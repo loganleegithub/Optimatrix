@@ -149,6 +149,33 @@ def build_fixture_events() -> tuple[CanonicalEvent, ...]:
                 "catalog",
             )
         )
+    catalog_names = tuple(sorted((REFERENCE, *(item[0] for item in option_rows))))
+    sequence += 1
+    events.append(
+        _event(
+            sequence,
+            start_ms,
+            EventKind.CATALOG_SNAPSHOT,
+            None,
+            {
+                "timestamp": start_ms,
+                "scope": "BTC_USDC_LINEAR_OPTIONS_DECISION_BUFFER",
+                "instrument_names": catalog_names,
+            },
+            "public/get_instruments",
+        )
+    )
+    sequence += 1
+    events.append(
+        _event(
+            sequence,
+            start_ms,
+            EventKind.SCHEDULED_BLOCK_STATE,
+            None,
+            {"state": "CLEAR", "label": None},
+            "fixture/scheduled_block",
+        )
+    )
     trade_sequence = 0
     for minute in range(61):
         at_ms = start_ms + minute * 60_000
@@ -263,6 +290,21 @@ def build_fixture_events() -> tuple[CanonicalEvent, ...]:
                 f"ticker.{name}.agg2",
             )
         )
+    sequence += 1
+    events.append(
+        _event(
+            sequence,
+            final_ms,
+            EventKind.CATALOG_SNAPSHOT,
+            None,
+            {
+                "timestamp": final_ms,
+                "scope": "BTC_USDC_LINEAR_OPTIONS_DECISION_BUFFER",
+                "instrument_names": catalog_names,
+            },
+            "public/get_instruments",
+        )
+    )
     sequence += 1
     events.append(
         _event(

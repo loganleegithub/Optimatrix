@@ -69,10 +69,12 @@ The Deribit collector requires no credentials:
 .venv/bin/python -m radar_runtime replay \
   /tmp/optimatrix-bounded/capture \
   --live /tmp/optimatrix-bounded/live.json \
+  --decision /tmp/optimatrix-bounded/decision.json \
   --output /tmp/optimatrix-bounded-replay
 ```
 
-This creates one bounded receipt, not a continuous acquisition or production Shadow service. A
+This creates one bounded capture receipt and one Decision receipt, not a continuous acquisition or
+production Shadow service. A
 duration above 3,600 seconds only makes a complete 60-minute observation possible; inspect/replay
 must prove actual coverage, freshness, platform state, and contamination status.
 

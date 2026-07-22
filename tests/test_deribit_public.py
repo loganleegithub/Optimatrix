@@ -15,10 +15,13 @@ from radar_runtime.deribit_public import (
     _canonical_instrument,
     _deribit_server_at_ms,
     _LiveSession,
+    _refresh_catalog,
     _rpc,
     _subscribe,
     _wait_result,
+    build_decision_receipt,
     capture_evidence_metadata,
+    decision_receipt_payload,
     inspect_payload,
     project_events,
     projection_payload,
@@ -26,7 +29,13 @@ from radar_runtime.deribit_public import (
     select_btc_usdc_catalog,
 )
 from radar_runtime.fixture import build_fixture_events
-from short_vol_radar import RadarAction, RadarPolicy, RadarProjector, evaluate_radar
+from short_vol_radar import (
+    DecisionInputContract,
+    RadarAction,
+    RadarPolicy,
+    RadarProjector,
+    evaluate_radar,
+)
 from websockets.sync.connection import Connection
 
 
@@ -254,12 +263,99 @@ def test_catalog_is_strictly_btc_usdc_zero_to_72_hours() -> None:
     assert tuple(item["instrument_name"] for item in selected) == (REFERENCE, "BTC_USDC-IN")
 
 
+def test_catalog_validity_buffer_captures_contracts_entering_decision_range() -> None:
+    as_of_ms = 1_000_000
+    seventy_two_hours_ms = 72 * 3_600 * 1_000
+    reference = {
+        "instrument_name": REFERENCE,
+        "base_currency": "BTC",
+        "counter_currency": "USDC",
+        "is_active": True,
+    }
+    entering = _option("BTC_USDC-ENTERING", as_of_ms + seventy_two_hours_ms + 300_000)
+
+    strict = select_btc_usdc_catalog((entering,), (reference,), as_of_ms=as_of_ms)
+    buffered = select_btc_usdc_catalog(
+        (entering,),
+        (reference,),
+        as_of_ms=as_of_ms,
+        validity_buffer_ms=360_000,
+    )
+
+    assert tuple(item["instrument_name"] for item in strict) == (REFERENCE,)
+    assert tuple(item["instrument_name"] for item in buffered) == (
+        REFERENCE,
+        "BTC_USDC-ENTERING",
+    )
+
+
 def test_catalog_clock_uses_deribit_response_timestamp_and_fails_closed() -> None:
     assert _deribit_server_at_ms({"usOut": 1_234_567}) == 1_234
     with pytest.raises(RuntimeError, match="usOut"):
         _deribit_server_at_ms({})
     with pytest.raises(RuntimeError, match="usOut"):
         _deribit_server_at_ms({"usOut": "1234567"})
+
+
+def test_catalog_refresh_records_snapshot_after_new_subscription() -> None:
+    source_at_ms = 1_700_000_000_000
+    option_name = "BTC_USDC-REFRESHED"
+    option = {
+        **_option(option_name, source_at_ms + 3_600_000),
+        "contract_size": 1,
+        "min_trade_amount": 0.01,
+        "taker_commission": 0.0003,
+    }
+    reference = {
+        "instrument_name": REFERENCE,
+        "base_currency": "BTC",
+        "counter_currency": "USDC",
+        "is_active": True,
+        "contract_size": 1,
+        "min_trade_amount": 0.001,
+        "taker_commission": 0.0001,
+    }
+    channel = f"ticker.{option_name}.agg2"
+    fake = _FakeConnection(
+        [
+            {
+                "jsonrpc": "2.0",
+                "id": 10,
+                "result": [option],
+                "usOut": source_at_ms * 1_000,
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "result": [reference],
+                "usOut": (source_at_ms + 1) * 1_000,
+            },
+            {"jsonrpc": "2.0", "id": 12, "result": [channel]},
+        ]
+    )
+    session = _LiveSession()
+
+    names, request_id, test_request_id = _refresh_catalog(
+        cast(Connection, fake),
+        session,
+        current_option_names=(),
+        request_id=10,
+        test_request_id=1_000,
+        input_contract=DecisionInputContract(),
+    )
+
+    assert names == (option_name,)
+    assert request_id == 13
+    assert test_request_id == 1_000
+    assert [item["method"] for item in fake.sent] == [
+        "public/get_instruments",
+        "public/get_instruments",
+        "public/subscribe",
+    ]
+    assert session.events[-1].event_kind is EventKind.CATALOG_SNAPSHOT
+    snapshot = session.projector.reducer.snapshot().catalog_snapshot
+    assert snapshot is not None
+    assert snapshot.instrument_names == tuple(sorted((REFERENCE, option_name)))
 
 
 def test_deribit_quantity_step_uses_min_trade_amount_not_lot_size() -> None:
@@ -796,6 +892,80 @@ def test_projection_payload_distinguishes_watch_from_emitted_candidate() -> None
     assert "candidate_count" not in watch_payload
 
 
+def test_missing_option_depth_is_unknown_not_zero() -> None:
+    events = build_fixture_events()
+    target = next(
+        event
+        for event in reversed(events)
+        if event.event_kind is EventKind.TICKER and event.instrument_name not in {None, REFERENCE}
+    )
+    payload = _event_payload(target)
+    payload.pop("best_bid_amount")
+    changed = tuple(
+        replace(
+            event,
+            raw_payload=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        )
+        if event is target
+        else event
+        for event in events
+    )
+
+    projection = project_events(changed)
+    quote = next(
+        item
+        for item in projection.frame.option_quotes
+        if item.instrument_name == target.instrument_name
+    )
+
+    assert quote.bid is not None
+    assert quote.bid_amount is None
+    assert "OPTION_DEPTH_UNKNOWN" in projection.frame.completeness_reasons
+    assert projection.decision.action is RadarAction.ABSTAIN
+
+
+def test_absent_scheduled_block_fact_remains_unknown() -> None:
+    events = tuple(
+        replace(event, capture_seq=sequence)
+        for sequence, event in enumerate(
+            (
+                item
+                for item in build_fixture_events()
+                if item.event_kind is not EventKind.SCHEDULED_BLOCK_STATE
+            ),
+            start=1,
+        )
+    )
+
+    projection = project_events(events)
+
+    assert projection.frame.scheduled_block_observed is False
+    assert projection.frame.scheduled_block is None
+    assert "SCHEDULED_BLOCK_UNKNOWN" in projection.frame.completeness_reasons
+    assert projection.decision.action is RadarAction.ABSTAIN
+
+
+def test_stale_catalog_snapshot_fails_closed() -> None:
+    baseline = build_fixture_events()
+    final_catalog_seq = max(
+        event.capture_seq for event in baseline if event.event_kind is EventKind.CATALOG_SNAPSHOT
+    )
+    events = tuple(
+        replace(event, capture_seq=sequence)
+        for sequence, event in enumerate(
+            (item for item in baseline if item.capture_seq != final_catalog_seq),
+            start=1,
+        )
+    )
+
+    projection = project_events(events)
+
+    assert projection.frame.catalog_age_ms is not None
+    assert projection.frame.catalog_age_ms > 360_000
+    assert "CATALOG_SNAPSHOT_STALE" in projection.frame.completeness_reasons
+    assert projection.decision.action is RadarAction.ABSTAIN
+
+
 def test_full_elapsed_with_compressed_market_time_abstains_live_and_replay() -> None:
     events = _compress_market_source_time(build_fixture_events())
 
@@ -1244,7 +1414,7 @@ def test_delayed_old_option_is_not_fresh_even_when_arrival_is_fresh() -> None:
     assert not quote.fresh
 
 
-def test_delayed_old_reference_is_stale_against_trade_watermark() -> None:
+def test_trade_price_cannot_advance_the_index_reference_watermark() -> None:
     events = build_fixture_events()
     last_trade_event = next(
         event for event in reversed(events) if event.event_kind is EventKind.TRADE
@@ -1268,10 +1438,11 @@ def test_delayed_old_reference_is_stale_against_trade_watermark() -> None:
 
     projection = _assert_live_replay_equal(events)
 
-    assert projection.frame.market_as_of_capture_seq == events[-1].capture_seq
+    assert projection.frame.market_as_of_capture_seq == events[-2].capture_seq
     assert projection.frame.reference_source_capture_seq == events[-2].capture_seq
-    assert "REFERENCE_STALE" in projection.frame.completeness_reasons
-    assert projection.decision.action is RadarAction.ABSTAIN
+    assert projection.frame.reference_price_source == "index_price"
+    assert "REFERENCE_STALE" not in projection.frame.completeness_reasons
+    assert projection.decision.action is RadarAction.RESEARCH_CANDIDATE
 
 
 def test_frame_provenance_includes_catalog_tickers_prior_reference_and_watermark() -> None:
@@ -1362,6 +1533,40 @@ def test_inspect_counts_book_gaps_only_when_book_facts_are_observed(
     assert payload["book_gap_records"] == 1
 
 
+def test_inspect_distinguishes_trade_batches_from_actual_trades(tmp_path: Path) -> None:
+    session = _LiveSession()
+    at_ms = 1_700_000_000_000
+    session.record_trades(
+        f"trades.{REFERENCE}.agg2",
+        [
+            {
+                "trade_seq": 1,
+                "timestamp": at_ms,
+                "instrument_name": REFERENCE,
+                "price": "100000",
+                "amount": "1",
+                "direction": "buy",
+            },
+            {
+                "trade_seq": 2,
+                "timestamp": at_ms + 1,
+                "instrument_name": REFERENCE,
+                "price": "100001",
+                "amount": "2",
+                "direction": "sell",
+            },
+        ],
+        received_at_ms=at_ms + 2,
+    )
+    events = tuple(session.events)
+    manifest = write_capture(tmp_path / "capture", events, complete=True)
+
+    payload = inspect_payload(manifest, events)
+
+    assert payload["trade_batch_records"] == 1
+    assert payload["actual_trades"] == 2
+
+
 def _live_capture_payload(
     manifest: CaptureManifest,
     events: tuple[CanonicalEvent, ...],
@@ -1416,6 +1621,35 @@ def test_replay_output_uses_semantic_identities_and_exact_live_capture_binding(
     saved: object = json.loads((replay_root / "replay.json").read_text(encoding="utf-8"))
     assert isinstance(saved, dict)
     assert saved["evidence_class"] == "BOUNDED_PRODUCTION_PUBLIC_LIVE_REPLAY"
+
+
+def test_decision_receipt_reconstructs_exactly_and_rejects_drift(tmp_path: Path) -> None:
+    events = build_fixture_events()
+    manifest = write_capture(tmp_path / "capture", events, complete=True)
+    projection = project_events(events)
+    receipt = decision_receipt_payload(
+        build_decision_receipt(manifest, projection, code_revision="test-revision")
+    )
+
+    replay = replay_payload(
+        manifest,
+        events,
+        decision_receipt=receipt,
+        code_revision="test-revision",
+    )
+
+    assert replay["decision_receipt_binding_verified"] is True
+    assert replay["decision_drift_count"] == 0
+    assert replay["decision_drift_fields"] == []
+    tampered = json.loads(json.dumps(receipt))
+    tampered["evaluation"]["assessment_set_digest"] = "tampered"
+    with pytest.raises(ValueError, match="Decision receipt drift"):
+        replay_payload(
+            manifest,
+            events,
+            decision_receipt=cast(dict[str, object], tampered),
+            code_revision="test-revision",
+        )
 
 
 @pytest.mark.parametrize(

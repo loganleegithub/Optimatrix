@@ -52,6 +52,12 @@ No known-at, warm-up, or freshness decision compares a Deribit timestamp numeric
 collector wall clock. A source timestamp later than its raw local receive timestamp is retained as
 clock-skew evidence, not rejected or clamped.
 
+The reference path is exactly `BTC_USDC-PERPETUAL` ticker `index_price`. Ticker `last_price`,
+perpetual `mark_price`, and trade prices never substitute into that path: mark remains descriptive
+basis input and trades remain flow input. The immutable Market/Decision input contract is
+`DERIBIT_PUBLIC_SHORT_VOL_DECISION_INPUT`; its content digest is separate from the immutable
+`OBSERVED_PATH_STRESS_FIXED_PRIOR_POLICY` identity and digest.
+
 - Price elapsed coverage is necessary but not sufficient. A complete price path requires an
   accepted reference-price anchor at or before the requested Deribit market start, an endpoint at
   the current reference market watermark, the full requested source-time span, and watermark
@@ -65,6 +71,18 @@ clock-skew evidence, not rejected or clamped.
 - Complete flat prices produce observed zero return, range, and variation.
 - Complete trade coverage with no trades produces observed zero flow.
 - An incomplete window has no path or flow value.
+- Every configured 1m / 5m / 15m / 30m / 60m price and flow window is required. One incomplete
+  window makes finite-horizon path risk `UNKNOWN`.
+- A visible option price without its corresponding amount has unknown depth, never numerical zero.
+- Scheduled-block state is observed only through an explicit canonical fact. Its absence is
+  `UNKNOWN`, not confirmation that no block exists.
+
+The bounded runtime refreshes the same Deribit public option/future catalog every 300 seconds and
+requires the latest complete snapshot to be no more than 360 seconds old at Decision time. Each
+snapshot includes the 0–72h Decision range plus only the 360-second expiry-transition buffer; the
+projector still scans exactly 0–72h. The snapshot identity, names digest, count, age, and causal
+sequence are Decision lineage. A missing/stale snapshot or missing member metadata/quote fails
+closed; this is not a generic catalog service.
 
 ## Risk method
 
@@ -126,6 +144,13 @@ Every candidate/watch/abstain Decision receipt must freeze:
 - complete scanned-universe and assessment-set identity;
 - selected assessment, predicates, and ranking result;
 - the exact action and reason.
+
+`SHORT_VOL_DECISION_RECEIPT` is the sole durable Decision artifact for this closure. It binds the
+sealed capture and manifest, final frame and complete lineage, code revision, input-contract and
+Policy identities/digests, option quote set, complete executable-structure set, deterministic
+assessment set, predicate-failure counts, full selected assessment when present, exact decision,
+and its own content digest. Zero structures, assessments, or candidate-class actions remain valid
+explicit counts.
 
 Every Shadow entry must freeze its Decision, structure, entry economics, assessment, horizon, and
 Policy identity. Observed Outcome contains only facts strictly after entry and no later than actual

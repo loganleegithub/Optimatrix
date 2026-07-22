@@ -10,6 +10,7 @@ from typing import cast
 from market_tape.contracts import (
     BookState,
     CanonicalEvent,
+    CatalogSnapshot,
     EventKind,
     GapFact,
     Instrument,
@@ -80,6 +81,7 @@ class MarketTapeReducer:
         self._last_collector_received_at_ms = 0
         self._last_collector_elapsed_ms: int | None = None
         self._instruments: dict[str, Instrument] = {}
+        self._catalog_snapshot: CatalogSnapshot | None = None
         self._tickers: dict[str, TickerFact] = {}
         self._trades: list[TradeFact] = []
         self._trade_sequences: dict[str, int] = {}
@@ -108,6 +110,8 @@ class MarketTapeReducer:
         payload = _payload(event)
         if event.event_kind is EventKind.INSTRUMENT:
             self._ingest_instrument(event, payload)
+        elif event.event_kind is EventKind.CATALOG_SNAPSHOT:
+            self._ingest_catalog_snapshot(event, payload)
         elif event.event_kind is EventKind.TICKER:
             self._ingest_ticker(event, payload)
         elif event.event_kind in {EventKind.TRADE, EventKind.TRADE_GAP}:
@@ -286,6 +290,29 @@ class MarketTapeReducer:
         except (ArithmeticError, ValueError) as error:
             raise TapeContractError("instrument metadata is invalid") from error
         self._instruments[name] = instrument
+
+    def _ingest_catalog_snapshot(
+        self,
+        event: CanonicalEvent,
+        payload: dict[str, object],
+    ) -> None:
+        raw_names = payload.get("instrument_names")
+        if not isinstance(raw_names, list) or not all(
+            isinstance(item, str) and item for item in raw_names
+        ):
+            raise TapeContractError("catalog snapshot instrument_names must be a string list")
+        source_at_ms = _positive_int(payload.get("timestamp"), "timestamp")
+        _require_market_envelope(event, source_at_ms)
+        try:
+            self._catalog_snapshot = CatalogSnapshot(
+                capture_seq=event.capture_seq,
+                source_at_ms=source_at_ms,
+                observed_elapsed_ms=event.collector_elapsed_ms,
+                scope=str(payload.get("scope", "")),
+                instrument_names=tuple(raw_names),
+            )
+        except ValueError as error:
+            raise TapeContractError(str(error)) from error
 
     def _ingest_ticker(
         self,
@@ -519,6 +546,7 @@ class MarketTapeReducer:
             instruments=tuple(
                 sorted(self._instruments.values(), key=lambda item: item.instrument_name)
             ),
+            catalog_snapshot=self._catalog_snapshot,
             tickers=tuple(sorted(self._tickers.values(), key=lambda item: item.instrument_name)),
             trades=tuple(
                 sorted(

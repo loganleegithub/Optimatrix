@@ -18,8 +18,8 @@ class OptionQuote:
     option_kind: OptionKind
     bid: Decimal | None
     ask: Decimal | None
-    bid_amount: Decimal
-    ask_amount: Decimal
+    bid_amount: Decimal | None
+    ask_amount: Decimal | None
     bid_iv: Decimal | None
     ask_iv: Decimal | None
     mark_iv: Decimal | None
@@ -41,7 +41,7 @@ class OptionQuote:
             raise ValueError("option quote must have positive TTE")
         if self.strike <= 0 or self.contract_size <= 0:
             raise ValueError("option strike and contract size must be positive")
-        if self.bid_amount < 0 or self.ask_amount < 0:
+        if any(item is not None and item < 0 for item in (self.bid_amount, self.ask_amount)):
             raise ValueError("option depth cannot be negative")
         if self.quote_age_ms < 0:
             raise ValueError("option quote age cannot be negative")

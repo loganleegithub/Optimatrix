@@ -39,10 +39,10 @@ def estimate_path_risk(
     reasons: list[str] = []
     if not frame.complete:
         reasons.extend(frame.completeness_reasons)
-    if len(complete_paths) < active.minimum_complete_path_windows:
-        reasons.append("INSUFFICIENT_COMPLETE_PATH_WINDOWS")
-    if not complete_flows:
-        reasons.append("NO_COMPLETE_FLOW_WINDOW")
+    if len(complete_paths) != len(frame.windows):
+        reasons.append("REQUIRED_PATH_WINDOW_UNKNOWN")
+    if len(complete_flows) != len(frame.windows):
+        reasons.append("REQUIRED_FLOW_WINDOW_UNKNOWN")
     if reasons:
         return FiniteHorizonPathRisk(
             method_id="OBSERVED_PATH_STRESS_FIXED_PRIOR",

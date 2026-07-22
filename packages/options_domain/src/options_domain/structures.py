@@ -121,6 +121,8 @@ def build_vertical_close(
         or short_quote.ask < 0
         or long_quote.bid is None
         or long_quote.bid < 0
+        or short_quote.ask_amount is None
+        or long_quote.bid_amount is None
         or short_quote.ask_amount < quantity
         or long_quote.bid_amount < quantity
     ):
@@ -158,6 +160,10 @@ def build_vertical_quote(
         or short_quote.ask is None
         or long_quote.bid is None
         or long_quote.ask is None
+        or short_quote.bid_amount is None
+        or short_quote.ask_amount is None
+        or long_quote.bid_amount is None
+        or long_quote.ask_amount is None
         or min(
             short_quote.bid_amount,
             short_quote.ask_amount,

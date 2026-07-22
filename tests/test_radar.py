@@ -7,7 +7,14 @@ import pytest
 from market_tape import CanonicalEvent, EventKind
 from options_domain import ComboQuote, build_surface_summary
 from radar_runtime.fixture import build_fixture_events, replay_fixture
-from short_vol_radar import RadarAction, RadarProjector, evaluate_radar
+from short_vol_radar import (
+    DecisionInputContract,
+    RadarAction,
+    RadarPolicy,
+    RadarProjector,
+    estimate_path_risk,
+    evaluate_radar,
+)
 
 
 def test_fixture_produces_transparent_research_candidate() -> None:
@@ -45,6 +52,36 @@ def test_unknown_lookback_fails_closed() -> None:
     decision = evaluate_radar(unknown)
     assert decision.action is RadarAction.ABSTAIN
     assert decision.reason == "PATH_RISK_UNKNOWN"
+
+
+def test_one_missing_required_window_makes_risk_unknown() -> None:
+    frame, _ = replay_fixture(build_fixture_events())
+    first = frame.windows[0]
+    incomplete = replace(
+        first,
+        coverage=replace(
+            first.coverage,
+            price_complete=False,
+            incomplete_reasons=("TEST_MISSING_REQUIRED_WINDOW",),
+        ),
+        path=None,
+    )
+    risk = estimate_path_risk(replace(frame, windows=(incomplete, *frame.windows[1:])), 1_800)
+
+    assert not risk.complete
+    assert "REQUIRED_PATH_WINDOW_UNKNOWN" in risk.incomplete_reasons
+
+
+def test_input_contract_and_policy_have_separate_identities() -> None:
+    input_contract = DecisionInputContract()
+    policy = RadarPolicy()
+
+    assert replace(input_contract, catalog_max_age_ms=420_000).digest != input_contract.digest
+    assert RadarPolicy().digest == policy.digest
+    assert replace(
+        policy, minimum_credit_to_friction=policy.minimum_credit_to_friction * 2
+    ).digest != (policy.digest)
+    assert DecisionInputContract().digest == input_contract.digest
 
 
 def test_scheduled_block_cannot_become_candidate() -> None:
@@ -183,6 +220,8 @@ def test_reference_dynamics_advance_only_on_new_reference_ticker() -> None:
 
 def test_combo_quote_source_must_be_in_decision_frame_lineage() -> None:
     frame, _ = replay_fixture(build_fixture_events())
+    assert frame.option_quotes[0].bid_amount is not None
+    assert frame.option_quotes[0].ask_amount is not None
     combo = ComboQuote(
         combo_id="combo",
         short_instrument=frame.option_quotes[0].instrument_name,

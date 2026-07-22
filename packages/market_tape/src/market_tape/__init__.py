@@ -10,6 +10,7 @@ from market_tape.capture import (
 from market_tape.contracts import (
     BookState,
     CanonicalEvent,
+    CatalogSnapshot,
     EventKind,
     GapFact,
     Instrument,
@@ -30,6 +31,7 @@ __all__ = [
     "BookState",
     "CanonicalEvent",
     "CaptureManifest",
+    "CatalogSnapshot",
     "EventKind",
     "GapFact",
     "Instrument",

@@ -12,6 +12,8 @@ from enum import Enum, StrEnum
 
 class EventKind(StrEnum):
     INSTRUMENT = "INSTRUMENT"
+    CATALOG_SNAPSHOT = "CATALOG_SNAPSHOT"
+    SCHEDULED_BLOCK_STATE = "SCHEDULED_BLOCK_STATE"
     SUBSCRIPTION_START = "SUBSCRIPTION_START"
     TICKER = "TICKER"
     TRADE = "TRADE"
@@ -144,6 +146,25 @@ class Instrument:
 
 
 @dataclass(frozen=True, slots=True)
+class CatalogSnapshot:
+    capture_seq: int
+    source_at_ms: int
+    observed_elapsed_ms: int
+    scope: str
+    instrument_names: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.capture_seq <= 0 or self.source_at_ms <= 0 or self.observed_elapsed_ms < 0:
+            raise ValueError("catalog snapshot sequence and times are invalid")
+        if not self.scope:
+            raise ValueError("catalog snapshot scope is required")
+        if not self.instrument_names:
+            raise ValueError("catalog snapshot cannot be empty")
+        if tuple(sorted(set(self.instrument_names))) != self.instrument_names:
+            raise ValueError("catalog instrument names must be sorted and unique")
+
+
+@dataclass(frozen=True, slots=True)
 class TickerFact:
     instrument_name: str
     capture_seq: int
@@ -243,6 +264,7 @@ class MarketTapeSnapshot:
     as_of_capture_seq: int
     collector_as_of_ms: int
     instruments: tuple[Instrument, ...]
+    catalog_snapshot: CatalogSnapshot | None
     tickers: tuple[TickerFact, ...]
     trades: tuple[TradeFact, ...]
     books: tuple[BookState, ...]

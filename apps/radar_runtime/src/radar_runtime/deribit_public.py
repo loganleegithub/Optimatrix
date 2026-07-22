@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import statistics
+import subprocess
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
@@ -20,16 +21,22 @@ from market_tape import (
     CaptureManifest,
     EventKind,
     MarketTapeReducer,
+    canonical_digest,
     canonical_value,
     validate_capture,
     write_capture,
 )
 from short_vol_radar import (
+    DECISION_RECEIPT_TYPE,
+    DecisionEvaluation,
     DecisionFrame,
+    DecisionInputContract,
+    DecisionReceipt,
     RadarAction,
     RadarDecision,
+    RadarPolicy,
     RadarProjector,
-    evaluate_radar,
+    evaluate_radar_evidence,
 )
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.sync.client import connect
@@ -49,6 +56,7 @@ LIVE_CAPTURE_EVIDENCE = "BOUNDED_PRODUCTION_PUBLIC_CAPTURE"
 LIVE_REPLAY_EVIDENCE = "BOUNDED_PRODUCTION_PUBLIC_LIVE_REPLAY"
 SEALED_REPLAY_EVIDENCE = "CANONICAL_CAPTURE_REPLAY"
 UNPROVEN_PLATFORM_REPLAY_EVIDENCE = "PLATFORM_STATUS_BARRIER_REPLAY_ONLY"
+CATALOG_SCOPE = "BTC_USDC_LINEAR_OPTIONS_DECISION_BUFFER"
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,8 +163,9 @@ def select_btc_usdc_catalog(
     future_rows: Iterable[Mapping[str, object]],
     *,
     as_of_ms: int,
+    validity_buffer_ms: int = 0,
 ) -> tuple[dict[str, object], ...]:
-    """Select exactly the active BTC-USDC perpetual and 0-72h linear options."""
+    """Select the active reference and decision range plus an explicit validity buffer."""
 
     selected: list[dict[str, object]] = []
     reference = next(
@@ -183,7 +192,7 @@ def select_btc_usdc_catalog(
             or row.get("instrument_type") != "linear"
             or row.get("is_active") is not True
             or expiry is None
-            or not as_of_ms < expiry <= as_of_ms + MAX_OPTION_TTE_MS
+            or not as_of_ms < expiry <= as_of_ms + MAX_OPTION_TTE_MS + validity_buffer_ms
         ):
             continue
         options.append(dict(row))
@@ -276,6 +285,7 @@ class RadarProjection:
     final_event_capture_seq: int
     frame: DecisionFrame
     decision: RadarDecision
+    evaluation: DecisionEvaluation
     current_complete_60m: bool
     ever_observed_complete_60m: bool
 
@@ -295,11 +305,13 @@ def project_events(events: Iterable[CanonicalEvent]) -> RadarProjection:
     if final_event_capture_seq is None:
         raise RuntimeError("capture produced no canonical event")
     current = projector.finalize()
+    evaluation = evaluate_radar_evidence(current)
     ever_observed_complete_60m = ever_observed_complete_60m or _complete_60m(current)
     return RadarProjection(
         final_event_capture_seq=final_event_capture_seq,
         frame=current,
-        decision=evaluate_radar(current),
+        decision=evaluation.decision,
+        evaluation=evaluation,
         current_complete_60m=_complete_60m(current),
         ever_observed_complete_60m=ever_observed_complete_60m,
     )
@@ -308,6 +320,8 @@ def project_events(events: Iterable[CanonicalEvent]) -> RadarProjection:
 def projection_payload(projection: RadarProjection) -> dict[str, object]:
     frame = projection.frame
     decision = projection.decision
+    evaluation = projection.evaluation
+    policy = RadarPolicy()
     window = frame.window(3_600)
     frame_lineage_violations = sum(
         capture_seq > frame.as_of_capture_seq for capture_seq in frame.source_capture_seqs
@@ -319,17 +333,61 @@ def projection_payload(projection: RadarProjection) -> dict[str, object]:
             frame.as_of_capture_seq == projection.final_event_capture_seq
         ),
         "frame_digest": frame.digest,
+        "input_contract_id": frame.input_contract_id,
+        "input_contract_digest": frame.input_contract_digest,
+        "policy_id": policy.policy_id,
+        "policy_digest": policy.digest,
         "frame_lineage_order": ("VERIFIED" if frame_lineage_violations == 0 else "VIOLATION"),
         "frame_lineage_violations": frame_lineage_violations,
         "decision_action": decision.action.value,
         "decision_reason": decision.reason,
         "decision_digest": decision.digest,
+        "decision_evaluation_digest": evaluation.digest,
         "evaluated_structure_id": decision.selected_candidate_id,
         "research_candidate_emitted": (decision.action is RadarAction.RESEARCH_CANDIDATE),
         "research_candidate_count": int(decision.action is RadarAction.RESEARCH_CANDIDATE),
+        "executable_structure_count": evaluation.executable_structure_count,
+        "structure_set_digest": evaluation.structure_set_digest,
+        "assessment_count": evaluation.assessment_count,
+        "assessment_set_digest": evaluation.assessment_set_digest,
+        "passed_assessment_count": evaluation.passed_assessment_count,
+        "predicate_failure_counts": [list(item) for item in evaluation.predicate_failure_counts],
+        "entry_count": 0,
+        "outcome_count": 0,
         "horizon_seconds": decision.horizon_seconds,
+        "reference_price_source": frame.reference_price_source,
         "platform_state": frame.platform_state,
         "platform_locked": frame.platform_locked,
+        "scheduled_block_observed": frame.scheduled_block_observed,
+        "scheduled_block": frame.scheduled_block,
+        "catalog_scope": frame.catalog_scope,
+        "catalog_snapshot_capture_seq": frame.catalog_snapshot_capture_seq,
+        "catalog_source_at": (
+            frame.catalog_source_at.isoformat() if frame.catalog_source_at is not None else None
+        ),
+        "catalog_age_ms": frame.catalog_age_ms,
+        "catalog_instrument_count": frame.catalog_instrument_count,
+        "catalog_instrument_names_digest": frame.catalog_instrument_names_digest,
+        "frame_complete": frame.complete,
+        "unknown_reasons": list(frame.completeness_reasons),
+        "required_window_coverage": [
+            {
+                "requested_seconds": item.coverage.requested_seconds,
+                "price_complete": item.coverage.price_complete,
+                "trade_complete": item.coverage.trade_complete,
+                "price_market_lookback_seconds": item.coverage.price_market_lookback_seconds,
+                "price_subscription_elapsed_seconds": (
+                    item.coverage.price_subscription_elapsed_seconds
+                ),
+                "trade_subscription_elapsed_seconds": (
+                    item.coverage.trade_subscription_elapsed_seconds
+                ),
+                "gap_contaminated": item.coverage.gap_contaminated,
+                "reconnect_contaminated": item.coverage.reconnect_contaminated,
+                "incomplete_reasons": list(item.coverage.incomplete_reasons),
+            }
+            for item in frame.windows
+        ],
         "current_complete_60m": projection.current_complete_60m,
         "ever_observed_complete_60m": projection.ever_observed_complete_60m,
         "market_requested_start_at": (
@@ -368,6 +426,60 @@ def projection_payload(projection: RadarProjection) -> dict[str, object]:
             list(window.coverage.incomplete_reasons) if window is not None else ["NO_60M_WINDOW"]
         ),
     }
+
+
+def _repository_state() -> tuple[str, bool]:
+    repository = Path(__file__).resolve().parents[4]
+    revision = subprocess.run(
+        ("git", "-C", str(repository), "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    status = subprocess.run(
+        ("git", "-C", str(repository), "status", "--porcelain"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if not revision:
+        raise RuntimeError("cannot identify the Decision code revision")
+    return revision, bool(status.strip())
+
+
+def build_decision_receipt(
+    manifest: CaptureManifest,
+    projection: RadarProjection,
+    *,
+    code_revision: str,
+) -> DecisionReceipt:
+    frame = projection.frame
+    policy = RadarPolicy()
+    return DecisionReceipt(
+        receipt_type=DECISION_RECEIPT_TYPE,
+        environment="production_public",
+        capture_format=manifest.format_id,
+        capture_digest=manifest.content_sha256,
+        capture_manifest_digest=manifest.digest,
+        code_revision=code_revision,
+        final_event_capture_seq=projection.final_event_capture_seq,
+        frame_capture_seq=frame.as_of_capture_seq,
+        frame_digest=frame.digest,
+        frame_lineage_capture_seqs=frame.source_capture_seqs,
+        frame_lineage_digest=canonical_digest(frame.source_capture_seqs),
+        input_contract_id=frame.input_contract_id,
+        input_contract_digest=frame.input_contract_digest,
+        policy_id=policy.policy_id,
+        policy_digest=policy.digest,
+        evaluation=projection.evaluation,
+    )
+
+
+def decision_receipt_payload(receipt: DecisionReceipt) -> dict[str, object]:
+    value = canonical_value(receipt)
+    if not isinstance(value, dict):
+        raise RuntimeError("Decision receipt encoding is not an object")
+    return {**value, "receipt_digest": receipt.digest}
 
 
 def _has_generation_scoped_platform_status(events: tuple[CanonicalEvent, ...]) -> bool:
@@ -426,6 +538,7 @@ def capture_evidence_metadata(
 ) -> dict[str, object]:
     validate_capture(manifest, events)
     generation_scoped_platform = _has_generation_scoped_platform_status(events)
+    decision_truth_inputs = any(event.event_kind is EventKind.CATALOG_SNAPSHOT for event in events)
     return {
         "capture_format": manifest.format_id,
         "capture_complete": manifest.complete,
@@ -436,12 +549,15 @@ def capture_evidence_metadata(
             if generation_scoped_platform
             else UNPROVEN_PLATFORM_STATE_CONTRACT_ID
         ),
+        "decision_truth_inputs_observed": decision_truth_inputs,
         "evidence_class": (
             SEALED_REPLAY_EVIDENCE
             if generation_scoped_platform
             else UNPROVEN_PLATFORM_REPLAY_EVIDENCE
         ),
-        "live_comparison_eligible": generation_scoped_platform and manifest.complete,
+        "live_comparison_eligible": (
+            generation_scoped_platform and decision_truth_inputs and manifest.complete
+        ),
     }
 
 
@@ -450,14 +566,22 @@ def replay_payload(
     events: tuple[CanonicalEvent, ...],
     *,
     live: Mapping[str, object] | None = None,
+    decision_receipt: Mapping[str, object] | None = None,
+    code_revision: str | None = None,
 ) -> dict[str, object]:
     metadata = capture_evidence_metadata(manifest, events)
-    projection = projection_payload(project_events(events))
+    projected = project_events(events)
+    projection = projection_payload(projected)
+    active_revision = code_revision or _repository_state()[0]
+    reconstructed_receipt = decision_receipt_payload(
+        build_decision_receipt(manifest, projected, code_revision=active_revision)
+    )
     payload = {
         **metadata,
         "records": manifest.record_count,
         "capture_digest": manifest.content_sha256,
         **projection,
+        "decision_receipt_digest": reconstructed_receipt["receipt_digest"],
     }
     if (
         payload["final_event_capture_seq"] != manifest.last_capture_seq
@@ -466,6 +590,20 @@ def replay_payload(
     ):
         raise ValueError("replay projection is not bound to the final capture event")
     if live is None:
+        if decision_receipt is not None:
+            drift_fields = tuple(
+                key
+                for key in sorted(set(reconstructed_receipt) | set(decision_receipt))
+                if key not in reconstructed_receipt
+                or key not in decision_receipt
+                or type(reconstructed_receipt[key]) is not type(decision_receipt[key])
+                or reconstructed_receipt[key] != decision_receipt[key]
+            )
+            if drift_fields:
+                raise ValueError("Decision receipt drift: " + ",".join(drift_fields))
+            payload["decision_receipt_binding_verified"] = True
+            payload["decision_drift_count"] = 0
+            payload["decision_drift_fields"] = []
         return payload
     if metadata["live_comparison_eligible"] is not True:
         raise ValueError("unscoped or incomplete capture cannot claim live/replay equality")
@@ -478,12 +616,14 @@ def replay_payload(
         "timestamp_contract": metadata["timestamp_contract"],
         "collector_elapsed_source": metadata["collector_elapsed_source"],
         "platform_state_contract": metadata["platform_state_contract"],
+        "decision_truth_inputs_observed": True,
         "capture_digest": manifest.content_sha256,
         "records": manifest.record_count,
         "final_event_capture_seq": manifest.last_capture_seq,
         "frame_capture_seq": manifest.last_capture_seq,
         "current_frame_is_final_event": True,
         **projection,
+        "decision_receipt_digest": reconstructed_receipt["receipt_digest"],
     }
     mismatches = tuple(
         key
@@ -502,6 +642,20 @@ def replay_payload(
     payload["live_binding_verified"] = True
     payload["live_frame_digest_match"] = True
     payload["live_decision_digest_match"] = True
+    if decision_receipt is not None:
+        drift_fields = tuple(
+            key
+            for key in sorted(set(reconstructed_receipt) | set(decision_receipt))
+            if key not in reconstructed_receipt
+            or key not in decision_receipt
+            or type(reconstructed_receipt[key]) is not type(decision_receipt[key])
+            or reconstructed_receipt[key] != decision_receipt[key]
+        )
+        if drift_fields:
+            raise ValueError("Decision receipt drift: " + ",".join(drift_fields))
+        payload["decision_receipt_binding_verified"] = True
+        payload["decision_drift_count"] = 0
+        payload["decision_drift_fields"] = []
     payload["evidence_class"] = LIVE_REPLAY_EVIDENCE
     return payload
 
@@ -574,6 +728,28 @@ class _LiveSession:
                 received_at_ms=received_at_ms,
                 elapsed_ms=elapsed_ms,
             )
+
+    def record_catalog_snapshot(
+        self,
+        instrument_names: Iterable[str],
+        *,
+        source_at_ms: int,
+        received_at_ms: int | None = None,
+        elapsed_ms: int | None = None,
+    ) -> None:
+        names = tuple(sorted(set(instrument_names)))
+        self._record(
+            EventKind.CATALOG_SNAPSHOT,
+            "public/get_instruments",
+            {
+                "timestamp": source_at_ms,
+                "scope": CATALOG_SCOPE,
+                "instrument_names": names,
+            },
+            exchange_timestamp_ms=source_at_ms,
+            received_at_ms=received_at_ms,
+            elapsed_ms=elapsed_ms,
+        )
 
     def record_platform(
         self,
@@ -847,11 +1023,13 @@ class _LiveSession:
         if not self.events:
             raise RuntimeError("live capture produced no DecisionFrame")
         current = self.projector.finalize()
+        evaluation = evaluate_radar_evidence(current)
         ever_observed_complete_60m = self.ever_observed_complete_60m or _complete_60m(current)
         return RadarProjection(
             final_event_capture_seq=self.events[-1].capture_seq,
             frame=current,
-            decision=evaluate_radar(current),
+            decision=evaluation.decision,
+            evaluation=evaluation,
             current_complete_60m=_complete_60m(current),
             ever_observed_complete_60m=ever_observed_complete_60m,
         )
@@ -937,6 +1115,114 @@ def _wait_result(
             elapsed_ms=received.clock.elapsed_ms,
             test_request_id=test_request_id,
         )
+
+
+def _wait_public_response(
+    connection: Connection,
+    session: _LiveSession,
+    request_id: int,
+    *,
+    test_request_id: int,
+) -> tuple[_PublicResponse, int]:
+    while True:
+        received = _message(connection, session, 20)
+        message = received.value
+        if message.get("id") == request_id:
+            if "error" in message:
+                raise RuntimeError(f"Deribit WebSocket error: {message['error']}")
+            if "result" not in message:
+                raise RuntimeError("Deribit WebSocket response has no result")
+            return (
+                _PublicResponse(
+                    result=message["result"],
+                    clock=received.clock,
+                    server_at_ms=_deribit_server_at_ms(message),
+                ),
+                test_request_id,
+            )
+        test_request_id = _handle_message(
+            connection,
+            session,
+            message,
+            received_at_ms=received.clock.received_at_ms,
+            elapsed_ms=received.clock.elapsed_ms,
+            test_request_id=test_request_id,
+        )
+
+
+def _refresh_catalog(
+    connection: Connection,
+    session: _LiveSession,
+    *,
+    current_option_names: tuple[str, ...],
+    request_id: int,
+    test_request_id: int,
+    input_contract: DecisionInputContract,
+) -> tuple[tuple[str, ...], int, int]:
+    _rpc(
+        connection,
+        request_id,
+        "public/get_instruments",
+        {"currency": "USDC", "kind": "option", "expired": False},
+    )
+    option_catalog, test_request_id = _wait_public_response(
+        connection,
+        session,
+        request_id,
+        test_request_id=test_request_id,
+    )
+    request_id += 1
+    _rpc(
+        connection,
+        request_id,
+        "public/get_instruments",
+        {"currency": "USDC", "kind": "future", "expired": False},
+    )
+    future_catalog, test_request_id = _wait_public_response(
+        connection,
+        session,
+        request_id,
+        test_request_id=test_request_id,
+    )
+    request_id += 1
+    catalog_market_at_ms = max(option_catalog.server_at_ms, future_catalog.server_at_ms)
+    selected = select_btc_usdc_catalog(
+        _instrument_rows(option_catalog.result),
+        _instrument_rows(future_catalog.result),
+        as_of_ms=catalog_market_at_ms,
+        validity_buffer_ms=input_contract.catalog_max_age_ms,
+    )
+    catalog_clock = session.clock_sample()
+    session.record_catalog(
+        selected,
+        received_at_ms=catalog_clock.received_at_ms,
+        elapsed_ms=catalog_clock.elapsed_ms,
+    )
+    next_option_names = tuple(str(row["instrument_name"]) for row in selected[1:])
+    added = tuple(sorted(set(next_option_names) - set(current_option_names)))
+    removed = tuple(sorted(set(current_option_names) - set(next_option_names)))
+    for method, names in (("public/subscribe", added), ("public/unsubscribe", removed)):
+        if not names:
+            continue
+        channels = tuple(f"ticker.{name}.agg2" for name in names)
+        _rpc(connection, request_id, method, {"channels": list(channels)})
+        result, test_request_id, _ = _wait_result(
+            connection,
+            session,
+            request_id,
+            test_request_id=test_request_id,
+        )
+        if not isinstance(result, list) or set(str(item) for item in result) != set(channels):
+            raise RuntimeError("Deribit option catalog subscription change was not accepted")
+        request_id += 1
+    snapshot_clock = session.clock_sample()
+    session.record_catalog_snapshot(
+        (str(row["instrument_name"]) for row in selected),
+        source_at_ms=catalog_market_at_ms,
+        received_at_ms=snapshot_clock.received_at_ms,
+        elapsed_ms=snapshot_clock.elapsed_ms,
+    )
+    return next_option_names, request_id, test_request_id
 
 
 def _subscribe(
@@ -1063,7 +1349,8 @@ def _event_summary(
             item.kind.value == "OPTION" for item in snapshot.instruments
         ),
         "ticker_records": kinds[EventKind.TICKER.value],
-        "trade_records": kinds[EventKind.TRADE.value] + kinds[EventKind.TRADE_GAP.value],
+        "trade_batch_records": kinds[EventKind.TRADE.value] + kinds[EventKind.TRADE_GAP.value],
+        "actual_trades": len(snapshot.trades),
         "heartbeat_records": kinds[EventKind.HEARTBEAT.value],
         "platform_state_records": kinds[EventKind.PLATFORM_STATE.value],
         "subscription_start_records": kinds[EventKind.SUBSCRIPTION_START.value],
@@ -1071,6 +1358,8 @@ def _event_summary(
         "book_stream_observed": book_stream_observed,
         "book_gap_records": (len(snapshot.book_gaps) if book_stream_observed else None),
         "reconnect_records": kinds[EventKind.RECONNECT.value],
+        "catalog_snapshot_records": kinds[EventKind.CATALOG_SNAPSHOT.value],
+        "scheduled_block_state_records": kinds[EventKind.SCHEDULED_BLOCK_STATE.value],
         "platform_locked": (
             snapshot.platform_state.locked if snapshot.platform_state is not None else None
         ),
@@ -1101,7 +1390,13 @@ def inspect_payload(
 ) -> dict[str, object]:
     payload = _event_summary(manifest, events)
     try:
-        payload.update(projection_payload(project_events(events)))
+        projection = project_events(events)
+        payload.update(projection_payload(projection))
+        payload["decision_receipt_digest"] = build_decision_receipt(
+            manifest,
+            projection,
+            code_revision=_repository_state()[0],
+        ).digest
     except RuntimeError as error:
         payload["projection_error"] = str(error)
     return payload
@@ -1112,6 +1407,10 @@ def run_public_capture(output: Path, duration_seconds: int) -> dict[str, object]
         raise ValueError("duration_seconds must be positive")
     if output.exists() and any(output.iterdir()):
         raise ValueError("capture output directory must be empty or absent")
+    code_revision, code_dirty = _repository_state()
+    if code_dirty:
+        raise RuntimeError("production Decision evidence requires a clean code revision")
+    input_contract = DecisionInputContract()
     session = _LiveSession()
     option_catalog = _public_result(
         "get_instruments",
@@ -1131,6 +1430,7 @@ def run_public_capture(output: Path, duration_seconds: int) -> dict[str, object]
         _instrument_rows(option_catalog.result),
         _instrument_rows(future_catalog.result),
         as_of_ms=catalog_market_at_ms,
+        validity_buffer_ms=input_contract.catalog_max_age_ms,
     )
     session.record_catalog(
         selected[1:],
@@ -1142,6 +1442,13 @@ def run_public_capture(output: Path, duration_seconds: int) -> dict[str, object]
         received_at_ms=future_catalog.clock.received_at_ms,
         elapsed_ms=future_catalog.clock.elapsed_ms,
     )
+    catalog_clock = session.clock_sample()
+    session.record_catalog_snapshot(
+        (str(row["instrument_name"]) for row in selected),
+        source_at_ms=catalog_market_at_ms,
+        received_at_ms=catalog_clock.received_at_ms,
+        elapsed_ms=catalog_clock.elapsed_ms,
+    )
     option_names = tuple(str(row["instrument_name"]) for row in selected[1:])
     channels = (
         f"ticker.{REFERENCE}.agg2",
@@ -1150,6 +1457,7 @@ def run_public_capture(output: Path, duration_seconds: int) -> dict[str, object]
         *(f"ticker.{name}.agg2" for name in option_names),
     )
     deadline: float | None = None
+    next_catalog_refresh: float | None = None
     reconnect_pending = False
     active_connection = False
     while deadline is None or time.monotonic() < deadline:
@@ -1183,7 +1491,31 @@ def run_public_capture(output: Path, duration_seconds: int) -> dict[str, object]
                 reconnect_pending = False
                 if deadline is None:
                     deadline = time.monotonic() + duration_seconds
+                    next_catalog_refresh = time.monotonic() + input_contract.catalog_refresh_seconds
+                request_id = 10
                 while time.monotonic() < deadline:
+                    if (
+                        next_catalog_refresh is not None
+                        and time.monotonic() >= next_catalog_refresh
+                    ):
+                        option_names, request_id, test_request_id = _refresh_catalog(
+                            connection,
+                            session,
+                            current_option_names=option_names,
+                            request_id=request_id,
+                            test_request_id=test_request_id,
+                            input_contract=input_contract,
+                        )
+                        channels = (
+                            f"ticker.{REFERENCE}.agg2",
+                            f"trades.{REFERENCE}.agg2",
+                            "platform_state",
+                            *(f"ticker.{name}.agg2" for name in option_names),
+                        )
+                        next_catalog_refresh = (
+                            time.monotonic() + input_contract.catalog_refresh_seconds
+                        )
+                        continue
                     remaining = deadline - time.monotonic()
                     try:
                         received = _message(
@@ -1219,14 +1551,26 @@ def run_public_capture(output: Path, duration_seconds: int) -> dict[str, object]
     output.mkdir(parents=True, exist_ok=True)
     manifest = write_capture(output / "capture", session.events, complete=True)
     events = tuple(session.events)
+    decision_receipt = build_decision_receipt(
+        manifest,
+        projection,
+        code_revision=code_revision,
+    )
+    encoded_decision_receipt = decision_receipt_payload(decision_receipt)
     result = {
         "receipt_type": CAPTURE_RECEIPT_TYPE,
         "environment": "production_public",
         "duration_seconds": duration_seconds,
         **_event_summary(manifest, events),
         **projection_payload(projection),
+        "decision_receipt_digest": decision_receipt.digest,
+        "code_revision": code_revision,
         "evidence_class": LIVE_CAPTURE_EVIDENCE,
     }
+    (output / "decision.json").write_text(
+        json.dumps(encoded_decision_receipt, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     (output / "live.json").write_text(
         json.dumps(canonical_value(result), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

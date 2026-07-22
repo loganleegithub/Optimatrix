@@ -31,6 +31,7 @@ def _parser() -> argparse.ArgumentParser:
     replay.add_argument("capture", type=Path)
     replay.add_argument("--output", type=Path, required=True)
     replay.add_argument("--live", type=Path)
+    replay.add_argument("--decision", type=Path)
     return parser
 
 
@@ -62,7 +63,13 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(raw_live, dict):
             raise ValueError("live result must be an object")
         live = cast(dict[str, object], raw_live)
-    payload = replay_payload(manifest, events, live=live)
+    decision: dict[str, object] | None = None
+    if arguments.decision is not None:
+        raw_decision: object = json.loads(arguments.decision.read_text(encoding="utf-8"))
+        if not isinstance(raw_decision, dict):
+            raise ValueError("Decision receipt must be an object")
+        decision = cast(dict[str, object], raw_decision)
+    payload = replay_payload(manifest, events, live=live, decision_receipt=decision)
     arguments.output.mkdir(parents=True, exist_ok=False)
     (arguments.output / "replay.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
