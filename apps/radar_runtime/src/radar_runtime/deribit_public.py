@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import statistics
-import subprocess
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
@@ -23,6 +22,8 @@ from market_tape import (
     MarketTapeReducer,
     canonical_digest,
     canonical_value,
+    catalog_generation_identity,
+    instrument_metadata_identity,
     validate_capture,
     write_capture,
 )
@@ -36,11 +37,14 @@ from short_vol_radar import (
     RadarDecision,
     RadarPolicy,
     RadarProjector,
+    build_decision_readiness,
     evaluate_radar_evidence,
 )
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
+
+from radar_runtime.runtime_identity import RuntimeSourceIdentity, runtime_source_identity
 
 REFERENCE = "BTC_USDC-PERPETUAL"
 REST_ROOT = "https://www.deribit.com/api/v2/public"
@@ -321,6 +325,7 @@ def projection_payload(projection: RadarProjection) -> dict[str, object]:
     frame = projection.frame
     decision = projection.decision
     evaluation = projection.evaluation
+    readiness = build_decision_readiness(frame)
     policy = RadarPolicy()
     window = frame.window(3_600)
     frame_lineage_violations = sum(
@@ -339,6 +344,8 @@ def projection_payload(projection: RadarProjection) -> dict[str, object]:
         "policy_digest": policy.digest,
         "frame_lineage_order": ("VERIFIED" if frame_lineage_violations == 0 else "VIOLATION"),
         "frame_lineage_violations": frame_lineage_violations,
+        "frame_lineage_count": len(frame.source_capture_seqs),
+        "frame_lineage_digest": canonical_digest(frame.source_capture_seqs),
         "decision_action": decision.action.value,
         "decision_reason": decision.reason,
         "decision_digest": decision.digest,
@@ -346,8 +353,15 @@ def projection_payload(projection: RadarProjection) -> dict[str, object]:
         "evaluated_structure_id": decision.selected_candidate_id,
         "research_candidate_emitted": (decision.action is RadarAction.RESEARCH_CANDIDATE),
         "research_candidate_count": int(decision.action is RadarAction.RESEARCH_CANDIDATE),
+        "option_quote_count": evaluation.option_quote_count,
+        "option_quote_set_digest": evaluation.option_quote_set_digest,
         "executable_structure_count": evaluation.executable_structure_count,
         "structure_set_digest": evaluation.structure_set_digest,
+        "assessment_opportunity_count": evaluation.assessment_opportunity_count,
+        "assessment_unavailable_count": evaluation.assessment_unavailable_count,
+        "assessment_unavailable_reason_counts": [
+            list(item) for item in evaluation.assessment_unavailable_reason_counts
+        ],
         "assessment_count": evaluation.assessment_count,
         "assessment_set_digest": evaluation.assessment_set_digest,
         "passed_assessment_count": evaluation.passed_assessment_count,
@@ -359,6 +373,18 @@ def projection_payload(projection: RadarProjection) -> dict[str, object]:
         "platform_state": frame.platform_state,
         "platform_locked": frame.platform_locked,
         "scheduled_block_observed": frame.scheduled_block_observed,
+        "scheduled_block_current": frame.scheduled_block_current,
+        "scheduled_block_source_id": frame.scheduled_block_source_id,
+        "scheduled_block_valid_from": (
+            frame.scheduled_block_valid_from.isoformat()
+            if frame.scheduled_block_valid_from is not None
+            else None
+        ),
+        "scheduled_block_valid_until": (
+            frame.scheduled_block_valid_until.isoformat()
+            if frame.scheduled_block_valid_until is not None
+            else None
+        ),
         "scheduled_block": frame.scheduled_block,
         "catalog_scope": frame.catalog_scope,
         "catalog_snapshot_capture_seq": frame.catalog_snapshot_capture_seq,
@@ -368,7 +394,14 @@ def projection_payload(projection: RadarProjection) -> dict[str, object]:
         "catalog_age_ms": frame.catalog_age_ms,
         "catalog_instrument_count": frame.catalog_instrument_count,
         "catalog_instrument_names_digest": frame.catalog_instrument_names_digest,
+        "catalog_generation_id": frame.catalog_generation_id,
+        "catalog_metadata_set_digest": frame.catalog_metadata_set_digest,
+        "catalog_instrument_source_capture_seqs": list(
+            frame.catalog_instrument_source_capture_seqs
+        ),
+        "catalog_generation_complete": frame.catalog_generation_complete,
         "frame_complete": frame.complete,
+        "decision_readiness": canonical_value(readiness),
         "unknown_reasons": list(frame.completeness_reasons),
         "required_window_coverage": [
             {
@@ -428,30 +461,12 @@ def projection_payload(projection: RadarProjection) -> dict[str, object]:
     }
 
 
-def _repository_state() -> tuple[str, bool]:
-    repository = Path(__file__).resolve().parents[4]
-    revision = subprocess.run(
-        ("git", "-C", str(repository), "rev-parse", "HEAD"),
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    status = subprocess.run(
-        ("git", "-C", str(repository), "status", "--porcelain"),
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    if not revision:
-        raise RuntimeError("cannot identify the Decision code revision")
-    return revision, bool(status.strip())
-
-
 def build_decision_receipt(
     manifest: CaptureManifest,
     projection: RadarProjection,
     *,
-    code_revision: str,
+    source_identity: RuntimeSourceIdentity,
+    receipt_git_commit_sha: str | None = None,
 ) -> DecisionReceipt:
     frame = projection.frame
     policy = RadarPolicy()
@@ -461,7 +476,9 @@ def build_decision_receipt(
         capture_format=manifest.format_id,
         capture_digest=manifest.content_sha256,
         capture_manifest_digest=manifest.digest,
-        code_revision=code_revision,
+        git_commit_sha=receipt_git_commit_sha or source_identity.git_commit_sha,
+        runtime_source_id=source_identity.runtime_source_id,
+        runtime_source_digest=source_identity.runtime_source_digest,
         final_event_capture_seq=projection.final_event_capture_seq,
         frame_capture_seq=frame.as_of_capture_seq,
         frame_digest=frame.digest,
@@ -471,6 +488,7 @@ def build_decision_receipt(
         input_contract_digest=frame.input_contract_digest,
         policy_id=policy.policy_id,
         policy_digest=policy.digest,
+        readiness=build_decision_readiness(frame),
         evaluation=projection.evaluation,
     )
 
@@ -567,19 +585,50 @@ def replay_payload(
     *,
     live: Mapping[str, object] | None = None,
     decision_receipt: Mapping[str, object] | None = None,
-    code_revision: str | None = None,
+    source_identity: RuntimeSourceIdentity | None = None,
 ) -> dict[str, object]:
     metadata = capture_evidence_metadata(manifest, events)
     projected = project_events(events)
     projection = projection_payload(projected)
-    active_revision = code_revision or _repository_state()[0]
+    identity_source = decision_receipt or live
+    active_identity = source_identity or runtime_source_identity(
+        require_clean=identity_source is not None
+    )
+    if active_identity.dirty_paths and (identity_source is not None or source_identity is not None):
+        raise RuntimeError(
+            "Decision runtime source scope is dirty: " + ",".join(active_identity.dirty_paths)
+        )
+    receipt_git_commit_sha = active_identity.git_commit_sha
+    if identity_source is not None:
+        expected_source_id = identity_source.get("runtime_source_id")
+        expected_source_digest = identity_source.get("runtime_source_digest")
+        expected_git_commit = identity_source.get("git_commit_sha")
+        if (
+            expected_source_id != active_identity.runtime_source_id
+            or expected_source_digest != active_identity.runtime_source_digest
+        ):
+            raise ValueError("Decision runtime source identity mismatch")
+        if not isinstance(expected_git_commit, str) or not expected_git_commit:
+            raise ValueError("Decision Git provenance is missing")
+        receipt_git_commit_sha = expected_git_commit
     reconstructed_receipt = decision_receipt_payload(
-        build_decision_receipt(manifest, projected, code_revision=active_revision)
+        build_decision_receipt(
+            manifest,
+            projected,
+            source_identity=active_identity,
+            receipt_git_commit_sha=receipt_git_commit_sha,
+        )
     )
     payload = {
         **metadata,
         "records": manifest.record_count,
         "capture_digest": manifest.content_sha256,
+        "git_commit_sha": receipt_git_commit_sha,
+        "replay_git_commit_sha": active_identity.git_commit_sha,
+        "runtime_source_id": active_identity.runtime_source_id,
+        "runtime_source_digest": active_identity.runtime_source_digest,
+        "runtime_source_digest_match": (identity_source is not None),
+        "runtime_source_dirty_paths": list(active_identity.dirty_paths),
         **projection,
         "decision_receipt_digest": reconstructed_receipt["receipt_digest"],
     }
@@ -617,6 +666,9 @@ def replay_payload(
         "collector_elapsed_source": metadata["collector_elapsed_source"],
         "platform_state_contract": metadata["platform_state_contract"],
         "decision_truth_inputs_observed": True,
+        "git_commit_sha": receipt_git_commit_sha,
+        "runtime_source_id": active_identity.runtime_source_id,
+        "runtime_source_digest": active_identity.runtime_source_digest,
         "capture_digest": manifest.content_sha256,
         "records": manifest.record_count,
         "final_event_capture_seq": manifest.last_capture_seq,
@@ -711,40 +763,67 @@ class _LiveSession:
         )
         return event
 
-    def record_catalog(
+    def record_catalog_generation(
         self,
         rows: Iterable[Mapping[str, object]],
         *,
+        source_at_ms: int,
         received_at_ms: int,
         elapsed_ms: int | None = None,
     ) -> None:
-        for row in rows:
+        canonical_rows = tuple(
+            sorted(
+                (_canonical_instrument(row) for row in rows),
+                key=lambda item: str(item["instrument_name"]),
+            )
+        )
+        if not canonical_rows:
+            raise ValueError("catalog generation cannot be empty")
+        source_capture_seqs: list[int] = []
+        for row in canonical_rows:
             name = str(row["instrument_name"])
-            self._record(
+            event = self._record(
                 EventKind.INSTRUMENT,
                 "public/get_instruments",
-                _canonical_instrument(row),
+                row,
                 instrument_name=name,
                 received_at_ms=received_at_ms,
                 elapsed_ms=elapsed_ms,
             )
-
-    def record_catalog_snapshot(
-        self,
-        instrument_names: Iterable[str],
-        *,
-        source_at_ms: int,
-        received_at_ms: int | None = None,
-        elapsed_ms: int | None = None,
-    ) -> None:
-        names = tuple(sorted(set(instrument_names)))
+            source_capture_seqs.append(event.capture_seq)
+        source_set = set(source_capture_seqs)
+        instruments = tuple(
+            item
+            for item in self.projector.reducer.snapshot().instruments
+            if item.source_capture_seq in source_set
+        )
+        if len(instruments) != len(canonical_rows):
+            raise RuntimeError("recorded catalog metadata generation is incomplete")
+        instruments = tuple(sorted(instruments, key=lambda item: item.instrument_name))
+        names = tuple(item.instrument_name for item in instruments)
+        sources = tuple(item.source_capture_seq for item in instruments)
+        metadata_set_digest = canonical_digest(
+            tuple(instrument_metadata_identity(item) for item in instruments)
+        )
+        generation_id = catalog_generation_identity(
+            scope=CATALOG_SCOPE,
+            source_at_ms=source_at_ms,
+            reference_instrument=REFERENCE,
+            instrument_names=names,
+            instrument_source_capture_seqs=sources,
+            metadata_set_digest=metadata_set_digest,
+        )
         self._record(
             EventKind.CATALOG_SNAPSHOT,
             "public/get_instruments",
             {
                 "timestamp": source_at_ms,
                 "scope": CATALOG_SCOPE,
+                "reference_instrument": REFERENCE,
                 "instrument_names": names,
+                "instrument_source_capture_seqs": sources,
+                "metadata_set_digest": metadata_set_digest,
+                "generation_id": generation_id,
             },
             exchange_timestamp_ms=source_at_ms,
             received_at_ms=received_at_ms,
@@ -1192,12 +1271,6 @@ def _refresh_catalog(
         as_of_ms=catalog_market_at_ms,
         validity_buffer_ms=input_contract.catalog_max_age_ms,
     )
-    catalog_clock = session.clock_sample()
-    session.record_catalog(
-        selected,
-        received_at_ms=catalog_clock.received_at_ms,
-        elapsed_ms=catalog_clock.elapsed_ms,
-    )
     next_option_names = tuple(str(row["instrument_name"]) for row in selected[1:])
     added = tuple(sorted(set(next_option_names) - set(current_option_names)))
     removed = tuple(sorted(set(current_option_names) - set(next_option_names)))
@@ -1216,8 +1289,8 @@ def _refresh_catalog(
             raise RuntimeError("Deribit option catalog subscription change was not accepted")
         request_id += 1
     snapshot_clock = session.clock_sample()
-    session.record_catalog_snapshot(
-        (str(row["instrument_name"]) for row in selected),
+    session.record_catalog_generation(
+        selected,
         source_at_ms=catalog_market_at_ms,
         received_at_ms=snapshot_clock.received_at_ms,
         elapsed_ms=snapshot_clock.elapsed_ms,
@@ -1348,6 +1421,7 @@ def _event_summary(
         "option_instrument_count": sum(
             item.kind.value == "OPTION" for item in snapshot.instruments
         ),
+        "instrument_records": kinds[EventKind.INSTRUMENT.value],
         "ticker_records": kinds[EventKind.TICKER.value],
         "trade_batch_records": kinds[EventKind.TRADE.value] + kinds[EventKind.TRADE_GAP.value],
         "actual_trades": len(snapshot.trades),
@@ -1387,16 +1461,23 @@ def _event_summary(
 def inspect_payload(
     manifest: CaptureManifest,
     events: tuple[CanonicalEvent, ...],
+    *,
+    source_identity: RuntimeSourceIdentity | None = None,
 ) -> dict[str, object]:
     payload = _event_summary(manifest, events)
     try:
+        active_identity = source_identity or runtime_source_identity(require_clean=False)
         projection = project_events(events)
         payload.update(projection_payload(projection))
         payload["decision_receipt_digest"] = build_decision_receipt(
             manifest,
             projection,
-            code_revision=_repository_state()[0],
+            source_identity=active_identity,
         ).digest
+        payload["git_commit_sha"] = active_identity.git_commit_sha
+        payload["runtime_source_id"] = active_identity.runtime_source_id
+        payload["runtime_source_digest"] = active_identity.runtime_source_digest
+        payload["runtime_source_dirty_paths"] = list(active_identity.dirty_paths)
     except RuntimeError as error:
         payload["projection_error"] = str(error)
     return payload
@@ -1407,9 +1488,7 @@ def run_public_capture(output: Path, duration_seconds: int) -> dict[str, object]
         raise ValueError("duration_seconds must be positive")
     if output.exists() and any(output.iterdir()):
         raise ValueError("capture output directory must be empty or absent")
-    code_revision, code_dirty = _repository_state()
-    if code_dirty:
-        raise RuntimeError("production Decision evidence requires a clean code revision")
+    source_identity = runtime_source_identity(require_clean=True)
     input_contract = DecisionInputContract()
     session = _LiveSession()
     option_catalog = _public_result(
@@ -1432,19 +1511,9 @@ def run_public_capture(output: Path, duration_seconds: int) -> dict[str, object]
         as_of_ms=catalog_market_at_ms,
         validity_buffer_ms=input_contract.catalog_max_age_ms,
     )
-    session.record_catalog(
-        selected[1:],
-        received_at_ms=option_catalog.clock.received_at_ms,
-        elapsed_ms=option_catalog.clock.elapsed_ms,
-    )
-    session.record_catalog(
-        selected[:1],
-        received_at_ms=future_catalog.clock.received_at_ms,
-        elapsed_ms=future_catalog.clock.elapsed_ms,
-    )
     catalog_clock = session.clock_sample()
-    session.record_catalog_snapshot(
-        (str(row["instrument_name"]) for row in selected),
+    session.record_catalog_generation(
+        selected,
         source_at_ms=catalog_market_at_ms,
         received_at_ms=catalog_clock.received_at_ms,
         elapsed_ms=catalog_clock.elapsed_ms,
@@ -1554,7 +1623,7 @@ def run_public_capture(output: Path, duration_seconds: int) -> dict[str, object]
     decision_receipt = build_decision_receipt(
         manifest,
         projection,
-        code_revision=code_revision,
+        source_identity=source_identity,
     )
     encoded_decision_receipt = decision_receipt_payload(decision_receipt)
     result = {
@@ -1564,7 +1633,9 @@ def run_public_capture(output: Path, duration_seconds: int) -> dict[str, object]
         **_event_summary(manifest, events),
         **projection_payload(projection),
         "decision_receipt_digest": decision_receipt.digest,
-        "code_revision": code_revision,
+        "git_commit_sha": source_identity.git_commit_sha,
+        "runtime_source_id": source_identity.runtime_source_id,
+        "runtime_source_digest": source_identity.runtime_source_digest,
         "evidence_class": LIVE_CAPTURE_EVIDENCE,
     }
     (output / "decision.json").write_text(

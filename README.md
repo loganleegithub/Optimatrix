@@ -65,13 +65,33 @@ The Deribit collector requires no credentials:
 .venv/bin/python -m radar_runtime capture \
   --duration-seconds 15 \
   --output /tmp/optimatrix-bounded
-.venv/bin/python -m radar_runtime inspect /tmp/optimatrix-bounded/capture
+.venv/bin/python -m radar_runtime inspect \
+  /tmp/optimatrix-bounded/capture \
+  --output /tmp/optimatrix-inspect.json
 .venv/bin/python -m radar_runtime replay \
   /tmp/optimatrix-bounded/capture \
   --live /tmp/optimatrix-bounded/live.json \
   --decision /tmp/optimatrix-bounded/decision.json \
   --output /tmp/optimatrix-bounded-replay
 ```
+
+After a required greater-than-one-hour Decision Truth run, package its capture and independently
+generated inspect/replay results into one hash-verifiable evidence bundle outside the repository:
+
+```bash
+.venv/bin/python -m radar_runtime bundle \
+  --capture-output /tmp/optimatrix-bounded \
+  --inspect /tmp/optimatrix-inspect.json \
+  --replay /tmp/optimatrix-bounded-replay/replay.json \
+  --output /tmp/optimatrix-decision-truth-bundle
+.venv/bin/python -m radar_runtime verify-bundle \
+  /tmp/optimatrix-decision-truth-bundle \
+  --archive /tmp/optimatrix-decision-truth-bundle.tar.gz
+```
+
+The bundle contains the sealed capture, manifest, Decision/live/inspect/replay artifacts,
+`SHA256SUMS`, a bundle manifest, and an automatically generated Chinese report that remains
+explicitly pending human business acceptance.
 
 This creates one bounded capture receipt and one Decision receipt, not a continuous acquisition or
 production Shadow service. A

@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 
 import pytest
+import short_vol_radar.decision as decision_module
 from market_tape import CanonicalEvent, EventKind
 from options_domain import ComboQuote, build_surface_summary
 from radar_runtime.fixture import build_fixture_events, replay_fixture
@@ -14,6 +15,7 @@ from short_vol_radar import (
     RadarProjector,
     estimate_path_risk,
     evaluate_radar,
+    evaluate_radar_evidence,
 )
 
 
@@ -70,6 +72,32 @@ def test_one_missing_required_window_makes_risk_unknown() -> None:
 
     assert not risk.complete
     assert "REQUIRED_PATH_WINDOW_UNKNOWN" in risk.incomplete_reasons
+
+
+def test_receipt_counts_all_456_unavailable_assessment_opportunities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame, decision = replay_fixture(build_fixture_events())
+    assert decision.assessment is not None
+    candidate = decision.assessment.candidate
+    monkeypatch.setattr(
+        decision_module,
+        "enumerate_verticals",
+        lambda **_: (candidate,) * 114,
+    )
+    unknown = replace(
+        frame,
+        complete=False,
+        completeness_reasons=("TEST_RISK_UNKNOWN",),
+    )
+
+    evaluation = evaluate_radar_evidence(unknown)
+
+    assert evaluation.executable_structure_count == 114
+    assert evaluation.assessment_opportunity_count == 456
+    assert evaluation.assessment_unavailable_count == 456
+    assert evaluation.assessment_count == 0
+    assert evaluation.assessment_unavailable_reason_counts == (("TEST_RISK_UNKNOWN", 456),)
 
 
 def test_input_contract_and_policy_have_separate_identities() -> None:

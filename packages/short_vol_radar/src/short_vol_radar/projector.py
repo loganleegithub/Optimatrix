@@ -13,6 +13,7 @@ from typing import cast
 from market_tape import (
     CanonicalEvent,
     EventKind,
+    Instrument,
     InstrumentKind,
     MarketTapeReducer,
     MarketTapeSnapshot,
@@ -114,6 +115,9 @@ class RadarProjector:
         self._scheduled_block_observed = False
         self._scheduled_block: str | None = None
         self._scheduled_block_source_capture_seq: int | None = None
+        self._scheduled_block_source_id: str | None = None
+        self._scheduled_block_valid_from_ms: int | None = None
+        self._scheduled_block_valid_until_ms: int | None = None
         self._last_event: CanonicalEvent | None = None
         self._current_frame: DecisionFrame | None = None
 
@@ -149,15 +153,32 @@ class RadarProjector:
             payload = _payload(event)
             state = payload.get("state")
             label = payload.get("label")
+            source_id = payload.get("source_id")
+            valid_from_ms = payload.get("valid_from_ms")
+            valid_until_ms = payload.get("valid_until_ms")
             if state not in {"CLEAR", "BLOCKED"}:
                 raise ValueError("scheduled-block state must be CLEAR or BLOCKED")
             if state == "BLOCKED" and (not isinstance(label, str) or not label):
                 raise ValueError("blocked scheduled state requires a label")
             if state == "CLEAR" and label is not None:
                 raise ValueError("clear scheduled state cannot have a label")
+            if not isinstance(source_id, str) or not source_id:
+                raise ValueError("scheduled-block source identity is required")
+            if (
+                not isinstance(valid_from_ms, int)
+                or isinstance(valid_from_ms, bool)
+                or not isinstance(valid_until_ms, int)
+                or isinstance(valid_until_ms, bool)
+                or valid_from_ms <= 0
+                or valid_until_ms < valid_from_ms
+            ):
+                raise ValueError("scheduled-block validity interval is invalid")
             self._scheduled_block_observed = True
             self._scheduled_block = str(label) if state == "BLOCKED" else None
             self._scheduled_block_source_capture_seq = event.capture_seq
+            self._scheduled_block_source_id = source_id
+            self._scheduled_block_valid_from_ms = valid_from_ms
+            self._scheduled_block_valid_until_ms = valid_until_ms
             frame = self._frame(
                 event,
                 dynamics_override=self._current_reference_dynamics,
@@ -382,7 +403,9 @@ class RadarProjector:
         )
         catalog = snapshot.catalog_snapshot
         catalog_matches = bool(
-            catalog is not None and catalog.scope == self.input_contract.catalog_scope
+            catalog is not None
+            and catalog.scope == self.input_contract.catalog_scope
+            and catalog.reference_instrument == self.reference_instrument
         )
         catalog_names = (
             frozenset(catalog.instrument_names)
@@ -398,7 +421,7 @@ class RadarProjector:
             snapshot,
             market_now_ms,
             observed_now_ms,
-            catalog_names=catalog_names,
+            catalog_instruments=(catalog.instruments if catalog_matches and catalog else ()),
         )
         combo_quotes: tuple[ComboQuote, ...] = ()
         surface: SurfaceSummary = build_surface_summary(option_quotes, as_of=surface_as_of)
@@ -443,12 +466,9 @@ class RadarProjector:
         elif catalog_age_ms is None or catalog_age_ms > self.input_contract.catalog_max_age_ms:
             reasons.append("CATALOG_SNAPSHOT_STALE")
         catalog_option_names = catalog_names - {self.reference_instrument}
-        known_instrument_names = {item.instrument_name for item in snapshot.instruments}
-        if catalog_names and not catalog_names.issubset(known_instrument_names):
-            reasons.append("CATALOG_INSTRUMENT_METADATA_INCOMPLETE")
         expected_option_names = {
             item.instrument_name
-            for item in snapshot.instruments
+            for item in (() if catalog is None or not catalog_matches else catalog.instruments)
             if item.instrument_name in catalog_option_names
             and item.kind is InstrumentKind.OPTION
             and item.active
@@ -500,8 +520,29 @@ class RadarProjector:
         effective_platform_locked: bool | None = (
             True if platform_is_locked else False if platform_is_open else None
         )
+        scheduled_block_current = bool(
+            self._scheduled_block_observed
+            and market_now_ms is not None
+            and self._scheduled_block_valid_from_ms is not None
+            and self._scheduled_block_valid_until_ms is not None
+            and self._scheduled_block_valid_from_ms
+            <= market_now_ms
+            <= self._scheduled_block_valid_until_ms
+        )
         if not self._scheduled_block_observed:
             reasons.append("SCHEDULED_BLOCK_UNKNOWN")
+        elif market_now_ms is None:
+            reasons.append("SCHEDULED_BLOCK_TIME_UNKNOWN")
+        elif (
+            self._scheduled_block_valid_from_ms is not None
+            and market_now_ms < self._scheduled_block_valid_from_ms
+        ):
+            reasons.append("SCHEDULED_BLOCK_NOT_YET_VALID")
+        elif (
+            self._scheduled_block_valid_until_ms is not None
+            and market_now_ms > self._scheduled_block_valid_until_ms
+        ):
+            reasons.append("SCHEDULED_BLOCK_STALE")
         elif self._scheduled_block is not None:
             reasons.append("SCHEDULED_BLOCK")
         source_capture_seqs = tuple(
@@ -513,6 +554,11 @@ class RadarProjector:
                     *(item.source_capture_seq for item in combo_quotes),
                     *(() if reference is None else (reference.capture_seq,)),
                     *(() if catalog is None or not catalog_matches else (catalog.capture_seq,)),
+                    *(
+                        ()
+                        if catalog is None or not catalog_matches
+                        else catalog.instrument_source_capture_seqs
+                    ),
                     *(
                         ()
                         if self._scheduled_block_source_capture_seq is None
@@ -590,8 +636,32 @@ class RadarProjector:
                 if catalog is not None and catalog_matches
                 else None
             ),
+            catalog_generation_id=(
+                catalog.generation_id if catalog is not None and catalog_matches else None
+            ),
+            catalog_metadata_set_digest=(
+                catalog.metadata_set_digest if catalog is not None and catalog_matches else None
+            ),
+            catalog_instrument_source_capture_seqs=(
+                catalog.instrument_source_capture_seqs
+                if catalog is not None and catalog_matches
+                else ()
+            ),
+            catalog_generation_complete=catalog_matches,
             scheduled_block_observed=self._scheduled_block_observed,
             scheduled_block_source_capture_seq=self._scheduled_block_source_capture_seq,
+            scheduled_block_source_id=self._scheduled_block_source_id,
+            scheduled_block_valid_from=(
+                datetime.fromtimestamp(self._scheduled_block_valid_from_ms / 1_000, tz=UTC)
+                if self._scheduled_block_valid_from_ms is not None
+                else None
+            ),
+            scheduled_block_valid_until=(
+                datetime.fromtimestamp(self._scheduled_block_valid_until_ms / 1_000, tz=UTC)
+                if self._scheduled_block_valid_until_ms is not None
+                else None
+            ),
+            scheduled_block_current=scheduled_block_current,
             scheduled_block=self._scheduled_block,
             complete=not reasons,
             completeness_reasons=tuple(reasons),
@@ -614,14 +684,12 @@ class RadarProjector:
         market_now_ms: int | None,
         observed_now_ms: int,
         *,
-        catalog_names: frozenset[str],
+        catalog_instruments: tuple[Instrument, ...],
     ) -> tuple[OptionQuote, ...]:
         instruments = {
             item.instrument_name: item
-            for item in snapshot.instruments
-            if item.kind is InstrumentKind.OPTION
-            and item.active
-            and item.instrument_name in catalog_names
+            for item in catalog_instruments
+            if item.kind is InstrumentKind.OPTION and item.active
         }
         tickers = {item.instrument_name: item for item in snapshot.tickers}
         quotes: list[OptionQuote] = []

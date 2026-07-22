@@ -20,6 +20,9 @@ from market_tape.contracts import (
     PlatformState,
     TickerFact,
     TradeFact,
+    canonical_digest,
+    catalog_generation_identity,
+    instrument_metadata_identity,
 )
 
 
@@ -81,6 +84,7 @@ class MarketTapeReducer:
         self._last_collector_received_at_ms = 0
         self._last_collector_elapsed_ms: int | None = None
         self._instruments: dict[str, Instrument] = {}
+        self._instrument_events: dict[int, Instrument] = {}
         self._catalog_snapshot: CatalogSnapshot | None = None
         self._tickers: dict[str, TickerFact] = {}
         self._trades: list[TradeFact] = []
@@ -290,6 +294,7 @@ class MarketTapeReducer:
         except (ArithmeticError, ValueError) as error:
             raise TapeContractError("instrument metadata is invalid") from error
         self._instruments[name] = instrument
+        self._instrument_events[event.capture_seq] = instrument
 
     def _ingest_catalog_snapshot(
         self,
@@ -301,15 +306,60 @@ class MarketTapeReducer:
             isinstance(item, str) and item for item in raw_names
         ):
             raise TapeContractError("catalog snapshot instrument_names must be a string list")
+        names = tuple(raw_names)
+        raw_sources = payload.get("instrument_source_capture_seqs")
+        if not isinstance(raw_sources, list) or not all(
+            isinstance(item, int) and not isinstance(item, bool) for item in raw_sources
+        ):
+            raise TapeContractError("catalog snapshot instrument sources must be an integer list")
+        sources = tuple(raw_sources)
+        reference_instrument = payload.get("reference_instrument")
+        metadata_set_digest = payload.get("metadata_set_digest")
+        generation_id = payload.get("generation_id")
+        if not isinstance(reference_instrument, str) or not reference_instrument:
+            raise TapeContractError("catalog snapshot reference instrument is required")
+        if not isinstance(metadata_set_digest, str) or not metadata_set_digest:
+            raise TapeContractError("catalog snapshot metadata digest is required")
+        if not isinstance(generation_id, str) or not generation_id:
+            raise TapeContractError("catalog snapshot generation identity is required")
         source_at_ms = _positive_int(payload.get("timestamp"), "timestamp")
         _require_market_envelope(event, source_at_ms)
+        prior_snapshot_seq = self._catalog_snapshot.capture_seq if self._catalog_snapshot else 0
+        if any(item <= prior_snapshot_seq or item >= event.capture_seq for item in sources):
+            raise TapeContractError("catalog generation reuses stale instrument metadata")
+        try:
+            instruments = tuple(self._instrument_events[item] for item in sources)
+        except KeyError as error:
+            raise TapeContractError("catalog generation instrument metadata is missing") from error
+        if any(self._instruments.get(item.instrument_name) != item for item in instruments):
+            raise TapeContractError("catalog generation does not use latest instrument metadata")
+        expected_metadata_digest = canonical_digest(
+            tuple(instrument_metadata_identity(item) for item in instruments)
+        )
+        if metadata_set_digest != expected_metadata_digest:
+            raise TapeContractError("catalog generation metadata digest disagrees")
+        expected_generation = catalog_generation_identity(
+            scope=str(payload.get("scope", "")),
+            source_at_ms=source_at_ms,
+            reference_instrument=reference_instrument,
+            instrument_names=names,
+            instrument_source_capture_seqs=sources,
+            metadata_set_digest=metadata_set_digest,
+        )
+        if generation_id != expected_generation:
+            raise TapeContractError("catalog generation identity disagrees")
         try:
             self._catalog_snapshot = CatalogSnapshot(
                 capture_seq=event.capture_seq,
                 source_at_ms=source_at_ms,
                 observed_elapsed_ms=event.collector_elapsed_ms,
                 scope=str(payload.get("scope", "")),
-                instrument_names=tuple(raw_names),
+                reference_instrument=reference_instrument,
+                instrument_names=names,
+                instrument_source_capture_seqs=sources,
+                metadata_set_digest=metadata_set_digest,
+                generation_id=generation_id,
+                instruments=instruments,
             )
         except ValueError as error:
             raise TapeContractError(str(error)) from error

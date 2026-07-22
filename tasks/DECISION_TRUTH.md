@@ -21,10 +21,12 @@ strict as-of market facts are evaluated under the immutable deployed input contr
 **When:** the runtime projects the final `DecisionFrame`, scans the complete authorized 0–72h
 vertical universe, evaluates every configured horizon, and makes one decision.
 
-**Then:** one durable `SHORT_VOL_DECISION_RECEIPT` freezes the exact action, code revision,
+**Then:** one durable `SHORT_VOL_DECISION_RECEIPT` freezes the exact action, Git provenance and
+runtime-source identity,
 `DERIBIT_PUBLIC_SHORT_VOL_DECISION_INPUT` identity/digest,
 `OBSERVED_PATH_STRESS_FIXED_PRIOR_POLICY` identity/digest, frame and lineage identities, complete
-scanned-universe and assessment-set identities/counts, failure summaries, and the full selected
+scanned-universe and assessment-set identities/counts, frame/readiness summaries, assessment
+opportunity/unavailable counts and reasons, predicate-failure summaries, and the full selected
 assessment when one exists.
 
 **Independent verification:** a fresh process reads the sealed capture, reconstructs the final
@@ -42,8 +44,10 @@ clear, or executable.
 `DERIBIT_PUBLIC_SHORT_VOL_DECISION_INPUT`; freeze
 `BTC_USDC-PERPETUAL.ticker.index_price` as the only reference path, require every configured price
 and flow window, preserve missing four-sided option depth and scheduled-block evidence as
-`UNKNOWN`, refresh the bounded public catalog every 300 seconds and require its complete snapshot
-to be no older than 360 seconds at the decision, and persist complete Decision lineage/identity.
+`UNKNOWN`, require every scheduled-block fact to identify its source and explicit market-time
+validity interval, refresh the bounded public catalog every 300 seconds and require its complete
+same-generation metadata snapshot to be no older than 360 seconds at the decision, and persist
+complete Decision lineage/identity.
 
 **Decision Policy change:** NONE — preserve every value and formula under
 `OBSERVED_PATH_STRESS_FIXED_PRIOR_POLICY`; relocating readiness fields out of `RadarPolicy` does not
@@ -67,9 +71,11 @@ promotion, execution, or any advancement of `CURRENT_STAGE`.
 ## Scope
 
 **In:** input/readiness and Policy identity separation; reference-path source and continuity;
-all-window enforcement; explicit depth and scheduled-block missingness; bounded decision-as-of
-catalog snapshot refresh/validity; deterministic universe/assessment summaries; one durable
-Decision receipt; actual parsed trade count; inspect and independent replay equality/drift report.
+all-window enforcement; explicit depth and scheduled-block missingness/validity; bounded
+decision-as-of catalog generation refresh/validity; deterministic universe, opportunity,
+unavailable-assessment, assessment and readiness summaries; Git audit provenance plus a scoped
+runtime-source digest; one durable Decision receipt; actual parsed trade count; inspect and
+independent replay equality/drift report; one closure-specific durable evidence bundle.
 
 **Out:** RadarPolicy numeric changes; risk/insurance formulas; thresholds; horizons; option
 structure range; new data sources; Outcome runtime; long-running Shadow; Challenger; Promotion;
@@ -86,13 +92,18 @@ decision `capture_seq`; path samples come only from accepted `index_price` ticke
 prices affect flow only; the latest complete catalog snapshot determines the active decision-as-of
 0–72h universe and must satisfy the persisted elapsed-age limit.
 
-**Durable output and identity:** the receipt binds capture content, final event/frame, source
-lineage, code revision, input contract, Policy, scanned universe, deterministic assessment set,
-selected full assessment, decision, and receipt digest.
+**Durable output and identity:** the receipt binds capture content, final event/frame and readiness,
+source lineage, audit Git commit, authoritative runtime-source digest, input contract, Policy,
+same-generation catalog metadata, scanned universe, deterministic assessment opportunity and
+assessment sets, unavailable and predicate-failure summaries, selected full assessment, decision,
+and receipt digest. A different Git commit may replay only when the scoped runtime-source digest is
+identical; dirty files inside that scope invalidate production evidence and replay.
 
-**Missing/invalid/UNKNOWN semantics:** missing path/flow coverage, depth amount, catalog snapshot,
-catalog freshness, scheduled-block observation, platform proof, quote freshness, or lineage fails
-closed and is named. Empty observed trade flow remains zero only after complete flow coverage.
+**Missing/invalid/UNKNOWN semantics:** missing path/flow coverage, depth amount, a complete
+same-generation catalog snapshot, catalog freshness, scheduled-block observation/source/validity,
+platform proof, quote freshness, or lineage fails closed and is named. A scheduled fact whose
+Decision `market_as_of` is before `valid_from_ms` or after `valid_until_ms` is `UNKNOWN`; stale
+`CLEAR` never passes. Empty observed trade flow remains zero only after complete flow coverage.
 
 **Persisted contract identity/replay compatibility:** new evidence uses semantic identity
 `DERIBIT_PUBLIC_SHORT_VOL_DECISION_INPUT`; existing sealed captures without a catalog snapshot
@@ -107,10 +118,21 @@ scheduled-block observation remains valid Decision Truth only as explicit `UNKNO
    must be complete before risk is complete.
 2. Missing depth, scheduled-block observation, or a complete fresh catalog snapshot fails closed as
    named `UNKNOWN`; observed empty flow remains zero and is distinguishable from missing flow.
-3. A decision-as-of catalog refresh captures additions/removals and proves the 0–72h universe;
-   the receipt freezes all required identities/counts and rejects future lineage or digest drift.
-4. A fresh-process replay reconstructs the exact frame, universe, assessment set, selected
-   assessment, decision, and receipt from the sealed capture and reports zero or nonzero drift.
+3. Scheduled `CLEAR` and `BLOCKED` facts require source identity and an inclusive market-time
+   validity interval; absent, expired, future, or invalid facts fail closed across reconnects.
+4. A decision-as-of catalog refresh captures additions/removals and binds reference membership,
+   exact instrument source sequences, canonical metadata-set digest, and generation completeness;
+   stale metadata, missing reference, inactive members, or a failed refresh cannot form a new
+   complete snapshot.
+5. The receipt freezes all readiness and identity summaries. For `N` executable structures and
+   `H` configured horizons it reports `N × H` assessment opportunities, and partitions every
+   opportunity into assessed or unavailable with deterministic unavailable-reason counts. In
+   particular 114 structures and four horizons with unknown risk report 456 unavailable
+   opportunities.
+6. A fresh-process replay reconstructs the exact frame, universe, opportunity/assessment sets,
+   selected assessment, decision, and receipt from the sealed capture. It permits a different Git
+   commit only when the scoped runtime-source digest is identical, rejects dirty identity-scope
+   files or a runtime-source mismatch, and reports zero or nonzero decision drift.
 
 ### Required commands
 
@@ -120,9 +142,13 @@ scheduled-block observation remains valid Decision Truth only as explicit `UNKNO
 - `make check`
 - production capture: `.venv/bin/python -m radar_runtime capture --duration-seconds 3665 --output
   <fresh-output>`
-- artifact inspect: `.venv/bin/python -m radar_runtime inspect <fresh-output>/capture`
+- artifact inspect: `.venv/bin/python -m radar_runtime inspect <fresh-output>/capture --output
+  <inspect-json>`
 - fresh-process replay: `.venv/bin/python -m radar_runtime replay <fresh-output>/capture --live
   <fresh-output>/live.json --decision <fresh-output>/decision.json --output <fresh-replay-output>`
+- evidence bundle: `.venv/bin/python -m radar_runtime bundle --capture-output <fresh-output>
+  --inspect <inspect-json> --replay <fresh-replay-output>/replay.json --output <stable-bundle>`
+- bundle verification: `.venv/bin/python -m radar_runtime verify-bundle <stable-bundle>`
 
 ### Real evidence
 
@@ -133,16 +159,21 @@ scheduled-block observation remains valid Decision Truth only as explicit `UNKNO
 
 **Required report:** total records and actual parsed trades; every required window's
 coverage/readiness; trade/book gap and reconnect counts; platform and source-time anomalies;
-`UNKNOWN` reasons; action and candidate/entry/Outcome counts including zero; final event/frame
-sequences; capture/frame/input-contract/Policy/universe/assessment/decision/receipt digests;
-identity equality; fresh-process decision drift; and all evidence limitations.
+`UNKNOWN` reasons; action and candidate/entry/Outcome counts including zero; readiness summaries;
+assessment opportunity, unavailable, assessed, predicate-failure and passed counts; final
+event/frame sequences; capture/frame/input-contract/Policy/runtime-source/catalog-generation/
+universe/assessment/decision/receipt digests; Git provenance; identity equality; fresh-process
+decision drift; bundle hash verification; stable bundle link; and all evidence limitations.
 
 **Private API:** FORBIDDEN.
 
 ## Artifacts and delivery report
 
-**Capture/receipt/replay paths and hashes:** retained outside the repository under the fresh
-evidence output paths and recorded in the Draft PR plus final delivery report.
+**Capture/receipt/replay paths and hashes:** retained outside the repository as one durable bundle
+containing capture, manifest, Decision receipt, live result, inspect result, replay result,
+`SHA256SUMS`, a machine-readable bundle manifest, and an automatically generated Chinese business
+acceptance report. The stable link, archive SHA-256, contained-file hashes, and verification result
+are recorded in the Draft PR plus final delivery report.
 
 **Policy/contract identities:** `OBSERVED_PATH_STRESS_FIXED_PRIOR_POLICY` and
 `DERIBIT_PUBLIC_SHORT_VOL_DECISION_INPUT`; exact content digests are receipt fields.
