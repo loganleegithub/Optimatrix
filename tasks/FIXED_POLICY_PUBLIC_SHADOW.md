@@ -863,3 +863,38 @@ bundle hashes, canonical report, focused tests, full gate, and Draft PR exist; e
 zero/null/incomplete result and attestation limit is honest; existing Decision and Outcome meanings
 remain unchanged; no later-stage authority is claimed; and the task remains `ACTIVE` pending human
 business acceptance.
+
+## Addendum — descriptive business Funnel report
+
+**Business assertion:** the offline evidence-bundle report distinguishes candidate activity over
+all due opportunities from candidate activity conditional on complete Decisions, without
+discarding the `OPPORTUNITY_UNKNOWN`, `NO_ENTRY`, `ADMITTED`, or `CONCURRENCY_BLOCKED` partition.
+
+**Observable input / durable output:** the existing sealed Run result's `accounting` object is the
+only input. `BUSINESS_FUNNEL.json` and the corresponding canonical Chinese-report lines output
+`candidate_count / due_opportunity_count` as `raw_candidate_rate` and
+`candidate_count / complete_decision_count` as `candidate_rate_given_complete`. A zero
+denominator is explicit JSON `null` (semantic undefined), never zero, `NaN`, infinity, omission,
+or backfilled activity. The integer numerator/denominator count pair is the exact authoritative
+ratio. A defined rate string is only its deterministic decimal rendering under explicit
+`precision=28` and `ROUND_HALF_EVEN`; it is not claimed to be an exact finite decimal when the
+ratio repeats.
+
+**Scope:** offline report derivation, bundle binding/verification, and direct nonzero,
+`complete_decision_count=0`, and `due_opportunity_count=0` behavior tests only. The fixed Run still
+pre-registers twelve due opportunities; the zero-due case proves the report boundary and does not
+alter the Run schedule. This addendum does not reclassify any opportunity, rescan a Decision,
+change admission, or claim qualification.
+
+**Market/Decision input contract change:** NONE
+
+**Decision Policy change:** NONE
+
+**Outcome/evaluation contract change:** NONE
+
+**Stage/authorization change:** NONE
+
+**Valid zero/UNKNOWN result and non-claims:** zero candidates remains valid; all incomplete
+Decisions preserve `candidate_rate_given_complete=null`; an absent due denominator preserves both
+rates as null. These descriptive rates do not prove Policy quality, profitability, qualification,
+promotion readiness, fills, execution, or capital authority.
