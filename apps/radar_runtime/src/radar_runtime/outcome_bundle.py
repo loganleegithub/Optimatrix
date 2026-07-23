@@ -7,14 +7,33 @@ import hashlib
 import json
 import shutil
 import tarfile
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import cast
 
-from market_tape import canonical_digest
-
 BUNDLE_FORMAT_ID = "OPTIMATRIX_OUTCOME_TRUTH_EVIDENCE_BUNDLE"
+BUNDLE_MANIFEST_FIELDS = frozenset(
+    {
+        "bundle_format",
+        "generated_at",
+        "synthetic_result_digest",
+        "synthetic_entry_receipt_digest",
+        "synthetic_outcome_receipt_digest",
+        "synthetic_outcome_runtime_source_digest",
+        "public_result_digest",
+        "public_entry_count",
+        "public_outcome_count",
+        "public_outcome_status",
+        "public_full_capture_digest",
+        "public_decision_receipt_digest",
+        "public_entry_receipt_digest",
+        "public_outcome_receipt_digest",
+        "public_outcome_runtime_source_digest",
+        "public_collector_invocation_digest",
+        "artifacts",
+    }
+)
+BUNDLE_ARTIFACT_FIELDS = frozenset({"path", "bytes", "sha256"})
 
 
 def _sha256(path: Path) -> str:
@@ -44,7 +63,31 @@ _REPLAY_BOUND_FIELDS = (
     "input_contract_digest",
     "policy_digest",
     "outcome_contract_digest",
+    "collector_invocation_digest",
 )
+
+
+def _typed_equal(left: object, right: object) -> bool:
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(
+            _typed_equal(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(
+            _typed_equal(left_item, right_item)
+            for left_item, right_item in zip(left, right, strict=True)
+        )
+    return left == right
+
+
+def _is_git_commit_sha(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 40
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _validate_replay(
@@ -54,16 +97,31 @@ def _validate_replay(
 ) -> None:
     if payload.get("replay_verified") is not True:
         raise ValueError(f"{label} replay is not verified")
+    if not _is_git_commit_sha(payload.get("replay_git_commit_sha")):
+        raise ValueError(f"{label} replay verifier Git identity is invalid")
+    if (
+        payload.get("computation_reconstructed") is not True
+        or payload.get("external_source_attested") is not False
+        or payload.get("collector_witness_verified")
+        is not (run.get("fact_provenance") == "production_public")
+    ):
+        raise ValueError(f"{label} replay trust boundary is invalid")
     for field in (
         "decision_drift_count",
         "entry_drift_count",
         "outcome_drift_count",
+        "result_drift_count",
         "strict_future_violation_count",
     ):
-        if payload.get(field) != 0:
+        if type(payload.get(field)) is not int or payload.get(field) != 0:
             raise ValueError(f"{label} replay has nonzero {field}")
-    for field in ("decision_drift_fields", "entry_drift_fields", "outcome_drift_fields"):
-        if payload.get(field) != []:
+    for field in (
+        "decision_drift_fields",
+        "entry_drift_fields",
+        "outcome_drift_fields",
+        "result_drift_fields",
+    ):
+        if type(payload.get(field)) is not list or payload.get(field) != []:
             raise ValueError(f"{label} replay has inconsistent {field}")
     if not isinstance(run.get("result_digest"), str) or (
         payload.get("source_result_digest") != run["result_digest"]
@@ -73,6 +131,10 @@ def _validate_replay(
     for field in _REPLAY_BOUND_FIELDS:
         if payload.get(field) != run.get(field):
             raise ValueError(f"{label} replay disagrees on {field}")
+
+
+def _replay_semantic_payload(payload: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in payload.items() if key != "replay_git_commit_sha"}
 
 
 def _validate_cases(
@@ -92,7 +154,12 @@ def _validate_cases(
         or synthetic.get("admission_status") != "ADMITTED"
     ):
         raise ValueError("synthetic evidence requires one admitted Candidate")
-    if synthetic.get("entry_count") != 1 or synthetic.get("outcome_count") != 1:
+    if (
+        type(synthetic.get("entry_count")) is not int
+        or synthetic.get("entry_count") != 1
+        or type(synthetic.get("outcome_count")) is not int
+        or synthetic.get("outcome_count") != 1
+    ):
         raise ValueError("synthetic evidence requires exactly one Entry and Outcome")
     if synthetic.get("outcome_status") != "CLOSED":
         raise ValueError("synthetic evidence requires a CLOSED Outcome")
@@ -117,11 +184,14 @@ def _validate_cases(
         public.get("fact_provenance") != "production_public"
         or public.get("evidence_class") != "BOUNDED_PUBLIC_CAPTURE"
         or public.get("capture_complete") is not True
+        or not isinstance(public.get("collector_invocation_digest"), str)
     ):
         raise ValueError("public evidence provenance is invalid")
     entry_count = public.get("entry_count")
     outcome_count = public.get("outcome_count")
     admission_status = public.get("admission_status")
+    if type(entry_count) is not int or type(outcome_count) is not int:
+        raise ValueError("public evidence Entry/Outcome counts are invalid")
     valid_unknown_zero = (
         entry_count == 0
         and outcome_count == 0
@@ -150,15 +220,15 @@ def _validate_cases(
     )
     if not valid_unknown_zero and not valid_no_entry_zero and not valid_observed:
         raise ValueError("public evidence has an invalid Entry/Outcome result")
-    if public.get("duration_seconds") != 3_665:
+    if type(public.get("duration_seconds")) is not int or public.get("duration_seconds") != 3_665:
         raise ValueError("public evidence must be the authorized 3665-second capture")
     public_elapsed_span = public.get("collector_elapsed_span_ms")
     if (
         not isinstance(public_elapsed_span, int)
         or isinstance(public_elapsed_span, bool)
-        or not 3_665_000 <= public_elapsed_span <= 3_725_000
+        or public_elapsed_span < 0
     ):
-        raise ValueError("public evidence elapsed span is not the authorized bounded run")
+        raise ValueError("public evidence event span is invalid")
     _validate_replay(synthetic, synthetic_replay, "synthetic")
     _validate_replay(public, public_replay, "production-public")
 
@@ -179,101 +249,9 @@ def _validate_public_collector_artifacts(
     root: Path,
     result: dict[str, object],
 ) -> None:
-    paths = {
-        "live": root / "collector-live.json",
-        "decision": root / "collector-decision.json",
-        "inspect": root / "collector-inspect.json",
-        "invocation": root / "collector-invocation.json",
-    }
-    if any(not path.is_file() for path in paths.values()):
-        raise ValueError("production-public run is missing bounded collector artifacts")
-    live = _json_object(paths["live"], "production-public collector live receipt")
-    decision = _json_object(paths["decision"], "production-public collector Decision receipt")
-    inspected = _json_object(paths["inspect"], "production-public collector inspect")
-    invocation = _json_object(
-        paths["invocation"],
-        "production-public collector invocation",
-    )
-    from radar_runtime.deribit_public import (
-        CAPTURE_RECEIPT_TYPE,
-        LIVE_CAPTURE_EVIDENCE,
-        WEBSOCKET_URL,
-        _event_summary,
-        build_decision_receipt,
-        decision_receipt_payload,
-        inspect_payload,
-        project_events,
-        projection_payload,
-    )
-    from radar_runtime.outcome_runtime import PUBLIC_INVOCATION_RECEIPT_TYPE
-    from radar_runtime.outcome_seal import read_sealed_capture
-    from radar_runtime.runtime_identity import runtime_source_identity
+    from radar_runtime.outcome_runtime import validate_public_collector_artifacts
 
-    _seal, manifest, events, _prefix_manifest, _prefix_events = read_sealed_capture(root / "facts")
-    evidence_git_commit_sha = result.get("git_commit_sha")
-    if not isinstance(evidence_git_commit_sha, str) or not evidence_git_commit_sha:
-        raise ValueError("production-public evidence Git identity is invalid")
-    invocation_digest = invocation.get("invocation_digest")
-    unsigned_invocation = {
-        key: value for key, value in invocation.items() if key != "invocation_digest"
-    }
-    invocation_elapsed_ms = invocation.get("invocation_elapsed_ms")
-    if (
-        not isinstance(invocation_digest, str)
-        or canonical_digest(unsigned_invocation) != invocation_digest
-        or invocation.get("receipt_type") != PUBLIC_INVOCATION_RECEIPT_TYPE
-        or invocation.get("environment") != "production_public"
-        or invocation.get("transport_endpoint") != WEBSOCKET_URL
-        or invocation.get("requested_duration_seconds") != 3_665
-        or not isinstance(invocation_elapsed_ms, int)
-        or isinstance(invocation_elapsed_ms, bool)
-        or invocation_elapsed_ms < 3_665_000
-        or not isinstance(invocation.get("invocation_started_at"), str)
-        or not isinstance(invocation.get("invocation_finished_at"), str)
-        or invocation.get("records") != manifest.record_count
-        or invocation.get("capture_digest") != manifest.content_sha256
-        or invocation.get("capture_manifest_digest") != manifest.digest
-        or invocation.get("collector_live_sha256") != _sha256(paths["live"])
-        or invocation.get("collector_decision_sha256") != _sha256(paths["decision"])
-        or invocation.get("collector_inspect_sha256") != _sha256(paths["inspect"])
-        or invocation.get("git_commit_sha") != evidence_git_commit_sha
-        or invocation.get("runtime_source_id") != result.get("decision_runtime_source_id")
-        or invocation.get("runtime_source_digest") != result.get("decision_runtime_source_digest")
-    ):
-        raise ValueError("production-public collector invocation witness is invalid")
-    current_identity = runtime_source_identity(require_clean=False)
-    bound_identity = replace(current_identity, git_commit_sha=evidence_git_commit_sha)
-    if bound_identity.runtime_source_id != result.get(
-        "decision_runtime_source_id"
-    ) or bound_identity.runtime_source_digest != result.get("decision_runtime_source_digest"):
-        raise ValueError("production-public Decision runtime identity changed")
-    projection = project_events(events)
-    expected_decision_receipt = build_decision_receipt(
-        manifest,
-        projection,
-        source_identity=current_identity,
-        receipt_git_commit_sha=evidence_git_commit_sha,
-    )
-    expected_decision = decision_receipt_payload(expected_decision_receipt)
-    if decision != expected_decision:
-        raise ValueError("production-public collector Decision receipt is not reconstructed")
-    expected_inspect = inspect_payload(manifest, events, source_identity=bound_identity)
-    if inspected != expected_inspect:
-        raise ValueError("production-public collector inspect is not reconstructed")
-    expected_live = {
-        "receipt_type": CAPTURE_RECEIPT_TYPE,
-        "environment": "production_public",
-        "duration_seconds": 3_665,
-        **_event_summary(manifest, events),
-        **projection_payload(projection),
-        "decision_receipt_digest": expected_decision_receipt.digest,
-        "git_commit_sha": evidence_git_commit_sha,
-        "runtime_source_id": bound_identity.runtime_source_id,
-        "runtime_source_digest": bound_identity.runtime_source_digest,
-        "evidence_class": LIVE_CAPTURE_EVIDENCE,
-    }
-    if live != expected_live:
-        raise ValueError("production-public collector live receipt is not reconstructed")
+    validate_public_collector_artifacts(root, result)
 
 
 def _copy_tree_files(source: Path, target: Path) -> None:
@@ -305,15 +283,23 @@ def _write_archive(bundle: Path, archive: Path) -> None:
 
 
 def _report_lines(
-    label: str, result: dict[str, object], replay: dict[str, object]
+    label: str,
+    result: dict[str, object],
+    replay: dict[str, object],
+    invocation: dict[str, object] | None = None,
 ) -> tuple[str, ...]:
     return (
         f"## {label}",
         "",
         f"- 证据类别 / provenance: `{result.get('evidence_class')}` / "
         f"`{result.get('fact_provenance')}`",
-        f"- records / actual public trades: `{result.get('records')}` / "
+        f"- environment / capture format / duration: `{result.get('environment')}` / "
+        f"`{result.get('capture_format_id')}` / `{result.get('duration_seconds')}` seconds",
+        f"- records / observed trade facts: `{result.get('records')}` / "
         f"`{result.get('actual_trades')}`",
+        f"- event elapsed span / invocation elapsed: "
+        f"`{result.get('collector_elapsed_span_ms')}` / "
+        f"`{invocation.get('invocation_elapsed_ms') if invocation is not None else None}` ms",
         f"- coverage / readiness: frame_complete=`{result.get('decision_frame_complete')}`, "
         f"readiness=`{result.get('decision_readiness')}`, "
         f"windows=`{result.get('required_window_coverage')}`",
@@ -330,26 +316,39 @@ def _report_lines(
         f"`{result.get('prefix_record_count')}` / `{result.get('suffix_record_count')}` "
         f"(`{result.get('suffix_first_capture_seq')}`.."
         f"`{result.get('suffix_last_capture_seq')}`)",
+        f"- final event / DecisionFrame sequence: `{result.get('final_event_capture_seq')}` / "
+        f"`{result.get('decision_frame_capture_seq')}`",
         f"- action / admission: `{result.get('decision_action')}` / "
-        f"`{result.get('admission_status')}`; reasons=`{result.get('admission_reasons')}`",
+        f"`{result.get('admission_status')}`; decision reason="
+        f"`{result.get('decision_reason')}`; admission reasons="
+        f"`{result.get('admission_reasons')}`",
+        f"- candidate / assessment count: `{result.get('candidate_count')}` / "
+        f"`{result.get('assessment_count')}`",
         f"- Entry / Outcome: `{result.get('entry_count')}` / "
         f"`{result.get('outcome_count')}`; status=`{result.get('outcome_status')}`; "
+        f"exit reason=`{result.get('outcome_exit_reason')}`; "
         f"UNKNOWN=`{result.get('unknown_reasons')}`",
         f"- capture / manifest / seal digests: `{result.get('full_capture_digest')}` / "
         f"`{result.get('full_capture_manifest_digest')}` / `{result.get('fact_seal_digest')}`",
         f"- Decision / Entry / Outcome digests: `{result.get('decision_receipt_digest')}` / "
         f"`{result.get('entry_receipt_digest')}` / `{result.get('outcome_receipt_digest')}`",
+        f"- frame / decision / result digests: `{result.get('decision_frame_digest')}` / "
+        f"`{result.get('decision_digest')}` / `{result.get('result_digest')}`",
         f"- Decision / Outcome runtime digests: "
         f"`{result.get('decision_runtime_source_digest')}` / "
         f"`{result.get('outcome_runtime_source_digest')}`",
         f"- input / Policy / Outcome contract digests: "
         f"`{result.get('input_contract_digest')}` / `{result.get('policy_digest')}` / "
         f"`{result.get('outcome_contract_digest')}`",
-        f"- fresh-process drift (Decision / Entry / Outcome / future): "
+        f"- collector invocation digest: `{result.get('collector_invocation_digest')}`",
+        f"- fresh-process drift (Decision / Entry / Outcome / Result): "
         f"`{replay.get('decision_drift_count')}` / `{replay.get('entry_drift_count')}` / "
         f"`{replay.get('outcome_drift_count')}` / "
-        f"`{replay.get('strict_future_violation_count')}`; "
-        f"verified=`{replay.get('replay_verified')}`",
+        f"`{replay.get('result_drift_count')}`",
+        f"- strict-future violations: `{replay.get('strict_future_violation_count')}`",
+        f"- replay trust: computation=`{replay.get('computation_reconstructed')}`, "
+        f"collector_witness=`{replay.get('collector_witness_verified')}`, "
+        f"external_source_attested=`{replay.get('external_source_attested')}`",
         "",
     )
 
@@ -359,25 +358,34 @@ def _report(
     synthetic_replay: dict[str, object],
     public: dict[str, object],
     public_replay: dict[str, object],
+    public_invocation: dict[str, object],
+    *,
+    generated_at: str,
 ) -> str:
     return "\n".join(
         (
             "# OUTCOME_TRUTH 业务验收报告 (待人类验收)",
             "",
-            f"- 生成时间: `{datetime.now(UTC).isoformat()}`",
+            f"- 生成时间: `{generated_at}`",
             "",
             *_report_lines("SYNTHETIC_LOGIC", synthetic, synthetic_replay),
             f"- 合成 post-exit counterfactual points: "
             f"`{synthetic.get('counterfactual_point_count')}`",
             "- 合成事实只验证合同逻辑, 不属于 production-public 观测。",
             "",
-            *_report_lines("BOUNDED_PUBLIC_CAPTURE", public, public_replay),
+            *_report_lines(
+                "BOUNDED_PUBLIC_CAPTURE",
+                public,
+                public_replay,
+                public_invocation,
+            ),
             "## Hash 与限制",
             "",
             "- bundle 内每个保留文件由 `SHA256SUMS` 覆盖; 归档由相邻 `.sha256` sidecar 覆盖。",
             "- production-public collector invocation witness 绑定 3,665 秒命令、Deribit 公网端点、",
-            "  monotonic elapsed、collector 文件、capture、Git 与 Decision runtime identity;",
-            "  它是进程证据; 不是第三方网络来源证明。",
+            "  monotonic elapsed、collector 文件、capture、Git 与 Decision/Outcome runtime identity;",
+            "  standalone public replay 会重验该进程 witness; 它仍不是第三方网络来源证明。",
+            "- archive SHA-256 写在相邻 `.sha256` sidecar; 不嵌入报告以避免自引用哈希。",
             "本 bundle 只证明一次固定 cutoff 的 Decision prefix、严格未来 suffix、Entry/Outcome",
             "合同和 fresh-process 确定性重建。它不证明真实 fill、连续 Shadow、Policy 质量、",
             "盈利、NO_TRADE qualification、Challenger、Promotion、执行或资本权限。",
@@ -417,6 +425,7 @@ def create_outcome_evidence_bundle(
         public_run / "collector-invocation.json",
         "public collector invocation",
     )
+    generated_at = datetime.now(UTC).isoformat()
     output.mkdir(parents=True)
     _copy_tree_files(synthetic_run, output / "synthetic" / "run")
     _copy_tree_files(synthetic_replay, output / "synthetic" / "replay")
@@ -428,6 +437,8 @@ def create_outcome_evidence_bundle(
             synthetic_replay_result,
             public_result,
             public_replay_result,
+            public_invocation,
+            generated_at=generated_at,
         ),
         encoding="utf-8",
     )
@@ -444,7 +455,7 @@ def create_outcome_evidence_bundle(
     )
     manifest = {
         "bundle_format": BUNDLE_FORMAT_ID,
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": generated_at,
         "synthetic_result_digest": synthetic_result.get("result_digest"),
         "synthetic_entry_receipt_digest": synthetic_result.get("entry_receipt_digest"),
         "synthetic_outcome_receipt_digest": synthetic_result.get("outcome_receipt_digest"),
@@ -520,7 +531,20 @@ def verify_outcome_evidence_bundle(
     if {item[0] for item in entries} != expected:
         raise ValueError("Outcome evidence checksum coverage is incomplete")
     manifest = _json_object(bundle / "BUNDLE_MANIFEST.json", "Outcome bundle manifest")
-    if manifest.get("bundle_format") != BUNDLE_FORMAT_ID:
+    raw_generated_at = manifest.get("generated_at")
+    try:
+        generated_at = (
+            datetime.fromisoformat(raw_generated_at) if isinstance(raw_generated_at, str) else None
+        )
+    except ValueError:
+        generated_at = None
+    if (
+        manifest.keys() != BUNDLE_MANIFEST_FIELDS
+        or manifest.get("bundle_format") != BUNDLE_FORMAT_ID
+        or generated_at is None
+        or generated_at.tzinfo is None
+        or generated_at.utcoffset() is None
+    ):
         raise ValueError("Outcome evidence bundle format is invalid")
     synthetic = _json_object(bundle / "synthetic/run/result.json", "synthetic result")
     synthetic_replay = _json_object(bundle / "synthetic/replay/replay.json", "synthetic replay")
@@ -541,11 +565,16 @@ def verify_outcome_evidence_bundle(
             raise ValueError("Outcome evidence manifest artifact is invalid")
         artifact = cast(dict[str, object], raw_artifact)
         raw_relative = artifact.get("path")
-        if not isinstance(raw_relative, str) or raw_relative in manifest_artifact_paths:
+        if (
+            artifact.keys() != BUNDLE_ARTIFACT_FIELDS
+            or not isinstance(raw_relative, str)
+            or raw_relative in manifest_artifact_paths
+        ):
             raise ValueError("Outcome evidence manifest artifact path is invalid")
         target = bundle / raw_relative
         if (
             raw_relative not in expected_artifact_paths
+            or type(artifact.get("bytes")) is not int
             or artifact.get("bytes") != target.stat().st_size
             or artifact.get("sha256") != _sha256(target)
         ):
@@ -569,8 +598,21 @@ def verify_outcome_evidence_bundle(
         "public_outcome_runtime_source_digest": public.get("outcome_runtime_source_digest"),
         "public_collector_invocation_digest": public_invocation.get("invocation_digest"),
     }
-    if any(manifest.get(key) != value for key, value in expected_manifest_bindings.items()):
+    if any(
+        not _typed_equal(manifest.get(key), value)
+        for key, value in expected_manifest_bindings.items()
+    ):
         raise ValueError("Outcome evidence manifest digest binding changed")
+    expected_report = _report(
+        synthetic,
+        synthetic_replay,
+        public,
+        public_replay,
+        public_invocation,
+        generated_at=cast(str, raw_generated_at),
+    )
+    if (bundle / "ACCEPTANCE.zh-CN.md").read_text(encoding="utf-8") != expected_report:
+        raise ValueError("Outcome acceptance report changed")
     _validate_receipt_files(bundle / "synthetic/run", synthetic, "synthetic")
     _validate_receipt_files(
         bundle / "production-public/run",
@@ -580,9 +622,17 @@ def verify_outcome_evidence_bundle(
     _validate_public_collector_artifacts(bundle / "production-public/run", public)
     from radar_runtime.outcome_runtime import reconstruct_outcome
 
-    if reconstruct_outcome(bundle / "synthetic/run") != synthetic_replay:
+    reconstructed_synthetic = reconstruct_outcome(bundle / "synthetic/run")
+    if not _typed_equal(
+        _replay_semantic_payload(reconstructed_synthetic),
+        _replay_semantic_payload(synthetic_replay),
+    ):
         raise ValueError("synthetic replay is not a fresh reconstruction of its run")
-    if reconstruct_outcome(bundle / "production-public/run") != public_replay:
+    reconstructed_public = reconstruct_outcome(bundle / "production-public/run")
+    if not _typed_equal(
+        _replay_semantic_payload(reconstructed_public),
+        _replay_semantic_payload(public_replay),
+    ):
         raise ValueError("production-public replay is not a fresh reconstruction of its run")
     result: dict[str, object] = {
         "bundle_format": BUNDLE_FORMAT_ID,

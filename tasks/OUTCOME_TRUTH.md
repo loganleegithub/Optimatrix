@@ -97,9 +97,10 @@ path, optional labeled post-exit counterfactual, close assessment, observed resu
 and its content digest.
 
 **Missing/invalid/UNKNOWN semantics:** stale/missing reference, quote side, amount, platform proof,
-or future lineage is `UNKNOWN`. Explicit platform lock/reference closure or complete visible depth
-below frozen quantity is `UNEXITABLE`. Only an executable close may populate observed close cost,
-fee, and PnL. No status substitutes maximum loss for observed PnL.
+future lineage, malformed freshness identity, or conflicting same-source evidence is `UNKNOWN`.
+Stale facts retain their point-level source lineage. Explicit platform lock/reference closure or
+complete visible depth below frozen quantity is `UNEXITABLE`. Only an executable close may
+populate observed close cost, fee, and PnL. No status substitutes maximum loss for observed PnL.
 
 **Persisted contract identity/replay compatibility:** existing non-durable Shadow results remain
 synthetic regression evidence only and are not comparable qualification Outcomes. Existing
@@ -114,20 +115,28 @@ declared above; the suffix seal is closure-specific and is not a generic capture
    drift fails, while complete no-candidate and incomplete Decision results remain explicit zero.
 2. Actual exposure selects the first executable point in causal order with same-point priority
    `PROFIT_TARGET`, `FIRST_TOUCH`, then `HORIZON`; only post-exit facts become a labeled unscored
-   counterfactual.
+   counterfactual. Horizon is an armed condition, not a terminal fact: temporary
+   `UNKNOWN`/`UNEXITABLE` observations continue until a later executable close or data end.
 3. Excursion includes entry as a zero baseline only after at least one valid future reference fact;
    no future reference remains `UNKNOWN`.
 4. Entry-only platform `OPEN` cannot support a future close; future connection-scoped status can,
-   and reconnect requires a new future subscription/status barrier.
+   and reconnect requires a new future subscription/status barrier. The Outcome-owned collector
+   must create an acknowledged platform-only subscription/status pair strictly after the already
+   fixed cutoff even when the production connection never drops.
 5. Executable close alone yields observed PnL. Known inability is `UNEXITABLE`; missingness is
    `UNKNOWN`; both have null PnL and no executable exit sequence.
 6. Fresh replay verifies prefix/suffix causality, combined full-capture digest, source identities,
-   Decision/Entry/Outcome receipts, zero drift, and tamper rejection.
+   Decision/Entry/Outcome receipts, zero drift, and tamper rejection. Standalone
+   production-public replay also verifies the collector process witness while explicitly leaving
+   external-source attestation false. Bundle verification tolerates a different audit Git commit
+   only when scoped source digests are unchanged and exactly reconstructs the canonical Chinese
+   report, rejecting semantically altered text even after hashes are recomputed.
 
 ### Required commands
 
 - `make UV='python3 -m uv' sync`
-- focused tests: `.venv/bin/python -m pytest tests/test_shadow.py tests/test_outcome_runtime.py`
+- focused tests: `.venv/bin/python -m pytest tests/test_shadow.py tests/test_outcome_shadow.py
+  tests/test_outcome_runtime.py`
 - `make check`
 - synthetic: `.venv/bin/optimatrix-outcome synthetic --output <fresh-synthetic>`
 - synthetic replay: `.venv/bin/optimatrix-outcome replay <fresh-synthetic> --output
@@ -144,7 +153,10 @@ declared above; the suffix seal is closure-specific and is not a generic capture
 **Required:** YES
 
 **Environment and minimum duration:** fresh Deribit `production_public`, 3,665 seconds; no
-credentials or private API. A zero entry/Outcome or admitted `UNKNOWN` is valid.
+credentials or private API. A zero entry/Outcome or admitted `UNKNOWN` is valid. The bounded
+collector invocation's persisted monotonic elapsed time proves this duration; first-to-last event
+span is reported for audit but is not a duration gate because both first-event startup delay and a
+silent tail can shorten it.
 
 **Required report:** records and actual public trades; coverage/readiness; gap/reconnect/platform/
 source anomalies; cutoff and prefix/suffix sequences; action/admission/Entry/Outcome counts and

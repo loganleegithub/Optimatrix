@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 from market_tape import CanonicalEvent, PlatformState, write_capture
@@ -577,6 +578,32 @@ def test_future_explicit_reference_closure_is_known_unexitable(tmp_path: Path) -
     assert receipt.observed_outcome.observed_executable_pnl_usdc is None
 
 
+def test_stale_future_reference_retains_its_point_lineage(tmp_path: Path) -> None:
+    *_unused, entry = _admission(tmp_path)
+    frame_seq = entry.position.entry_capture_seq + 3
+    observation = _observation(
+        entry,
+        capture_seq=frame_seq,
+        seconds=entry.position.horizon_seconds,
+    )
+    stale = replace(
+        observation,
+        frame=replace(
+            observation.frame,
+            complete=False,
+            completeness_reasons=("REFERENCE_STALE",),
+        ),
+    )
+    receipt = _evaluate(entry, (stale,))
+    point = receipt.actual_path.points[0]
+
+    assert receipt.outcome_status is OutcomeStatus.UNKNOWN
+    assert point.close_observation_reasons == ("FUTURE_REFERENCE_UNKNOWN",)
+    assert point.reference_price is None
+    assert point.reference_source_capture_seq == frame_seq
+    assert frame_seq in point.source_capture_seqs
+
+
 def test_reconnect_requires_new_future_subscription_status_barrier(tmp_path: Path) -> None:
     *_unused, entry = _admission(tmp_path)
     frame_seq = entry.position.entry_capture_seq + 8
@@ -618,7 +645,7 @@ def test_reconnect_requires_new_future_subscription_status_barrier(tmp_path: Pat
     )
 
 
-def test_nonclosed_suffix_remains_actual_after_horizon_without_counterfactual(
+def test_horizon_unknown_remains_armed_until_later_executable_close(
     tmp_path: Path,
 ) -> None:
     *_unused, entry = _admission(tmp_path)
@@ -632,33 +659,136 @@ def test_nonclosed_suffix_remains_actual_after_horizon_without_counterfactual(
         entry,
         capture_seq=entry.position.entry_capture_seq + 6,
         seconds=entry.position.horizon_seconds + 60,
+        reference_price=Decimal("100000"),
+        close_debit=Decimal("615"),
+    )
+    post_exit_touch = _observation(
+        entry,
+        capture_seq=entry.position.entry_capture_seq + 9,
+        seconds=entry.position.horizon_seconds + 120,
         reference_price=Decimal("95000"),
         close_debit=Decimal("100"),
     )
-    receipt = _evaluate(entry, (horizon, later_actual))
+    receipt = _evaluate(entry, (horizon, later_actual, post_exit_touch))
 
-    assert receipt.outcome_status is OutcomeStatus.UNKNOWN
+    assert receipt.outcome_status is OutcomeStatus.CLOSED
+    assert receipt.observed_outcome.exit_reason is ExitReason.HORIZON
     assert len(receipt.actual_path.points) == 2
-    assert receipt.counterfactual_path is None
-    assert receipt.observed_outcome.exit_capture_seq is None
-    assert receipt.observed_outcome.first_touch_capture_seq == (
-        later_actual.frame.as_of_capture_seq
-    )
+    assert receipt.counterfactual_path is not None
+    assert len(receipt.counterfactual_path.points) == 1
+    assert receipt.observed_outcome.exit_capture_seq == later_actual.frame.as_of_capture_seq
+    assert receipt.observed_outcome.evaluation_capture_seq == later_actual.frame.as_of_capture_seq
+    assert receipt.observed_outcome.observed_exposure_seconds == entry.position.horizon_seconds + 60
+    assert receipt.observed_outcome.first_touch_capture_seq is None
+    assert receipt.observed_outcome.maximum_down_fraction == Decimal("0")
 
     forged = replace(
         receipt.observed_outcome,
-        status=OutcomeStatus.CLOSED,
         exit_reason=ExitReason.PROFIT_TARGET,
-        exit_capture_seq=later_actual.frame.as_of_capture_seq,
-        evaluation_capture_seq=later_actual.frame.as_of_capture_seq,
-        observed_exposure_seconds=entry.position.horizon_seconds + 60,
-        observed_executable_close_cost_usdc=Decimal("1"),
-        observed_close_fee_usdc=Decimal("1"),
         observed_executable_pnl_usdc=Decimal("999999"),
-        unknown_reasons=(),
     )
     with pytest.raises(ValueError, match="derived semantics"):
         replace(receipt, observed_outcome=forged)
+
+
+def test_horizon_unexitable_remains_armed_until_later_executable_close(
+    tmp_path: Path,
+) -> None:
+    *_unused, entry = _admission(tmp_path)
+    unavailable = _observation(
+        entry,
+        capture_seq=entry.position.entry_capture_seq + 3,
+        seconds=entry.position.horizon_seconds,
+        close_debit=Decimal("615"),
+        depth=Decimal("0.01"),
+    )
+    executable = _observation(
+        entry,
+        capture_seq=entry.position.entry_capture_seq + 6,
+        seconds=entry.position.horizon_seconds + 60,
+        close_debit=Decimal("615"),
+    )
+
+    receipt = _evaluate(entry, (unavailable, executable))
+
+    assert receipt.outcome_status is OutcomeStatus.CLOSED
+    assert receipt.observed_outcome.exit_reason is ExitReason.HORIZON
+    assert receipt.observed_outcome.exit_capture_seq == executable.frame.as_of_capture_seq
+
+
+def test_touch_before_unexitable_horizon_closes_at_later_executable_point(
+    tmp_path: Path,
+) -> None:
+    *_unused, entry = _admission(tmp_path)
+    touch = _observation(
+        entry,
+        capture_seq=entry.position.entry_capture_seq + 3,
+        seconds=60,
+        reference_price=Decimal("95000"),
+        close_debit=None,
+    )
+    unavailable_at_horizon = _observation(
+        entry,
+        capture_seq=entry.position.entry_capture_seq + 6,
+        seconds=entry.position.horizon_seconds,
+        close_debit=Decimal("615"),
+        depth=Decimal("0.01"),
+    )
+    executable = _observation(
+        entry,
+        capture_seq=entry.position.entry_capture_seq + 9,
+        seconds=entry.position.horizon_seconds + 60,
+        close_debit=Decimal("615"),
+    )
+
+    receipt = _evaluate(entry, (touch, unavailable_at_horizon, executable))
+
+    assert receipt.outcome_status is OutcomeStatus.CLOSED
+    assert receipt.observed_outcome.exit_reason is ExitReason.FIRST_TOUCH
+    assert receipt.observed_outcome.first_touch_capture_seq == touch.frame.as_of_capture_seq
+    assert receipt.observed_outcome.exit_capture_seq == executable.frame.as_of_capture_seq
+    assert receipt.observed_outcome.observed_exposure_seconds == (
+        entry.position.horizon_seconds + 60
+    )
+
+
+@pytest.mark.parametrize(
+    ("first_depth", "first_debit", "last_depth", "last_debit", "expected"),
+    (
+        (Decimal("0.01"), Decimal("615"), Decimal("1"), None, OutcomeStatus.UNKNOWN),
+        (Decimal("1"), None, Decimal("0.01"), Decimal("615"), OutcomeStatus.UNEXITABLE),
+    ),
+)
+def test_nonclosed_horizon_status_uses_last_observation(
+    tmp_path: Path,
+    first_depth: Decimal,
+    first_debit: Decimal | None,
+    last_depth: Decimal,
+    last_debit: Decimal | None,
+    expected: OutcomeStatus,
+) -> None:
+    *_unused, entry = _admission(tmp_path)
+    first = _observation(
+        entry,
+        capture_seq=entry.position.entry_capture_seq + 3,
+        seconds=entry.position.horizon_seconds,
+        close_debit=first_debit,
+        depth=first_depth,
+    )
+    last = _observation(
+        entry,
+        capture_seq=entry.position.entry_capture_seq + 6,
+        seconds=entry.position.horizon_seconds + 60,
+        close_debit=last_debit,
+        depth=last_depth,
+    )
+
+    receipt = _evaluate(entry, (first, last))
+
+    assert receipt.outcome_status is expected
+    assert receipt.observed_outcome.evaluation_capture_seq == last.frame.as_of_capture_seq
+    assert receipt.observed_outcome.exit_capture_seq is None
+    assert receipt.counterfactual_path is None
 
 
 def test_locked_and_depth_shortfall_are_unexitable_with_null_pnl(tmp_path: Path) -> None:
@@ -827,13 +957,29 @@ def test_missing_combo_close_side_overrides_visible_leg_depth_shortfall(
 
 
 @pytest.mark.parametrize(
-    ("quote_age_ms", "ask_amount"),
-    ((-1, Decimal("1")), (0, Decimal("-1")), (0, Decimal("NaN"))),
+    ("combo_id", "quote_age_ms", "ask_amount", "fresh", "valid"),
+    (
+        ("invalid-future-combo", -1, Decimal("1"), True, True),
+        ("invalid-future-combo", 0, Decimal("-1"), True, True),
+        ("invalid-future-combo", 0, Decimal("NaN"), True, True),
+        ("invalid-future-combo", 0, Decimal("1"), False, True),
+        ("invalid-future-combo", 0, Decimal("1"), True, False),
+        ("invalid-future-combo", 5_001, Decimal("1"), True, True),
+        ("", 0, Decimal("1"), True, True),
+        ("   ", 0, Decimal("1"), True, True),
+        ("invalid-future-combo", True, Decimal("1"), True, True),
+        ("invalid-future-combo", 1.5, Decimal("1"), True, True),
+        ("invalid-future-combo", 0, Decimal("1"), "false", True),
+        ("invalid-future-combo", 0, Decimal("1"), True, "false"),
+    ),
 )
 def test_invalid_combo_evidence_is_unknown_not_error_or_unexitable(
     tmp_path: Path,
-    quote_age_ms: int,
+    combo_id: str,
+    quote_age_ms: object,
     ask_amount: Decimal,
+    fresh: object,
+    valid: object,
 ) -> None:
     *_unused, entry = _admission(tmp_path)
     frame_seq = entry.position.entry_capture_seq + 3
@@ -844,16 +990,16 @@ def test_invalid_combo_evidence_is_unknown_not_error_or_unexitable(
         depth=Decimal("0.01"),
     )
     combo = ComboQuote(
-        combo_id="invalid-future-combo",
+        combo_id=combo_id,
         short_instrument=entry.position.structure.short_leg.instrument_name,
         long_instrument=entry.position.structure.long_leg.instrument_name,
         bid=None,
         ask=Decimal("100"),
         bid_amount=Decimal("1"),
         ask_amount=ask_amount,
-        quote_age_ms=quote_age_ms,
-        fresh=True,
-        valid=True,
+        quote_age_ms=cast(int, quote_age_ms),
+        fresh=cast(bool, fresh),
+        valid=cast(bool, valid),
         source_capture_seq=frame_seq,
     )
     receipt = _evaluate(
@@ -865,6 +1011,254 @@ def test_invalid_combo_evidence_is_unknown_not_error_or_unexitable(
     assert receipt.actual_path.points[0].close_observation_reasons == (
         "FUTURE_COMBO_EVIDENCE_INVALID",
     )
+    assert receipt.actual_path.points[0].quote_source_capture_seqs == (frame_seq,)
+    assert receipt.observed_outcome.observed_executable_pnl_usdc is None
+
+
+def test_conflicting_latest_combo_facts_are_order_independent_unknown(
+    tmp_path: Path,
+) -> None:
+    *_unused, entry = _admission(tmp_path)
+    frame_seq = entry.position.entry_capture_seq + 3
+    base = _observation(
+        entry,
+        capture_seq=frame_seq,
+        seconds=entry.position.horizon_seconds,
+        depth=Decimal("0.01"),
+    )
+    valid = ComboQuote(
+        combo_id="future-combo",
+        short_instrument=entry.position.structure.short_leg.instrument_name,
+        long_instrument=entry.position.structure.long_leg.instrument_name,
+        bid=None,
+        ask=Decimal("100"),
+        bid_amount=Decimal("1"),
+        ask_amount=Decimal("1"),
+        quote_age_ms=0,
+        fresh=True,
+        valid=True,
+        source_capture_seq=frame_seq,
+    )
+    invalid = replace(valid, valid=False)
+
+    for combos in ((valid, invalid), (invalid, valid)):
+        receipt = _evaluate(
+            entry,
+            (replace(base, frame=replace(base.frame, combo_quotes=combos)),),
+        )
+        assert receipt.outcome_status is OutcomeStatus.UNKNOWN
+        assert receipt.actual_path.points[0].close_observation_reasons == (
+            "FUTURE_COMBO_EVIDENCE_CONFLICT",
+        )
+        assert receipt.observed_outcome.observed_executable_pnl_usdc is None
+
+
+def test_conflicting_combo_does_not_hide_independent_executable_leg_close(
+    tmp_path: Path,
+) -> None:
+    *_unused, entry = _admission(tmp_path)
+    frame_seq = entry.position.entry_capture_seq + 3
+    base = _observation(
+        entry,
+        capture_seq=frame_seq,
+        seconds=60,
+        close_debit=Decimal("100"),
+    )
+    valid = ComboQuote(
+        combo_id="future-combo",
+        short_instrument=entry.position.structure.short_leg.instrument_name,
+        long_instrument=entry.position.structure.long_leg.instrument_name,
+        bid=None,
+        ask=Decimal("100"),
+        bid_amount=Decimal("1"),
+        ask_amount=Decimal("1"),
+        quote_age_ms=0,
+        fresh=True,
+        valid=True,
+        source_capture_seq=frame_seq,
+    )
+    receipt = _evaluate(
+        entry,
+        (
+            replace(
+                base,
+                frame=replace(base.frame, combo_quotes=(valid, replace(valid, valid=False))),
+            ),
+        ),
+    )
+
+    assert receipt.outcome_status is OutcomeStatus.CLOSED
+    assert receipt.actual_path.points[0].close_execution_source == "CONSERVATIVE_LEG_CROSS"
+
+
+def test_duplicate_leg_facts_are_order_independent_unknown(tmp_path: Path) -> None:
+    *_unused, entry = _admission(tmp_path)
+    frame_seq = entry.position.entry_capture_seq + 3
+    base = _observation(
+        entry,
+        capture_seq=frame_seq,
+        seconds=entry.position.horizon_seconds,
+        close_debit=Decimal("100"),
+    )
+    short_name = entry.position.structure.short_leg.instrument_name
+    fresh_short = next(
+        quote for quote in base.frame.option_quotes if quote.instrument_name == short_name
+    )
+    stale_short = replace(fresh_short, quote_age_ms=5_001)
+    other_quotes = tuple(
+        quote for quote in base.frame.option_quotes if quote.instrument_name != short_name
+    )
+
+    for duplicates in ((fresh_short, stale_short), (stale_short, fresh_short)):
+        receipt = _evaluate(
+            entry,
+            (
+                replace(
+                    base,
+                    frame=replace(
+                        base.frame,
+                        option_quotes=(*other_quotes, *duplicates),
+                    ),
+                ),
+            ),
+        )
+        assert receipt.outcome_status is OutcomeStatus.UNKNOWN
+        assert receipt.actual_path.points[0].close_observation_reasons == (
+            "FUTURE_CLOSE_QUOTE_CONFLICT",
+        )
+        assert receipt.observed_outcome.observed_executable_pnl_usdc is None
+
+
+def test_duplicate_legs_do_not_hide_independent_executable_combo_close(
+    tmp_path: Path,
+) -> None:
+    *_unused, entry = _admission(tmp_path)
+    frame_seq = entry.position.entry_capture_seq + 3
+    base = _observation(
+        entry,
+        capture_seq=frame_seq,
+        seconds=60,
+        close_debit=Decimal("100"),
+    )
+    short_name = entry.position.structure.short_leg.instrument_name
+    short_quote = next(
+        quote for quote in base.frame.option_quotes if quote.instrument_name == short_name
+    )
+    combo = ComboQuote(
+        combo_id="future-combo",
+        short_instrument=entry.position.structure.short_leg.instrument_name,
+        long_instrument=entry.position.structure.long_leg.instrument_name,
+        bid=None,
+        ask=Decimal("100"),
+        bid_amount=Decimal("1"),
+        ask_amount=Decimal("1"),
+        quote_age_ms=0,
+        fresh=True,
+        valid=True,
+        source_capture_seq=frame_seq,
+    )
+    receipt = _evaluate(
+        entry,
+        (
+            replace(
+                base,
+                frame=replace(
+                    base.frame,
+                    option_quotes=(*base.frame.option_quotes, short_quote),
+                    combo_quotes=(combo,),
+                ),
+            ),
+        ),
+    )
+
+    assert receipt.outcome_status is OutcomeStatus.CLOSED
+    assert receipt.actual_path.points[0].close_execution_source == "ACTIVE_COMBO"
+
+
+@pytest.mark.parametrize(
+    ("quote_age_ms", "fresh"),
+    (
+        (True, True),
+        (1.5, True),
+        (0, "false"),
+    ),
+)
+def test_malformed_leg_freshness_cannot_close(
+    tmp_path: Path,
+    quote_age_ms: object,
+    fresh: object,
+) -> None:
+    *_unused, entry = _admission(tmp_path)
+    frame_seq = entry.position.entry_capture_seq + 3
+    observation = _observation(
+        entry,
+        capture_seq=frame_seq,
+        seconds=entry.position.horizon_seconds,
+        close_debit=Decimal("100"),
+    )
+    leg_names = {
+        entry.position.structure.short_leg.instrument_name,
+        entry.position.structure.long_leg.instrument_name,
+    }
+    malformed_frame = replace(
+        observation.frame,
+        option_quotes=tuple(
+            replace(
+                quote,
+                quote_age_ms=cast(int, quote_age_ms),
+                fresh=cast(bool, fresh),
+            )
+            if quote.instrument_name in leg_names
+            else quote
+            for quote in observation.frame.option_quotes
+        ),
+    )
+    receipt = _evaluate(entry, (replace(observation, frame=malformed_frame),))
+
+    assert receipt.outcome_status is OutcomeStatus.UNKNOWN
+    assert receipt.actual_path.points[0].close_observation_reasons == (
+        "FUTURE_CLOSE_QUOTE_STALE_OR_NOT_FUTURE",
+    )
+    assert receipt.observed_outcome.observed_executable_pnl_usdc is None
+
+
+def test_future_frame_contract_drift_and_stale_age_cannot_close(tmp_path: Path) -> None:
+    *_unused, entry = _admission(tmp_path)
+    frame_seq = entry.position.entry_capture_seq + 3
+    observation = _observation(
+        entry,
+        capture_seq=frame_seq,
+        seconds=entry.position.horizon_seconds,
+        close_debit=Decimal("100"),
+    )
+
+    drifted = replace(
+        observation,
+        frame=replace(observation.frame, input_contract_digest="f" * 64),
+    )
+    with pytest.raises(ValueError, match="input contract identity changed"):
+        _evaluate(entry, (drifted,))
+
+    short_name = entry.position.structure.short_leg.instrument_name
+    long_name = entry.position.structure.long_leg.instrument_name
+    stale_frame = replace(
+        observation.frame,
+        option_quotes=tuple(
+            replace(quote, quote_age_ms=5_001, fresh=True)
+            if quote.instrument_name in {short_name, long_name}
+            else quote
+            for quote in observation.frame.option_quotes
+        ),
+    )
+    stale = replace(observation, frame=stale_frame)
+    receipt = _evaluate(entry, (stale,))
+
+    assert receipt.outcome_status is OutcomeStatus.UNKNOWN
+    assert receipt.actual_path.points[0].close_observation_reasons == (
+        "FUTURE_CLOSE_QUOTE_STALE_OR_NOT_FUTURE",
+    )
+    assert receipt.actual_path.points[0].short_quote_age_ms == 5_001
+    assert receipt.actual_path.points[0].long_quote_age_ms == 5_001
     assert receipt.observed_outcome.observed_executable_pnl_usdc is None
 
 
@@ -951,6 +1345,22 @@ def test_point_and_receipt_aggregate_lineage_tamper_is_rejected(tmp_path: Path) 
         replace(receipt.actual_path.points[0], source_capture_seqs=())
     with pytest.raises(ValueError, match="receipt aggregate lineage"):
         replace(receipt, outcome_source_capture_seqs=())
+
+    contract_drift_point = replace(
+        receipt.actual_path.points[0],
+        input_contract_digest="f" * 64,
+    )
+    contract_drift_path = replace(receipt.actual_path, points=(contract_drift_point,))
+    contract_drift_observed = replace(
+        receipt.observed_outcome,
+        actual_path_digest=contract_drift_path.digest,
+    )
+    with pytest.raises(ValueError, match="input-contract binding"):
+        replace(
+            receipt,
+            actual_path=contract_drift_path,
+            observed_outcome=contract_drift_observed,
+        )
 
     moved_path = replace(
         receipt.actual_path,

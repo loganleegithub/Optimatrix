@@ -12,6 +12,7 @@ from market_tape import PlatformState, canonical_digest, canonical_value
 from options_domain import ExecutableVerticalClose, OptionQuote, build_vertical_close
 from short_vol_radar import (
     DecisionFrame,
+    DecisionInputContract,
     DecisionReceipt,
     InsuranceAssessment,
     RadarAction,
@@ -39,6 +40,12 @@ OUTCOME_CONTRACT_DIGEST = canonical_digest(
         "actual_path": "ENTRY_THROUGH_EXECUTABLE_EXIT_INCLUSIVE",
         "counterfactual": POST_EXIT_COUNTERFACTUAL,
         "excursion_baseline": "ENTRY_ZERO_AFTER_FUTURE_REFERENCE",
+        "horizon": "ARMED_UNTIL_FIRST_EXECUTABLE_CLOSE_OR_DATA_END",
+        "observation_freshness": "RECOMPUTED_FROM_FROZEN_INPUT_CONTRACT",
+        "quote_age_schema": "NON_BOOLEAN_INTEGER_WITHIN_FROZEN_LIMIT",
+        "combo_identity": "NONEMPTY_FOR_OBSERVED_ACTIVE_COMBO",
+        "combo_conflict": "UNKNOWN_UNLESS_INDEPENDENT_LEG_CLOSE_IS_EXECUTABLE",
+        "leg_quote_conflict": "UNKNOWN_UNLESS_INDEPENDENT_COMBO_CLOSE_IS_EXECUTABLE",
         "pnl": "EXECUTABLE_CLOSE_ONLY",
     }
 )
@@ -233,9 +240,15 @@ class OutcomeObservation:
 @dataclass(frozen=True, slots=True)
 class OutcomeClosePoint:
     frame_capture_seq: int
+    frame_digest: str
+    input_contract_digest: str
     collector_as_of: datetime
     observed_elapsed_ms: int
     market_as_of: datetime | None
+    option_freshness_limit_ms: int
+    short_quote_age_ms: int | None
+    long_quote_age_ms: int | None
+    combo_quote_age_ms: int | None
     reference_price: Decimal | None
     close_observation_status: CloseObservationStatus
     close_observation_reasons: tuple[str, ...]
@@ -252,7 +265,14 @@ class OutcomeClosePoint:
     source_capture_seqs: tuple[int, ...]
 
     def __post_init__(self) -> None:
-        if self.frame_capture_seq <= 0 or self.observed_elapsed_ms < 0:
+        if (
+            self.frame_capture_seq <= 0
+            or self.observed_elapsed_ms < 0
+            or not self.frame_digest
+            or not self.input_contract_digest
+            or type(self.option_freshness_limit_ms) is not int
+            or self.option_freshness_limit_ms <= 0
+        ):
             raise ValueError("Outcome point causal coordinates are invalid")
         if self.reference_price is not None and not _positive_finite(self.reference_price):
             raise ValueError("Outcome point reference price is invalid")
@@ -287,6 +307,19 @@ class OutcomeClosePoint:
                 "CONSERVATIVE_LEG_CROSS",
             } or (self.close_execution_source == "ACTIVE_COMBO" and self.close_combo_id is None):
                 raise ValueError("executable Outcome point source is invalid")
+            executable_ages = (
+                (self.combo_quote_age_ms,)
+                if self.close_execution_source == "ACTIVE_COMBO"
+                else (self.short_quote_age_ms, self.long_quote_age_ms)
+            )
+            if any(
+                not _valid_quote_age(age, self.option_freshness_limit_ms) for age in executable_ages
+            ):
+                raise ValueError("executable Outcome point freshness evidence is invalid")
+            if self.close_execution_source == "ACTIVE_COMBO" and (
+                not isinstance(self.close_combo_id, str) or not self.close_combo_id.strip()
+            ):
+                raise ValueError("executable Outcome point combo identity is invalid")
         elif any(item is not None for item in close_values) or self.close_combo_id is not None:
             raise ValueError("non-executable Outcome point cannot record close economics")
         if not self.close_observation_reasons:
@@ -493,6 +526,14 @@ class OutcomeReceipt:
         all_points = self.actual_path.points + (
             self.counterfactual_path.points if self.counterfactual_path is not None else ()
         )
+        input_contract = DecisionInputContract()
+        if any(
+            point.input_contract_digest != self.entry_receipt.frame.input_contract_digest
+            or point.input_contract_digest != input_contract.digest
+            or point.option_freshness_limit_ms != input_contract.option_freshness_ms
+            for point in all_points
+        ):
+            raise ValueError("Outcome point input-contract binding changed")
         if any(
             left.frame_capture_seq >= right.frame_capture_seq
             or left.observed_elapsed_ms > right.observed_elapsed_ms
@@ -652,19 +693,27 @@ def admit_shadow(
     )
 
 
-def _quote(frame: DecisionFrame, instrument_name: str) -> OptionQuote | None:
-    return next(
-        (item for item in frame.option_quotes if item.instrument_name == instrument_name),
-        None,
-    )
+def _quotes(frame: DecisionFrame, instrument_name: str) -> tuple[OptionQuote, ...]:
+    return tuple(item for item in frame.option_quotes if item.instrument_name == instrument_name)
 
 
-def _positive_finite(value: Decimal | None) -> bool:
-    return value is not None and value.is_finite() and value > 0
+def _positive_finite(value: object) -> bool:
+    return isinstance(value, Decimal) and value.is_finite() and value > 0
 
 
-def _nonnegative_finite(value: Decimal | None) -> bool:
-    return value is not None and value.is_finite() and value >= 0
+def _nonnegative_finite(value: object) -> bool:
+    return isinstance(value, Decimal) and value.is_finite() and value >= 0
+
+
+def _valid_quote_age(value: object, limit_ms: int) -> bool:
+    return type(value) is int and 0 <= value <= limit_ms
+
+
+def _normalized_quote_age(value: object) -> int | None:
+    if type(value) is not int:
+        return None
+    assert isinstance(value, int)
+    return value
 
 
 def _freeze_contract_terms(observed: OptionQuote, entry: OptionQuote) -> OptionQuote:
@@ -698,7 +747,11 @@ def _platform_assessment(
         and reconnect > entry_capture_seq
         and (platform.capture_seq <= reconnect or not any(item > reconnect for item in sources))
     ):
-        return CloseObservationStatus.UNKNOWN, ("POST_RECONNECT_PLATFORM_BARRIER_MISSING",), ()
+        return (
+            CloseObservationStatus.UNKNOWN,
+            ("POST_RECONNECT_PLATFORM_BARRIER_MISSING",),
+            future_sources,
+        )
     if platform.state == "LOCKED" and platform.locked is True:
         return CloseObservationStatus.UNEXITABLE, ("PLATFORM_LOCKED",), future_sources
     if (
@@ -708,7 +761,11 @@ def _platform_assessment(
         or not any(item < platform.status_capture_seq for item in sources)
         or any(item <= entry_capture_seq for item in sources)
     ):
-        return CloseObservationStatus.UNKNOWN, ("FUTURE_PLATFORM_BARRIER_MISSING",), ()
+        return (
+            CloseObservationStatus.UNKNOWN,
+            ("FUTURE_PLATFORM_BARRIER_MISSING",),
+            future_sources,
+        )
     if (
         reconnect is not None
         and reconnect > entry_capture_seq
@@ -718,7 +775,11 @@ def _platform_assessment(
             or any(item <= reconnect for item in sources)
         )
     ):
-        return CloseObservationStatus.UNKNOWN, ("POST_RECONNECT_PLATFORM_BARRIER_MISSING",), ()
+        return (
+            CloseObservationStatus.UNKNOWN,
+            ("POST_RECONNECT_PLATFORM_BARRIER_MISSING",),
+            future_sources,
+        )
     if platform.state != "OPEN" or platform.locked is not False:
         return CloseObservationStatus.UNKNOWN, ("PLATFORM_STATE_UNKNOWN",), future_sources
     return None, (), future_sources
@@ -727,6 +788,14 @@ def _platform_assessment(
 def _point(entry: ShadowEntryReceipt, observation: OutcomeObservation) -> OutcomeClosePoint:
     position = entry.position
     frame = observation.frame
+    input_contract = DecisionInputContract()
+    if (
+        frame.input_contract_id != entry.frame.input_contract_id
+        or frame.input_contract_digest != entry.frame.input_contract_digest
+        or frame.input_contract_id != input_contract.contract_id
+        or frame.input_contract_digest != input_contract.digest
+    ):
+        raise ValueError("Outcome observation Decision input contract identity changed")
     if frame.as_of_capture_seq <= position.entry_capture_seq:
         raise ValueError("Outcome observation is not strictly after Entry")
     if frame.collector_elapsed_ms < position.entry_elapsed_ms:
@@ -750,42 +819,61 @@ def _point(entry: ShadowEntryReceipt, observation: OutcomeObservation) -> Outcom
     )
     reference_price = frame.reference_price if reference_valid else None
     reference_source = (
-        frame.reference_source_capture_seq if reference_valid or future_reference_closed else None
+        frame.reference_source_capture_seq
+        if frame.reference_source_capture_seq is not None
+        and frame.reference_source_capture_seq > position.entry_capture_seq
+        else None
     )
-    short_quote = _quote(frame, position.structure.short_leg.instrument_name)
-    long_quote = _quote(frame, position.structure.long_leg.instrument_name)
+    short_quotes = _quotes(frame, position.structure.short_leg.instrument_name)
+    long_quotes = _quotes(frame, position.structure.long_leg.instrument_name)
+    leg_evidence_conflict = len(short_quotes) > 1 or len(long_quotes) > 1
+    short_quote = short_quotes[0] if len(short_quotes) == 1 else None
+    long_quote = long_quotes[0] if len(long_quotes) == 1 else None
     future_combos = tuple(
         item for item in frame.combo_quotes if item.source_capture_seq > position.entry_capture_seq
     )
-    matching_combo = next(
-        (
-            item
-            for item in future_combos
-            if item.short_instrument == position.structure.short_leg.instrument_name
-            and item.long_instrument == position.structure.long_leg.instrument_name
-            and item.fresh
-            and item.valid
-        ),
-        None,
+    structure_combos = tuple(
+        item
+        for item in future_combos
+        if item.short_instrument == position.structure.short_leg.instrument_name
+        and item.long_instrument == position.structure.long_leg.instrument_name
     )
+    latest_combo_source_seq = max(
+        (item.source_capture_seq for item in structure_combos),
+        default=None,
+    )
+    latest_combos = tuple(
+        item for item in structure_combos if item.source_capture_seq == latest_combo_source_seq
+    )
+    combo_evidence_conflict = len(latest_combos) > 1
+    observed_combo = latest_combos[0] if latest_combos else None
     combo_evidence_invalid = bool(
-        matching_combo is not None
+        observed_combo is not None
         and (
-            matching_combo.quote_age_ms < 0
-            or not _nonnegative_finite(matching_combo.bid_amount)
-            or not _nonnegative_finite(matching_combo.ask_amount)
-            or (matching_combo.bid is not None and not _nonnegative_finite(matching_combo.bid))
-            or (matching_combo.ask is not None and not _nonnegative_finite(matching_combo.ask))
+            combo_evidence_conflict
+            or not isinstance(observed_combo.combo_id, str)
+            or not observed_combo.combo_id.strip()
+            or observed_combo.fresh is not True
+            or observed_combo.valid is not True
+            or not _valid_quote_age(
+                observed_combo.quote_age_ms,
+                input_contract.option_freshness_ms,
+            )
+            or not _nonnegative_finite(observed_combo.bid_amount)
+            or not _nonnegative_finite(observed_combo.ask_amount)
+            or (observed_combo.bid is not None and not _nonnegative_finite(observed_combo.bid))
+            or (observed_combo.ask is not None and not _nonnegative_finite(observed_combo.ask))
         )
     )
+    matching_combo = observed_combo if not combo_evidence_invalid else None
     quote_sources = tuple(
         sorted(
             {
                 item.ticker_source_capture_seq
-                for item in (short_quote, long_quote)
-                if item is not None and item.ticker_source_capture_seq > position.entry_capture_seq
+                for item in (*short_quotes, *long_quotes)
+                if item.ticker_source_capture_seq > position.entry_capture_seq
             }
-            | {*((matching_combo.source_capture_seq,) if matching_combo is not None else ())}
+            | {*((observed_combo.source_capture_seq,) if observed_combo is not None else ())}
         )
     )
 
@@ -835,8 +923,16 @@ def _point(entry: ShadowEntryReceipt, observation: OutcomeObservation) -> Outcom
             and long_quote is not None
             and short_quote.ticker_source_capture_seq > position.entry_capture_seq
             and long_quote.ticker_source_capture_seq > position.entry_capture_seq
-            and short_quote.fresh
-            and long_quote.fresh
+            and short_quote.fresh is True
+            and long_quote.fresh is True
+            and _valid_quote_age(
+                short_quote.quote_age_ms,
+                input_contract.option_freshness_ms,
+            )
+            and _valid_quote_age(
+                long_quote.quote_age_ms,
+                input_contract.option_freshness_ms,
+            )
         )
         leg_prices_visible = bool(
             legs_are_future
@@ -865,16 +961,16 @@ def _point(entry: ShadowEntryReceipt, observation: OutcomeObservation) -> Outcom
             reasons = ("VISIBLE_EXECUTABLE_CLOSE",)
         else:
             combo_side_unknown = bool(
-                matching_combo is not None
+                observed_combo is not None
                 and not combo_evidence_invalid
-                and matching_combo.ask is None
+                and observed_combo.ask is None
             )
             combo_depth_insufficient = bool(
-                matching_combo is not None
+                observed_combo is not None
                 and not combo_evidence_invalid
-                and matching_combo.ask is not None
-                and _nonnegative_finite(matching_combo.ask)
-                and matching_combo.ask_amount < position.structure.quantity
+                and observed_combo.ask is not None
+                and _nonnegative_finite(observed_combo.ask)
+                and observed_combo.ask_amount < position.structure.quantity
             )
             leg_depth_insufficient = bool(
                 leg_prices_visible
@@ -887,11 +983,15 @@ def _point(entry: ShadowEntryReceipt, observation: OutcomeObservation) -> Outcom
                 )
                 < position.structure.quantity
             )
-            if combo_evidence_invalid:
+            if combo_evidence_conflict:
+                reasons = ("FUTURE_COMBO_EVIDENCE_CONFLICT",)
+            elif combo_evidence_invalid:
                 reasons = ("FUTURE_COMBO_EVIDENCE_INVALID",)
             elif combo_side_unknown:
                 reasons = ("FUTURE_COMBO_CLOSE_SIDE_UNKNOWN",)
-            elif leg_depth_insufficient and (matching_combo is None or combo_depth_insufficient):
+            elif leg_evidence_conflict:
+                reasons = ("FUTURE_CLOSE_QUOTE_CONFLICT",)
+            elif leg_depth_insufficient and (observed_combo is None or combo_depth_insufficient):
                 status = CloseObservationStatus.UNEXITABLE
                 reasons = ("VISIBLE_CLOSE_DEPTH_INSUFFICIENT",)
             elif short_quote is None or long_quote is None:
@@ -924,9 +1024,29 @@ def _point(entry: ShadowEntryReceipt, observation: OutcomeObservation) -> Outcom
     )
     return OutcomeClosePoint(
         frame_capture_seq=frame.as_of_capture_seq,
+        frame_digest=frame.digest,
+        input_contract_digest=frame.input_contract_digest,
         collector_as_of=frame.collector_as_of,
         observed_elapsed_ms=frame.collector_elapsed_ms,
         market_as_of=frame.market_as_of,
+        option_freshness_limit_ms=input_contract.option_freshness_ms,
+        short_quote_age_ms=(
+            _normalized_quote_age(short_quote.quote_age_ms)
+            if short_quote is not None
+            and short_quote.ticker_source_capture_seq > position.entry_capture_seq
+            else None
+        ),
+        long_quote_age_ms=(
+            _normalized_quote_age(long_quote.quote_age_ms)
+            if long_quote is not None
+            and long_quote.ticker_source_capture_seq > position.entry_capture_seq
+            else None
+        ),
+        combo_quote_age_ms=(
+            _normalized_quote_age(observed_combo.quote_age_ms)
+            if observed_combo is not None
+            else None
+        ),
         reference_price=reference_price,
         close_observation_status=status,
         close_observation_reasons=reasons,
@@ -940,7 +1060,11 @@ def _point(entry: ShadowEntryReceipt, observation: OutcomeObservation) -> Outcom
             if reference_valid
             and short_quote is not None
             and short_quote.ticker_source_capture_seq > position.entry_capture_seq
-            and short_quote.fresh
+            and short_quote.fresh is True
+            and _valid_quote_age(
+                short_quote.quote_age_ms,
+                input_contract.option_freshness_ms,
+            )
             and (short_quote.delta is None or short_quote.delta.is_finite())
             else None
         ),
@@ -1002,6 +1126,7 @@ def _derive_paths_and_outcome(
                 status = OutcomeStatus.CLOSED
                 reason = ExitReason.HORIZON
                 unknown_reasons = ()
+                break
             elif point.close_observation_status is CloseObservationStatus.UNEXITABLE:
                 status = OutcomeStatus.UNEXITABLE
                 reason = ExitReason.UNEXITABLE_AT_HORIZON
@@ -1010,7 +1135,6 @@ def _derive_paths_and_outcome(
                 status = OutcomeStatus.UNKNOWN
                 reason = ExitReason.HORIZON
                 unknown_reasons = point.close_observation_reasons
-            break
     terminal = selected or evaluation
     if selected is not None:
         actual_points = tuple(
