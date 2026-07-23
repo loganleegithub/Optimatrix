@@ -12,6 +12,11 @@ from typing import cast
 
 from market_tape import canonical_digest, canonical_value
 
+from radar_runtime.shadow_identity import RUN_RUNTIME_SOURCE_ID
+from radar_runtime.shadow_report_identity import (
+    RUN_REPORT_SOURCE_ID,
+    run_report_source_identity,
+)
 from radar_runtime.shadow_runtime import (
     HISTORICAL_SEMANTIC_RECEIPT_TYPE,
     replay_shadow,
@@ -58,6 +63,7 @@ def _copy_tree(source: Path, target: Path) -> None:
 
 
 def _validate_replay(replay: dict[str, object], label: str) -> None:
+    anomalies = replay.get("operational_anomaly_counts")
     if (
         replay.get("replay_verified") is not True
         or replay.get("computation_reconstructed") is not True
@@ -66,6 +72,8 @@ def _validate_replay(replay: dict[str, object], label: str) -> None:
         or replay.get("external_source_attested") is not False
         or replay.get("attempt_selection_attested") is not False
         or replay.get("online_persistence_external_attested") is not False
+        or not isinstance(anomalies, dict)
+        or any(type(value) is not int or value < 0 for value in anomalies.values())
     ):
         raise ValueError(f"{label} replay trust boundary is invalid")
     for layer in (
@@ -100,10 +108,12 @@ def _report(
             "",
             f"- 报告生成时间: `{generated_at}`",
             f"- 合成 Run: complete=`{synthetic.get('complete')}`, "
-            f"records=`{synthetic.get('records')}`",
+            f"records=`{synthetic.get('records')}`, "
+            f"operational anomalies=`{json.dumps(synthetic.get('operational_anomaly_counts'), sort_keys=True)}`",
             f"- 合成会计: `{json.dumps(synthetic.get('accounting'), sort_keys=True, ensure_ascii=False)}`",
             f"- 生产公开 Run: complete=`{public.get('complete')}`, "
-            f"records=`{public.get('records')}`",
+            f"records=`{public.get('records')}`, "
+            f"operational anomalies=`{json.dumps(public.get('operational_anomaly_counts'), sort_keys=True)}`",
             f"- 生产公开会计: `{json.dumps(public.get('accounting'), sort_keys=True, ensure_ascii=False)}`",
             f"- 合成 replay: verified=`{synthetic_replay.get('replay_verified')}`, "
             f"prefix_causality=`{synthetic_replay.get('prefix_causality_verified')}`",
@@ -161,6 +171,7 @@ def create_shadow_evidence_bundle(
     public = _json_object(public_run / "result.json")
     public_replayed = _json_object(public_replay / "replay.json")
     semantic = _json_object(semantic_regression / "semantic-regression.json")
+    report_identity = run_report_source_identity(require_clean=True)
     if synthetic.get("complete") is not True or public.get("complete") is not True:
         raise ValueError("Shadow evidence bundle requires two complete Runs")
     _validate_replay(synthetic_replayed, "synthetic")
@@ -206,6 +217,12 @@ def create_shadow_evidence_bundle(
         "public_result_digest": public["result_digest"],
         "public_replay_digest": public_replayed["replay_digest"],
         "semantic_regression_digest": semantic["receipt_digest"],
+        "report_source_id": report_identity.report_source_id,
+        "report_source_digest": report_identity.report_source_digest,
+        "report_source_git_commit_sha": report_identity.git_commit_sha,
+        "report_source_file_hashes": canonical_value(report_identity.file_hashes),
+        "online_runtime_source_id": report_identity.online_runtime_source_id,
+        "online_runtime_source_digest": report_identity.online_runtime_source_digest,
         "artifacts": artifacts,
     }
     manifest["bundle_manifest_digest"] = canonical_digest(manifest)
@@ -260,9 +277,22 @@ def verify_shadow_evidence_bundle(
         raise ValueError("Shadow evidence checksum coverage is incomplete")
     manifest = _json_object(bundle / "BUNDLE_MANIFEST.json")
     manifest_digest = manifest.get("bundle_manifest_digest")
+    report_source_files = manifest.get("report_source_file_hashes")
+    recorded_report_source_digest = canonical_digest(
+        {
+            "report_source_id": manifest.get("report_source_id"),
+            "online_runtime_source_id": manifest.get("online_runtime_source_id"),
+            "online_runtime_source_digest": manifest.get("online_runtime_source_digest"),
+            "files": report_source_files,
+        }
+    )
     if (
         manifest.get("bundle_format") != BUNDLE_FORMAT_ID
         or not isinstance(manifest_digest, str)
+        or manifest.get("report_source_id") != RUN_REPORT_SOURCE_ID
+        or manifest.get("online_runtime_source_id") != RUN_RUNTIME_SOURCE_ID
+        or not isinstance(report_source_files, list)
+        or manifest.get("report_source_digest") != recorded_report_source_digest
         or canonical_digest(
             {key: value for key, value in manifest.items() if key != "bundle_manifest_digest"}
         )
@@ -293,6 +323,17 @@ def verify_shadow_evidence_bundle(
     public = _json_object(bundle / "production-public/run/result.json")
     public_replayed = _json_object(bundle / "production-public/replay/replay.json")
     semantic = _json_object(bundle / "historical-semantic-regression/semantic-regression.json")
+    report_identity = run_report_source_identity(require_clean=authoritative_replay)
+    report_source_match = (
+        manifest.get("report_source_id") == report_identity.report_source_id
+        and manifest.get("report_source_digest") == report_identity.report_source_digest
+        and manifest.get("online_runtime_source_id") == report_identity.online_runtime_source_id
+        and manifest.get("online_runtime_source_digest")
+        == report_identity.online_runtime_source_digest
+        and report_source_files == canonical_value(report_identity.file_hashes)
+    )
+    if authoritative_replay and not report_source_match:
+        raise ValueError("Shadow evidence offline report source identity changed")
     _validate_replay(synthetic_replayed, "synthetic")
     _validate_replay(public_replayed, "production-public")
     if (
@@ -303,16 +344,17 @@ def verify_shadow_evidence_bundle(
         or manifest.get("semantic_regression_digest") != semantic.get("receipt_digest")
     ):
         raise ValueError("Shadow evidence manifest bindings changed")
-    expected_report = _report(
-        generated_at=cast(str, manifest["generated_at"]),
-        synthetic=synthetic,
-        synthetic_replay=synthetic_replayed,
-        public=public,
-        public_replay=public_replayed,
-        semantic=semantic,
-    )
-    if (bundle / "ACCEPTANCE.zh-CN.md").read_text(encoding="utf-8") != expected_report:
-        raise ValueError("Shadow evidence canonical report changed")
+    if report_source_match:
+        expected_report = _report(
+            generated_at=cast(str, manifest["generated_at"]),
+            synthetic=synthetic,
+            synthetic_replay=synthetic_replayed,
+            public=public,
+            public_replay=public_replayed,
+            semantic=semantic,
+        )
+        if (bundle / "ACCEPTANCE.zh-CN.md").read_text(encoding="utf-8") != expected_report:
+            raise ValueError("Shadow evidence canonical report changed")
     temporary = bundle.parent / f".{bundle.name}-verification-replay"
     if authoritative_replay:
         if temporary.exists():
@@ -362,6 +404,9 @@ def verify_shadow_evidence_bundle(
         "bundle_format": BUNDLE_FORMAT_ID,
         "bundle_verified": True,
         "authoritative_replay_verified": authoritative_replay,
+        "report_source_match": report_source_match,
+        "report_reconstructed": report_source_match,
+        "report_source_digest": manifest["report_source_digest"],
         "checksum_entries": len(checksum_paths),
         "bundle_manifest_digest": manifest_digest,
         "archive_sha256": _sha256(archive) if archive is not None else None,

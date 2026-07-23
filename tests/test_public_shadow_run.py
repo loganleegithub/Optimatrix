@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 from market_tape import (
@@ -15,15 +16,23 @@ from market_tape import (
 from radar_runtime.outcome_identity import outcome_runtime_source_identity
 from radar_runtime.runtime_identity import runtime_source_identity
 from radar_runtime.shadow_identity import (
+    RUN_RUNTIME_SOURCE_SCOPE,
     run_runtime_source_identity,
     runtime_environment_identity,
 )
+from radar_runtime.shadow_report_identity import (
+    RUN_REPORT_OPTIONAL_SOURCE_SCOPE,
+    RUN_REPORT_SOURCE_SCOPE,
+    run_report_source_identity,
+)
 from radar_runtime.shadow_runtime import (
+    MAXIMUM_OPPORTUNITY_COMMIT_LATENCY_MS,
     RUN_RECEIPT_PATH,
     SEALED_RUN_SECONDS,
     _HardCutoffReached,
     _incomplete_public_run,
     _OnlineRunController,
+    _reconstruct_operational_evidence,
     _synthetic_events,
     build_run_contract,
     compose_run,
@@ -301,6 +310,108 @@ def test_online_controller_commits_each_opportunity_before_later_facts(
     assert PublicShadowJournalReader(tmp_path / "online").verify().opportunity_count == 12
 
 
+def test_online_runtime_and_offline_report_source_scopes_are_separate() -> None:
+    online_paths = set(RUN_RUNTIME_SOURCE_SCOPE)
+    report_paths = set(RUN_REPORT_SOURCE_SCOPE)
+    online_identity = run_runtime_source_identity(require_clean=False)
+    report_identity = run_report_source_identity(require_clean=False)
+
+    assert "apps/radar_runtime/src/radar_runtime/shadow_runtime.py" in online_paths
+    assert "apps/radar_runtime/src/radar_runtime/shadow_bundle.py" not in online_paths
+    assert "apps/radar_runtime/src/radar_runtime/shadow_bundle.py" in report_paths
+    assert "apps/radar_runtime/src/radar_runtime/shadow_report_identity.py" in report_paths
+    assert "apps/radar_runtime/src/radar_runtime/shadow_report_identity.py" not in online_paths
+    assert RUN_REPORT_OPTIONAL_SOURCE_SCOPE == ("offline_audits",)
+    assert online_paths.isdisjoint(report_paths)
+    assert report_identity.online_runtime_source_id == online_identity.runtime_source_id
+    assert report_identity.online_runtime_source_digest == online_identity.runtime_source_digest
+
+
+def test_late_opportunity_commit_is_anomaly_when_causal_order_is_preserved(
+    tmp_path: Path,
+) -> None:
+    controller, writer, projector, clock, _contract = _controller(tmp_path)
+    for event in _synthetic_events():
+        clock[0] = event.collector_elapsed_ms
+        controller.before_event(event)
+        controller.after_event(event, projector.ingest(event))
+        if controller.origin_elapsed_ms is not None:
+            break
+    assert controller.origin_elapsed_ms is not None
+    record = controller._no_event_record(0)
+    trigger = cast(int, record["interval_end_elapsed_ms"])
+    clock[0] = trigger + MAXIMUM_OPPORTUNITY_COMMIT_LATENCY_MS + 1
+
+    controller._commit_opportunity(record, trigger)
+
+    assert controller.incomplete_reasons == []
+    assert controller.operational_anomalies == ["OPPORTUNITY_COMMIT_LATENCY_BREACH"]
+    writer.interrupt(("INJECTED_OPERATIONAL_ANOMALY_TEST",))
+
+
+def test_negative_opportunity_commit_latency_remains_incomplete(tmp_path: Path) -> None:
+    controller, writer, projector, clock, _contract = _controller(tmp_path)
+    for event in _synthetic_events():
+        clock[0] = event.collector_elapsed_ms
+        controller.before_event(event)
+        controller.after_event(event, projector.ingest(event))
+        if controller.origin_elapsed_ms is not None:
+            break
+    assert controller.origin_elapsed_ms is not None
+    record = controller._no_event_record(0)
+    trigger = cast(int, record["interval_end_elapsed_ms"])
+    clock[0] = trigger - 1
+
+    controller._commit_opportunity(record, trigger)
+
+    assert controller.operational_anomalies == []
+    assert controller.incomplete_reasons == ["OPPORTUNITY_COMMIT_LATENCY_BREACH"]
+    writer.interrupt(("INJECTED_NEGATIVE_LATENCY_TEST",))
+
+
+def test_operational_anomalies_reconstruct_from_actual_causal_times() -> None:
+    event = replace(_synthetic_events()[0], capture_seq=1, collector_elapsed_ms=1_000)
+    opportunities: tuple[dict[str, object], ...] = (
+        {
+            "event_backed": True,
+            "cutoff_capture_seq": 1,
+        },
+    )
+    commits: tuple[dict[str, object], ...] = (
+        {
+            "commit_type": "OPPORTUNITY_COMMIT",
+            "opportunity_ordinal": 1,
+            "commit_elapsed_ms": 7_000,
+        },
+        {
+            "commit_type": "NETWORK_OPEN_INTENT_COMMIT",
+            "retry_dispatch_breach": True,
+        },
+        {
+            "commit_type": "PLATFORM_PROBE_STATE_COMMIT",
+            "state": "MISSED_DEADLINE",
+        },
+        {
+            "commit_type": "PLATFORM_PROBE_STATE_COMMIT",
+            "state": "OMITTED_BEFORE_LATER_FACT",
+        },
+    )
+
+    latencies, anomalies = _reconstruct_operational_evidence(
+        commits,
+        opportunities,
+        (event,),
+    )
+
+    assert latencies == [6_000]
+    assert anomalies == {
+        "NETWORK_RETRY_DISPATCH_LATE": 1,
+        "OPPORTUNITY_COMMIT_LATENCY_BREACH": 1,
+        "PLATFORM_PROBE_MISSED_DEADLINE": 1,
+        "PLATFORM_PROBE_TIMER_ORDER_BREACH": 1,
+    }
+
+
 def test_incomplete_public_prefix_never_persists_successful_run_receipt(
     tmp_path: Path,
 ) -> None:
@@ -360,7 +471,8 @@ def test_probe_deadline_wakeup_never_backdates_or_catches_up_expired_attempts(
     )
     assert next_attempt is not None
     assert next_attempt[1] == 1
-    assert "PLATFORM_PROBE_MISSED_DEADLINE" in controller.incomplete_reasons
+    assert "PLATFORM_PROBE_MISSED_DEADLINE" in controller.operational_anomalies
+    assert "PLATFORM_PROBE_MISSED_DEADLINE" not in controller.incomplete_reasons
     controller.finish_probe(
         next_attempt[0],
         next_attempt[1],
@@ -377,7 +489,7 @@ def test_probe_deadline_wakeup_never_backdates_or_catches_up_expired_attempts(
         )
         is None
     )
-    assert controller.incomplete_reasons.count("PLATFORM_PROBE_MISSED_DEADLINE") == 2
+    assert controller.operational_anomalies.count("PLATFORM_PROBE_MISSED_DEADLINE") == 2
     writer.interrupt(("INJECTED_PROBE_DEADLINE_TEST",))
 
 

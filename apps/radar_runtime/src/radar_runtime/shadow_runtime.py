@@ -125,6 +125,10 @@ MAXIMUM_PROBE_ATTEMPTS = 3
 FUTURE_PLATFORM_PROBE_CONTRACT = "POST_ENTRY_AND_RECONNECT_PLATFORM_RESUBSCRIBE_THEN_STATUS"
 
 
+def _operational_anomaly_counts(values: list[str]) -> dict[str, int]:
+    return dict(sorted(Counter(values).items()))
+
+
 class _HardCutoffReached(RuntimeError):
     pass
 
@@ -310,6 +314,7 @@ class _OnlineRunController:
         self._active: _EntryState | None = None
         self._ever_complete = False
         self.incomplete_reasons: list[str] = []
+        self.operational_anomalies: list[str] = []
         self.opportunity_commit_latencies_ms: list[int] = []
         self._probe_obligations: list[dict[str, object]] = []
         self._platform_acquisition_ordinal = 0
@@ -391,8 +396,10 @@ class _OnlineRunController:
         commit_elapsed_ms = cast(int, commit["commit_elapsed_ms"])
         latency = commit_elapsed_ms - trigger_elapsed_ms
         self.opportunity_commit_latencies_ms.append(latency)
-        if latency < 0 or latency > MAXIMUM_OPPORTUNITY_COMMIT_LATENCY_MS:
+        if latency < 0:
             self.incomplete_reasons.append("OPPORTUNITY_COMMIT_LATENCY_BREACH")
+        elif latency > MAXIMUM_OPPORTUNITY_COMMIT_LATENCY_MS:
+            self.operational_anomalies.append("OPPORTUNITY_COMMIT_LATENCY_BREACH")
 
     def advance_time(self, now_elapsed_ms: int) -> None:
         if self.origin_elapsed_ms is None:
@@ -431,7 +438,7 @@ class _OnlineRunController:
             obligation, attempt = due_before_fact
             attempts = cast(dict[int, str], obligation["attempts"])
             attempts[attempt] = "OMITTED_BEFORE_LATER_FACT"
-            self.incomplete_reasons.append("PLATFORM_PROBE_TIMER_ORDER_BREACH")
+            self.operational_anomalies.append("PLATFORM_PROBE_TIMER_ORDER_BREACH")
             self.writer.commit_control(
                 "PLATFORM_PROBE_STATE_COMMIT",
                 {
@@ -735,7 +742,7 @@ class _OnlineRunController:
                     continue
                 if now_elapsed_ms >= deadline:
                     attempts[attempt] = "MISSED_DEADLINE"
-                    self.incomplete_reasons.append("PLATFORM_PROBE_MISSED_DEADLINE")
+                    self.operational_anomalies.append("PLATFORM_PROBE_MISSED_DEADLINE")
                     self.writer.commit_control(
                         "PLATFORM_PROBE_STATE_COMMIT",
                         {
@@ -1011,6 +1018,7 @@ def compose_run(
     outcome_identity: OutcomeRuntimeSourceIdentity,
     fact_seal_digest: str,
     require_complete: bool = True,
+    operational_anomaly_counts: dict[str, int] | None = None,
 ) -> RunComposition:
     if not events:
         raise ValueError("public-Shadow run has no canonical facts")
@@ -1270,6 +1278,7 @@ def compose_run(
         + event_counts[EventKind.BOOK_GAP.value],
         "reconnect_records": event_counts[EventKind.RECONNECT.value],
         "platform_state_records": event_counts[EventKind.PLATFORM_STATE.value],
+        "operational_anomaly_counts": dict(sorted((operational_anomaly_counts or {}).items())),
         "fact_provenance": run_contract["fact_provenance"],
         "git_commit_sha": run_contract["git_commit_sha"],
         "decision_runtime_source_digest": run_contract["decision_runtime_source_digest"],
@@ -1684,6 +1693,7 @@ def run_synthetic_shadow(output: Path) -> dict[str, object]:
         decision_identity=decision_identity,
         outcome_identity=outcome_identity,
         fact_seal_digest=exact_fact_seal,
+        operational_anomaly_counts=_operational_anomaly_counts(controller.operational_anomalies),
     )
     if not _typed_equal(list(controller.records), list(composition.opportunities)):
         raise ValueError("synthetic online opportunities differ from sealed reconstruction")
@@ -1700,6 +1710,7 @@ def run_synthetic_shadow(output: Path) -> dict[str, object]:
         "origin_elapsed_ms": composition.origin_elapsed_ms,
         "seal_end_elapsed_ms": composition.seal_end_elapsed_ms,
         "accounting": canonical_value(composition.accounting),
+        "operational_anomaly_counts": _operational_anomaly_counts(controller.operational_anomalies),
         "decision_runtime_source_digest": decision_identity.runtime_source_digest,
         "outcome_runtime_source_digest": outcome_identity.runtime_source_digest,
         "run_runtime_source_digest": run_identity.runtime_source_digest,
@@ -2291,6 +2302,7 @@ def _incomplete_public_run(
         "opportunity_journal_head": writer.opportunity_head,
         "incomplete_state": controller.incomplete_state(),
         "incomplete_reasons": list(dict.fromkeys(reasons)),
+        "operational_anomaly_counts": _operational_anomaly_counts(controller.operational_anomalies),
         "decision_runtime_source_digest": contract.get("decision_runtime_source_digest"),
         "outcome_runtime_source_digest": contract.get("outcome_runtime_source_digest"),
         "run_runtime_source_digest": contract.get("run_runtime_source_digest"),
@@ -2323,6 +2335,7 @@ def _incomplete_public_run(
         "terminal_causal_commit_digest_before_witness": writer.causal_head,
         "result_digest": result["result_digest"],
         "incomplete_reasons": result["incomplete_reasons"],
+        "operational_anomaly_counts": result["operational_anomaly_counts"],
         "online_persistence_external_attested": False,
         "external_source_attested": False,
         "attempt_selection_attested": False,
@@ -2484,7 +2497,7 @@ def run_public_shadow_capture(output: Path) -> dict[str, object]:
             break
         dispatch_latency_ms = intent_elapsed - next_network_due_ms
         if dispatch_latency_ms >= MAXIMUM_NETWORK_RETRY_DISPATCH_LATENCY_MS:
-            controller.incomplete_reasons.append("NETWORK_RETRY_DISPATCH_LATE")
+            controller.operational_anomalies.append("NETWORK_RETRY_DISPATCH_LATE")
         effective_timeout_ms = min(
             NETWORK_OPEN_TIMEOUT_SECONDS * 1_000,
             remaining_ms,
@@ -2701,6 +2714,7 @@ def run_public_shadow_capture(output: Path) -> dict[str, object]:
         outcome_identity=outcome_identity,
         fact_seal_digest=exact_fact_seal,
         require_complete=False,
+        operational_anomaly_counts=_operational_anomaly_counts(controller.operational_anomalies),
     )
     if not _typed_equal(list(controller.records), list(composition.opportunities)):
         raise ValueError("online opportunity journal differs from sealed reconstruction")
@@ -2732,6 +2746,7 @@ def run_public_shadow_capture(output: Path) -> dict[str, object]:
         "seal_end_elapsed_ms": controller.seal_end_elapsed_ms,
         "network_attempts": network_attempts,
         "opportunity_commit_latencies_ms": (controller.opportunity_commit_latencies_ms),
+        "operational_anomaly_counts": _operational_anomaly_counts(controller.operational_anomalies),
         "segment_manifest_digests": list(writer.segment_manifest_digests),
         "opportunity_journal_head": writer.opportunity_head,
         "terminal_causal_commit_digest_before_witness": writer.causal_head,
@@ -2766,6 +2781,7 @@ def run_public_shadow_capture(output: Path) -> dict[str, object]:
         "seal_end_elapsed_ms": composition.seal_end_elapsed_ms,
         "accounting": canonical_value(composition.accounting),
         "incomplete_reasons": [],
+        "operational_anomaly_counts": _operational_anomaly_counts(controller.operational_anomalies),
         "decision_runtime_source_digest": decision_identity.runtime_source_digest,
         "outcome_runtime_source_digest": outcome_identity.runtime_source_digest,
         "run_runtime_source_digest": run_identity.runtime_source_digest,
@@ -3100,6 +3116,60 @@ def run_historical_semantic_regression(
     return receipt
 
 
+def _reconstruct_operational_evidence(
+    causal_records: tuple[dict[str, object], ...],
+    opportunities: tuple[dict[str, object], ...],
+    events: tuple[CanonicalEvent, ...],
+) -> tuple[list[int], dict[str, int]]:
+    event_elapsed = {item.capture_seq: item.collector_elapsed_ms for item in events}
+    opportunity_commits = tuple(
+        item for item in causal_records if item.get("commit_type") == "OPPORTUNITY_COMMIT"
+    )
+    if len(opportunity_commits) != len(opportunities):
+        raise ValueError("opportunity commit denominator changed")
+    latencies: list[int] = []
+    anomalies: list[str] = []
+    for ordinal, (commit, opportunity) in enumerate(
+        zip(opportunity_commits, opportunities, strict=True),
+        start=1,
+    ):
+        if commit.get("opportunity_ordinal") != ordinal:
+            raise ValueError("opportunity commit ordinal changed")
+        if opportunity.get("event_backed") is True:
+            cutoff = opportunity.get("cutoff_capture_seq")
+            if type(cutoff) is not int or cutoff not in event_elapsed:
+                raise ValueError("event-backed opportunity trigger changed")
+            trigger = event_elapsed[cutoff]
+        elif opportunity.get("event_backed") is False:
+            raw_trigger = opportunity.get("interval_end_elapsed_ms")
+            if type(raw_trigger) is not int:
+                raise ValueError("no-event opportunity trigger changed")
+            trigger = raw_trigger
+        else:
+            raise ValueError("opportunity event-backed state changed")
+        commit_elapsed = commit.get("commit_elapsed_ms")
+        if type(commit_elapsed) is not int:
+            raise ValueError("opportunity commit elapsed changed")
+        latency = commit_elapsed - trigger
+        if latency < 0:
+            raise ValueError("opportunity commit precedes its trigger")
+        latencies.append(latency)
+        if latency > MAXIMUM_OPPORTUNITY_COMMIT_LATENCY_MS:
+            anomalies.append("OPPORTUNITY_COMMIT_LATENCY_BREACH")
+    for commit in causal_records:
+        if (
+            commit.get("commit_type") == "NETWORK_OPEN_INTENT_COMMIT"
+            and commit.get("retry_dispatch_breach") is True
+        ):
+            anomalies.append("NETWORK_RETRY_DISPATCH_LATE")
+        if commit.get("commit_type") == "PLATFORM_PROBE_STATE_COMMIT":
+            if commit.get("state") == "MISSED_DEADLINE":
+                anomalies.append("PLATFORM_PROBE_MISSED_DEADLINE")
+            elif commit.get("state") == "OMITTED_BEFORE_LATER_FACT":
+                anomalies.append("PLATFORM_PROBE_TIMER_ORDER_BREACH")
+    return latencies, _operational_anomaly_counts(anomalies)
+
+
 def replay_shadow(run_root: Path, output: Path) -> dict[str, object]:
     if output.exists():
         raise ValueError("public-Shadow replay output must not already exist")
@@ -3119,6 +3189,20 @@ def replay_shadow(run_root: Path, output: Path) -> dict[str, object]:
     recorded_contract_digest = contract.pop("run_contract_digest", None)
     if canonical_digest(contract) != recorded_contract_digest:
         raise ValueError("public-Shadow run contract changed")
+    causal_records = tuple(
+        cast(dict[str, object], json.loads(line))
+        for line in (run_root / "causal-commits.jsonl").read_text(encoding="utf-8").splitlines()
+        if line
+    )
+    reconstructed_opportunity_latencies, operational_anomaly_counts = (
+        _reconstruct_operational_evidence(
+            causal_records,
+            verified.opportunities,
+            verified.events,
+        )
+    )
+    if source_result.get("operational_anomaly_counts") != operational_anomaly_counts:
+        raise ValueError("public-Shadow operational anomaly report changed")
     decision_identity = runtime_source_identity(require_clean=False)
     outcome_identity = outcome_runtime_source_identity(require_clean=False)
     run_identity = run_runtime_source_identity(require_clean=False)
@@ -3158,6 +3242,7 @@ def replay_shadow(run_root: Path, output: Path) -> dict[str, object]:
             dirty_paths=(),
         ),
         fact_seal_digest=fact_seal_digest,
+        operational_anomaly_counts=operational_anomaly_counts,
     )
     if not _typed_equal(source_receipt, composition.run_receipt):
         raise ValueError("public-Shadow Run receipt drift")
@@ -3231,11 +3316,6 @@ def replay_shadow(run_root: Path, output: Path) -> dict[str, object]:
             finished_at = datetime.fromisoformat(cast(str, finished))
         except (TypeError, ValueError):
             started_at = finished_at = None
-        causal_records = tuple(
-            cast(dict[str, object], json.loads(line))
-            for line in (run_root / "causal-commits.jsonl").read_text(encoding="utf-8").splitlines()
-            if line
-        )
         witness_commit = next(
             (
                 item
@@ -3295,12 +3375,8 @@ def replay_shadow(run_root: Path, output: Path) -> dict[str, object]:
             or invocation.get("network_attempts") != reconstructed_network_attempts
             or invocation.get("segment_manifest_digests") != segment_digests
             or invocation.get("opportunity_journal_head") != verified.opportunity_journal_head
-            or not isinstance(opportunity_latencies, list)
-            or len(opportunity_latencies) != DUE_OPPORTUNITY_COUNT
-            or any(
-                type(value) is not int or value < 0 or value > MAXIMUM_OPPORTUNITY_COMMIT_LATENCY_MS
-                for value in opportunity_latencies
-            )
+            or opportunity_latencies != reconstructed_opportunity_latencies
+            or invocation.get("operational_anomaly_counts") != operational_anomaly_counts
             or invocation.get("run_receipt_digest") != source_run_receipt_digest
             or invocation.get("decision_runtime_source_digest")
             != decision_identity.runtime_source_digest
@@ -3347,6 +3423,7 @@ def replay_shadow(run_root: Path, output: Path) -> dict[str, object]:
         "online_persistence_external_attested": False,
         "external_source_attested": False,
         "attempt_selection_attested": False,
+        "operational_anomaly_counts": operational_anomaly_counts,
         **{f"{name}_drift_count": 0 for name in drift_names},
         "run_receipt_digest": composition.run_receipt["run_receipt_digest"],
         "fact_seal_digest": fact_seal_digest,

@@ -220,11 +220,11 @@ record contains:
 For an event-backed slot, `opportunity_trigger_elapsed_ms` is the cutoff fact's persisted elapsed
 value; for a no-event slot it is the half-open slot end. `opportunity_commit_elapsed_ms` is the
 invocation-monotonic value immediately after the commit fsync. Both use the same persisted
-monotonic domain, and every `complete=true` run requires integer
-`0 <= opportunity_commit_elapsed_ms - opportunity_trigger_elapsed_ms <= 5,000`. A breach is
-durably reported and makes the Run incomplete even though the record is retained. This bounded
-latency rule replaces the physically impossible claim that an event arriving immediately before a
-cadence boundary must already be fsynced before that boundary.
+monotonic domain. A negative latency is invalid and makes the Run incomplete. A latency above
+5,000 milliseconds is a durably reported `OPPORTUNITY_COMMIT_LATENCY_BREACH` operational anomaly,
+but does not invalidate a Run when the opportunity was still committed before every later
+canonical fact and later-slot commit. This SLA does not override the causal known-at or complete
+denominator requirements.
 
 One append-only causal commit journal begins with a `RUN_CONTRACT_COMMIT`. Every WebSocket
 `connect` call is then bracketed by a `NETWORK_OPEN_INTENT_COMMIT` fsynced before the call and a
@@ -352,10 +352,10 @@ intent/result pair binds the pending connection generation, due elapsed value, a
 result elapsed values, effective timeout, success or normalized failure, and preceding causal
 head. The first initial call is due when its pre-connection public inputs are ready; the first
 reconnect call is due at the reconnect trigger. A retry is due exactly 1,000 milliseconds after
-the preceding failed result. An intent may not precede its due time and, for a complete Run, must
-be committed in `[due_elapsed_ms, due_elapsed_ms + 1,000)`. A later dispatch records
-`NETWORK_RETRY_DISPATCH_LATE` at its actual elapsed value and makes the Run incomplete, but still
-continues recovery when time remains; it is never backdated.
+the preceding failed result. An intent may not precede its due time. A dispatch outside
+`[due_elapsed_ms, due_elapsed_ms + 1,000)` records `NETWORK_RETRY_DISPATCH_LATE` at its actual
+elapsed value as an operational anomaly and continues recovery when time remains; it is never
+backdated. Missing intent/result lineage remains incomplete evidence.
 
 An initial call uses pending generation 1. Repeated failures before any established connection
 retain that generation and increment only `network_attempt_ordinal`. The first successful result
@@ -396,8 +396,10 @@ current connection generation, and the start remains the latest authoritative pl
 through the status response. The pair may come from the dedicated platform-only probe, the normal
 reconnect bootstrap, later network-recovery bootstrap, or another predeclared collector
 subscription path. A faithfully recorded timeout, send failure, or no-active-connection attempt
-is an honest SLA result and does not by itself make the Run incomplete; an omitted transition,
-backdated transition, or `MISSED_DEADLINE` does. None can veto an otherwise valid pair, erase an
+is an honest SLA result and does not by itself make the Run incomplete. A durably recorded
+`MISSED_DEADLINE` or `OMITTED_BEFORE_LATER_FACT` is an operational anomaly when actual elapsed
+time, canonical known-at order, and the opportunity denominator remain intact; an unrecorded or
+backdated transition remains incomplete. None can veto an otherwise valid pair, erase an
 executable exit, or alter its Outcome receipt.
 
 Every `ADMITTED` Entry creates one acquisition obligation after its Entry/opportunity commit.
@@ -475,9 +477,9 @@ An attempt without a timely send-intent or timely skip commit becomes `MISSED_DE
 at the actual wake elapsed value; it is never catch-up sent, backdated, or counted as timely. The
 runtime may then send only the single attempt whose half-open timely interval is currently active.
 If every interval has elapsed, it records every missing attempt as `MISSED_DEADLINE` without a
-send. Any missed deadline makes the Run incomplete, while a separately valid future platform pair
-still retains its Outcome eligibility. Tests inject one- and multi-deadline wakeups and prove that
-neither backfill nor compressed catch-up traffic can complete the Run.
+send. Each durably recorded missed deadline remains an operational anomaly, while a separately
+valid future platform pair retains its Outcome eligibility. Tests inject one- and multi-deadline
+wakeups and prove that neither backfill nor compressed catch-up traffic is fabricated.
 
 Authoritative acquisition facts follow the unchanged projection rules and are visible to later
 slots in `capture_seq` order without altering Entry or a frozen prior Decision. Control-anomaly
@@ -610,14 +612,21 @@ storage attestor observes the physical write.
   verify, while always preserving `online_persistence_external_attested=false`.
 
 The Run contract owns
-`OPTIMATRIX_FIXED_POLICY_PUBLIC_SHADOW_RUNTIME_SOURCE`, computed from sorted path/content hashes of
-every Python file recursively under `packages/market_tape/src/market_tape`,
-`packages/options_domain/src/options_domain`, `packages/short_vol_radar/src/short_vol_radar`,
-`packages/shadow_engine/src/shadow_engine`, and `apps/radar_runtime/src/radar_runtime`, plus exact
-`pyproject.toml` bytes. Its frozen Decision and Outcome source digests remain independently
-authoritative. Replay may occur at a different audit Git commit only when every scoped source
-digest and the frozen runtime-environment digest are unchanged; any in-scope dirty path,
-source-content change, interpreter mismatch, or runtime-dependency mismatch fails closed.
+`OPTIMATRIX_FIXED_POLICY_PUBLIC_SHADOW_ONLINE_RUNTIME_SOURCE`, computed from sorted path/content
+hashes of the four domain packages, the exact `radar_runtime` modules imported by capture,
+composition, and replay, plus exact `pyproject.toml` bytes. Offline bundle/report code is excluded
+from that identity and separately owns
+`OPTIMATRIX_FIXED_POLICY_PUBLIC_SHADOW_OFFLINE_REPORT_SOURCE`. The report identity composes the
+frozen online-runtime digest with the exact offline bundle/CLI and bounded `offline_audits` file
+hashes and is bound by the bundle manifest, not the pre-network Run contract or Run receipt. Thus a report-only change cannot
+impersonate or churn online runtime identity, while authoritative report reconstruction still
+requires its exact report identity. Static bundle/hash verification under a different report
+identity remains non-authoritative and does not claim report reconstruction.
+
+The frozen Decision and Outcome source digests remain independently authoritative. Replay may
+occur at a different audit Git commit only when every scoped online source digest and the frozen
+runtime-environment digest are unchanged; any in-scope dirty path, source-content change,
+interpreter mismatch, or runtime-dependency mismatch fails closed.
 Historical Decision Truth and Outcome Truth bundles remain byte-valid under their recorded
 identities; execution replay requires those exact scoped source bytes and environment, and a later
 audit commit may not impersonate them with a different digest.
@@ -691,8 +700,9 @@ reports `online_persistence_external_attested=false`.
 2. Every due opportunity's fact and opportunity commits precede any later fact/slot commit in the
    interleaved chain. Fresh replay verifies prefix causality and process-witness consistency; the
    shipped runtime has no successful post-run batch substitute, while external physical-write
-   timing remains explicitly unattested. Each commit also meets the frozen 5,000-millisecond
-   process-witness latency bound or makes the Run incomplete. Injected crashes after
+   timing remains explicitly unattested. A positive commit latency above the frozen
+   5,000-millisecond SLA is reconstructed as an anomaly without invalidating an otherwise causal,
+   denominator-complete Run; a negative latency or broken ordering remains incomplete. Injected crashes after
    payload-before-commit, fact-before-opportunity, and opportunity-before-next-fact preserve only
    the valid durable prefix and cannot complete the run.
 3. The four admission classes partition all twelve opportunities. Concurrency blocking preserves
@@ -708,11 +718,11 @@ reports `online_persistence_external_attested=false`.
    Uninterrupted single-Entry, sequential multi-Entry, reconnect, timeout/send-failure followed by
    later recovery, uncorrelated/delayed status rejection, omitted-probe, and probe
    pending/reset/status effects on later DecisionFrames are tested. One- and multi-deadline late
-   wakeups record actual elapsed values, never backdate or catch up expired attempts, and cannot
-   complete the run. Superseded raw responses remain auditable without changing canonical counts
-   or projections; an omitted due probe cannot complete the run. Repeated connect failures for
+   wakeups record actual elapsed values, never backdate or catch up expired attempts, and remain
+   explicit operational anomalies. Superseded raw responses remain auditable without changing
+   canonical counts or projections. Repeated connect failures for
    one outage retain one pending generation, every connect call is intent/result bracketed, a late
-   retry-dispatch is explicit and incomplete, and the bounded recovery loop continues
+   retry-dispatch is an explicit anomaly, and the bounded recovery loop continues
    independently of probe exhaustion through success or the hard cutoff. A late successful
    bootstrap is not a catch-up attempt but may still supply valid latest-authoritative facts and
    an Outcome barrier.
@@ -758,7 +768,7 @@ platform pair. All complete-run accounting identities hold, zero `NO_TRADE` is d
 strategy PnL, and all ten replay drift counts are type-strict integer zero. Direct tests separately
 cover terminal `UNKNOWN`, terminal `UNEXITABLE`, interruption, setup timeout, omitted platform
 probe, one and multiple failed connection calls in one pending generation, retry-dispatch
-lateness, hard-cutoff connect cancellation, late network recovery after probe exhaustion, and
+lateness as anomaly, hard-cutoff connect cancellation, late network recovery after probe exhaustion, and
 silent head/tail behavior.
 
 ### Real evidence
@@ -814,6 +824,34 @@ incomplete prefix is not a completed run; replay equality proves reconstruction 
 `NO_TRADE=0` is not qualification; no result proves Policy quality, profitability, account
 behavior, execution, capital authority, third-party source provenance, externally witnessed
 pre-network/fsync timing, or the absence of externally discarded attempts.
+
+## Parallel bounded governance addendum — Identity and operational SLA
+
+This branch narrows provenance and failure governance without changing market facts, Decision
+behavior, Entry/Outcome meaning, or permission.
+
+**Market/Decision input contract change:** NONE
+
+**Decision Policy change:** NONE
+
+**Outcome/evaluation contract change:** NONE
+
+**Stage/authorization change:** NONE
+
+The Online Runtime and offline report have separate content identities. A report-only source
+change cannot alter the pre-network Run runtime digest. Bundle manifests bind the report identity,
+and authoritative report reconstruction requires that identity; static verification under another
+report identity proves hashes only.
+
+Operational SLA violations are not business-truth failures when the journal preserves actual
+elapsed values, causal known-at order, every due opportunity, and Outcome maturity. Positive
+opportunity-commit lateness, network retry-dispatch lateness, and durably recorded probe missed
+deadlines/late timer transitions remain counted anomalies. Negative latency, backdating, a missing
+transition, later input processed before its required causal commit, a missing opportunity,
+interruption, an unsealed/orphan segment, or immature Outcome remains a hard incomplete result.
+Replay independently reconstructs the anomaly counts from causal commits and persisted elapsed
+times. This governance correction does not relax denominator, causality, maturity, replay, or
+attestation requirements.
 
 ## Definition of done
 

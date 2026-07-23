@@ -1,4 +1,4 @@
-"""Source and runtime-environment identity for the bounded Shadow run."""
+"""Online runtime and environment identities for the bounded Shadow run."""
 
 from __future__ import annotations
 
@@ -12,13 +12,21 @@ from pathlib import Path
 
 from market_tape import canonical_digest
 
-RUN_RUNTIME_SOURCE_ID = "OPTIMATRIX_FIXED_POLICY_PUBLIC_SHADOW_RUNTIME_SOURCE"
+RUN_RUNTIME_SOURCE_ID = "OPTIMATRIX_FIXED_POLICY_PUBLIC_SHADOW_ONLINE_RUNTIME_SOURCE"
 RUN_RUNTIME_SOURCE_SCOPE = (
     "packages/market_tape/src/market_tape",
     "packages/options_domain/src/options_domain",
     "packages/short_vol_radar/src/short_vol_radar",
     "packages/shadow_engine/src/shadow_engine",
-    "apps/radar_runtime/src/radar_runtime",
+    "apps/radar_runtime/src/radar_runtime/__init__.py",
+    "apps/radar_runtime/src/radar_runtime/deribit_public.py",
+    "apps/radar_runtime/src/radar_runtime/fixture.py",
+    "apps/radar_runtime/src/radar_runtime/outcome_identity.py",
+    "apps/radar_runtime/src/radar_runtime/outcome_runtime.py",
+    "apps/radar_runtime/src/radar_runtime/outcome_seal.py",
+    "apps/radar_runtime/src/radar_runtime/runtime_identity.py",
+    "apps/radar_runtime/src/radar_runtime/shadow_identity.py",
+    "apps/radar_runtime/src/radar_runtime/shadow_runtime.py",
     "pyproject.toml",
 )
 
@@ -70,14 +78,21 @@ def repository_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
-def _source_files(root: Path) -> tuple[Path, ...]:
+def _source_files(
+    root: Path,
+    scope: tuple[str, ...],
+    *,
+    optional_scope: tuple[str, ...] = (),
+) -> tuple[Path, ...]:
     files: set[Path] = set()
-    for relative in RUN_RUNTIME_SOURCE_SCOPE:
+    for relative in scope:
         target = root / relative
         if target.is_dir():
             files.update(path for path in target.rglob("*.py") if path.is_file())
         elif target.is_file():
             files.add(target)
+        elif relative in optional_scope:
+            continue
         else:
             raise RuntimeError(f"run runtime source scope is missing: {relative}")
     return tuple(sorted(files, key=lambda path: path.relative_to(root).as_posix()))
@@ -92,7 +107,7 @@ def run_runtime_source_file_hashes(
             path.relative_to(active_root).as_posix(),
             hashlib.sha256(path.read_bytes()).hexdigest(),
         )
-        for path in _source_files(active_root)
+        for path in _source_files(active_root, RUN_RUNTIME_SOURCE_SCOPE)
     )
 
 
