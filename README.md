@@ -26,10 +26,10 @@ Repository-owned contracts, tasks, and receipts use semantic identities and cont
 ordinal product generations. External protocols, dependencies, and build tools retain the exact
 versions required for compatibility; those versions grant no product authority.
 
-The bounded Deribit capture/replay foundation and accepted Decision Truth closure are implemented.
-Outcome Truth is the sole authorized next closure. A continuous fixed-Policy Shadow run,
-qualification, Challenger research, promotion, private/account access, and execution are not
-implemented or authorized.
+The bounded Deribit capture/replay foundation plus the accepted Decision Truth and Outcome Truth
+closures are implemented. One bounded Fixed-Policy public Shadow run is the sole authorized next
+closure; it is not yet implemented. Qualification, Challenger research, promotion,
+private/account access, and execution remain unauthorized.
 
 ## Repository shape
 
@@ -102,3 +102,61 @@ must prove actual coverage, freshness, platform state, and contamination status.
 Zero candidates are a valid market result. Matching live/replay digests prove deterministic
 reconstruction of the sealed tape, not data completeness, strategy quality, fills, or trading
 authority.
+
+## Bounded Outcome Truth evidence
+
+`optimatrix-outcome` is the bounded evidence CLI for the accepted Outcome Truth closure. Every
+output or archive path must be fresh and previously nonexistent. It fixes one Decision cutoff at
+the first canonical event after the initial required subscriptions have accumulated 3,600 seconds
+of collector-elapsed time; an incomplete Decision, `WATCH`, `ABSTAIN`, or reconnect does not move
+the cutoff or trigger a retry.
+
+First generate and independently replay the deterministic nonzero synthetic evidence:
+
+```bash
+.venv/bin/optimatrix-outcome synthetic \
+  --output /tmp/optimatrix-outcome-synthetic
+.venv/bin/optimatrix-outcome replay \
+  /tmp/optimatrix-outcome-synthetic \
+  --output /tmp/optimatrix-outcome-synthetic-replay
+```
+
+Then collect and independently replay one fresh production-public run. It requires no credentials
+or private API:
+
+```bash
+.venv/bin/optimatrix-outcome capture \
+  --duration-seconds 3665 \
+  --output /tmp/optimatrix-outcome-public
+.venv/bin/optimatrix-outcome replay \
+  /tmp/optimatrix-outcome-public \
+  --output /tmp/optimatrix-outcome-public-replay
+```
+
+Keep the synthetic and production-public evidence classes distinct while packaging both into one
+hash-verifiable bundle:
+
+```bash
+.venv/bin/optimatrix-outcome bundle \
+  --synthetic-run /tmp/optimatrix-outcome-synthetic \
+  --synthetic-replay /tmp/optimatrix-outcome-synthetic-replay \
+  --public-run /tmp/optimatrix-outcome-public \
+  --public-replay /tmp/optimatrix-outcome-public-replay \
+  --output /tmp/optimatrix-outcome-truth-bundle
+.venv/bin/optimatrix-outcome verify-bundle \
+  /tmp/optimatrix-outcome-truth-bundle \
+  --archive /tmp/optimatrix-outcome-truth-bundle.tar.gz
+```
+
+A complete `WATCH` or `ABSTAIN` produces `NO_ENTRY`; an incomplete cutoff Decision produces an
+admission `UNKNOWN`. Both valid zero results create no Entry or Outcome receipt. An admitted entry
+with incomplete future evidence creates an `UNKNOWN` Outcome with null observed executable PnL.
+Only `CLOSED` records an executable close and observed PnL; `UNEXITABLE` and `UNKNOWN` keep them
+null. A complete but immature bounded suffix is still `UNKNOWN`, never an invented zero or close.
+The durable enum is `shadow_engine.truth.OutcomeStatus`; the package-root legacy enum and its
+`OPEN` value remain unchanged for legacy regression compatibility. Production runs also persist a
+collector invocation witness binding the 3,665-second command to its Deribit public endpoint,
+collector files, capture, Git identity, and Decision runtime identity.
+Synthetic success is not production Outcome evidence, public quotes are not fills, and matching
+replay digests do not prove strategy quality, profitability, qualification, continuous Shadow
+operation, or trading authority.

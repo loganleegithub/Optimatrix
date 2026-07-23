@@ -27,7 +27,10 @@ Canonical public facts
 → executable 1:1 vertical inventory
 → insurance assessment for 30m / 1h / 2h / 4h
 → RESEARCH_CANDIDATE | WATCH | ABSTAIN
-→ future-only Shadow OutcomePath
+→ one fixed-cutoff Shadow admission
+→ zero entry or SHORT_VOL_SHADOW_ENTRY_RECEIPT
+→ strictly future SHORT_VOL_OUTCOME_FACT_SEAL
+→ SHORT_VOL_OUTCOME_RECEIPT
 ```
 
 `RESEARCH_CANDIDATE` is the current public-Shadow schema name for a candidate-class research
@@ -176,6 +179,164 @@ exit. Any continued full-horizon path is a separately labeled counterfactual.
 
 Live/replay equality must independently reconstruct every identity that can be derived from sealed
 input. Equality is determinism evidence, not qualification.
+
+## Bounded Outcome Truth contract
+
+The Outcome/evaluation contract is `PUBLIC_SHADOW_SHORT_VOL_OUTCOME_TRUTH`. It adds only the
+bounded Outcome behavior and artifacts below:
+
+- the Market/Decision input contract remains `DERIBIT_PUBLIC_SHORT_VOL_DECISION_INPUT`, including
+  the accepted `SHORT_VOL_DECISION_RECEIPT` schema and meaning;
+- the Decision Policy remains `OBSERVED_PATH_STRESS_FIXED_PRIOR_POLICY`, with no change to its
+  horizons, structures, formulas, thresholds, reserves, vetoes, ranking, or candidate predicates;
+- the Outcome/evaluation axis adds `SHORT_VOL_SHADOW_ENTRY_RECEIPT`,
+  `SHORT_VOL_OUTCOME_FACT_SEAL`, and `SHORT_VOL_OUTCOME_RECEIPT` under the new Outcome contract;
+- the permission boundary remains bounded `PUBLIC_SHADOW`. This contract does not authorize a
+  cadence, retrying scan, Run receipt, qualification, private/account data, or execution.
+
+Existing non-durable `ShadowPosition`, `OutcomePath`, and `MaturedOutcome` values remain synthetic
+regression inputs only. They are not durable Outcome Truth artifacts or historically comparable
+qualification Outcomes. Their package-root `OutcomeStatus` and `OPEN` value remain unchanged for
+legacy compatibility; the new exact durable enum is public as `shadow_engine.truth.OutcomeStatus`
+with only `CLOSED`, `UNEXITABLE`, and `UNKNOWN`.
+
+### Cutoff and admission
+
+One run fixes exactly one Decision cutoff before inspecting any Outcome suffix: the first canonical
+event after the initial required subscriptions have accumulated 3,600 seconds of
+collector-elapsed time. Missingness, contamination, or reconnect may make that cutoff Decision
+incomplete, but may not move the cutoff, select a later Decision, or trigger a retry.
+
+The one admission result is fail-closed:
+
+- `UNKNOWN`: the cutoff Decision or its binding evidence is incomplete; Entry and Outcome receipt
+  counts are both zero;
+- `NO_ENTRY`: the cutoff Decision is complete and its action is `WATCH` or `ABSTAIN`; Entry and
+  Outcome receipt counts are both zero;
+- `ADMITTED`: and only a complete `RESEARCH_CANDIDATE` whose receipt, frame, selected assessment,
+  Policy, sequence, entry prices, amounts, and depth all bind exactly may create one Entry receipt.
+
+Admission never changes thresholds to manufacture activity. Receipt, frame, assessment, Policy,
+or sequence drift is an error, not another chance to scan. If an admitted entry later lacks
+complete future evidence, it still produces one `UNKNOWN` Outcome with null observed executable
+PnL.
+
+### Immutable artifacts and identities
+
+`SHORT_VOL_SHADOW_ENTRY_RECEIPT` binds the exact accepted Decision receipt and digest, Decision
+frame and selected assessment, deployed Policy identity/digest, frozen structure and quantity,
+entry credit, executable depth, fees, maximum loss, entry causal sequence, entry-generation
+platform-control anchors, and Outcome contract/runtime identities.
+
+`SHORT_VOL_OUTCOME_FACT_SEAL` binds the original sealed full-capture identity, the fixed cutoff,
+the Decision prefix and strictly post-entry suffix boundaries, every retained future market and
+platform-control fact, their causal lineage, and its own content digest. It is closure-specific;
+it is not a generic capture or storage format.
+
+`SHORT_VOL_OUTCOME_RECEIPT` binds the Entry receipt and fact-seal digests, Outcome
+contract/runtime identities, actual-exposure and optional counterfactual path digests, selected
+exit or bounded failure status, executable close assessment, observed result, complete lineage,
+and its own content digest. A fresh process must reproduce all derivable fields and digests from
+the sealed inputs; a mismatch or tamper fails verification. The receipt JSON is not a standalone
+trust anchor: acceptance requires byte-verified fact-seal reconstruction and fresh replay. Merely
+rehashing modified receipt content never validates it against the sealed tape.
+
+### Strictly future facts and control lineage
+
+Every market or platform-control fact used for reference price, tradability, close economics,
+touch, excursion, or exit has `capture_seq` strictly greater than the Entry sequence. Entry facts
+and the Entry connection's platform anchors remain frozen in the Entry receipt but cannot be
+reused as future evidence.
+
+An executable future close requires a connection-scoped platform barrier in the future suffix: an
+accepted `platform_state` subscription-start fact for that connection generation followed by a
+later canonical `public/status` fact. Entry-only `OPEN` is insufficient. Reconnect invalidates the
+prior barrier and requires a new future subscription/status pair before a close can be executable.
+The bounded Outcome collector waits until the fixed Decision cutoff has actually been selected,
+then obtains an acknowledged platform-only subscription refresh and a later `public/status` on
+the active connection. Those facts are Outcome-only suffix evidence: they cannot change the
+already frozen Decision prefix or its receipt.
+Missing or stale reference, quote side, amount, platform proof, or causal lineage is `UNKNOWN`;
+known platform lock, reference closure, or complete visible depth below the frozen quantity is
+`UNEXITABLE`. A stale future reference keeps its concrete source sequence in the point-level
+lineage even though its reference value is unusable.
+
+Each future close observation is classified independently as `EXECUTABLE`, `UNEXITABLE`, or
+`UNKNOWN`. `EXECUTABLE` means all visible close economics, frozen-quantity depth, future platform
+proof, and lineage are complete. `UNEXITABLE` means the required facts are complete and establish
+a known inability to close. `UNKNOWN` means the observation is missing or invalid and cannot be
+used to infer either execution or known inability. The evaluator independently checks the frozen
+input-contract identity and a non-boolean integer quote age within the frozen limit; truthy
+non-booleans cannot impersonate `fresh` or `valid`. A blank combo identity is invalid. Duplicate
+latest combo facts or duplicate leg facts are conflicting evidence and remain `UNKNOWN` when no
+other independently complete close path is executable. An observed stale, invalid, or conflicting
+combo cannot disappear into a leg-depth `UNEXITABLE` classification.
+
+### Actual exposure, exit, and counterfactual
+
+Actual exposure starts at Entry and examines future points once in increasing `capture_seq` order.
+The first executable exit condition wins. If multiple conditions hold at the same point, priority
+is `PROFIT_TARGET`, then `FIRST_TOUCH`, then `HORIZON`. No later fact may change the selected exit,
+touch, excursion, or observed PnL.
+
+Reaching the horizon arms the `HORIZON` exit condition; it does not by itself end exposure.
+An `UNKNOWN` or `UNEXITABLE` close observation at or after the horizon is non-terminal, and the
+actual path continues until the first later executable close or data end. If no executable close
+appears, the last observation at or after the horizon supplies the bounded failure status and
+evaluation sequence. Earlier temporary missingness or inability is not sticky.
+
+The actual path ends at the selected exit, inclusive. Any retained point after that exit belongs
+only to a separately labeled, unscored counterfactual path. It cannot contribute to actual touch,
+excursion, max-loss-region, holding time, close, or PnL fields.
+
+Excursion uses Entry as an explicit zero baseline once at least one valid strictly future reference
+fact exists. Actual maximum-up and maximum-down excursion therefore include zero and use only the
+actual path through exit. With no valid future reference fact, excursion and touch remain
+`UNKNOWN`; Entry alone is not evidence of an observed zero path.
+
+### Outcome status and observed PnL
+
+- `CLOSED` requires a visible executable close with complete price sides and amounts, depth at least
+  the frozen quantity, complete future platform proof, and complete lineage. It alone records an
+  executable exit sequence, close debit and fee, and observed PnL. PnL is frozen gross entry credit
+  less executable close debit times frozen quantity and contract size, entry fee, and close fee.
+- `UNEXITABLE` records a known inability to close, such as an explicit platform/reference closure
+  or complete visible depth below frozen quantity. Close debit, observed PnL, and executable exit
+  sequence are null. Frozen maximum loss may remain risk context but is never substituted for
+  observed PnL.
+- `UNKNOWN` records missing, stale, incomplete, contaminated, or invalid future evidence. Close
+  debit, observed PnL, and executable exit sequence are null; absence is never represented as zero
+  or `UNEXITABLE`.
+
+### Evidence and non-claims
+
+Outcome Truth requires two distinct evidence layers. Deterministic synthetic evidence must exercise
+an admitted nonzero Entry/Outcome path and boundary failures. A fresh production-public bounded
+capture may honestly produce zero admission or an admitted `UNKNOWN`; it proves only the facts it
+contains. Fresh-process replay must verify the full-capture identity, fixed prefix/suffix boundary,
+Decision, admission, Entry, fact seal, Outcome, lineage, and zero drift for each layer.
+
+The `optimatrix-outcome` CLI exposes bounded `synthetic`, `capture`, `replay`, `bundle`, and
+`verify-bundle` commands. Each output path is fresh and each run uses the one fixed cutoff without
+retry. The evidence bundle keeps synthetic and production-public subtrees distinct and binds both
+with `BUNDLE_MANIFEST.json`, `SHA256SUMS`, and `ACCEPTANCE.zh-CN.md`. Production-public evidence
+also retains a collector invocation witness binding the authorized duration, Deribit public
+endpoint, monotonic invocation elapsed time, collector artifacts, capture, Git identity, and
+Decision and Outcome runtime identities. Standalone production-public replay must reconstruct and
+verify that witness and reports computation reconstruction, collector-witness verification, and
+external-source attestation separately. The witness is process evidence, not third-party network
+attestation; external-source attestation therefore remains false. Invocation monotonic elapsed is
+the duration authority. The elapsed span between the first and last canonical events remains an
+audit metric only: initial setup before the first event and a silent tail after the last event may
+both make that span shorter than the authorized invocation without making the invocation shorter.
+The Chinese acceptance report is a deterministic view of the sealed result, replay, invocation,
+and manifest timestamp; bundle verification reconstructs it exactly rather than trusting report
+text or self-consistent replacement hashes.
+
+Synthetic success is not production Outcome evidence. A public zero result is not failure or
+profitability evidence. Visible public quotes are not fills. Matching receipts and replay digests
+prove deterministic reconstruction only; they do not prove Policy quality, qualification,
+continuous Shadow operation, promotion, account access, execution, or capital authority.
 
 ## Non-goals
 
