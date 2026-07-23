@@ -26,9 +26,10 @@ Repository-owned contracts, tasks, and receipts use semantic identities and cont
 ordinal product generations. External protocols, dependencies, and build tools retain the exact
 versions required for compatibility; those versions grant no product authority.
 
-The bounded Deribit capture/replay foundation is implemented. Decision Truth is the sole
-authorized next closure. Production Shadow Decision-to-Outcome receipts, qualification,
-Challenger research, promotion, and execution are not implemented or authorized.
+The bounded Deribit capture/replay foundation and accepted Decision Truth closure are implemented.
+Outcome Truth is the sole authorized next closure. A continuous fixed-Policy Shadow run,
+qualification, Challenger research, promotion, private/account access, and execution are not
+implemented or authorized.
 
 ## Repository shape
 

@@ -1,6 +1,6 @@
 # Task — Decision Truth
 
-**Status:** ACTIVE
+**Status:** ACTIVE — HUMAN BUSINESS ACCEPTED
 
 **Product/stage:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md) /
@@ -55,7 +55,10 @@ change horizon, structure scope, ranking, reserve, veto, threshold, or candidate
 
 **Outcome/evaluation contract change:** NONE
 
-**Stage/authorization change:** NONE
+**Stage/authorization change:** APPROVED — keep the permission boundary at `PUBLIC_SHADOW`, record
+`DECISION_TRUTH` as the implemented capability, and activate `OUTCOME_TRUTH` as the sole authorized
+next product-capability closure. This grants no new environment, data-source, private/account,
+promotion, execution, or capital authority.
 
 ## Evidence boundary
 
@@ -64,7 +67,9 @@ Decision evidence, and fresh-process reconstruction from the same sealed public 
 
 **Does not prove:** continuous acquisition, a Shadow entry or Outcome, Policy quality,
 qualification, profitability, `NO_TRADE` comparison, a real fill, private/account access,
-promotion, execution, or any advancement of `CURRENT_STAGE`.
+promotion, execution, or later-stage authority. Evidence and implementation do not advance stage
+by implication; the explicit human acceptance and authorization above permit only the exact
+`CURRENT_STAGE` reconciliation declared here.
 
 **Evidence class:** `SYNTHETIC_LOGIC | BOUNDED_PUBLIC_CAPTURE | LIVE_REPLAY`
 
@@ -75,11 +80,13 @@ all-window enforcement; explicit depth and scheduled-block missingness/validity;
 decision-as-of catalog generation refresh/validity; deterministic universe, opportunity,
 unavailable-assessment, assessment and readiness summaries; Git audit provenance plus a scoped
 runtime-source digest; one durable Decision receipt; actual parsed trade count; inspect and
-independent replay equality/drift report; one closure-specific durable evidence bundle.
+independent replay equality/drift report; one closure-specific durable evidence bundle; and the
+post-acceptance permission-authority reconciliation declared above.
 
 **Out:** RadarPolicy numeric changes; risk/insurance formulas; thresholds; horizons; option
 structure range; new data sources; Outcome runtime; long-running Shadow; Challenger; Promotion;
-database; service; private API; account; order; fill; execution; capital; `CURRENT_STAGE` change.
+database; service; private API; account; order; fill; execution; capital; any permission change
+beyond activating bounded `OUTCOME_TRUTH` under the unchanged `PUBLIC_SHADOW` boundary.
 
 **Owning module/artifact:** `market_tape` canonical catalog facts, `short_vol_radar` projection and
 decision evidence, and `radar_runtime` bounded public composition plus
@@ -178,8 +185,8 @@ are recorded in the Draft PR plus final delivery report.
 **Policy/contract identities:** `OBSERVED_PATH_STRESS_FIXED_PRIOR_POLICY` and
 `DERIBIT_PUBLIC_SHORT_VOL_DECISION_INPUT`; exact content digests are receipt fields.
 
-**Commit/PR:** recorded by Git and the final delivery report; the task stops at Draft PR pending
-human business acceptance.
+**Commit/PR:** recorded by Git and the final delivery report; after explicit human business
+acceptance, this same PR records the exact authority advancement, becomes ready, and may merge.
 
 **Unknowns and non-claims:** zero activity is valid; public quotes are not fills; live/replay
 equality proves reconstruction only; scheduled-block evidence remains `UNKNOWN` unless explicitly
@@ -190,5 +197,7 @@ execution capability.
 
 The durable closure exists; direct tests, repository gates, fresh greater-than-one-hour public
 evidence, artifact inspection, and independent replay pass; all four declarations are satisfied;
-limits and zero activity are explicit; `CURRENT_STAGE` is unchanged; committed and remote scope
-contain only this closure; and a Draft PR awaits human business acceptance without merge.
+limits and zero activity are explicit; explicit human acceptance is recorded through the exact
+`CURRENT_STAGE` advancement above; committed and remote scope contain only this closure; the
+completed task file is removed before merge; and the authorized PR merge is verified without any
+later-stage permission claim.

@@ -4,9 +4,9 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Implemented capability:** `BOUNDED_PUBLIC_FACTS_AND_REPLAY`
+**Implemented capability:** `DECISION_TRUTH`
 
-**Sole authorized next product-capability closure:** `DECISION_TRUTH`
+**Sole authorized next product-capability closure:** `OUTCOME_TRUTH`
 
 ## Authority
 
@@ -26,72 +26,71 @@ The repository currently implements:
 - visible 1:1 same-expiry same-side vertical enumeration;
 - fixed transparent `OBSERVED_PATH_STRESS_FIXED_PRIOR` assessment;
 - `RESEARCH_CANDIDATE | WATCH | ABSTAIN` decisions;
+- strict Decision input truth for the index-price reference path, every required path/flow window,
+  missing depth, scheduled-block validity, and connection-scoped platform state;
+- refreshed decision-as-of 0–72h catalog generations bound to exact same-generation metadata;
+- durable `SHORT_VOL_DECISION_RECEIPT` evidence with readiness, complete opportunity accounting,
+  Git provenance, authoritative runtime-source identity, and deterministic fresh-process replay;
 - future-only Shadow primitives verified with synthetic tests.
 
-This baseline does not prove continuous acquisition, complete Decision evidence, real Shadow
-Outcomes, Policy qualification, ML, promotion, execution, or profitability. No production capture
-is retained in the repository as current evidence.
+This baseline proves the accepted bounded Decision Truth closure. It does not prove continuous
+acquisition, a complete final frame in every market run, real Shadow Outcomes, Policy
+qualification, ML, promotion, execution, or profitability. No production capture is retained in
+the repository as current evidence.
 
 ## Acceptance blockers
 
 These are product-truth gaps, not permission for broad refactoring:
 
-1. Required-window enforcement is weaker than the active Short Vol contract.
-2. Reference-path economic identity and continuity are not frozen; ticker last, mark, index, and
-   trade prices can enter one path without one approved meaning.
-3. Missing option depth can appear as numerical zero rather than `UNKNOWN`.
-4. Absence of a scheduled-block fact is not distinguished from observed confirmation of no block.
-5. Decision evidence does not freeze code revision, immutable Policy identity/digest, complete
-   scanned-universe identity, assessment-set identity, and the full selected assessment.
-6. `RadarPolicy` mixes input/readiness configuration with Decision Policy parameters, so one
-   undifferentiated digest would misclassify input-contract changes as Policy changes.
-7. The option catalog/universe is selected only at capture start; there is no refresh or bounded
-   validity contract proving that a later decision includes contracts newly inside 0–72h, new
-   listings, or relevant state transitions.
-8. Matured Outcome can include touch/excursion after selected exit and does not use entry as the
+1. Matured Outcome can include touch/excursion after selected exit and does not use entry as the
    zero excursion baseline.
-9. Outcome close lineage does not include all platform-state control facts used for tradability.
-10. `UNEXITABLE_AT_HORIZON` conflates a conservative maximum-loss penalty with observed executable
+2. Outcome close lineage does not include all platform-state control facts used for tradability.
+3. `UNEXITABLE_AT_HORIZON` conflates a conservative maximum-loss penalty with observed executable
    PnL.
-11. Inspect labels trade-event batch count as `trade_records` instead of reporting actual parsed
-   trades.
-12. Runtime has no declared decision cadence, immutable Shadow entry ledger, real future Outcome,
-    or `NO_TRADE` comparison.
-13. The bounded collector retains the full event set in memory before final capture writing.
+4. There is no durable Shadow entry receipt freezing the accepted Decision, entry economics,
+   assessment, horizon, Policy, and strictly future causal boundary.
+5. Runtime has no declared decision cadence, bounded Run receipt, opportunity denominator, mature
+   horizon accounting, or `NO_TRADE` comparison.
+6. The bounded collector retains the full event set in memory before final capture writing.
 
-## Sole authorized product-capability closure: Decision Truth
+## Sole authorized product-capability closure: Outcome Truth
 
-The next product-capability task may only close strict as-of Decision truth:
+The next product-capability task may only close one bounded, strictly future public-Shadow Outcome
+truth loop on top of the accepted Decision Truth contract:
 
-- freeze one reference-path economic source and continuity contract;
-- enforce every active required path and flow window;
-- preserve missing depth and scheduled-block evidence as `UNKNOWN`;
-- separate and freeze Market/Decision input-contract identity from Decision Policy identity without
-  changing their values;
-- define and prove decision-as-of 0–72h catalog/universe completeness through explicit refresh or
-  a strict bounded-validity contract, without creating a generic catalog service;
-- freeze code, both contract identities, universe, assessment-set, selected-assessment, and lineage
-  identities in Decision evidence;
-- preserve current economic formulas and thresholds unless a separately approved Decision Policy
-  change says otherwise.
+- freeze one immutable Shadow entry from its exact Decision receipt, selected structure,
+  assessment, horizon, quantity, entry economics, fees, maximum loss, Policy, and causal sequence;
+- admit entry and Outcome facts only when their required evidence is complete; valid zero admission
+  and `UNKNOWN` remain first-class results;
+- begin observed excursion at zero at entry, use only facts strictly after entry, and end actual
+  exposure at the selected exit;
+- retain any observation after actual exit only as a separately labeled counterfactual;
+- use visible executable close debit, fees, quantity, and depth, preserving `UNKNOWN` or
+  `UNEXITABLE` instead of presenting a maximum-loss penalty as observed executable PnL;
+- bind every market and platform-control fact used for entry, tradability, close, touch, excursion,
+  and exit to one immutable Outcome receipt;
+- independently reconstruct the entry and Outcome from sealed public facts without changing the
+  accepted Decision input contract or deployed Policy.
 
-This permission does not authorize Outcome runtime, a long Shadow run, Challenger work, or generic
-evidence infrastructure.
+This permission authorizes only the bounded Outcome Truth closure. It does not authorize a
+continuous or fixed-Policy Shadow run, cadence automation, generic persistence, `NO_TRADE`
+qualification, Challenger work, promotion, private/account access, or execution. Create a semantic
+active task before implementing it.
 
 Bounded maintenance, security, dependency, or authority work may proceed on explicit request when
 its declarations show that it does not implement or advance a queued product capability.
 
 ## Queued sequence — not authorized
 
-After Decision Truth is merged and this document is explicitly advanced, the intended sequence is:
+After Outcome Truth is merged and this document is explicitly advanced, the intended sequence is:
 
-1. **Outcome Truth:** actual exposure through exit, separate counterfactuals, entry-zero
-   excursion, control-fact lineage, and falsifiable frozen entry assessment.
-2. **Fixed-Policy public Shadow run:** incremental durability, declared cadence/admission, immutable
+1. **Fixed-Policy public Shadow run:** incremental durability, declared cadence/admission, immutable
    Decision/Entry/Outcome/Run receipts, opportunity denominators, mature horizons, `NO_TRADE=0`,
    independent replay.
-3. **Challenger research and qualification:** only after a usable fixed-Policy baseline and a
+2. **Challenger research and qualification:** only after a usable fixed-Policy baseline and a
    separately approved qualification contract.
+3. **Promotion:** only after a valid independently verified Qualification receipt and a separately
+   approved promotion envelope. Execution and capital authority remain separate after promotion.
 
 A queued closure is not an active task. Activate exactly one by updating this authority in an
 explicitly approved change after the preceding closure is accepted.
@@ -99,6 +98,7 @@ explicitly approved change after the preceding closure is accepted.
 ## Forbidden under the current boundary
 
 - learned models, research automation, automatic promotion, or evolution;
+- continuous or long-running Shadow operation, automated admission cadence, or qualification;
 - databases, feature stores, model registries, workflow engines, or services;
 - generic multi-market or multi-strategy architecture;
 - private/test/account APIs, credentials, balances, margin, positions, orders, fills, settlement,

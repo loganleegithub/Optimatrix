@@ -121,11 +121,11 @@ only by the closure that consumes them.
 ### Existing
 
 - `CanonicalEvent` and sealed capture manifest;
-- `DecisionFrame` and `RadarDecision`;
+- `DecisionFrame`, `RadarDecision`, and `SHORT_VOL_DECISION_RECEIPT`;
 - `ShadowPosition`, `OutcomePath`, and `MaturedOutcome`;
-- inspect and replay receipts.
+- inspect, replay, and Decision Truth evidence-bundle receipts.
 
-### Current authorized Decision Truth closure
+### Implemented Decision Truth
 
 - explicit immutable Policy identity and digest;
 - one durable `DecisionReceipt` with opportunity counts, deterministic assessment-set identity,
@@ -136,9 +136,22 @@ The receipt need not duplicate every structure if it preserves counts, failure s
 selected assessment, and a digest of the deterministic assessment set. Do not create a separate
 scan artifact unless an active task proves an independent consumer needs it.
 
+### Current authorized Outcome Truth closure
+
+- one immutable `ShadowEntryReceipt` bound to its accepted Decision, structure, assessment,
+  horizon, entry economics, Policy, and causal entry sequence;
+- one strictly future `OutcomeReceipt` separating actual exposure through exit from any labeled
+  later counterfactual and binding executable close plus control-fact lineage;
+- independent reconstruction from sealed public facts.
+
+These are bounded Outcome Truth artifacts only. Their authorization does not permit a run ledger,
+continuous scheduler, generic storage, qualification, promotion, private/account access, or
+execution. Do not add them until an active task defines their exact semantic contracts and consumes
+them.
+
 ### Queued or later stages only
 
-- `ShadowEntryReceipt`, `OutcomeReceipt`, and bounded `RunReceipt`;
+- bounded `RunReceipt` and fixed-Policy comparison artifacts;
 - `ChallengerPackage` and frozen experiment manifest;
 - `QualificationReceipt` and deployment manifest;
 - execution intent, account-risk decision, order, fill, and reconciliation receipts.
