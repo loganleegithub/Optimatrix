@@ -15,6 +15,7 @@ from market_tape import (
 )
 from radar_runtime.outcome_identity import outcome_runtime_source_identity
 from radar_runtime.runtime_identity import runtime_source_identity
+from radar_runtime.shadow_bundle import build_single_run_business_report
 from radar_runtime.shadow_identity import (
     RUN_RUNTIME_SOURCE_SCOPE,
     run_runtime_source_identity,
@@ -173,6 +174,145 @@ def test_complete_run_rejects_immature_entry_and_strategy_zero_for_unknown() -> 
             outcome="UNKNOWN",
             maturity=MaturityClass.MATURE_UNKNOWN,
             pnl=Decimal("0"),
+        )
+
+
+def test_single_run_business_report_keeps_four_value_semantics_distinct() -> None:
+    accounting = {
+        "due_opportunity_count": 2,
+        "outcome_count": 2,
+        "null_strategy_result_count": 1,
+        "no_trade_comparator_count": 2,
+        "no_trade_pnl_usdc": "0",
+        "closed_pnl_subtotal_usdc": "0",
+    }
+    result: dict[str, object] = {
+        "run_id": "business-semantics",
+        "run_receipt_digest": "a" * 64,
+        "complete": True,
+        "accounting": accounting,
+    }
+    receipt: dict[str, object] = {
+        "run_id": "business-semantics",
+        "run_receipt_digest": "a" * 64,
+        "accounting": accounting,
+        "opportunity_summaries": [
+            {
+                "slot_index": 0,
+                "outcome_receipt_digest": "b" * 64,
+                "outcome_status": "CLOSED",
+                "maturity_class": "MATURE_CLOSED",
+                "observed_executable_pnl_usdc": "0",
+            },
+            {
+                "slot_index": 1,
+                "outcome_receipt_digest": "c" * 64,
+                "outcome_status": "UNKNOWN",
+                "maturity_class": "MATURE_UNKNOWN",
+                "observed_executable_pnl_usdc": None,
+            },
+        ],
+    }
+
+    report = build_single_run_business_report(result, receipt)
+    outcomes = cast(list[dict[str, object]], report["outcomes"])
+
+    assert report["exposure_pnl"] == {
+        "status": "OBSERVED",
+        "observed_executable_pnl_usdc": "0",
+        "closed_outcome_count": 1,
+        "observed_zero_outcome_count": 1,
+        "null_outcome_pnl_count": 1,
+        "zero_semantics": "OBSERVED_EXECUTABLE_ZERO_ONLY",
+    }
+    assert report["policy_value"] == {
+        "status": "UNKNOWN",
+        "value_usdc": None,
+        "reason": "SINGLE_RUN_DESCRIPTIVE_EVIDENCE_IS_NOT_POLICY_QUALIFICATION",
+    }
+    assert outcomes[0]["pnl_semantics"] == "OBSERVED_EXECUTABLE_ZERO"
+    assert outcomes[1]["observed_executable_pnl_usdc"] is None
+    assert outcomes[1]["pnl_semantics"] == "NULL_NO_EXECUTABLE_OUTCOME_PNL"
+    assert report["no_trade"] == {
+        "status": "DEFINED_ZERO",
+        "comparator_count": 2,
+        "exposure_count": 0,
+        "pnl_usdc": "0",
+        "zero_semantics": "NO_POSITION_BY_DEFINITION",
+    }
+
+
+def test_single_run_business_report_does_not_turn_no_exposure_into_zero_pnl() -> None:
+    accounting = {
+        "due_opportunity_count": 1,
+        "outcome_count": 0,
+        "null_strategy_result_count": 0,
+        "no_trade_comparator_count": 1,
+        "no_trade_pnl_usdc": "0",
+        "closed_pnl_subtotal_usdc": "0",
+    }
+    report = build_single_run_business_report(
+        {
+            "run_id": "no-entry",
+            "run_receipt_digest": "d" * 64,
+            "complete": True,
+            "accounting": accounting,
+        },
+        {
+            "run_id": "no-entry",
+            "run_receipt_digest": "d" * 64,
+            "accounting": accounting,
+            "opportunity_summaries": [
+                {
+                    "slot_index": 0,
+                    "outcome_receipt_digest": None,
+                    "outcome_status": None,
+                    "observed_executable_pnl_usdc": None,
+                }
+            ],
+        },
+    )
+    exposure = cast(dict[str, object], report["exposure_pnl"])
+    policy_value = cast(dict[str, object], report["policy_value"])
+    no_trade = cast(dict[str, object], report["no_trade"])
+
+    assert exposure["status"] == "UNAVAILABLE"
+    assert exposure["observed_executable_pnl_usdc"] is None
+    assert policy_value["status"] == "UNKNOWN"
+    assert no_trade["pnl_usdc"] == "0"
+
+
+def test_single_run_business_report_rejects_nonclosed_numeric_pnl() -> None:
+    accounting = {
+        "due_opportunity_count": 1,
+        "outcome_count": 1,
+        "null_strategy_result_count": 0,
+        "no_trade_comparator_count": 1,
+        "no_trade_pnl_usdc": "0",
+        "closed_pnl_subtotal_usdc": "0",
+    }
+    with pytest.raises(ValueError, match="non-CLOSED Outcome PnL must be null"):
+        build_single_run_business_report(
+            {
+                "run_id": "invalid",
+                "run_receipt_digest": "e" * 64,
+                "complete": True,
+                "accounting": accounting,
+            },
+            {
+                "run_id": "invalid",
+                "run_receipt_digest": "e" * 64,
+                "accounting": accounting,
+                "opportunity_summaries": [
+                    {
+                        "slot_index": 0,
+                        "outcome_receipt_digest": "f" * 64,
+                        "outcome_status": "UNKNOWN",
+                        "maturity_class": "MATURE_UNKNOWN",
+                        "observed_executable_pnl_usdc": "0",
+                    }
+                ],
+            },
         )
 
 
