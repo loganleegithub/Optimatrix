@@ -52,6 +52,12 @@ No known-at, warm-up, or freshness decision compares a Deribit timestamp numeric
 collector wall clock. A source timestamp later than its raw local receive timestamp is retained as
 clock-skew evidence, not rejected or clamped.
 
+The reference path is exactly `BTC_USDC-PERPETUAL` ticker `index_price`. Ticker `last_price`,
+perpetual `mark_price`, and trade prices never substitute into that path: mark remains descriptive
+basis input and trades remain flow input. The immutable Market/Decision input contract is
+`DERIBIT_PUBLIC_SHORT_VOL_DECISION_INPUT`; its content digest is separate from the immutable
+`OBSERVED_PATH_STRESS_FIXED_PRIOR_POLICY` identity and digest.
+
 - Price elapsed coverage is necessary but not sufficient. A complete price path requires an
   accepted reference-price anchor at or before the requested Deribit market start, an endpoint at
   the current reference market watermark, the full requested source-time span, and watermark
@@ -65,6 +71,24 @@ clock-skew evidence, not rejected or clamped.
 - Complete flat prices produce observed zero return, range, and variation.
 - Complete trade coverage with no trades produces observed zero flow.
 - An incomplete window has no path or flow value.
+- Every configured 1m / 5m / 15m / 30m / 60m price and flow window is required. One incomplete
+  window makes finite-horizon path risk `UNKNOWN`.
+- A visible option price without its corresponding amount has unknown depth, never numerical zero.
+- Scheduled-block state is observed only through an explicit canonical fact with a non-empty source
+  identity and an inclusive `valid_from_ms` / `valid_until_ms` market-time interval. Its absence,
+  invalid source/interval, or a Decision `market_as_of` outside that interval is `UNKNOWN`, not
+  confirmation that no block exists. A stale `CLEAR` never passes the no-block predicate; a
+  reconnect does not renew a fact's validity.
+
+The bounded runtime refreshes the same Deribit public option/future catalog every 300 seconds and
+requires the latest complete snapshot to be no more than 360 seconds old at Decision time. Each
+snapshot includes the 0–72h Decision range plus only the 360-second expiry-transition buffer; the
+projector still scans exactly 0–72h. A complete snapshot binds reference membership, every member's
+same-generation instrument source sequence, and the canonical metadata-set digest. Names and
+metadata membership must match exactly and every member must be active; a failed refresh publishes
+no new generation. The generation identity, names/metadata digests, counts, age, and causal
+sequences are Decision lineage. A missing/stale/incomplete generation or missing member quote fails
+closed; this is not a generic catalog service.
 
 ## Risk method
 
@@ -122,10 +146,29 @@ A research candidate requires all of:
 Every candidate/watch/abstain Decision receipt must freeze:
 
 - current frame identity and source lineage;
-- code revision and immutable deployed Policy identity/digest;
+- audit Git commit, authoritative scoped runtime-source digest, and immutable deployed Policy
+  identity/digest;
 - complete scanned-universe and assessment-set identity;
+- frame completeness and required-window/catalog/schedule/quote readiness summaries;
+- assessment opportunity, unavailable and assessed counts, with unavailable and predicate-failure
+  reason summaries;
 - selected assessment, predicates, and ranking result;
 - the exact action and reason.
+
+`SHORT_VOL_DECISION_RECEIPT` is the sole durable Decision artifact for this closure. It binds the
+sealed capture and manifest, final frame/readiness and complete lineage, audit Git commit,
+authoritative runtime-source digest, input-contract and Policy identities/digests, option quote
+set, complete executable-structure and assessment-opportunity sets, unavailable and predicate
+failure summaries, deterministic assessment set, full selected assessment when present, exact
+decision, and its own content digest. Zero structures, assessments, or candidate-class actions
+remain valid explicit counts.
+
+The Git commit is audit provenance. `runtime_source_digest` is the authoritative reconstruction
+identity over the declared Decision runtime source scope. Replay may use a different commit only
+when that digest is identical; a changed digest or dirty file inside the identity scope fails.
+Every executable structure/configured-horizon pair is one assessment opportunity. The receipt
+partitions all opportunities into assessed or unavailable and aggregates deterministic unavailable
+reasons; predicate failures remain a separate summary over completed assessments.
 
 Every Shadow entry must freeze its Decision, structure, entry economics, assessment, horizon, and
 Policy identity. Observed Outcome contains only facts strictly after entry and no later than actual

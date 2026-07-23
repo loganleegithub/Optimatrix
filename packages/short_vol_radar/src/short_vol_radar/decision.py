@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from decimal import Decimal
 
-from market_tape import OptionKind
+from market_tape import OptionKind, canonical_digest
 from options_domain import VerticalQuote, enumerate_verticals
 
 from short_vol_radar.contracts import (
     BreakoutDirection,
+    CatalogReadiness,
+    DecisionEvaluation,
     DecisionFrame,
+    DecisionInputContract,
+    DecisionReadiness,
     InsuranceAssessment,
     PredicateResult,
+    QuoteReadiness,
     RadarAction,
     RadarDecision,
     RadarPolicy,
+    RequiredWindowReadiness,
+    ScheduleReadiness,
 )
 from short_vol_radar.risk import estimate_path_risk
 
@@ -55,13 +63,13 @@ def _assessment(
     candidate: VerticalQuote,
     horizon_seconds: int,
     policy: RadarPolicy,
-) -> InsuranceAssessment | None:
+) -> tuple[InsuranceAssessment | None, tuple[str, ...]]:
     if frame.reference_price is None:
-        return None
+        return None, ("REFERENCE_PRICE_UNKNOWN",)
     risk = estimate_path_risk(frame, horizon_seconds, policy=policy)
     adverse_move = risk.adverse_move(candidate.sold_side)
     if adverse_move is None:
-        return None
+        return None, risk.incomplete_reasons or ("ADVERSE_MOVE_UNKNOWN",)
     safety_multiple = (
         candidate.short_distance_fraction / adverse_move
         if adverse_move > 0
@@ -148,8 +156,10 @@ def _assessment(
         ),
         PredicateResult(
             "NO_SCHEDULED_BLOCK",
-            frame.scheduled_block is None,
-            str(frame.scheduled_block),
+            frame.scheduled_block_observed
+            and frame.scheduled_block_current
+            and frame.scheduled_block is None,
+            (str(frame.scheduled_block) if frame.scheduled_block_current else "UNKNOWN"),
         ),
         PredicateResult(
             "POSITIVE_CONSERVATIVE_MARGIN",
@@ -157,18 +167,21 @@ def _assessment(
             str(conservative_margin),
         ),
     )
-    return InsuranceAssessment(
-        candidate=candidate,
-        risk=risk,
-        adverse_move_fraction=adverse_move,
-        safety_multiple=safety_multiple,
-        stress_intrinsic_payout_usdc=intrinsic_reserve,
-        residual_time_value_floor_usdc=time_value_floor,
-        claim_reserve_usdc=claim_reserve,
-        liquidity_reserve_usdc=liquidity_reserve,
-        method_uncertainty_reserve_usdc=method_reserve,
-        conservative_margin_usdc=conservative_margin,
-        predicates=predicates,
+    return (
+        InsuranceAssessment(
+            candidate=candidate,
+            risk=risk,
+            adverse_move_fraction=adverse_move,
+            safety_multiple=safety_multiple,
+            stress_intrinsic_payout_usdc=intrinsic_reserve,
+            residual_time_value_floor_usdc=time_value_floor,
+            claim_reserve_usdc=claim_reserve,
+            liquidity_reserve_usdc=liquidity_reserve,
+            method_uncertainty_reserve_usdc=method_reserve,
+            conservative_margin_usdc=conservative_margin,
+            predicates=predicates,
+        ),
+        (),
     )
 
 
@@ -184,14 +197,100 @@ def _rank(item: InsuranceAssessment) -> tuple[object, ...]:
     )
 
 
-def evaluate_radar(
+def build_decision_readiness(
+    frame: DecisionFrame,
+    *,
+    input_contract: DecisionInputContract | None = None,
+) -> DecisionReadiness:
+    active = input_contract or DecisionInputContract()
+    catalog_reasons = tuple(
+        item for item in frame.completeness_reasons if item.startswith("CATALOG_")
+    )
+    schedule_reasons = tuple(
+        item for item in frame.completeness_reasons if item.startswith("SCHEDULED_BLOCK")
+    )
+    quote_reason_names = {
+        "INSUFFICIENT_FRESH_OPTION_QUOTES",
+        "OPTION_UNIVERSE_QUOTES_INCOMPLETE",
+        "OPTION_UNIVERSE_QUOTES_STALE",
+        "OPTION_DEPTH_UNKNOWN",
+    }
+    quote_reasons = tuple(item for item in frame.completeness_reasons if item in quote_reason_names)
+    fresh_quote_count = sum(item.fresh for item in frame.option_quotes)
+    depth_unknown_quote_count = sum(
+        (item.bid is not None and item.bid_amount is None)
+        or (item.ask is not None and item.ask_amount is None)
+        for item in frame.option_quotes
+    )
+    schedule_state = (
+        "UNKNOWN"
+        if not frame.scheduled_block_current
+        else "BLOCKED"
+        if frame.scheduled_block is not None
+        else "CLEAR"
+    )
+    return DecisionReadiness(
+        frame_complete=frame.complete,
+        frame_incomplete_reasons=frame.completeness_reasons,
+        required_windows=tuple(
+            RequiredWindowReadiness(
+                requested_seconds=item.coverage.requested_seconds,
+                price_complete=item.coverage.price_complete,
+                trade_complete=item.coverage.trade_complete,
+                gap_contaminated=item.coverage.gap_contaminated,
+                reconnect_contaminated=item.coverage.reconnect_contaminated,
+                incomplete_reasons=item.coverage.incomplete_reasons,
+            )
+            for item in frame.windows
+        ),
+        catalog=CatalogReadiness(
+            complete=frame.catalog_generation_complete and not catalog_reasons,
+            scope=frame.catalog_scope,
+            snapshot_capture_seq=frame.catalog_snapshot_capture_seq,
+            source_at=frame.catalog_source_at,
+            age_ms=frame.catalog_age_ms,
+            instrument_count=frame.catalog_instrument_count,
+            names_digest=frame.catalog_instrument_names_digest,
+            generation_id=frame.catalog_generation_id,
+            metadata_set_digest=frame.catalog_metadata_set_digest,
+            instrument_source_capture_seqs=frame.catalog_instrument_source_capture_seqs,
+            incomplete_reasons=catalog_reasons,
+        ),
+        schedule=ScheduleReadiness(
+            complete=frame.scheduled_block_observed and frame.scheduled_block_current,
+            observed=frame.scheduled_block_observed,
+            current=frame.scheduled_block_current,
+            source_capture_seq=frame.scheduled_block_source_capture_seq,
+            source_id=frame.scheduled_block_source_id,
+            valid_from=frame.scheduled_block_valid_from,
+            valid_until=frame.scheduled_block_valid_until,
+            state=schedule_state,
+            label=frame.scheduled_block,
+            incomplete_reasons=schedule_reasons,
+        ),
+        quotes=QuoteReadiness(
+            complete=not quote_reasons,
+            option_quote_count=len(frame.option_quotes),
+            fresh_quote_count=fresh_quote_count,
+            stale_quote_count=len(frame.option_quotes) - fresh_quote_count,
+            depth_unknown_quote_count=depth_unknown_quote_count,
+            minimum_fresh_quote_count=active.minimum_fresh_option_quotes,
+            incomplete_reasons=quote_reasons,
+        ),
+    )
+
+
+def evaluate_radar_evidence(
     frame: DecisionFrame,
     *,
     policy: RadarPolicy | None = None,
-) -> RadarDecision:
+) -> DecisionEvaluation:
     active = policy or RadarPolicy()
+    candidates: tuple[VerticalQuote, ...] = ()
+    assessments: list[InsuranceAssessment] = []
+    unavailable_reasons: Counter[str] = Counter()
     if frame.reference_price is None or frame.index_price is None:
-        return RadarDecision(
+        decision = RadarDecision(
             action=RadarAction.ABSTAIN,
             frame_capture_seq=frame.as_of_capture_seq,
             frame_digest=frame.digest,
@@ -200,18 +299,31 @@ def evaluate_radar(
             assessment=None,
             reason="REFERENCE_OR_INDEX_UNKNOWN",
         )
-    candidates = enumerate_verticals(
-        frame_capture_seq=frame.as_of_capture_seq,
-        reference_price=frame.reference_price,
-        index_price=frame.index_price,
-        option_quotes=frame.option_quotes,
-        combo_quotes=frame.combo_quotes,
-        quantity=active.quantity,
-        minimum_tte_seconds=active.minimum_tte_seconds,
-        maximum_tte_seconds=active.maximum_tte_seconds,
-    )
-    if not candidates:
-        return RadarDecision(
+    else:
+        candidates = enumerate_verticals(
+            frame_capture_seq=frame.as_of_capture_seq,
+            reference_price=frame.reference_price,
+            index_price=frame.index_price,
+            option_quotes=frame.option_quotes,
+            combo_quotes=frame.combo_quotes,
+            quantity=active.quantity,
+            minimum_tte_seconds=active.minimum_tte_seconds,
+            maximum_tte_seconds=active.maximum_tte_seconds,
+        )
+        for candidate in candidates:
+            for horizon_seconds in active.horizons_seconds:
+                assessment, reasons = _assessment(
+                    frame,
+                    candidate,
+                    horizon_seconds,
+                    active,
+                )
+                if assessment is not None:
+                    assessments.append(assessment)
+                else:
+                    unavailable_reasons.update(reasons)
+    if frame.reference_price is not None and frame.index_price is not None and not candidates:
+        decision = RadarDecision(
             action=RadarAction.ABSTAIN,
             frame_capture_seq=frame.as_of_capture_seq,
             frame_digest=frame.digest,
@@ -220,21 +332,10 @@ def evaluate_radar(
             assessment=None,
             reason="NO_EXECUTABLE_DEFINED_RISK_STRUCTURE",
         )
-    assessments: list[InsuranceAssessment] = []
-    for candidate in candidates:
-        for horizon_seconds in active.horizons_seconds:
-            assessment = _assessment(
-                frame,
-                candidate,
-                horizon_seconds,
-                active,
-            )
-            if assessment is not None:
-                assessments.append(assessment)
     passed = tuple(item for item in assessments if item.all_passed)
     if passed:
         selected = sorted(passed, key=_rank)[0]
-        return RadarDecision(
+        decision = RadarDecision(
             action=RadarAction.RESEARCH_CANDIDATE,
             frame_capture_seq=frame.as_of_capture_seq,
             frame_digest=frame.digest,
@@ -243,10 +344,10 @@ def evaluate_radar(
             assessment=selected,
             reason="CONSERVATIVE_INSURANCE_MARGIN_POSITIVE",
         )
-    if assessments:
+    elif assessments:
         selected = sorted(assessments, key=_rank)[0]
         failed = ",".join(item.name for item in selected.predicates if not item.passed)
-        return RadarDecision(
+        decision = RadarDecision(
             action=RadarAction.WATCH,
             frame_capture_seq=frame.as_of_capture_seq,
             frame_digest=frame.digest,
@@ -255,12 +356,43 @@ def evaluate_radar(
             assessment=selected,
             reason=f"FAILED_PREDICATES:{failed}",
         )
-    return RadarDecision(
-        action=RadarAction.ABSTAIN,
-        frame_capture_seq=frame.as_of_capture_seq,
-        frame_digest=frame.digest,
-        selected_candidate_id=None,
-        horizon_seconds=None,
-        assessment=None,
-        reason="PATH_RISK_UNKNOWN",
+    elif candidates:
+        decision = RadarDecision(
+            action=RadarAction.ABSTAIN,
+            frame_capture_seq=frame.as_of_capture_seq,
+            frame_digest=frame.digest,
+            selected_candidate_id=None,
+            horizon_seconds=None,
+            assessment=None,
+            reason="PATH_RISK_UNKNOWN",
+        )
+    failures = Counter(
+        predicate.name
+        for assessment in assessments
+        for predicate in assessment.predicates
+        if not predicate.passed
     )
+    return DecisionEvaluation(
+        decision=decision,
+        option_quote_count=len(frame.option_quotes),
+        option_quote_set_digest=canonical_digest(frame.option_quotes),
+        executable_structure_count=len(candidates),
+        structure_set_digest=canonical_digest(candidates),
+        assessment_opportunity_count=len(candidates) * len(active.horizons_seconds),
+        assessment_unavailable_count=(
+            len(candidates) * len(active.horizons_seconds) - len(assessments)
+        ),
+        assessment_unavailable_reason_counts=tuple(sorted(unavailable_reasons.items())),
+        assessment_count=len(assessments),
+        assessment_set_digest=canonical_digest(tuple(assessments)),
+        passed_assessment_count=len(passed),
+        predicate_failure_counts=tuple(sorted(failures.items())),
+    )
+
+
+def evaluate_radar(
+    frame: DecisionFrame,
+    *,
+    policy: RadarPolicy | None = None,
+) -> RadarDecision:
+    return evaluate_radar_evidence(frame, policy=policy).decision

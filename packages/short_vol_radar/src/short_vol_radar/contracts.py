@@ -10,6 +10,10 @@ from enum import StrEnum
 from market_tape import OptionKind, canonical_digest
 from options_domain import ComboQuote, OptionQuote, SurfaceSummary, VerticalQuote
 
+DECISION_INPUT_CONTRACT_ID = "DERIBIT_PUBLIC_SHORT_VOL_DECISION_INPUT"
+POLICY_ID = "OBSERVED_PATH_STRESS_FIXED_PRIOR_POLICY"
+DECISION_RECEIPT_TYPE = "SHORT_VOL_DECISION_RECEIPT"
+
 
 class BreakoutDirection(StrEnum):
     NONE = "NONE"
@@ -149,13 +153,56 @@ class ReferenceDynamics:
 
 
 @dataclass(frozen=True, slots=True)
+class DecisionInputContract:
+    contract_id: str = DECISION_INPUT_CONTRACT_ID
+    reference_instrument: str = "BTC_USDC-PERPETUAL"
+    reference_price_field: str = "index_price"
+    required_windows_seconds: tuple[int, ...] = (60, 300, 900, 1_800, 3_600)
+    option_freshness_ms: int = 5_000
+    reference_freshness_ms: int = 2_000
+    minimum_fresh_option_quotes: int = 4
+    catalog_scope: str = "BTC_USDC_LINEAR_OPTIONS_DECISION_BUFFER"
+    catalog_refresh_seconds: int = 300
+    catalog_max_age_ms: int = 360_000
+    catalog_generation_contract: str = "COMPLETE_METADATA_GENERATION"
+    scheduled_block_validity_contract: str = "EXPLICIT_INCLUSIVE_MARKET_TIME_INTERVAL"
+
+    def __post_init__(self) -> None:
+        if self.contract_id != DECISION_INPUT_CONTRACT_ID:
+            raise ValueError("unsupported Decision input contract identity")
+        if self.reference_price_field != "index_price":
+            raise ValueError("Decision reference path must use index_price")
+        if (
+            not self.reference_instrument
+            or not self.catalog_scope
+            or not self.catalog_generation_contract
+            or not self.scheduled_block_validity_contract
+            or tuple(sorted(set(self.required_windows_seconds))) != self.required_windows_seconds
+            or any(item <= 0 for item in self.required_windows_seconds)
+            or self.option_freshness_ms <= 0
+            or self.reference_freshness_ms <= 0
+            or self.minimum_fresh_option_quotes < 0
+            or self.catalog_refresh_seconds <= 0
+            or self.catalog_max_age_ms < self.catalog_refresh_seconds * 1_000
+        ):
+            raise ValueError("Decision input contract values are invalid")
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self)
+
+
+@dataclass(frozen=True, slots=True)
 class DecisionFrame:
     as_of_capture_seq: int
     collector_as_of: datetime
     collector_elapsed_ms: int
     market_as_of: datetime | None
     market_as_of_capture_seq: int | None
+    input_contract_id: str
+    input_contract_digest: str
     reference_instrument: str
+    reference_price_source: str
     reference_source_capture_seq: int | None
     reference_price: Decimal | None
     index_price: Decimal | None
@@ -168,6 +215,22 @@ class DecisionFrame:
     combo_quotes: tuple[ComboQuote, ...]
     platform_state: str | None
     platform_locked: bool | None
+    catalog_scope: str | None
+    catalog_snapshot_capture_seq: int | None
+    catalog_source_at: datetime | None
+    catalog_age_ms: int | None
+    catalog_instrument_count: int | None
+    catalog_instrument_names_digest: str | None
+    catalog_generation_id: str | None
+    catalog_metadata_set_digest: str | None
+    catalog_instrument_source_capture_seqs: tuple[int, ...]
+    catalog_generation_complete: bool
+    scheduled_block_observed: bool
+    scheduled_block_source_capture_seq: int | None
+    scheduled_block_source_id: str | None
+    scheduled_block_valid_from: datetime | None
+    scheduled_block_valid_until: datetime | None
+    scheduled_block_current: bool
     scheduled_block: str | None
     complete: bool
     completeness_reasons: tuple[str, ...]
@@ -178,6 +241,62 @@ class DecisionFrame:
             raise ValueError("decision frame sequence and elapsed time are invalid")
         if (self.market_as_of is None) != (self.market_as_of_capture_seq is None):
             raise ValueError("market as-of time and source sequence must be paired")
+        if self.input_contract_id != DECISION_INPUT_CONTRACT_ID:
+            raise ValueError("decision frame input contract identity is invalid")
+        if not self.input_contract_digest or self.reference_price_source != "index_price":
+            raise ValueError("decision frame input contract evidence is invalid")
+        catalog_values = (
+            self.catalog_scope,
+            self.catalog_snapshot_capture_seq,
+            self.catalog_source_at,
+            self.catalog_age_ms,
+            self.catalog_instrument_count,
+            self.catalog_instrument_names_digest,
+            self.catalog_generation_id,
+            self.catalog_metadata_set_digest,
+        )
+        if any(item is None for item in catalog_values) and any(
+            item is not None for item in catalog_values
+        ):
+            raise ValueError("decision frame catalog evidence must be complete or unknown")
+        if self.catalog_age_ms is not None and self.catalog_age_ms < 0:
+            raise ValueError("decision frame catalog age is invalid")
+        if self.catalog_instrument_count is not None and self.catalog_instrument_count <= 0:
+            raise ValueError("decision frame catalog count is invalid")
+        if self.catalog_generation_complete != all(item is not None for item in catalog_values):
+            raise ValueError("decision frame catalog generation completeness is inconsistent")
+        if self.catalog_generation_complete and (
+            len(self.catalog_instrument_source_capture_seqs) != self.catalog_instrument_count
+            or len(set(self.catalog_instrument_source_capture_seqs))
+            != len(self.catalog_instrument_source_capture_seqs)
+        ):
+            raise ValueError("decision frame catalog generation lineage is invalid")
+        if not self.catalog_generation_complete and self.catalog_instrument_source_capture_seqs:
+            raise ValueError("unknown catalog generation cannot have metadata lineage")
+        scheduled_fact_values = (
+            self.scheduled_block_source_capture_seq,
+            self.scheduled_block_source_id,
+            self.scheduled_block_valid_from,
+            self.scheduled_block_valid_until,
+        )
+        if self.scheduled_block_observed != all(
+            item is not None for item in scheduled_fact_values
+        ) or (
+            not self.scheduled_block_observed
+            and any(item is not None for item in scheduled_fact_values)
+        ):
+            raise ValueError("scheduled-block observation lineage is inconsistent")
+        if self.scheduled_block is not None and not self.scheduled_block_observed:
+            raise ValueError("scheduled block cannot exist without an observed fact")
+        if self.scheduled_block_observed and (
+            not self.scheduled_block_source_id
+            or self.scheduled_block_valid_from is None
+            or self.scheduled_block_valid_until is None
+            or self.scheduled_block_valid_from > self.scheduled_block_valid_until
+        ):
+            raise ValueError("scheduled-block validity is invalid")
+        if self.scheduled_block_current and not self.scheduled_block_observed:
+            raise ValueError("current scheduled-block state requires an observed fact")
         expected_platform_lock = {None: None, "UNKNOWN": None, "OPEN": False, "LOCKED": True}
         if (
             self.platform_state not in expected_platform_lock
@@ -189,6 +308,8 @@ class DecisionFrame:
             for item in (
                 self.market_as_of_capture_seq,
                 self.reference_source_capture_seq,
+                self.catalog_snapshot_capture_seq,
+                self.scheduled_block_source_capture_seq,
             )
             if item is not None
         )
@@ -205,6 +326,7 @@ class DecisionFrame:
             *(seq for window in self.windows for seq in window.source_capture_seqs),
             *(seq for quote in self.option_quotes for seq in quote.source_capture_seqs),
             *(quote.source_capture_seq for quote in self.combo_quotes),
+            *self.catalog_instrument_source_capture_seqs,
             *(
                 ()
                 if self.reference_dynamics.prior_reference_capture_seq is None
@@ -304,19 +426,178 @@ class RadarDecision:
 @dataclass(frozen=True, slots=True)
 class RadarPolicy:
     horizons_seconds: tuple[int, ...] = (1_800, 3_600, 7_200, 14_400)
-    required_windows_seconds: tuple[int, ...] = (60, 300, 900, 1_800, 3_600)
     quantity: Decimal = Decimal("0.04")
     minimum_tte_seconds: int = 1_800
     maximum_tte_seconds: int = 72 * 3_600
     settlement_buffer_seconds: int = 1_800
-    minimum_complete_path_windows: int = 3
     minimum_credit_to_friction: Decimal = Decimal("2.5")
     minimum_safety_multiple: Decimal = Decimal("1.25")
     minimum_net_premium_to_max_loss: Decimal = Decimal("0.0025")
     liquidity_reserve_fraction: Decimal = Decimal("0.02")
     method_uncertainty_reserve_fraction: Decimal = Decimal("0.02")
     minimum_move_floor_fraction: Decimal = Decimal("0.001")
-    option_freshness_ms: int = 5_000
-    reference_freshness_ms: int = 2_000
-    minimum_fresh_option_quotes: int = 4
     directional_flow_veto: Decimal = Decimal("0.75")
+
+    @property
+    def policy_id(self) -> str:
+        return POLICY_ID
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest({"policy_id": self.policy_id, "parameters": self})
+
+
+@dataclass(frozen=True, slots=True)
+class RequiredWindowReadiness:
+    requested_seconds: int
+    price_complete: bool
+    trade_complete: bool
+    gap_contaminated: bool
+    reconnect_contaminated: bool
+    incomplete_reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogReadiness:
+    complete: bool
+    scope: str | None
+    snapshot_capture_seq: int | None
+    source_at: datetime | None
+    age_ms: int | None
+    instrument_count: int | None
+    names_digest: str | None
+    generation_id: str | None
+    metadata_set_digest: str | None
+    instrument_source_capture_seqs: tuple[int, ...]
+    incomplete_reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleReadiness:
+    complete: bool
+    observed: bool
+    current: bool
+    source_capture_seq: int | None
+    source_id: str | None
+    valid_from: datetime | None
+    valid_until: datetime | None
+    state: str
+    label: str | None
+    incomplete_reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteReadiness:
+    complete: bool
+    option_quote_count: int
+    fresh_quote_count: int
+    stale_quote_count: int
+    depth_unknown_quote_count: int
+    minimum_fresh_quote_count: int
+    incomplete_reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionReadiness:
+    frame_complete: bool
+    frame_incomplete_reasons: tuple[str, ...]
+    required_windows: tuple[RequiredWindowReadiness, ...]
+    catalog: CatalogReadiness
+    schedule: ScheduleReadiness
+    quotes: QuoteReadiness
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionEvaluation:
+    decision: RadarDecision
+    option_quote_count: int
+    option_quote_set_digest: str
+    executable_structure_count: int
+    structure_set_digest: str
+    assessment_opportunity_count: int
+    assessment_unavailable_count: int
+    assessment_unavailable_reason_counts: tuple[tuple[str, int], ...]
+    assessment_count: int
+    assessment_set_digest: str
+    passed_assessment_count: int
+    predicate_failure_counts: tuple[tuple[str, int], ...]
+
+    def __post_init__(self) -> None:
+        if self.assessment_opportunity_count != (
+            self.assessment_count + self.assessment_unavailable_count
+        ):
+            raise ValueError("assessment opportunities are not completely partitioned")
+        if any(
+            count <= 0
+            for _, count in (
+                *self.assessment_unavailable_reason_counts,
+                *self.predicate_failure_counts,
+            )
+        ):
+            raise ValueError("assessment failure counts must be positive")
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionReceipt:
+    receipt_type: str
+    environment: str
+    capture_format: str
+    capture_digest: str
+    capture_manifest_digest: str
+    git_commit_sha: str
+    runtime_source_id: str
+    runtime_source_digest: str
+    final_event_capture_seq: int
+    frame_capture_seq: int
+    frame_digest: str
+    frame_lineage_capture_seqs: tuple[int, ...]
+    frame_lineage_digest: str
+    input_contract_id: str
+    input_contract_digest: str
+    policy_id: str
+    policy_digest: str
+    readiness: DecisionReadiness
+    evaluation: DecisionEvaluation
+
+    def __post_init__(self) -> None:
+        if self.receipt_type != DECISION_RECEIPT_TYPE:
+            raise ValueError("unsupported Decision receipt type")
+        if self.environment != "production_public":
+            raise ValueError("Decision receipt environment is invalid")
+        if self.final_event_capture_seq != self.frame_capture_seq:
+            raise ValueError("Decision receipt must bind the final frame")
+        if self.evaluation.decision.frame_capture_seq != self.frame_capture_seq:
+            raise ValueError("Decision receipt and evaluated frame disagree")
+        if self.evaluation.decision.frame_digest != self.frame_digest:
+            raise ValueError("Decision receipt and frame digest disagree")
+        if self.input_contract_id != DECISION_INPUT_CONTRACT_ID or self.policy_id != POLICY_ID:
+            raise ValueError("Decision receipt contract identity is invalid")
+        if not all(
+            (
+                self.capture_format,
+                self.capture_digest,
+                self.capture_manifest_digest,
+                self.git_commit_sha,
+                self.runtime_source_id,
+                self.runtime_source_digest,
+                self.frame_digest,
+                self.frame_lineage_digest,
+                self.input_contract_digest,
+                self.policy_digest,
+            )
+        ):
+            raise ValueError("Decision receipt identity is incomplete")
+        if tuple(sorted(set(self.frame_lineage_capture_seqs))) != (
+            self.frame_lineage_capture_seqs
+        ) or any(
+            item <= 0 or item > self.frame_capture_seq for item in self.frame_lineage_capture_seqs
+        ):
+            raise ValueError("Decision receipt lineage is invalid")
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self)

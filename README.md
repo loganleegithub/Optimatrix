@@ -26,9 +26,10 @@ Repository-owned contracts, tasks, and receipts use semantic identities and cont
 ordinal product generations. External protocols, dependencies, and build tools retain the exact
 versions required for compatibility; those versions grant no product authority.
 
-The bounded Deribit capture/replay foundation is implemented. Decision Truth is the sole
-authorized next closure. Production Shadow Decision-to-Outcome receipts, qualification,
-Challenger research, promotion, and execution are not implemented or authorized.
+The bounded Deribit capture/replay foundation and accepted Decision Truth closure are implemented.
+Outcome Truth is the sole authorized next closure. A continuous fixed-Policy Shadow run,
+qualification, Challenger research, promotion, private/account access, and execution are not
+implemented or authorized.
 
 ## Repository shape
 
@@ -65,14 +66,36 @@ The Deribit collector requires no credentials:
 .venv/bin/python -m radar_runtime capture \
   --duration-seconds 15 \
   --output /tmp/optimatrix-bounded
-.venv/bin/python -m radar_runtime inspect /tmp/optimatrix-bounded/capture
+.venv/bin/python -m radar_runtime inspect \
+  /tmp/optimatrix-bounded/capture \
+  --output /tmp/optimatrix-inspect.json
 .venv/bin/python -m radar_runtime replay \
   /tmp/optimatrix-bounded/capture \
   --live /tmp/optimatrix-bounded/live.json \
+  --decision /tmp/optimatrix-bounded/decision.json \
   --output /tmp/optimatrix-bounded-replay
 ```
 
-This creates one bounded receipt, not a continuous acquisition or production Shadow service. A
+After a required greater-than-one-hour Decision Truth run, package its capture and independently
+generated inspect/replay results into one hash-verifiable evidence bundle outside the repository:
+
+```bash
+.venv/bin/python -m radar_runtime bundle \
+  --capture-output /tmp/optimatrix-bounded \
+  --inspect /tmp/optimatrix-inspect.json \
+  --replay /tmp/optimatrix-bounded-replay/replay.json \
+  --output /tmp/optimatrix-decision-truth-bundle
+.venv/bin/python -m radar_runtime verify-bundle \
+  /tmp/optimatrix-decision-truth-bundle \
+  --archive /tmp/optimatrix-decision-truth-bundle.tar.gz
+```
+
+The bundle contains the sealed capture, manifest, Decision/live/inspect/replay artifacts,
+`SHA256SUMS`, a bundle manifest, and an automatically generated Chinese report that remains
+explicitly pending human business acceptance.
+
+This creates one bounded capture receipt and one Decision receipt, not a continuous acquisition or
+production Shadow service. A
 duration above 3,600 seconds only makes a complete 60-minute observation possible; inspect/replay
 must prove actual coverage, freshness, platform state, and contamination status.
 

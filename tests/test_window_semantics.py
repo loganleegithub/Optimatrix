@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 from market_tape import CanonicalEvent, EventKind
-from short_vol_radar import RadarPolicy, RadarProjector, WindowCoverage
+from short_vol_radar import DecisionInputContract, RadarProjector, WindowCoverage
 
 from tests.conftest import EventFactory
 
@@ -61,7 +62,7 @@ def _ticker(
 
 def _started_projector(event_factory: EventFactory) -> tuple[RadarProjector, int]:
     projector = RadarProjector(
-        policy=RadarPolicy(
+        input_contract=DecisionInputContract(
             required_windows_seconds=(60, 300),
             minimum_fresh_option_quotes=0,
         )
@@ -90,7 +91,7 @@ def test_collector_wall_jump_cannot_complete_elapsed_warmup(
     event_factory: EventFactory,
 ) -> None:
     projector = RadarProjector(
-        policy=RadarPolicy(
+        input_contract=DecisionInputContract(
             required_windows_seconds=(60,),
             minimum_fresh_option_quotes=0,
         )
@@ -198,7 +199,7 @@ def test_full_elapsed_with_compressed_market_span_is_incomplete(
     event_factory: EventFactory,
 ) -> None:
     projector = RadarProjector(
-        policy=RadarPolicy(
+        input_contract=DecisionInputContract(
             required_windows_seconds=(60,),
             minimum_fresh_option_quotes=0,
         )
@@ -241,7 +242,7 @@ def test_missing_market_anchor_is_incomplete_after_full_elapsed(
     event_factory: EventFactory,
 ) -> None:
     projector = RadarProjector(
-        policy=RadarPolicy(
+        input_contract=DecisionInputContract(
             required_windows_seconds=(3_600,),
             minimum_fresh_option_quotes=0,
         )
@@ -265,7 +266,7 @@ def test_exact_market_bracket_preserves_flat_path_and_zero_trade_flow(
     event_factory: EventFactory,
 ) -> None:
     projector = RadarProjector(
-        policy=RadarPolicy(
+        input_contract=DecisionInputContract(
             required_windows_seconds=(60,),
             minimum_fresh_option_quotes=0,
         )
@@ -286,11 +287,50 @@ def test_exact_market_bracket_preserves_flat_path_and_zero_trade_flow(
     assert window.flow is not None and window.flow.trade_volume == Decimal("0")
 
 
+def test_reference_path_uses_only_index_price(event_factory: EventFactory) -> None:
+    projector = RadarProjector(
+        input_contract=DecisionInputContract(
+            required_windows_seconds=(60,),
+            minimum_fresh_option_quotes=0,
+        )
+    )
+    projector.ingest(_subscription(event_factory, 1, "reference_price", elapsed_ms=0))
+    projector.ingest(_subscription(event_factory, 2, "reference_trade", elapsed_ms=0))
+    first = _ticker(event_factory, 3, 0, "100000", elapsed_ms=0)
+    first_payload = json.loads(first.raw_payload)
+    first_payload["last_price"] = "90000"
+    first_payload["mark_price"] = "95000"
+    projector.ingest(
+        replace(
+            first,
+            raw_payload=json.dumps(first_payload, sort_keys=True, separators=(",", ":")),
+        )
+    )
+    second = _ticker(event_factory, 4, 1, "100000", elapsed_ms=60_000)
+    second_payload = json.loads(second.raw_payload)
+    second_payload["last_price"] = "110000"
+    second_payload["mark_price"] = "105000"
+    frame = projector.ingest(
+        replace(
+            second,
+            raw_payload=json.dumps(second_payload, sort_keys=True, separators=(",", ":")),
+        )
+    )
+    assert frame is not None
+
+    window = frame.window(60)
+    assert window is not None and window.path is not None
+    assert frame.reference_price_source == "index_price"
+    assert frame.reference_price == Decimal("100000")
+    assert window.path.return_fraction == Decimal("0")
+    assert window.path.range_fraction == Decimal("0")
+
+
 def test_same_timestamp_arrivals_do_not_refresh_market_watermark_progress(
     event_factory: EventFactory,
 ) -> None:
     projector = RadarProjector(
-        policy=RadarPolicy(
+        input_contract=DecisionInputContract(
             required_windows_seconds=(60,),
             minimum_fresh_option_quotes=0,
         )

@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import pytest
-from market_tape import CanonicalEvent, CaptureManifest, EventKind, write_capture
+from market_tape import (
+    CanonicalEvent,
+    CaptureManifest,
+    EventKind,
+    TapeContractError,
+    catalog_generation_identity,
+    write_capture,
+)
 from options_domain import enumerate_verticals
 from radar_runtime.cli import main as runtime_main
 from radar_runtime.deribit_public import (
@@ -15,19 +23,45 @@ from radar_runtime.deribit_public import (
     _canonical_instrument,
     _deribit_server_at_ms,
     _LiveSession,
+    _refresh_catalog,
     _rpc,
     _subscribe,
     _wait_result,
+    build_decision_receipt,
     capture_evidence_metadata,
+    decision_receipt_payload,
     inspect_payload,
     project_events,
     projection_payload,
     replay_payload,
     select_btc_usdc_catalog,
 )
+from radar_runtime.evidence_bundle import create_evidence_bundle, verify_evidence_bundle
 from radar_runtime.fixture import build_fixture_events
-from short_vol_radar import RadarAction, RadarPolicy, RadarProjector, evaluate_radar
+from radar_runtime.runtime_identity import RUNTIME_SOURCE_ID, RuntimeSourceIdentity
+from short_vol_radar import (
+    DecisionInputContract,
+    RadarAction,
+    RadarPolicy,
+    RadarProjector,
+    evaluate_radar,
+)
 from websockets.sync.connection import Connection
+
+TEST_RUNTIME_IDENTITY = RuntimeSourceIdentity(
+    git_commit_sha="test-git-commit",
+    runtime_source_id=RUNTIME_SOURCE_ID,
+    runtime_source_digest="test-runtime-source-digest",
+    file_hashes=(("test.py", "test-file-digest"),),
+)
+
+
+@pytest.fixture(autouse=True)
+def _stable_runtime_source_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "radar_runtime.deribit_public.runtime_source_identity",
+        lambda *, require_clean: TEST_RUNTIME_IDENTITY,
+    )
 
 
 def _option(name: str, expiry: int) -> dict[str, object]:
@@ -44,10 +78,62 @@ def _option(name: str, expiry: int) -> dict[str, object]:
     }
 
 
+def _complete_option(name: str, expiry: int, *, active: bool = True) -> dict[str, object]:
+    return {
+        **_option(name, expiry),
+        "is_active": active,
+        "contract_size": 1,
+        "min_trade_amount": 0.01,
+        "taker_commission": 0.0003,
+    }
+
+
+def _complete_reference(*, active: bool = True) -> dict[str, object]:
+    return {
+        "instrument_name": REFERENCE,
+        "base_currency": "BTC",
+        "counter_currency": "USDC",
+        "is_active": active,
+        "contract_size": 1,
+        "min_trade_amount": 0.001,
+        "taker_commission": 0.0001,
+    }
+
+
 def _event_payload(event: CanonicalEvent) -> dict[str, object]:
     value: object = json.loads(event.raw_payload)
     assert isinstance(value, dict)
     return value
+
+
+def _replace_scheduled_fact(
+    events: tuple[CanonicalEvent, ...],
+    *,
+    state: str,
+    label: str | None,
+    valid_from_ms: int,
+    valid_until_ms: int,
+    source_id: str = "TEST_AUTHORIZED_SCHEDULE",
+) -> tuple[CanonicalEvent, ...]:
+    return tuple(
+        replace(
+            event,
+            raw_payload=json.dumps(
+                {
+                    "state": state,
+                    "label": label,
+                    "source_id": source_id,
+                    "valid_from_ms": valid_from_ms,
+                    "valid_until_ms": valid_until_ms,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+        if event.event_kind is EventKind.SCHEDULED_BLOCK_STATE
+        else event
+        for event in events
+    )
 
 
 class _FakeConnection:
@@ -142,14 +228,36 @@ def _reconnected_fixture(fresh_platform_locked: bool | None) -> tuple[CanonicalE
     )
     suffix_origin_ms = baseline[market_start].collector_elapsed_ms
     suffix_start_ms = events[-1].collector_elapsed_ms + 1
-    suffix = tuple(
-        replace(
-            event,
-            capture_seq=len(events) + offset,
-            collector_elapsed_ms=(suffix_start_ms + event.collector_elapsed_ms - suffix_origin_ms),
+    shift = len(events) + 1 - baseline[market_start].capture_seq
+    suffix_items: list[CanonicalEvent] = []
+    for offset, event in enumerate(baseline[market_start:], start=1):
+        payload = _event_payload(event)
+        if event.event_kind is EventKind.CATALOG_SNAPSHOT:
+            raw_sources = payload["instrument_source_capture_seqs"]
+            assert isinstance(raw_sources, list)
+            sources = tuple(int(str(item)) + shift for item in raw_sources)
+            payload["instrument_source_capture_seqs"] = sources
+            raw_names = payload["instrument_names"]
+            assert isinstance(raw_names, list)
+            payload["generation_id"] = catalog_generation_identity(
+                scope=str(payload["scope"]),
+                source_at_ms=int(str(payload["timestamp"])),
+                reference_instrument=str(payload["reference_instrument"]),
+                instrument_names=tuple(str(item) for item in raw_names),
+                instrument_source_capture_seqs=sources,
+                metadata_set_digest=str(payload["metadata_set_digest"]),
+            )
+        suffix_items.append(
+            replace(
+                event,
+                capture_seq=len(events) + offset,
+                collector_elapsed_ms=(
+                    suffix_start_ms + event.collector_elapsed_ms - suffix_origin_ms
+                ),
+                raw_payload=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            )
         )
-        for offset, event in enumerate(baseline[market_start:], start=1)
-    )
+    suffix = tuple(suffix_items)
     return (*events, *suffix)
 
 
@@ -254,12 +362,246 @@ def test_catalog_is_strictly_btc_usdc_zero_to_72_hours() -> None:
     assert tuple(item["instrument_name"] for item in selected) == (REFERENCE, "BTC_USDC-IN")
 
 
+def test_catalog_validity_buffer_captures_contracts_entering_decision_range() -> None:
+    as_of_ms = 1_000_000
+    seventy_two_hours_ms = 72 * 3_600 * 1_000
+    reference = {
+        "instrument_name": REFERENCE,
+        "base_currency": "BTC",
+        "counter_currency": "USDC",
+        "is_active": True,
+    }
+    entering = _option("BTC_USDC-ENTERING", as_of_ms + seventy_two_hours_ms + 300_000)
+
+    strict = select_btc_usdc_catalog((entering,), (reference,), as_of_ms=as_of_ms)
+    buffered = select_btc_usdc_catalog(
+        (entering,),
+        (reference,),
+        as_of_ms=as_of_ms,
+        validity_buffer_ms=360_000,
+    )
+
+    assert tuple(item["instrument_name"] for item in strict) == (REFERENCE,)
+    assert tuple(item["instrument_name"] for item in buffered) == (
+        REFERENCE,
+        "BTC_USDC-ENTERING",
+    )
+
+
 def test_catalog_clock_uses_deribit_response_timestamp_and_fails_closed() -> None:
     assert _deribit_server_at_ms({"usOut": 1_234_567}) == 1_234
     with pytest.raises(RuntimeError, match="usOut"):
         _deribit_server_at_ms({})
     with pytest.raises(RuntimeError, match="usOut"):
         _deribit_server_at_ms({"usOut": "1234567"})
+
+
+def test_catalog_refresh_records_snapshot_after_new_subscription() -> None:
+    source_at_ms = 1_700_000_000_000
+    option_name = "BTC_USDC-REFRESHED"
+    option = {
+        **_option(option_name, source_at_ms + 3_600_000),
+        "contract_size": 1,
+        "min_trade_amount": 0.01,
+        "taker_commission": 0.0003,
+    }
+    reference = {
+        "instrument_name": REFERENCE,
+        "base_currency": "BTC",
+        "counter_currency": "USDC",
+        "is_active": True,
+        "contract_size": 1,
+        "min_trade_amount": 0.001,
+        "taker_commission": 0.0001,
+    }
+    channel = f"ticker.{option_name}.agg2"
+    fake = _FakeConnection(
+        [
+            {
+                "jsonrpc": "2.0",
+                "id": 10,
+                "result": [option],
+                "usOut": source_at_ms * 1_000,
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "result": [reference],
+                "usOut": (source_at_ms + 1) * 1_000,
+            },
+            {"jsonrpc": "2.0", "id": 12, "result": [channel]},
+        ]
+    )
+    session = _LiveSession()
+
+    names, request_id, test_request_id = _refresh_catalog(
+        cast(Connection, fake),
+        session,
+        current_option_names=(),
+        request_id=10,
+        test_request_id=1_000,
+        input_contract=DecisionInputContract(),
+    )
+
+    assert names == (option_name,)
+    assert request_id == 13
+    assert test_request_id == 1_000
+    assert [item["method"] for item in fake.sent] == [
+        "public/get_instruments",
+        "public/get_instruments",
+        "public/subscribe",
+    ]
+    assert session.events[-1].event_kind is EventKind.CATALOG_SNAPSHOT
+    snapshot = session.projector.reducer.snapshot().catalog_snapshot
+    assert snapshot is not None
+    assert snapshot.instrument_names == tuple(sorted((REFERENCE, option_name)))
+    assert snapshot.reference_instrument == REFERENCE
+    assert len(snapshot.instrument_source_capture_seqs) == 2
+    assert snapshot.metadata_set_digest
+    assert snapshot.generation_id
+
+
+def test_catalog_refresh_removal_unsubscribes_before_publishing_generation() -> None:
+    source_at_ms = 1_700_000_000_000
+    removed_name = "BTC_USDC-REMOVED"
+    removed_channel = f"ticker.{removed_name}.agg2"
+    fake = _FakeConnection(
+        [
+            {
+                "jsonrpc": "2.0",
+                "id": 10,
+                "result": [],
+                "usOut": source_at_ms * 1_000,
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "result": [_complete_reference()],
+                "usOut": (source_at_ms + 1) * 1_000,
+            },
+            {"jsonrpc": "2.0", "id": 12, "result": [removed_channel]},
+        ]
+    )
+    session = _LiveSession()
+
+    names, request_id, _ = _refresh_catalog(
+        cast(Connection, fake),
+        session,
+        current_option_names=(removed_name,),
+        request_id=10,
+        test_request_id=1_000,
+        input_contract=DecisionInputContract(),
+    )
+
+    assert names == ()
+    assert request_id == 13
+    assert fake.sent[-1]["method"] == "public/unsubscribe"
+    snapshot = session.projector.reducer.snapshot().catalog_snapshot
+    assert snapshot is not None
+    assert snapshot.instrument_names == (REFERENCE,)
+
+
+def test_failed_catalog_refresh_publishes_no_partial_generation() -> None:
+    source_at_ms = 1_700_000_000_000
+    option_name = "BTC_USDC-FAILED-REFRESH"
+    fake = _FakeConnection(
+        [
+            {
+                "jsonrpc": "2.0",
+                "id": 10,
+                "result": [_complete_option(option_name, source_at_ms + 3_600_000)],
+                "usOut": source_at_ms * 1_000,
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "result": [_complete_reference()],
+                "usOut": (source_at_ms + 1) * 1_000,
+            },
+            {"jsonrpc": "2.0", "id": 12, "result": []},
+        ]
+    )
+    session = _LiveSession()
+
+    with pytest.raises(RuntimeError, match="subscription change"):
+        _refresh_catalog(
+            cast(Connection, fake),
+            session,
+            current_option_names=(),
+            request_id=10,
+            test_request_id=1_000,
+            input_contract=DecisionInputContract(),
+        )
+
+    assert session.events == []
+
+
+def test_catalog_generation_rejects_stale_metadata_sources() -> None:
+    source_at_ms = 1_700_000_000_000
+    rows = (
+        _complete_reference(),
+        _complete_option("BTC_USDC-GENERATION", source_at_ms + 3_600_000),
+    )
+    session = _LiveSession()
+    session.record_catalog_generation(
+        rows,
+        source_at_ms=source_at_ms,
+        received_at_ms=source_at_ms,
+        elapsed_ms=0,
+    )
+    first_snapshot = _event_payload(session.events[-1])
+    session.record_catalog_generation(
+        rows,
+        source_at_ms=source_at_ms + 1,
+        received_at_ms=source_at_ms + 1,
+        elapsed_ms=1,
+    )
+    final = session.events[-1]
+    tampered = _event_payload(final)
+    tampered["instrument_source_capture_seqs"] = first_snapshot["instrument_source_capture_seqs"]
+    events = (
+        *session.events[:-1],
+        replace(
+            final,
+            raw_payload=json.dumps(tampered, sort_keys=True, separators=(",", ":")),
+        ),
+    )
+
+    with pytest.raises(TapeContractError, match="stale instrument metadata"):
+        project_events(events)
+
+
+def test_catalog_generation_requires_reference_membership() -> None:
+    source_at_ms = 1_700_000_000_000
+    session = _LiveSession()
+
+    with pytest.raises(TapeContractError, match="reference membership"):
+        session.record_catalog_generation(
+            (_complete_option("BTC_USDC-NO-REFERENCE", source_at_ms + 3_600_000),),
+            source_at_ms=source_at_ms,
+            received_at_ms=source_at_ms,
+            elapsed_ms=0,
+        )
+
+
+def test_catalog_generation_rejects_inactive_member() -> None:
+    source_at_ms = 1_700_000_000_000
+    session = _LiveSession()
+
+    with pytest.raises(TapeContractError, match="inactive metadata"):
+        session.record_catalog_generation(
+            (
+                _complete_reference(),
+                _complete_option(
+                    "BTC_USDC-INACTIVE",
+                    source_at_ms + 3_600_000,
+                    active=False,
+                ),
+            ),
+            source_at_ms=source_at_ms,
+            received_at_ms=source_at_ms,
+            elapsed_ms=0,
+        )
 
 
 def test_deribit_quantity_step_uses_min_trade_amount_not_lot_size() -> None:
@@ -745,19 +1087,21 @@ def test_duplicate_old_trade_batch_does_not_regress_sequence_or_create_false_gap
 
 
 def test_zero_candidate_live_and_independent_replay_digests_match() -> None:
-    reference_only = tuple(
-        replace(event, capture_seq=sequence)
-        for sequence, event in enumerate(
-            (
-                event
-                for event in build_fixture_events()
-                if event.instrument_name in {None, REFERENCE}
-            ),
-            start=1,
-        )
-    )
+    reference_only: list[CanonicalEvent] = []
+    for event in build_fixture_events():
+        if event.event_kind is EventKind.TICKER and event.instrument_name not in {
+            None,
+            REFERENCE,
+        }:
+            payload = _event_payload(event)
+            payload["state"] = "closed"
+            event = replace(
+                event,
+                raw_payload=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            )
+        reference_only.append(event)
 
-    live = _assert_live_replay_equal(reference_only)
+    live = _assert_live_replay_equal(tuple(reference_only))
     replay = project_events(reference_only)
 
     assert live.current_complete_60m
@@ -794,6 +1138,175 @@ def test_projection_payload_distinguishes_watch_from_emitted_candidate() -> None
     assert watch_payload["research_candidate_count"] == 0
     assert "candidate_id" not in watch_payload
     assert "candidate_count" not in watch_payload
+
+
+def test_missing_option_depth_is_unknown_not_zero() -> None:
+    events = build_fixture_events()
+    target = next(
+        event
+        for event in reversed(events)
+        if event.event_kind is EventKind.TICKER and event.instrument_name not in {None, REFERENCE}
+    )
+    payload = _event_payload(target)
+    payload.pop("best_bid_amount")
+    changed = tuple(
+        replace(
+            event,
+            raw_payload=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        )
+        if event is target
+        else event
+        for event in events
+    )
+
+    projection = project_events(changed)
+    quote = next(
+        item
+        for item in projection.frame.option_quotes
+        if item.instrument_name == target.instrument_name
+    )
+
+    assert quote.bid is not None
+    assert quote.bid_amount is None
+    assert "OPTION_DEPTH_UNKNOWN" in projection.frame.completeness_reasons
+    assert projection.decision.action is RadarAction.ABSTAIN
+
+
+def test_absent_scheduled_block_fact_remains_unknown() -> None:
+    events = tuple(
+        replace(
+            event,
+            event_kind=EventKind.HEARTBEAT,
+            channel="test/no-schedule",
+            raw_payload='{"type":"test"}',
+        )
+        if event.event_kind is EventKind.SCHEDULED_BLOCK_STATE
+        else event
+        for event in build_fixture_events()
+    )
+
+    projection = project_events(events)
+
+    assert projection.frame.scheduled_block_observed is False
+    assert projection.frame.scheduled_block is None
+    assert "SCHEDULED_BLOCK_UNKNOWN" in projection.frame.completeness_reasons
+    assert projection.decision.action is RadarAction.ABSTAIN
+
+
+def test_current_scheduled_clear_is_explicit_and_can_pass() -> None:
+    events = build_fixture_events()
+    projection = project_events(events)
+
+    assert projection.frame.scheduled_block_observed is True
+    assert projection.frame.scheduled_block_current is True
+    assert projection.frame.scheduled_block_source_id == "FIXTURE_AUTHORIZED_SCHEDULE"
+    assert projection.frame.scheduled_block is None
+    assert projection.decision.action is RadarAction.RESEARCH_CANDIDATE
+
+
+def test_current_scheduled_block_fails_closed() -> None:
+    baseline = build_fixture_events()
+    market_at_ms = baseline[-1].exchange_timestamp_ms
+    assert market_at_ms is not None
+    events = _replace_scheduled_fact(
+        baseline,
+        state="BLOCKED",
+        label="FOMC",
+        valid_from_ms=market_at_ms - 1,
+        valid_until_ms=market_at_ms + 1,
+    )
+
+    projection = project_events(events)
+
+    assert projection.frame.scheduled_block_current is True
+    assert projection.frame.scheduled_block == "FOMC"
+    assert "SCHEDULED_BLOCK" in projection.frame.completeness_reasons
+    assert projection.decision.action is not RadarAction.RESEARCH_CANDIDATE
+
+
+@pytest.mark.parametrize(
+    ("offsets", "reason"),
+    (
+        ((-2_000, -1_000), "SCHEDULED_BLOCK_STALE"),
+        ((1_000, 2_000), "SCHEDULED_BLOCK_NOT_YET_VALID"),
+    ),
+)
+def test_expired_or_future_scheduled_clear_is_unknown(
+    offsets: tuple[int, int],
+    reason: str,
+) -> None:
+    baseline = build_fixture_events()
+    market_at_ms = baseline[-1].exchange_timestamp_ms
+    assert market_at_ms is not None
+    events = _replace_scheduled_fact(
+        baseline,
+        state="CLEAR",
+        label=None,
+        valid_from_ms=market_at_ms + offsets[0],
+        valid_until_ms=market_at_ms + offsets[1],
+    )
+
+    projection = project_events(events)
+
+    assert projection.frame.scheduled_block_observed is True
+    assert projection.frame.scheduled_block_current is False
+    assert reason in projection.frame.completeness_reasons
+    assert projection.decision.action is RadarAction.ABSTAIN
+
+
+def test_reconnect_does_not_renew_expired_scheduled_clear() -> None:
+    baseline = _reconnected_fixture(False)
+    market_at_ms = baseline[-1].exchange_timestamp_ms
+    assert market_at_ms is not None
+    events = _replace_scheduled_fact(
+        baseline,
+        state="CLEAR",
+        label=None,
+        valid_from_ms=market_at_ms - 2_000,
+        valid_until_ms=market_at_ms - 1_000,
+    )
+
+    projection = project_events(events)
+
+    assert projection.frame.scheduled_block_current is False
+    assert "SCHEDULED_BLOCK_STALE" in projection.frame.completeness_reasons
+    assert projection.decision.action is RadarAction.ABSTAIN
+
+
+def test_scheduled_fact_requires_source_identity_and_validity() -> None:
+    baseline = build_fixture_events()
+    broken = _replace_scheduled_fact(
+        baseline,
+        state="CLEAR",
+        label=None,
+        source_id="",
+        valid_from_ms=1,
+        valid_until_ms=2,
+    )
+
+    with pytest.raises(ValueError, match="source identity"):
+        project_events(broken)
+
+
+def test_stale_catalog_snapshot_fails_closed() -> None:
+    baseline = build_fixture_events()
+    final_catalog_seq = max(
+        event.capture_seq for event in baseline if event.event_kind is EventKind.CATALOG_SNAPSHOT
+    )
+    events = tuple(
+        replace(event, capture_seq=sequence)
+        for sequence, event in enumerate(
+            (item for item in baseline if item.capture_seq != final_catalog_seq),
+            start=1,
+        )
+    )
+
+    projection = project_events(events)
+
+    assert projection.frame.catalog_age_ms is not None
+    assert projection.frame.catalog_age_ms > 360_000
+    assert "CATALOG_SNAPSHOT_STALE" in projection.frame.completeness_reasons
+    assert projection.decision.action is RadarAction.ABSTAIN
 
 
 def test_full_elapsed_with_compressed_market_time_abstains_live_and_replay() -> None:
@@ -1244,7 +1757,7 @@ def test_delayed_old_option_is_not_fresh_even_when_arrival_is_fresh() -> None:
     assert not quote.fresh
 
 
-def test_delayed_old_reference_is_stale_against_trade_watermark() -> None:
+def test_trade_price_cannot_advance_the_index_reference_watermark() -> None:
     events = build_fixture_events()
     last_trade_event = next(
         event for event in reversed(events) if event.event_kind is EventKind.TRADE
@@ -1268,10 +1781,11 @@ def test_delayed_old_reference_is_stale_against_trade_watermark() -> None:
 
     projection = _assert_live_replay_equal(events)
 
-    assert projection.frame.market_as_of_capture_seq == events[-1].capture_seq
+    assert projection.frame.market_as_of_capture_seq == events[-2].capture_seq
     assert projection.frame.reference_source_capture_seq == events[-2].capture_seq
-    assert "REFERENCE_STALE" in projection.frame.completeness_reasons
-    assert projection.decision.action is RadarAction.ABSTAIN
+    assert projection.frame.reference_price_source == "index_price"
+    assert "REFERENCE_STALE" not in projection.frame.completeness_reasons
+    assert projection.decision.action is RadarAction.RESEARCH_CANDIDATE
 
 
 def test_frame_provenance_includes_catalog_tickers_prior_reference_and_watermark() -> None:
@@ -1362,6 +1876,40 @@ def test_inspect_counts_book_gaps_only_when_book_facts_are_observed(
     assert payload["book_gap_records"] == 1
 
 
+def test_inspect_distinguishes_trade_batches_from_actual_trades(tmp_path: Path) -> None:
+    session = _LiveSession()
+    at_ms = 1_700_000_000_000
+    session.record_trades(
+        f"trades.{REFERENCE}.agg2",
+        [
+            {
+                "trade_seq": 1,
+                "timestamp": at_ms,
+                "instrument_name": REFERENCE,
+                "price": "100000",
+                "amount": "1",
+                "direction": "buy",
+            },
+            {
+                "trade_seq": 2,
+                "timestamp": at_ms + 1,
+                "instrument_name": REFERENCE,
+                "price": "100001",
+                "amount": "2",
+                "direction": "sell",
+            },
+        ],
+        received_at_ms=at_ms + 2,
+    )
+    events = tuple(session.events)
+    manifest = write_capture(tmp_path / "capture", events, complete=True)
+
+    payload = inspect_payload(manifest, events)
+
+    assert payload["trade_batch_records"] == 1
+    assert payload["actual_trades"] == 2
+
+
 def _live_capture_payload(
     manifest: CaptureManifest,
     events: tuple[CanonicalEvent, ...],
@@ -1416,6 +1964,222 @@ def test_replay_output_uses_semantic_identities_and_exact_live_capture_binding(
     saved: object = json.loads((replay_root / "replay.json").read_text(encoding="utf-8"))
     assert isinstance(saved, dict)
     assert saved["evidence_class"] == "BOUNDED_PRODUCTION_PUBLIC_LIVE_REPLAY"
+
+    inspect_path = tmp_path / "artifacts" / "inspect.json"
+    assert (
+        runtime_main(
+            [
+                "inspect",
+                str(capture_root),
+                "--output",
+                str(inspect_path),
+            ]
+        )
+        == 0
+    )
+    saved_inspect: object = json.loads(inspect_path.read_text(encoding="utf-8"))
+    assert isinstance(saved_inspect, dict)
+    assert saved_inspect["capture_digest"] == manifest.content_sha256
+
+
+def test_decision_receipt_reconstructs_exactly_and_rejects_drift(tmp_path: Path) -> None:
+    events = build_fixture_events()
+    manifest = write_capture(tmp_path / "capture", events, complete=True)
+    projection = project_events(events)
+    receipt = decision_receipt_payload(
+        build_decision_receipt(
+            manifest,
+            projection,
+            source_identity=TEST_RUNTIME_IDENTITY,
+        )
+    )
+    readiness = receipt["readiness"]
+    assert isinstance(readiness, dict)
+    assert readiness["frame_complete"] is True
+    assert readiness["frame_incomplete_reasons"] == []
+    assert len(cast(list[object], readiness["required_windows"])) == 5
+    assert receipt["runtime_source_digest"] == TEST_RUNTIME_IDENTITY.runtime_source_digest
+    evaluation = receipt["evaluation"]
+    assert isinstance(evaluation, dict)
+    assert evaluation["assessment_opportunity_count"] == (
+        evaluation["assessment_count"] + evaluation["assessment_unavailable_count"]
+    )
+
+    replay = replay_payload(
+        manifest,
+        events,
+        decision_receipt=receipt,
+        source_identity=TEST_RUNTIME_IDENTITY,
+    )
+
+    assert replay["decision_receipt_binding_verified"] is True
+    assert replay["decision_drift_count"] == 0
+    assert replay["decision_drift_fields"] == []
+    tampered = json.loads(json.dumps(receipt))
+    tampered["evaluation"]["assessment_set_digest"] = "tampered"
+    with pytest.raises(ValueError, match="Decision receipt drift"):
+        replay_payload(
+            manifest,
+            events,
+            decision_receipt=cast(dict[str, object], tampered),
+            source_identity=TEST_RUNTIME_IDENTITY,
+        )
+
+
+def test_replay_allows_different_git_commit_with_identical_runtime_source(
+    tmp_path: Path,
+) -> None:
+    events = build_fixture_events()
+    manifest = write_capture(tmp_path / "capture", events, complete=True)
+    projection = project_events(events)
+    capture_identity = replace(TEST_RUNTIME_IDENTITY, git_commit_sha="capture-commit")
+    replay_identity = replace(TEST_RUNTIME_IDENTITY, git_commit_sha="later-docs-commit")
+    receipt = decision_receipt_payload(
+        build_decision_receipt(
+            manifest,
+            projection,
+            source_identity=capture_identity,
+        )
+    )
+
+    replay = replay_payload(
+        manifest,
+        events,
+        decision_receipt=receipt,
+        source_identity=replay_identity,
+    )
+
+    assert replay["git_commit_sha"] == "capture-commit"
+    assert replay["replay_git_commit_sha"] == "later-docs-commit"
+    assert replay["runtime_source_digest_match"] is True
+    assert replay["decision_drift_count"] == 0
+
+
+def test_replay_rejects_runtime_source_digest_mismatch(tmp_path: Path) -> None:
+    events = build_fixture_events()
+    manifest = write_capture(tmp_path / "capture", events, complete=True)
+    projection = project_events(events)
+    receipt = decision_receipt_payload(
+        build_decision_receipt(
+            manifest,
+            projection,
+            source_identity=TEST_RUNTIME_IDENTITY,
+        )
+    )
+    changed = replace(TEST_RUNTIME_IDENTITY, runtime_source_digest="changed-runtime-source")
+
+    with pytest.raises(ValueError, match="runtime source identity mismatch"):
+        replay_payload(
+            manifest,
+            events,
+            decision_receipt=receipt,
+            source_identity=changed,
+        )
+
+
+def test_replay_rejects_dirty_runtime_identity_scope(tmp_path: Path) -> None:
+    events = build_fixture_events()
+    manifest = write_capture(tmp_path / "capture", events, complete=True)
+    dirty = replace(
+        TEST_RUNTIME_IDENTITY,
+        dirty_paths=(" M packages/short_vol_radar/src/short_vol_radar/decision.py",),
+    )
+
+    with pytest.raises(RuntimeError, match="runtime source scope is dirty"):
+        replay_payload(manifest, events, source_identity=dirty)
+
+
+def test_decision_truth_evidence_bundle_generates_chinese_report_and_verifies(
+    tmp_path: Path,
+) -> None:
+    events = build_fixture_events()
+    capture_output = tmp_path / "run"
+    manifest = write_capture(capture_output / "capture", events, complete=True)
+    projection = project_events(events)
+    decision = decision_receipt_payload(
+        build_decision_receipt(
+            manifest,
+            projection,
+            source_identity=TEST_RUNTIME_IDENTITY,
+        )
+    )
+    live = _live_capture_payload(manifest, events)
+    live["duration_seconds"] = 3_665
+    inspect = inspect_payload(manifest, events, source_identity=TEST_RUNTIME_IDENTITY)
+    replay = replay_payload(
+        manifest,
+        events,
+        live=live,
+        decision_receipt=decision,
+        source_identity=TEST_RUNTIME_IDENTITY,
+    )
+    (capture_output / "decision.json").write_text(
+        json.dumps(decision),
+        encoding="utf-8",
+    )
+    (capture_output / "live.json").write_text(json.dumps(live), encoding="utf-8")
+    inspect_path = tmp_path / "inspect.json"
+    inspect_path.write_text(json.dumps(inspect), encoding="utf-8")
+    replay_path = tmp_path / "replay.json"
+    replay_path.write_text(json.dumps(replay), encoding="utf-8")
+
+    result = create_evidence_bundle(
+        capture_output=capture_output,
+        inspect_path=inspect_path,
+        replay_path=replay_path,
+        output=tmp_path / "bundle",
+    )
+
+    assert result["bundle_verified"] is True
+    assert result["archive_sha256"]
+    report = (tmp_path / "bundle" / "ACCEPTANCE.zh-CN.md").read_text(encoding="utf-8")
+    assert "业务验收报告 (待人类验收)" in report
+    assert "Assessment opportunities" in report
+    assert (tmp_path / "bundle" / "SHA256SUMS").is_file()
+    verification = verify_evidence_bundle(
+        tmp_path / "bundle",
+        archive=tmp_path / "bundle.tar.gz",
+    )
+    assert verification["bundle_verified"] is True
+
+
+def test_evidence_bundle_verification_rejects_tampering(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "BUNDLE_MANIFEST.json").write_text(
+        json.dumps({"bundle_format": "OPTIMATRIX_DECISION_TRUTH_EVIDENCE_BUNDLE"}),
+        encoding="utf-8",
+    )
+    original = (bundle / "BUNDLE_MANIFEST.json").read_bytes()
+    digest = hashlib.sha256(original).hexdigest()
+    (bundle / "SHA256SUMS").write_text(
+        f"{digest}  BUNDLE_MANIFEST.json\n",
+        encoding="utf-8",
+    )
+    (bundle / "BUNDLE_MANIFEST.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        verify_evidence_bundle(bundle)
+
+
+def test_evidence_bundle_verification_rejects_duplicate_checksum_paths(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    manifest = bundle / "BUNDLE_MANIFEST.json"
+    manifest.write_text(
+        json.dumps({"bundle_format": "OPTIMATRIX_DECISION_TRUTH_EVIDENCE_BUNDLE"}),
+        encoding="utf-8",
+    )
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    (bundle / "SHA256SUMS").write_text(
+        f"{digest}  BUNDLE_MANIFEST.json\n{digest}  BUNDLE_MANIFEST.json\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicates"):
+        verify_evidence_bundle(bundle)
 
 
 @pytest.mark.parametrize(

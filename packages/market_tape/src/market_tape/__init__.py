@@ -10,6 +10,7 @@ from market_tape.capture import (
 from market_tape.contracts import (
     BookState,
     CanonicalEvent,
+    CatalogSnapshot,
     EventKind,
     GapFact,
     Instrument,
@@ -22,6 +23,8 @@ from market_tape.contracts import (
     canonical_digest,
     canonical_json,
     canonical_value,
+    catalog_generation_identity,
+    instrument_metadata_identity,
 )
 from market_tape.reducer import MarketTapeReducer, TapeContractError
 
@@ -30,6 +33,7 @@ __all__ = [
     "BookState",
     "CanonicalEvent",
     "CaptureManifest",
+    "CatalogSnapshot",
     "EventKind",
     "GapFact",
     "Instrument",
@@ -44,6 +48,8 @@ __all__ = [
     "canonical_digest",
     "canonical_json",
     "canonical_value",
+    "catalog_generation_identity",
+    "instrument_metadata_identity",
     "read_capture",
     "validate_capture",
     "write_capture",

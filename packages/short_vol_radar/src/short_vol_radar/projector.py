@@ -13,21 +13,23 @@ from typing import cast
 from market_tape import (
     CanonicalEvent,
     EventKind,
+    Instrument,
     InstrumentKind,
     MarketTapeReducer,
     MarketTapeSnapshot,
     TickerFact,
+    canonical_digest,
 )
 from options_domain import ComboQuote, OptionQuote, SurfaceSummary, build_surface_summary
 
 from short_vol_radar.contracts import (
     BreakoutDirection,
     DecisionFrame,
+    DecisionInputContract,
     FlowMetrics,
     PathMetrics,
     RadarPolicy,
     ReferenceDynamics,
-    ScheduledBlock,
     WindowCoverage,
     WindowObservation,
 )
@@ -80,11 +82,7 @@ def _optional_decimal(
 
 
 def _ticker_price(ticker: TickerFact) -> Decimal | None:
-    return (
-        _optional_decimal(ticker.payload, "last_price")
-        or _optional_decimal(ticker.payload, "mark_price")
-        or _optional_decimal(ticker.payload, "index_price")
-    )
+    return _optional_decimal(ticker.payload, "index_price")
 
 
 class RadarProjector:
@@ -92,14 +90,13 @@ class RadarProjector:
 
     def __init__(
         self,
-        reference_instrument: str = "BTC_USDC-PERPETUAL",
         *,
+        input_contract: DecisionInputContract | None = None,
         policy: RadarPolicy | None = None,
-        scheduled_blocks: tuple[ScheduledBlock, ...] = (),
     ) -> None:
-        self.reference_instrument = reference_instrument
+        self.input_contract = input_contract or DecisionInputContract()
+        self.reference_instrument = self.input_contract.reference_instrument
         self.policy = policy or RadarPolicy()
-        self.scheduled_blocks = scheduled_blocks
         self.reducer = MarketTapeReducer()
         self._price_samples: list[_PriceSample] = []
         self._trade_samples: list[_TradeSample] = []
@@ -115,6 +112,12 @@ class RadarProjector:
             tuple[Decimal | None, Decimal | None, Decimal | None, int] | None
         ) = None
         self._current_reference_dynamics: ReferenceDynamics | None = None
+        self._scheduled_block_observed = False
+        self._scheduled_block: str | None = None
+        self._scheduled_block_source_capture_seq: int | None = None
+        self._scheduled_block_source_id: str | None = None
+        self._scheduled_block_valid_from_ms: int | None = None
+        self._scheduled_block_valid_until_ms: int | None = None
         self._last_event: CanonicalEvent | None = None
         self._current_frame: DecisionFrame | None = None
 
@@ -146,6 +149,51 @@ class RadarProjector:
             self._market_watermark_progress_elapsed_ms = None
             self._current_frame = None
             return None
+        if event.event_kind is EventKind.SCHEDULED_BLOCK_STATE:
+            payload = _payload(event)
+            state = payload.get("state")
+            label = payload.get("label")
+            source_id = payload.get("source_id")
+            valid_from_ms = payload.get("valid_from_ms")
+            valid_until_ms = payload.get("valid_until_ms")
+            if state not in {"CLEAR", "BLOCKED"}:
+                raise ValueError("scheduled-block state must be CLEAR or BLOCKED")
+            if state == "BLOCKED" and (not isinstance(label, str) or not label):
+                raise ValueError("blocked scheduled state requires a label")
+            if state == "CLEAR" and label is not None:
+                raise ValueError("clear scheduled state cannot have a label")
+            if not isinstance(source_id, str) or not source_id:
+                raise ValueError("scheduled-block source identity is required")
+            if (
+                not isinstance(valid_from_ms, int)
+                or isinstance(valid_from_ms, bool)
+                or not isinstance(valid_until_ms, int)
+                or isinstance(valid_until_ms, bool)
+                or valid_from_ms <= 0
+                or valid_until_ms < valid_from_ms
+            ):
+                raise ValueError("scheduled-block validity interval is invalid")
+            self._scheduled_block_observed = True
+            self._scheduled_block = str(label) if state == "BLOCKED" else None
+            self._scheduled_block_source_capture_seq = event.capture_seq
+            self._scheduled_block_source_id = source_id
+            self._scheduled_block_valid_from_ms = valid_from_ms
+            self._scheduled_block_valid_until_ms = valid_until_ms
+            frame = self._frame(
+                event,
+                dynamics_override=self._current_reference_dynamics,
+                update_previous=False,
+            )
+            self._current_frame = frame
+            return frame
+        if event.event_kind is EventKind.CATALOG_SNAPSHOT:
+            frame = self._frame(
+                event,
+                dynamics_override=self._current_reference_dynamics,
+                update_previous=False,
+            )
+            self._current_frame = frame
+            return frame
         if event.instrument_name != self.reference_instrument:
             return None
         if event.event_kind is EventKind.TICKER:
@@ -156,13 +204,13 @@ class RadarProjector:
                 if item.instrument_name == self.reference_instrument
             )
             ticker_applied = ticker.capture_seq == event.capture_seq
-            if ticker_applied:
+            price = _ticker_price(ticker) if ticker_applied else None
+            if price is not None and ticker_applied:
                 self._advance_market_as_of(
                     ticker.source_at_ms,
                     ticker.capture_seq,
                     ticker.observed_elapsed_ms,
                 )
-            price = _ticker_price(ticker) if ticker_applied else None
             if price is not None and ticker_applied:
                 self._price_samples.append(
                     _PriceSample(
@@ -183,22 +231,6 @@ class RadarProjector:
             if event.event_kind is EventKind.TRADE_GAP:
                 self._trade_gaps.append(_ControlFact(event.collector_elapsed_ms, event.capture_seq))
             snapshot = self.reducer.snapshot(event.collector_received_at_ms)
-            current_trades = tuple(
-                trade
-                for trade in snapshot.trades
-                if trade.instrument_name == self.reference_instrument
-                and trade.capture_seq == event.capture_seq
-            )
-            if current_trades:
-                latest_trade = max(
-                    current_trades,
-                    key=lambda item: (item.source_at_ms, item.trade_seq),
-                )
-                self._advance_market_as_of(
-                    latest_trade.source_at_ms,
-                    event.capture_seq,
-                    latest_trade.observed_elapsed_ms,
-                )
             existing = {item.trade_seq for item in self._trade_samples}
             for trade in snapshot.trades:
                 if (
@@ -223,14 +255,6 @@ class RadarProjector:
                     liquidation=trade.liquidation,
                 )
                 self._trade_samples.append(sample)
-                self._price_samples.append(
-                    _PriceSample(
-                        trade.source_at_ms,
-                        trade.observed_elapsed_ms,
-                        trade.capture_seq,
-                        trade.price,
-                    )
-                )
                 existing.add(trade.trade_seq)
             frame = self._frame(
                 event,
@@ -309,19 +333,17 @@ class RadarProjector:
             ),
             None,
         )
-        reference_price = _ticker_price(reference) if reference is not None else None
-        reference_source_capture_seq = reference.capture_seq if reference is not None else None
         known_prices = tuple(
             item
             for item in self._price_samples
             if market_now_ms is not None and item.source_at_ms <= market_now_ms
         )
-        if reference_price is None and known_prices:
-            reference_price = known_prices[-1].price
-            reference_source_capture_seq = known_prices[-1].capture_seq
-        index_price = (
-            _optional_decimal(reference.payload, "index_price") if reference is not None else None
+        reference_sample = known_prices[-1] if known_prices else None
+        reference_price = reference_sample.price if reference_sample is not None else None
+        reference_source_capture_seq = (
+            reference_sample.capture_seq if reference_sample is not None else None
         )
+        index_price = reference_price
         mark_price = (
             _optional_decimal(reference.payload, "mark_price") if reference is not None else None
         )
@@ -379,7 +401,28 @@ class RadarProjector:
             open_interest_change_fraction=open_interest_change_fraction,
             prior_reference_capture_seq=prior_reference_used,
         )
-        option_quotes = self._option_quotes(snapshot, market_now_ms, observed_now_ms)
+        catalog = snapshot.catalog_snapshot
+        catalog_matches = bool(
+            catalog is not None
+            and catalog.scope == self.input_contract.catalog_scope
+            and catalog.reference_instrument == self.reference_instrument
+        )
+        catalog_names = (
+            frozenset(catalog.instrument_names)
+            if catalog is not None and catalog_matches
+            else frozenset()
+        )
+        catalog_age_ms = (
+            max(0, observed_now_ms - catalog.observed_elapsed_ms)
+            if catalog is not None and catalog_matches
+            else None
+        )
+        option_quotes = self._option_quotes(
+            snapshot,
+            market_now_ms,
+            observed_now_ms,
+            catalog_instruments=(catalog.instruments if catalog_matches and catalog else ()),
+        )
         combo_quotes: tuple[ComboQuote, ...] = ()
         surface: SurfaceSummary = build_surface_summary(option_quotes, as_of=surface_as_of)
         windows = tuple(
@@ -388,15 +431,7 @@ class RadarProjector:
                 observed_now_ms,
                 seconds,
             )
-            for seconds in self.policy.required_windows_seconds
-        )
-        scheduled_block = (
-            next(
-                (item for item in self.scheduled_blocks if item.contains(market_as_of)),
-                None,
-            )
-            if market_as_of is not None
-            else None
+            for seconds in self.input_contract.required_windows_seconds
         )
         reasons: list[str] = []
         platform_state = snapshot.platform_state
@@ -410,18 +445,57 @@ class RadarProjector:
             reasons.append("REFERENCE_NOT_OPEN")
         reference_age_ms = (
             max(
-                max(0, observed_now_ms - reference.observed_elapsed_ms),
-                max(0, market_now_ms - reference.source_at_ms),
+                max(0, observed_now_ms - reference_sample.observed_elapsed_ms),
+                max(0, market_now_ms - reference_sample.source_at_ms),
             )
-            if reference is not None and market_now_ms is not None
+            if reference_sample is not None and market_now_ms is not None
             else None
         )
-        if reference_age_ms is None or reference_age_ms > self.policy.reference_freshness_ms:
+        if (
+            reference_age_ms is None
+            or reference_age_ms > self.input_contract.reference_freshness_ms
+        ):
             reasons.append("REFERENCE_STALE")
-        if sum(item.fresh for item in option_quotes) < self.policy.minimum_fresh_option_quotes:
+        if (
+            sum(item.fresh for item in option_quotes)
+            < self.input_contract.minimum_fresh_option_quotes
+        ):
             reasons.append("INSUFFICIENT_FRESH_OPTION_QUOTES")
+        if not catalog_matches:
+            reasons.append("CATALOG_SNAPSHOT_UNKNOWN")
+        elif catalog_age_ms is None or catalog_age_ms > self.input_contract.catalog_max_age_ms:
+            reasons.append("CATALOG_SNAPSHOT_STALE")
+        catalog_option_names = catalog_names - {self.reference_instrument}
+        expected_option_names = {
+            item.instrument_name
+            for item in (() if catalog is None or not catalog_matches else catalog.instruments)
+            if item.instrument_name in catalog_option_names
+            and item.kind is InstrumentKind.OPTION
+            and item.active
+            and item.expiration_timestamp_ms is not None
+            and market_now_ms is not None
+            and 0
+            < item.expiration_timestamp_ms - market_now_ms
+            <= self.policy.maximum_tte_seconds * 1_000
+        }
+        quote_names = {item.instrument_name for item in option_quotes}
+        if expected_option_names != quote_names:
+            reasons.append("OPTION_UNIVERSE_QUOTES_INCOMPLETE")
+        if any(not item.fresh for item in option_quotes):
+            reasons.append("OPTION_UNIVERSE_QUOTES_STALE")
+        if any(
+            (item.bid is not None and item.bid_amount is None)
+            or (item.ask is not None and item.ask_amount is None)
+            for item in option_quotes
+        ):
+            reasons.append("OPTION_DEPTH_UNKNOWN")
         if not surface.expiries:
             reasons.append("NO_SURFACE")
+        for window in windows:
+            if not window.coverage.price_complete or window.path is None:
+                reasons.append(f"REQUIRED_PRICE_WINDOW_UNKNOWN:{window.coverage.requested_seconds}")
+            if not window.coverage.trade_complete or window.flow is None:
+                reasons.append(f"REQUIRED_FLOW_WINDOW_UNKNOWN:{window.coverage.requested_seconds}")
         platform_is_locked = (
             platform_state is not None
             and platform_state.state == "LOCKED"
@@ -446,7 +520,30 @@ class RadarProjector:
         effective_platform_locked: bool | None = (
             True if platform_is_locked else False if platform_is_open else None
         )
-        if scheduled_block is not None:
+        scheduled_block_current = bool(
+            self._scheduled_block_observed
+            and market_now_ms is not None
+            and self._scheduled_block_valid_from_ms is not None
+            and self._scheduled_block_valid_until_ms is not None
+            and self._scheduled_block_valid_from_ms
+            <= market_now_ms
+            <= self._scheduled_block_valid_until_ms
+        )
+        if not self._scheduled_block_observed:
+            reasons.append("SCHEDULED_BLOCK_UNKNOWN")
+        elif market_now_ms is None:
+            reasons.append("SCHEDULED_BLOCK_TIME_UNKNOWN")
+        elif (
+            self._scheduled_block_valid_from_ms is not None
+            and market_now_ms < self._scheduled_block_valid_from_ms
+        ):
+            reasons.append("SCHEDULED_BLOCK_NOT_YET_VALID")
+        elif (
+            self._scheduled_block_valid_until_ms is not None
+            and market_now_ms > self._scheduled_block_valid_until_ms
+        ):
+            reasons.append("SCHEDULED_BLOCK_STALE")
+        elif self._scheduled_block is not None:
             reasons.append("SCHEDULED_BLOCK")
         source_capture_seqs = tuple(
             sorted(
@@ -456,6 +553,17 @@ class RadarProjector:
                     *(seq for item in option_quotes for seq in item.source_capture_seqs),
                     *(item.source_capture_seq for item in combo_quotes),
                     *(() if reference is None else (reference.capture_seq,)),
+                    *(() if catalog is None or not catalog_matches else (catalog.capture_seq,)),
+                    *(
+                        ()
+                        if catalog is None or not catalog_matches
+                        else catalog.instrument_source_capture_seqs
+                    ),
+                    *(
+                        ()
+                        if self._scheduled_block_source_capture_seq is None
+                        else (self._scheduled_block_source_capture_seq,)
+                    ),
                     *(
                         ()
                         if self._platform_subscription is None
@@ -486,7 +594,10 @@ class RadarProjector:
             collector_elapsed_ms=observed_now_ms,
             market_as_of=market_as_of,
             market_as_of_capture_seq=market_as_of_capture_seq,
+            input_contract_id=self.input_contract.contract_id,
+            input_contract_digest=self.input_contract.digest,
             reference_instrument=self.reference_instrument,
+            reference_price_source=self.input_contract.reference_price_field,
             reference_source_capture_seq=reference_source_capture_seq,
             reference_price=reference_price,
             index_price=index_price,
@@ -507,7 +618,51 @@ class RadarProjector:
             combo_quotes=combo_quotes,
             platform_state=effective_platform_state,
             platform_locked=effective_platform_locked,
-            scheduled_block=(scheduled_block.label if scheduled_block is not None else None),
+            catalog_scope=(catalog.scope if catalog is not None and catalog_matches else None),
+            catalog_snapshot_capture_seq=(
+                catalog.capture_seq if catalog is not None and catalog_matches else None
+            ),
+            catalog_source_at=(
+                datetime.fromtimestamp(catalog.source_at_ms / 1_000, tz=UTC)
+                if catalog is not None and catalog_matches
+                else None
+            ),
+            catalog_age_ms=catalog_age_ms,
+            catalog_instrument_count=(
+                len(catalog.instrument_names) if catalog is not None and catalog_matches else None
+            ),
+            catalog_instrument_names_digest=(
+                canonical_digest(catalog.instrument_names)
+                if catalog is not None and catalog_matches
+                else None
+            ),
+            catalog_generation_id=(
+                catalog.generation_id if catalog is not None and catalog_matches else None
+            ),
+            catalog_metadata_set_digest=(
+                catalog.metadata_set_digest if catalog is not None and catalog_matches else None
+            ),
+            catalog_instrument_source_capture_seqs=(
+                catalog.instrument_source_capture_seqs
+                if catalog is not None and catalog_matches
+                else ()
+            ),
+            catalog_generation_complete=catalog_matches,
+            scheduled_block_observed=self._scheduled_block_observed,
+            scheduled_block_source_capture_seq=self._scheduled_block_source_capture_seq,
+            scheduled_block_source_id=self._scheduled_block_source_id,
+            scheduled_block_valid_from=(
+                datetime.fromtimestamp(self._scheduled_block_valid_from_ms / 1_000, tz=UTC)
+                if self._scheduled_block_valid_from_ms is not None
+                else None
+            ),
+            scheduled_block_valid_until=(
+                datetime.fromtimestamp(self._scheduled_block_valid_until_ms / 1_000, tz=UTC)
+                if self._scheduled_block_valid_until_ms is not None
+                else None
+            ),
+            scheduled_block_current=scheduled_block_current,
+            scheduled_block=self._scheduled_block,
             complete=not reasons,
             completeness_reasons=tuple(reasons),
             source_capture_seqs=source_capture_seqs,
@@ -528,10 +683,12 @@ class RadarProjector:
         snapshot: MarketTapeSnapshot,
         market_now_ms: int | None,
         observed_now_ms: int,
+        *,
+        catalog_instruments: tuple[Instrument, ...],
     ) -> tuple[OptionQuote, ...]:
         instruments = {
             item.instrument_name: item
-            for item in snapshot.instruments
+            for item in catalog_instruments
             if item.kind is InstrumentKind.OPTION and item.active
         }
         tickers = {item.instrument_name: item for item in snapshot.tickers}
@@ -573,8 +730,8 @@ class RadarProjector:
                     option_kind=instrument.option_kind,
                     bid=_optional_decimal(payload, "best_bid_price"),
                     ask=_optional_decimal(payload, "best_ask_price"),
-                    bid_amount=(_optional_decimal(payload, "best_bid_amount") or Decimal("0")),
-                    ask_amount=(_optional_decimal(payload, "best_ask_amount") or Decimal("0")),
+                    bid_amount=_optional_decimal(payload, "best_bid_amount"),
+                    ask_amount=_optional_decimal(payload, "best_ask_amount"),
                     bid_iv=_optional_decimal(payload, "bid_iv"),
                     ask_iv=_optional_decimal(payload, "ask_iv"),
                     mark_iv=_optional_decimal(payload, "mark_iv"),
@@ -588,7 +745,7 @@ class RadarProjector:
                     quote_age_ms=quote_age_ms,
                     fresh=(
                         ticker.source_at_ms <= market_now_ms
-                        and quote_age_ms <= self.policy.option_freshness_ms
+                        and quote_age_ms <= self.input_contract.option_freshness_ms
                     ),
                     instrument_source_capture_seq=instrument.source_capture_seq,
                     ticker_source_capture_seq=ticker.capture_seq,
@@ -705,7 +862,7 @@ class RadarProjector:
         )
         price_watermark_live = (
             price_watermark_progress_age_ms is not None
-            and price_watermark_progress_age_ms <= self.policy.reference_freshness_ms
+            and price_watermark_progress_age_ms <= self.input_contract.reference_freshness_ms
         )
         price_complete = (
             market_now_ms is not None
@@ -892,7 +1049,7 @@ class RadarProjector:
         )
 
     def _prune(self, observed_now_ms: int) -> None:
-        cutoff = observed_now_ms - max(self.policy.required_windows_seconds) * 2_000
+        cutoff = observed_now_ms - max(self.input_contract.required_windows_seconds) * 2_000
         self._price_samples = [
             item for item in self._price_samples if item.observed_elapsed_ms >= cutoff
         ]

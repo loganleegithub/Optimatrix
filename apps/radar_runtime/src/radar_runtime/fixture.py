@@ -8,7 +8,15 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from market_tape import CanonicalEvent, EventKind, write_capture
+from market_tape import (
+    CanonicalEvent,
+    EventKind,
+    MarketTapeReducer,
+    canonical_digest,
+    catalog_generation_identity,
+    instrument_metadata_identity,
+    write_capture,
+)
 from options_domain import OptionQuote, build_surface_summary
 from shadow_engine import build_outcome_path, mature_outcome, open_position
 from short_vol_radar import (
@@ -149,6 +157,62 @@ def build_fixture_events() -> tuple[CanonicalEvent, ...]:
                 "catalog",
             )
         )
+    reducer = MarketTapeReducer()
+    for event in events:
+        reducer.ingest(event)
+    catalog_instruments = tuple(
+        sorted(reducer.snapshot().instruments, key=lambda item: item.instrument_name)
+    )
+    catalog_names = tuple(item.instrument_name for item in catalog_instruments)
+    catalog_sources = tuple(item.source_capture_seq for item in catalog_instruments)
+    catalog_metadata_digest = canonical_digest(
+        tuple(instrument_metadata_identity(item) for item in catalog_instruments)
+    )
+    catalog_scope = "BTC_USDC_LINEAR_OPTIONS_DECISION_BUFFER"
+    catalog_generation_id = catalog_generation_identity(
+        scope=catalog_scope,
+        source_at_ms=start_ms,
+        reference_instrument=REFERENCE,
+        instrument_names=catalog_names,
+        instrument_source_capture_seqs=catalog_sources,
+        metadata_set_digest=catalog_metadata_digest,
+    )
+    sequence += 1
+    events.append(
+        _event(
+            sequence,
+            start_ms,
+            EventKind.CATALOG_SNAPSHOT,
+            None,
+            {
+                "timestamp": start_ms,
+                "scope": catalog_scope,
+                "reference_instrument": REFERENCE,
+                "instrument_names": catalog_names,
+                "instrument_source_capture_seqs": catalog_sources,
+                "metadata_set_digest": catalog_metadata_digest,
+                "generation_id": catalog_generation_id,
+            },
+            "public/get_instruments",
+        )
+    )
+    sequence += 1
+    events.append(
+        _event(
+            sequence,
+            start_ms,
+            EventKind.SCHEDULED_BLOCK_STATE,
+            None,
+            {
+                "state": "CLEAR",
+                "label": None,
+                "source_id": "FIXTURE_AUTHORIZED_SCHEDULE",
+                "valid_from_ms": start_ms,
+                "valid_until_ms": start_ms + 2 * 3_600_000,
+            },
+            "fixture/scheduled_block",
+        )
+    )
     trade_sequence = 0
     for minute in range(61):
         at_ms = start_ms + minute * 60_000
@@ -263,6 +327,61 @@ def build_fixture_events() -> tuple[CanonicalEvent, ...]:
                 f"ticker.{name}.agg2",
             )
         )
+    prior_instrument_events = tuple(
+        item for item in events if item.event_kind is EventKind.INSTRUMENT
+    )
+    for prior in prior_instrument_events:
+        sequence += 1
+        metadata: object = json.loads(prior.raw_payload)
+        if not isinstance(metadata, dict):
+            raise RuntimeError("fixture instrument metadata is invalid")
+        events.append(
+            _event(
+                sequence,
+                final_ms,
+                EventKind.INSTRUMENT,
+                prior.instrument_name,
+                metadata,
+                "catalog",
+            )
+        )
+    final_reducer = MarketTapeReducer()
+    for event in events:
+        final_reducer.ingest(event)
+    final_catalog_instruments = tuple(
+        sorted(final_reducer.snapshot().instruments, key=lambda item: item.instrument_name)
+    )
+    final_catalog_sources = tuple(item.source_capture_seq for item in final_catalog_instruments)
+    final_catalog_metadata_digest = canonical_digest(
+        tuple(instrument_metadata_identity(item) for item in final_catalog_instruments)
+    )
+    final_catalog_generation_id = catalog_generation_identity(
+        scope=catalog_scope,
+        source_at_ms=final_ms,
+        reference_instrument=REFERENCE,
+        instrument_names=catalog_names,
+        instrument_source_capture_seqs=final_catalog_sources,
+        metadata_set_digest=final_catalog_metadata_digest,
+    )
+    sequence += 1
+    events.append(
+        _event(
+            sequence,
+            final_ms,
+            EventKind.CATALOG_SNAPSHOT,
+            None,
+            {
+                "timestamp": final_ms,
+                "scope": catalog_scope,
+                "reference_instrument": REFERENCE,
+                "instrument_names": catalog_names,
+                "instrument_source_capture_seqs": final_catalog_sources,
+                "metadata_set_digest": final_catalog_metadata_digest,
+                "generation_id": final_catalog_generation_id,
+            },
+            "public/get_instruments",
+        )
+    )
     sequence += 1
     events.append(
         _event(

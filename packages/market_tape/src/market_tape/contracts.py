@@ -12,6 +12,8 @@ from enum import Enum, StrEnum
 
 class EventKind(StrEnum):
     INSTRUMENT = "INSTRUMENT"
+    CATALOG_SNAPSHOT = "CATALOG_SNAPSHOT"
+    SCHEDULED_BLOCK_STATE = "SCHEDULED_BLOCK_STATE"
     SUBSCRIPTION_START = "SUBSCRIPTION_START"
     TICKER = "TICKER"
     TRADE = "TRADE"
@@ -143,6 +145,108 @@ class Instrument:
             raise ValueError("instrument commission cannot be negative")
 
 
+def instrument_metadata_identity(instrument: Instrument) -> dict[str, object]:
+    """Return canonical economic metadata without capture-local lineage."""
+
+    return {
+        "instrument_name": instrument.instrument_name,
+        "kind": instrument.kind,
+        "active": instrument.active,
+        "contract_size": instrument.contract_size,
+        "min_trade_amount": instrument.min_trade_amount,
+        "amount_step": instrument.amount_step,
+        "taker_commission": instrument.taker_commission,
+        "expiration_timestamp_ms": instrument.expiration_timestamp_ms,
+        "strike": instrument.strike,
+        "option_kind": instrument.option_kind,
+    }
+
+
+def catalog_generation_identity(
+    *,
+    scope: str,
+    source_at_ms: int,
+    reference_instrument: str,
+    instrument_names: tuple[str, ...],
+    instrument_source_capture_seqs: tuple[int, ...],
+    metadata_set_digest: str,
+) -> str:
+    return canonical_digest(
+        {
+            "scope": scope,
+            "source_at_ms": source_at_ms,
+            "reference_instrument": reference_instrument,
+            "instrument_names": instrument_names,
+            "instrument_source_capture_seqs": instrument_source_capture_seqs,
+            "metadata_set_digest": metadata_set_digest,
+        }
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogSnapshot:
+    capture_seq: int
+    source_at_ms: int
+    observed_elapsed_ms: int
+    scope: str
+    reference_instrument: str
+    instrument_names: tuple[str, ...]
+    instrument_source_capture_seqs: tuple[int, ...]
+    metadata_set_digest: str
+    generation_id: str
+    instruments: tuple[Instrument, ...]
+
+    def __post_init__(self) -> None:
+        if self.capture_seq <= 0 or self.source_at_ms <= 0 or self.observed_elapsed_ms < 0:
+            raise ValueError("catalog snapshot sequence and times are invalid")
+        if not self.scope:
+            raise ValueError("catalog snapshot scope is required")
+        if not self.reference_instrument or self.reference_instrument not in self.instrument_names:
+            raise ValueError("catalog snapshot reference membership is invalid")
+        if not self.instrument_names or not self.metadata_set_digest or not self.generation_id:
+            raise ValueError("catalog snapshot cannot be empty")
+        if tuple(sorted(set(self.instrument_names))) != self.instrument_names:
+            raise ValueError("catalog instrument names must be sorted and unique")
+        if (
+            len(set(self.instrument_source_capture_seqs))
+            != len(self.instrument_source_capture_seqs)
+            or len(self.instrument_source_capture_seqs) != len(self.instrument_names)
+            or any(
+                item <= 0 or item >= self.capture_seq
+                for item in self.instrument_source_capture_seqs
+            )
+        ):
+            raise ValueError("catalog instrument source sequences are invalid")
+        if (
+            tuple(sorted(self.instruments, key=lambda item: item.instrument_name))
+            != self.instruments
+        ):
+            raise ValueError("catalog metadata must be sorted")
+        if tuple(item.instrument_name for item in self.instruments) != self.instrument_names:
+            raise ValueError("catalog names and metadata membership disagree")
+        if tuple(item.source_capture_seq for item in self.instruments) != (
+            self.instrument_source_capture_seqs
+        ):
+            raise ValueError("catalog metadata lineage disagrees")
+        if any(not item.active for item in self.instruments):
+            raise ValueError("catalog generation contains inactive metadata")
+        expected_metadata_digest = canonical_digest(
+            tuple(instrument_metadata_identity(item) for item in self.instruments)
+        )
+        if self.metadata_set_digest != expected_metadata_digest:
+            raise ValueError("catalog metadata digest disagrees")
+        expected_generation = catalog_generation_identity(
+            scope=self.scope,
+            source_at_ms=self.source_at_ms,
+            reference_instrument=self.reference_instrument,
+            instrument_names=self.instrument_names,
+            instrument_source_capture_seqs=self.instrument_source_capture_seqs,
+            metadata_set_digest=self.metadata_set_digest,
+        )
+        if self.generation_id != expected_generation:
+            raise ValueError("catalog generation identity disagrees")
+
+
 @dataclass(frozen=True, slots=True)
 class TickerFact:
     instrument_name: str
@@ -243,6 +347,7 @@ class MarketTapeSnapshot:
     as_of_capture_seq: int
     collector_as_of_ms: int
     instruments: tuple[Instrument, ...]
+    catalog_snapshot: CatalogSnapshot | None
     tickers: tuple[TickerFact, ...]
     trades: tuple[TradeFact, ...]
     books: tuple[BookState, ...]
