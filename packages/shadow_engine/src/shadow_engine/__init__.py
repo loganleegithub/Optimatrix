@@ -10,6 +10,17 @@ from shadow_engine.contracts import (
     ShadowPosition,
 )
 from shadow_engine.engine import build_outcome_path, mature_outcome, open_position
+from shadow_engine.run import (
+    NO_TRADE_COMPARATOR_ID,
+    OPPORTUNITY_RECORD_TYPE,
+    RUN_CONTRACT_ID,
+    RUN_RECEIPT_TYPE,
+    AdmissionClass,
+    MaturityClass,
+    OpportunitySummary,
+    RunAccounting,
+    classify_admission,
+)
 from shadow_engine.truth import (
     EXECUTION_EVIDENCE_CLASS,
     OUTCOME_CONTRACT_DIGEST,
@@ -39,16 +50,23 @@ from shadow_engine.truth import (
 
 __all__ = [
     "EXECUTION_EVIDENCE_CLASS",
+    "NO_TRADE_COMPARATOR_ID",
+    "OPPORTUNITY_RECORD_TYPE",
     "OUTCOME_CONTRACT_DIGEST",
     "OUTCOME_CONTRACT_ID",
     "OUTCOME_FACT_SEAL_TYPE",
     "OUTCOME_RECEIPT_TYPE",
     "POST_EXIT_COUNTERFACTUAL",
+    "RUN_CONTRACT_ID",
+    "RUN_RECEIPT_TYPE",
     "SHADOW_ENTRY_RECEIPT_TYPE",
+    "AdmissionClass",
     "CloseObservationStatus",
     "ExitReason",
     "MaturedOutcome",
+    "MaturityClass",
     "ObservedOutcome",
+    "OpportunitySummary",
     "OutcomeClosePoint",
     "OutcomeObservation",
     "OutcomePath",
@@ -57,6 +75,7 @@ __all__ = [
     "OutcomeReceipt",
     "OutcomeStatus",
     "OutcomeTruthPath",
+    "RunAccounting",
     "ShadowAdmission",
     "ShadowAdmissionResult",
     "ShadowEntryReceipt",
@@ -65,6 +84,7 @@ __all__ = [
     "TruthOutcomeStatus",
     "admit_shadow",
     "build_outcome_path",
+    "classify_admission",
     "entry_receipt_payload",
     "evaluate_outcome",
     "mature_outcome",

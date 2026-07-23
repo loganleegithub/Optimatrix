@@ -6,7 +6,7 @@ import json
 import statistics
 import time
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from itertools import pairwise
@@ -713,9 +713,23 @@ def replay_payload(
 
 
 class _LiveSession:
-    def __init__(self) -> None:
-        self._started_monotonic_ns = time.monotonic_ns()
+    def __init__(
+        self,
+        *,
+        before_event: Callable[[CanonicalEvent], None] | None = None,
+        after_event: Callable[[CanonicalEvent, DecisionFrame | None], None] | None = None,
+        retain_events: bool = True,
+        started_monotonic_ns: int | None = None,
+    ) -> None:
+        self._started_monotonic_ns = (
+            time.monotonic_ns() if started_monotonic_ns is None else started_monotonic_ns
+        )
         self.events: list[CanonicalEvent] = []
+        self._before_event = before_event
+        self._after_event = after_event
+        self._retain_events = retain_events
+        self._next_capture_seq = 1
+        self._last_event: CanonicalEvent | None = None
         self.projector = RadarProjector()
         self.ever_observed_complete_60m = False
         self.last_trade_seq: int | None = None
@@ -747,7 +761,7 @@ class _LiveSession:
         received = received_at_ms if received_at_ms is not None else clock.received_at_ms
         elapsed = elapsed_ms if elapsed_ms is not None else clock.elapsed_ms
         event = CanonicalEvent(
-            capture_seq=len(self.events) + 1,
+            capture_seq=self._next_capture_seq,
             collector_received_at_ms=received,
             collector_elapsed_ms=elapsed,
             exchange_timestamp_ms=exchange_timestamp_ms,
@@ -756,11 +770,18 @@ class _LiveSession:
             instrument_name=instrument_name,
             raw_payload=_payload(value),
         )
+        if self._before_event is not None:
+            self._before_event(event)
         frame = self.projector.ingest(event)
-        self.events.append(event)
+        if self._retain_events:
+            self.events.append(event)
+        self._last_event = event
+        self._next_capture_seq += 1
         self.ever_observed_complete_60m = self.ever_observed_complete_60m or bool(
             frame is not None and _complete_60m(frame)
         )
+        if self._after_event is not None:
+            self._after_event(event, frame)
         return event
 
     def record_catalog_generation(
@@ -837,8 +858,9 @@ class _LiveSession:
         channel: str,
         received_at_ms: int,
         elapsed_ms: int | None = None,
-    ) -> None:
-        next_capture_seq = len(self.events) + 1
+        acquisition_lineage: Mapping[str, object] | None = None,
+    ) -> CanonicalEvent | None:
+        next_capture_seq = self._next_capture_seq
         price_index = value.get("price_index")
         maintenance = self._platform_maintenance
         maintenance_capture_seq = self._platform_maintenance_capture_seq
@@ -859,7 +881,7 @@ class _LiveSession:
             if price_index is not None:
                 if price_index != "btc_usdc":
                     if raw_maintenance is None:
-                        return
+                        return None
                 else:
                     raw_index_locked = value.get("locked")
                     if not isinstance(raw_index_locked, bool):
@@ -904,18 +926,20 @@ class _LiveSession:
                 }
             )
         )
-        self._record(
+        payload: dict[str, object] = {
+            "state": state,
+            "locked": locked,
+            "price_index": price_index,
+            "maintenance": maintenance,
+            "index_locked": index_locked,
+            "status_capture_seq": status_capture_seq,
+            "source_capture_seqs": lineage,
+        }
+        payload.update(acquisition_lineage or {})
+        event = self._record(
             EventKind.PLATFORM_STATE,
             channel,
-            {
-                "state": state,
-                "locked": locked,
-                "price_index": price_index,
-                "maintenance": maintenance,
-                "index_locked": index_locked,
-                "status_capture_seq": status_capture_seq,
-                "source_capture_seqs": lineage,
-            },
+            payload,
             exchange_timestamp_ms=_integer(value.get("timestamp")),
             received_at_ms=received_at_ms,
             elapsed_ms=elapsed_ms,
@@ -925,28 +949,36 @@ class _LiveSession:
         self._platform_index_locked = index_locked
         self._platform_index_capture_seq = index_capture_seq
         self._platform_status_capture_seq = status_capture_seq
+        return event
 
     def record_subscription_start(
         self,
         *,
         received_at_ms: int,
         elapsed_ms: int | None = None,
-    ) -> None:
+        platform_acquisition_lineage: Mapping[str, object] | None = None,
+    ) -> tuple[CanonicalEvent, ...]:
+        events: list[CanonicalEvent] = []
         for stream, channel in (
             ("reference_price", f"ticker.{REFERENCE}.agg2"),
             ("reference_trade", f"trades.{REFERENCE}.agg2"),
             ("platform_state", "platform_state"),
         ):
+            payload: dict[str, object] = {"stream": stream, "channel": channel}
+            if stream == "platform_state":
+                payload.update(platform_acquisition_lineage or {})
             event = self._record(
                 EventKind.SUBSCRIPTION_START,
                 "control",
-                {"stream": stream, "channel": channel},
+                payload,
                 received_at_ms=received_at_ms,
                 elapsed_ms=elapsed_ms,
             )
+            events.append(event)
             if stream == "platform_state":
                 self._platform_status_capture_seq = None
                 self._platform_subscription_capture_seq = event.capture_seq
+        return tuple(events)
 
     def record_reconnect(
         self,
@@ -1099,19 +1131,23 @@ class _LiveSession:
             )
 
     def live_projection(self) -> RadarProjection:
-        if not self.events:
+        if self._last_event is None:
             raise RuntimeError("live capture produced no DecisionFrame")
         current = self.projector.finalize()
         evaluation = evaluate_radar_evidence(current)
         ever_observed_complete_60m = self.ever_observed_complete_60m or _complete_60m(current)
         return RadarProjection(
-            final_event_capture_seq=self.events[-1].capture_seq,
+            final_event_capture_seq=self._last_event.capture_seq,
             frame=current,
             decision=evaluation.decision,
             evaluation=evaluation,
             current_complete_60m=_complete_60m(current),
             ever_observed_complete_60m=ever_observed_complete_60m,
         )
+
+    @property
+    def last_event(self) -> CanonicalEvent | None:
+        return self._last_event
 
 
 def _rpc(connection: Connection, request_id: int, method: str, params: object) -> None:
