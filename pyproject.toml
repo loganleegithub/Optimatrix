@@ -13,6 +13,7 @@ dependencies = ["websockets==16.1.1"]
 
 [project.scripts]
 optimatrix-radar = "radar_runtime.cli:main"
+optimatrix-outcome = "radar_runtime.outcome_cli:main"
 
 [tool.setuptools]
 packages = [
