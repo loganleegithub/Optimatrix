@@ -95,6 +95,67 @@ already authorized boundedness, causal durability, future-platform acquisition, 
 exposure, and attestation/non-proof boundaries; permission, implemented capability, stage, and
 sole authorized closure do not change.
 
+## Bounded parallel addendum — `UNKNOWN_DENOMINATOR_AUDIT`
+
+This addendum authorizes only a read-only report projection on
+`codex/unknown-denominator-audit`. It does not create a second ACTIVE task and does not change the
+Fixed-Policy run, Decision, admission, Entry, Outcome, maturity, or receipt semantics.
+
+### Addendum change declarations
+
+**Market/Decision input contract change:** NONE — consume only already sealed opportunity and
+Decision receipt fields; do not change canonical facts, projection, readiness, freshness,
+missingness, lineage, or executable quote meaning.
+
+**Decision Policy change:** NONE — do not change structures, horizons, formulas, thresholds,
+ranking, reserves, vetoes, predicates, or actions.
+
+**Outcome/evaluation contract change:** NONE — do not change admission, exposure, exit, maturity,
+PnL, `NO_TRADE`, aggregate, or Outcome meanings.
+
+**Stage/authorization change:** NONE — this remains offline reporting inside `PUBLIC_SHADOW`; it
+does not authorize qualification, Challenger, promotion, private/account data, execution, or
+capital.
+
+### Addendum assertion and output
+
+**Assertion:** the sealed denominator can show why each due slot was or was not available without
+turning missing evidence into zero or collapsing simultaneous blockers into one narrative label.
+
+For every due slot, `UNKNOWN_DENOMINATOR_AUDIT.json` reports:
+
+- the exact unique blocker set derived from the sealed
+  `readiness.frame_incomplete_reasons` and positive
+  `evaluation.assessment_unavailable_reason_counts`; a no-event slot retains its exact
+  opportunity reason;
+- `sole_blocker` only when that set has exactly one member; `co_blockers` contains the complete
+  set only when two or more blockers coexist;
+- Decision availability as the sealed `readiness.frame_complete` classification;
+- quote coverage as
+  `option_quote_count / max(catalog.instrument_count - one required reference instrument, 0)`;
+- assessment availability as `assessment_count / assessment_opportunity_count`.
+
+The Run-level availability rate is
+`available frame-complete due slots / all due slots`. Every rate freezes its numerator and
+denominator. A known zero denominator emits `rate=null` with
+`UNDEFINED_ZERO_DENOMINATOR`; an unavailable denominator emits `rate=null` with
+`UNKNOWN_DENOMINATOR`. No-event, missing quote universe, zero executable structures, and zero
+assessment opportunities are never reported as observed zero market coverage or zero Policy
+value. Numerator and denominator retain the exact ratio; `rate` is only its deterministic
+34-significant-digit, round-half-even decimal rendering. Predicate failures belong to completed
+assessments and are not availability blockers.
+
+### Addendum acceptance and non-claims
+
+- Direct tests cover one sole blocker, multiple simultaneous co-blockers, a no-event UNKNOWN
+  denominator, and zero-denominator/null quote, assessment, and Run availability rates.
+- Focused tests and `make check` pass in the addendum's independent virtual environment.
+- Bundle verification reconstructs the audit from the copied sealed receipts and rejects changed
+  audit or report text.
+- The audit is descriptive only. It does not prove complete market data, executable fills, Policy
+  quality, qualification, profitability, third-party provenance, execution, or capital authority,
+  and it may not rewrite any receipt or historical Decision.
+
 ## Evidence boundary
 
 **Proves:** one predeclared fixed-Policy run accounted for twelve production-public opportunities;
