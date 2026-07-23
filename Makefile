@@ -18,7 +18,7 @@ lint:
 	$(PYTHON) -m ruff check .
 
 type-check:
-	$(PYTHON) -m mypy
+	$(PYTHON) -m mypy packages apps offline_audits tests
 
 test:
 	$(PYTHON) -m pytest
