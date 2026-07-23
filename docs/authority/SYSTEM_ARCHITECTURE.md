@@ -150,13 +150,24 @@ ledger, scheduler, generic storage, qualification, promotion, private/account ac
 ### Current authorized Fixed-Policy public Shadow closure
 
 - one bounded, predeclared production-public run with a fixed Decision input contract, deployed
-  Policy, Outcome contract, cadence, admission rule, and maturity rule;
+  Policy, Outcome contract, initial-origin deadline, hard stop, cadence, admission rule, and
+  maturity rule;
 - the minimum incremental or segmented append-only fact durability required to preserve every due
   opportunity and its eventual maturity or explicit incompleteness;
-- a contemporaneous opportunity journal that makes each due online decision durable before the
-  next cadence boundary; end-of-run batch evaluation is replay evidence, not online Shadow;
+- a contemporaneous opportunity journal that, after each slot cutoff or no-event close, makes that
+  online opportunity durable before any later canonical event is processed or later slot is
+  closed under a frozen bounded monotonic commit-latency gate; one interleaved causal commit chain
+  must bind every later fact/segment seal back to the latest due opportunity and platform-probe
+  control state; process-witness verification does not claim external fsync-time attestation, and
+  end-of-run batch evaluation is replay evidence, not online Shadow;
+- active strictly future platform-proof acquisition after every Entry and after reconnect while an
+  exposure remains open; failed acquisition is `UNKNOWN`, later valid latest-authoritative
+  same-generation proof from a dedicated probe, reconnect bootstrap, or other eligible durable
+  acquisition remains eligible, superseded responses remain noncanonical control anomalies,
+  authoritative acquisition facts enter later DecisionFrames without changing prior Decisions,
+  and an omitted SLA attempt may make the Run incomplete but cannot rewrite a valid Outcome;
 - one immutable `RunReceipt` binding all Decision, Entry, Outcome, zero-activity, anomaly,
-  denominator, and contemporaneous `NO_TRADE=0` comparator;
+  denominator, final nonclosed exposure, and contemporaneous `NO_TRADE=0` comparator;
 - deterministic fresh-process reconstruction of the sealed run and every aggregate.
 
 This authorization does not permit a generic scheduler, daemon, database, service, qualification,

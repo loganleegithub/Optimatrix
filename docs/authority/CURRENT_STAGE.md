@@ -63,11 +63,25 @@ The next product-capability task may only close one bounded, multi-decision prod
 Shadow run on top of the accepted Decision Truth and Outcome Truth contracts:
 
 - freeze the run boundary, declared decision cadence, admission/concurrency rule, deployed Decision
-  input, Policy, Outcome contract, and all runtime-source identities before observing run results;
+  input, Policy, Outcome contract, initial-origin acquisition deadline, invocation hard stop, and
+  all runtime-source identities before observing run results;
 - durably record every due decision opportunity, including incomplete `UNKNOWN`, complete
   `WATCH`/`ABSTAIN`, admitted Entry, immature Outcome, and mature `CLOSED`/`UNEXITABLE`/`UNKNOWN`;
-- persist each due opportunity before the next declared cadence boundary; a post-run batch replay
-  cannot impersonate a Policy decision that was durably made online;
+- after each slot cutoff or no-event close, persist that opportunity before processing any later
+  canonical event or closing a later slot; a post-run batch replay cannot impersonate a Policy
+  decision that was durably made online; freeze a bounded monotonic commit-latency gate rather than
+  claim an event arriving immediately before a cadence boundary was already durable before it;
+  later facts and segment seals must cross-bind the latest due opportunity and platform-probe
+  control state through one interleaved causal commit chain, while process-witness verification
+  remains distinct from unavailable external fsync-time attestation;
+- after every admitted Entry, and after reconnect while exposure remains open, actively request
+  and durably bind the accepted strictly future platform subscription/status proof; a failed
+  attempt remains `UNKNOWN` but cannot veto later valid latest-authoritative same-generation proof
+  from a dedicated probe, reconnect bootstrap, or other eligible durable acquisition; superseded
+  late control responses remain noncanonical control-anomaly evidence and cannot overwrite
+  authoritative platform state; only authoritative acquisition facts enter later DecisionFrames
+  in causal order without changing a frozen prior Decision, while an omitted due SLA attempt may
+  make the Run incomplete but cannot rewrite a valid Outcome;
 - keep the run open through the last possible admission's full maximum Policy horizon plus one
   declared observation tail so that a completed run cannot hide all late Entries as immature;
 - preserve a complete opportunity denominator and contemporaneous `NO_TRADE=0` comparator without
@@ -76,11 +90,14 @@ Shadow run on top of the accepted Decision Truth and Outcome Truth contracts:
   strategy results retain null PnL;
 - add only the incremental or segmented append-only durability required for this bounded run,
   making interruption and incomplete maturity explicit rather than silently dropping records; an
-  interrupted prefix is independently verifiable but is not a completed Run receipt and cannot be
-  resumed or selected as the accepted run based on observed activity or results;
+  interrupted prefix is independently verifiable but is not a completed Run receipt and the
+  runtime cannot resume or automatically retry it; operators may not choose a replacement based
+  on activity or results, but without an external attempt registry the evidence must report
+  `attempt_selection_attested=false` rather than claim it proves that no attempt was discarded;
 - emit one immutable Run receipt binding the run contract, schedule, sealed facts, every
   Decision/Entry/Outcome receipt, maturity partition, zero activity, anomalies, and aggregate
-  descriptive results;
+  descriptive results, including final nonclosed exposure rather than treating
+  `UNKNOWN`/`UNEXITABLE` as an executable exit;
 - independently replay the sealed run in a fresh process and reconstruct every due opportunity,
   receipt, maturity classification, aggregate, and digest.
 
