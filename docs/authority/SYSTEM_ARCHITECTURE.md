@@ -136,7 +136,7 @@ The receipt need not duplicate every structure if it preserves counts, failure s
 selected assessment, and a digest of the deterministic assessment set. Do not create a separate
 scan artifact unless an active task proves an independent consumer needs it.
 
-### Current authorized Outcome Truth closure
+### Implemented Outcome Truth
 
 - one immutable `ShadowEntryReceipt` bound to its accepted Decision, structure, assessment,
   horizon, entry economics, Policy, and causal entry sequence;
@@ -144,14 +144,25 @@ scan artifact unless an active task proves an independent consumer needs it.
   later counterfactual and binding executable close plus control-fact lineage;
 - independent reconstruction from sealed public facts.
 
-These are bounded Outcome Truth artifacts only. Their authorization does not permit a run ledger,
-continuous scheduler, generic storage, qualification, promotion, private/account access, or
-execution. Do not add them until an active task defines their exact semantic contracts and consumes
-them.
+These are bounded Outcome Truth artifacts only. Their implementation does not itself permit a run
+ledger, scheduler, generic storage, qualification, promotion, private/account access, or execution.
+
+### Current authorized Fixed-Policy public Shadow closure
+
+- one bounded, predeclared production-public run with a fixed Decision input contract, deployed
+  Policy, Outcome contract, cadence, admission rule, and maturity rule;
+- the minimum incremental or segmented append-only fact durability required to preserve every due
+  opportunity and its eventual maturity or explicit incompleteness;
+- one immutable `RunReceipt` binding all Decision, Entry, Outcome, zero-activity, anomaly,
+  denominator, and contemporaneous `NO_TRADE=0` comparator;
+- deterministic fresh-process reconstruction of the sealed run and every aggregate.
+
+This authorization does not permit a generic scheduler, daemon, database, service, qualification,
+Policy change, Challenger, promotion, private/account access, or execution. The active task must
+define the exact bounded behavior before implementation.
 
 ### Queued or later stages only
 
-- bounded `RunReceipt` and fixed-Policy comparison artifacts;
 - `ChallengerPackage` and frozen experiment manifest;
 - `QualificationReceipt` and deployment manifest;
 - execution intent, account-risk decision, order, fill, and reconciliation receipts.
@@ -178,10 +189,10 @@ reference another but may not collapse these meanings.
 
 ## Persistence
 
-The current bounded writer is sufficient only for short evidence receipts. A later explicitly
-activated long Shadow closure may add incremental or segmented JSONL durability because it directly
-needs more than warm-up plus the maximum Outcome horizon. This does not authorize a daemon,
-database, generic storage platform, or multi-day scheduler.
+The current bounded writer is sufficient only for short evidence receipts. The authorized
+Fixed-Policy public Shadow closure may add incremental or segmented append-only durability only
+because it directly needs a bounded multi-decision run plus the maximum Outcome horizon. This does
+not authorize a daemon, database, generic storage platform, or unbounded scheduler.
 
 ## Architecture change rule
 

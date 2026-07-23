@@ -146,8 +146,8 @@ def test_current_stage_authorizes_exactly_one_next_closure() -> None:
 
     marker = "**Sole authorized next product-capability closure:**"
     assert current_stage.count(marker) == 1
-    assert f"{marker} `OUTCOME_TRUTH`" in current_stage
-    assert "**Implemented capability:** `DECISION_TRUTH`" in current_stage
+    assert f"{marker} `FIXED_POLICY_PUBLIC_SHADOW`" in current_stage
+    assert "**Implemented capability:** `OUTCOME_TRUTH`" in current_stage
     assert "## Queued sequence — not authorized" in current_stage
 
 

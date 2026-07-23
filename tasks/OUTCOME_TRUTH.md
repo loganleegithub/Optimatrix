@@ -1,6 +1,6 @@
 # Task — Outcome Truth
 
-**Status:** ACTIVE
+**Status:** HUMAN BUSINESS ACCEPTED — AUTHORITY HANDOFF AUTHORIZED
 
 **Product/stage:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md) /
@@ -12,6 +12,11 @@
 **Base commit:** `809c431e2bbe6873bc1ecec78ea24422710ca0bb`
 
 **Target branch/PR:** `codex/outcome-truth` / Draft PR to `main`
+
+**Human acceptance:** accepted on 2026-07-23 from implementation commit
+`62f9453503bf585a1c0aa891d40c69f90c02e83a` and the independently verified
+`OPTIMATRIX_OUTCOME_TRUTH_EVIDENCE_BUNDLE` archive with SHA-256
+`c3099dfa62575a66854f8d66f1c5a2d0c9701bb445b7ac91a27f7db56e56bcd3`.
 
 ## Business closure
 
@@ -53,8 +58,10 @@ reserve, veto, and candidate predicate.
 entry-zero excursion, executable observed PnL, control-fact lineage, and actual/counterfactual
 separation.
 
-**Stage/authorization change:** NONE — remain inside bounded `PUBLIC_SHADOW`; do not update
-`CURRENT_STAGE.md`, activate a fixed-Policy run, or grant private/account/execution authority.
+**Stage/authorization change:** APPROVED after human business acceptance — record
+`OUTCOME_TRUTH` as implemented and activate only `FIXED_POLICY_PUBLIC_SHADOW` as the sole next
+product-capability closure. Remain inside `PUBLIC_SHADOW`; do not grant qualification,
+private/account, execution, promotion, or capital authority.
 
 ## Evidence boundary
 
@@ -72,15 +79,18 @@ promotion, execution, account access, or capital authority.
 
 **In:** one fixed cutoff; exact Decision prefix; strictly future fact suffix; fail-closed admission;
 Entry and Outcome receipts; actual/counterfactual split; platform-control and quote lineage;
-executable close/PnL; Outcome-specific runtime identity, replay, bundle, hashes, and report.
+executable close/PnL; Outcome-specific runtime identity, replay, bundle, hashes, report; and, only
+after explicit human acceptance, the authority handoff and task archival required to record
+`OUTCOME_TRUTH` as implemented and activate the next bounded closure.
 
 **Out:** Decision input or Policy changes; repeated scanning; retrying after reconnect or no
-candidate; cadence; Run receipt; opportunity denominator; `NO_TRADE`; generic segmented storage;
-database; service; Challenger; qualification; promotion; private API; order; fill; execution;
-capital; stage advancement.
+candidate; implementation of cadence, Run receipt, opportunity denominator, `NO_TRADE`, generic
+segmented storage, database, service, Challenger, qualification, promotion, private API, order,
+fill, execution, or capital.
 
 **Owning module/artifact:** `shadow_engine` Outcome contract and pure evaluation;
-`radar_runtime` bounded Outcome composition and evidence; immutable Entry/Outcome JSON receipts.
+`radar_runtime` bounded Outcome composition and evidence; immutable Entry/Outcome JSON receipts;
+and the post-acceptance authority handoff in `CURRENT_STAGE.md`.
 
 ## Contract
 
@@ -131,6 +141,9 @@ declared above; the suffix seal is closure-specific and is not a generic capture
    external-source attestation false. Bundle verification tolerates a different audit Git commit
    only when scoped source digests are unchanged and exactly reconstructs the canonical Chinese
    report, rejecting semantically altered text even after hashes are recomputed.
+7. After explicit human business acceptance, the same PR records the exact authority handoff,
+   remains inside `PUBLIC_SHADOW`, archives this completed task from `main`, and does not implement
+   the newly authorized closure.
 
 ### Required commands
 
@@ -177,8 +190,10 @@ facts are never committed.
 `DERIBIT_PUBLIC_SHORT_VOL_DECISION_INPUT`, and
 `PUBLIC_SHADOW_SHORT_VOL_OUTCOME_TRUTH`; exact content digests are receipt fields.
 
-**Commit/PR:** commit and push only `codex/outcome-truth`, then open a Draft PR to `main`; stop
-before readiness, merge, task archival, ref deletion, or authority advancement.
+**Commit/PR:** after explicit human acceptance, commit and push the authority handoff on
+`codex/outcome-truth`, mark the existing PR ready, merge it to `main`, archive this task in a
+separate deletion commit, and verify local plus remote state. Do not implement the next closure in
+this PR.
 
 **Unknowns and non-claims:** synthetic success is not production Outcome evidence; public zero is
 not failure and not profitability; visible quotes are not fills; replay equality proves
@@ -188,5 +203,6 @@ reconstruction only.
 
 The contracts, receipts, sealed facts, dual evidence, independent replay, focused tests, full gate,
 hash verification, and Draft PR exist; every zero/UNKNOWN and limitation is honest; Decision source
-and Policy remain unchanged; repository and remote scope contain only this closure; and no later
-stage is claimed or activated.
+and Policy remain unchanged; human acceptance and the exact authority handoff are recorded in Git;
+the completed task is removed before `main`; and no implementation or authority beyond the sole
+next Fixed-Policy public Shadow closure is added.

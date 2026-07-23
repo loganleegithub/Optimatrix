@@ -4,9 +4,9 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Implemented capability:** `DECISION_TRUTH`
+**Implemented capability:** `OUTCOME_TRUTH`
 
-**Sole authorized next product-capability closure:** `OUTCOME_TRUTH`
+**Sole authorized next product-capability closure:** `FIXED_POLICY_PUBLIC_SHADOW`
 
 ## Authority
 
@@ -31,65 +31,67 @@ The repository currently implements:
 - refreshed decision-as-of 0–72h catalog generations bound to exact same-generation metadata;
 - durable `SHORT_VOL_DECISION_RECEIPT` evidence with readiness, complete opportunity accounting,
   Git provenance, authoritative runtime-source identity, and deterministic fresh-process replay;
-- future-only Shadow primitives verified with synthetic tests.
+- immutable `SHORT_VOL_SHADOW_ENTRY_RECEIPT`, `SHORT_VOL_OUTCOME_FACT_SEAL`, and
+  `SHORT_VOL_OUTCOME_RECEIPT` evidence;
+- strict post-entry causality, entry-zero excursion, actual-exposure versus counterfactual
+  separation, executable visible-quote close economics, and complete market/control lineage;
+- Outcome-specific runtime identity, byte-exact prefix/suffix sealing, fresh-process reconstruction,
+  and hash-verifiable synthetic plus production-public evidence bundles.
 
-This baseline proves the accepted bounded Decision Truth closure. It does not prove continuous
-acquisition, a complete final frame in every market run, real Shadow Outcomes, Policy
-qualification, ML, promotion, execution, or profitability. No production capture is retained in
-the repository as current evidence.
+This baseline proves the accepted bounded Decision Truth and Outcome Truth closures. It does not
+prove continuous acquisition, a complete final frame in every market run, a nonzero
+production-public Entry or matured Outcome, Policy quality or qualification, ML, promotion,
+execution, or profitability. Accepted production evidence remains outside the repository; no
+production capture is committed as current source.
 
 ## Acceptance blockers
 
 These are product-truth gaps, not permission for broad refactoring:
 
-1. Matured Outcome can include touch/excursion after selected exit and does not use entry as the
-   zero excursion baseline.
-2. Outcome close lineage does not include all platform-state control facts used for tradability.
-3. `UNEXITABLE_AT_HORIZON` conflates a conservative maximum-loss penalty with observed executable
-   PnL.
-4. There is no durable Shadow entry receipt freezing the accepted Decision, entry economics,
-   assessment, horizon, Policy, and strictly future causal boundary.
-5. Runtime has no declared decision cadence, bounded Run receipt, opportunity denominator, mature
-   horizon accounting, or `NO_TRADE` comparison.
-6. The bounded collector retains the full event set in memory before final capture writing.
+1. Runtime has no predeclared bounded run interval, decision cadence, admission/concurrency rule,
+   or deterministic accounting for every due opportunity.
+2. The bounded collector retains the full event set in memory before final capture writing; it has
+   no incremental, interruption-evident durability suitable for a multi-decision bounded run and
+   its maximum Outcome horizon.
+3. There is no immutable Run receipt binding the fixed Policy, schedule, opportunity denominator,
+   Decision/Entry/Outcome maturity partitions, `NO_TRADE=0` comparison, sealed facts, and
+   independent replay.
 
-## Sole authorized product-capability closure: Outcome Truth
+## Sole authorized product-capability closure: Fixed-Policy public Shadow
 
-The next product-capability task may only close one bounded, strictly future public-Shadow Outcome
-truth loop on top of the accepted Decision Truth contract:
+The next product-capability task may only close one bounded, multi-decision production-public
+Shadow run on top of the accepted Decision Truth and Outcome Truth contracts:
 
-- freeze one immutable Shadow entry from its exact Decision receipt, selected structure,
-  assessment, horizon, quantity, entry economics, fees, maximum loss, Policy, and causal sequence;
-- admit entry and Outcome facts only when their required evidence is complete; valid zero admission
-  and `UNKNOWN` remain first-class results;
-- begin observed excursion at zero at entry, use only facts strictly after entry, and end actual
-  exposure at the selected exit;
-- retain any observation after actual exit only as a separately labeled counterfactual;
-- use visible executable close debit, fees, quantity, and depth, preserving `UNKNOWN` or
-  `UNEXITABLE` instead of presenting a maximum-loss penalty as observed executable PnL;
-- bind every market and platform-control fact used for entry, tradability, close, touch, excursion,
-  and exit to one immutable Outcome receipt;
-- independently reconstruct the entry and Outcome from sealed public facts without changing the
-  accepted Decision input contract or deployed Policy.
+- freeze the run boundary, declared decision cadence, admission/concurrency rule, deployed Decision
+  input, Policy, Outcome contract, and all runtime-source identities before observing run results;
+- durably record every due decision opportunity, including incomplete `UNKNOWN`, complete
+  `WATCH`/`ABSTAIN`, admitted Entry, immature Outcome, and mature `CLOSED`/`UNEXITABLE`/`UNKNOWN`;
+- preserve a complete opportunity denominator and contemporaneous `NO_TRADE=0` comparator without
+  changing thresholds, retrying to manufacture activity, or calling the run qualification;
+- add only the incremental or segmented append-only durability required for this bounded run,
+  making interruption and incomplete maturity explicit rather than silently dropping records;
+- emit one immutable Run receipt binding the run contract, schedule, sealed facts, every
+  Decision/Entry/Outcome receipt, maturity partition, zero activity, anomalies, and aggregate
+  descriptive results;
+- independently replay the sealed run in a fresh process and reconstruct every due opportunity,
+  receipt, maturity classification, aggregate, and digest.
 
-This permission authorizes only the bounded Outcome Truth closure. It does not authorize a
-continuous or fixed-Policy Shadow run, cadence automation, generic persistence, `NO_TRADE`
-qualification, Challenger work, promotion, private/account access, or execution. Create a semantic
-active task before implementing it.
+This permission authorizes only one bounded fixed-Policy production-public Shadow run and the
+minimum durability it consumes. It does not authorize an unbounded daemon or service, Policy
+tuning, qualification, Challenger work, promotion, private/account access, execution, or capital.
+Create a semantic active task before implementing it.
 
 Bounded maintenance, security, dependency, or authority work may proceed on explicit request when
 its declarations show that it does not implement or advance a queued product capability.
 
 ## Queued sequence — not authorized
 
-After Outcome Truth is merged and this document is explicitly advanced, the intended sequence is:
+After the Fixed-Policy public Shadow closure is accepted and this document is explicitly advanced,
+the intended sequence is:
 
-1. **Fixed-Policy public Shadow run:** incremental durability, declared cadence/admission, immutable
-   Decision/Entry/Outcome/Run receipts, opportunity denominators, mature horizons, `NO_TRADE=0`,
-   independent replay.
-2. **Challenger research and qualification:** only after a usable fixed-Policy baseline and a
+1. **Challenger research and qualification:** only after a usable fixed-Policy baseline and a
    separately approved qualification contract.
-3. **Promotion:** only after a valid independently verified Qualification receipt and a separately
+2. **Promotion:** only after a valid independently verified Qualification receipt and a separately
    approved promotion envelope. Execution and capital authority remain separate after promotion.
 
 A queued closure is not an active task. Activate exactly one by updating this authority in an
@@ -98,7 +100,7 @@ explicitly approved change after the preceding closure is accepted.
 ## Forbidden under the current boundary
 
 - learned models, research automation, automatic promotion, or evolution;
-- continuous or long-running Shadow operation, automated admission cadence, or qualification;
+- unbounded or service-operated Shadow, undeclared cadence/admission, or qualification;
 - databases, feature stores, model registries, workflow engines, or services;
 - generic multi-market or multi-strategy architecture;
 - private/test/account APIs, credentials, balances, margin, positions, orders, fills, settlement,

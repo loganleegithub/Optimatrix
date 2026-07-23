@@ -26,10 +26,10 @@ Repository-owned contracts, tasks, and receipts use semantic identities and cont
 ordinal product generations. External protocols, dependencies, and build tools retain the exact
 versions required for compatibility; those versions grant no product authority.
 
-The bounded Deribit capture/replay foundation and accepted Decision Truth closure are implemented.
-Outcome Truth is the sole authorized next closure. A continuous fixed-Policy Shadow run,
-qualification, Challenger research, promotion, private/account access, and execution are not
-implemented or authorized.
+The bounded Deribit capture/replay foundation plus the accepted Decision Truth and Outcome Truth
+closures are implemented. One bounded Fixed-Policy public Shadow run is the sole authorized next
+closure; it is not yet implemented. Qualification, Challenger research, promotion,
+private/account access, and execution remain unauthorized.
 
 ## Repository shape
 
@@ -105,7 +105,7 @@ authority.
 
 ## Bounded Outcome Truth evidence
 
-`optimatrix-outcome` is the bounded evidence CLI for the authorized Outcome Truth closure. Every
+`optimatrix-outcome` is the bounded evidence CLI for the accepted Outcome Truth closure. Every
 output or archive path must be fresh and previously nonexistent. It fixes one Decision cutoff at
 the first canonical event after the initial required subscriptions have accumulated 3,600 seconds
 of collector-elapsed time; an incomplete Decision, `WATCH`, `ABSTAIN`, or reconnect does not move
