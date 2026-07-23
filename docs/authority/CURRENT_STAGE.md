@@ -66,10 +66,18 @@ Shadow run on top of the accepted Decision Truth and Outcome Truth contracts:
   input, Policy, Outcome contract, and all runtime-source identities before observing run results;
 - durably record every due decision opportunity, including incomplete `UNKNOWN`, complete
   `WATCH`/`ABSTAIN`, admitted Entry, immature Outcome, and mature `CLOSED`/`UNEXITABLE`/`UNKNOWN`;
+- persist each due opportunity before the next declared cadence boundary; a post-run batch replay
+  cannot impersonate a Policy decision that was durably made online;
+- keep the run open through the last possible admission's full maximum Policy horizon plus one
+  declared observation tail so that a completed run cannot hide all late Entries as immature;
 - preserve a complete opportunity denominator and contemporaneous `NO_TRADE=0` comparator without
-  changing thresholds, retrying to manufacture activity, or calling the run qualification;
+  changing thresholds, retrying to manufacture activity, or calling the run qualification; only
+  the no-position comparator has defined zero PnL, while `UNKNOWN`, `UNEXITABLE`, and immature
+  strategy results retain null PnL;
 - add only the incremental or segmented append-only durability required for this bounded run,
-  making interruption and incomplete maturity explicit rather than silently dropping records;
+  making interruption and incomplete maturity explicit rather than silently dropping records; an
+  interrupted prefix is independently verifiable but is not a completed Run receipt and cannot be
+  resumed or selected as the accepted run based on observed activity or results;
 - emit one immutable Run receipt binding the run contract, schedule, sealed facts, every
   Decision/Entry/Outcome receipt, maturity partition, zero activity, anomalies, and aggregate
   descriptive results;

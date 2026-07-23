@@ -153,6 +153,8 @@ ledger, scheduler, generic storage, qualification, promotion, private/account ac
   Policy, Outcome contract, cadence, admission rule, and maturity rule;
 - the minimum incremental or segmented append-only fact durability required to preserve every due
   opportunity and its eventual maturity or explicit incompleteness;
+- a contemporaneous opportunity journal that makes each due online decision durable before the
+  next cadence boundary; end-of-run batch evaluation is replay evidence, not online Shadow;
 - one immutable `RunReceipt` binding all Decision, Entry, Outcome, zero-activity, anomaly,
   denominator, and contemporaneous `NO_TRADE=0` comparator;
 - deterministic fresh-process reconstruction of the sealed run and every aggregate.
