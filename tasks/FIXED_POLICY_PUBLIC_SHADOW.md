@@ -914,6 +914,28 @@ Replay independently reconstructs the anomaly counts from causal commits and per
 times. This governance correction does not relax denominator, causality, maturity, replay, or
 attestation requirements.
 
+## Parallel bounded report addendum — Single Run business truth
+
+This branch adds one deterministic offline `FIXED_POLICY_SINGLE_RUN_BUSINESS_REPORT` view over an
+existing Run result and receipt. It does not enter the Online Runtime or any authoritative
+Decision, Entry, Outcome, or Run receipt.
+
+**Market/Decision input contract change:** NONE
+
+**Decision Policy change:** NONE
+
+**Outcome/evaluation contract change:** NONE
+
+**Stage/authorization change:** NONE
+
+The report distinguishes four values without substitution: a `CLOSED` exposure may have observed
+executable PnL exactly zero; one bounded Run still has `Policy value=UNKNOWN` and null Policy value;
+`UNKNOWN`/`UNEXITABLE` Outcome PnL remains null; and `NO_TRADE=0` is defined only by no position.
+With no `CLOSED` Outcome, exposure PnL is unavailable/null rather than an empty-sum zero. Bundle
+verification independently reconstructs both synthetic and production-public reports from their
+sealed Run receipts. This view does not prove Policy quality, qualification, profitability, fills,
+execution, or capital authority.
+
 ## Definition of done
 
 The pre-registered run contract, interleaved causal commit/opportunity journals, append-only sealed
