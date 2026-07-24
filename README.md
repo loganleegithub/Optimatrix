@@ -27,9 +27,12 @@ ordinal product generations. External protocols, dependencies, and build tools r
 versions required for compatibility; those versions grant no product authority.
 
 The bounded Deribit capture/replay foundation plus the accepted Decision Truth and Outcome Truth
-closures are implemented. One bounded Fixed-Policy public Shadow run is the sole authorized next
-closure; it is not yet implemented. Qualification, Challenger research, promotion,
-private/account access, and execution remain unauthorized.
+semantics are implemented. Production Radar reachability is not established: current evidence has
+not shown repeated real scans with nonzero completed- and Policy-evaluable-assessment denominators.
+The sole authorized next closure is `RADAR_ESTABLISHMENT`, which establishes one continuously
+captured public fact stream, rolling state, repeated scans, and localized per-structure
+availability. Qualification, Challenger research, promotion, private/account access, and execution
+remain unauthorized.
 
 ## Repository shape
 
@@ -58,7 +61,13 @@ If the installed `uv` is available only as a Python module, use:
 make UV='python3 -m uv' sync
 ```
 
-## Production-public bounded capture
+## Legacy bounded capture and Decision Truth tools
+
+The commands below remain useful for the accepted bounded artifact contracts. They do not define
+the Online Runtime lifecycle or the acceptance criteria for `RADAR_ESTABLISHMENT`.
+**Do not run them for the current authority realignment or Radar establishment unless a later task
+marks that exact historical evidence class `REQUIRED`.** They document how accepted compatibility
+artifacts were created.
 
 The Deribit collector requires no credentials:
 
@@ -76,8 +85,8 @@ The Deribit collector requires no credentials:
   --output /tmp/optimatrix-bounded-replay
 ```
 
-After a required greater-than-one-hour Decision Truth run, package its capture and independently
-generated inspect/replay results into one hash-verifiable evidence bundle outside the repository:
+Historical Decision Truth compatibility packaged a greater-than-one-hour bounded artifact with
+independently generated inspect/replay results outside the repository:
 
 ```bash
 .venv/bin/python -m radar_runtime bundle \
@@ -94,22 +103,28 @@ The bundle contains the sealed capture, manifest, Decision/live/inspect/replay a
 `SHA256SUMS`, a bundle manifest, and an automatically generated Chinese report that remains
 explicitly pending human business acceptance.
 
-This creates one bounded capture receipt and one Decision receipt, not a continuous acquisition or
-production Shadow service. A
-duration above 3,600 seconds only makes a complete 60-minute observation possible; inspect/replay
-must prove actual coverage, freshness, platform state, and contamination status.
+This creates one bounded capture receipt and one Decision receipt, not continuous acquisition.
+The 3,600-second duration belongs to that historical harness; in the product, 60 minutes is a
+rolling feature lookback that is warmed once or restored from covered persisted facts.
 
-Zero candidates are a valid market result. Matching live/replay digests prove deterministic
-reconstruction of the sealed tape, not data completeness, strategy quality, fills, or trading
-authority.
+A numeric zero-Candidate count requires a nonzero Policy-evaluable-assessment denominator and
+describes only that evaluated window or subset. Matching live/replay digests prove deterministic
+reconstruction of the sealed tape, not Radar reachability, Policy value, data completeness,
+strategy quality, fills, or trading authority.
 
-## Bounded Outcome Truth evidence
+## Historical bounded Outcome Truth evidence
 
 `optimatrix-outcome` is the bounded evidence CLI for the accepted Outcome Truth closure. Every
 output or archive path must be fresh and previously nonexistent. It fixes one Decision cutoff at
 the first canonical event after the initial required subscriptions have accumulated 3,600 seconds
 of collector-elapsed time; an incomplete Decision, `WATCH`, `ABSTAIN`, or reconnect does not move
 the cutoff or trigger a retry.
+
+This cutoff and the commands below preserve historical artifact compatibility. They do not stop a
+continuous scanner, require each reconnect to wait another hour when covered history is available,
+or make a long evidence run the product processing unit.
+**Do not run these commands for `RADAR_ESTABLISHMENT`; they are not current-stage acceptance
+steps.**
 
 First generate and independently replay the deterministic nonzero synthetic evidence:
 
@@ -121,8 +136,8 @@ First generate and independently replay the deterministic nonzero synthetic evid
   --output /tmp/optimatrix-outcome-synthetic-replay
 ```
 
-Then collect and independently replay one fresh production-public run. It requires no credentials
-or private API:
+The historical acceptance then collected and independently replayed one fresh production-public
+run. It required no credentials or private API:
 
 ```bash
 .venv/bin/optimatrix-outcome capture \

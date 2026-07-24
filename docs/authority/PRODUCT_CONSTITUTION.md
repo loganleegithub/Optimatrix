@@ -45,21 +45,23 @@ visible executable premium
 - entry and close friction
 - liquidity reserve
 - model and method uncertainty
-- strategy and future account constraints
+- currently authorized strategy constraints
 ```
 
 Only a positive conservative margin may produce a candidate-class research decision. A candidate
-is not trading authority.
+is not Shadow admission or trading authority. Future account and portfolio constraints belong to
+the separately authorized execution path; they are not prerequisites for the current public
+Radar.
 
 ## Product business loop
 
 ```text
-1. continuously capture authorized public market facts
-2. construct a strict current DecisionFrame
-3. scan the complete authorized executable structure universe
-4. run the immutable deployed Policy or Model
-5. emit CANDIDATE, WATCH, or ABSTAIN and a DecisionReceipt
-6. record strictly future path, executable close cost, and Outcome
+1. continuously capture one shared stream of authorized public market facts
+2. maintain rolling strict-as-of state and repeatedly scan the authorized legal structure universe
+3. let the immutable deployed Policy or Model estimate finite-horizon risk
+4. compare visible premium with path, tail, liquidity, cost, and uncertainty reserves
+5. emit availability, CANDIDATE / WATCH / ABSTAIN when evaluable, and a DecisionReceipt
+6. apply separate Shadow admission; record actual Outcome or separately labeled counterfactual evaluation
 7. let an offline AI Researcher propose one explicit Challenger
 8. independently replay, test, and forward-validate incumbent and Challenger
 9. promote only under a pre-registered qualification contract
@@ -68,6 +70,17 @@ is not trading authority.
 
 The current implementation name `RESEARCH_CANDIDATE` is the public-Shadow encoding of the
 candidate-class action. Renaming that schema is not implied by this Constitution.
+
+Market facts flow through one shared collector and canonical tape used by scans and Outcome
+evaluation; structures and Entries do not start their own collectors. This is not a network
+exactly-once claim. The longest observation window is rolling history: it requires warm-up only
+when history is genuinely unavailable after initial startup or an unresolved coverage gap. A
+bounded capture or evidence window is an acceptance harness, not the Online Runtime lifecycle or a
+unit of business processing. Scans continue while prior Shadow Outcomes mature independently.
+
+Readiness is scoped. Market-global facts may affect a whole scan, while a missing or stale
+instrument fact makes only structures that consume that fact unavailable. Universe coverage,
+structure availability, Policy action, admission, and Outcome maturity remain separate states.
 
 ## Roles and trust boundaries
 
@@ -79,9 +92,14 @@ rewrite, approve, promote, or replace its deployed artifact.
 
 ### Outcome and evidence plane
 
-The evidence plane records Decision receipts and strictly post-entry market facts. It computes
-observed Shadow Outcomes. Actual exposure ends at the selected exit; a full-horizon counterfactual,
-when retained, is a separate labeled artifact.
+The evidence plane records Decision receipts and strictly post-Entry market facts for actual
+Shadow Outcomes. Actual exposure ends at the selected exit; a full-horizon post-exit
+counterfactual, when retained, is a separate labeled artifact.
+
+To measure false negatives and reserve conservatism, a pre-registered cohort of complete rejected
+assessments may also receive strictly post-decision counterfactual evaluation from the same future
+fact stream. Such evaluation is never a Shadow position, actual exposure, fill, or observed
+strategy PnL.
 
 ### AI Researcher
 
@@ -120,18 +138,29 @@ state reconciliation, or emergency stop.
 ## Hard invariants
 
 1. Decision inputs contain only facts known at or before the decision causal sequence.
-2. Outcome inputs contain only facts strictly after entry.
+2. Actual Shadow Outcome inputs contain only facts strictly after Entry. A separately labeled
+   rejected-opportunity counterfactual contains only facts strictly after its Decision and never
+   creates exposure.
 3. Missing, stale, incomplete, or contaminated evidence is `UNKNOWN`, never zero or calm.
 4. Executable entry, close, and PnL use visible bid/ask, a visible combo, or future actual fills;
    mark and mid are descriptive only.
 5. Every decision freezes data lineage, code identity, Policy/Model identity, and parameters.
 6. Every Shadow position freezes entry assumptions, fees, quantity, maximum loss, and horizon.
-7. Zero candidates and zero entries are valid results.
-8. Strategy risk and account risk may reduce or veto a decision; they may never create one.
-9. An AI proposer may not verify, approve, promote, or deploy its own Challenger.
-10. Qualification criteria are fixed before validation and include `NO_TRADE`.
-11. Public Shadow evidence cannot be represented as real fill or execution evidence.
-12. No later-stage authority is inferred from code presence, green tests, matching digests, prior
+7. Availability is separate from economic action. An unusable assessment has no Policy action and
+   cannot be counted as economic `ABSTAIN`.
+8. `UNKNOWN` is scoped to the smallest affected fact, feature, structure, or admission gate unless
+   a declared market-global dependency is actually unavailable.
+9. Zero candidates and zero entries are valid recorded results. A numeric zero-Candidate count
+   requires a nonzero Policy-evaluable-assessment denominator and proves only that scoped
+   window/subset's observed count or rate, not Policy value, conservatism, or qualification.
+10. One continuous canonical fact stream is reused by scans and Outcomes; structures do not start
+    independent market-data captures.
+11. Bounded evidence duration never defines the Online Runtime lifecycle.
+12. Strategy risk and account risk may reduce or veto a decision; they may never create one.
+13. An AI proposer may not verify, approve, promote, or deploy its own Challenger.
+14. Qualification criteria are fixed before validation and include a cohort-aligned `NO_TRADE`.
+15. Public Shadow evidence cannot be represented as real fill or execution evidence.
+16. No later-stage authority is inferred from code presence, green tests, matching digests, prior
     stage success, or historical artifacts.
 
 ## Stage authority

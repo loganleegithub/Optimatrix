@@ -123,6 +123,8 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
     template = (ROOT / "tasks/TEMPLATE.md").read_text(encoding="utf-8")
     required_sections = (
         "## Business closure",
+        "## Product operating behavior",
+        "## Validation harness",
         "## Evidence boundary",
         "## Change declarations",
         "## Acceptance",
@@ -130,6 +132,8 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
     )
     for section in required_sections:
         assert section in template
+
+    assert "**Task kind:** AUTHORITY_ONLY | IMPLEMENTATION | EVIDENCE_ONLY" in template
 
     declarations = (
         "**Market/Decision input contract change:**",
@@ -146,9 +150,46 @@ def test_current_stage_authorizes_exactly_one_next_closure() -> None:
 
     marker = "**Sole authorized next product-capability closure:**"
     assert current_stage.count(marker) == 1
-    assert f"{marker} `FIXED_POLICY_PUBLIC_SHADOW`" in current_stage
-    assert "**Implemented capability:** `OUTCOME_TRUTH`" in current_stage
+    assert f"{marker} `RADAR_ESTABLISHMENT`" in current_stage
+    assert "FIXED_POLICY_PUBLIC_SHADOW" not in current_stage
+    assert "**Implemented capability:** `OUTCOME_TRUTH` (bounded contract only)" in current_stage
+    assert "**Production Radar reachability:** `NOT_ESTABLISHED`" in current_stage
     assert "## Queued sequence — not authorized" in current_stage
+
+
+def test_authority_separates_continuous_radar_from_bounded_evidence() -> None:
+    constitution = (ROOT / "docs/authority/PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
+    current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
+    architecture = (ROOT / "docs/authority/SYSTEM_ARCHITECTURE.md").read_text(encoding="utf-8")
+    delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
+    radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "one shared stream of authorized public market facts" in constitution
+    assert "Bounded evidence duration never defines the Online Runtime lifecycle" in constitution
+    assert "`policy_evaluable_assessment_count > 0`" in current_stage
+    assert "`executed_cycle_count >= 2`" in current_stage
+    assert "`policy_action != null`" in current_stage
+    assert "`action_cycle_count = 1`" in current_stage
+    assert "does not require a one-hour or six-hour run" in current_stage
+    assert "closure may reuse existing inspection/replay support" in current_stage
+    assert "new replay artifact, drift taxonomy, bundle" in current_stage
+    assert "removing only the unavailable" in current_stage
+    assert "scheduled-block fact from Candidate eligibility" in current_stage
+    assert "one continuously appended CanonicalEvent / Market Tape" in architecture
+    assert "does not require per-fact or per-RPC" in architecture
+    assert "## Denominator integrity" in delivery
+    assert "`UNKNOWN` availability is not economic `ABSTAIN`" in radar
+    assert "Sixty minutes is a rolling feature lookback" in radar
+    assert "**not yet implemented**" in radar
+    assert "`DERIBIT_PUBLIC_SHORT_VOL_RADAR_INPUT`" in radar
+    assert "`OBSERVED_PATH_STRESS_FIXED_PRIOR_RADAR_POLICY`" in radar
+    assert "`SHORT_VOL_RADAR_SCAN_SUMMARY`" in radar
+    assert "cycle_status = EXECUTED | SKIPPED | UNAVAILABLE" in radar
+    assert "`TTE_BUFFER` remains a Policy predicate" in radar
+    assert "NON-ACTIVE HISTORICAL APPENDIX" in radar
+    assert "`RADAR_ESTABLISHMENT`, which establishes" in readme
+    assert "Do not run these commands for `RADAR_ESTABLISHMENT`" in readme
 
 
 def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
@@ -166,6 +207,9 @@ def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
     )
     for path in active:
         text = path.read_text(encoding="utf-8")
+        if "**Task kind:** `AUTHORITY_ONLY`" in text:
+            assert "**Runtime implementation:** FORBIDDEN" in text
+            assert "**Live commands:** FORBIDDEN" in text
         for declaration in (
             "**Market/Decision input contract change:**",
             "**Decision Policy change:**",

@@ -21,14 +21,20 @@ modular monolith.
 
 ```text
 Deribit public adapter
-→ CanonicalEvent / Market Tape
-→ strict current DecisionFrame
-→ executable structure inventory
-→ immutable deployed Policy or Model
-→ DecisionReceipt with opportunity identity
-→ Shadow admission
-→ strictly future OutcomeReceipt
+→ one continuously appended CanonicalEvent / Market Tape
+→ rolling strict-as-of market and risk state
+→ repeated authorized-universe scan cycles
+→ per-structure availability and immutable deployed Policy or Model
+→ DecisionReceipt with explicit funnel denominators
+→ separate Shadow admission
+→ asynchronous strictly future Outcome trackers
+→ OutcomeReceipt
 ```
+
+Market facts flow through one shared adapter/tape path. Scan cycles, admitted Shadow positions, and
+later evaluation reference that tape rather than starting structure-specific or Entry-specific
+collectors. This is not a network exactly-once guarantee. The scan trigger may be time-based,
+event-based, or coalesced as declared by the active task; it does not terminate acquisition.
 
 The offline, separately trusted path is:
 
@@ -71,8 +77,9 @@ It must not acquire market data, select a strategy, qualify a Policy, or access 
 
 ### `short_vol_radar`
 
-Owns current DecisionFrame projection, observation windows, the deployed finite-horizon risk
-method, insurance assessment, ranking, and candidate/watch/abstain decision.
+Owns rolling DecisionFrame projection, observation windows, market-global risk readiness,
+universe coverage, per-structure readiness, the deployed finite-horizon risk method, insurance
+assessment, ranking, and candidate/watch/abstain decision.
 
 It must not perform network I/O, consume post-entry Outcome facts, train a model, or access an
 account.
@@ -118,6 +125,10 @@ regressions as evidence rather than clamping them away.
 Artifacts are immutable and content-addressed where practical. New artifact types are introduced
 only by the closure that consumes them.
 
+Content identity binds meaningful facts, deployed code/Policy, and sealed segments. It does not
+require a distinct hash or synchronous disk flush for every network event, RPC, or in-memory
+projection step.
+
 ### Existing
 
 - `CanonicalEvent` and sealed capture manifest;
@@ -147,21 +158,22 @@ scan artifact unless an active task proves an independent consumer needs it.
 These are bounded Outcome Truth artifacts only. Their implementation does not itself permit a run
 ledger, scheduler, generic storage, qualification, promotion, private/account access, or execution.
 
-### Current authorized Fixed-Policy public Shadow closure
+### Current authorized Radar establishment closure
 
-- one bounded, predeclared production-public run with a fixed Decision input contract, deployed
-  Policy, Outcome contract, cadence, admission rule, and maturity rule;
-- the minimum incremental or segmented append-only fact durability required to preserve every due
-  opportunity and its eventual maturity or explicit incompleteness;
-- a contemporaneous opportunity journal that makes each due online decision durable before the
-  next cadence boundary; end-of-run batch evaluation is replay evidence, not online Shadow;
-- one immutable `RunReceipt` binding all Decision, Entry, Outcome, zero-activity, anomaly,
-  denominator, and contemporaneous `NO_TRADE=0` comparator;
-- deterministic fresh-process reconstruction of the sealed run and every aggregate.
+- one continuously acquired production-public fact stream inside the modular monolith under the
+  prospective `DERIBIT_PUBLIC_SHORT_VOL_RADAR_INPUT` identity;
+- rolling state and at least two executed scan cycles under one declared trigger rule;
+- explicit separation of global risk-input readiness, universe coverage, local structure
+  readiness, Policy action, and admission;
+- one compact prospective `SHORT_VOL_RADAR_SCAN_SUMMARY` per due cycle; the closure does not alter
+  or impersonate `SHORT_VOL_DECISION_RECEIPT`;
+- the exact `OBSERVED_PATH_STRESS_FIXED_PRIOR_RADAR_POLICY` delta authorized by
+  `CURRENT_STAGE.md`, with no other Policy tuning.
 
-This authorization does not permit a generic scheduler, daemon, database, service, qualification,
-Policy change, Challenger, promotion, private/account access, or execution. The active task must
-define the exact bounded behavior before implementation.
+The bounded observation window is only acceptance evidence for the continuous lifecycle. This
+closure does not consume a run-wide receipt, Entry, mature Outcome, historical archive, generic
+scheduler, database, service platform, qualification, Challenger, promotion, private/account
+access, or execution.
 
 ### Queued or later stages only
 
@@ -189,12 +201,26 @@ Decision is separate from experiment admission; actual exposure is separate from
 paths; and observed executable close is separate from any qualification penalty. One artifact may
 reference another but may not collapse these meanings.
 
+Outcome trackers mature independently while new scans continue. A later evidence snapshot may
+partition Outcomes into mature and immature without stopping the scanner or retroactively changing
+earlier Decisions. Counterfactual evaluation of a pre-registered rejected-opportunity cohort uses
+the same future tape but remains separately labeled and never creates exposure.
+
+Rejected-opportunity evaluation is a future, explicitly authorized extension of `shadow_engine`,
+not part of `RADAR_ESTABLISHMENT` and not a reason to add a generic evaluation service now.
+
 ## Persistence
 
-The current bounded writer is sufficient only for short evidence receipts. The authorized
-Fixed-Policy public Shadow closure may add incremental or segmented append-only durability only
-because it directly needs a bounded multi-decision run plus the maximum Outcome horizon. This does
-not authorize a daemon, database, generic storage platform, or unbounded scheduler.
+The production-public lifecycle uses ordered append-only segments that can be rotated, flushed,
+and sealed incrementally. `capture_seq` establishes known-at order. Durability must preserve
+accepted facts and Decision boundaries, but the architecture does not require per-fact or per-RPC
+`fsync`, cross-binding before the next network event, or a single ever-growing run bundle.
+
+When replay is required, it reads each sealed segment once, validates the facts it contains, and
+reconstructs the requested scan or Outcome window. Verified segments may be composed into later
+cohort reports without re-reading the same bytes once per fact or pretending to replay the
+external collection process. This continuous modular-monolith runtime does not authorize a
+database, generic storage platform, workflow engine, or multi-service architecture.
 
 ## Architecture change rule
 

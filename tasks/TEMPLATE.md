@@ -2,6 +2,12 @@
 
 **Status:** DRAFT | ACTIVE
 
+**Task kind:** AUTHORITY_ONLY | IMPLEMENTATION | EVIDENCE_ONLY
+
+**Runtime implementation:** REQUIRED | FORBIDDEN | NOT_APPLICABLE
+
+**Live commands:** REQUIRED | FORBIDDEN | NOT_APPLICABLE
+
 **Product/stage:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md) /
 [`CURRENT_STAGE`](../docs/authority/CURRENT_STAGE.md)
@@ -16,13 +22,18 @@
 
 **Given:** one observable input or precondition.
 
-**When:** one machine behavior occurs.
+**When:** one bounded behavior or authority change occurs.
 
-**Then:** one durable business output or receipt exists.
+**Then:** one durable business output, contract, or receipt exists.
 
-**Independent verification:** fresh process, sealed input, or another independent path.
+**Independent verification:** one assertion-appropriate independent path. Require a fresh process
+or sealed replay only when its evidence class is `REQUIRED`.
 
-**Valid zero/UNKNOWN result:** exact empty, unavailable, or fail-closed result.
+**Valid zero/UNKNOWN result:** exact empty, unavailable, or fail-closed result, and whether it
+satisfies or falsifies this business assertion.
+
+**Upstream prerequisite:** the smallest independently falsifiable input or capability that must
+already be reachable. If it is not established, make that prerequisite the task instead.
 
 ## Change declarations
 
@@ -38,14 +49,34 @@ identity and behavioral delta. Follow
 
 **Stage/authorization change:** NONE
 
+## Product operating behavior
+
+Describe the intended ongoing lifecycle independently of any bounded validation command: fact
+capture, state, trigger/cadence, Decision, admission, and asynchronous Outcome behavior.
+
+## Validation harness
+
+Describe the smallest bounded observation, fixture, replay, or authority check that can prove the
+task assertion, or `NOT_APPLICABLE`. Its duration, cutoff, bundle, or process lifetime does not
+become product behavior.
+
 ## Evidence boundary
 
 **Proves:** ...
 
 **Does not prove:** ...
 
-**Evidence class:** `SYNTHETIC_LOGIC | BOUNDED_PUBLIC_CAPTURE | LIVE_REPLAY |
-SHADOW_OUTCOME | QUALIFICATION | EXECUTION_ENVIRONMENT`
+Mark every class independently:
+
+| Evidence class | Requirement |
+|---|---|
+| Direct synthetic/behavior | REQUIRED \| NOT_APPLICABLE |
+| Bounded public capture | REQUIRED \| NOT_APPLICABLE |
+| Production Radar reachability | REQUIRED \| NOT_APPLICABLE |
+| Fresh-process replay | REQUIRED \| NOT_APPLICABLE |
+| Shadow Outcome | REQUIRED \| NOT_APPLICABLE |
+| Qualification | REQUIRED \| NOT_APPLICABLE |
+| Execution environment | REQUIRED \| NOT_APPLICABLE |
 
 ## Scope
 
@@ -63,7 +94,11 @@ SHADOW_OUTCOME | QUALIFICATION | EXECUTION_ENVIRONMENT`
 
 **Missing/invalid/UNKNOWN semantics:** ...
 
-**Persisted contract identity/replay compatibility:** ...
+**Persisted contract identity/replay compatibility:** ... | `NOT_APPLICABLE`
+
+**Business denominators:** name every numerator, unit, and conditioning denominator. Keep scan
+cycles, structures, structure-by-horizon assessment opportunities, completed and Policy-evaluable
+assessments, actions, Entries, and mature Outcomes distinct, or mark `NOT_APPLICABLE`.
 
 ## Acceptance
 
@@ -71,14 +106,14 @@ SHADOW_OUTCOME | QUALIFICATION | EXECUTION_ENVIRONMENT`
 
 1. Given ... when ... then ...
 2. Missing/invalid ... fails closed as ...
-3. Causal and replay/Outcome boundary verifies ...
+3. Applicable causal/replay/Outcome boundary verifies ... | `NOT_APPLICABLE`
 
 ### Required commands
 
-- `make sync`
+- `make sync` | `NOT_APPLICABLE` with reason
 - focused tests: ...
-- `make check`
-- task-specific inspect/replay/Outcome command: ...
+- `make check` or exact applicable authority/document gate
+- task-specific inspect/replay/Outcome command: ... | `NOT_APPLICABLE`
 
 ### Real evidence
 
@@ -86,15 +121,16 @@ SHADOW_OUTCOME | QUALIFICATION | EXECUTION_ENVIRONMENT`
 
 **Environment and minimum duration:** ...
 
-**Required report:** records and actual trades; coverage/readiness; gap/reconnect/platform/source
-anomalies; actions/candidates/entries/Outcomes including zero; causal sequences; artifact digests;
-fresh-process equality; limitations.
+**Required report:** only fields that prove the assertion. For a full Radar/Shadow report include
+records and actual trades; due scans and funnel denominators; coverage/readiness;
+gap/reconnect/platform/source anomalies; actions/candidates/entries/Outcomes including zero;
+causal sequences; applicable artifact digests; fresh-process equality when required; limitations.
 
 **Private API:** FORBIDDEN unless `CURRENT_STAGE.md` explicitly grants it.
 
 ## Artifacts and delivery report
 
-**Capture/receipt/replay paths and hashes:** ...
+**Capture/receipt/replay paths and hashes:** ... | `NOT_APPLICABLE`
 
 **Policy/contract identities:** ...
 
@@ -105,8 +141,9 @@ its own hash.
 
 ## Definition of done
 
-The durable closure exists; direct tests, repository gates, required real evidence, and independent
-verification pass; all four declarations are satisfied; limitations and zero activity are honest;
-authority/status match reality; committed and remote scope contain only this closure; and the
-completed task file is not retained on `main`. Delivery and Git safety remain governed by
+The durable closure exists; required direct tests, applicable repository gates, evidence classes,
+and independent verification pass; all four declarations are satisfied; limitations and zero
+activity are honest; authority/status match reality; committed and remote scope contain only this
+closure; and the completed task file is not retained on `main`. Delivery and Git safety remain
+governed by
 [`DELIVERY_CONTRACT.md`](../docs/authority/DELIVERY_CONTRACT.md#git-and-pr-contract).
