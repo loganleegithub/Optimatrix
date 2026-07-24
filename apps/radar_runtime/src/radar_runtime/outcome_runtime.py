@@ -185,11 +185,28 @@ class _OutcomeLiveSession(_LiveSession):
         *,
         received_at_ms: int,
         elapsed_ms: int,
+        request_id: int | None = None,
+        platform_acquisition_ordinal: int | None = None,
+        obligation_id: str | None = None,
+        connection_generation: int | None = None,
     ) -> CanonicalEvent:
+        payload: dict[str, object] = {
+            "stream": "platform_state",
+            "channel": "platform_state",
+        }
+        if request_id is not None:
+            payload.update(
+                {
+                    "request_id": request_id,
+                    "platform_acquisition_ordinal": platform_acquisition_ordinal,
+                    "obligation_id": obligation_id,
+                    "connection_generation": connection_generation,
+                }
+            )
         event = self._record(
             EventKind.SUBSCRIPTION_START,
             "control",
-            {"stream": "platform_state", "channel": "platform_state"},
+            payload,
             received_at_ms=received_at_ms,
             elapsed_ms=elapsed_ms,
         )

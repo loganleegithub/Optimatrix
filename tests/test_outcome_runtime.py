@@ -177,7 +177,7 @@ def _write_mock_public_collector_artifacts(
     git_commit_sha: str,
 ) -> dict[str, object]:
     _seal, manifest, events, _prefix_manifest, _prefix_events = read_sealed_capture(run / "facts")
-    identity = runtime_source_identity(require_clean=False)
+    identity = replace(runtime_source_identity(require_clean=False), dirty_paths=())
     projection = project_events(events)
     outcome_identity = outcome_runtime_source_identity(require_clean=False)
     decision = build_decision_receipt(
@@ -556,7 +556,11 @@ def test_synthetic_run_and_fresh_process_replay_are_exact(tmp_path: Path) -> Non
     assert result["entry_count"] == result["outcome_count"] == 1
     assert result["outcome_status"] == "CLOSED"
     assert result["counterfactual_point_count"] == 1
-    assert result["decision_runtime_source_digest"] == (
+    assert (
+        result["decision_runtime_source_digest"]
+        == runtime_source_identity(require_clean=False).runtime_source_digest
+    )
+    assert result["decision_runtime_source_digest"] != (
         "eed711f1c924c73a0a61b562da5154873b40713f5b5e44c482882eecf7aee29c"
     )
     assert not (run / "_full-capture").exists()

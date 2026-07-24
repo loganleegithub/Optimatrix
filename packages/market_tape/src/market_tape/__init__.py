@@ -27,9 +27,21 @@ from market_tape.contracts import (
     instrument_metadata_identity,
 )
 from market_tape.reducer import MarketTapeReducer, TapeContractError
+from market_tape.segmented import (
+    CAUSAL_COMMIT_ID,
+    FACT_SEGMENT_ID,
+    OPPORTUNITY_JOURNAL_ID,
+    PublicShadowJournalReader,
+    PublicShadowJournalWriter,
+    VerifiedJournal,
+    VerifiedSegment,
+)
 
 __all__ = [
     "CAPTURE_FORMAT_ID",
+    "CAUSAL_COMMIT_ID",
+    "FACT_SEGMENT_ID",
+    "OPPORTUNITY_JOURNAL_ID",
     "BookState",
     "CanonicalEvent",
     "CaptureManifest",
@@ -42,9 +54,13 @@ __all__ = [
     "MarketTapeSnapshot",
     "OptionKind",
     "PlatformState",
+    "PublicShadowJournalReader",
+    "PublicShadowJournalWriter",
     "TapeContractError",
     "TickerFact",
     "TradeFact",
+    "VerifiedJournal",
+    "VerifiedSegment",
     "canonical_digest",
     "canonical_json",
     "canonical_value",
