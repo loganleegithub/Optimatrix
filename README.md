@@ -5,13 +5,18 @@ system. Its first product slice under construction is Deribit BTC-USDC defined-r
 current permission boundary is production-public Shadow only: no private API, account, margin,
 order, fill, or money access exists.
 
-The current system asks one finite-horizon underwriting question:
+The target Radar asks one structure-level assessment question:
 
-> For a BTC 0–3DTE defined-risk option structure and a finite holding horizon, is the visible
-> executable premium sufficient for observed path, touch, tail, liquidity, cost, and uncertainty?
+> For one executable BTC 0–3DTE defined-risk structure at a strict as-of market state, what
+> visible entry/close economics and path, tail, liquidity, cost, and uncertainty reserves are
+> observed across the declared forward risk scenarios?
 
-It returns `RESEARCH_CANDIDATE`, `WATCH`, or `ABSTAIN`. A research candidate is not a qualified
-strategy and grants no trading authority.
+The configured 30m / 1h / 2h / 4h values are forward risk scenarios for one structure. They are
+not promised holding periods, exit timers, or four separate opportunities. The historical bounded
+system returns `RESEARCH_CANDIDATE`, `WATCH`, or `ABSTAIN`; target structure-level aggregation,
+Entry Policy, and state-driven position-management Policy are not yet authorized. A scenario that
+extends beyond usable pre-settlement life is `NOT_APPLICABLE_TTE`, not a failed opportunity. A
+research candidate is not a qualified strategy and grants no trading authority.
 
 ## Authority and current status
 
@@ -27,15 +32,22 @@ ordinal product generations. External protocols, dependencies, and build tools r
 versions required for compatibility; those versions grant no product authority.
 
 The bounded Deribit capture/replay foundation plus the accepted Decision Truth and Outcome Truth
-closures are implemented. One bounded Fixed-Policy public Shadow run is the sole authorized next
-closure; it is not yet implemented. Qualification, Challenger research, promotion,
+semantics are implemented. Production Radar reachability is not established: current evidence has
+not shown distinct live evaluations caused by changed consumed market state or necessary time
+boundaries with a nonzero risk-assessable-structure denominator.
+The sole authorized next closure is `STRUCTURE_ASSESSMENT_REACHABILITY`, which establishes only
+one prerequisite: a continuously consumed public fact stream, rolling state, changed-state-driven
+structure assessment, and localized per-structure availability. An unchanged state creates no new
+assessment or opportunity. Full production Radar reachability remains `NOT_ESTABLISHED`.
+Candidate/Entry Policy, position management, qualification, Challenger research, promotion,
 private/account access, and execution remain unauthorized.
 
 ## Repository shape
 
 - `market_tape`: canonical public facts, causal order, gap/reconnect, capture, and replay
 - `options_domain`: observed option facts and visible defined-risk structure economics
-- `short_vol_radar`: current frames, finite-horizon risk, insurance assessment, and decision
+- `short_vol_radar`: current frames, forward risk-scenario vectors, structure assessment, and
+  historical bounded decision compatibility
 - `shadow_engine`: entry-frozen future-only Shadow position and Outcome primitives
 - `radar_runtime`: Deribit public adapter and deterministic CLI composition
 
@@ -58,7 +70,13 @@ If the installed `uv` is available only as a Python module, use:
 make UV='python3 -m uv' sync
 ```
 
-## Production-public bounded capture
+## Legacy bounded capture and Decision Truth tools
+
+The commands below remain useful for the accepted bounded artifact contracts. They do not define
+the Online Runtime lifecycle or the acceptance criteria for
+`STRUCTURE_ASSESSMENT_REACHABILITY`. **Do not run them for the current authority realignment or
+structure-assessment reachability unless a later task marks that exact historical evidence class
+`REQUIRED`.** They document how accepted compatibility artifacts were created.
 
 The Deribit collector requires no credentials:
 
@@ -76,8 +94,8 @@ The Deribit collector requires no credentials:
   --output /tmp/optimatrix-bounded-replay
 ```
 
-After a required greater-than-one-hour Decision Truth run, package its capture and independently
-generated inspect/replay results into one hash-verifiable evidence bundle outside the repository:
+Historical Decision Truth compatibility packaged a greater-than-one-hour bounded artifact with
+independently generated inspect/replay results outside the repository:
 
 ```bash
 .venv/bin/python -m radar_runtime bundle \
@@ -94,22 +112,34 @@ The bundle contains the sealed capture, manifest, Decision/live/inspect/replay a
 `SHA256SUMS`, a bundle manifest, and an automatically generated Chinese report that remains
 explicitly pending human business acceptance.
 
-This creates one bounded capture receipt and one Decision receipt, not a continuous acquisition or
-production Shadow service. A
-duration above 3,600 seconds only makes a complete 60-minute observation possible; inspect/replay
-must prove actual coverage, freshness, platform state, and contamination status.
+This creates one bounded capture receipt and one Decision receipt, not continuous acquisition.
+The 3,600-second duration belongs to that historical harness; in the product, 60 minutes is a
+rolling feature lookback that is warmed once or restored from covered persisted facts.
 
-Zero candidates are a valid market result. Matching live/replay digests prove deterministic
-reconstruction of the sealed tape, not data completeness, strategy quality, fills, or trading
-authority.
+The historical Policy also binds one selected `horizon_seconds` to its bounded Shadow position.
+That compatibility behavior is not the target Radar meaning: forward risk scenarios do not choose
+actual holding time, and a future forward cohort must separately authorize a state-driven
+position-management Policy.
 
-## Bounded Outcome Truth evidence
+A numeric zero-Candidate count requires a frozen Candidate contract—including structure-level
+aggregation, Entry and exit Policies—and a nonzero Policy-evaluable unique-structure denominator.
+It describes only that evaluated window or subset. Matching live/replay digests prove
+deterministic reconstruction of the sealed tape, not Radar reachability, Policy value, data
+completeness, strategy quality, fills, or trading authority.
+
+## Historical bounded Outcome Truth evidence
 
 `optimatrix-outcome` is the bounded evidence CLI for the accepted Outcome Truth closure. Every
 output or archive path must be fresh and previously nonexistent. It fixes one Decision cutoff at
 the first canonical event after the initial required subscriptions have accumulated 3,600 seconds
 of collector-elapsed time; an incomplete Decision, `WATCH`, `ABSTAIN`, or reconnect does not move
 the cutoff or trigger a retry.
+
+This cutoff and the commands below preserve historical artifact compatibility. They do not stop a
+continuous scanner, require each reconnect to wait another hour when covered history is available,
+or make a long evidence run the product processing unit.
+**Do not run these commands for `STRUCTURE_ASSESSMENT_REACHABILITY`; they are not current-stage
+acceptance steps.**
 
 First generate and independently replay the deterministic nonzero synthetic evidence:
 
@@ -121,8 +151,8 @@ First generate and independently replay the deterministic nonzero synthetic evid
   --output /tmp/optimatrix-outcome-synthetic-replay
 ```
 
-Then collect and independently replay one fresh production-public run. It requires no credentials
-or private API:
+The historical acceptance then collected and independently replayed one fresh production-public
+run. It required no credentials or private API:
 
 ```bash
 .venv/bin/optimatrix-outcome capture \
