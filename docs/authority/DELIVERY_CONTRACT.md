@@ -90,16 +90,21 @@ record `NOT_COMPARABLE`; do not manufacture a baseline by replaying a large unav
 They are not automatically Policy changes.
 
 `Decision Policy` is the immutable mapping from a valid DecisionFrame and executable inventory to
-an action. It includes the approved structure/horizon universe, risk and insurance formulas,
-thresholds, ranking, reserves, vetoes, and candidate eligibility. An approved change must identify
+an action. It includes the approved structure universe, forward risk-scenario set, one explicit
+structure-level aggregation rule, risk and insurance formulas, thresholds, ranking, reserves,
+vetoes, and candidate eligibility. Risk scenarios are inputs to one structure-level decision;
+they are not separate opportunities or planned holding periods. An approved change must identify
 every old/new value or formula, create a new identity and digest, preserve the incumbent, and
 pre-register evaluation before seeing claimed validation Outcomes.
 
 `Outcome/evaluation contract` owns Shadow admission, entry, actual exposure, exit, executable PnL,
-counterfactual paths, horizons, scoring, and qualification comparisons. Its changes require a new
-artifact/contract identity and explicit comparability with historical Outcomes. Actual Shadow
-Outcome tests enforce strictly post-Entry facts; rejected-opportunity counterfactual tests enforce
-strictly post-Decision facts and the absence of exposure/fill/Policy-PnL claims.
+the immutable position-management Policy and its consumed state, hard latest-exit/expiry
+boundaries, actual holding time, counterfactual checkpoints, scoring, and qualification
+comparisons. A hard boundary creates an exit obligation but does not manufacture an executable
+close. Its changes require a new artifact/contract identity and explicit comparability with
+historical Outcomes. Actual Shadow Outcome tests enforce strictly post-Entry facts;
+rejected-opportunity counterfactual tests enforce strictly post-Decision facts and the absence of
+exposure/fill/Policy-PnL claims.
 
 `Stage/authorization` owns allowed environments, data sources, private/account surfaces,
 promotion, execution, capital, and runtime permissions. It changes only through explicit human
@@ -115,7 +120,7 @@ infrastructure scope.
 |---|---|---|
 | Direct unit/synthetic test | formula, boundary, fail-closed, causality | production data availability or strategy quality |
 | Bounded public capture | real public connectivity and canonicalization | full warm-up, mature Outcome, or fills |
-| Production Radar reachability | repeated real scans with usable global inputs and nonzero completed and Policy-evaluable assessment denominators | Policy value, mature Outcome, profitability, or qualification |
+| Production structure-assessment reachability | distinct real evaluation states caused by relevant facts or necessary time boundaries, with usable global inputs and a nonzero risk-assessable-structure denominator | Candidate value, mature Outcome, profitability, or qualification |
 | Live/replay equality | deterministic reconstruction of the same sealed input | data completeness, Policy correctness, or profitability |
 | Actual public Shadow Outcome | strictly post-entry public path and executable-quote close observation | rejected-opportunity value, strategy qualification, or actual fills |
 | Rejected-opportunity counterfactual | strictly post-decision path under a pre-registered hypothetical rule | Shadow exposure, fills, observed Policy PnL, or qualification by itself |
@@ -133,9 +138,11 @@ For a full Radar/Shadow report, the minimum is:
 - environment, capture format identity, duration, record and actual trade counts;
 - current window coverage and readiness;
 - gap, reconnect, platform, and source-time anomaly counts;
-- due scan, executed-scan, global-risk-ready, universe-coverage, legal-structure, quote-observable,
-  round-trip-executable, assessment-opportunity, completed-assessment, Policy-evaluable-assessment,
-  passing-assessment, action, Entry, and Outcome counts, including zero;
+- accepted evaluation-trigger, unchanged-trigger diagnostic, distinct evaluation-state,
+  executed-evaluation, global-risk-ready, universe-coverage, legal-structure, quote-observable,
+  round-trip-executable, risk-assessable-structure, configured/calculated/not-applicable/unknown
+  risk-scenario-slot counts,
+  Candidate-episode, Entry, and Outcome counts as applicable, including zero;
 - final event and DecisionFrame sequences;
 - capture, frame, Policy, decision, and Outcome digests as applicable;
 - independent recomputation or replay equality when its evidence class is `REQUIRED`, plus all
@@ -164,25 +171,34 @@ attestation.
 Business reports keep units and denominators distinct:
 
 ```text
-cycle ledger:
-  due scan cycles → executed cycles → globally risk-ready cycles → action cycles
+evaluation-state ledger:
+  accepted evaluation triggers → distinct changed evaluation states
+  → executed evaluations → globally risk-ready evaluations
 
 structure ledger:
-  legal structures → quote-observable structures → round-trip-executable structures
+  legal structures → quote-observable structures
+  → round-trip-executable structures → risk-assessable structures
 
-assessment ledger:
-  assessment opportunities (legal structure × every configured horizon)
-  → completed assessments → Policy-evaluable assessments → passing assessments
+risk-scenario diagnostic ledger:
+  configured risk-scenario slots
+  → calculated + not-applicable-for-TTE + unknown
 
 admission/outcome ledger:
-  Candidate observations → admitted Entries → mature Outcomes
+  distinct Candidate episodes → admitted Entries → mature Outcomes
 ```
 
-Rates name their numerator and conditioning denominator. Candidate observations, distinct
-opportunity episodes, and admissions are different quantities. `NO_TRADE=0` is the no-position
-comparator over the same usable cohort; it does not turn unavailable Policy value or null Outcome
-PnL into zero. A denominator is numeric only when its upstream scope is known; otherwise it and
-dependent rates are `null/UNKNOWN`, never zero.
+Scenario-evaluation counts are diagnostic workload only. They are never business-opportunity,
+Candidate, Entry, or Outcome denominators. A future Candidate contract must pre-register episode
+identity, persistence/hysteresis, and re-arm semantics. Until then, repeated Candidate observations,
+state flicker, and leave/re-enter transitions cannot be counted automatically as independent
+opportunities.
+
+Rates name their numerator and conditioning denominator. Collector heartbeats, duplicates,
+unrelated facts, arbitrary timer ticks, and unchanged-state evaluations are not business
+denominators. Candidate observations, distinct opportunity episodes, and admissions are different
+quantities. `NO_TRADE=0` is the no-position comparator over the same usable cohort; it does not
+turn unavailable Policy value or null Outcome PnL into zero. A denominator is numeric only when
+its upstream scope is known; otherwise it and dependent rates are `null/UNKNOWN`, never zero.
 
 ## Review standard
 
@@ -196,6 +212,12 @@ Review the behavior, not only the diff:
   facts enter a rejected-opportunity counterfactual?
 - Is a public quote presented as a real fill?
 - Is a bounded evidence harness being mistaken for the product runtime lifecycle?
+- Could an unchanged consumed-state identity create another assessment, Decision, Candidate
+  observation, opportunity episode, or business artifact?
+- Are forward risk scenarios being counted as separate opportunities or represented as promised
+  holding periods?
+- Does any future Candidate-capable closure define a separate immutable position-management Policy
+  before Candidate, rather than inheriting a historical fixed-horizon exit?
 - Does the task declaration match every changed input, Policy, Outcome, or permission surface?
 - Is new infrastructure consumed by this closure?
 - Is governance or replay cost directly necessary to prove the business behavior?

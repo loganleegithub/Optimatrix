@@ -150,46 +150,96 @@ def test_current_stage_authorizes_exactly_one_next_closure() -> None:
 
     marker = "**Sole authorized next product-capability closure:**"
     assert current_stage.count(marker) == 1
-    assert f"{marker} `RADAR_ESTABLISHMENT`" in current_stage
+    assert f"{marker} `STRUCTURE_ASSESSMENT_REACHABILITY`" in current_stage
     assert "FIXED_POLICY_PUBLIC_SHADOW" not in current_stage
     assert "**Implemented capability:** `OUTCOME_TRUTH` (bounded contract only)" in current_stage
     assert "**Production Radar reachability:** `NOT_ESTABLISHED`" in current_stage
     assert "## Queued sequence — not authorized" in current_stage
 
 
-def test_authority_separates_continuous_radar_from_bounded_evidence() -> None:
+def test_authority_separates_changed_state_radar_from_bounded_evidence() -> None:
     constitution = (ROOT / "docs/authority/PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     architecture = (ROOT / "docs/authority/SYSTEM_ARCHITECTURE.md").read_text(encoding="utf-8")
     delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
     radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    task = (ROOT / "tasks/RADAR_AUTHORITY_REALIGNMENT.md").read_text(encoding="utf-8")
+    active_radar, historical_radar = radar.split(
+        "## NON-ACTIVE HISTORICAL APPENDIX",
+        maxsplit=1,
+    )
+    target_authority = "\n".join(
+        (constitution, current_stage, architecture, delivery, active_radar, readme, task)
+    )
+    multiplication_sign = chr(0x00D7)
 
     assert "one shared stream of authorized public market facts" in constitution
     assert "Bounded evidence duration never defines the Online Runtime lifecycle" in constitution
-    assert "`policy_evaluable_assessment_count > 0`" in current_stage
-    assert "`executed_cycle_count >= 2`" in current_stage
-    assert "`policy_action != null`" in current_stage
-    assert "`action_cycle_count = 1`" in current_stage
+    assert "holding time is an Outcome, not an Entry parameter" in constitution
+    assert "An unchanged consumed-state identity cannot create another Decision" in constitution
+    assert "positive result in one scenario alone cannot create a Candidate" in constitution
+    assert "position-management/exit Policy" in constitution
+    assert "before it may emit Candidate" in constitution
+    assert "Policy-evaluable unique-structure denominator" in constitution
+    assert "`distinct_evaluation_state_count >= 2`" in current_stage
+    assert "`evaluation_state_digest`" in current_stage
+    assert "continuously changing quote age or TTE" in current_stage
+    assert "whole-universe quote-age dispersion" in current_stage
+    assert "`risk_assessable_structure_count > 0`" in current_stage
+    assert "`calculated_risk_scenario_slot_count > 0`" in current_stage
+    assert "`CALCULATED | NOT_APPLICABLE_TTE | UNKNOWN`" in current_stage
+    assert "`NO_APPLICABLE_RISK_SCENARIO`" in current_stage
+    assert "not a generic" in current_stage
+    assert "dependency index" in current_stage
+    assert "does not require or emit a Policy action" in current_stage
     assert "does not require a one-hour or six-hour run" in current_stage
-    assert "closure may reuse existing inspection/replay support" in current_stage
+    assert "This closure may reuse existing" in current_stage
+    assert "inspection/replay support" in current_stage
     assert "new replay artifact, drift taxonomy, bundle" in current_stage
-    assert "removing only the unavailable" in current_stage
-    assert "scheduled-block fact from Candidate eligibility" in current_stage
+    assert "target Radar assessment does not consume" in current_stage
+    assert "that non-market admission fact" in current_stage
+    assert "one structure assessment unit" in current_stage
+    assert "not planned holding periods, exit clocks, or" in current_stage
     assert "one continuously appended CanonicalEvent / Market Tape" in architecture
     assert "does not require per-fact or per-RPC" in architecture
+    assert "arbitrary timer tick that" in architecture
+    assert "leaves the consumed evaluation state unchanged" in architecture
+    assert "historical fixed-horizon rule by implication" in architecture
     assert "## Denominator integrity" in delivery
+    assert "risk-scenario diagnostic ledger" in delivery
+    assert "never business-opportunity" in delivery
     assert "`UNKNOWN` availability is not economic `ABSTAIN`" in radar
     assert "Sixty minutes is a rolling feature lookback" in radar
     assert "**not yet implemented**" in radar
     assert "`DERIBIT_PUBLIC_SHORT_VOL_RADAR_INPUT`" in radar
-    assert "`OBSERVED_PATH_STRESS_FIXED_PRIOR_RADAR_POLICY`" in radar
-    assert "`SHORT_VOL_RADAR_SCAN_SUMMARY`" in radar
-    assert "cycle_status = EXECUTED | SKIPPED | UNAVAILABLE" in radar
-    assert "`TTE_BUFFER` remains a Policy predicate" in radar
+    assert "`OBSERVED_PATH_STRESS_FIXED_PRIOR_RADAR_ASSESSMENT`" in radar
+    assert "No new Radar receipt/witness identity" in radar
+    assert "## Bounded acceptance observation" in radar
+    assert "`SHORT_VOL_RADAR_EVALUATION_WITNESS`" not in radar
+    assert "trigger_kind = MARKET_FACT | NECESSARY_TIME_BOUNDARY" in radar
+    assert "An unchanged trigger emits no Radar business artifact" in radar
+    assert "does not persist a second artifact for every changed quote" in radar
+    assert "one assessment containing that scenario vector" in active_radar
+    assert "not a planned holding period, exit timer, or separate business" in active_radar
+    assert f"legal structure {multiplication_sign} all four configured horizons" not in active_radar
+    assert "fixed maximum-exposure clock" in historical_radar
     assert "NON-ACTIVE HISTORICAL APPENDIX" in radar
-    assert "`RADAR_ESTABLISHMENT`, which establishes" in readme
-    assert "Do not run these commands for `RADAR_ESTABLISHMENT`" in readme
+    assert "`STRUCTURE_ASSESSMENT_REACHABILITY`, which establishes" in readme
+    assert "finite holding horizon" not in readme
+    assert "Do not run these commands for `STRUCTURE_ASSESSMENT_REACHABILITY`" in readme
+    for forbidden in (
+        "OBSERVED_PATH_STRESS_FIXED_PRIOR_RADAR_POLICY",
+        "SHORT_VOL_RADAR_SCAN_SUMMARY",
+        "SHORT_VOL_RADAR_STATE_CHANGE_SUMMARY",
+        "`executed_cycle_count >= 2`",
+        "`policy_action != null`",
+        "`action_cycle_count = 1`",
+        f"legal structure {multiplication_sign} every configured horizon",
+        "RADAR_ESTABLISHMENT",
+        "SHORT_VOL_RADAR_EVALUATION_WITNESS",
+    ):
+        assert forbidden not in target_authority
 
 
 def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:

@@ -52,7 +52,8 @@ identity and behavioral delta. Follow
 ## Product operating behavior
 
 Describe the intended ongoing lifecycle independently of any bounded validation command: fact
-capture, state, trigger/cadence, Decision, admission, and asynchronous Outcome behavior.
+capture, changed-consumed-state or necessary-time-boundary trigger, unchanged-state suppression,
+Decision, admission, position management, and asynchronous Outcome behavior.
 
 ## Validation harness
 
@@ -72,7 +73,7 @@ Mark every class independently:
 |---|---|
 | Direct synthetic/behavior | REQUIRED \| NOT_APPLICABLE |
 | Bounded public capture | REQUIRED \| NOT_APPLICABLE |
-| Production Radar reachability | REQUIRED \| NOT_APPLICABLE |
+| Production structure-assessment reachability | REQUIRED \| NOT_APPLICABLE |
 | Fresh-process replay | REQUIRED \| NOT_APPLICABLE |
 | Shadow Outcome | REQUIRED \| NOT_APPLICABLE |
 | Qualification | REQUIRED \| NOT_APPLICABLE |
@@ -96,9 +97,11 @@ Mark every class independently:
 
 **Persisted contract identity/replay compatibility:** ... | `NOT_APPLICABLE`
 
-**Business denominators:** name every numerator, unit, and conditioning denominator. Keep scan
-cycles, structures, structure-by-horizon assessment opportunities, completed and Policy-evaluable
-assessments, actions, Entries, and mature Outcomes distinct, or mark `NOT_APPLICABLE`.
+**Business denominators:** name every numerator, unit, and conditioning denominator. Keep accepted
+triggers, distinct changed evaluation states, unique structures, structure-level assessments,
+diagnostic risk-scenario calculations, Candidate episodes, Entries, and mature Outcomes distinct,
+or mark `NOT_APPLICABLE`. A scenario count or unchanged trigger is never an opportunity
+denominator.
 
 ## Acceptance
 
@@ -122,9 +125,11 @@ assessments, actions, Entries, and mature Outcomes distinct, or mark `NOT_APPLIC
 **Environment and minimum duration:** ...
 
 **Required report:** only fields that prove the assertion. For a full Radar/Shadow report include
-records and actual trades; due scans and funnel denominators; coverage/readiness;
-gap/reconnect/platform/source anomalies; actions/candidates/entries/Outcomes including zero;
-causal sequences; applicable artifact digests; fresh-process equality when required; limitations.
+records and actual trades; accepted and unchanged trigger diagnostics; distinct evaluation states
+and structure-level funnel denominators; configured/calculated/not-applicable/unknown risk-scenario
+slot counts; coverage/readiness; gap/reconnect/platform/source anomalies; Candidate
+episodes/Entries/Outcomes including zero; causal sequences; applicable artifact digests;
+fresh-process equality when required; limitations.
 
 **Private API:** FORBIDDEN unless `CURRENT_STAGE.md` explicitly grants it.
 

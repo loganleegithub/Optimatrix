@@ -24,47 +24,76 @@ amend this contract.
 ```text
 one continuously captured canonical public fact stream
 → rolling strict-as-of market and risk state
-→ repeated authorized-universe scan cycles
+→ changed-consumed-state / necessary-time-boundary detection
+→ event-driven evaluation of the current authorized structure universe
 → legal 1:1 vertical pairs and per-structure quote/executability readiness
-→ finite-horizon insurance assessments for 30m / 1h / 2h / 4h
-→ availability plus RESEARCH_CANDIDATE | WATCH | ABSTAIN when evaluable
-→ separate immutable Shadow admission
+→ one structure-level assessment carrying a 30m / 1h / 2h / 4h forward risk-scenario vector
+→ availability plus existing inspection/recomputation output when acceptance samples a state
+→ later separately authorized structure-level Entry and position-management Policies
+→ separate immutable Shadow admission when authorized
 → asynchronous strictly future actual and labeled counterfactual evaluation
 ```
 
 `RESEARCH_CANDIDATE` is the current public-Shadow schema name for a candidate-class research
-decision. It grants no trading authority.
+decision under the historical bounded Policy. It grants no trading authority and is not an output
+required by `STRUCTURE_ASSESSMENT_REACHABILITY`.
 
 ## Operating semantics
 
-**Implementation status:** the operating, observation, Policy-boundary, and scan-accounting
-semantics before the historical appendix are the authorized `RADAR_ESTABLISHMENT` target and are
-**not yet implemented**. Their prospective identities are
-`DERIBIT_PUBLIC_SHORT_VOL_RADAR_INPUT`,
-`OBSERVED_PATH_STRESS_FIXED_PRIOR_RADAR_POLICY`, and
-`SHORT_VOL_RADAR_SCAN_SUMMARY`. They must not be persisted under the existing input, Policy, or
-DecisionReceipt identities. The currently implemented bounded behavior remains the compatibility
-contract in the explicitly non-active historical appendix below.
+**Implementation status:** the operating, observation, Policy-boundary, and assessment-accounting
+semantics before the historical appendix are the authorized
+`STRUCTURE_ASSESSMENT_REACHABILITY` target and are **not yet implemented**. Their prospective
+identities are `DERIBIT_PUBLIC_SHORT_VOL_RADAR_INPUT` and
+`OBSERVED_PATH_STRESS_FIXED_PRIOR_RADAR_ASSESSMENT`. No new Radar receipt/witness identity and no
+prospective structure-level aggregation, Entry Policy, or position-management Policy identity is
+authorized. Target input or assessment meaning must not be persisted under the existing input,
+Policy, or DecisionReceipt identities. The currently implemented bounded behavior remains the
+compatibility contract in the explicitly non-active historical appendix below.
 
-1. Market facts flow through one shared collector and tape used by scans and later Outcomes. A
+1. Market facts flow through one shared collector and tape used by online assessments and later
+   Outcomes. A
    structure, Decision, or Entry does not start a new collector. This is not a network
    exactly-once guarantee; duplicates and conflicts remain canonical evidence.
-2. Sixty minutes is a rolling feature lookback, not a run duration or a delay between scans.
+2. Sixty minutes is a rolling feature lookback, not a run duration or a delay between assessments.
    Warm-up is needed only when required history is genuinely unavailable.
 3. Reconnect does not erase history already proved complete. The disconnected interval is
    `UNKNOWN` until sequence continuity or a separately authorized backfill positively covers it.
-   Backfill may restore only future scan readiness and never rewrite an earlier Decision.
+   Backfill may restore only future assessment readiness and never rewrite an earlier Decision.
 4. Market-global risk readiness, universe coverage, per-structure quote/executability readiness,
-   Policy action, and Shadow admission are separate states. One may not erase the others.
+   structure assessment, future Policy action, and Shadow admission are separate states. One may
+   not erase the others.
 5. Missing or stale price/depth facts for one instrument make dependent structures unavailable,
    not every otherwise complete structure. An explicitly declared market-global Policy feature
    may still depend on aggregate facts; coverage loss remains explicit.
-6. `UNKNOWN` availability is not economic `ABSTAIN`. Zero Candidate is a numeric observation only
-   over a nonzero Policy-evaluable-assessment denominator.
+6. `UNKNOWN` availability is not economic `ABSTAIN`.
+   `STRUCTURE_ASSESSMENT_REACHABILITY` records structure assessment availability and does not
+   manufacture a Candidate action.
 7. Bounded captures, fixed cutoffs, long evidence runs, and replay bundles are validation
    harnesses or historical artifacts, not the product's processing lifecycle.
 8. Actual Shadow Outcomes and rejected-opportunity counterfactual evaluation are distinct; neither
    public quotes nor counterfactuals are fills.
+9. One unique legal leg pair at one relevant market state is one structure assessment unit. Its
+   four forward risk scenarios are components of one assessment, not four opportunities or
+   promised holding periods.
+10. An unchanged consumed-state identity produces no new assessment, Decision, opportunity
+    episode, or business artifact. Collector health remains separately observable.
+
+Market acquisition, rolling-state reduction, and Radar evaluation form one continuous streaming
+pipeline. Each accepted canonical fact updates reduced state first. Evaluation occurs only when:
+
+1. an accepted fact changes a value consumed by universe construction, availability, executable
+   economics, or risk assessment; or
+2. a necessary time boundary changes a consumed value, including quote/catalog freshness, TTE or
+   settlement eligibility, or rolling-window membership.
+
+`evaluation_state_digest` identifies the consumed semantic values. It excludes raw wall time,
+continuously changing quote age or TTE, receipt timestamps, heartbeat bookkeeping, and
+`capture_seq` by itself; `capture_seq` remains the causal as-of boundary. Time creates a trigger
+only when a declared consumed classification or membership changes, such as fresh→stale,
+entry/exit from TTE eligibility, or a rolling-window member entering/leaving. Market-watermark
+progress caused by a new fact remains a `MARKET_FACT`, not a timer scan. Bursting updates may be
+coalesced into one strict-as-of evaluation. A duplicate, heartbeat, unrelated fact, arbitrary
+timer tick, or replay that leaves this digest unchanged creates no Radar business artifact.
 
 ## Observation semantics
 
@@ -120,15 +149,15 @@ basis input and trades remain flow input. The accepted bounded Market/Decision i
 
 The accepted bounded Policy contains a scheduled-block predicate, but the current production
 adapter has no authorized `SCHEDULED_BLOCK_STATE` producer. Its absence remains `UNKNOWN` under
-that historical identity and is never fabricated as `CLEAR`. The target
-`OBSERVED_PATH_STRESS_FIXED_PRIOR_RADAR_POLICY` adds no source and removes this unavailable fact
-from economic Candidate eligibility. A future Shadow-admission contract may add a sourced
-scheduled-event veto only through a separate authority change.
+that historical identity and is never fabricated as `CLEAR`. The target Radar assessment adds no
+source and does not consume this non-market admission fact. A future structure-level Entry or
+Shadow-admission contract must explicitly decide whether to add a sourced scheduled-event veto;
+no future contract inherits `CLEAR` or a veto by implication.
 
 The runtime refreshes the same Deribit public option/future catalog every 300 seconds and requires
-the latest complete snapshot to be no more than 360 seconds old at scan time. Each snapshot
+the latest complete snapshot to be no more than 360 seconds old at evaluation time. Each snapshot
 includes the 0–72h Decision range plus only the 360-second expiry-transition buffer; the projector
-still scans exactly 0–72h. A complete snapshot binds reference membership, every member's
+still evaluates exactly 0–72h. A complete snapshot binds reference membership, every member's
 same-generation instrument source sequence, and the canonical metadata-set digest. A failed
 refresh publishes no new generation.
 
@@ -136,15 +165,16 @@ Catalog completeness and quote readiness are different. A missing/stale catalog 
 complete-universe coverage `UNKNOWN`. Inside a known generation, a missing, stale, or
 depth-unknown quote makes only structures using that instrument unavailable. It is reported in
 coverage and unavailable-reason counts and does not suppress completed assessments for unrelated
-structures. The Radar establishment closure uses the already implemented leg-quote execution path;
-it does not authorize new combo acquisition. A later task may activate visible combo economics
-under an explicit input-contract change.
+structures. The structure-assessment-reachability closure uses the already implemented leg-quote
+execution path; it does not authorize new combo acquisition. A later task may activate visible
+combo economics under an explicit input-contract change.
 
 ## Risk method
 
-The deployed method is `OBSERVED_PATH_STRESS_FIXED_PRIOR`. It is a transparent, deterministic
-research prior, not a calibrated probability model. It scales complete observed range/variation
-into a candidate horizon and adds explicit multipliers for:
+The implemented method is `OBSERVED_PATH_STRESS_FIXED_PRIOR`. It is a transparent, deterministic
+research prior, not a calibrated probability model. The target Radar assessment applies its
+formula to each declared forward risk scenario and returns one scenario vector for the structure.
+It scales complete observed range/variation into each scenario and adds explicit multipliers for:
 
 - short/long-window acceleration;
 - directional efficiency;
@@ -158,12 +188,12 @@ Any missing required path or flow coverage returns incomplete risk and fails clo
 The present formula and its quote-age treatment remain uncalibrated Policy behavior. In
 particular, current whole-universe quote-age dispersion is an explicitly market-global dependency;
 localizing price/depth availability does not silently localize that multiplier.
-`RADAR_ESTABLISHMENT` may separate readiness and health diagnostics but may not tune these
-multipliers or reinterpret them as demonstrated edge.
+`STRUCTURE_ASSESSMENT_REACHABILITY` may separate readiness and health diagnostics but may not tune
+these multipliers or reinterpret them as demonstrated edge.
 
 ## Insurance reserve
 
-For each candidate vertical and horizon, the deployed assessment freezes:
+For each executable vertical and forward risk scenario, the assessment calculates:
 
 - visible entry credit and immediate close debit;
 - entry and close fee upper bounds;
@@ -173,54 +203,41 @@ For each candidate vertical and horizon, the deployed assessment freezes:
 - residual time-value floor;
 - liquidity and method-uncertainty reserves.
 
-`ResidualTimeValueFloor` is:
+`ResidualTimeValueFloor(risk_scenario_seconds)` is:
 
 ```text
 entry-frame immediate close notional
-× sqrt(max(TTE - horizon, 0) / TTE)
+× sqrt(max(TTE - risk_scenario_seconds, 0) / TTE)
 ```
 
-The claim reserve is the larger of that floor and stress intrinsic payout. This is a fixed,
-falsifiable prior; future Shadow outcomes must determine whether it is conservative enough.
+The claim reserve is the larger of that floor and stress intrinsic payout. The variable is a
+stress-projection input, not a planned holding period, exit timer, or separate business
+opportunity. This is a fixed, falsifiable prior; future Shadow outcomes must determine whether it
+is conservative enough.
 
-## Deployed bounded Policy predicates
+## Target structure and risk-scenario inputs
 
-The accepted bounded Policy identity currently requires all predicates below for a
-candidate-class action. This list records deployed compatibility; it does not collapse the Radar
-funnel back into one global readiness flag. In particular, platform and scheduled-block facts are
-currently folded into candidate eligibility. Its broad `complete current frame` and four-sided-leg
-requirements are legacy predicates, not statements that the target input contract is already
-implemented.
+`STRUCTURE_ASSESSMENT_REACHABILITY` does not promote the accepted bounded Policy predicates,
+ranking, or WATCH mapping into a future structure-level Candidate contract. A later closure must
+explicitly define how one structure's scenario vector and exit behavior map to one action; it may
+not silently choose the easiest, most profitable, or most conservative scenario after seeing
+results.
 
-A research candidate requires all of:
+The target Radar preserves the observable structure and sizing inputs: OTM-only 1:1 same-expiry
+same-side verticals, TTE from 1,800 through 259,200 seconds, quantity `0.04`, forward risk
+scenarios `(1,800, 3,600, 7,200, 14,400)` seconds, and a 1,800-second settlement buffer. Every
+unique legal structure receives one assessment containing that scenario vector.
+Each configured slot reports `CALCULATED | NOT_APPLICABLE_TTE | UNKNOWN`. A scenario beyond the
+structure's usable pre-settlement lifetime is `NOT_APPLICABLE_TTE` unless a later authorized
+contract models settlement risk. It is neither a failed opportunity nor an `UNKNOWN`. Missing
+evidence for an applicable scenario remains `UNKNOWN`.
 
-- complete current frame and complete risk;
-- TTE greater than horizon plus settlement buffer;
-- visible four-sided quantity and immediate close;
-- credit/friction ratio at least 2.5;
-- short-strike distance at least 1.25 times adverse stress;
-- minimum premium/max-loss ratio;
-- no same-side breakout or directional-flow veto;
-- a current-generation platform barrier establishing `OPEN`, and no scheduled block;
-- positive conservative insurance margin.
+## Incremental assessment availability and denominator accounting
 
-The target `OBSERVED_PATH_STRESS_FIXED_PRIOR_RADAR_POLICY` preserves the horizons, economic
-formulas, thresholds, reserves, platform predicate, non-schedule vetoes, ranking, and legacy WATCH
-mapping above. Its only Policy delta is removing the scheduled-block predicate. Legacy WATCH means
-the best-ranked completed assessment when none passes; it does not mean near-threshold,
-actionable, or likely to become a future Candidate.
+Each distinct executed evaluation state reports linked ledgers without mixing units:
 
-The preserved universe and sizing parameters are exact: OTM-only 1:1 same-expiry same-side
-verticals, TTE from 1,800 through 259,200 seconds, quantity `0.04`, configured horizons
-`(1,800, 3,600, 7,200, 14,400)` seconds, and a 1,800-second settlement buffer. Every legal
-structure is paired with all four configured horizons. `TTE_BUFFER` remains a Policy predicate and
-may not be moved into denominator filtering.
-
-## Scan availability and denominator accounting
-
-Each due scan reports linked ledgers without mixing units:
-
-- cycle counts: due, executed, globally risk-ready, and action cycles;
+- evaluation-state counts: accepted evaluation triggers, distinct changed states, executed
+  evaluations, globally risk-ready evaluations, and unchanged-trigger diagnostics;
 - `legal_structure_count`: authorized active same-expiry, same-side verticals with valid
   short/long strike order, compatible contract size, OTM-only legs, and TTE from 1,800 through
   259,200 seconds;
@@ -228,81 +245,107 @@ Each due scan reports linked ledgers without mixing units:
   leg-quote execution path;
 - `round_trip_executable_structure_count`: observable structures with valid entry and
   immediate-close sides, sufficient depth for quantity `0.04`, and positive visible entry credit;
-- `assessment_opportunity_count`: legal structure × all four configured horizons, before any
-  horizon-specific Policy predicate is applied;
-- `completed_assessment_count`: structure/horizon opportunities with all required market-risk,
-  cost, liquidity, and reserve inputs;
-- `policy_evaluable_assessment_count`: completed assessments for which every target Policy
-  predicate fact is available;
-- `passing_assessment_count`: Policy-evaluable assessments that pass every target candidate
-  predicate.
+- `risk_assessable_structure_count`: executable structures whose every configured scenario slot is
+  `CALCULATED` or `NOT_APPLICABLE_TTE`, with no required applicable input `UNKNOWN` and at least
+  one slot `CALCULATED`; an all-not-applicable structure remains one classified assessment with
+  reason `NO_APPLICABLE_RISK_SCENARIO` but is not risk-assessable;
+- `configured_risk_scenario_slot_count`, `calculated_risk_scenario_slot_count`,
+  `not_applicable_tte_risk_scenario_slot_count`, and `unknown_risk_scenario_slot_count`: diagnostic
+  calculation workload only.
 
-Each item has one terminal funnel stage and zero or more diagnostic reasons; multiple simultaneous
-causes are not discarded to manufacture one primary reason. Candidate observations, candidate
-scan cycles, distinct deduplicated opportunity episodes, admitted Entries, and mature Outcomes
-remain separate measures.
+Each structure has one terminal funnel stage and zero or more diagnostic reasons; multiple
+simultaneous causes are not discarded to manufacture one primary reason. One structure's four
+scenario calculations never enter a business opportunity denominator.
 
-Availability is independent from action:
+Availability is independent from any future action:
 
 ```text
 evaluation_status = COMPLETE | PARTIAL | UNKNOWN
-policy_action = RESEARCH_CANDIDATE | WATCH | ABSTAIN | null
+policy_action = null
 ```
 
-Only a Policy-evaluable assessment can contribute to an economic action. The target
-`policy_action` is `null` for unavailable evaluation. A legacy safety `ABSTAIN` compatibility
-output remains separately labeled and is excluded from Policy action rates.
+`STRUCTURE_ASSESSMENT_REACHABILITY` has no target Candidate contract. Historical
+`RESEARCH_CANDIDATE | WATCH | ABSTAIN` outputs remain inside the bounded compatibility contract
+and are excluded from target Radar counts.
 
 A denominator is numeric only when its upstream scope is known. Unknown catalog or universe scope
 makes legal-structure and dependent counts/rates `null/UNKNOWN`, never zero. Zero is valid only
-after the relevant scope and readiness boundary were completely observed. With
-`policy_evaluable_assessment_count > 0`, zero Candidate describes only the evaluated window or,
-under partial coverage, the evaluated subset; it does not prove Policy value or complete-universe
-absence.
+after the relevant scope and readiness boundary were completely observed. Candidate rate remains
+undefined until a later structure-level Entry Policy and Candidate-episode contract exist.
 
-## Target Radar scan summary
+That later Candidate contract must pre-register episode identity, persistence/hysteresis, and
+re-arm rules. Forward risk-scenario labels do not enter the key. Repeated observations and
+microstructure flicker—including a brief leave/re-enter transition—cannot be counted automatically
+as independent opportunities.
 
-Every due cycle emits one prospective `SHORT_VOL_RADAR_SCAN_SUMMARY` with:
+## Bounded acceptance observation
+
+Online evaluation does not persist a second artifact for every changed quote or evaluated state.
+When bounded acceptance samples a distinct executed evaluation state, existing
+inspection/recomputation support may report:
 
 ```text
-cycle_status = EXECUTED | SKIPPED | UNAVAILABLE
+trigger_kind = MARKET_FACT | NECESSARY_TIME_BOUNDARY
+evaluation_status = COMPLETE | PARTIAL | UNKNOWN
 ```
 
-The due time/trigger identity and target input/Policy identities are always present.
-`SKIPPED` and `UNAVAILABLE` require a non-empty exact reason; frame, as-of sequence, assessment,
-Policy action, and any downstream denominator whose scope was not known are `null`. `EXECUTED`
-means the scanner actually projected and evaluated the available as-of state; its
-`action_cycle_count` is one exactly when `policy_action` is non-null, otherwise zero.
+An unchanged trigger emits no Radar business artifact. Collector liveness and health may be
+recorded separately without creating an assessment, Decision, Candidate observation, or
+opportunity. The sampled report shows as available:
 
-For an executed cycle, the summary freezes as available:
-
-- current frame identity and source lineage;
-- audit Git commit, authoritative scoped runtime-source digest, and immutable deployed Policy
-  identity/digest;
-- legal-universe identity and every funnel denominator above;
+- `evaluation_state_digest`, trigger kind/reason, exact strict-as-of `capture_seq`, current frame
+  identity, and source lineage;
+- audit Git commit, authoritative scoped runtime-source digest, target input identity, and target
+  assessment identity/digest;
+- legal-universe identity and every structure-level and risk-scenario diagnostic count above;
 - global risk-input readiness, universe coverage, and structure-readiness summaries;
-- unavailable and predicate-failure reason summaries;
-- selected assessment, predicates, and ranking result;
-- the exact action and reason.
+- unavailable and calculation-failure reason summaries;
+- assessment-set identity and the one sampled structure assessment needed to prove reachability.
 
-It refers to sealed segment identity plus the exact as-of `capture_seq` when present,
-frame/lineage digest, ledger counts and reasons, assessment-set digest, selected assessment when
-present, exact availability/action, and its own content digest. It does not change or impersonate
-the existing `SHORT_VOL_DECISION_RECEIPT` schema and need not duplicate reconstructable rolling
-lineage.
+The report is reconstructed from canonical facts and existing inspection support. It is not a new
+runtime receipt, witness schema, persisted contract identity, or per-state artifact, and it does
+not change or impersonate `SHORT_VOL_DECISION_RECEIPT`. The full derived universe remains
+reconstructable rather than stored. A future authorized Candidate transition may persist its
+selected structure under that later contract.
 
-The Git commit is audit provenance. Every legal structure/configured-horizon pair is an assessment
-opportunity; quote or executability filters may not erase it before denominator accounting.
-Predicate failures remain separate from availability diagnostics over incomplete assessments.
+The Git commit is audit provenance. Every unique legal structure at the exact evaluation state is
+one assessment unit. Quote or executability filters may not erase it before structure-level
+denominator accounting. Risk-scenario status remains diagnostic inside that one assessment.
 
 ## Queued forward-cohort semantics
 
-The following Outcome and rejected-opportunity behavior is product direction for the later
-Fixed-Policy forward cohort. `RADAR_ESTABLISHMENT` does not implement or invoke it.
+The following Entry, position-management, Outcome, and rejected-opportunity behavior is product
+direction for later separately authorized closures. `STRUCTURE_ASSESSMENT_REACHABILITY` does not
+implement or invoke it.
 
-Every Shadow entry must freeze its Decision, structure, entry economics, assessment, horizon, and
-Policy identity. Observed Outcome contains only facts strictly after entry and no later than actual
-exit. Any continued full-horizon path is a separately labeled counterfactual.
+Before any Candidate action, forward cohort, or Shadow Entry, authority must define one explicit
+structure-level aggregation rule for the forward risk-scenario vector, one immutable Entry Policy,
+one immutable position-management Policy, its consumed post-Entry state, hard
+latest-exit/expiry boundaries, and a new forward Outcome identity. No historical fixed-horizon
+rule is inherited.
+
+Every Shadow Entry must freeze its Decision, fixed legs and ratio, entry economics, Entry Policy
+identity, position-management Policy identity, hard risk boundaries, and causal Entry sequence.
+On each relevant post-Entry state change, the position-management Policy emits:
+
+```text
+position_action = HOLD | CLOSE | UNKNOWN
+```
+
+Relevant changes are only inputs declared by that Policy, such as executable close economics,
+remaining premium, underlying/short-strike risk, path/tail state, liquidity, platform state, TTE,
+and hard-boundary status. A quote tick does not automatically require a close, and this contract
+does not invent thresholds.
+
+Actual holding duration is derived from future state transitions. Actual exposure ends at the
+first strictly post-Entry state where the frozen Policy requests `CLOSE` and an executable close
+exists, or at settlement under a separately authorized contract. A requested close without
+executable evidence remains open/unknown and never manufactures a fill. A latest-exit,
+maximum-exposure, expiry, or emergency boundary is a hard obligation to seek exit, not a planned
+holding period.
+
+The configured 30m/1h/2h/4h risk scenarios may later be retained as separately labeled
+counterfactual checkpoints. They do not determine actual exit or actual holding time.
 
 When a later stage authorizes a forward cohort, a pre-registered sample of complete rejected
 assessments may be evaluated from facts strictly after its Decision to measure false negatives and
@@ -318,6 +361,30 @@ minimal sealed input. It is determinism evidence, not qualification.
 No current task inherits this appendix's 3,600-second duration, fixed cutoff, retry, connection
 ceremony, CLI, bundle, or replay requirements unless `CURRENT_STAGE.md` and that task's evidence
 matrix explicitly name the historical `PUBLIC_SHADOW_SHORT_VOL_OUTCOME_TRUTH` contract.
+
+Within this appendix only, `horizon_seconds` retains its accepted historical meaning as the
+bounded position's fixed maximum-exposure clock that may produce `HORIZON` or
+`UNEXITABLE_AT_HORIZON`. That field and exit behavior are not the meaning of the target
+forward-risk scenarios and may not be inherited by a future Entry or position-management
+contract.
+
+### Historical bounded Policy predicates
+
+The accepted bounded Policy identity requires all predicates below for a candidate-class action.
+Its broad `complete current frame`, four-sided-leg requirement, structure/horizon ranking, and
+WATCH mapping are compatibility semantics, not the target Radar contract.
+
+A historical research candidate requires all of:
+
+- complete current frame and complete risk;
+- TTE greater than horizon plus settlement buffer;
+- visible four-sided quantity and immediate close;
+- credit/friction ratio at least 2.5;
+- short-strike distance at least 1.25 times adverse stress;
+- minimum premium/max-loss ratio;
+- no same-side breakout or directional-flow veto;
+- a current-generation platform barrier establishing `OPEN`, and no scheduled block;
+- positive conservative insurance margin.
 
 This section preserves the accepted `OUTCOME_TRUTH` artifact meaning for deterministic
 compatibility. Its one cutoff, one admission, connection proof, CLI, and bundle behavior describe

@@ -5,13 +5,18 @@ system. Its first product slice under construction is Deribit BTC-USDC defined-r
 current permission boundary is production-public Shadow only: no private API, account, margin,
 order, fill, or money access exists.
 
-The current system asks one finite-horizon underwriting question:
+The target Radar asks one structure-level assessment question:
 
-> For a BTC 0–3DTE defined-risk option structure and a finite holding horizon, is the visible
-> executable premium sufficient for observed path, touch, tail, liquidity, cost, and uncertainty?
+> For one executable BTC 0–3DTE defined-risk structure at a strict as-of market state, what
+> visible entry/close economics and path, tail, liquidity, cost, and uncertainty reserves are
+> observed across the declared forward risk scenarios?
 
-It returns `RESEARCH_CANDIDATE`, `WATCH`, or `ABSTAIN`. A research candidate is not a qualified
-strategy and grants no trading authority.
+The configured 30m / 1h / 2h / 4h values are forward risk scenarios for one structure. They are
+not promised holding periods, exit timers, or four separate opportunities. The historical bounded
+system returns `RESEARCH_CANDIDATE`, `WATCH`, or `ABSTAIN`; target structure-level aggregation,
+Entry Policy, and state-driven position-management Policy are not yet authorized. A scenario that
+extends beyond usable pre-settlement life is `NOT_APPLICABLE_TTE`, not a failed opportunity. A
+research candidate is not a qualified strategy and grants no trading authority.
 
 ## Authority and current status
 
@@ -28,17 +33,21 @@ versions required for compatibility; those versions grant no product authority.
 
 The bounded Deribit capture/replay foundation plus the accepted Decision Truth and Outcome Truth
 semantics are implemented. Production Radar reachability is not established: current evidence has
-not shown repeated real scans with nonzero completed- and Policy-evaluable-assessment denominators.
-The sole authorized next closure is `RADAR_ESTABLISHMENT`, which establishes one continuously
-captured public fact stream, rolling state, repeated scans, and localized per-structure
-availability. Qualification, Challenger research, promotion, private/account access, and execution
-remain unauthorized.
+not shown distinct live evaluations caused by changed consumed market state or necessary time
+boundaries with a nonzero risk-assessable-structure denominator.
+The sole authorized next closure is `STRUCTURE_ASSESSMENT_REACHABILITY`, which establishes only
+one prerequisite: a continuously consumed public fact stream, rolling state, changed-state-driven
+structure assessment, and localized per-structure availability. An unchanged state creates no new
+assessment or opportunity. Full production Radar reachability remains `NOT_ESTABLISHED`.
+Candidate/Entry Policy, position management, qualification, Challenger research, promotion,
+private/account access, and execution remain unauthorized.
 
 ## Repository shape
 
 - `market_tape`: canonical public facts, causal order, gap/reconnect, capture, and replay
 - `options_domain`: observed option facts and visible defined-risk structure economics
-- `short_vol_radar`: current frames, finite-horizon risk, insurance assessment, and decision
+- `short_vol_radar`: current frames, forward risk-scenario vectors, structure assessment, and
+  historical bounded decision compatibility
 - `shadow_engine`: entry-frozen future-only Shadow position and Outcome primitives
 - `radar_runtime`: Deribit public adapter and deterministic CLI composition
 
@@ -64,10 +73,10 @@ make UV='python3 -m uv' sync
 ## Legacy bounded capture and Decision Truth tools
 
 The commands below remain useful for the accepted bounded artifact contracts. They do not define
-the Online Runtime lifecycle or the acceptance criteria for `RADAR_ESTABLISHMENT`.
-**Do not run them for the current authority realignment or Radar establishment unless a later task
-marks that exact historical evidence class `REQUIRED`.** They document how accepted compatibility
-artifacts were created.
+the Online Runtime lifecycle or the acceptance criteria for
+`STRUCTURE_ASSESSMENT_REACHABILITY`. **Do not run them for the current authority realignment or
+structure-assessment reachability unless a later task marks that exact historical evidence class
+`REQUIRED`.** They document how accepted compatibility artifacts were created.
 
 The Deribit collector requires no credentials:
 
@@ -107,10 +116,16 @@ This creates one bounded capture receipt and one Decision receipt, not continuou
 The 3,600-second duration belongs to that historical harness; in the product, 60 minutes is a
 rolling feature lookback that is warmed once or restored from covered persisted facts.
 
-A numeric zero-Candidate count requires a nonzero Policy-evaluable-assessment denominator and
-describes only that evaluated window or subset. Matching live/replay digests prove deterministic
-reconstruction of the sealed tape, not Radar reachability, Policy value, data completeness,
-strategy quality, fills, or trading authority.
+The historical Policy also binds one selected `horizon_seconds` to its bounded Shadow position.
+That compatibility behavior is not the target Radar meaning: forward risk scenarios do not choose
+actual holding time, and a future forward cohort must separately authorize a state-driven
+position-management Policy.
+
+A numeric zero-Candidate count requires a frozen Candidate contract—including structure-level
+aggregation, Entry and exit Policies—and a nonzero Policy-evaluable unique-structure denominator.
+It describes only that evaluated window or subset. Matching live/replay digests prove
+deterministic reconstruction of the sealed tape, not Radar reachability, Policy value, data
+completeness, strategy quality, fills, or trading authority.
 
 ## Historical bounded Outcome Truth evidence
 
@@ -123,8 +138,8 @@ the cutoff or trigger a retry.
 This cutoff and the commands below preserve historical artifact compatibility. They do not stop a
 continuous scanner, require each reconnect to wait another hour when covered history is available,
 or make a long evidence run the product processing unit.
-**Do not run these commands for `RADAR_ESTABLISHMENT`; they are not current-stage acceptance
-steps.**
+**Do not run these commands for `STRUCTURE_ASSESSMENT_REACHABILITY`; they are not current-stage
+acceptance steps.**
 
 First generate and independently replay the deterministic nonzero synthetic evidence:
 
