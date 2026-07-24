@@ -7,6 +7,7 @@ import hashlib
 import json
 import shutil
 import tarfile
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from pathlib import Path, PurePosixPath
 from typing import cast
 
@@ -19,10 +20,14 @@ from radar_runtime.shadow_report_identity import (
 )
 from radar_runtime.shadow_runtime import (
     HISTORICAL_SEMANTIC_RECEIPT_TYPE,
+    RECEIPTS_DIRECTORY,
+    RUN_RECEIPT_PATH,
     replay_shadow,
 )
 
 BUNDLE_FORMAT_ID = "OPTIMATRIX_FIXED_POLICY_PUBLIC_SHADOW_EVIDENCE_BUNDLE"
+UNKNOWN_DENOMINATOR_AUDIT_TYPE = "UNKNOWN_DENOMINATOR_AUDIT"
+UNKNOWN_DENOMINATOR_AUDIT_PATH = "UNKNOWN_DENOMINATOR_AUDIT.json"
 
 
 def _sha256(path: Path) -> str:
@@ -60,6 +65,230 @@ def _copy_tree(source: Path, target: Path) -> None:
         destination = target / path.relative_to(source)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, destination)
+
+
+def _object(value: object, label: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object")
+    return cast(dict[str, object], value)
+
+
+def _nonnegative_int(value: object, label: str) -> int:
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{label} must be a nonnegative integer")
+    return value
+
+
+def _rate(
+    numerator: int | None,
+    denominator: int | None,
+) -> dict[str, object]:
+    if denominator is None:
+        return {
+            "numerator": numerator,
+            "denominator": None,
+            "rate": None,
+            "status": "UNKNOWN_DENOMINATOR",
+        }
+    if denominator == 0:
+        if numerator not in {None, 0}:
+            raise ValueError("zero denominator has a nonzero numerator")
+        return {
+            "numerator": numerator,
+            "denominator": 0,
+            "rate": None,
+            "status": "UNDEFINED_ZERO_DENOMINATOR",
+        }
+    if numerator is None:
+        return {
+            "numerator": None,
+            "denominator": denominator,
+            "rate": None,
+            "status": "UNKNOWN_NUMERATOR",
+        }
+    if numerator > denominator:
+        raise ValueError("rate numerator exceeds its denominator")
+    with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
+        rendered = format((Decimal(numerator) / Decimal(denominator)).normalize(), "f")
+    return {
+        "numerator": numerator,
+        "denominator": denominator,
+        "rate": rendered,
+        "status": "DEFINED",
+    }
+
+
+def _reason_list(value: object, label: str) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        raise ValueError(f"{label} must contain exact nonempty reasons")
+    return cast(list[str], value)
+
+
+def _build_unknown_denominator_audit(
+    run_receipt: dict[str, object],
+    decision_receipts: dict[int, dict[str, object]],
+) -> dict[str, object]:
+    summaries = run_receipt.get("opportunity_summaries")
+    decision_digests = run_receipt.get("decision_receipt_digests")
+    if not isinstance(summaries, list) or not isinstance(decision_digests, list):
+        raise ValueError("Run receipt lacks its opportunity denominator")
+    if len(summaries) != len(decision_digests):
+        raise ValueError("opportunity and Decision receipt denominators disagree")
+
+    expected_receipt_slots: set[int] = set()
+    available_slot_count = 0
+    slots: list[dict[str, object]] = []
+    for expected_slot, raw_summary in enumerate(summaries):
+        summary = _object(raw_summary, "opportunity summary")
+        if summary.get("slot_index") != expected_slot:
+            raise ValueError("opportunity slots are not exact and ordered")
+        event_backed = summary.get("event_backed")
+        if type(event_backed) is not bool:
+            raise ValueError("opportunity event-backed state is invalid")
+        decision_digest = decision_digests[expected_slot]
+        if event_backed != isinstance(decision_digest, str):
+            raise ValueError("opportunity and Decision receipt presence disagree")
+
+        blockers: set[str]
+        quote_coverage: dict[str, object]
+        assessment_availability: dict[str, object]
+        if not event_backed:
+            reason = summary.get("admission_reason")
+            if not isinstance(reason, str) or not reason:
+                raise ValueError("no-event opportunity lacks its exact reason")
+            blockers = {reason}
+            availability = "UNAVAILABLE"
+            quote_coverage = _rate(None, None)
+            assessment_availability = _rate(None, None)
+        else:
+            expected_receipt_slots.add(expected_slot)
+            receipt = decision_receipts.get(expected_slot)
+            if receipt is None:
+                raise ValueError("event-backed opportunity lacks its Decision receipt")
+            recorded_digest = receipt.get("receipt_digest")
+            if not isinstance(recorded_digest, str) or recorded_digest != decision_digest:
+                raise ValueError("Decision receipt digest and Run receipt disagree")
+            readiness = _object(receipt.get("readiness"), "Decision readiness")
+            evaluation = _object(receipt.get("evaluation"), "Decision evaluation")
+            frame_complete = readiness.get("frame_complete")
+            if type(frame_complete) is not bool:
+                raise ValueError("Decision frame availability is invalid")
+            frame_reasons = _reason_list(
+                readiness.get("frame_incomplete_reasons"),
+                "frame incomplete reasons",
+            )
+            if frame_complete == bool(frame_reasons):
+                raise ValueError("Decision availability and blocker set disagree")
+            blockers = set(frame_reasons)
+            unavailable_reason_counts = evaluation.get("assessment_unavailable_reason_counts")
+            if not isinstance(unavailable_reason_counts, list):
+                raise ValueError("assessment unavailable reasons are invalid")
+            for raw_reason_count in unavailable_reason_counts:
+                if (
+                    not isinstance(raw_reason_count, list)
+                    or len(raw_reason_count) != 2
+                    or not isinstance(raw_reason_count[0], str)
+                    or not raw_reason_count[0]
+                ):
+                    raise ValueError("assessment unavailable reason is invalid")
+                _nonnegative_int(raw_reason_count[1], "assessment unavailable reason count")
+                if raw_reason_count[1] == 0:
+                    raise ValueError("assessment unavailable reason count must be positive")
+                blockers.add(raw_reason_count[0])
+
+            catalog = _object(readiness.get("catalog"), "catalog readiness")
+            quotes = _object(readiness.get("quotes"), "quote readiness")
+            catalog_count_raw = catalog.get("instrument_count")
+            catalog_count = (
+                None
+                if catalog_count_raw is None
+                else _nonnegative_int(catalog_count_raw, "catalog instrument count")
+            )
+            catalog_option_count = None if catalog_count is None else max(catalog_count - 1, 0)
+            option_quote_count = _nonnegative_int(
+                quotes.get("option_quote_count"),
+                "option quote count",
+            )
+            quote_coverage = _rate(option_quote_count, catalog_option_count)
+
+            assessment_count = _nonnegative_int(
+                evaluation.get("assessment_count"),
+                "assessment count",
+            )
+            assessment_opportunity_count = _nonnegative_int(
+                evaluation.get("assessment_opportunity_count"),
+                "assessment opportunity count",
+            )
+            assessment_unavailable_count = _nonnegative_int(
+                evaluation.get("assessment_unavailable_count"),
+                "assessment unavailable count",
+            )
+            if assessment_count + assessment_unavailable_count != assessment_opportunity_count:
+                raise ValueError("assessment denominator is not completely partitioned")
+            assessment_availability = _rate(
+                assessment_count,
+                assessment_opportunity_count,
+            )
+            availability = "AVAILABLE" if frame_complete else "UNAVAILABLE"
+            available_slot_count += int(frame_complete)
+
+        ordered_blockers = sorted(blockers)
+        slots.append(
+            {
+                "slot_index": expected_slot,
+                "event_backed": event_backed,
+                "decision_receipt_digest": decision_digest,
+                "availability": availability,
+                "blocker_count": len(ordered_blockers),
+                "blockers": ordered_blockers,
+                "sole_blocker": (ordered_blockers[0] if len(ordered_blockers) == 1 else None),
+                "co_blockers": ordered_blockers if len(ordered_blockers) > 1 else [],
+                "quote_coverage": quote_coverage,
+                "assessment_availability": assessment_availability,
+            }
+        )
+    if set(decision_receipts) != expected_receipt_slots:
+        raise ValueError("Decision receipt set does not match event-backed slots")
+
+    audit: dict[str, object] = {
+        "audit_type": UNKNOWN_DENOMINATOR_AUDIT_TYPE,
+        "run_id": run_receipt.get("run_id"),
+        "source_run_receipt_digest": run_receipt.get("run_receipt_digest"),
+        "due_slot_count": len(summaries),
+        "available_slot_count": available_slot_count,
+        "availability_rate": _rate(available_slot_count, len(summaries)),
+        "quote_coverage_definition": (
+            "option_quote_count / max(catalog.instrument_count - "
+            "one_required_reference_instrument, 0)"
+        ),
+        "assessment_availability_definition": ("assessment_count / assessment_opportunity_count"),
+        "rate_rendering": (
+            "numerator and denominator are the exact ratio; rate is a deterministic "
+            "34-significant-digit ROUND_HALF_EVEN decimal rendering"
+        ),
+        "slots": slots,
+        "authoritative_decision_or_outcome": False,
+        "non_claims": [
+            "MISSING_EVIDENCE_IS_NOT_ZERO",
+            "PREDICATE_FAILURE_IS_NOT_AN_AVAILABILITY_BLOCKER",
+            "REPORT_DOES_NOT_CHANGE_DECISION_POLICY_OUTCOME_OR_STAGE",
+        ],
+    }
+    audit["audit_digest"] = canonical_digest(audit)
+    return audit
+
+
+def _unknown_denominator_audit(run_root: Path) -> dict[str, object]:
+    run_receipt = _json_object(run_root / RUN_RECEIPT_PATH)
+    raw_decision_digests = run_receipt.get("decision_receipt_digests")
+    if not isinstance(raw_decision_digests, list):
+        raise ValueError("Run receipt Decision denominator is invalid")
+    receipts = {
+        slot: _json_object(run_root / RECEIPTS_DIRECTORY / f"decision-slot-{slot:02d}.json")
+        for slot, digest in enumerate(raw_decision_digests)
+        if isinstance(digest, str)
+    }
+    return _build_unknown_denominator_audit(run_receipt, receipts)
 
 
 def _validate_replay(replay: dict[str, object], label: str) -> None:
@@ -101,27 +330,54 @@ def _report(
     public: dict[str, object],
     public_replay: dict[str, object],
     semantic: dict[str, object],
+    synthetic_audit: dict[str, object],
+    public_audit: dict[str, object],
 ) -> str:
-    return "\n".join(
+    lines = [
+        "# Fixed-Policy Public Shadow 验收报告",
+        "",
+        f"- 报告生成时间: `{generated_at}`",
+        f"- 合成 Run: complete=`{synthetic.get('complete')}`, "
+        f"records=`{synthetic.get('records')}`, "
+        f"operational anomalies=`{json.dumps(synthetic.get('operational_anomaly_counts'), sort_keys=True)}`",
+        f"- 合成会计: `{json.dumps(synthetic.get('accounting'), sort_keys=True, ensure_ascii=False)}`",
+        f"- 生产公开 Run: complete=`{public.get('complete')}`, "
+        f"records=`{public.get('records')}`, "
+        f"operational anomalies=`{json.dumps(public.get('operational_anomaly_counts'), sort_keys=True)}`",
+        f"- 生产公开会计: `{json.dumps(public.get('accounting'), sort_keys=True, ensure_ascii=False)}`",
+        f"- 合成 replay: verified=`{synthetic_replay.get('replay_verified')}`, "
+        f"prefix_causality=`{synthetic_replay.get('prefix_causality_verified')}`",
+        f"- 生产 replay: verified=`{public_replay.get('replay_verified')}`, "
+        f"collector_witness=`{public_replay.get('collector_witness_verified')}`",
+        f"- 历史语义回归: authoritative=`{semantic.get('authoritative_replay')}`, "
+        f"Decision drift=`{semantic.get('decision_semantic_drift_count')}`, "
+        f"Outcome drift=`{semantic.get('outcome_semantic_drift_count')}`",
+        "",
+        "## UNKNOWN denominator audit",
+        "",
+        "- availability rate 的零是“可用槽计数”, 不是缺失市场事实的数值替代。",
+        "- quote coverage = observed option quotes / catalog option instruments; "
+        "assessment availability = assessed / assessment opportunities。",
+        f"- 合成 availability: `{json.dumps(synthetic_audit.get('availability_rate'), sort_keys=True, ensure_ascii=False)}`",
+        f"- 生产公开 availability: `{json.dumps(public_audit.get('availability_rate'), sort_keys=True, ensure_ascii=False)}`",
+        "",
+    ]
+    for label, audit in (("合成", synthetic_audit), ("生产公开", public_audit)):
+        slots = audit.get("slots")
+        if not isinstance(slots, list):
+            raise ValueError(f"{label} UNKNOWN denominator audit lacks slots")
+        for raw_slot in slots:
+            slot = _object(raw_slot, "UNKNOWN denominator slot")
+            lines.append(
+                f"- {label} slot `{slot.get('slot_index')}`: "
+                f"availability=`{slot.get('availability')}`, "
+                f"sole=`{slot.get('sole_blocker')}`, "
+                f"co=`{json.dumps(slot.get('co_blockers'), sort_keys=True, ensure_ascii=False)}`, "
+                f"quote=`{json.dumps(slot.get('quote_coverage'), sort_keys=True, ensure_ascii=False)}`, "
+                f"assessment=`{json.dumps(slot.get('assessment_availability'), sort_keys=True, ensure_ascii=False)}`"
+            )
+    lines.extend(
         (
-            "# Fixed-Policy Public Shadow 验收报告",
-            "",
-            f"- 报告生成时间: `{generated_at}`",
-            f"- 合成 Run: complete=`{synthetic.get('complete')}`, "
-            f"records=`{synthetic.get('records')}`, "
-            f"operational anomalies=`{json.dumps(synthetic.get('operational_anomaly_counts'), sort_keys=True)}`",
-            f"- 合成会计: `{json.dumps(synthetic.get('accounting'), sort_keys=True, ensure_ascii=False)}`",
-            f"- 生产公开 Run: complete=`{public.get('complete')}`, "
-            f"records=`{public.get('records')}`, "
-            f"operational anomalies=`{json.dumps(public.get('operational_anomaly_counts'), sort_keys=True)}`",
-            f"- 生产公开会计: `{json.dumps(public.get('accounting'), sort_keys=True, ensure_ascii=False)}`",
-            f"- 合成 replay: verified=`{synthetic_replay.get('replay_verified')}`, "
-            f"prefix_causality=`{synthetic_replay.get('prefix_causality_verified')}`",
-            f"- 生产 replay: verified=`{public_replay.get('replay_verified')}`, "
-            f"collector_witness=`{public_replay.get('collector_witness_verified')}`",
-            f"- 历史语义回归: authoritative=`{semantic.get('authoritative_replay')}`, "
-            f"Decision drift=`{semantic.get('decision_semantic_drift_count')}`, "
-            f"Outcome drift=`{semantic.get('outcome_semantic_drift_count')}`",
             "",
             "## 边界",
             "",
@@ -133,6 +389,7 @@ def _report(
             "",
         )
     )
+    return "\n".join(lines)
 
 
 def _write_archive(bundle: Path, archive: Path) -> None:
@@ -172,6 +429,8 @@ def create_shadow_evidence_bundle(
     public_replayed = _json_object(public_replay / "replay.json")
     semantic = _json_object(semantic_regression / "semantic-regression.json")
     report_identity = run_report_source_identity(require_clean=True)
+    synthetic_audit = _unknown_denominator_audit(synthetic_run)
+    public_audit = _unknown_denominator_audit(public_run)
     if synthetic.get("complete") is not True or public.get("complete") is not True:
         raise ValueError("Shadow evidence bundle requires two complete Runs")
     _validate_replay(synthetic_replayed, "synthetic")
@@ -190,6 +449,14 @@ def create_shadow_evidence_bundle(
     _copy_tree(public_run, output / "production-public/run")
     _copy_tree(public_replay, output / "production-public/replay")
     _copy_tree(semantic_regression, output / "historical-semantic-regression")
+    _write_json(
+        output / "synthetic" / UNKNOWN_DENOMINATOR_AUDIT_PATH,
+        synthetic_audit,
+    )
+    _write_json(
+        output / "production-public" / UNKNOWN_DENOMINATOR_AUDIT_PATH,
+        public_audit,
+    )
     invocation = _json_object(public_run / "invocation-witness.json")
     generated_at = cast(str, invocation["invocation_finished_at"])
     report = _report(
@@ -199,6 +466,8 @@ def create_shadow_evidence_bundle(
         public=public,
         public_replay=public_replayed,
         semantic=semantic,
+        synthetic_audit=synthetic_audit,
+        public_audit=public_audit,
     )
     (output / "ACCEPTANCE.zh-CN.md").write_text(report, encoding="utf-8")
     artifacts = [
@@ -223,6 +492,8 @@ def create_shadow_evidence_bundle(
         "report_source_file_hashes": canonical_value(report_identity.file_hashes),
         "online_runtime_source_id": report_identity.online_runtime_source_id,
         "online_runtime_source_digest": report_identity.online_runtime_source_digest,
+        "synthetic_unknown_denominator_audit_digest": synthetic_audit["audit_digest"],
+        "public_unknown_denominator_audit_digest": public_audit["audit_digest"],
         "artifacts": artifacts,
     }
     manifest["bundle_manifest_digest"] = canonical_digest(manifest)
@@ -323,6 +594,8 @@ def verify_shadow_evidence_bundle(
     public = _json_object(bundle / "production-public/run/result.json")
     public_replayed = _json_object(bundle / "production-public/replay/replay.json")
     semantic = _json_object(bundle / "historical-semantic-regression/semantic-regression.json")
+    synthetic_audit = _json_object(bundle / "synthetic" / UNKNOWN_DENOMINATOR_AUDIT_PATH)
+    public_audit = _json_object(bundle / "production-public" / UNKNOWN_DENOMINATOR_AUDIT_PATH)
     report_identity = run_report_source_identity(require_clean=authoritative_replay)
     report_source_match = (
         manifest.get("report_source_id") == report_identity.report_source_id
@@ -342,9 +615,19 @@ def verify_shadow_evidence_bundle(
         or manifest.get("public_result_digest") != public.get("result_digest")
         or manifest.get("public_replay_digest") != public_replayed.get("replay_digest")
         or manifest.get("semantic_regression_digest") != semantic.get("receipt_digest")
+        or manifest.get("synthetic_unknown_denominator_audit_digest")
+        != synthetic_audit.get("audit_digest")
+        or manifest.get("public_unknown_denominator_audit_digest")
+        != public_audit.get("audit_digest")
     ):
         raise ValueError("Shadow evidence manifest bindings changed")
     if report_source_match:
+        reconstructed_synthetic_audit = _unknown_denominator_audit(bundle / "synthetic/run")
+        reconstructed_public_audit = _unknown_denominator_audit(bundle / "production-public/run")
+        if canonical_digest(synthetic_audit) != canonical_digest(
+            reconstructed_synthetic_audit
+        ) or canonical_digest(public_audit) != canonical_digest(reconstructed_public_audit):
+            raise ValueError("UNKNOWN denominator audit changed")
         expected_report = _report(
             generated_at=cast(str, manifest["generated_at"]),
             synthetic=synthetic,
@@ -352,6 +635,8 @@ def verify_shadow_evidence_bundle(
             public=public,
             public_replay=public_replayed,
             semantic=semantic,
+            synthetic_audit=synthetic_audit,
+            public_audit=public_audit,
         )
         if (bundle / "ACCEPTANCE.zh-CN.md").read_text(encoding="utf-8") != expected_report:
             raise ValueError("Shadow evidence canonical report changed")
