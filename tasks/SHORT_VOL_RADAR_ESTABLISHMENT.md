@@ -1,0 +1,849 @@
+# Task — SHORT_VOL_RADAR_ESTABLISHMENT
+
+**Status:** ACTIVE
+
+**Task kind:** `IMPLEMENTATION`
+
+**Runtime implementation:** REQUIRED
+
+**Live commands:** REQUIRED only after the separate production observation gate opens
+
+**Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`
+
+**Production observation gate:** `CLOSED_UNTIL_IMPLEMENTATION_REVIEW_AND_EXPLICIT_HUMAN_COMMAND`
+
+**Product/stage:**
+[`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md) /
+[`CURRENT_STAGE`](../docs/authority/CURRENT_STAGE.md)
+
+**Implementation contract:**
+[`SHORT_VOL_RADAR`](../docs/contracts/SHORT_VOL_RADAR.md)
+
+**Base commit:** `0154e946c6959c351f6ab2504b9f7780a14fe9ad`
+
+**Target branch/PR:** `codex/short-vol-radar-establishment`; Draft PR to `main`
+
+## Human execution gates
+
+The design DRAFT did not authorize construction. The explicit human command naming
+`SHORT_VOL_RADAR_ESTABLISHMENT` on 2026-07-25 opened the construction gate for this exact task
+revision. Branch switch, dependency sync, bounded runtime edits, direct tests, commit, push, and
+Draft PR delivery are now authorized. Production-public connection, live artifact collection,
+merge, business acceptance, task archival, and stage advancement remain unauthorized.
+
+Two later human gates are distinct:
+
+1. **Construction gate:** an explicit command naming `SHORT_VOL_RADAR_ESTABLISHMENT` authorizes
+   implementation of this exact task revision and no more.
+2. **Production observation gate:** after code review and tests, an explicit command names the
+   exact Policy file and authorizes one production-public observation run.
+
+The delivery stops at a Draft PR. Merge, business acceptance, task archival, stage advancement,
+and any later research or execution authority each require a separate explicit human decision.
+
+## Business closure
+
+**Given:** Deribit production-public data can establish a continuous current state for the actual
+BTC-USDC linear-option universe with `0 < TTE <= 72 hours`.
+
+**When:** one process loads one exact content-identified Radar Policy, maintains the current
+public market state in memory, and applies the Policy only to causally known changed facts.
+
+**Then:** for each applicable option instrument and each active short-leg episode, it continuously
+reports two independent facts:
+
+1. `detector_state[instrument_name] = UNKNOWN | NO_ANOMALY | ANOMALY_ACTIVE`, plus the
+   completeness-aware aggregate state;
+2. independently for each active short-leg episode,
+   `public_atomic_quote_state = NOT_EVALUATED | UNKNOWN | NO_ACTIVE_COMBO |
+   NO_TARGET_SIZE_CREDIT_QUOTE | PUBLIC_ATOMIC_QUOTE_AVAILABLE`.
+
+The process writes one minimal `SHORT_VOL_ANOMALY_EVENT` when an anomaly episode activates. If an
+official same-expiry 1:1 vertical combo later has target-size depth in the required combo order
+direction and positive normalized gross entry credit during that episode, it separately writes
+`PUBLIC_ATOMIC_QUOTE_EVENT`. A missing, unavailable, or empty combo book never changes an already
+known anomaly into `UNKNOWN`.
+
+**Independent verification:** direct deterministic tests of the consumed formulas, state
+transitions, source continuity, result separation, and artifact projection, plus one
+production-public smoke observation. This task does not implement replay, a second calculator,
+hit-only recomputation, or provenance verification.
+
+**Valid zero/no-hit/UNKNOWN result:**
+
+- a covered production interval with usable detector evaluations and zero anomaly is a valid
+  runtime-establishment result; it proves neither natural anomaly reachability nor Policy quality;
+- no active anomaly produces `public_atomic_quote_state = NOT_EVALUATED`;
+- an anomaly with no official combo is a known anomaly plus
+  `public_atomic_quote_state = NO_ACTIVE_COMBO` or `NO_TARGET_SIZE_CREDIT_QUOTE`;
+- unavailable/invalid detector inputs or numerically unresolved classification make only
+  `detector_state = UNKNOWN`;
+- unavailable combo inputs make only `public_atomic_quote_state = UNKNOWN`;
+- a complete continuous book with an empty required side or insufficient target-size depth is
+  known unavailable liquidity, not missing data;
+- rates with a zero or unknown denominator are `null`, never `0`.
+
+Negative claims require complete scope: `NO_ANOMALY` requires every potentially eligible option
+to be usable or known liquidity-ineligible; `NO_ACTIVE_COMBO` requires the complete official combo
+catalog; and `NO_TARGET_SIZE_CREDIT_QUOTE` requires every matching active combo book to be usable
+or known insufficient. One complete active short leg can prove `ANOMALY_ACTIVE` with degraded
+coverage, and one known atomic credit quote can prove positive availability. Neither positive
+witness claims a complete triggered set, best quote, or ranked full market.
+
+Within one runtime, the exact aggregate key is
+`Policy identity × expiry_timestamp × option_type`. It exists only when the reconciled catalog has
+at least one real instrument in that expiry/type and a detector band whose `option_rules` contains
+that option type. OTM, Delta, minimum-amount, or depth failure is a known per-instrument
+evaluation; it must not erase the instrument from the denominator. An empty set is reported as
+`aggregate_applicability = NO_APPLICABLE_SCOPE`; no Layer 1 aggregate detector state is evaluated,
+it adds no complete aggregate evaluation, and its rate is `null`.
+
+**Upstream prerequisite:** none. This is the smallest current product prerequisite.
+
+## Change declarations
+
+**Market/Decision input contract change:** `APPROVED` — establish the
+`DERIBIT_BTC_USDC_0_3DTE_MARKET_MONITOR` from public Deribit time, index, option and combo
+catalogs, lifecycle events, ticker facts, and continuous books. Normal option-chain changes,
+no-anomaly evaluations, and theoretical structures remain transient.
+
+**Decision Policy change:** `APPROVED` — implement one narrow configurable
+`POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE` family. Exact numeric values live in a Policy file
+rather than code, and Layer 2 matches only existing official same-expiry, same-option-type, 1:1
+protective credit verticals. This structure family is an availability classification, not a
+decision to trade. One process binds one exact Policy identity from start to stop. Detector truth,
+official atomic-quote availability, and future order/fill state remain separate.
+
+**Outcome/evaluation contract change:** `NONE` — no future realized-volatility label, settlement
+result, Candidate, Shadow admission, Position action, Outcome, PnL, edge, comparator,
+qualification, or promotion. Current results can describe coverage, signal frequency and public
+combo availability only; they cannot prove that one Policy predicts better or earns more.
+
+**Stage/authorization change:** `APPROVED` — conditional public Radar capability only. Permission
+remains `PUBLIC_SHADOW`. Private APIs, RFQ, combo creation, maker orders, fills, account facts,
+capital, training, automatic Policy evolution, and execution remain unauthorized.
+
+## First-principles scope
+
+This task answers only:
+
+1. Can the system continuously maintain the relevant public market state without confusing
+   missing data with a quiet market?
+2. Can it apply one explicit, inspectable Short Vol baseline to that state?
+3. Can it preserve a known anomaly independently from whether Deribit happens to have an official
+   combo book?
+4. If an official combo exists, can it truthfully report visible target-size atomic credit
+   availability?
+
+It does not answer whether the anomaly should be traded. Fees, delivery fees, account tiers,
+margin, liquidation, future exit liquidity, expected payoff, maximum total loss after all future
+costs, and maker execution belong to later Underwriting/Execution work.
+
+## Policy lifecycle and calibration
+
+### Configuration, not hard-coded trading truth
+
+The runtime implements one bounded formula family. A Policy file supplies exact values for:
+
+- target base quantity in BTC;
+- one or more exact TTE bands, each with trailing-variance lookbacks, non-negative weights, and a
+  strictly positive annualized variance floor;
+- in every band, a non-empty `option_rules` map keyed only by `call` and/or `put`;
+- in every band/option rule, absolute-Delta bounds, activation/clear IV-richness ratios,
+  activation/clear observation counts, and minimum trusted-market-time separation.
+
+A call or put omitted from a band is explicitly out of detector scope in that band. Calls and puts
+inside one band may use different detector boundaries but must share that band's one BTC
+underlying return baseline.
+
+Policy loading rejects an empty TTE-band set or empty/unsupported per-band `option_rules`;
+empty/duplicate/non-positive lookbacks; missing or misaligned weights;
+non-finite/negative weights or a sum other than exactly one after canonical decimal parsing;
+overlapping or out-of-range TTE bands outside `(30 minutes, 72 hours]`; invalid
+`0 <= abs_delta_min < abs_delta_max <= 1`; non-positive/non-finite target quantity or variance
+floor; anything other than `activation_ratio > 1` and
+`0 < clear_ratio < activation_ratio`; non-positive counts; or negative separation. A deliberate
+TTE-band gap is explicit `OUT_OF_BASELINE_SCOPE`, not `UNKNOWN`.
+Unknown or misspelled Policy keys are rejected at every object level; unlike external exchange
+payloads, repository-owned Policy objects do not tolerate `additionalProperties`.
+Official BTC amount units, `contract_size = 1`, and minimum amount are source-contract
+requirements. The exact derived option/combo order amount must be at least the minimum. When the
+optional official `qty_tick_size` is present, it must be positive and the amount must be its
+integer multiple. A known undersized or published-grid-misaligned Policy target is target-size
+liquidity ineligibility; it is never rounded. Absence of that optional field is not `UNKNOWN` and
+does not authorize an inferred grid from any undocumented field. Missing/invalid required amount
+metadata, or an invalid present step, is `UNKNOWN` unless another independent gate is already
+known to fail.
+
+The construction tests use at least two different Policy fixtures so a fixed implementation
+constant cannot masquerade as configuration.
+
+Construction establishes the schema, loader, and non-production fixtures; it does not select a
+permanent or secretly preferred live parameter set. The later production observation command must
+name and approve the exact external Policy path and content digest to observe.
+
+The Policy is UTF-8 JSON without BOM: one top-level object, duplicate keys and non-finite numbers
+rejected, numeric tokens parsed directly to `Decimal`. Before any subscription, startup reads its
+exact bytes once, computes `sha256:<hex>` over those bytes, and compares it with the required
+human-approved expected digest from the command. Missing/mismatch fails closed. The runtime then
+uses only the immutable parsed in-memory Policy; later file mutation cannot alter the run.
+
+### Frozen during one run, replaceable between runs
+
+The Policy's verified exact-byte content digest is bound before a process starts and recorded in
+every event and run summary. The process rejects hot reload and cannot mutate, approve, promote,
+or replace its own Policy.
+
+After an observation interval, a human may approve a successor inside the already authorized
+Policy schema. It may change target quantity, TTE bands/gaps and call/put inclusion,
+lookbacks/weights/floor, Delta boundaries, activation/clear ratios and counts, or separation. The
+successor receives a new content identity, a new runtime instance, and a new forward observation
+interval. Earlier events keep their original meaning and are never relabeled or backfilled.
+
+A change to the baseline formula, source family, structure family, or evaluation claim is not a
+parameter adjustment; it requires a new task and owning-contract change. Automatic training,
+automatic selection, and automatic deployment are out of scope.
+
+Because this task has no future realized-volatility or trade Outcome labels, a successor based
+only on these results may improve operability, coverage, frequency, or flicker behavior. It may
+not be called a better forecast or a better trading strategy.
+
+The first human-approved observation Policy may deliberately use broad bands and low persistence
+to learn whether the public pipeline produces enough usable evaluations, provided every schema
+invariant still holds—especially `activation_ratio > 1`. That is operational calibration, not a
+profitable-threshold recommendation. After each frozen forward interval, a human may loosen or
+tighten a successor for coverage/frequency/flicker and observe it prospectively. Evolving the
+volatility estimator itself, or claiming improved prediction, waits for a later task that first
+declares a strictly future horizon-matched realized-volatility/settlement label and comparator;
+this Radar neither collects nor backtests that label.
+
+## Product and source contract
+
+### Product
+
+- Deribit production public data only;
+- active `BTC_USDC` linear options discovered in the `USDC` currency namespace and then filtered
+  by official `base_currency = BTC`, settlement/quote currency, instrument kind, and price index;
+- Monitor universe: trusted `0 < TTE <= 72 hours`;
+- Policy TTE bands use explicit non-overlapping `(lower, upper]` boundaries with separate
+  evaluation denominators;
+- initial detector scope excludes any expiry whose official 30-minute delivery-price window has
+  begun;
+- same-expiry, same-option-type, 1:1 protective verticals only for the atomic-quote layer.
+
+`TTE <= 30 minutes` has `detector_applicability = OUT_OF_BASELINE_SCOPE`, a known model limitation
+rather than `UNKNOWN`. The Monitor still observes it, but no Layer 1 `detector_state` is evaluated
+for it and it is excluded from the detector denominator. A future detector may cover that
+interval only after explicitly modeling the partially formed delivery TWAP/estimated delivery
+price.
+
+### Exact public source route
+
+- bootstrap active options with `public/get_instruments` using the official `USDC` currency
+  namespace, then filter to BTC-USDC linear options;
+- follow `instrument.state.option.USDC`;
+- bootstrap active combos with `public/get_combos` for `USDC`, then filter official legs to
+  BTC-USDC and fetch each admitted combo's official instrument metadata before using its amount
+  constraints or book;
+- follow `instrument.state.option_combo.USDC`;
+- acknowledge and buffer public `platform_state` and
+  `platform_state.public_methods_state`, call `public/status` to bootstrap current BTC/index lock
+  state and prove public-method access, then reconcile buffered platform notifications;
+- bootstrap and refresh public Deribit time with `public/get_time`;
+- use only `deribit_price_index.btc_usdc` for the baseline;
+- use only `ticker.<instrument_name>.100ms` for each option's official
+  `underlying_price`/`underlying_index` forward facts;
+- use only `book.<instrument_name>.100ms` snapshots and changes for option and active-combo depth;
+- subscribe to matching combo books only while a relevant anomaly is active.
+
+Subscriptions are dynamic, sent in bounded batches within the exchange limit, and accepted only
+after their acknowledgements are checked. New lifecycle members are not inferred from names; their
+official metadata must be fetched before use.
+
+Every index/ticker channel must deliver its own initial usable notification and every book its own
+snapshot; reconnect invalidates all of them. Apart from status/time/catalog/new-member metadata
+bootstrap, no REST polling or alternate index/ticker interval may feed a detector observation.
+
+Option and combo catalog bootstrap is race-free: acknowledge and buffer the lifecycle stream,
+fetch the catalog snapshot, then reconcile buffered events in causal order before declaring the
+catalog complete. Negative aggregate or no-combo claims stay `UNKNOWN` until reconciliation
+finishes.
+
+Platform startup never defaults an unseen `maintenance = false`. Platform-dependent state stays
+unusable until the buffered platform subscriptions are acknowledged; `public/status` proves no
+all-currency or consumed-BTC-index lock; later time/catalog/subscription requests succeed; and
+fresh index coverage plus required book snapshots are established. A public-method denial,
+relevant lock, or maintenance/break notification invalidates dependent state immediately.
+Recovery notifications alone do not restore it; the same bootstrap conditions must be rebuilt.
+
+The WebSocket acknowledges `public/set_heartbeat` at the fixed operational interval of 30 seconds
+before market state becomes usable. The run summary freezes that value, but it is not a trading
+Policy parameter. The client answers every `test_request` with `public/test`. Sixty seconds without
+inbound session activity, a failed heartbeat/test response, or a connection close makes all
+dependent state `UNKNOWN` and ends affected episodes
+`UNKNOWN_AT_GAP`; reconnect rebuilds subscriptions, snapshots, catalogs, and baseline coverage.
+Heartbeat traffic proves connection liveness only: it neither refreshes an economic quote nor
+creates a detector observation.
+
+Raw external payloads tolerate additional unknown fields. Missing, invalid, or changed fields
+that this task actually consumes fail closed at their smallest consumer. The implementation may
+not reject the whole feed merely because Deribit adds an unrelated field.
+
+No private, account, RFQ, combo-creation, order, fill, maker, or test-environment method is
+permitted. The only allowed `public/test` call is the required response to a `test_request` on the
+already established production-public heartbeat; it cannot be initiated as a market/business
+probe.
+
+## Market-state semantics
+
+### Known-at order
+
+Every accepted fact receives a local monotonic `causal_seq`. Cross-instrument channels do not have
+one exchange-global sequence. “Strict as-of” therefore means the latest individually continuous
+facts known to this process at one `causal_seq`; it does not claim a matching-engine-wide
+simultaneous snapshot.
+
+### Order-book validity
+
+The first accepted subscription notification must be a complete snapshot. Later changes require
+exact `prev_change_id -> change_id` continuity. A gap, reconnect, invalid/crossed book, lifecycle
+loss, or explicit platform/connection failure invalidates only affected consumers until a new
+snapshot is accepted.
+
+The book timestamp is the time of its last mutation. A quiet but continuously maintained book
+does not become stale merely because no level changed for several seconds, and the runtime must
+not resubscribe just to make an unchanged quote look newer. Quote mutation age is recorded as a
+diagnostic only. Connection health, subscription acknowledgement, snapshot establishment,
+sequence continuity, and instrument state establish whether the current public book is usable.
+
+An empty bid side or cumulative bid depth below the Policy target is known
+option liquidity ineligibility and per-instrument `NO_ANOMALY`, not `UNKNOWN`. It short-circuits
+before ticker/forward/IV inputs are required; once target-size bid depth exists, missing pricing
+facts are `UNKNOWN`.
+
+### Clock and boundaries
+
+The Monitor uses Deribit server time advanced by local monotonic elapsed time and carries an
+explicit uncertainty bound. A detector TTE band is usable only when the full trusted-time
+uncertainty interval lies within the band and outside the settlement window. Crossing a TTE,
+settlement, freshness, or lifecycle boundary may trigger reevaluation, but an arbitrary timer may
+not reuse an unproved or gapped quote to create an episode.
+
+For every `public/get_time` request, local monotonic send/receive instants bound time at receipt as
+`base = [returned_server_ms, returned_server_ms + 1 ms + round_trip_ms]`. With monotonic elapsed
+`e_ms`, expand this by the fixed 1000 ppm operational drift budget:
+`[base.lower + e_ms × (1 - 0.001), base.upper + e_ms × (1 + 0.001)]`. Clock math is
+integer/rational milliseconds with lower rounded down and upper rounded up, never binary-float
+inward rounding. Refresh every 30 seconds; advance the prior interval to the new receive instant
+and intersect it with the new interval as the next base. An empty intersection or 60 seconds
+without refresh is a clock gap: dependent state becomes `UNKNOWN`, an active episode ends
+`UNKNOWN_AT_GAP`, and a fresh clock bootstrap is required. The fixed heartbeat, liveness, and
+drift values are recorded in the run summary and are not trading calibration parameters.
+
+### Index-minute coverage
+
+Validate the official index notification field `data.timestamp` as integer milliseconds, map it
+to internal `source_timestamp_ms`, and assign `deribit_price_index.btc_usdc` ticks by
+`floor(source_timestamp_ms / 60_000)`. Require non-decreasing source timestamps and order ties by
+`causal_seq`. Seal a minute only after continuous subscription coverage for its full half-open
+interval, at least one assigned tick, trusted-time lower bound at/after minute end, and index
+timestamp watermark at/after minute end. The close is the last causal tick in that minute; no
+near-boundary tick is required. A timestamp regression or late tick for a sealed minute is a gap:
+never rewrite the close, invalidate rolling returns, and restart warm-up.
+
+## Configured trailing-variance baseline
+
+For one Policy baseline entry keyed by TTE band:
+
+1. parse source and Policy numbers directly to canonical `Decimal` and use one repository-owned
+   `decimal.Context(prec=50, rounding=ROUND_HALF_EVEN)` pure function;
+2. construct returns in chronological order as
+   `context.ln(close_t) - context.ln(close_t_minus_1)`;
+3. for each configured lookback `h`, calculate the mean of the last `h` squared returns;
+4. in ascending `h` order calculate the weighted sum; weights are finite, non-negative, and
+   sum to one;
+5. apply the configured strictly positive annualized variance floor after exact division by
+   `365 × 24 × 60`;
+6. derive remaining-life minutes as
+   `[(expiry - trusted_time_upper), (expiry - trusted_time_lower)] / 60_000`, multiply the
+   variance rate by both bounds for baseline total-variance interval, and calculate annualized
+   baseline volatility directly as `sqrt(rate × 365 × 24 × 60)`;
+7. independently inspect official amount minimum/grid, target bid depth, and forward/fixed OTM;
+   any available known failure is enough for `NO_ANOMALY`, while a missing fact is `UNKNOWN` only
+   when no independent gate is already known to fail;
+8. after all three pass, walk visible bids through target BTC and invert that executable sell price
+   with the declared official linear-option Black formula to total-volatility interval
+   `x = σ × sqrt(T)`;
+9. calculate Delta from `x`, apply configured absolute-Delta eligibility, and after it passes
+   calculate implied-total-variance interval `x²`;
+10. derive
+    `IV_interval = [x_low / sqrt(T_high), x_high / sqrt(T_low)]` and compare its richness interval
+    with the configured option-type/TTE-band boundaries; classification is known only when the
+    entire interval has one truth value.
+
+The same Decimal function supplies runtime and fixed-vector tests. Any final richness interval
+that spans an activation/clear boundary is
+`UNKNOWN/NUMERICAL_BOUNDARY_UNRESOLVED`.
+
+The trailing-index-variance baseline is shared by calls and puts in the same TTE band. Option type may
+change eligibility or detector boundaries, but it cannot create a different realized history of
+the same BTC underlying.
+
+OTM is exact at the executable-IV forward: call requires `K > F`, put requires `K < F`.
+Absolute-Delta eligibility is inclusive:
+`abs_delta_min <= abs(delta) <= abs_delta_max`.
+
+For an IV-richness ratio `r`, the IV premium is `(r - 1) × 100%` and the equivalent total-variance
+ratio is `r²`. These percentages are never interchanged.
+
+Warm-up requires `largest_configured_lookback + 1` consecutive covered minute closes to form the
+required number of returns; it is derived from Policy rather than a fixed close count.
+Price/quantity/fee-free credit arithmetic uses `Decimal`; model values must be finite. IV inversion
+uses the owning contract's one canonical total-volatility oracle: finite-domain validation,
+`x = σ × sqrt(T)`, the declared binary64 `math.erf/log/sqrt` formula, a bracket from
+`x_high = 1` with at most 32 doublings, and at most 64 bisection updates with one exact tie rule.
+A positive price outside the finite formula domain or an unbracketed price is `UNKNOWN`. The final
+bracket is the decision total-volatility interval; if Delta eligibility or an activation/clear comparison
+changes truth over its conservative bound (including any analytic Delta stationary point), the
+dependent result is
+`UNKNOWN/NUMERICAL_BOUNDARY_UNRESOLVED`. The same repository-owned pure function serves runtime
+and fixed-vector tests; half-a-tick residual is not an alternate decision rule. The owning
+contract fixes `F`, `T`, call/put price, Delta, and fixed OTM formulas; they are not Policy choices.
+
+This is a transparent causal trailing-index-variance baseline, not a delivery-TWAP distribution
+forecast, validated physical forecast, model-free variance risk premium, tail model, or edge
+claim. Calls and puts have separate episode denominators.
+Evaluation counts are separated by configured TTE band; an episode is attributed only to its
+activation band. A single OTM IV contains skew, jump, and tail pricing that the baseline does not
+explain.
+
+## Detector state and episodes
+
+Each `Policy identity × instrument_name` scope has an activation/clear tracker. Episode identity
+is `runtime identity × Policy identity × instrument_name × activation_causal_seq`; TTE band is an
+activation attribute, not identity:
+
+```text
+UNKNOWN
+          a required detector fact is missing/invalid, or derived classification is numerically unresolved
+ARMED     this instrument is usable and no episode is active
+ACTIVE    this instrument passed activation
+CLEARING  this instrument's clear persistence is pending
+BAND_SUSPENDED
+          trusted time straddles a Policy boundary while market-source continuity stays known
+```
+
+Activation observations use
+`iv_richness_ratio >= activation_ratio`, clear observations use
+`iv_richness_ratio <= clear_ratio`, and values between the two boundaries preserve the current
+instrument state. Counts and minimum separation come from the Policy.
+One observation can follow a counted observation only when
+`later.time_lower_bound - prior_counted.time_upper_bound >= minimum_separation`; equality counts.
+A qualifying observation with overlapping intervals or a smaller guaranteed gap neither
+increments nor resets.
+While non-active, any known observation below activation resets the activation count; while
+active/clearing, any known observation above clear resets the clear count and restores `ACTIVE`.
+A qualifying observation inside the minimum separation neither increments nor resets, but any
+intervening known non-qualifying observation resets immediately. Equality is inclusive.
+Repeated messages, heartbeats, metadata-only changes, and unchanged reduced economic state do not
+create observations or episodes.
+
+While trusted time straddles a boundary whose adjacent band has a rule for this instrument's
+option type, detector output is temporarily `UNKNOWN/TIME_BAND_BOUNDARY`; an active episode becomes
+`BAND_SUSPENDED`, its known-active clock pauses, Layer 2 becomes `NOT_EVALUATED`, and incomplete
+confirmation counts reset. Once the full interval lies in that adjacent same-option-type band,
+continuous sources let the same episode resume `ACTIVE` under new parameters without a second
+event. A non-active tracker resumes `ARMED`.
+
+If the time interval stops lying wholly inside the current band and the other side is a deliberate
+Policy gap, a band without this option-type rule, or the final 30 minutes, an active episode ends
+immediately `OUT_OF_BASELINE_SCOPE` at the last trusted active boundary. Layer 2 stops; it does not
+wait for the interval to resolve wholly outside, and later applicability requires fresh
+activation.
+
+A gap invalidates only the affected instrument and its quotes and cancels pending observations. If
+its episode was active, that observed episode ends with `UNKNOWN_AT_GAP` at the last trusted
+boundary. A different known active instrument keeps aggregate state `ANOMALY_ACTIVE` with degraded
+coverage; with none active and some unresolved, aggregate state is `UNKNOWN`.
+
+After complete resync, fresh activation persistence creates a new episode identity. It may
+reference the pre-gap episode as an uncertain predecessor, but never claims continuity across the
+gap.
+
+Known target-depth/minimum-amount, OTM, or Delta ineligibility produces `NO_ANOMALY` and ends an
+active episode immediately as `KNOWN_INELIGIBLE` with detail. Expiry, deactivation, or catalog
+removal ends `MEMBERSHIP_LOSS`. Any detector `UNKNOWN` except the time-band suspension or a
+separately classified source-continuity gap ends `UNKNOWN_DETECTOR` with a
+missing/invalid/numerical detail. Operator stop ends
+`CENSORED_AT_STOP`; only richness clearing uses clear persistence and ends `CLEAR`. Every end makes
+Layer 2 `NOT_EVALUATED`. Recovery/readmission requires fresh activation; only the adjacent
+same-option-type band suspension above preserves episode identity.
+
+One instrument's `ARMED -> ACTIVE` transition creates one short-leg anomaly episode and one
+`SHORT_VOL_ANOMALY_EVENT`. The event is not rewritten as quotes change.
+
+## Three separate layers
+
+### Layer 1 — Short Vol anomaly
+
+`detector_state` depends only on option/index/clock/Policy facts. It never depends on combo
+catalog or combo books.
+
+### Layer 2 — public official atomic availability
+
+Only while one short-leg episode is active, inspect active official two-leg combos whose signed
+legs can form the required same-expiry 1:1 protective call or put credit vertical for that exact
+short instrument. Derive whether the desired signed legs require buying or selling the official
+combo; do not assume every credit orientation consumes the bid.
+
+The target vectors are fixed: call credit sells the lower-strike call and buys the higher-strike
+call; put credit sells the higher-strike put and buys the lower-strike put. Official metadata
+defines `legs[].amount`, the signed leg vector for buying the combo. Find the signed combo order
+amount that maps that vector exactly to the desired legs. With official BTC-USDC
+`contract_size = 1` and amount in BTC, the only authorized results are `+target_btc` for `BUY`
+(consume asks) or `-target_btc` for `SELL` (consume bids); any other vector is not a match.
+The official minimum trade amount must permit the exact target; when optional official
+`qty_tick_size` is published, the target must also align exactly. No rounding is allowed.
+Preserve the signed depth-weighted combo price and calculate:
+
+```text
+gross_entry_credit_usdc =
+    -signed_order_amount_btc × required_side_vwap_usdc_per_btc
+```
+
+Never take the absolute value; availability requires `gross_entry_credit_usdc > 0`.
+
+`public_atomic_quote_state` is:
+
+- `NOT_EVALUATED`: no anomaly is active, so no combo claim was attempted;
+- `UNKNOWN`: required combo catalog, metadata, lifecycle, or book continuity is unavailable;
+- `NO_ACTIVE_COMBO`: the complete official catalog has no matching active combo;
+- `NO_TARGET_SIZE_CREDIT_QUOTE`: matching combos are known but none has enough depth on the bid or
+  ask implied by the desired legs with positive normalized gross entry credit;
+- `PUBLIC_ATOMIC_QUOTE_AVAILABLE`: at least one matching official combo does.
+
+The two negative combo states require the completeness conditions above. Positive availability is
+existential and does not wait for unrelated combo books, but its event makes no best-price or
+complete-selection claim.
+
+The component-leg bid/ask is not implemented in this closure and may never substitute for this
+state. No Greek sign gate, arbitrary wing-width percentage, future delivery-fee estimate,
+account-fee estimate, or total-loss qualification belongs to this availability fact.
+
+An official atomic public quote is still a quote, not a fill or a guarantee it remains available.
+If optional public quantity-step metadata is absent, it also does not prove that a later private
+order at that amount will be accepted.
+
+### Layer 3 — future execution
+
+Creating a combo, requesting a quote, placing a post-only combo maker order, canceling/repricing,
+and proving `ORDER_WORKING | FILLED` require private trade and account authority. They are not
+implemented, represented, or simulated in this task. Two separately placed leg orders are not an
+atomic substitute.
+
+## Durable evidence
+
+Only these small runtime evidence object kinds are permitted:
+
+1. `SHORT_VOL_ANOMALY_EVENT`, once per activated episode;
+2. `PUBLIC_ATOMIC_QUOTE_EVENT`, once per unique official combo first observed available inside an
+   anomaly episode;
+3. one `RADAR_RUN_SUMMARY` when the process stops.
+
+An anomaly event records only:
+
+- Policy/code/runtime/episode identity and causal time;
+- one short-leg instrument, expiry, option type, activation TTE band, and aggregate coverage
+  state;
+- configured target BTC quantity and detector boundaries;
+- baseline feature summary and output, trusted-time interval, and remaining-life `T` interval;
+- that short leg's consumed bid levels, forward, sell price, total-volatility, IV, Delta, implied
+  total-variance, and richness lower/upper intervals plus the final classification;
+- explicit `NOT_A_DELIVERY_TWAP_DISTRIBUTION_FORECAST` and `NOT_VALIDATED_FORECAST`
+  non-claims.
+
+An atomic event directly references its short-leg anomaly episode and records only official combo
+identity, signed legs, that episode's current active detector causal binding, required combo order
+direction, target BTC quantity, consumed combo bid or ask levels, positive normalized gross entry
+credit, source times, and public-quote non-claims.
+
+The run summary records coverage time, usable detector evaluations, anomaly activations, episode
+ends by
+`CLEAR | KNOWN_INELIGIBLE | OUT_OF_BASELINE_SCOPE | MEMBERSHIP_LOSS | UNKNOWN_DETECTOR |
+UNKNOWN_AT_GAP | CENSORED_AT_STOP`, known-active duration by end reason, band-suspended duration,
+atomic-state transitions, detector `UNKNOWN` transitions by reason, and Policy identity. These are
+reduced business-state transitions, never message counts. It contains no full market chain.
+
+Coverage partitions the exact half-open interval
+`[runtime_started_monotonic_ms, clean_stop_monotonic_ms)` into one global state at every
+millisecond across current Policy-applicable aggregate scopes:
+
+- `NO_APPLICABLE_SCOPE`: reconciled catalog and trusted time are known and prove no non-empty
+  expiry/type scope currently has that option-type rule;
+- `KNOWN_COMPLETE`: all current scopes/instruments have known detector state;
+- `KNOWN_DEGRADED`: a known active witness exists while another current instrument/scope is
+  unresolved;
+- `UNKNOWN`: scope existence itself or a required prerequisite is unresolved, or a scope exists
+  but warm-up, band suspension, or unresolved facts prevent the two known coverage states.
+
+Dynamic catalog/band changes split at their accepted causal boundary. Band-suspended duration is a
+diagnostic subset, not a fifth partition. The validator requires non-negative, non-overlapping,
+gap-free durations and
+`coverage_partition_error_ms = observation_interval_ms - (known_complete_ms +
+known_degraded_ms + unknown_ms + no_applicable_scope_ms) = 0`.
+
+`radar_runtime` is the only writer. The current readers are the strict repository-owned schema
+validator and operator delivery report; no downstream business module consumes them in this
+closure. Required fields cannot be silently null, unknown repository-owned fields fail
+validation, and only explicitly unavailable diagnostics may be nullable. One evidence directory
+binds one Policy and runtime identity; mixed identities fail closed. Cross-Policy compatibility
+is `NOT_COMPARABLE` for forecast or trading claims, although named operational counts may be
+displayed side by side without causal inference.
+
+Each object has a simple strict repository-owned schema and Policy content identity. No separate
+source-document manifest, Git-object provenance graph, hit-only recomputation command, full-feed
+archive, or replay object is created.
+
+The production observation command runs only from a clean Git worktree at one exact `HEAD`.
+Startup rejects staged, tracked, or untracked changes and every object records that commit as
+`code_identity`. This is a minimal identity guard, not a provenance graph or correctness claim.
+
+## Product operating behavior
+
+One continuously running `radar_runtime` process:
+
+1. loads and validates one exact Policy;
+2. establishes time, catalogs, lifecycle subscriptions, index, tickers, and option books;
+3. maintains bounded current state and the largest configured rolling return window;
+4. evaluates only causally affected detector scopes;
+5. writes one anomaly event on activation;
+6. while active, evaluates matching official combo availability independently and writes atomic
+   events only when availability first becomes known for a combo;
+7. keeps ordinary no-anomaly states and market updates transient;
+8. writes one run summary on clean operator stop;
+9. stops only on operator signal or process failure, not because a fixed business duration
+   elapsed.
+
+A restart creates a new runtime identity and empty detector memory. No warm-state persistence or
+cross-process episode de-duplication is implemented.
+
+## Validation harness
+
+The smallest proportional harness is:
+
+1. direct pure/state-sequence tests;
+2. integration tests with public source fixtures;
+3. one production-public smoke observation using one exact Policy;
+4. ordinary schema validation of any event actually emitted.
+
+No replay, second calculation path, independent recomputation, provenance CLI, market archive,
+Outcome collector, or qualification run is required.
+
+## Evidence boundary
+
+**Proves:** a versioned public Radar can continuously produce honest detector state and keep
+official atomic-quote availability separate, under real production-public connectivity.
+
+**Does not prove:** forecast accuracy, natural anomaly frequency outside the observed interval,
+edge, Candidate quality, a fill, maker feasibility, exact fees, margin, liquidation safety,
+future exit liquidity, Outcome, PnL, qualification, promotion, or execution permission.
+
+| Evidence class | Requirement |
+|---|---|
+| Direct behavior | REQUIRED |
+| Production-public Radar | REQUIRED |
+| Minimal-hit recomputation | NOT_APPLICABLE |
+| Bounded stream reconstruction | NOT_APPLICABLE |
+| Shadow forward Outcome | NOT_APPLICABLE |
+| Qualification | NOT_APPLICABLE |
+| Execution | NOT_APPLICABLE |
+
+## Implementation scope
+
+**In:**
+
+- `packages/market_monitor/src/market_monitor/`;
+- `packages/options_domain/src/options_domain/`;
+- `packages/short_vol_radar/src/short_vol_radar/`;
+- `apps/radar_runtime/src/radar_runtime/`;
+- direct tests under `tests/`;
+- the Policy schema/loader and non-production test fixtures;
+- minimal events and one run summary.
+
+**Out:**
+
+- replay, recomputation or provenance commands;
+- databases, queues, schedulers, services, generic dependency engines, feature stores, model
+  registries, hot reload, or automatic tuning;
+- private/account APIs, test-environment market sources, combo creation, RFQ, maker/order/fill
+  handling, credentials, margin, capital, settlement, or money; the sole exception is
+  heartbeat-required production `public/test`;
+- legged-price diagnostics, Greeks as structure gates, account or delivery fees, total economic
+  maximum loss, Candidate, Shadow, Position, Outcome, research, qualification, or promotion;
+- compatibility with removed legacy artifacts and unrelated refactors.
+
+## Acceptance
+
+### Direct behavior
+
+1. TTE tests cover `0`, just above `0`, the settlement-window boundary, just outside it, every
+   configured TTE band boundary, exactly `72 hours`, and above `72 hours`, including clock
+   uncertainty.
+2. Adapter tests prove the `USDC` namespace and BTC-USDC filters, bounded acknowledged
+   subscriptions, subscribe-buffer-snapshot lifecycle reconciliation without a catalog race,
+   initially locked/maintenance platform cases, `public/status` bootstrap/reconciliation,
+   `public/get_time` RTT/discontinuity and conservative outward rounding/intersection, exact
+   index/ticker/book channel allowlist and initial notifications, heartbeat/test-request liveness,
+   additions/removals, tolerant extra source fields, fail-closed consumed fields, snapshot/change
+   continuity, gap/reconnect recovery, affected-only invalidation, exact official
+   `data.timestamp` mapping and index-minute sealing, timestamp regression, and a late tick for a
+   sealed minute.
+3. Quiet-book tests prove that no-change time does not invalidate or artificially refresh a book.
+   Empty and
+   insufficient books remain known liquidity states rather than `UNKNOWN`.
+4. Baseline tests cover configured lookbacks/weights/floor, derived warm-up, missing minutes,
+   partial startup minutes, all load-time validation relationships, explicit Policy band gaps,
+   exact remaining-life scaling, no future input, target-size bid walking, canonical
+   total-volatility Black inversion, fixed OTM/configured Delta eligibility,
+   numerical-boundary fail-closed behavior, finite values, locked Decimal/model fixed vectors, and
+   at least two different Policy fixtures. Policy-loader tests also reject unknown keys,
+   duplicate keys, BOM/non-finite values, and a missing/mismatched exact-byte digest before any
+   subscription, and prove later file mutation cannot change the immutable in-memory Policy.
+5. Episode tests cover activation, interval-bounded separation including equality/overlap,
+   interrupted/too-soon persistence, maintenance, clear/re-arm, every exact end reason,
+   `UNKNOWN_AT_GAP` termination followed by fresh new-episode activation,
+   duplicate/heartbeat/unchanged suppression, adjacent-band suspend/resume without a mechanical
+   second episode, scope-gap exit, separate call/put counts, activation-band attribution, one
+   event per short-leg episode, and the aggregate truth table for positive witness, complete
+   no-anomaly, incomplete `UNKNOWN`, and empty-scope non-evaluation.
+6. Atomic tests cover official signed directions for call/put credits, wrong expiry/type/ratio,
+   required combo buy/sell direction, bid-versus-ask selection, complete no-combo, known
+   no-credit-depth, positive and negative signed combo prices, no absolute-value normalization,
+   option/combo amount-minimum failure, optional quantity-step absence, published-grid
+   alignment/failure without rounding, combo `UNKNOWN`, positive normalized target-size atomic
+   credit, and proof that no combo state changes detector truth. They also prove that negative
+   states require complete relevant scope while one positive witness makes no best-market claim.
+7. Artifact tests cover minimal schemas, Policy identity, unit-bearing decimals, null rates,
+   event de-duplication, dirty-worktree rejection, exact clean-`HEAD` code identity, and absence of
+   normal full-chain/no-anomaly persistence; injected coverage overlap/gaps fail validation.
+8. Integration tests prove one public-only process and the absence of replay, recomputation,
+   private, maker, Candidate, Shadow, Position, and Outcome paths.
+
+### Required commands after the construction gate
+
+- checkout the bounded branch, then `make sync`;
+- focused tests for the four owning modules;
+- `make check`;
+- after the separate production observation gate:
+  `.venv/bin/python -m radar_runtime observe --policy <exact-policy-path> --expected-policy-digest <sha256:hex> --evidence-dir <new-empty-evidence-dir>`.
+
+The live command rejects a missing/invalid/mismatched Policy digest, dirty Git worktree, or
+non-empty evidence directory. Evidence stays outside the Git worktree. There is no recomputation
+or provenance command.
+
+### Production-public smoke
+
+The process runs until:
+
+- warm-up completes and at least one real
+  `Policy identity × expiry_timestamp × option_type` aggregate detector scope contains one or
+  more reconciled catalog instruments, produces at least one full-formula known per-instrument
+  evaluation inside that same causal aggregate evaluation, and with
+  `detector_coverage = COMPLETE` produces `NO_ANOMALY` or `ANOMALY_ACTIVE`, after which a human may
+  stop it; or
+- a human stops it earlier.
+
+A pre-warm-up or all-`UNKNOWN` stop is truthful but does not complete live validation. A degraded
+positive witness is truthful evidence but does not by itself establish the full Radar. A complete
+usable `NO_ANOMALY` result does complete runtime validation. Natural anomaly and public atomic
+availability are separately reported as `OBSERVED | NOT_OBSERVED`; neither is forced by elapsed
+time and neither may trigger in-place Policy tuning.
+
+`known_full_detector_formula_evaluation_count` counts only an instrument that passes
+minimum-amount, target-depth, OTM, and Delta gates and reaches known baseline volatility,
+executable IV interval, and richness classification. Short-circuit known ineligibility is still
+truthful `NO_ANOMALY`, but cannot alone establish the formula path.
+`complete_aggregate_with_full_formula_evaluation_count` counts only the joint witness where the
+same Policy/scope/causal aggregate is complete and contains that full-formula evaluation; separate
+times or scopes cannot be combined.
+
+The accepted ledger contains only:
+
+```text
+coverage_partition_error_ms = 0
+applicable_instrument_count >= 1
+known_per_instrument_detector_evaluation_count >= 1
+known_full_detector_formula_evaluation_count >= 1
+complete_aggregate_detector_evaluation_count >= 1
+complete_aggregate_with_full_formula_evaluation_count >= 1
+known_full_formula_rate_given_known_per_instrument
+complete_aggregate_with_full_formula_rate_given_complete_aggregate
+detector_unknown_transition_count_by_reason
+distinct_anomaly_episode_count
+anomaly_activation_transition_count
+anomaly_end_count_by_reason
+known_active_duration_ms_sum_by_end_reason
+public_atomic_quote_state_transition_count
+```
+
+Counts are grouped by Policy identity, option type, and TTE band. Rates with zero/unknown
+denominators are `null`. Evaluation and atomic-state transitions use their current band; episode,
+activation, clear, and duration metrics stay attributed to the episode's activation band.
+Integration spies and artifact inspection—not new production counters—prove zero private API
+calls, zero forbidden downstream artifacts, and zero persisted normal market/no-anomaly rows.
+
+## Trader-readable acceptance gates
+
+1. **行情真的看得全。** 生产公共连接完成 warm-up，至少一个真实 aggregate 范围在目录与
+   所有潜在期权覆盖完整时算出已知 detector 状态，而且同一次完整 aggregate 计算里
+   至少真有一只合约走完 `baseline → IV → Delta → richness` 全公式链；只靠深度、OTM
+   或 Delta 失格短路不能过关。空集合不能“全都看完”式过关。局部异常会记录，但不能
+   拿局部可见冒充全 Radar 建立。断线、缺字段和数据 gap 不会被说成市场平静。
+2. **安静挂单不会被误杀。** 订单簿只因明确断线、gap、失效状态或坏数据变成
+   `UNKNOWN`，不会因为五秒没变化就反复洗新；同时官方 heartbeat 会识别半开连接，
+   但 heartbeat 本身绝不把旧盘口“续命”为新报价。
+3. **末日最后半小时不装懂。** 交割 TWAP 开始后明确标记
+   `OUT_OF_BASELINE_SCOPE`，不拿普通到期模型硬算。
+4. **参考波动是可审计的简基线，不是假装知道未来。** call/put 分开计数，但同一期限桶
+   共享同一个 BTC 标的基线：把只使用过去数据的 1 分钟指数收益平方做配置化加权，再按
+   精确剩余分钟缩放。它只是 trailing-index-variance Radar 参照，不是交割 TWAP
+   分布预测，也不叫已验证预测、VRP 或 edge。
+5. **参数能校准，但历史不会被改写。** 数量、Delta、期限桶、回看、触发和清除来自
+   Policy 文件；第一版可为了观察覆盖率、频率和抖动而定得宽松，但触发比仍必须大于
+   1。一次运行内固定，下一套参数使用新身份和新观察区间；没有未来标签前只叫运营校准，
+   不能自称预测变准。
+6. **异常什么时候结束说清楚。** 波动回落、深度/Delta/OTM 失格、离开模型范围、合约
+   退市、输入缺失或无效、数值边界解不开、断线和人工停止各有不同结束原因；任何结束都
+   立即停止 combo 检查。相邻期限桶边界只在时钟不确定期间暂停，行情连续时才允许恢复
+   同一个 episode。
+7. **异常与 combo 分开。** 没有 combo、combo 没深度或 combo 数据未知，都不会抹掉已知
+   异常；按官方腿方向决定买卖 combo 并换算正信用，两腿拼价不会冒充 atomic quote。
+8. **“没有”必须真的看全。** 少看一只潜在期权或一个相关 combo 只能报 `UNKNOWN`；看到
+   一个可用原子报价可以报存在，但不能自称全市场最优。
+9. **没有等市场赐予稀有事件才算代码完成。** 同一完整范围内走完全公式链后得到的已知
+   `NO_ANOMALY` 可以证明实时链路能工作；由深度、OTM 或 Delta 已知失格短路得到的
+   `NO_ANOMALY` 仍然真实，但不能单独验收全公式链。自然异常和原子报价另报
+   `NOT_OBSERVED`，不为了验收调松阈值。
+10. **没有提前造后半场。** 本闭环没有 replay、离线重算、provenance、maker、账户、
+   Candidate、Outcome、数据库或自动调参。
+
+## Artifacts and delivery report
+
+Record the exact Policy path/digest, base/head, code commit, live command, observation interval,
+coverage partition, detector and atomic counts, `UNKNOWN` reasons, any anomaly/atomic event paths,
+and Git/remote state.
+
+Report every zero, unavailable scope and non-claim. Do not infer forecast quality, complete-market
+selection, fill, edge, profitability, qualification, future closeability, execution permission,
+or stage advancement.
+
+## Definition of done
+
+The implementation is ready only when direct tests and `make check` pass. Runtime establishment
+requires every accepted invariant in **Production-public smoke**, including
+`complete_aggregate_with_full_formula_evaluation_count >= 1` and a balanced coverage partition; a
+covered zero-anomaly result is valid only when the joint full-formula witness also exists.
+
+Business acceptance still requires an explicit human decision. Until then this task remains
+incomplete, production Radar remains `NOT_ESTABLISHED`, no later closure is authorized, and no
+Policy successor or live command may be inferred from green tests or a Draft PR.

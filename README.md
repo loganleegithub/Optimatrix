@@ -6,35 +6,43 @@ production-public Shadow only: no private API, account, margin, order, fill, or 
 
 ## Current truth
 
-This repository is a clean, authority-aligned implementation baseline. It has no product runtime
-or product command today. In particular, it contains no bounded market-capture job, saved-data
-scanner, replay closure, fixed holding-period Decision, Shadow position, or Outcome engine.
+This branch contains the implementation-under-review for one production-public Radar runtime and
+its guarded `observe` command. It still contains no bounded market-capture job, saved-data scanner,
+replay closure, fixed holding-period Decision, Shadow position, or Outcome engine.
 
 The production Short Vol Radar is `NOT_ESTABLISHED`. The sole authorized next product-capability
-closure is `SHORT_VOL_RADAR_ESTABLISHMENT`.
+closure is `SHORT_VOL_RADAR_ESTABLISHMENT`; code and tests alone do not establish it.
 
 ## Intended first business flow
 
 ```text
 live Deribit BTC-USDC 0–3DTE option-chain changes
-→ frozen Short Vol richness detector
-→ authorized target-size atomic combo credit spread
-→ minimal SHORT_VOL_RADAR_HIT snapshot
+→ one exact content-identified Short Vol baseline
+→ independent SHORT_VOL_ANOMALY_EVENT
+→ while active, independent official atomic-combo availability
+→ optional PUBLIC_ATOMIC_QUOTE_EVENT
 ```
 
 Market ingestion, bounded in-memory chain maintenance, and Radar notification are one continuous
 event-driven flow. The product does not first save the whole market and then repeatedly scan the
-same facts. Ordinary no-hit updates and the theoretical structure universe are not persisted.
+same facts. Ordinary no-anomaly updates and the theoretical structure universe are not persisted.
 
-The Radar states remain distinct:
+The three layers remain distinct:
 
-- `NO_HIT`: required current facts are usable and the detector did not fire;
-- `UNKNOWN`: required facts are missing, stale, discontinuous, or unaligned;
-- `ANOMALY_OBSERVED`: the detector fired but no authorized target-size atomic combo quote exists;
-- `RADAR_HIT`: the anomaly and at least one such atomic combo structure coexist.
+- detector: `UNKNOWN | NO_ANOMALY | ANOMALY_ACTIVE`;
+- existing official atomic combo:
+  `NOT_EVALUATED | UNKNOWN | NO_ACTIVE_COMBO | NO_TARGET_SIZE_CREDIT_QUOTE |
+  PUBLIC_ATOMIC_QUOTE_AVAILABLE`;
+- future maker/order/fill: not implemented or authorized.
 
-`RADAR_HIT` is not Candidate, Shadow Entry, fill, Outcome, or proof of an edge. A component-leg
-quote is diagnostic and cannot create a hit.
+An anomaly or public atomic quote is not Candidate, Shadow Entry, fill, Outcome, or proof of an
+edge. Component-leg prices cannot substitute for an official combo.
+
+Exact quantity, Delta/TTE bands, return lookbacks, trigger/clear ratios, and persistence live in a
+content-identified Policy file rather than code. One run cannot change its Policy. A
+human-approved successor inside the declared Policy schema uses a new identity and forward
+observation interval; current Radar evidence alone cannot prove better forecasting or
+profitability.
 
 ## Later position behavior
 
@@ -55,14 +63,14 @@ Start with [`AGENTS.md`](AGENTS.md). The
 
 ## Repository shape
 
-- `market_monitor`: future public adapters, known-at order, continuity, and bounded current state
-- `options_domain`: future option facts, authorized leg relationships, executable economics, and
-  bounded-loss calculations
-- `short_vol_radar`: future detector state, episodes, structure checks, and minimal hit projection
-- `radar_runtime`: future composition of the continuous public process
+- `market_monitor`: public adapters, known-at order, continuity, and bounded current state
+- `options_domain`: option facts, authorized leg relationships, and target-size public
+  quote arithmetic
+- `short_vol_radar`: detector episodes, official atomic availability, and minimal event
+  projection
+- `radar_runtime`: guarded composition of the continuous production-public process
 
-These packages are empty ownership boundaries, not implemented capabilities. There is no
-compatibility package or alias for the removed pipeline.
+There is no compatibility package or alias for the removed pipeline.
 
 ## Local verification
 
@@ -71,5 +79,6 @@ make sync
 make check
 ```
 
-No live market command belongs to this clean-baseline closure. The next implementation task must
-freeze its exact Radar Policy, tests, and production-public acceptance command before execution.
+The implementation task's construction gate is open. Running `python -m radar_runtime observe`
+still requires a separate explicit human production-observation command naming the exact Policy
+path and expected digest.

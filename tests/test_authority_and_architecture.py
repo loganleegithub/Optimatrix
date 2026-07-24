@@ -147,6 +147,22 @@ def test_current_stage_authorizes_exactly_one_next_closure() -> None:
     assert "## Queued sequence — not authorized" in current_stage
 
 
+def test_short_vol_task_has_open_construction_and_closed_live_gates() -> None:
+    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
+    opening = "\n".join(task.splitlines()[:24])
+
+    assert "**Status:** ACTIVE" in opening
+    assert "**Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`" in opening
+    assert (
+        "**Production observation gate:** "
+        "`CLOSED_UNTIL_IMPLEMENTATION_REVIEW_AND_EXPLICIT_HUMAN_COMMAND`" in opening
+    )
+    assert (
+        "Live commands:** REQUIRED only after the separate production observation gate opens"
+        in opening
+    )
+
+
 def test_authority_defines_one_live_short_vol_business_flow() -> None:
     constitution = (ROOT / "docs/authority/PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
@@ -166,8 +182,10 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
 
     for invariant in (
         "Receiving a relevant public market event",
-        "Normal market events that produce no Short Vol hit are not durable business objects",
-        "SHORT_VOL_RICHNESS_RADAR_POLICY",
+        "Normal market events that produce no Short Vol anomaly are not durable business objects",
+        "POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE",
+        "`SHORT_VOL_ANOMALY_EVENT`",
+        "`PUBLIC_ATOMIC_QUOTE_EVENT`",
         "`SHADOW_ENTRY`",
         "`EXECUTED_ENTRY`",
         "refreshed target-size atomic combo quote",
@@ -184,52 +202,80 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
 
     for invariant in (
         "Root blocker",
-        "target-size atomic defined-risk credit structure",
-        "component-leg references are not durable product evidence",
-        "no predetermined duration can force acceptance",
+        "A covered `NO_ANOMALY` interval is valid establishment evidence",
+        "human may approve a successor inside the same authorized Policy schema",
+        "no replay, independent offline recomputation",
+        (
+            "Runtime construction and production-public observation each require their own "
+            "explicit human command"
+        ),
     ):
         assert invariant in current_stage
 
     for invariant in (
         "There is no capture job followed by a scan job",
         "Normal live operation does not seal every market event",
-        "`ATOMIC_COMBO_QUOTE`",
-        "`LEGGED_QUOTE_REFERENCE`",
-        "cannot create a Radar hit",
+        "`SHORT_VOL_ANOMALY_EVENT`",
+        "`PUBLIC_ATOMIC_QUOTE_EVENT`",
+        "quiet unchanged book remains current",
+        "NO_TARGET_SIZE_CREDIT_QUOTE",
+        "first Radar closure intentionally creates no replay path",
         "no preselected holding duration",
     ):
         assert invariant in architecture
 
     assert "Do not require full replay" in delivery
     assert "Predetermined elapsed time neither accepts nor rejects a capability" in delivery
+    assert "human-approved successor identity and new forward interval" in delivery
     assert "## Denominator integrity" in delivery
     assert "`UNKNOWN` is neither numeric zero nor economic `ABSTAIN`" in delivery
 
     for invariant in (
-        "**Current implementation state:** NOT IMPLEMENTED",
-        "`DERIBIT_BTC_USDC_0_3DTE_MARKET_MONITOR`",
-        "`POINTWISE_EXECUTABLE_IV_RICHNESS`",
-        "not the model-free variance risk premium",
-        "`episode_scope_key`",
-        "`triggered_short_leg_set`",
-        "cannot create `RADAR_HIT`",
-        "known `UNEXECUTABLE`, not `UNKNOWN`",
-        "## Radar result states",
+        (
+            "**Current implementation state:** IMPLEMENTED — AWAITING REVIEW AND SEPARATE "
+            "PRODUCTION OBSERVATION"
+        ),
+        "`POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE`",
+        "`detector_state`",
+        "`public_atomic_quote_state`",
+        "`NOT_EVALUATED`",
+        "`NO_TARGET_SIZE_CREDIT_QUOTE`",
+        "instrument.state.option.USDC",
+        "final 30 minutes",
+        "does not become stale merely because no level changed",
+        "target_base_quantity_btc",
+        "human may approve a successor inside this same Policy schema",
+        "`qty_tick_size`",
+        "`data.timestamp`",
+        "baseline_total_variance",
+        "`runtime identity × Policy identity × instrument_name × activation_causal_seq`",  # noqa: RUF001
+        "`Policy identity × expiry_timestamp × option_type`",  # noqa: RUF001
+        "`public/status`",
+        "`public/set_heartbeat`",
+        "`BAND_SUSPENDED`",
+        "`KNOWN_INELIGIBLE`",
+        "`UNKNOWN_AT_GAP`",
+        "required combo order direction",
+        "gross_entry_credit_usdc > 0",
+        "-signed_order_amount_btc × required_side_vwap_usdc_per_btc",  # noqa: RUF001
+        "`NOT_A_DELIVERY_TWAP_DISTRIBUTION_FORECAST`",
+        "applicable_instrument_count >= 1",
+        "known_per_instrument_detector_evaluation_count >= 1",
+        "known_full_detector_formula_evaluation_count >= 1",
+        "complete_aggregate_detector_evaluation_count >= 1",
+        "complete_aggregate_with_full_formula_evaluation_count >= 1",
+        "does not create replay, a second calculation path",
         "## Public-source basis and inference limits",
-        "supplies no universal trigger",
-        "for every member of `triggered_short_leg_set`",
-        "combo bid price/quantity levels consumed through target quantity",
-        "sell price → implied volatility → implied total variance → richness score → trigger",
-        "`(anomaly_episode_id, canonical_structure_identity)`",
-        "observed usable-scope count, not a complete-market total",
+        "define mechanics, not a universal target quantity",
     ):
         assert invariant in radar
 
     for invariant in (
-        "Ordinary no-hit updates",
+        "Ordinary no-anomaly updates",
         "planned holding duration",
         "`SHORT_VOL_RADAR_ESTABLISHMENT`",
-        "target-size atomic combo",
+        "future maker/order/fill",
+        "human-approved successor inside the declared Policy schema",
     ):
         assert invariant in readme
 
@@ -253,8 +299,8 @@ def test_radar_contract_keeps_market_signal_execution_and_decision_distinct() ->
         "Market Monitor",
         "Detector evaluation",
         "Anomaly episode",
-        "Quote-executable structure",
-        "`RADAR_HIT`",
+        "Public atomic availability",
+        "Future maker/order state",
         "Candidate",
         "`CLOSE`",
         "Shadow close opportunity",
@@ -263,17 +309,24 @@ def test_radar_contract_keeps_market_signal_execution_and_decision_distinct() ->
     for term in terms:
         assert term in radar_flat
 
-    assert "The Radar never returns `CANDIDATE`, `WATCH`, or `ABSTAIN`." in radar_flat
-    assert "The component reference is conservative" in radar_flat
-    assert "is not simultaneous" in radar_flat
-    assert "carries leg risk" in radar_flat
-    assert "cannot create `RADAR_HIT`" in radar_flat
-    assert "It does not contain the full option chain" in radar_flat
-    assert "This closure stops at `SHORT_VOL_RADAR_HIT`." in radar_flat
+    assert (
+        "The Radar never returns `CANDIDATE`, `WATCH`, `ABSTAIN`, `HOLD`, or `CLOSE`." in radar_flat
+    )
+    assert "Two component-leg orders are not an atomic substitute at any layer." in radar_flat
+    assert "No Layer 2 result changes Layer 1." in radar_flat
+    assert (
+        "No current enum, placeholder service, simulation, or artifact represents them."
+        in radar_flat
+    )
+    assert "The objects do not contain the full option chain" in radar_flat
+    assert (
+        "This closure stops at `SHORT_VOL_ANOMALY_EVENT` plus optional "
+        "`PUBLIC_ATOMIC_QUOTE_EVENT`." in radar_flat
+    )
     assert "Neither entry kind has a planned holding duration." in radar_flat
-    assert "It never overrides a known hard-close condition." in radar_flat
-    assert "`SHADOW_CLOSE_OPPORTUNITY` only when action is `CLOSE`" in radar_flat
-    assert "`LEGGED_CLOSE_REFERENCE` is diagnostic" in radar_flat
+    assert "never let a missing quote override a known hard-close condition" in radar_flat
+    assert "emit `SHADOW_CLOSE_OPPORTUNITY` only when action is `CLOSE`" in radar_flat
+    assert "keep `LEGGED_CLOSE_REFERENCE` diagnostic" in radar_flat
 
 
 def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
