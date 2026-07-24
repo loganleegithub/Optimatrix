@@ -981,3 +981,50 @@ change admission, or claim qualification.
 Decisions preserve `candidate_rate_given_complete=null`; an absent due denominator preserves both
 rates as null. These descriptive rates do not prove Policy quality, profitability, qualification,
 promotion readiness, fills, execution, or capital authority.
+
+## Parallel maintenance addendum — Quote freshness locator
+
+**Business assertion:** a read-only offline report can bind one sealed capture to its exact
+Decision receipt, name every stale option instrument in the reconstructed final frame, and locate
+the exact structurally allowed vertical/configured-horizon opportunities touched by those stale
+legs without changing or replacing the authoritative Decision.
+
+**Observable input/output:** the input is one existing canonical capture plus its existing exact
+`SHORT_VOL_DECISION_RECEIPT`; the output is a
+`NON_AUTHORITATIVE_QUOTE_FRESHNESS_LOCATOR_REPORT` written outside both sealed input trees. Missing
+receipt binding, reference price, quote lineage, a complete current catalog/option universe, or a
+zero structural denominator remains `UNKNOWN`/`null` where a rate cannot be proven.
+
+**Market/Decision input contract change:** NONE — preserve the current authoritative
+`OPTION_UNIVERSE_QUOTES_STALE` whole-frame fail-closed behavior, every quote freshness limit,
+lineage rule, executable-structure denominator, assessment denominator, and Decision receipt.
+
+**Decision Policy change:** NONE — preserve every structure, horizon, formula, threshold,
+predicate, ranking, and candidate-selection behavior.
+
+**Outcome/evaluation contract change:** NONE — the report does not read or change Entry, exposure,
+exit, PnL, Outcome, maturity, `NO_TRADE`, or Run-receipt meaning.
+
+**Stage/authorization change:** NONE — this is bounded offline public-evidence analysis only.
+
+**Scope:** add one standalone offline locator outside every Online Runtime source-identity scope,
+include it in the persistent strict-mypy gate, and add direct tests. The CLI rejects an output
+path inside or above the capture tree or Decision-receipt tree, so producing the report cannot
+contaminate sealed inputs. The authoritative section copies only receipt-bound observed
+frame/Decision facts. A separately labeled `NON_AUTHORITATIVE_COUNTERFACTUAL` counts each
+topology-valid same-expiry/same-side 1:1 vertical containing at least one stale leg once,
+multiplies the deduped vertical count by the configured horizon count, and compares that localized
+impact with the observed whole-frame veto. It does not assert that unaffected structures were
+executable, assessable, candidates, or profitable.
+
+**Acceptance:** tests cover one stale leg touching multiple verticals and horizons, multiple stale
+legs with global vertical deduplication, no stale legs, zero structural denominator, incomplete or
+noncurrent catalog/option-universe denominators failing closed, missing receipt/lineage facts
+failing closed, isolated output-path enforcement, and the exact non-authoritative label and
+no-feedback flags. Run focused tests, strict type checking for the standalone package, and
+`make check` in the isolated virtual environment.
+
+**Non-claims:** the counterfactual is not a Decision, Policy value, Outcome, Run receipt,
+qualification result, candidate selection, or permission change. It never feeds any authoritative
+artifact. Public quotes remain observations, not fills, and localized counts do not prove data
+completeness, Policy quality, profitability, or execution.
