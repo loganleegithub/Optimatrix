@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal, localcontext
 from pathlib import Path
 from typing import cast
 
@@ -12,9 +12,11 @@ from market_tape import (
     EventKind,
     PublicShadowJournalReader,
     PublicShadowJournalWriter,
+    canonical_digest,
 )
 from radar_runtime.outcome_identity import outcome_runtime_source_identity
 from radar_runtime.runtime_identity import runtime_source_identity
+from radar_runtime.shadow_bundle import business_funnel_report
 from radar_runtime.shadow_identity import (
     RUN_RUNTIME_SOURCE_SCOPE,
     run_runtime_source_identity,
@@ -174,6 +176,117 @@ def test_complete_run_rejects_immature_entry_and_strategy_zero_for_unknown() -> 
             maturity=MaturityClass.MATURE_UNKNOWN,
             pnl=Decimal("0"),
         )
+
+
+def test_business_funnel_reports_both_candidate_denominators_and_partitions() -> None:
+    report = business_funnel_report(
+        {
+            "due_opportunity_count": 12,
+            "admission_counts": {
+                "OPPORTUNITY_UNKNOWN": 6,
+                "NO_ENTRY": 3,
+                "ADMITTED": 2,
+                "CONCURRENCY_BLOCKED": 1,
+            },
+            "action_counts": {
+                "RESEARCH_CANDIDATE": 3,
+                "WATCH": 1,
+                "ABSTAIN": 5,
+            },
+        }
+    )
+
+    assert report == {
+        "report_type": "FIXED_POLICY_PUBLIC_SHADOW_BUSINESS_FUNNEL_REPORT",
+        "due_opportunity_count": 12,
+        "complete_decision_count": 6,
+        "candidate_count": 3,
+        "opportunity_partition": {
+            "OPPORTUNITY_UNKNOWN": 6,
+            "NO_ENTRY": 3,
+            "ADMITTED": 2,
+            "CONCURRENCY_BLOCKED": 1,
+        },
+        "raw_candidate_rate": "0.25",
+        "candidate_rate_given_complete": "0.5",
+        "rate_semantics": "COUNTS_AUTHORITATIVE_DECIMAL_RENDERING_ONLY",
+        "decimal_rendering": {
+            "precision": 28,
+            "rounding": "ROUND_HALF_EVEN",
+        },
+        "interpretation": "DESCRIPTIVE_ONLY_NOT_QUALIFICATION",
+    }
+
+
+def test_business_funnel_decimal_rendering_ignores_global_context() -> None:
+    accounting = {
+        "due_opportunity_count": 12,
+        "admission_counts": {
+            "OPPORTUNITY_UNKNOWN": 0,
+            "NO_ENTRY": 11,
+            "ADMITTED": 1,
+            "CONCURRENCY_BLOCKED": 0,
+        },
+        "action_counts": {
+            "RESEARCH_CANDIDATE": 1,
+        },
+    }
+    baseline = business_funnel_report(accounting)
+
+    with localcontext() as global_context:
+        global_context.prec = 6
+        global_context.rounding = ROUND_DOWN
+        changed_context = business_funnel_report(accounting)
+
+    assert baseline["raw_candidate_rate"] == "0.08333333333333333333333333333"
+    assert changed_context == baseline
+    assert canonical_digest(changed_context) == canonical_digest(baseline)
+
+
+def test_business_funnel_complete_zero_keeps_raw_zero_and_conditional_null() -> None:
+    report = business_funnel_report(
+        {
+            "due_opportunity_count": 4,
+            "admission_counts": {
+                "OPPORTUNITY_UNKNOWN": 4,
+                "NO_ENTRY": 0,
+                "ADMITTED": 0,
+                "CONCURRENCY_BLOCKED": 0,
+            },
+            "action_counts": {
+                "RESEARCH_CANDIDATE": 0,
+                "WATCH": 0,
+                "ABSTAIN": 4,
+            },
+        }
+    )
+
+    assert report["raw_candidate_rate"] == "0"
+    assert report["candidate_rate_given_complete"] is None
+    assert json.loads(json.dumps(report))["candidate_rate_given_complete"] is None
+
+
+def test_business_funnel_due_zero_keeps_both_rates_null() -> None:
+    report = business_funnel_report(
+        {
+            "due_opportunity_count": 0,
+            "admission_counts": {
+                "OPPORTUNITY_UNKNOWN": 0,
+                "NO_ENTRY": 0,
+                "ADMITTED": 0,
+                "CONCURRENCY_BLOCKED": 0,
+            },
+            "action_counts": {
+                "RESEARCH_CANDIDATE": 0,
+                "WATCH": 0,
+                "ABSTAIN": 0,
+            },
+        }
+    )
+
+    serialized = json.loads(json.dumps(report))
+    assert serialized["raw_candidate_rate"] is None
+    assert serialized["candidate_rate_given_complete"] is None
 
 
 def test_deterministic_synthetic_run_has_full_denominator_and_fresh_replay(

@@ -28,6 +28,16 @@ from radar_runtime.shadow_runtime import (
 BUNDLE_FORMAT_ID = "OPTIMATRIX_FIXED_POLICY_PUBLIC_SHADOW_EVIDENCE_BUNDLE"
 UNKNOWN_DENOMINATOR_AUDIT_TYPE = "UNKNOWN_DENOMINATOR_AUDIT"
 UNKNOWN_DENOMINATOR_AUDIT_PATH = "UNKNOWN_DENOMINATOR_AUDIT.json"
+BUSINESS_FUNNEL_REPORT_TYPE = "FIXED_POLICY_PUBLIC_SHADOW_BUSINESS_FUNNEL_REPORT"
+BUSINESS_FUNNEL_BUNDLE_REPORT_TYPE = "FIXED_POLICY_PUBLIC_SHADOW_BUSINESS_FUNNEL_BUNDLE_REPORT"
+BUSINESS_FUNNEL_PATH = "BUSINESS_FUNNEL.json"
+RATE_DECIMAL_PRECISION = 28
+_ADMISSION_PARTITION = (
+    "OPPORTUNITY_UNKNOWN",
+    "NO_ENTRY",
+    "ADMITTED",
+    "CONCURRENCY_BLOCKED",
+)
 
 
 def _sha256(path: Path) -> str:
@@ -79,7 +89,7 @@ def _nonnegative_int(value: object, label: str) -> int:
     return value
 
 
-def _rate(
+def _audit_rate(
     numerator: int | None,
     denominator: int | None,
 ) -> dict[str, object]:
@@ -158,8 +168,8 @@ def _build_unknown_denominator_audit(
                 raise ValueError("no-event opportunity lacks its exact reason")
             blockers = {reason}
             availability = "UNAVAILABLE"
-            quote_coverage = _rate(None, None)
-            assessment_availability = _rate(None, None)
+            quote_coverage = _audit_rate(None, None)
+            assessment_availability = _audit_rate(None, None)
         else:
             expected_receipt_slots.add(expected_slot)
             receipt = decision_receipts.get(expected_slot)
@@ -209,7 +219,7 @@ def _build_unknown_denominator_audit(
                 quotes.get("option_quote_count"),
                 "option quote count",
             )
-            quote_coverage = _rate(option_quote_count, catalog_option_count)
+            quote_coverage = _audit_rate(option_quote_count, catalog_option_count)
 
             assessment_count = _nonnegative_int(
                 evaluation.get("assessment_count"),
@@ -225,7 +235,7 @@ def _build_unknown_denominator_audit(
             )
             if assessment_count + assessment_unavailable_count != assessment_opportunity_count:
                 raise ValueError("assessment denominator is not completely partitioned")
-            assessment_availability = _rate(
+            assessment_availability = _audit_rate(
                 assessment_count,
                 assessment_opportunity_count,
             )
@@ -256,7 +266,7 @@ def _build_unknown_denominator_audit(
         "source_run_receipt_digest": run_receipt.get("run_receipt_digest"),
         "due_slot_count": len(summaries),
         "available_slot_count": available_slot_count,
-        "availability_rate": _rate(available_slot_count, len(summaries)),
+        "availability_rate": _audit_rate(available_slot_count, len(summaries)),
         "quote_coverage_definition": (
             "option_quote_count / max(catalog.instrument_count - "
             "one_required_reference_instrument, 0)"
@@ -289,6 +299,72 @@ def _unknown_denominator_audit(run_root: Path) -> dict[str, object]:
         if isinstance(digest, str)
     }
     return _build_unknown_denominator_audit(run_receipt, receipts)
+
+
+def _funnel_rate(numerator: int, denominator: int) -> str | None:
+    if denominator == 0:
+        return None
+    with localcontext(Context(prec=RATE_DECIMAL_PRECISION, rounding=ROUND_HALF_EVEN)):
+        return str(Decimal(numerator) / Decimal(denominator))
+
+
+def business_funnel_report(accounting: object) -> dict[str, object]:
+    """Derive descriptive candidate rates without changing the sealed Run accounting."""
+
+    if not isinstance(accounting, dict):
+        raise ValueError("business Funnel accounting must be an object")
+    due_count = _nonnegative_int(
+        accounting.get("due_opportunity_count"),
+        "due opportunity count",
+    )
+    raw_admissions = accounting.get("admission_counts")
+    raw_actions = accounting.get("action_counts")
+    if not isinstance(raw_admissions, dict) or not isinstance(raw_actions, dict):
+        raise ValueError("business Funnel partitions are missing")
+    admissions = {
+        name: _nonnegative_int(raw_admissions.get(name), f"{name} count")
+        for name in _ADMISSION_PARTITION
+    }
+    if sum(admissions.values()) != due_count:
+        raise ValueError("business Funnel opportunity partition changed")
+    candidate_count = _nonnegative_int(
+        raw_actions.get("RESEARCH_CANDIDATE"),
+        "candidate count",
+    )
+    complete_decision_count = due_count - admissions["OPPORTUNITY_UNKNOWN"]
+    if candidate_count != (admissions["ADMITTED"] + admissions["CONCURRENCY_BLOCKED"]):
+        raise ValueError("business Funnel candidate partition changed")
+    if candidate_count > complete_decision_count:
+        raise ValueError("business Funnel candidate count exceeds complete Decisions")
+    return {
+        "report_type": BUSINESS_FUNNEL_REPORT_TYPE,
+        "due_opportunity_count": due_count,
+        "complete_decision_count": complete_decision_count,
+        "candidate_count": candidate_count,
+        "opportunity_partition": admissions,
+        "raw_candidate_rate": _funnel_rate(candidate_count, due_count),
+        "candidate_rate_given_complete": _funnel_rate(
+            candidate_count,
+            complete_decision_count,
+        ),
+        "rate_semantics": "COUNTS_AUTHORITATIVE_DECIMAL_RENDERING_ONLY",
+        "decimal_rendering": {
+            "precision": RATE_DECIMAL_PRECISION,
+            "rounding": ROUND_HALF_EVEN,
+        },
+        "interpretation": "DESCRIPTIVE_ONLY_NOT_QUALIFICATION",
+    }
+
+
+def _bundle_business_funnel(
+    synthetic: dict[str, object],
+    public: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "report_type": BUSINESS_FUNNEL_BUNDLE_REPORT_TYPE,
+        "synthetic": business_funnel_report(synthetic.get("accounting")),
+        "production_public": business_funnel_report(public.get("accounting")),
+    }
 
 
 def _validate_replay(replay: dict[str, object], label: str) -> None:
@@ -333,6 +409,7 @@ def _report(
     synthetic_audit: dict[str, object],
     public_audit: dict[str, object],
 ) -> str:
+    funnel = _bundle_business_funnel(synthetic, public)
     lines = [
         "# Fixed-Policy Public Shadow 验收报告",
         "",
@@ -345,6 +422,8 @@ def _report(
         f"records=`{public.get('records')}`, "
         f"operational anomalies=`{json.dumps(public.get('operational_anomaly_counts'), sort_keys=True)}`",
         f"- 生产公开会计: `{json.dumps(public.get('accounting'), sort_keys=True, ensure_ascii=False)}`",
+        f"- 合成业务 Funnel: `{json.dumps(funnel['synthetic'], sort_keys=True, ensure_ascii=False)}`",
+        f"- 生产公开业务 Funnel: `{json.dumps(funnel['production_public'], sort_keys=True, ensure_ascii=False)}`",
         f"- 合成 replay: verified=`{synthetic_replay.get('replay_verified')}`, "
         f"prefix_causality=`{synthetic_replay.get('prefix_causality_verified')}`",
         f"- 生产 replay: verified=`{public_replay.get('replay_verified')}`, "
@@ -385,6 +464,7 @@ def _report(
             "- `NO_TRADE=0` 是无持仓定义值, 不是资格赛、Policy 质量或盈利证明。",
             "- replay 相等只证明封存输入的确定性重建, 不证明第三方来源或物理 fsync 时刻。",
             "- `attempt_selection_attested=false`; 证据不能证明外部操作者未丢弃另一尝试。",
+            "- 两个 candidate rate 都是描述性 Funnel 指标, 不是 qualification 或 Policy 质量结论。",
             "- 不授权 Challenger、qualification、promotion、private API、execution 或 capital。",
             "",
         )
@@ -457,6 +537,8 @@ def create_shadow_evidence_bundle(
         output / "production-public" / UNKNOWN_DENOMINATOR_AUDIT_PATH,
         public_audit,
     )
+    funnel = _bundle_business_funnel(synthetic, public)
+    _write_json(output / BUSINESS_FUNNEL_PATH, funnel)
     invocation = _json_object(public_run / "invocation-witness.json")
     generated_at = cast(str, invocation["invocation_finished_at"])
     report = _report(
@@ -494,6 +576,7 @@ def create_shadow_evidence_bundle(
         "online_runtime_source_digest": report_identity.online_runtime_source_digest,
         "synthetic_unknown_denominator_audit_digest": synthetic_audit["audit_digest"],
         "public_unknown_denominator_audit_digest": public_audit["audit_digest"],
+        "business_funnel_digest": canonical_digest(funnel),
         "artifacts": artifacts,
     }
     manifest["bundle_manifest_digest"] = canonical_digest(manifest)
@@ -596,6 +679,7 @@ def verify_shadow_evidence_bundle(
     semantic = _json_object(bundle / "historical-semantic-regression/semantic-regression.json")
     synthetic_audit = _json_object(bundle / "synthetic" / UNKNOWN_DENOMINATOR_AUDIT_PATH)
     public_audit = _json_object(bundle / "production-public" / UNKNOWN_DENOMINATOR_AUDIT_PATH)
+    funnel = _json_object(bundle / BUSINESS_FUNNEL_PATH)
     report_identity = run_report_source_identity(require_clean=authoritative_replay)
     report_source_match = (
         manifest.get("report_source_id") == report_identity.report_source_id
@@ -619,6 +703,7 @@ def verify_shadow_evidence_bundle(
         != synthetic_audit.get("audit_digest")
         or manifest.get("public_unknown_denominator_audit_digest")
         != public_audit.get("audit_digest")
+        or manifest.get("business_funnel_digest") != canonical_digest(funnel)
     ):
         raise ValueError("Shadow evidence manifest bindings changed")
     if report_source_match:
@@ -628,6 +713,9 @@ def verify_shadow_evidence_bundle(
             reconstructed_synthetic_audit
         ) or canonical_digest(public_audit) != canonical_digest(reconstructed_public_audit):
             raise ValueError("UNKNOWN denominator audit changed")
+        expected_funnel = _bundle_business_funnel(synthetic, public)
+        if canonical_digest(funnel) != canonical_digest(expected_funnel):
+            raise ValueError("Shadow business Funnel reconstruction changed")
         expected_report = _report(
             generated_at=cast(str, manifest["generated_at"]),
             synthetic=synthetic,
