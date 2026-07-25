@@ -348,6 +348,12 @@ def parse_ticker(payload: object, expected_instrument_name: str) -> TickerState:
         raise ValueError("ticker timestamp must be a non-negative integer")
     if not isinstance(underlying_index, str) or not underlying_index:
         raise ValueError("ticker underlying_index must be a non-empty string")
+    option_name_parts = expected_instrument_name.rsplit("-", 2)
+    if len(option_name_parts) != 3:
+        raise ValueError("ticker option identity cannot establish its forward basis")
+    expected_expiry_future = option_name_parts[0]
+    if underlying_index not in {"index_price", expected_expiry_future}:
+        raise ValueError("ticker underlying_index is not the expected forward basis")
     try:
         forward = Decimal(str(underlying_price))
     except Exception as exc:

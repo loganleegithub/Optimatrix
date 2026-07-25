@@ -144,7 +144,12 @@ Platform startup does not default an unobserved `maintenance = false`. It remain
 2. `public/status` succeeds and its official lock fields prove that neither all currencies nor the
    consumed BTC index are locked;
 3. the time/catalog requests and subscriptions succeed after that status boundary; and
-4. fresh index coverage and required book snapshots are established.
+4. fresh index coverage is established.
+
+That is the global platform boundary, not a global all-option barrier. Each current option's own
+initial ticker and book snapshot gates only that detector. A missing or invalid per-instrument
+fact makes that instrument `UNKNOWN`; it does not suppress a causally known active witness in
+another instrument, which is reported through the completeness-aware aggregate state.
 
 `platform_state.public_methods_state.allow_unauthenticated_public_requests = false`, a relevant
 lock, or a maintenance/break notification invalidates dependent state immediately. A later
@@ -163,13 +168,19 @@ actually consumed by this contract fail closed at their smallest consumer.
 
 The WebSocket enables `public/set_heartbeat` at a fixed operational interval of 30 seconds and
 acknowledges it before market state can become usable. This is transport safety, not a trading
-Policy parameter, and the run summary freezes it. Every `test_request` is answered with
-`public/test`. No inbound session activity for 60 seconds, a failed heartbeat/test response, or a
-connection close invalidates every
+Policy parameter, and the run summary freezes it. The consumed official result shapes are
+`public/set_heartbeat -> "ok"` and `public/test -> {"version": <non-empty string>, ...}`. Every
+`test_request` is answered with `public/test`. No inbound session activity for 60 seconds, a
+failed heartbeat/test response, or a connection close invalidates every
 connection-dependent consumer and ends affected active episodes as `UNKNOWN_AT_GAP`. Reconnect
 requires fresh subscriptions, snapshots, catalog reconciliation, and baseline coverage.
 Heartbeat traffic proves only transport liveness: it never refreshes a book's economic timestamp,
 creates a detector observation, or bridges a market-data sequence gap.
+
+The socket reader records local monotonic receive time before enqueue. Its queue is bounded and
+must never block the sole RPC-response reader: overflow is a session gap. Processing more than
+1000 ms after receive is also a session gap, not a late market observation. The run summary freezes
+that operational limit and records the maximum observed notification queue lag.
 
 ## Time and settlement boundary
 
@@ -212,6 +223,11 @@ estimated delivery price. Ordinary remaining-life variance scaling cannot silent
 Each accepted fact receives a local monotonic `causal_seq`. Different channels do not share one
 exchange-global sequence. “Strict as-of” means the latest individually continuous facts known to
 this process at one `causal_seq`; it does not claim a simultaneous exchange snapshot.
+
+When one fact affects multiple instruments in the same
+`Policy identity × expiry_timestamp × option_type` scope, the runtime evaluates every affected
+instrument first and settles that aggregate exactly once from that same causal pass. It may not
+publish transient partial truth produced by iteration order.
 
 An order book becomes usable only after:
 
@@ -666,7 +682,8 @@ activations, episode ends by
 UNKNOWN_AT_GAP | CENSORED_AT_STOP`, known-active duration by end reason, band-suspended duration,
 Layer 2 state transitions, detector `UNKNOWN` transitions by reason, and Policy identity. Counts
 are business-state transitions after reduced-state de-duplication, never message counts. Rates
-with a zero or unknown denominator are `null`.
+with a zero or unknown denominator are `null`. Operational diagnostics include the frozen
+notification queue-lag limit and the maximum observed queue lag.
 
 Coverage is one exact half-open runtime interval
 `[runtime_started_monotonic_ms, clean_stop_monotonic_ms)`. At every monotonic millisecond it has
@@ -731,7 +748,7 @@ One `radar_runtime` process:
 2. establishes time, catalogs, lifecycle streams, index state, required pricing facts, and option
    books;
 3. maintains bounded current state and only the largest configured rolling return window;
-4. evaluates causally affected detector scopes;
+4. evaluates causally affected detector scopes as one aggregate transaction per exact scope;
 5. writes one anomaly event on activation;
 6. subscribes to matching active official combo books only while relevant anomalies are active;
 7. reports Layer 2 independently and writes an atomic event when availability first appears;
@@ -752,7 +769,9 @@ Tests must cover:
   subscriptions, initially locked/maintenance platform cases, `public/status`
   bootstrap/reconciliation, `public/get_time` RTT/discontinuity and conservative outward
   rounding/intersection, exact index/ticker/book channel allowlist and initial notifications,
-  heartbeat/test-request liveness, and tolerant unrelated source fields;
+  official heartbeat/test result shapes, non-blocking notification overflow, receive-time queue
+  lag, normal socket close, stale subscription generations, late RPC responses, and tolerant
+  unrelated source fields;
 - TTE and trusted-clock interval boundaries, including final delivery-price window exclusion;
 - snapshot/change continuity, quiet unchanged books, empty/insufficient depth, gap/resnapshot,
   affected-only invalidation, exact `data.timestamp` mapping and index-minute sealing, timestamp
@@ -863,6 +882,7 @@ design basis:
 - [Deribit server time](https://docs.deribit.com/api-reference/supporting/public-get_time)
 - [Deribit instrument metadata and quantity step](https://docs.deribit.com/api-reference/market-data/public-get_instrument)
 - [Deribit WebSocket heartbeat](https://docs.deribit.com/api-reference/session-management/public-set_heartbeat)
+- [Deribit heartbeat test response](https://docs.deribit.com/api-reference/supporting/public-test)
 - [Deribit official combo books and leg conventions](https://support.deribit.com/hc/en-us/articles/31424954956061-Combo-Books)
 
 These sources define mechanics, not a universal target quantity, Delta band, return lookback,

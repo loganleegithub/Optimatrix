@@ -210,9 +210,7 @@ def test_catalog_bootstrap_buffers_lifecycle_until_snapshot_reconciliation() -> 
 def test_platform_readiness_never_defaults_unseen_maintenance_or_recovery() -> None:
     platform = PlatformReadiness()
     platform.acknowledge(("platform_state", "platform_state.public_methods_state"))
-    platform.apply_status(
-        {"locked": False, "locked_indices": [], "locked_currencies": [], "extra": "ok"}
-    )
+    platform.apply_status({"locked": "false", "extra": "ok"})
     platform.public_methods_allowed = True
     assert platform.maintenance is None
     assert not platform.usable
@@ -226,6 +224,26 @@ def test_platform_readiness_never_defaults_unseen_maintenance_or_recovery() -> N
     assert not platform.usable
     with pytest.raises(RuntimeError, match="status"):
         platform.complete_post_status_bootstrap()
+
+
+def test_platform_readiness_accepts_official_lock_notification_union() -> None:
+    platform = PlatformReadiness()
+    platform.acknowledge(("platform_state", "platform_state.public_methods_state"))
+    platform.apply_status({"locked": "false"})
+    platform.public_methods_allowed = True
+    platform.prove_operational_from_post_status_public_success()
+    platform.complete_post_status_bootstrap()
+    assert platform.usable
+
+    platform.apply_platform_notification({"price_index": "eth_usdc", "locked": True})
+    assert platform.usable
+
+    platform.apply_platform_notification({"price_index": "btc_usdc", "locked": True})
+    assert not platform.usable
+    assert platform.reason == "RELEVANT_PLATFORM_LOCK"
+
+    platform.apply_platform_notification({"price_index": "btc_usdc", "locked": False})
+    assert not platform.usable
 
 
 def test_relevant_status_locks_and_public_method_denial_fail_closed() -> None:
@@ -242,3 +260,5 @@ def test_relevant_status_locks_and_public_method_denial_fail_closed() -> None:
         PlatformReadiness().apply_status(
             {"locked": "unexpected", "locked_indices": [], "locked_currencies": []}
         )
+    with pytest.raises(SourceDataError, match="locked_indices"):
+        PlatformReadiness().apply_status({"locked": "partial"})

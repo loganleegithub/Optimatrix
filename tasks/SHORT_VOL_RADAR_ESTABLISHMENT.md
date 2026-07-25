@@ -272,18 +272,26 @@ finishes.
 Platform startup never defaults an unseen `maintenance = false`. Platform-dependent state stays
 unusable until the buffered platform subscriptions are acknowledged; `public/status` proves no
 all-currency or consumed-BTC-index lock; later time/catalog/subscription requests succeed; and
-fresh index coverage plus required book snapshots are established. A public-method denial,
-relevant lock, or maintenance/break notification invalidates dependent state immediately.
-Recovery notifications alone do not restore it; the same bootstrap conditions must be rebuilt.
+fresh index coverage is established. This is the global platform boundary, not a global
+all-option barrier: each option's initial ticker and book snapshot gates only that detector.
+A public-method denial, relevant lock, or maintenance/break notification invalidates dependent
+state immediately. Recovery notifications alone do not restore it; the same bootstrap conditions
+must be rebuilt.
 
 The WebSocket acknowledges `public/set_heartbeat` at the fixed operational interval of 30 seconds
 before market state becomes usable. The run summary freezes that value, but it is not a trading
-Policy parameter. The client answers every `test_request` with `public/test`. Sixty seconds without
-inbound session activity, a failed heartbeat/test response, or a connection close makes all
-dependent state `UNKNOWN` and ends affected episodes
+Policy parameter. The exact consumed response shapes are `public/set_heartbeat -> "ok"` and
+`public/test -> {"version": <non-empty string>, ...}`. The client answers every `test_request` with
+`public/test`. Sixty seconds without inbound session activity, a failed heartbeat/test response,
+or a connection close makes all dependent state `UNKNOWN` and ends affected episodes
 `UNKNOWN_AT_GAP`; reconnect rebuilds subscriptions, snapshots, catalogs, and baseline coverage.
 Heartbeat traffic proves connection liveness only: it neither refreshes an economic quote nor
 creates a detector observation.
+
+The socket reader stamps each notification with local monotonic receive time before enqueue. Its
+bounded queue may not block RPC-response dispatch: overflow is a session gap. More than 1000 ms of
+receive-to-processing lag is likewise a session gap. The run summary records the fixed limit and
+maximum observed lag.
 
 Raw external payloads tolerate additional unknown fields. Missing, invalid, or changed fields
 that this task actually consumes fail closed at their smallest consumer. The implementation may
@@ -302,6 +310,10 @@ Every accepted fact receives a local monotonic `causal_seq`. Cross-instrument ch
 one exchange-global sequence. “Strict as-of” therefore means the latest individually continuous
 facts known to this process at one `causal_seq`; it does not claim a matching-engine-wide
 simultaneous snapshot.
+
+One fact that affects multiple instruments is evaluated as one transaction for each exact
+`Policy identity × expiry_timestamp × option_type` scope: all affected instruments are calculated
+before the aggregate is settled once. Iteration order may not expose transient partial truth.
 
 ### Order-book validity
 
@@ -572,7 +584,8 @@ ends by
 `CLEAR | KNOWN_INELIGIBLE | OUT_OF_BASELINE_SCOPE | MEMBERSHIP_LOSS | UNKNOWN_DETECTOR |
 UNKNOWN_AT_GAP | CENSORED_AT_STOP`, known-active duration by end reason, band-suspended duration,
 atomic-state transitions, detector `UNKNOWN` transitions by reason, and Policy identity. These are
-reduced business-state transitions, never message counts. It contains no full market chain.
+reduced business-state transitions, never message counts. It also records the fixed notification
+queue-lag limit and maximum observed lag. It contains no full market chain.
 
 Coverage partitions the exact half-open interval
 `[runtime_started_monotonic_ms, clean_stop_monotonic_ms)` into one global state at every
@@ -615,7 +628,7 @@ One continuously running `radar_runtime` process:
 1. loads and validates one exact Policy;
 2. establishes time, catalogs, lifecycle subscriptions, index, tickers, and option books;
 3. maintains bounded current state and the largest configured rolling return window;
-4. evaluates only causally affected detector scopes;
+4. evaluates only causally affected detector scopes, once per exact aggregate transaction;
 5. writes one anomaly event on activation;
 6. while active, evaluates matching official combo availability independently and writes atomic
    events only when availability first becomes known for a combo;
@@ -693,9 +706,11 @@ future exit liquidity, Outcome, PnL, qualification, promotion, or execution perm
    subscriptions, subscribe-buffer-snapshot lifecycle reconciliation without a catalog race,
    initially locked/maintenance platform cases, `public/status` bootstrap/reconciliation,
    `public/get_time` RTT/discontinuity and conservative outward rounding/intersection, exact
-   index/ticker/book channel allowlist and initial notifications, heartbeat/test-request liveness,
-   additions/removals, tolerant extra source fields, fail-closed consumed fields, snapshot/change
-   continuity, gap/reconnect recovery, affected-only invalidation, exact official
+   index/ticker/book channel allowlist and initial notifications, official heartbeat/test result
+   shapes, non-blocking notification overflow, receive-time queue lag, normal socket close, stale
+   subscription generations, late RPC responses, additions/removals, tolerant extra source
+   fields, fail-closed consumed fields, snapshot/change continuity, gap/reconnect recovery,
+   affected-only invalidation, exact official
    `data.timestamp` mapping and index-minute sealing, timestamp regression, and a late tick for a
    sealed minute.
 3. Quiet-book tests prove that no-change time does not invalidate or artificially refresh a book.

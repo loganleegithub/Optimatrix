@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 import radar_runtime.runtime as runtime_module
 from conftest import PolicyFactory
 from market_monitor import ContinuousOrderBook, PriceLevel, TimeInterval, TrustedClock
-from market_monitor.deribit import book_channel, ticker_channel
-from options_domain import AmountMetadata, OptionInstrument, OptionType
+from market_monitor.deribit import PLATFORM_CHANNELS, book_channel, ticker_channel
+from options_domain import (
+    AmountMetadata,
+    ComboInstrument,
+    ComboLeg,
+    OptionInstrument,
+    OptionType,
+)
 from radar_runtime.deribit_public import (
     PUBLIC_METHODS,
     DeribitPublicClient,
@@ -22,7 +30,7 @@ from radar_runtime.identity import (
     prepare_evidence_directory,
     validate_clean_git_outputs,
 )
-from radar_runtime.runtime import LiveRadarRuntime, ScopeCounts
+from radar_runtime.runtime import CoverageLedger, LiveRadarRuntime, ScopeCounts
 from short_vol_radar.atomic import (
     AtomicMatch,
     AtomicQuote,
@@ -34,6 +42,7 @@ from short_vol_radar.black import DecimalInterval, TotalVolatilityInterval
 from short_vol_radar.detector import (
     DetectorCoverage,
     DetectorObservation,
+    DetectorState,
     EpisodeEndReason,
     EpisodeTracker,
     TrackerState,
@@ -55,7 +64,7 @@ from short_vol_radar.evidence import (
     validate_run_summary,
 )
 from short_vol_radar.policy import OptionRule, load_policy_bytes
-from short_vol_radar.radar import TickerState
+from short_vol_radar.radar import EvaluationResult, TickerState
 
 
 def anomaly_evidence() -> AnomalyEvidence:
@@ -146,6 +155,8 @@ def summary_object(
         heartbeat_interval_seconds=30,
         liveness_deadline_seconds=60,
         clock_drift_ppm=1_000,
+        notification_queue_lag_limit_ms=1_000,
+        max_notification_queue_lag_ms=0,
     )
 
 
@@ -197,9 +208,46 @@ def test_evidence_writer_deduplicates_events_and_validates_directory(
     assert writer.write_anomaly(anomaly) is None
     assert writer.write_atomic(atomic) is not None
     assert writer.write_atomic(atomic) is None
-    writer.write_summary(summary_object())
+    scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
+    scope.applicable_instrument_count = 1
+    scope.distinct_anomaly_episode_count = 1
+    scope.anomaly_activation_transition_count = 1
+    scope.anomaly_end_count_by_reason[EpisodeEndReason.CENSORED_AT_STOP.value] = 1
+    scope.known_active_duration_ms_sum_by_end_reason[EpisodeEndReason.CENSORED_AT_STOP.value] = 0
+    scope.public_atomic_quote_state_transition_count[
+        PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE.value
+    ] = 1
+    summary = summary_object()
+    summary["counts_by_scope"] = [scope.as_object()]
+    summary["anomaly_end_count_by_reason"] = {
+        reason.value: int(reason is EpisodeEndReason.CENSORED_AT_STOP)
+        for reason in EpisodeEndReason
+    }
+    summary["known_active_duration_ms_sum_by_end_reason"] = {
+        reason.value: 0 for reason in EpisodeEndReason
+    }
+    summary["public_atomic_quote_state_transition_count"] = {
+        PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE.value: 1
+    }
+    writer.write_summary(summary)
     objects = validate_evidence_directory(tmp_path)
     assert len(objects) == 3
+
+
+def test_evidence_writer_rejects_conflicting_duplicate_identity(tmp_path: Path) -> None:
+    event = project_anomaly_event(anomaly_evidence())
+    writer = EvidenceWriter(
+        tmp_path,
+        code_identity="a" * 40,
+        runtime_identity="runtime",
+        policy_identity="sha256:" + "b" * 64,
+    )
+    assert writer.write_anomaly(event) is not None
+    conflicting = dict(event)
+    conflicting["causal_seq"] = 11
+
+    with pytest.raises(EvidenceError, match="conflicting"):
+        writer.write_anomaly(conflicting)
 
 
 def test_evidence_directory_rejects_mixed_runtime_identity(tmp_path: Path) -> None:
@@ -217,6 +265,24 @@ def test_evidence_directory_rejects_duplicate_json_keys(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(EvidenceError, match="invalid evidence"):
+        validate_evidence_directory(tmp_path)
+
+
+def test_evidence_directory_cross_checks_summary_episode_count(tmp_path: Path) -> None:
+    scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
+    scope.applicable_instrument_count = 1
+    scope.distinct_anomaly_episode_count = 1
+    scope.anomaly_activation_transition_count = 1
+    scope.anomaly_end_count_by_reason[EpisodeEndReason.CENSORED_AT_STOP.value] = 1
+    summary = summary_object()
+    summary["counts_by_scope"] = [scope.as_object()]
+    summary["anomaly_end_count_by_reason"] = {
+        reason.value: int(reason is EpisodeEndReason.CENSORED_AT_STOP)
+        for reason in EpisodeEndReason
+    }
+    (tmp_path / "radar-run-summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match="episode count"):
         validate_evidence_directory(tmp_path)
 
 
@@ -252,6 +318,62 @@ def test_zero_and_unknown_denominators_serialize_as_null_semantics() -> None:
     assert rates["complete_aggregate_with_full_formula_rate_given_complete_aggregate"] is None
 
 
+def test_run_summary_rejects_impossible_scope_count_relationships() -> None:
+    scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
+    scope.applicable_instrument_count = 1
+    scope.known_per_instrument_detector_evaluation_count = 1
+    scope.known_full_detector_formula_evaluation_count = 2
+    summary = summary_object()
+    summary["counts_by_scope"] = [scope.as_object()]
+
+    with pytest.raises(EvidenceError, match="full-formula"):
+        validate_run_summary(summary)
+
+
+def test_run_summary_cross_checks_episode_activation_and_end_totals() -> None:
+    scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
+    scope.applicable_instrument_count = 1
+    scope.distinct_anomaly_episode_count = 1
+    scope.anomaly_activation_transition_count = 1
+    summary = summary_object()
+    summary["counts_by_scope"] = [scope.as_object()]
+
+    with pytest.raises(EvidenceError, match="episode ends"):
+        validate_run_summary(summary)
+
+
+def test_zero_duration_coverage_is_truthful_not_fabricated() -> None:
+    segments = CoverageLedger(100).close(100)
+    assert segments == (CoverageSegment(100, 100, CoverageState.UNKNOWN),)
+    summary = project_run_summary(
+        code_identity="a" * 40,
+        runtime_identity="runtime",
+        policy_identity="sha256:" + "b" * 64,
+        coverage_segments=segments,
+        band_suspended_duration_ms=0,
+        counts_by_scope=[],
+        detector_unknown_transition_count_by_reason={},
+        anomaly_end_count_by_reason={},
+        known_active_duration_ms_sum_by_end_reason={},
+        public_atomic_quote_state_transition_count={},
+        heartbeat_interval_seconds=30,
+        liveness_deadline_seconds=60,
+        clock_drift_ppm=1_000,
+        notification_queue_lag_limit_ms=1_000,
+        max_notification_queue_lag_ms=0,
+    )
+    assert summary["runtime_started_monotonic_ms"] == 100
+    assert summary["clean_stop_monotonic_ms"] == 100
+    assert summary["coverage"] == {
+        "observation_interval_ms": 0,
+        "known_complete_ms": 0,
+        "known_degraded_ms": 0,
+        "unknown_ms": 0,
+        "no_applicable_scope_ms": 0,
+        "coverage_partition_error_ms": 0,
+    }
+
+
 def test_git_and_evidence_startup_guards_fail_before_network(tmp_path: Path) -> None:
     assert validate_clean_git_outputs(head_output="a" * 40 + "\n", status_output="") == "a" * 40
     with pytest.raises(StartupGuardError, match="clean"):
@@ -268,6 +390,28 @@ def test_git_and_evidence_startup_guards_fail_before_network(tmp_path: Path) -> 
     (evidence / "occupied").write_text("x", encoding="utf-8")
     with pytest.raises(StartupGuardError, match="empty"):
         prepare_evidence_directory(evidence, repository)
+
+
+def test_evidence_publish_failure_leaves_no_partial_final_or_temp_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = anomaly_evidence()
+    writer = EvidenceWriter(
+        tmp_path,
+        code_identity=evidence.code_identity,
+        runtime_identity=evidence.runtime_identity,
+        policy_identity=evidence.policy_identity,
+    )
+
+    def fail_publish(_source: object, _target: object) -> None:
+        raise OSError("injected atomic publish failure")
+
+    monkeypatch.setattr(os, "link", fail_publish)
+    with pytest.raises(OSError, match="publish"):
+        writer.write_anomaly(project_anomaly_event(evidence))
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_public_client_has_exact_public_allowlist_and_test_request_guard() -> None:
@@ -312,7 +456,7 @@ class FakePublicClient:
         if method == "public/get_time":
             return 1_000_000
         if method == "public/test":
-            return "ok"
+            return {"version": "2.1.1"}
         if method in {"public/get_instruments", "public/get_combos"}:
             return []
         raise AssertionError(f"unexpected fake request {method} {params}")
@@ -331,6 +475,297 @@ class FakePublicClient:
 
     def drain_notifications(self) -> tuple[dict[str, object], ...]:
         return ()
+
+
+class IncomingConnection:
+    def __init__(self, messages: list[str]) -> None:
+        self._messages = iter(messages)
+
+    def __aiter__(self) -> IncomingConnection:
+        return self
+
+    async def __anext__(self) -> str:
+        try:
+            return next(self._messages)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def close(self) -> None:
+        return None
+
+
+def clear_fixture_connection_close(client: DeribitPublicClient) -> None:
+    client._reader_error = None
+    retained: list[Any] = []
+    while True:
+        try:
+            envelope = client._notifications.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        if envelope.message.get("method") != "connection_error":
+            retained.append(envelope)
+    for envelope in retained:
+        client._notifications.put_nowait(envelope)
+
+
+def test_public_client_discards_notifications_from_an_old_subscription_generation() -> None:
+    async def scenario() -> dict[str, object]:
+        client = DeribitPublicClient()
+
+        async def acknowledge(
+            method: str,
+            params: dict[str, object],
+            *,
+            responding_to_test_request: bool = False,
+        ) -> object:
+            del responding_to_test_request
+            assert method in {"public/subscribe", "public/unsubscribe"}
+            return params["channels"]
+
+        client.request = acknowledge  # type: ignore[method-assign]
+        channel = "book.BTC_USDC-TEST-100ms"
+        await client.subscribe([channel])
+        client._connection = IncomingConnection(  # type: ignore[assignment]
+            [
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "subscription",
+                        "params": {"channel": channel, "data": {"change_id": 1}},
+                    }
+                )
+            ]
+        )
+        await client._reader()
+        clear_fixture_connection_close(client)
+
+        await client.unsubscribe([channel])
+        await client.subscribe([channel])
+        client._connection = IncomingConnection(  # type: ignore[assignment]
+            [
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "subscription",
+                        "params": {"channel": channel, "data": {"change_id": 2}},
+                    }
+                )
+            ]
+        )
+        await client._reader()
+        clear_fixture_connection_close(client)
+        return await client.next_notification(timeout_seconds=0.1)
+
+    message = asyncio.run(scenario())
+    assert isinstance(getattr(message, "received_monotonic_ms", None), int)
+    assert message["params"] == {
+        "channel": "book.BTC_USDC-TEST-100ms",
+        "data": {"change_id": 2},
+    }
+
+
+def test_public_client_notification_overflow_cannot_block_rpc_resolution() -> None:
+    async def scenario() -> None:
+        client = DeribitPublicClient()
+        client._notifications = asyncio.Queue(maxsize=1)
+        queued: Any = {"jsonrpc": "2.0", "method": "subscription", "params": {}}
+        client._notifications.put_nowait(queued)
+        loop = asyncio.get_running_loop()
+        pending: asyncio.Future[object] = loop.create_future()
+        client._pending[1] = pending
+        client._connection = IncomingConnection(  # type: ignore[assignment]
+            [
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "subscription",
+                        "params": {"channel": "book.BTC_USDC-TEST-100ms", "data": {}},
+                    }
+                ),
+                json.dumps({"jsonrpc": "2.0", "id": 1, "result": "ok"}),
+            ]
+        )
+
+        await asyncio.wait_for(client._reader(), timeout=0.1)
+        with pytest.raises(PublicProtocolError, match="overflow"):
+            await pending
+
+    asyncio.run(scenario())
+
+
+def test_public_client_surfaces_normal_websocket_close_immediately() -> None:
+    async def scenario() -> None:
+        client = DeribitPublicClient()
+        client._connection = IncomingConnection([])  # type: ignore[assignment]
+        await client._reader()
+        with pytest.raises(PublicProtocolError, match="closed"):
+            await client.next_notification(timeout_seconds=0.1)
+
+    asyncio.run(scenario())
+
+
+def test_public_client_drops_late_rpc_response_instead_of_treating_it_as_market_data() -> None:
+    async def scenario() -> None:
+        client = DeribitPublicClient()
+        client._connection = IncomingConnection(  # type: ignore[assignment]
+            [json.dumps({"jsonrpc": "2.0", "id": 999, "result": "late"})]
+        )
+        await client._reader()
+        clear_fixture_connection_close(client)
+        assert client.drain_notifications() == ()
+
+    asyncio.run(scenario())
+
+
+def test_book_known_at_time_is_socket_receive_time_not_delayed_processing_time(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    name = "SHORT"
+    runtime.option_books[name] = ContinuousOrderBook(name)
+    runtime.trackers[name] = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=digest,
+        instrument_name=name,
+    )
+    monkeypatch.setattr(runtime_module, "_monotonic_ms", lambda: 9_000)
+
+    asyncio.run(
+        runtime._handle_book(
+            FakePublicClient(),
+            name,
+            {
+                "type": "snapshot",
+                "timestamp": 1,
+                "instrument_name": name,
+                "change_id": 1,
+                "bids": [],
+                "asks": [],
+            },
+            received_monotonic_ms=1_000,
+        )
+    )
+    assert runtime.option_books[name].last_mutation_monotonic_ms == 1_000
+
+
+def test_queue_lag_gate_rejects_stale_market_notifications(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    monkeypatch.setattr(runtime_module, "_monotonic_ms", lambda: 5_000)
+    runtime._coverage = CoverageLedger(0)
+
+    with pytest.raises(PublicProtocolError, match="queue lag"):
+        asyncio.run(
+            runtime._handle_message(
+                FakePublicClient(),
+                {
+                    "method": "subscription",
+                    "params": {
+                        "channel": "instrument.state.option.USDC",
+                        "data": {"instrument_name": "X", "state": "closed"},
+                    },
+                },
+                received_monotonic_ms=1_000,
+            )
+        )
+    assert runtime._max_notification_queue_lag_ms == 4_000
+
+
+def test_bootstrap_subscription_fact_receives_causal_sequence(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    runtime.platform.acknowledge(PLATFORM_CHANNELS)
+
+    asyncio.run(
+        runtime._handle_bootstrap_message(
+            FakePublicClient(),
+            {
+                "method": "subscription",
+                "params": {
+                    "channel": "platform_state",
+                    "data": {"maintenance": False},
+                },
+            },
+        )
+    )
+
+    assert runtime.causal_seq == 1
+
+
+def test_connection_gap_receives_causal_sequence_before_invalidation(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    tracker = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=digest,
+        instrument_name="SHORT",
+    )
+    tracker.known_ineligible(reason="READY", causal_seq=0)
+    runtime.trackers["SHORT"] = tracker
+
+    with pytest.raises(PublicProtocolError, match="connection closed"):
+        asyncio.run(
+            runtime._handle_message(
+                FakePublicClient(),
+                {"method": "connection_error", "params": {"reason": "closed"}},
+            )
+        )
+
+    assert runtime.causal_seq == 1
+    assert tracker.detector_state is DetectorState.UNKNOWN
 
 
 def test_public_only_runtime_composes_and_cleanly_writes_empty_scope_summary(
@@ -360,13 +795,492 @@ def test_public_only_runtime_composes_and_cleanly_writes_empty_scope_summary(
     coverage = summary["coverage"]
     assert isinstance(coverage, dict)
     assert coverage["coverage_partition_error_ms"] == 0
-    assert coverage["unknown_ms"] >= 1
+    assert coverage["observation_interval_ms"] == 0
+    assert coverage["unknown_ms"] == 0
+    operational = summary["operational_constants"]
+    assert isinstance(operational, dict)
+    assert operational["notification_queue_lag_limit_ms"] == 1_000
+    assert summary["max_notification_queue_lag_ms"] == 0
     assert all(method.startswith("public/") for method in client.calls)
     assert not any(tmp_path.glob("*market*"))
     assert not any(tmp_path.glob("*no-anomaly*"))
 
 
-def test_platform_bootstrap_waits_for_initial_index_ticker_and_book(
+def test_scope_evaluation_records_one_joint_aggregate_witness(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    policy = load_policy_bytes(exact, digest)
+    runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    now = time.monotonic_ns() // 1_000_000
+    server_ms = 1_000_000
+    runtime.clock = TrustedClock.from_response(server_ms, now, now)
+    runtime.platform.acknowledge(("platform_state", "platform_state.public_methods_state"))
+    runtime.platform.status_usable = True
+    runtime.platform.post_status_bootstrap_complete = True
+    runtime.platform.maintenance = False
+    runtime.platform.public_methods_allowed = True
+    runtime.option_catalog.complete = True
+    expiry_ms = server_ms + 60 * 60 * 1_000
+    for name, strike in (("FIRST", "110"), ("SECOND", "120")):
+        runtime.options[name] = OptionInstrument(
+            name,
+            expiry_ms,
+            Decimal(strike),
+            OptionType.CALL,
+            AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+        )
+        runtime.trackers[name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=digest,
+            instrument_name=name,
+        )
+
+    def known_result(**kwargs: object) -> EvaluationResult:
+        tracker = kwargs["tracker"]
+        instrument = kwargs["instrument"]
+        assert isinstance(tracker, EpisodeTracker)
+        assert isinstance(instrument, OptionInstrument)
+        transition = tracker.known_ineligible(
+            reason="TEST_KNOWN",
+            causal_seq=runtime.causal_seq,
+        )
+        return EvaluationResult(
+            detector_state=DetectorState.NO_ANOMALY,
+            reason="TEST_KNOWN",
+            known_evaluation=True,
+            full_formula_evaluation=instrument.instrument_name == "FIRST",
+            band_id=policy.tte_bands[0].band_id,
+            transition=transition,
+        )
+
+    monkeypatch.setattr(runtime_module, "evaluate_instrument", known_result)
+    asyncio.run(runtime._evaluate_all(FakePublicClient()))
+
+    scope = runtime._scope_counter(OptionType.CALL, policy.tte_bands[0].band_id)
+    assert scope.known_per_instrument_detector_evaluation_count == 2
+    assert scope.complete_aggregate_detector_evaluation_count == 1
+    assert scope.complete_aggregate_with_full_formula_evaluation_count == 1
+
+
+def test_combo_catalog_failure_is_local_to_atomic_availability(
+    tmp_path: Path, policy_factory: PolicyFactory
+) -> None:
+    exact, digest = policy_factory(activation_count=1, separation_ms=0)
+    policy = load_policy_bytes(exact, digest)
+    runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    instrument = OptionInstrument(
+        "SHORT",
+        10_000_000,
+        Decimal(110),
+        OptionType.CALL,
+        AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+    )
+    tracker = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=digest,
+        instrument_name=instrument.instrument_name,
+    )
+    tracker.observe(
+        DetectorObservation(
+            causal_seq=1,
+            trusted_time=TimeInterval(0, 0),
+            band_id=policy.tte_bands[0].band_id,
+            richness=DecimalInterval(Decimal("2"), Decimal("2")),
+        ),
+        policy.tte_bands[0].option_rules[OptionType.CALL],
+    )
+    assert tracker.detector_state is DetectorState.ANOMALY_ACTIVE
+    runtime.options[instrument.instrument_name] = instrument
+    runtime.trackers[instrument.instrument_name] = tracker
+    runtime.combo_catalog.complete = True
+
+    client = FakePublicClient()
+
+    async def invalid_combo_result(
+        method: str,
+        params: dict[str, object],
+        *,
+        responding_to_test_request: bool = False,
+    ) -> object:
+        del params, responding_to_test_request
+        assert method == "public/get_combos"
+        return {"not": "an array"}
+
+    client.request = invalid_combo_result  # type: ignore[method-assign]
+    asyncio.run(runtime._refresh_combo_catalog(client))
+
+    assert tracker.detector_state is DetectorState.ANOMALY_ACTIVE
+    assert not runtime.combo_catalog.complete
+    episode_id = tracker.episode_id
+    assert episode_id is not None
+    assert runtime.atomic_states[episode_id] is PublicAtomicQuoteState.UNKNOWN
+
+
+def test_initial_combo_catalog_failure_does_not_abort_layer_one_bootstrap(
+    tmp_path: Path, policy_factory: PolicyFactory
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    client = FakePublicClient()
+    original_request = client.request
+
+    async def invalid_initial_combo(
+        method: str,
+        params: dict[str, object],
+        *,
+        responding_to_test_request: bool = False,
+    ) -> object:
+        if method == "public/get_combos":
+            return {"not": "an array"}
+        return await original_request(
+            method,
+            params,
+            responding_to_test_request=responding_to_test_request,
+        )
+
+    client.request = invalid_initial_combo  # type: ignore[method-assign]
+    asyncio.run(runtime._bootstrap(client))
+    assert runtime.option_catalog.complete
+    assert not runtime.combo_catalog.complete
+
+
+def test_invalid_option_lifecycle_recovers_from_authoritative_snapshot(
+    tmp_path: Path, policy_factory: PolicyFactory
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    now = time.monotonic_ns() // 1_000_000
+    runtime.clock = TrustedClock.from_response(1_000_000, now, now)
+    runtime.option_catalog.complete = True
+
+    asyncio.run(
+        runtime._handle_message(
+            FakePublicClient(),
+            {
+                "method": "subscription",
+                "params": {
+                    "channel": "instrument.state.option.USDC",
+                    "data": {"malformed": True},
+                },
+            },
+        )
+    )
+    assert runtime.option_catalog.complete
+
+
+def test_catalog_recovery_applies_membership_loss_before_removing_active_tracker(
+    tmp_path: Path, policy_factory: PolicyFactory
+) -> None:
+    exact, digest = policy_factory(activation_count=1, separation_ms=0)
+    policy = load_policy_bytes(exact, digest)
+    runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    now = time.monotonic_ns() // 1_000_000
+    runtime.clock = TrustedClock.from_response(1_000_000, now, now)
+    option = OptionInstrument(
+        "SHORT",
+        2_000_000,
+        Decimal(110),
+        OptionType.CALL,
+        AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+    )
+    tracker = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=digest,
+        instrument_name=option.instrument_name,
+    )
+    tracker.observe(
+        DetectorObservation(
+            causal_seq=1,
+            trusted_time=TimeInterval(0, 0),
+            band_id=policy.tte_bands[0].band_id,
+            richness=DecimalInterval(Decimal("2"), Decimal("2")),
+        ),
+        policy.tte_bands[0].option_rules[OptionType.CALL],
+    )
+    runtime.catalog_options[option.instrument_name] = option
+    runtime.options[option.instrument_name] = option
+    runtime.trackers[option.instrument_name] = tracker
+    runtime.option_books[option.instrument_name] = ContinuousOrderBook(option.instrument_name)
+    runtime.option_catalog.complete = True
+    client = FakePublicClient()
+    client.subscriptions.extend(
+        [ticker_channel(option.instrument_name), book_channel(option.instrument_name)]
+    )
+
+    asyncio.run(
+        runtime._handle_message(
+            client,
+            {
+                "method": "subscription",
+                "params": {
+                    "channel": "instrument.state.option.USDC",
+                    "data": {"malformed": True},
+                },
+            },
+        )
+    )
+
+    assert option.instrument_name not in runtime.trackers
+    assert runtime._episode_end_counts[EpisodeEndReason.MEMBERSHIP_LOSS.value] == 1
+
+
+def test_accepted_clock_rpc_facts_receive_distinct_causal_sequences(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    monkeypatch.setattr(runtime_module, "_monotonic_ms", lambda: 100)
+    client = FakePublicClient()
+
+    asyncio.run(runtime._bootstrap_clock(client))
+    first = runtime.causal_seq
+    asyncio.run(runtime._refresh_clock(client))
+
+    assert first > 0
+    assert runtime.causal_seq > first
+
+
+def test_relevant_platform_lock_invalidates_detector_but_unrelated_lock_does_not(
+    tmp_path: Path, policy_factory: PolicyFactory
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    runtime.platform.acknowledge(("platform_state", "platform_state.public_methods_state"))
+    runtime.platform.apply_status({"locked": "false"})
+    runtime.platform.public_methods_allowed = True
+    runtime.platform.prove_operational_from_post_status_public_success()
+    runtime.platform.complete_post_status_bootstrap()
+    tracker = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=digest,
+        instrument_name="SHORT",
+    )
+    tracker.known_ineligible(reason="READY", causal_seq=1)
+    runtime.trackers["SHORT"] = tracker
+
+    asyncio.run(
+        runtime._handle_message(
+            FakePublicClient(),
+            {
+                "method": "subscription",
+                "params": {
+                    "channel": "platform_state",
+                    "data": {"price_index": "eth_usdc", "locked": True},
+                },
+            },
+        )
+    )
+    assert tracker.detector_state is DetectorState.NO_ANOMALY
+
+    with pytest.raises(PublicProtocolError, match="platform state"):
+        asyncio.run(
+            runtime._handle_message(
+                FakePublicClient(),
+                {
+                    "method": "subscription",
+                    "params": {
+                        "channel": "platform_state",
+                        "data": {"price_index": "btc_usdc", "locked": True},
+                    },
+                },
+            )
+        )
+    assert tracker.state is TrackerState.UNKNOWN
+
+
+def test_atomic_event_binds_latest_active_detector_evaluation_sequence(
+    tmp_path: Path, policy_factory: PolicyFactory
+) -> None:
+    exact, digest = policy_factory(activation_count=1, separation_ms=0)
+    policy = load_policy_bytes(exact, digest)
+    runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    amount = AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1"))
+    short = OptionInstrument("SHORT", 10_000_000, Decimal(100), OptionType.CALL, amount)
+    long = OptionInstrument("LONG", 10_000_000, Decimal(110), OptionType.CALL, amount)
+    combo = ComboInstrument(
+        "COMBO",
+        "active",
+        (ComboLeg("SHORT", Decimal(-1)), ComboLeg("LONG", Decimal(1))),
+        amount,
+    )
+    combo_book = ContinuousOrderBook("COMBO")
+    combo_book.apply(
+        {
+            "type": "snapshot",
+            "timestamp": 1_000,
+            "instrument_name": "COMBO",
+            "change_id": 1,
+            "bids": [],
+            "asks": [["new", "-5", "0.1"]],
+        },
+        1_000,
+    )
+    tracker = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=digest,
+        instrument_name="SHORT",
+    )
+    tracker.observe(
+        DetectorObservation(
+            causal_seq=1,
+            trusted_time=TimeInterval(0, 0),
+            band_id=policy.tte_bands[0].band_id,
+            richness=DecimalInterval(Decimal("2"), Decimal("2")),
+        ),
+        policy.tte_bands[0].option_rules[OptionType.CALL],
+    )
+    runtime.options = {"SHORT": short, "LONG": long}
+    runtime.trackers["SHORT"] = tracker
+    runtime.combos["COMBO"] = combo
+    runtime.combo_books["COMBO"] = combo_book
+    runtime.combo_catalog.complete = True
+    runtime.causal_seq = 10
+    runtime._last_detector_causal_seq = {"SHORT": 7}
+
+    asyncio.run(runtime._evaluate_atomic(tracker))
+
+    path = next(tmp_path.glob("public-atomic-quote-*.json"))
+    event = json.loads(path.read_text(encoding="utf-8"))
+    assert event["detector_causal_seq"] == 7
+    assert event["quote_causal_seq"] == 10
+
+
+def test_gap_episode_duration_stops_at_last_trusted_active_boundary(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory(activation_count=1, separation_ms=0)
+    policy = load_policy_bytes(exact, digest)
+    runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    tracker = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=digest,
+        instrument_name="SHORT",
+    )
+    tracker.observe(
+        DetectorObservation(
+            causal_seq=1,
+            trusted_time=TimeInterval(0, 0),
+            band_id=policy.tte_bands[0].band_id,
+            richness=DecimalInterval(Decimal("2"), Decimal("2")),
+        ),
+        policy.tte_bands[0].option_rules[OptionType.CALL],
+    )
+    episode_id = tracker.episode_id
+    assert episode_id is not None
+    runtime._episode_active_segment_started_ms[episode_id] = 100
+    runtime._episode_active_accumulated_ms[episode_id] = 0
+    runtime._episode_last_trusted_boundary_ms = {episode_id: 200}
+    runtime._episode_option_types[episode_id] = OptionType.CALL
+    monkeypatch.setattr(runtime_module, "_monotonic_ms", lambda: 1_000)
+
+    ended = tracker.unknown(
+        reason="OPTION_BOOK_GAP",
+        causal_seq=2,
+        continuity_gap=True,
+    ).ended_episode
+    runtime._record_episode_end(ended)
+
+    assert runtime._known_active_duration_ms[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 100
+
+
+def test_platform_bootstrap_does_not_make_one_missing_option_a_global_barrier(
     tmp_path: Path, policy_factory: PolicyFactory
 ) -> None:
     exact, digest = policy_factory()
@@ -410,7 +1324,8 @@ def test_platform_bootstrap_waits_for_initial_index_ticker_and_book(
     runtime.option_books[name] = ContinuousOrderBook(name)
     client = FakePublicClient()
     asyncio.run(runtime._maybe_complete_post_status_bootstrap(client))
-    assert not runtime.platform.usable
+    assert runtime.platform.usable
+    assert runtime.results[name].reason == "OPTION_BOOK_UNKNOWN"
 
     runtime.option_books[name].apply(
         {
@@ -440,6 +1355,37 @@ def test_platform_bootstrap_waits_for_initial_index_ticker_and_book(
     assert runtime.option_books == {}
 
 
+def test_direct_gap_paths_record_unknown_transitions_once_per_reason(
+    tmp_path: Path, policy_factory: PolicyFactory
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    runtime.trackers["SHORT"] = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=digest,
+        instrument_name="SHORT",
+    )
+
+    runtime._invalidate_all("CONNECTION_CLOSED")
+    runtime._invalidate_all("CONNECTION_CLOSED")
+    runtime._invalidate_all("CLOCK_GAP")
+
+    assert runtime._unknown_counts == {
+        "CONNECTION_CLOSED": 1,
+        "CLOCK_GAP": 1,
+    }
+
+
 def test_heartbeat_test_request_uses_only_guarded_public_test(
     tmp_path: Path, policy_factory: PolicyFactory
 ) -> None:
@@ -464,6 +1410,52 @@ def test_heartbeat_test_request_uses_only_guarded_public_test(
         )
     )
     assert client.calls == ["public/test"]
+
+
+def test_heartbeat_rejects_non_official_public_test_result(
+    tmp_path: Path, policy_factory: PolicyFactory
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    client = FakePublicClient()
+
+    async def invalid_request(
+        method: str,
+        params: dict[str, object],
+        *,
+        responding_to_test_request: bool = False,
+    ) -> object:
+        assert method == "public/test"
+        assert responding_to_test_request
+        return "ok"
+
+    client.request = invalid_request  # type: ignore[method-assign]
+    with pytest.raises(PublicProtocolError, match="version") as exc_info:
+        asyncio.run(
+            runtime._handle_heartbeat(
+                client,
+                {"params": {"type": "test_request"}},
+            )
+        )
+    assert type(exc_info.value).__name__ == "PublicProtocolIncompatibility"
+
+
+def test_transient_reconnect_delay_is_exponential_capped_and_jittered() -> None:
+    delay = runtime_module.reconnect_delay_seconds
+
+    assert delay(0, jitter_fraction=0) == pytest.approx(0.8)
+    assert delay(1, jitter_fraction=0.5) == pytest.approx(2.0)
+    assert delay(10, jitter_fraction=1) == pytest.approx(36.0)
 
 
 def test_option_book_gap_ends_episode_and_forces_fresh_snapshot_subscription(

@@ -3,13 +3,14 @@ from __future__ import annotations
 import math
 from decimal import Decimal
 
+import pytest
 from conftest import PolicyFactory
 from market_monitor import ContinuousOrderBook, TimeInterval
 from options_domain import AmountMetadata, OptionInstrument, OptionType
 from short_vol_radar.black import black_price
 from short_vol_radar.detector import DetectorState, EpisodeEndReason, EpisodeTracker, TrackerState
 from short_vol_radar.policy import RadarPolicy, load_policy_bytes
-from short_vol_radar.radar import TickerState, evaluate_instrument
+from short_vol_radar.radar import TickerState, evaluate_instrument, parse_ticker
 
 
 def make_book(name: str, bid_price: Decimal | None, amount: str = "0.1") -> ContinuousOrderBook:
@@ -53,6 +54,32 @@ def make_engine_inputs(
         instrument_name=instrument.instrument_name,
     )
     return policy, instrument, tracker, price
+
+
+def test_ticker_forward_basis_must_match_the_option_expiry_future_or_index() -> None:
+    instrument_name = "BTC_USDC-27SEP24-110000-C"
+    common = {
+        "instrument_name": instrument_name,
+        "timestamp": 1,
+        "underlying_price": 100,
+    }
+
+    assert (
+        parse_ticker(
+            {**common, "underlying_index": "index_price"}, instrument_name
+        ).underlying_index
+        == "index_price"
+    )
+    assert (
+        parse_ticker(
+            {**common, "underlying_index": "BTC_USDC-27SEP24"}, instrument_name
+        ).underlying_index
+        == "BTC_USDC-27SEP24"
+    )
+
+    for invalid_basis in ("BTC_USDC-26SEP24", "BTC-27SEP24", "garbage"):
+        with pytest.raises(ValueError, match="forward basis"):
+            parse_ticker({**common, "underlying_index": invalid_basis}, instrument_name)
 
 
 def test_full_baseline_iv_delta_richness_path_can_activate(

@@ -130,19 +130,16 @@ class PlatformReadiness:
             or (isinstance(locked, str) and locked in {"true", "false", "partial"})
         ):
             raise SourceDataError("public/status.locked has an unsupported value")
-        locked_indices_raw = status.get("locked_indices")
-        locked_currencies_raw = status.get("locked_currencies")
-        locked_indices = require_list(locked_indices_raw, "public/status.locked_indices")
-        locked_currencies = require_list(locked_currencies_raw, "public/status.locked_currencies")
-        if not all(isinstance(item, str) for item in (*locked_indices, *locked_currencies)):
-            raise SourceDataError("public/status lock lists must contain strings")
         all_locked = locked is True or locked == "true"
         partially_locked = locked == "partial"
-        relevant_locked = (
-            all_locked
-            or (partially_locked and "BTC" in locked_currencies)
-            or "btc_usdc" in locked_indices
-        )
+        locked_indices: list[object] = []
+        if partially_locked:
+            locked_indices = require_list(
+                status.get("locked_indices"), "public/status.locked_indices"
+            )
+            if not all(isinstance(item, str) for item in locked_indices):
+                raise SourceDataError("public/status.locked_indices must contain strings")
+        relevant_locked = all_locked or "btc_usdc" in locked_indices
         self.status_usable = not relevant_locked
         self.reason = (
             "RELEVANT_PLATFORM_LOCK" if relevant_locked else "POST_STATUS_BOOTSTRAP_REQUIRED"
@@ -153,13 +150,19 @@ class PlatformReadiness:
         data = require_mapping(payload, "platform_state")
         if "maintenance" in data:
             self.maintenance = require_bool(data["maintenance"], "platform_state.maintenance")
-        elif "state" in data:
-            state = require_str(data["state"], "platform_state.state")
-            self.maintenance = state not in {"operational", "open"}
+            if self.maintenance:
+                self._invalidate("PLATFORM_MAINTENANCE")
+            return
+        if "price_index" in data or "locked" in data:
+            price_index = require_str(data.get("price_index"), "platform_state.price_index")
+            locked = require_bool(data.get("locked"), "platform_state.locked")
+            if price_index == "btc_usdc" and locked:
+                self._invalidate("RELEVANT_PLATFORM_LOCK")
+            return
         else:
-            raise SourceDataError("platform_state lacks consumed maintenance/state field")
-        if self.maintenance:
-            self._invalidate("PLATFORM_MAINTENANCE")
+            raise SourceDataError(
+                "platform_state lacks consumed maintenance or price_index/locked fields"
+            )
 
     def apply_public_methods_notification(self, payload: object) -> None:
         data = require_mapping(payload, "platform_state.public_methods_state")

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import uuid
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -192,6 +194,8 @@ def project_run_summary(
     heartbeat_interval_seconds: int,
     liveness_deadline_seconds: int,
     clock_drift_ppm: int,
+    notification_queue_lag_limit_ms: int,
+    max_notification_queue_lag_ms: int,
 ) -> dict[str, object]:
     if not coverage_segments:
         raise EvidenceError("run summary requires at least one coverage segment")
@@ -207,6 +211,7 @@ def project_run_summary(
             "heartbeat_interval_seconds": heartbeat_interval_seconds,
             "liveness_deadline_seconds": liveness_deadline_seconds,
             "clock_drift_ppm": clock_drift_ppm,
+            "notification_queue_lag_limit_ms": notification_queue_lag_limit_ms,
         },
         "coverage_segments": [
             {
@@ -218,6 +223,7 @@ def project_run_summary(
         ],
         "coverage": coverage,
         "band_suspended_duration_ms": band_suspended_duration_ms,
+        "max_notification_queue_lag_ms": max_notification_queue_lag_ms,
         "counts_by_scope": [dict(item) for item in counts_by_scope],
         "detector_unknown_transition_count_by_reason": dict(
             detector_unknown_transition_count_by_reason
@@ -305,14 +311,35 @@ class EvidenceWriter:
             ensure_ascii=False,
             allow_nan=False,
         )
+        temporary = self.directory / f".{name}.{uuid.uuid4().hex}.tmp"
         try:
-            with path.open("x", encoding="utf-8", newline="\n") as handle:
+            with temporary.open("x", encoding="utf-8", newline="\n") as handle:
                 handle.write(serialized)
                 handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.link(temporary, path)
         except FileExistsError as exc:
             if duplicate_is_noop:
-                return None
+                try:
+                    existing = path.read_text(encoding="utf-8")
+                except OSError as read_exc:
+                    raise EvidenceError(
+                        f"existing evidence cannot be verified: {path}"
+                    ) from read_exc
+                if existing == serialized + "\n":
+                    return None
+                raise EvidenceError(
+                    f"conflicting evidence already exists for the same identity: {path}"
+                ) from exc
             raise EvidenceError(f"evidence path already exists: {path}") from exc
+        finally:
+            temporary.unlink(missing_ok=True)
+        directory_fd = os.open(self.directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
         return path
 
 
@@ -457,6 +484,7 @@ def validate_run_summary(value: Mapping[str, object]) -> None:
             "coverage_segments",
             "coverage",
             "band_suspended_duration_ms",
+            "max_notification_queue_lag_ms",
             "counts_by_scope",
             "detector_unknown_transition_count_by_reason",
             "anomaly_end_count_by_reason",
@@ -477,6 +505,7 @@ def validate_run_summary(value: Mapping[str, object]) -> None:
             "heartbeat_interval_seconds",
             "liveness_deadline_seconds",
             "clock_drift_ppm",
+            "notification_queue_lag_limit_ms",
         },
         "operational_constants",
     )
@@ -494,6 +523,10 @@ def validate_run_summary(value: Mapping[str, object]) -> None:
     if value["clean_stop_monotonic_ms"] != segments[-1].end_monotonic_ms:
         raise EvidenceError("summary stop does not match coverage")
     _non_negative_integer(value["band_suspended_duration_ms"], "band_suspended_duration_ms")
+    _non_negative_integer(
+        value["max_notification_queue_lag_ms"],
+        "max_notification_queue_lag_ms",
+    )
     _validate_scope_counts(value["counts_by_scope"])
     for field in (
         "detector_unknown_transition_count_by_reason",
@@ -502,11 +535,57 @@ def validate_run_summary(value: Mapping[str, object]) -> None:
         "public_atomic_quote_state_transition_count",
     ):
         _validate_count_mapping(value[field], field)
+    scopes = _array(value["counts_by_scope"], "counts_by_scope")
+    scope_ends: Counter[str] = Counter()
+    scope_durations: Counter[str] = Counter()
+    scope_atomic: Counter[str] = Counter()
+    for raw_scope in scopes:
+        scope = _mapping(raw_scope, "scope count")
+        if scope["policy_identity"] != value["policy_identity"]:
+            raise EvidenceError("scope Policy identity does not match summary")
+        _merge_counts(scope_ends, scope["anomaly_end_count_by_reason"], "scope episode ends")
+        _merge_counts(
+            scope_durations,
+            scope["known_active_duration_ms_sum_by_end_reason"],
+            "scope active durations",
+        )
+        _merge_counts(
+            scope_atomic,
+            scope["public_atomic_quote_state_transition_count"],
+            "scope atomic transitions",
+        )
+    global_ends: Counter[str] = Counter()
+    global_durations: Counter[str] = Counter()
+    global_atomic: Counter[str] = Counter()
+    _merge_counts(
+        global_ends,
+        value["anomaly_end_count_by_reason"],
+        "anomaly_end_count_by_reason",
+    )
+    _merge_counts(
+        global_durations,
+        value["known_active_duration_ms_sum_by_end_reason"],
+        "known_active_duration_ms_sum_by_end_reason",
+    )
+    _merge_counts(
+        global_atomic,
+        value["public_atomic_quote_state_transition_count"],
+        "public_atomic_quote_state_transition_count",
+    )
+    if scope_ends != global_ends:
+        raise EvidenceError("global episode ends do not match scope totals")
+    if scope_durations != global_durations:
+        raise EvidenceError("global active durations do not match scope totals")
+    if scope_atomic != global_atomic:
+        raise EvidenceError("global atomic transitions do not match scope totals")
 
 
 def validate_evidence_directory(directory: Path) -> tuple[dict[str, object], ...]:
     objects: list[dict[str, object]] = []
     identities: set[tuple[object, object, object]] = set()
+    anomaly_episode_ids: set[str] = set()
+    atomic_episode_ids: set[str] = set()
+    summaries: list[dict[str, object]] = []
     for path in sorted(directory.glob("*.json")):
         try:
             value = json.loads(
@@ -521,10 +600,13 @@ def validate_evidence_directory(directory: Path) -> tuple[dict[str, object], ...
         kind = value.get("object_kind")
         if kind == "SHORT_VOL_ANOMALY_EVENT":
             validate_anomaly_event(value)
+            anomaly_episode_ids.add(_required_string(value, "episode_identity"))
         elif kind == "PUBLIC_ATOMIC_QUOTE_EVENT":
             validate_atomic_event(value)
+            atomic_episode_ids.add(_required_string(value, "episode_identity"))
         elif kind == "RADAR_RUN_SUMMARY":
             validate_run_summary(value)
+            summaries.append(value)
         else:
             raise EvidenceError(f"unknown evidence object_kind in {path}")
         identities.add(
@@ -537,6 +619,21 @@ def validate_evidence_directory(directory: Path) -> tuple[dict[str, object], ...
         objects.append(value)
     if len(identities) > 1:
         raise EvidenceError("evidence directory mixes code, runtime, or Policy identities")
+    if len(summaries) > 1:
+        raise EvidenceError("evidence directory contains more than one run summary")
+    if not atomic_episode_ids <= anomaly_episode_ids:
+        raise EvidenceError("atomic evidence references an absent anomaly episode")
+    if summaries:
+        counts = _array(summaries[0]["counts_by_scope"], "counts_by_scope")
+        declared_episodes = sum(
+            _non_negative_integer(
+                _mapping(item, "scope count")["distinct_anomaly_episode_count"],
+                "scope distinct_anomaly_episode_count",
+            )
+            for item in counts
+        )
+        if declared_episodes != len(anomaly_episode_ids):
+            raise EvidenceError("summary episode count does not match anomaly evidence")
     return tuple(objects)
 
 
@@ -560,8 +657,10 @@ def _coverage_object(segments: tuple[CoverageSegment, ...]) -> dict[str, int]:
     for segment in segments:
         if segment.start_monotonic_ms != cursor:
             raise EvidenceError("coverage segments overlap or contain a gap")
-        if segment.end_monotonic_ms <= segment.start_monotonic_ms:
-            raise EvidenceError("coverage segment must have positive duration")
+        if segment.end_monotonic_ms < segment.start_monotonic_ms:
+            raise EvidenceError("coverage segment duration cannot be negative")
+        if segment.end_monotonic_ms == segment.start_monotonic_ms and len(segments) != 1:
+            raise EvidenceError("zero-duration coverage is valid only for a zero-length run")
         counts[segment.state] += segment.end_monotonic_ms - segment.start_monotonic_ms
         cursor = segment.end_monotonic_ms
     observation = segments[-1].end_monotonic_ms - segments[0].start_monotonic_ms
@@ -647,6 +746,30 @@ def _validate_scope_counts(value: object) -> None:
                 item["complete_aggregate_detector_evaluation_count"],
             ),
         }
+        if (
+            item["known_full_detector_formula_evaluation_count"]
+            > item["known_per_instrument_detector_evaluation_count"]
+        ):
+            raise EvidenceError("scope full-formula count exceeds known evaluations")
+        if (
+            item["complete_aggregate_with_full_formula_evaluation_count"]
+            > item["complete_aggregate_detector_evaluation_count"]
+        ):
+            raise EvidenceError("scope aggregate full-formula count exceeds complete aggregates")
+        if item["distinct_anomaly_episode_count"] != item["anomaly_activation_transition_count"]:
+            raise EvidenceError("scope episode and activation counts differ")
+        end_counts = _mapping(
+            item["anomaly_end_count_by_reason"],
+            "scope count anomaly_end_count_by_reason",
+        )
+        if (
+            sum(
+                _non_negative_integer(count, "scope episode end count")
+                for count in end_counts.values()
+            )
+            != item["distinct_anomaly_episode_count"]
+        ):
+            raise EvidenceError("scope episode ends do not match distinct episodes")
         for key, expected_rate in expected_rates.items():
             expected_serialized = decimal_text(expected_rate) if expected_rate is not None else None
             if item[key] != expected_serialized:
@@ -941,6 +1064,14 @@ def _validate_count_mapping(value: object, field: str) -> None:
         if not isinstance(key, str) or not key:
             raise EvidenceError(f"{field} keys must be non-empty strings")
         _non_negative_integer(count, f"{field}.{key}")
+
+
+def _merge_counts(target: Counter[str], value: object, field: str) -> None:
+    counts = _mapping(value, field)
+    for key, count in counts.items():
+        if not isinstance(key, str) or not key:
+            raise EvidenceError(f"{field} keys must be non-empty strings")
+        target[key] += _non_negative_integer(count, f"{field}.{key}")
 
 
 def _exact_keys(value: Mapping[str, object], expected: set[str], field: str) -> None:

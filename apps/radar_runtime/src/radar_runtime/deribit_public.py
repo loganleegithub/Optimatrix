@@ -5,6 +5,7 @@ import contextlib
 import json
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
@@ -32,6 +33,24 @@ class PublicProtocolError(RuntimeError):
     """The production-public JSON-RPC session violated the consumed contract."""
 
 
+class PublicProtocolIncompatibility(PublicProtocolError):
+    """The consumed official protocol shape is incompatible with this runtime."""
+
+
+@dataclass(frozen=True)
+class _NotificationEnvelope:
+    message: dict[str, object]
+    received_monotonic_ms: int
+    channel: str | None
+    subscription_generation: int | None
+
+
+class ReceivedNotification(dict[str, object]):
+    def __init__(self, envelope: _NotificationEnvelope) -> None:
+        super().__init__(envelope.message)
+        self.received_monotonic_ms = envelope.received_monotonic_ms
+
+
 class DeribitPublicClient:
     def __init__(self, endpoint: str = PRODUCTION_PUBLIC_ENDPOINT) -> None:
         if endpoint != PRODUCTION_PUBLIC_ENDPOINT:
@@ -41,9 +60,12 @@ class DeribitPublicClient:
         self._reader_task: asyncio.Task[None] | None = None
         self._next_request_id = 1
         self._pending: dict[int, asyncio.Future[object]] = {}
-        self._notifications: asyncio.Queue[dict[str, object]] = asyncio.Queue(
+        self._notifications: asyncio.Queue[_NotificationEnvelope] = asyncio.Queue(
             maxsize=MAX_PENDING_NOTIFICATIONS
         )
+        self._next_subscription_generation = 1
+        self._active_subscription_generations: dict[str, int] = {}
+        self._reader_error: PublicProtocolError | None = None
         self.last_inbound_monotonic = time.monotonic()
 
     async def __aenter__(self) -> DeribitPublicClient:
@@ -100,26 +122,60 @@ class DeribitPublicClient:
 
     async def subscribe(self, channels: Sequence[str]) -> None:
         for batch in subscription_batches(channels):
-            result = await self.request("public/subscribe", {"channels": list(batch)})
-            validate_subscription_ack(batch, result)
+            previous = {
+                channel: self._active_subscription_generations.get(channel) for channel in batch
+            }
+            for channel in batch:
+                self._active_subscription_generations[channel] = self._next_subscription_generation
+                self._next_subscription_generation += 1
+            try:
+                result = await self.request("public/subscribe", {"channels": list(batch)})
+                validate_subscription_ack(batch, result)
+            except Exception:
+                for channel, generation in previous.items():
+                    if generation is None:
+                        self._active_subscription_generations.pop(channel, None)
+                    else:
+                        self._active_subscription_generations[channel] = generation
+                raise
 
     async def unsubscribe(self, channels: Sequence[str]) -> None:
         for batch in subscription_batches(channels):
             result = await self.request("public/unsubscribe", {"channels": list(batch)})
             validate_subscription_ack(batch, result)
+            for channel in batch:
+                self._active_subscription_generations.pop(channel, None)
 
     async def next_notification(self, timeout_seconds: float | None = None) -> dict[str, object]:
-        if timeout_seconds is None:
-            return await self._notifications.get()
-        return await asyncio.wait_for(self._notifications.get(), timeout_seconds)
+        deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
+        while True:
+            if self._reader_error is not None:
+                raise self._reader_error
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            if remaining is None:
+                envelope = await self._notifications.get()
+            else:
+                envelope = await asyncio.wait_for(self._notifications.get(), remaining)
+            if self._is_current(envelope):
+                return ReceivedNotification(envelope)
 
     def drain_notifications(self) -> tuple[dict[str, object], ...]:
         values: list[dict[str, object]] = []
         while True:
             try:
-                values.append(self._notifications.get_nowait())
+                envelope = self._notifications.get_nowait()
             except asyncio.QueueEmpty:
                 return tuple(values)
+            if self._is_current(envelope):
+                values.append(ReceivedNotification(envelope))
+
+    def _is_current(self, envelope: _NotificationEnvelope) -> bool:
+        if envelope.channel is None:
+            return True
+        return (
+            self._active_subscription_generations.get(envelope.channel)
+            == envelope.subscription_generation
+        )
 
     async def _reader(self) -> None:
         if self._connection is None:
@@ -129,28 +185,65 @@ class DeribitPublicClient:
                 self.last_inbound_monotonic = time.monotonic()
                 message = _decode_message(raw_message)
                 request_id = message.get("id")
-                if isinstance(request_id, int) and request_id in self._pending:
-                    future = self._pending[request_id]
-                    if "error" in message:
-                        future.set_exception(
-                            PublicProtocolError(f"Deribit JSON-RPC error: {message['error']!r}")
-                        )
-                    elif "result" not in message:
-                        future.set_exception(PublicProtocolError("JSON-RPC response lacks result"))
-                    else:
-                        future.set_result(message["result"])
+                if isinstance(request_id, int):
+                    if request_id in self._pending:
+                        future = self._pending[request_id]
+                        if "error" in message:
+                            future.set_exception(
+                                PublicProtocolError(f"Deribit JSON-RPC error: {message['error']!r}")
+                            )
+                        elif "result" not in message:
+                            future.set_exception(
+                                PublicProtocolError("JSON-RPC response lacks result")
+                            )
+                        else:
+                            future.set_result(message["result"])
+                    continue
                 else:
-                    await self._notifications.put(message)
+                    channel: str | None = None
+                    generation: int | None = None
+                    if message.get("method") == "subscription":
+                        params = message.get("params")
+                        if isinstance(params, dict) and isinstance(params.get("channel"), str):
+                            channel = params["channel"]
+                            generation = self._active_subscription_generations.get(channel)
+                    try:
+                        self._notifications.put_nowait(
+                            _NotificationEnvelope(
+                                message=message,
+                                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                                channel=channel,
+                                subscription_generation=generation,
+                            )
+                        )
+                    except asyncio.QueueFull as exc:
+                        raise PublicProtocolError("notification queue overflow") from exc
+            raise PublicProtocolError("production-public connection closed")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            error = PublicProtocolError(f"production-public reader failed: {exc}")
+            error = (
+                exc
+                if isinstance(exc, PublicProtocolError)
+                else PublicProtocolError(f"production-public reader failed: {exc}")
+            )
+            self._reader_error = error
             for future in self._pending.values():
                 if not future.done():
                     future.set_exception(error)
-            await self._notifications.put(
-                {"jsonrpc": "2.0", "method": "connection_error", "params": {"error": str(exc)}}
-            )
+            with contextlib.suppress(asyncio.QueueFull):
+                self._notifications.put_nowait(
+                    _NotificationEnvelope(
+                        message={
+                            "jsonrpc": "2.0",
+                            "method": "connection_error",
+                            "params": {"error": str(exc)},
+                        },
+                        received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                        channel=None,
+                        subscription_generation=None,
+                    )
+                )
 
 
 def _decode_message(raw_message: str | bytes) -> dict[str, object]:
