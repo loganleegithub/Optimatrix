@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import short_vol_radar.policy as policy_module
 from conftest import PolicyFactory
+from market_monitor import TimeInterval
 from options_domain import OptionType
 from short_vol_radar.baseline import BaselineUnavailable, compute_baseline
 from short_vol_radar.black import (
@@ -153,6 +155,42 @@ def test_band_selection_uses_full_uncertainty_interval(
         )
         is None
     )
+
+
+def test_time_applicability_classifies_every_business_boundary(
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    policy = load_policy_bytes(exact, digest)
+    expiry = 100 * 60_000
+
+    def classify(lower_tte: int, upper_tte: int) -> str:
+        result = policy_module.classify_time_applicability(
+            policy,
+            expiration_timestamp_ms=expiry,
+            trusted_time=TimeInterval(expiry - upper_tte, expiry - lower_tte),
+            option_type=OptionType.CALL,
+        )
+        return result.classification.value
+
+    assert classify(60 * 60_000, 60 * 60_000) == "IN_BAND"
+    assert classify(360 * 60_000 - 1, 360 * 60_000 + 1) == "ADJACENT_BAND_BOUNDARY"
+    assert classify(30 * 60_000, 30 * 60_000) == "FINAL_WINDOW"
+    assert classify(72 * 60 * 60_000 - 1, 72 * 60 * 60_000 + 1) == "MONITOR_BOUNDARY"
+    assert classify(-1, -1) == "OUT_OF_MONITOR_SCOPE"
+
+    document = json.loads(exact)
+    document["tte_bands"][0]["upper_bound_minutes"] = 300
+    document["tte_bands"][1]["lower_bound_minutes"] = 420
+    changed = json.dumps(document, separators=(",", ":"), sort_keys=True).encode()
+    gap_policy = load_policy_bytes(changed, digest_policy_bytes(changed))
+    gap = policy_module.classify_time_applicability(
+        gap_policy,
+        expiration_timestamp_ms=expiry,
+        trusted_time=TimeInterval(expiry - 390 * 60_000, expiry - 390 * 60_000),
+        option_type=OptionType.CALL,
+    )
+    assert gap.classification.value == "POLICY_GAP"
 
 
 def test_baseline_uses_causal_log_returns_configured_weights_and_floor() -> None:

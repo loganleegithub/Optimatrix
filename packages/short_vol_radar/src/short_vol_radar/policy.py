@@ -6,13 +6,15 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from market_monitor.types import SourceDataError
+from market_monitor.types import SourceDataError, TimeInterval
 from options_domain import OptionType
+from options_domain.instruments import MAX_TTE_MS, SETTLEMENT_WINDOW_MS
 
 POLICY_FAMILY = "POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE"
 MINIMUM_TTE_MINUTES = 30
@@ -64,6 +66,55 @@ class RadarPolicy:
     @property
     def largest_lookback_minutes(self) -> int:
         return max(max(band.lookbacks_minutes) for band in self.tte_bands)
+
+
+class TimeApplicability(StrEnum):
+    IN_BAND = "IN_BAND"
+    ADJACENT_BAND_BOUNDARY = "ADJACENT_BAND_BOUNDARY"
+    POLICY_GAP = "POLICY_GAP"
+    FINAL_WINDOW = "FINAL_WINDOW"
+    MONITOR_BOUNDARY = "MONITOR_BOUNDARY"
+    OUT_OF_MONITOR_SCOPE = "OUT_OF_MONITOR_SCOPE"
+
+
+@dataclass(frozen=True)
+class TimeApplicabilityResult:
+    classification: TimeApplicability
+    band: TteBand | None = None
+
+
+def classify_time_applicability(
+    policy: RadarPolicy,
+    *,
+    expiration_timestamp_ms: int,
+    trusted_time: TimeInterval,
+    option_type: OptionType,
+) -> TimeApplicabilityResult:
+    lower_tte_ms = expiration_timestamp_ms - trusted_time.upper_ms
+    upper_tte_ms = expiration_timestamp_ms - trusted_time.lower_ms
+    if upper_tte_ms <= 0 or lower_tte_ms > MAX_TTE_MS:
+        return TimeApplicabilityResult(TimeApplicability.OUT_OF_MONITOR_SCOPE)
+    if lower_tte_ms <= 0 or upper_tte_ms > MAX_TTE_MS:
+        return TimeApplicabilityResult(TimeApplicability.MONITOR_BOUNDARY)
+    if lower_tte_ms <= SETTLEMENT_WINDOW_MS:
+        return TimeApplicabilityResult(TimeApplicability.FINAL_WINDOW)
+    band = band_for_tte(
+        policy,
+        lower_tte_ms=lower_tte_ms,
+        upper_tte_ms=upper_tte_ms,
+        option_type=option_type,
+    )
+    if band is not None:
+        return TimeApplicabilityResult(TimeApplicability.IN_BAND, band)
+    touched = bands_touched_by_tte(
+        policy,
+        lower_tte_ms=lower_tte_ms,
+        upper_tte_ms=upper_tte_ms,
+        option_type=option_type,
+    )
+    if _bands_are_adjacent(touched):
+        return TimeApplicabilityResult(TimeApplicability.ADJACENT_BAND_BOUNDARY)
+    return TimeApplicabilityResult(TimeApplicability.POLICY_GAP)
 
 
 def load_policy(path: Path, expected_digest: str) -> RadarPolicy:
@@ -136,6 +187,13 @@ def bands_touched_by_tte(
         and upper_tte_ms > band.lower_bound_ms
         and lower_tte_ms <= band.upper_bound_ms
     )
+
+
+def _bands_are_adjacent(touched: tuple[TteBand, ...]) -> bool:
+    if len(touched) != 2:
+        return False
+    earlier, later = sorted(touched, key=lambda item: item.lower_bound_minutes)
+    return earlier.upper_bound_minutes == later.lower_bound_minutes
 
 
 def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:

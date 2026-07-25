@@ -2,7 +2,7 @@
 
 from market_monitor.book import BookState, ContinuousOrderBook
 from market_monitor.clock import TrustedClock
-from market_monitor.index import IndexMinuteReducer, MinuteClose
+from market_monitor.index import IndexMinuteReducer, IndexWindow, MinuteClose
 from market_monitor.types import ContinuityGap, PriceLevel, SourceDataError, TimeInterval
 
 __all__ = [
@@ -10,6 +10,7 @@ __all__ = [
     "ContinuityGap",
     "ContinuousOrderBook",
     "IndexMinuteReducer",
+    "IndexWindow",
     "MinuteClose",
     "PriceLevel",
     "SourceDataError",

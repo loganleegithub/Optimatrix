@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import random
 import signal
 import time
 import uuid
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -31,17 +32,16 @@ from market_monitor.deribit import (
 )
 from market_monitor.types import (
     SourceDataError,
+    decimal_from_source,
     require_int,
     require_list,
     require_mapping,
     require_str,
 )
 from options_domain import (
-    Applicability,
     ComboInstrument,
     OptionInstrument,
     OptionType,
-    monitor_applicability,
     parse_combo_instrument,
     parse_option_instrument,
 )
@@ -73,10 +73,15 @@ from short_vol_radar.evidence import (
     project_run_summary,
     ratio_or_none,
 )
-from short_vol_radar.policy import RadarPolicy, band_for_tte
+from short_vol_radar.policy import (
+    RadarPolicy,
+    TimeApplicability,
+    classify_time_applicability,
+)
 from short_vol_radar.radar import (
     EvaluationResult,
     TickerState,
+    detector_observation_identity,
     evaluate_instrument,
     parse_ticker,
 )
@@ -86,6 +91,9 @@ from radar_runtime.deribit_public import (
     DeribitPublicClient,
     PublicProtocolError,
     PublicProtocolIncompatibility,
+    PublicRequestError,
+    PublicSessionError,
+    ReceivedRpcResult,
 )
 
 MAX_NOTIFICATION_QUEUE_LAG_MS = 1_000
@@ -173,6 +181,16 @@ class ScopeCounts:
         }
 
 
+@dataclass(frozen=True)
+class ScopeSnapshot:
+    causal_seq: int
+    trusted_time: TimeInterval
+    clock_revision: int
+    instrument_names: tuple[str, ...]
+    boundary_observation_eligible: bool
+    observation_reason: str | None
+
+
 class CoverageLedger:
     def __init__(self, started_monotonic_ms: int) -> None:
         self._current_state = CoverageState.UNKNOWN
@@ -227,11 +245,19 @@ class LiveRadarRuntime:
         self.results: dict[str, EvaluationResult] = {}
         self.atomic_states: dict[str, PublicAtomicQuoteState] = {}
         self._subscribed_combo_names: set[str] = set()
+        self._pending_option_unsubscribe: set[str] = set()
+        self._failed_option_subscriptions: set[str] = set()
+        self._failed_combo_subscriptions: set[str] = set()
+        self._combo_summary_fingerprints: dict[str, tuple[object, ...]] = {}
+        self._combo_refresh_task: asyncio.Task[None] | None = None
         self.index = IndexMinuteReducer(self.policy.largest_lookback_minutes)
         self.clock: TrustedClock | None = None
         self.causal_seq = 0
+        self._clock_revision = 0
         self._last_fingerprints: dict[str, tuple[object, ...]] = {}
+        self._last_observation_fingerprints: dict[str, tuple[object, ...]] = {}
         self._last_detector_causal_seq: dict[str, int] = {}
+        self._emitted_atomic_quotes: set[tuple[str, str]] = set()
         self._last_unknown_reason: dict[str, str | None] = {}
         self._scope_counts: dict[tuple[str, OptionType, str], ScopeCounts] = {}
         self._unknown_counts: Counter[str] = Counter()
@@ -245,11 +271,17 @@ class LiveRadarRuntime:
         self._band_suspended_started_ms: dict[str, int] = {}
         self._band_suspended_duration_ms = 0
         self._max_notification_queue_lag_ms = 0
+        self._last_applied_ingress_seq = 0
+        self._last_rpc_received_monotonic_ms: int | None = None
+        self._deferred_notifications: deque[dict[str, object]] = deque()
+        self._bootstrap_in_progress = False
+        self._session_established = False
         started = _monotonic_ms()
         self._coverage = CoverageLedger(started)
 
     async def run(self, client: PublicClient, stop_event: asyncio.Event) -> Path:
         await self._bootstrap(client)
+        self._session_established = True
         next_clock_refresh_ms = _monotonic_ms() + 30_000
         next_membership_refresh_ms = _monotonic_ms() + 1_000
         while not stop_event.is_set():
@@ -258,15 +290,16 @@ class LiveRadarRuntime:
                 await self._refresh_clock(client)
                 next_clock_refresh_ms = now_ms + 30_000
             if now_ms >= next_membership_refresh_ms:
+                await self._recover_incomplete_catalogs(client)
                 if await self._sync_option_membership(client):
-                    await self._refresh_combo_catalog(client)
+                    await self._coalesced_combo_refresh(client)
                 next_membership_refresh_ms = now_ms + 1_000
             if time.monotonic() - client.last_inbound_monotonic >= LIVENESS_DEADLINE_SECONDS:
                 self._accept_causal_fact()
-                self._invalidate_all("SESSION_LIVENESS_DEADLINE")
-                raise PublicProtocolError("production-public session liveness deadline expired")
+                self._invalidate_all("SESSION_GAP")
+                raise PublicSessionError("production-public session liveness deadline expired")
             try:
-                message = await client.next_notification(timeout_seconds=1.0)
+                message = await self._next_notification(client, timeout_seconds=1.0)
             except TimeoutError:
                 continue
             await self._handle_message(
@@ -277,60 +310,69 @@ class LiveRadarRuntime:
         return await self._clean_stop(client)
 
     async def _bootstrap(self, client: PublicClient) -> None:
-        self._reset_session_state()
-        heartbeat = await client.request(
-            "public/set_heartbeat", {"interval": HEARTBEAT_INTERVAL_SECONDS}
-        )
-        if heartbeat != "ok":
-            raise PublicProtocolIncompatibility("heartbeat acknowledgement was not ok")
-        await client.subscribe(list(PLATFORM_CHANNELS))
-        self.platform.acknowledge(PLATFORM_CHANNELS)
-        await client.subscribe([OPTION_LIFECYCLE_CHANNEL, COMBO_LIFECYCLE_CHANNEL])
-        self.option_catalog.acknowledge_lifecycle()
-        self.combo_catalog.acknowledge_lifecycle()
-        status = await client.request("public/status", {})
-        self.platform.apply_status(status)
-        self._accept_causal_fact()
-        self.platform.public_methods_allowed = True
-        await self._bootstrap_clock(client)
-        option_payloads = require_list(
-            await client.request(
-                "public/get_instruments",
-                {"currency": "USDC", "kind": "option", "expired": False},
-            ),
-            "public/get_instruments result",
-        )
-        option_snapshot_complete = self._replace_options(option_payloads)
-        self._accept_causal_fact()
+        self._bootstrap_in_progress = True
         try:
-            combo_payloads = require_list(
-                await client.request("public/get_combos", {"currency": "USDC"}),
-                "public/get_combos result",
+            self._reset_session_state()
+            heartbeat = await self._request_public(
+                client,
+                "public/set_heartbeat",
+                {"interval": HEARTBEAT_INTERVAL_SECONDS},
             )
+            if heartbeat != "ok":
+                raise PublicProtocolIncompatibility("heartbeat acknowledgement was not ok")
+            await client.subscribe(list(PLATFORM_CHANNELS))
+            self.platform.acknowledge(PLATFORM_CHANNELS)
+            await client.subscribe([OPTION_LIFECYCLE_CHANNEL, COMBO_LIFECYCLE_CHANNEL])
+            self.option_catalog.acknowledge_lifecycle()
+            self.combo_catalog.acknowledge_lifecycle()
+            status = await self._request_public(client, "public/status", {})
+            self.platform.apply_status(status)
             self._accept_causal_fact()
-            combo_snapshot_complete = await self._replace_combos(client, combo_payloads)
-        except (SourceDataError, PublicProtocolError, TimeoutError):
-            self.combo_catalog.mark_incomplete()
-            self.combos.clear()
-            combo_snapshot_complete = False
-        for message in client.drain_notifications():
-            await self._handle_bootstrap_message(client, message)
-        for event in self.option_catalog.reconcile():
-            await self._apply_option_lifecycle(client, event)
-        self.option_catalog.complete = self.option_catalog.complete and option_snapshot_complete
-        for _event in self.combo_catalog.reconcile():
-            await self._refresh_combo_catalog(client)
-        self.combo_catalog.complete = self.combo_catalog.complete and combo_snapshot_complete
-        await self._sync_option_membership(client)
-        await client.subscribe([INDEX_CHANNEL])
-        if self.clock is None:
-            raise RuntimeError("clock was not established")
-        self.index.start_continuous_coverage(self.clock.interval_at(_monotonic_ms()).lower_ms)
-        try:
-            self.platform.prove_operational_from_post_status_public_success()
-        except RuntimeError as exc:
-            raise PublicProtocolError("platform state was unusable after public bootstrap") from exc
-        self._update_coverage()
+            self.platform.public_methods_allowed = True
+            await self._bootstrap_clock(client)
+            option_payloads = require_list(
+                await self._request_public(
+                    client,
+                    "public/get_instruments",
+                    {"currency": "USDC", "kind": "option", "expired": False},
+                ),
+                "public/get_instruments result",
+            )
+            option_snapshot_complete = self._replace_options(option_payloads)
+            self._accept_causal_fact()
+            try:
+                combo_payloads = require_list(
+                    await self._request_public(client, "public/get_combos", {"currency": "USDC"}),
+                    "public/get_combos result",
+                )
+                self._accept_causal_fact()
+                combo_snapshot_complete = await self._replace_combos(client, combo_payloads)
+            except (SourceDataError, PublicRequestError, TimeoutError):
+                self.combo_catalog.mark_incomplete()
+                self.combos.clear()
+                combo_snapshot_complete = False
+            for message in (*self._drain_deferred(), *client.drain_notifications()):
+                await self._handle_bootstrap_message(client, message)
+            for event in self.option_catalog.reconcile():
+                await self._apply_option_lifecycle(client, event)
+            self.option_catalog.complete = self.option_catalog.complete and option_snapshot_complete
+            for _event in self.combo_catalog.reconcile():
+                await self._coalesced_combo_refresh(client)
+            self.combo_catalog.complete = self.combo_catalog.complete and combo_snapshot_complete
+            await self._sync_option_membership(client)
+            await client.subscribe([INDEX_CHANNEL])
+            if self.clock is None:
+                raise RuntimeError("clock was not established")
+            self.index.start_continuous_coverage(self.clock.interval_at(_monotonic_ms()).lower_ms)
+            try:
+                self.platform.prove_operational_from_post_status_public_success()
+            except RuntimeError as exc:
+                raise PublicSessionError(
+                    "platform state was unusable after public bootstrap"
+                ) from exc
+            self._update_coverage()
+        finally:
+            self._bootstrap_in_progress = False
 
     def _reset_session_state(self) -> None:
         self.platform = PlatformReadiness()
@@ -345,20 +387,188 @@ class LiveRadarRuntime:
         self.results.clear()
         self._last_detector_causal_seq.clear()
         self._subscribed_combo_names.clear()
+        self._pending_option_unsubscribe.clear()
+        self._failed_option_subscriptions.clear()
+        self._failed_combo_subscriptions.clear()
+        self._combo_summary_fingerprints.clear()
+        self._combo_refresh_task = None
         self.index = IndexMinuteReducer(self.policy.largest_lookback_minutes)
         self.clock = None
+        self._clock_revision = 0
         self._last_fingerprints.clear()
+        self._last_observation_fingerprints.clear()
+        self._last_applied_ingress_seq = 0
+        self._last_rpc_received_monotonic_ms = None
+        self._deferred_notifications.clear()
+        self._session_established = False
 
     def prepare_reconnect(self, reason: str) -> None:
+        reason = _canonical_unknown_reason(reason)
+        if self.platform.reason == reason:
+            return
         self._accept_causal_fact()
         self._invalidate_all(reason)
 
+    async def _request_public(
+        self,
+        client: PublicClient,
+        method: str,
+        params: dict[str, object],
+        *,
+        responding_to_test_request: bool = False,
+    ) -> object:
+        request_task = asyncio.create_task(
+            client.request(
+                method,
+                params,
+                responding_to_test_request=responding_to_test_request,
+            )
+        )
+        await asyncio.sleep(0)
+        try:
+            while not request_task.done():
+                notification_task = asyncio.create_task(
+                    self._next_notification(client, timeout_seconds=0.05)
+                )
+                done, _pending = await asyncio.wait(
+                    (request_task, notification_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if notification_task in done:
+                    try:
+                        message = notification_task.result()
+                    except TimeoutError:
+                        self._check_blocked_request_deadlines(client)
+                        continue
+                    if responding_to_test_request and message.get("method") != "heartbeat":
+                        self._deferred_notifications.append(message)
+                        continue
+                    await self._route_ingress_notification(client, message)
+                    continue
+                notification_task.cancel()
+                try:
+                    await notification_task
+                except (asyncio.CancelledError, TimeoutError):
+                    pass
+        except BaseException:
+            if not request_task.done():
+                request_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await request_task
+            raise
+        result = await request_task
+        if not isinstance(result, ReceivedRpcResult):
+            self._last_rpc_received_monotonic_ms = _monotonic_ms()
+            return result
+        queued = [*self._drain_deferred(), *client.drain_notifications()]
+        queued.sort(key=lambda item: getattr(item, "ingress_seq", result.ingress_seq + 1))
+        for message in queued:
+            if getattr(message, "ingress_seq", result.ingress_seq + 1) < result.ingress_seq:
+                await self._route_ingress_notification(client, message)
+            else:
+                self._deferred_notifications.append(message)
+        if responding_to_test_request:
+            self._check_receive_lag(result)
+        else:
+            self._start_ingress(result)
+        self._last_rpc_received_monotonic_ms = result.received_monotonic_ms
+        return result.value
+
+    def _check_blocked_request_deadlines(self, client: PublicClient) -> None:
+        if time.monotonic() - client.last_inbound_monotonic >= LIVENESS_DEADLINE_SECONDS:
+            self._accept_causal_fact()
+            self._invalidate_all("SESSION_GAP")
+            raise PublicSessionError("production-public session liveness deadline expired")
+        if self.clock is None:
+            return
+        try:
+            self.clock.interval_at(_monotonic_ms())
+        except ContinuityGap:
+            self._accept_causal_fact()
+            self._invalidate_all("CLOCK_GAP")
+            raise
+
+    async def _route_ingress_notification(
+        self,
+        client: PublicClient,
+        message: dict[str, object],
+    ) -> None:
+        if self._bootstrap_in_progress:
+            await self._handle_bootstrap_message(client, message)
+        else:
+            await self._handle_message(
+                client,
+                message,
+                received_monotonic_ms=getattr(message, "received_monotonic_ms", None),
+            )
+
+    async def _next_notification(
+        self,
+        client: PublicClient,
+        *,
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
+        if self._deferred_notifications:
+            return self._deferred_notifications.popleft()
+        return await client.next_notification(timeout_seconds=timeout_seconds)
+
+    def _drain_deferred(self) -> tuple[dict[str, object], ...]:
+        values = tuple(self._deferred_notifications)
+        self._deferred_notifications.clear()
+        return values
+
+    def _start_ingress(
+        self,
+        frame: object,
+        *,
+        received_monotonic_ms: int | None = None,
+    ) -> int | None:
+        ingress_seq = getattr(frame, "ingress_seq", None)
+        if ingress_seq is not None:
+            if not isinstance(ingress_seq, int) or ingress_seq <= self._last_applied_ingress_seq:
+                raise PublicProtocolError("inbound frame ingress sequence is not increasing")
+            self._last_applied_ingress_seq = ingress_seq
+        return self._check_receive_lag(
+            frame,
+            received_monotonic_ms=received_monotonic_ms,
+        )
+
+    def _check_receive_lag(
+        self,
+        frame: object,
+        *,
+        received_monotonic_ms: int | None = None,
+    ) -> int | None:
+        if received_monotonic_ms is None:
+            received_monotonic_ms = getattr(frame, "received_monotonic_ms", None)
+        if received_monotonic_ms is None:
+            return None
+        if not isinstance(received_monotonic_ms, int):
+            raise PublicProtocolError("inbound frame receive time is invalid")
+        queue_lag_ms = _monotonic_ms() - received_monotonic_ms
+        if queue_lag_ms < 0:
+            raise PublicProtocolError("inbound frame receive time is in the future")
+        self._max_notification_queue_lag_ms = max(
+            self._max_notification_queue_lag_ms,
+            queue_lag_ms,
+        )
+        if queue_lag_ms > MAX_NOTIFICATION_QUEUE_LAG_MS:
+            self._accept_causal_fact()
+            self._invalidate_all("SESSION_GAP")
+            raise PublicSessionError(
+                f"notification queue lag exceeded {MAX_NOTIFICATION_QUEUE_LAG_MS} ms"
+            )
+        return received_monotonic_ms
+
     async def _bootstrap_clock(self, client: PublicClient) -> None:
         sent = _monotonic_ms()
-        result = await client.request("public/get_time", {})
-        received = _monotonic_ms()
+        result = await self._request_public(client, "public/get_time", {})
+        received = self._last_rpc_received_monotonic_ms
+        if received is None:
+            raise RuntimeError("public/get_time response lacked a receive boundary")
         server_ms = require_int(result, "public/get_time result")
         self.clock = TrustedClock.from_response(server_ms, sent, received)
+        self._clock_revision += 1
         self._accept_causal_fact()
 
     async def _refresh_clock(self, client: PublicClient) -> None:
@@ -366,8 +576,10 @@ class LiveRadarRuntime:
             await self._bootstrap_clock(client)
             return
         sent = _monotonic_ms()
-        result = await client.request("public/get_time", {})
-        received = _monotonic_ms()
+        result = await self._request_public(client, "public/get_time", {})
+        received = self._last_rpc_received_monotonic_ms
+        if received is None:
+            raise RuntimeError("public/get_time response lacked a receive boundary")
         server_ms = require_int(result, "public/get_time result")
         self._accept_causal_fact()
         try:
@@ -379,9 +591,15 @@ class LiveRadarRuntime:
         except ContinuityGap:
             self._invalidate_all("CLOCK_GAP")
             raise
+        self._clock_revision += 1
         if await self._sync_option_membership(client):
-            await self._refresh_combo_catalog(client)
-        await self._evaluate_all(client)
+            await self._coalesced_combo_refresh(client)
+        self.index.seal_ready(self.clock.interval_at(_monotonic_ms()).lower_ms)
+        await self._evaluate_all(
+            client,
+            boundary_observation_eligible=False,
+            observation_reason="CLOCK_ONLY",
+        )
 
     def _replace_options(self, payloads: list[object]) -> bool:
         if self.clock is None:
@@ -392,8 +610,13 @@ class LiveRadarRuntime:
         self.options = {
             name: instrument
             for name, instrument in options.items()
-            if monitor_applicability(instrument.expiration_timestamp_ms, trusted_time)
-            is not Applicability.OUT_OF_MONITOR_SCOPE
+            if classify_time_applicability(
+                self.policy,
+                expiration_timestamp_ms=instrument.expiration_timestamp_ms,
+                trusted_time=trusted_time,
+                option_type=instrument.option_type,
+            ).classification
+            is not TimeApplicability.OUT_OF_MONITOR_SCOPE
         }
         for instrument_name in set(self.trackers) - set(self.options):
             self.trackers.pop(instrument_name, None)
@@ -430,30 +653,47 @@ class LiveRadarRuntime:
     async def _sync_option_membership(self, client: PublicClient) -> bool:
         if self.clock is None:
             raise RuntimeError("clock required before membership synchronization")
-        trusted_time = self.clock.interval_at(_monotonic_ms())
+        boundary_monotonic_ms = _monotonic_ms()
+        trusted_time = self.clock.interval_at(boundary_monotonic_ms)
         desired = {
             name: instrument
             for name, instrument in self.catalog_options.items()
-            if monitor_applicability(instrument.expiration_timestamp_ms, trusted_time)
-            is not Applicability.OUT_OF_MONITOR_SCOPE
+            if classify_time_applicability(
+                self.policy,
+                expiration_timestamp_ms=instrument.expiration_timestamp_ms,
+                trusted_time=trusted_time,
+                option_type=instrument.option_type,
+            ).classification
+            is not TimeApplicability.OUT_OF_MONITOR_SCOPE
         }
         current_names = set(self.options)
         desired_names = set(desired)
-        removals = sorted(current_names - desired_names)
-        additions = sorted(name for name in desired_names if name not in self.option_books)
-        if removals or additions:
+        membership_removals = sorted(current_names - desired_names)
+        removals = sorted(set(membership_removals) | self._pending_option_unsubscribe)
+        additions = sorted(
+            name
+            for name in desired_names
+            if name not in self.option_books or name in self._failed_option_subscriptions
+        )
+        if membership_removals or additions:
             self._accept_causal_fact()
-        for instrument_name in removals:
+        for instrument_name in membership_removals:
             tracker = self.trackers[instrument_name]
             transition = tracker.membership_loss(causal_seq=self.causal_seq)
-            self._record_episode_end(transition.ended_episode)
+            self._record_episode_end(
+                transition.ended_episode,
+                boundary_monotonic_ms=boundary_monotonic_ms,
+            )
             self.option_books.pop(instrument_name, None)
             self.tickers.pop(instrument_name, None)
             self.results.pop(instrument_name, None)
             self._last_fingerprints.pop(instrument_name, None)
+            self._last_observation_fingerprints.pop(instrument_name, None)
             self._last_unknown_reason.pop(instrument_name, None)
             self._last_detector_causal_seq.pop(instrument_name, None)
             self.trackers.pop(instrument_name, None)
+            self._pending_option_unsubscribe.add(instrument_name)
+            self._failed_option_subscriptions.discard(instrument_name)
         self.options = desired
         for instrument_name in additions:
             self.trackers.setdefault(
@@ -465,72 +705,116 @@ class LiveRadarRuntime:
                 ),
             )
             self.option_books[instrument_name] = ContinuousOrderBook(instrument_name)
+        if membership_removals or additions:
+            self._update_coverage(monotonic_ms=boundary_monotonic_ms)
         if removals:
-            await client.unsubscribe(
-                [
-                    channel
-                    for name in removals
-                    for channel in (ticker_channel(name), book_channel(name))
-                ]
-            )
+            try:
+                await client.unsubscribe(
+                    [
+                        channel
+                        for name in removals
+                        for channel in (ticker_channel(name), book_channel(name))
+                    ]
+                )
+            except (PublicRequestError, SourceDataError, TimeoutError):
+                pass
+            else:
+                self._pending_option_unsubscribe.difference_update(removals)
         if additions:
-            await client.subscribe(
-                [
-                    channel
-                    for name in additions
-                    for channel in (ticker_channel(name), book_channel(name))
-                ]
-            )
-        if removals:
+            try:
+                await client.subscribe(
+                    [
+                        channel
+                        for name in additions
+                        for channel in (ticker_channel(name), book_channel(name))
+                    ]
+                )
+            except (PublicRequestError, SourceDataError, TimeoutError):
+                for name in additions:
+                    self.option_books[name].invalidate("OPTION_CHANNEL_REQUEST_FAILURE")
+                    self._failed_option_subscriptions.add(name)
+                    tracker = self.trackers[name]
+                    self._mark_tracker_unknown(
+                        tracker,
+                        reason="OPTION_CHANNEL_REQUEST_FAILURE",
+                    )
+            else:
+                self._failed_option_subscriptions.difference_update(additions)
+        if membership_removals:
             await self._sync_combo_subscriptions(client)
-        return bool(additions or removals)
+        return bool(additions or membership_removals)
 
     async def _replace_combos(self, client: PublicClient, payloads: list[object]) -> bool:
         combos: dict[str, ComboInstrument] = {}
+        fingerprints: dict[str, tuple[object, ...]] = {}
         complete = True
         for payload in payloads:
             try:
                 summary = require_mapping(payload, "combo")
                 raw_legs = require_list(summary.get("legs"), "combo.legs")
-                leg_names = {
-                    require_str(
-                        require_mapping(item, "combo leg").get("instrument_name"),
-                        "combo leg.instrument_name",
+                parsed_legs = tuple(
+                    (
+                        require_str(
+                            require_mapping(item, "combo leg").get("instrument_name"),
+                            "combo leg.instrument_name",
+                        ),
+                        decimal_from_source(
+                            require_mapping(item, "combo leg").get("amount"),
+                            "combo leg.amount",
+                        ),
                     )
                     for item in raw_legs
-                }
-            except SourceDataError:
-                complete = False
-                continue
-            if len(raw_legs) != 2 or len(leg_names) != 2 or not leg_names <= set(self.options):
-                continue
-            try:
+                )
+                leg_names = {name for name, _amount in parsed_legs}
                 combo_id = require_str(summary.get("id"), "combo.id")
+                state = require_str(summary.get("state"), "combo.state")
             except SourceDataError:
                 complete = False
                 continue
-            metadata = await client.request("public/get_instrument", {"instrument_name": combo_id})
-            self._accept_causal_fact()
-            try:
-                combo = parse_combo_instrument(summary, metadata)
-            except SourceDataError:
+            if len(raw_legs) != 2 or len(leg_names) != 2:
+                continue
+            if not leg_names <= set(self.options):
+                if leg_names & set(self.options):
+                    complete = False
+                continue
+            fingerprint = (
+                state,
+                tuple(parsed_legs),
+            )
+            if not combo_id:
                 complete = False
                 continue
+            fingerprints[combo_id] = fingerprint
+            combo = self.combos.get(combo_id)
+            if combo is None or self._combo_summary_fingerprints.get(combo_id) != fingerprint:
+                metadata = await self._request_public(
+                    client,
+                    "public/get_instrument",
+                    {"instrument_name": combo_id},
+                )
+                self._accept_causal_fact()
+                try:
+                    combo = parse_combo_instrument(summary, metadata)
+                except SourceDataError:
+                    complete = False
+                    continue
             if combo is not None:
                 combos[combo.instrument_name] = combo
         self.combos = combos
+        self._combo_summary_fingerprints = fingerprints
         return complete
 
     async def _handle_bootstrap_message(
         self, client: PublicClient, message: dict[str, object]
     ) -> None:
+        self._start_ingress(message)
         method = message.get("method")
         if method == "heartbeat":
             await self._handle_heartbeat(client, message)
             return
         if method != "subscription":
             if method == "connection_error":
-                raise PublicProtocolError("connection failed during bootstrap")
+                raise PublicSessionError("connection failed during bootstrap")
             return
         params = require_mapping(message.get("params"), "subscription.params")
         channel = require_str(params.get("channel"), "subscription.params.channel")
@@ -559,29 +843,19 @@ class LiveRadarRuntime:
         received_monotonic_ms: int | None = None,
     ) -> None:
         processing_ms = _monotonic_ms()
-        if received_monotonic_ms is not None:
-            queue_lag_ms = processing_ms - received_monotonic_ms
-            if queue_lag_ms < 0:
-                raise PublicProtocolError("notification receive time is in the future")
-            self._max_notification_queue_lag_ms = max(
-                self._max_notification_queue_lag_ms,
-                queue_lag_ms,
-            )
-            if queue_lag_ms > MAX_NOTIFICATION_QUEUE_LAG_MS:
-                self._accept_causal_fact()
-                self._invalidate_all("NOTIFICATION_QUEUE_LAG")
-                raise PublicProtocolError(
-                    f"notification queue lag exceeded {MAX_NOTIFICATION_QUEUE_LAG_MS} ms"
-                )
-        known_at_ms = received_monotonic_ms if received_monotonic_ms is not None else processing_ms
+        ingress_received_ms = self._start_ingress(
+            message,
+            received_monotonic_ms=received_monotonic_ms,
+        )
+        known_at_ms = ingress_received_ms if ingress_received_ms is not None else processing_ms
         method = message.get("method")
         if method == "heartbeat":
             await self._handle_heartbeat(client, message)
             return
         if method == "connection_error":
             self._accept_causal_fact()
-            self._invalidate_all("CONNECTION_CLOSED")
-            raise PublicProtocolError("production-public connection closed")
+            self._invalidate_all("SESSION_GAP")
+            raise PublicSessionError("production-public connection closed")
         if method != "subscription":
             raise PublicProtocolError("unexpected non-subscription notification")
         params = require_mapping(message.get("params"), "subscription.params")
@@ -592,11 +866,18 @@ class LiveRadarRuntime:
             await self._handle_index(client, data, received_monotonic_ms=known_at_ms)
         elif channel.startswith("ticker.") and channel.endswith(".100ms"):
             instrument_name = channel[len("ticker.") : -len(".100ms")]
+            if (
+                instrument_name not in self.options
+                or instrument_name in self._pending_option_unsubscribe
+                or instrument_name in self._failed_option_subscriptions
+            ):
+                return
             try:
                 ticker = parse_ticker(data, instrument_name)
             except ValueError:
                 self.tickers.pop(instrument_name, None)
                 self._last_fingerprints.pop(instrument_name, None)
+                self._last_observation_fingerprints.pop(instrument_name, None)
                 tracker = self.trackers.get(instrument_name)
                 if tracker is not None:
                     transition = self._mark_tracker_unknown(
@@ -613,6 +894,7 @@ class LiveRadarRuntime:
             ):
                 self.tickers.pop(instrument_name, None)
                 self._last_fingerprints.pop(instrument_name, None)
+                self._last_observation_fingerprints.pop(instrument_name, None)
                 tracker = self.trackers.get(instrument_name)
                 if tracker is not None:
                     transition = self._mark_tracker_unknown(
@@ -621,8 +903,11 @@ class LiveRadarRuntime:
                         continuity_gap=True,
                     )
                     self._record_episode_end(transition.ended_episode)
-                await client.unsubscribe([ticker_channel(instrument_name)])
-                await client.subscribe([ticker_channel(instrument_name)])
+                try:
+                    await client.unsubscribe([ticker_channel(instrument_name)])
+                    await client.subscribe([ticker_channel(instrument_name)])
+                except (PublicRequestError, SourceDataError, TimeoutError):
+                    self._failed_option_subscriptions.add(instrument_name)
                 self._update_coverage()
                 return
             self.tickers[instrument_name] = ticker
@@ -646,17 +931,17 @@ class LiveRadarRuntime:
                 self.option_catalog.mark_incomplete()
                 await self._recover_option_catalog(client)
         elif channel == COMBO_LIFECYCLE_CHANNEL:
-            await self._refresh_combo_catalog(client)
+            await self._coalesced_combo_refresh(client)
         elif channel == "platform_state":
             self.platform.apply_platform_notification(data)
             if self.platform.maintenance is True or not self.platform.status_usable:
                 self._invalidate_all(self.platform.reason)
-                raise PublicProtocolError("platform state requires full bootstrap")
+                raise PublicSessionError("platform state requires full bootstrap")
         elif channel == "platform_state.public_methods_state":
             self.platform.apply_public_methods_notification(data)
             if self.platform.public_methods_allowed is False:
                 self._invalidate_all(self.platform.reason)
-                raise PublicProtocolError("public-method state requires full bootstrap")
+                raise PublicSessionError("public-method state requires full bootstrap")
         else:
             raise PublicProtocolError(f"unexpected subscription channel: {channel}")
         await self._maybe_complete_post_status_bootstrap(client)
@@ -680,7 +965,12 @@ class LiveRadarRuntime:
         params = require_mapping(message.get("params"), "heartbeat.params")
         heartbeat_type = require_str(params.get("type"), "heartbeat.params.type")
         if heartbeat_type == "test_request":
-            result = await client.request("public/test", {}, responding_to_test_request=True)
+            result = await self._request_public(
+                client,
+                "public/test",
+                {},
+                responding_to_test_request=True,
+            )
             if (
                 not isinstance(result, dict)
                 or not isinstance(result.get("version"), str)
@@ -700,6 +990,9 @@ class LiveRadarRuntime:
     ) -> None:
         if self.clock is None:
             raise RuntimeError("index tick arrived before clock")
+        known_at_ms = (
+            received_monotonic_ms if received_monotonic_ms is not None else _monotonic_ms()
+        )
         try:
             data = require_mapping(payload, "index notification")
             if require_str(data.get("index_name"), "index.index_name") != "btc_usdc":
@@ -712,6 +1005,7 @@ class LiveRadarRuntime:
         except (ContinuityGap, SourceDataError, ValueError):
             self.index.gap()
             self._last_fingerprints.clear()
+            self._last_observation_fingerprints.clear()
             for tracker in self.trackers.values():
                 transition = self._mark_tracker_unknown(
                     tracker,
@@ -719,16 +1013,20 @@ class LiveRadarRuntime:
                     continuity_gap=True,
                 )
                 self._record_episode_end(transition.ended_episode)
-            await client.unsubscribe([INDEX_CHANNEL])
-            await client.subscribe([INDEX_CHANNEL])
+            self.platform.reason = "INDEX_GAP"
+            self._update_coverage(monotonic_ms=known_at_ms)
+            try:
+                await client.unsubscribe([INDEX_CHANNEL])
+                await client.subscribe([INDEX_CHANNEL])
+            except (PublicRequestError, SourceDataError, TimeoutError) as exc:
+                raise ContinuityGap("index resubscription failed") from exc
             if self.clock is not None:
                 self.index.start_continuous_coverage(
                     self.clock.interval_at(_monotonic_ms()).lower_ms
                 )
+            if self.platform.usable:
+                self.platform.reason = "USABLE"
             return
-        known_at_ms = (
-            received_monotonic_ms if received_monotonic_ms is not None else _monotonic_ms()
-        )
         sealed = self.index.seal_ready(self.clock.interval_at(known_at_ms).lower_ms)
         if sealed:
             await self._evaluate_all(client, evaluation_monotonic_ms=known_at_ms)
@@ -744,6 +1042,10 @@ class LiveRadarRuntime:
         known_at_ms = (
             received_monotonic_ms if received_monotonic_ms is not None else _monotonic_ms()
         )
+        if instrument_name in self._pending_option_unsubscribe:
+            return
+        if instrument_name in self._failed_option_subscriptions:
+            return
         book = self.option_books.get(instrument_name)
         if book is not None:
             try:
@@ -757,9 +1059,14 @@ class LiveRadarRuntime:
                 )
                 self._record_episode_end(transition.ended_episode)
                 self._last_fingerprints.pop(instrument_name, None)
-                await client.unsubscribe([book_channel(instrument_name)])
+                self._last_observation_fingerprints.pop(instrument_name, None)
                 self.option_books[instrument_name] = ContinuousOrderBook(instrument_name)
-                await client.subscribe([book_channel(instrument_name)])
+                try:
+                    await client.unsubscribe([book_channel(instrument_name)])
+                    await client.subscribe([book_channel(instrument_name)])
+                except (PublicRequestError, SourceDataError, TimeoutError):
+                    self.option_books[instrument_name].invalidate("OPTION_CHANNEL_REQUEST_FAILURE")
+                    self._failed_option_subscriptions.add(instrument_name)
                 return
             if changed:
                 await self._evaluate_one(
@@ -775,9 +1082,15 @@ class LiveRadarRuntime:
             changed = combo_book.apply(payload, known_at_ms)
         except (ContinuityGap, SourceDataError) as exc:
             combo_book.invalidate(type(exc).__name__)
-            await client.unsubscribe([book_channel(instrument_name)])
             self.combo_books[instrument_name] = ContinuousOrderBook(instrument_name)
-            await client.subscribe([book_channel(instrument_name)])
+            try:
+                await client.unsubscribe([book_channel(instrument_name)])
+                await client.subscribe([book_channel(instrument_name)])
+            except (PublicRequestError, SourceDataError, TimeoutError):
+                self.combo_books[instrument_name].invalidate("COMBO_LAYER_REQUEST_FAILURE")
+                self._subscribed_combo_names.discard(instrument_name)
+                self._failed_combo_subscriptions.add(instrument_name)
+                self._mark_layer_two_unknown()
             changed = True
         if changed:
             await self._evaluate_atomic_for_combo(instrument_name)
@@ -789,9 +1102,15 @@ class LiveRadarRuntime:
         )
         state = require_str(data.get("state"), "option lifecycle.state")
         if state == "open":
-            metadata = await client.request(
-                "public/get_instrument", {"instrument_name": instrument_name}
-            )
+            try:
+                metadata = await self._request_public(
+                    client,
+                    "public/get_instrument",
+                    {"instrument_name": instrument_name},
+                )
+            except (PublicRequestError, TimeoutError):
+                self.option_catalog.mark_incomplete()
+                return
             self._accept_causal_fact()
             try:
                 instrument = parse_option_instrument(metadata)
@@ -804,12 +1123,13 @@ class LiveRadarRuntime:
         else:
             self.catalog_options.pop(instrument_name, None)
         if await self._sync_option_membership(client):
-            await self._refresh_combo_catalog(client)
+            await self._coalesced_combo_refresh(client)
 
     async def _recover_option_catalog(self, client: PublicClient) -> None:
         try:
             payloads = require_list(
-                await client.request(
+                await self._request_public(
+                    client,
                     "public/get_instruments",
                     {"currency": "USDC", "kind": "option", "expired": False},
                 ),
@@ -824,18 +1144,26 @@ class LiveRadarRuntime:
             self.option_catalog.source_complete = complete
             self.option_catalog.complete = complete
             await self._sync_option_membership(client)
-        except (SourceDataError, PublicProtocolError, TimeoutError):
+        except (SourceDataError, PublicRequestError, TimeoutError):
             self.option_catalog.mark_incomplete()
+
+    async def _recover_incomplete_catalogs(self, client: PublicClient) -> None:
+        if not self.option_catalog.complete:
+            await self._recover_option_catalog(client)
+        if not self.combo_catalog.complete:
+            await self._coalesced_combo_refresh(client)
+        elif self._failed_combo_subscriptions:
+            await self._sync_combo_subscriptions(client)
 
     async def _refresh_combo_catalog(self, client: PublicClient) -> None:
         try:
             payloads = require_list(
-                await client.request("public/get_combos", {"currency": "USDC"}),
+                await self._request_public(client, "public/get_combos", {"currency": "USDC"}),
                 "public/get_combos result",
             )
             self._accept_causal_fact()
             self.combo_catalog.complete = await self._replace_combos(client, payloads)
-        except (SourceDataError, PublicProtocolError, TimeoutError):
+        except (SourceDataError, PublicRequestError, TimeoutError):
             self.combo_catalog.mark_incomplete()
             for book in self.combo_books.values():
                 book.invalidate("COMBO_CATALOG_UNAVAILABLE")
@@ -852,16 +1180,35 @@ class LiveRadarRuntime:
             if tracker.episode_id is not None:
                 await self._evaluate_atomic(tracker)
 
+    async def _coalesced_combo_refresh(self, client: PublicClient) -> None:
+        existing = self._combo_refresh_task
+        if existing is not None:
+            if existing is asyncio.current_task():
+                return
+            await existing
+            return
+        task = asyncio.create_task(self._refresh_combo_catalog(client))
+        self._combo_refresh_task = task
+        try:
+            await task
+        finally:
+            if self._combo_refresh_task is task:
+                self._combo_refresh_task = None
+
     async def _evaluate_all(
         self,
         client: PublicClient,
         *,
         evaluation_monotonic_ms: int | None = None,
+        boundary_observation_eligible: bool = True,
+        observation_reason: str | None = None,
     ) -> None:
         await self._evaluate_batch(
             client,
             tuple(self.options),
             evaluation_monotonic_ms=evaluation_monotonic_ms,
+            boundary_observation_eligible=boundary_observation_eligible,
+            observation_reason=observation_reason,
         )
 
     async def _evaluate_one(
@@ -870,11 +1217,15 @@ class LiveRadarRuntime:
         instrument_name: str,
         *,
         evaluation_monotonic_ms: int | None = None,
+        boundary_observation_eligible: bool = True,
+        observation_reason: str | None = None,
     ) -> None:
         await self._evaluate_batch(
             client,
             (instrument_name,),
             evaluation_monotonic_ms=evaluation_monotonic_ms,
+            boundary_observation_eligible=boundary_observation_eligible,
+            observation_reason=observation_reason,
         )
 
     async def _evaluate_batch(
@@ -883,6 +1234,8 @@ class LiveRadarRuntime:
         instrument_names: tuple[str, ...],
         *,
         evaluation_monotonic_ms: int | None = None,
+        boundary_observation_eligible: bool = True,
+        observation_reason: str | None = None,
     ) -> None:
         if self.clock is None:
             return
@@ -890,13 +1243,30 @@ class LiveRadarRuntime:
             evaluation_monotonic_ms if evaluation_monotonic_ms is not None else _monotonic_ms()
         )
         trusted_time = self.clock.interval_at(known_at_ms)
+        index_window = self.index.current_window(
+            self.policy.largest_lookback_minutes,
+            trusted_time_lower_ms=trusted_time.lower_ms,
+        )
+        snapshot = ScopeSnapshot(
+            causal_seq=self.causal_seq,
+            trusted_time=trusted_time,
+            clock_revision=self._clock_revision,
+            instrument_names=instrument_names,
+            boundary_observation_eligible=boundary_observation_eligible,
+            observation_reason=observation_reason,
+        )
         evaluated: list[tuple[OptionInstrument, EvaluationResult, TrackerState, str | None]] = []
         state_changed = False
         for instrument_name in instrument_names:
             instrument = self.options.get(instrument_name)
             if instrument is None:
                 continue
-            fingerprint = self._fingerprint(instrument, trusted_time)
+            fingerprint, observation_fingerprint = self._fingerprints(
+                instrument,
+                snapshot,
+                index_window_reason=index_window.reason,
+                index_window_prices=index_window.prices,
+            )
             if self._last_fingerprints.get(instrument_name) == fingerprint:
                 continue
             self._last_fingerprints[instrument_name] = fingerprint
@@ -910,9 +1280,13 @@ class LiveRadarRuntime:
                 self._record_episode_end(transition.ended_episode)
                 state_changed = state_changed or transition.state_changed
                 continue
-            closes = self.index.consecutive_prices(self.policy.largest_lookback_minutes)
             previous_state = tracker.state
             previous_episode_id = tracker.episode_id
+            observation_eligible = (
+                snapshot.boundary_observation_eligible
+                and self._last_observation_fingerprints.get(instrument_name)
+                != observation_fingerprint
+            )
             result = evaluate_instrument(
                 policy=self.policy,
                 tracker=tracker,
@@ -921,13 +1295,25 @@ class LiveRadarRuntime:
                 causal_seq=self.causal_seq,
                 option_book=self.option_books.get(instrument_name),
                 ticker=self.tickers.get(instrument_name),
-                causal_closes=closes,
+                causal_closes=index_window.prices,
+                baseline_unavailable_reason=(index_window.reason or "INDEX_BASELINE_WARMUP"),
+                observation_eligible=observation_eligible,
+                observation_reason=(
+                    None
+                    if observation_eligible
+                    else snapshot.observation_reason or "DUPLICATE_REDUCED_STATE"
+                ),
             )
+            if observation_eligible:
+                self._last_observation_fingerprints[instrument_name] = observation_fingerprint
             self.results[instrument_name] = result
-            if tracker.detector_state is DetectorState.ANOMALY_ACTIVE:
+            if (
+                tracker.detector_state is DetectorState.ANOMALY_ACTIVE
+                and result.observation_eligible
+            ):
                 self._last_detector_causal_seq[instrument_name] = self.causal_seq
             evaluated.append((instrument, result, previous_state, previous_episode_id))
-            state_changed = True
+            state_changed = state_changed or result.transition.state_changed
 
         for instrument, result, previous_state, previous_episode_id in evaluated:
             tracker = self.trackers[instrument.instrument_name]
@@ -942,9 +1328,28 @@ class LiveRadarRuntime:
                 result.transition.ended_episode,
                 boundary_monotonic_ms=known_at_ms,
             )
-            if result.known_evaluation and tracker.detector_state is DetectorState.ANOMALY_ACTIVE:
+            if (
+                result.known_evaluation
+                and result.observation_eligible
+                and tracker.detector_state is DetectorState.ANOMALY_ACTIVE
+            ):
                 if tracker.episode_id is not None:
                     self._episode_last_trusted_boundary_ms[tracker.episode_id] = known_at_ms
+
+        if index_window.reason in {"INDEX_BASELINE_STALE", "INDEX_BASELINE_GAP"}:
+            self.index.gap()
+            self._last_fingerprints.clear()
+            self._last_observation_fingerprints.clear()
+            self.platform.reason = index_window.reason
+            self._update_coverage(monotonic_ms=known_at_ms)
+            try:
+                await client.unsubscribe([INDEX_CHANNEL])
+                await client.subscribe([INDEX_CHANNEL])
+            except (PublicRequestError, SourceDataError, TimeoutError) as exc:
+                raise ContinuityGap("index resubscription failed") from exc
+            self.index.start_continuous_coverage(trusted_time.lower_ms)
+            if self.platform.usable:
+                self.platform.reason = "USABLE"
 
         by_scope: dict[
             tuple[int, OptionType, str], list[tuple[OptionInstrument, EvaluationResult]]
@@ -971,14 +1376,16 @@ class LiveRadarRuntime:
                         trusted_time,
                         boundary_monotonic_ms=known_at_ms,
                     )
-            self._record_aggregate(
-                representative,
-                scope_results[0][1].band_id,
-                aggregate,
-                full_formula_witness=any(
-                    result.full_formula_evaluation for _instrument, result in scope_results
-                ),
-            )
+            if any(result.observation_eligible for _instrument, result in scope_results):
+                self._record_aggregate(
+                    representative,
+                    scope_results[0][1].band_id,
+                    aggregate,
+                    full_formula_witness=any(
+                        result.full_formula_evaluation and result.observation_eligible
+                        for _instrument, result in scope_results
+                    ),
+                )
 
         for instrument, result, _previous_state, _previous_episode_id in evaluated:
             tracker = self.trackers[instrument.instrument_name]
@@ -994,45 +1401,63 @@ class LiveRadarRuntime:
             tracker = self.trackers[instrument.instrument_name]
             if tracker.detector_state is DetectorState.ANOMALY_ACTIVE:
                 await self._evaluate_atomic(tracker)
+        self._update_coverage(monotonic_ms=known_at_ms)
 
-    def _fingerprint(
-        self, instrument: OptionInstrument, trusted_time: TimeInterval
-    ) -> tuple[object, ...]:
+    def _fingerprints(
+        self,
+        instrument: OptionInstrument,
+        snapshot: ScopeSnapshot,
+        *,
+        index_window_reason: str | None,
+        index_window_prices: tuple[object, ...] | None,
+    ) -> tuple[tuple[object, ...], tuple[object, ...]]:
         book = self.option_books.get(instrument.instrument_name)
         ticker = self.tickers.get(instrument.instrument_name)
-        lower_tte = instrument.expiration_timestamp_ms - trusted_time.upper_ms
-        upper_tte = instrument.expiration_timestamp_ms - trusted_time.lower_ms
-        band = band_for_tte(
+        applicability = classify_time_applicability(
             self.policy,
-            lower_tte_ms=lower_tte,
-            upper_tte_ms=upper_tte,
+            expiration_timestamp_ms=instrument.expiration_timestamp_ms,
+            trusted_time=snapshot.trusted_time,
             option_type=instrument.option_type,
         )
-        last_close = self.index.sealed[-1].causal_seq if self.index.sealed else None
-        return (
-            self.platform.usable,
-            book.economic_revision if book is not None else None,
+        consumed_prices = index_window_prices
+        if applicability.band is not None and index_window_prices is not None:
+            close_count = max(applicability.band.lookbacks_minutes) + 1
+            consumed_prices = index_window_prices[-close_count:]
+        baseline_identity: tuple[object, ...] = (
             (
-                ticker.forward_usdc,
-                ticker.underlying_index,
+                self.index.sealed[-1].minute_start_ms,
+                consumed_prices,
             )
-            if ticker is not None
-            else None,
-            last_close,
-            band.band_id if band is not None else "BOUNDARY_OR_GAP",
+            if consumed_prices is not None and self.index.sealed
+            else (index_window_reason,)
         )
+        observation = detector_observation_identity(
+            policy=self.policy,
+            instrument=instrument,
+            trusted_time=snapshot.trusted_time,
+            option_book=book,
+            ticker=ticker,
+            baseline_identity=baseline_identity,
+        )
+        current = (
+            self.platform.usable,
+            snapshot.clock_revision,
+            instrument.amount,
+            (book.state, book.reason) if book is not None else None,
+            observation,
+        )
+        return current, observation
 
     def _scope_aggregate(
         self, instrument: OptionInstrument, trusted_time: TimeInterval
     ) -> AggregateDetectorResult:
-        lower_tte = instrument.expiration_timestamp_ms - trusted_time.upper_ms
-        upper_tte = instrument.expiration_timestamp_ms - trusted_time.lower_ms
-        band = band_for_tte(
+        applicability = classify_time_applicability(
             self.policy,
-            lower_tte_ms=lower_tte,
-            upper_tte_ms=upper_tte,
+            expiration_timestamp_ms=instrument.expiration_timestamp_ms,
+            trusted_time=trusted_time,
             option_type=instrument.option_type,
         )
+        band = applicability.band
         if band is None:
             return aggregate_detector(
                 (),
@@ -1060,10 +1485,13 @@ class LiveRadarRuntime:
         )
 
     def _record_evaluation(self, instrument: OptionInstrument, result: EvaluationResult) -> None:
-        if result.reason is not None and not result.known_evaluation:
-            self._record_unknown_reason(instrument.instrument_name, result.reason)
-        else:
-            self._last_unknown_reason[instrument.instrument_name] = None
+        if result.observation_eligible or result.transition.state_changed:
+            if result.reason is not None and not result.known_evaluation:
+                self._record_unknown_reason(instrument.instrument_name, result.reason)
+            else:
+                self._last_unknown_reason[instrument.instrument_name] = None
+        if not result.observation_eligible:
+            return
         if result.band_id is None:
             return
         scope = self._scope_counter(instrument.option_type, result.band_id)
@@ -1158,17 +1586,51 @@ class LiveRadarRuntime:
                     is not None
                 ):
                     needed.add(combo.instrument_name)
+        abandoned_failures = self._failed_combo_subscriptions - (
+            needed | self._subscribed_combo_names
+        )
+        for instrument_name in abandoned_failures:
+            self.combo_books.pop(instrument_name, None)
+        self._failed_combo_subscriptions.difference_update(abandoned_failures)
         additions = sorted(needed - self._subscribed_combo_names)
         removals = sorted(self._subscribed_combo_names - needed)
         if additions:
             for instrument_name in additions:
                 self.combo_books[instrument_name] = ContinuousOrderBook(instrument_name)
-            await client.subscribe([book_channel(name) for name in additions])
+            try:
+                await client.subscribe([book_channel(name) for name in additions])
+            except (PublicRequestError, SourceDataError, TimeoutError):
+                for instrument_name in additions:
+                    self.combo_books[instrument_name].invalidate("COMBO_LAYER_REQUEST_FAILURE")
+                    self._failed_combo_subscriptions.add(instrument_name)
+                self._mark_layer_two_unknown()
+            else:
+                self._subscribed_combo_names.update(additions)
+                self._failed_combo_subscriptions.difference_update(additions)
         if removals:
-            await client.unsubscribe([book_channel(name) for name in removals])
-            for instrument_name in removals:
-                self.combo_books.pop(instrument_name, None)
-        self._subscribed_combo_names = needed
+            try:
+                await client.unsubscribe([book_channel(name) for name in removals])
+            except (PublicRequestError, SourceDataError, TimeoutError):
+                for instrument_name in removals:
+                    book = self.combo_books.get(instrument_name)
+                    if book is not None:
+                        book.invalidate("COMBO_LAYER_REQUEST_FAILURE")
+                    self._failed_combo_subscriptions.add(instrument_name)
+                self._mark_layer_two_unknown()
+            else:
+                for instrument_name in removals:
+                    self.combo_books.pop(instrument_name, None)
+                    self._subscribed_combo_names.discard(instrument_name)
+                    self._failed_combo_subscriptions.discard(instrument_name)
+
+    def _mark_layer_two_unknown(self) -> None:
+        for tracker in self.trackers.values():
+            if tracker.detector_state is DetectorState.ANOMALY_ACTIVE:
+                self._record_atomic_transition(
+                    tracker,
+                    PublicAtomicQuoteState.UNKNOWN,
+                    band_id=tracker.activation_band_id,
+                )
 
     async def _evaluate_atomic_for_combo(self, combo_name: str) -> None:
         combo = self.combos.get(combo_name)
@@ -1187,6 +1649,7 @@ class LiveRadarRuntime:
         result = classify_atomic_quotes(
             anomaly_active=True,
             combo_catalog_complete=self.combo_catalog.complete,
+            option_catalog_complete=self.option_catalog.complete,
             short_leg=short_leg,
             options_by_name=self.options,
             combos=tuple(self.combos.values()),
@@ -1204,6 +1667,9 @@ class LiveRadarRuntime:
         if result.state is PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE:
             for quote in result.quotes:
                 combo = self.combos[quote.match.combo_instrument_name]
+                emitted_key = (tracker.episode_id, combo.instrument_name)
+                if emitted_key in self._emitted_atomic_quotes:
+                    continue
                 combo_book = self.combo_books[combo.instrument_name]
                 event = project_atomic_event(
                     AtomicEvidence(
@@ -1227,6 +1693,7 @@ class LiveRadarRuntime:
                     )
                 )
                 self.writer.write_atomic(event)
+                self._emitted_atomic_quotes.add(emitted_key)
 
     def _record_episode_end(
         self,
@@ -1364,6 +1831,7 @@ class LiveRadarRuntime:
         return transition
 
     def _invalidate_all(self, reason: str) -> None:
+        reason = _canonical_unknown_reason(reason)
         self.platform.post_status_bootstrap_complete = False
         self.platform.reason = reason
         self.index.gap()
@@ -1377,10 +1845,11 @@ class LiveRadarRuntime:
             )
             self._record_episode_end(transition.ended_episode)
         self._last_fingerprints.clear()
+        self._last_observation_fingerprints.clear()
         self._update_coverage()
 
-    def _update_coverage(self) -> None:
-        now = _monotonic_ms()
+    def _update_coverage(self, *, monotonic_ms: int | None = None) -> None:
+        now = monotonic_ms if monotonic_ms is not None else _monotonic_ms()
         if self.clock is None or not self.platform.usable:
             self._coverage.transition(CoverageState.UNKNOWN, now)
             return
@@ -1401,22 +1870,33 @@ class LiveRadarRuntime:
             )
             self._coverage.transition(state, now)
             return
-        scoped: list[tuple[OptionInstrument, object]] = []
+        scoped: list[OptionInstrument] = []
+        unresolved_time_boundary = False
         for instrument in self.options.values():
-            lower_tte = instrument.expiration_timestamp_ms - trusted.upper_ms
-            upper_tte = instrument.expiration_timestamp_ms - trusted.lower_ms
-            band = band_for_tte(
+            applicability = classify_time_applicability(
                 self.policy,
-                lower_tte_ms=lower_tte,
-                upper_tte_ms=upper_tte,
+                expiration_timestamp_ms=instrument.expiration_timestamp_ms,
+                trusted_time=trusted,
                 option_type=instrument.option_type,
             )
-            if band is not None:
-                scoped.append((instrument, band))
+            if applicability.classification is TimeApplicability.IN_BAND:
+                scoped.append(instrument)
+            elif applicability.classification in {
+                TimeApplicability.ADJACENT_BAND_BOUNDARY,
+                TimeApplicability.MONITOR_BOUNDARY,
+            }:
+                unresolved_time_boundary = True
         if not scoped:
-            self._coverage.transition(CoverageState.NO_APPLICABLE_SCOPE, now)
+            self._coverage.transition(
+                CoverageState.UNKNOWN
+                if unresolved_time_boundary
+                else CoverageState.NO_APPLICABLE_SCOPE,
+                now,
+            )
             return
-        states = [self.trackers[item.instrument_name].detector_state for item, _ in scoped]
+        states = [self.trackers[item.instrument_name].detector_state for item in scoped]
+        if unresolved_time_boundary:
+            states.append(DetectorState.UNKNOWN)
         if all(state is not DetectorState.UNKNOWN for state in states):
             self._coverage.transition(CoverageState.KNOWN_COMPLETE, now)
         elif DetectorState.ANOMALY_ACTIVE in states:
@@ -1461,6 +1941,18 @@ class LiveRadarRuntime:
         return self.writer.write_summary(summary)
 
 
+def _canonical_unknown_reason(reason: str) -> str:
+    if (
+        reason == "CONNECTION_CLOSED"
+        or reason == "NOTIFICATION_QUEUE_LAG"
+        or reason.startswith("SESSION_")
+    ):
+        return "SESSION_GAP"
+    if reason in {"PROTOCOL_INCOMPATIBILITY", "FATAL_PROTOCOL_INCOMPATIBILITY"}:
+        return "FATAL_PROTOCOL_INCOMPATIBILITY"
+    return reason
+
+
 async def observe(
     *,
     policy: RadarPolicy,
@@ -1490,19 +1982,44 @@ async def observe(
         except PublicProtocolIncompatibility:
             runtime.prepare_reconnect("PROTOCOL_INCOMPATIBILITY")
             raise
+        except ContinuityGap:
+            runtime.prepare_reconnect(
+                runtime.platform.reason
+                if runtime.platform.reason
+                in {
+                    "CLOCK_GAP",
+                    "INDEX_GAP",
+                    "INDEX_BASELINE_STALE",
+                    "INDEX_BASELINE_GAP",
+                }
+                else "CLOCK_OR_INDEX_GAP"
+            )
+        except (PublicRequestError, SourceDataError, TimeoutError):
+            runtime.prepare_reconnect("TRANSIENT_PUBLIC_REQUEST_FAILURE")
         except (
             ConnectionError,
-            ContinuityGap,
             OSError,
-            PublicProtocolError,
-            SourceDataError,
-            TimeoutError,
+            PublicSessionError,
             WebSocketException,
         ) as exc:
-            runtime.prepare_reconnect(f"SESSION_RECONNECT:{type(exc).__name__}")
-            if not event.is_set():
-                await asyncio.sleep(reconnect_delay_seconds(reconnect_attempt))
-                reconnect_attempt += 1
+            runtime.prepare_reconnect(
+                runtime.platform.reason
+                if runtime.platform.reason
+                in {
+                    "PLATFORM_MAINTENANCE",
+                    "PUBLIC_METHODS_DENIED",
+                    "RELEVANT_PLATFORM_LOCK",
+                }
+                else f"SESSION_RECONNECT:{type(exc).__name__}"
+            )
+        except PublicProtocolError:
+            runtime.prepare_reconnect("FATAL_PROTOCOL_INCOMPATIBILITY")
+            raise
+        if not event.is_set():
+            if runtime._session_established:
+                reconnect_attempt = 0
+            await asyncio.sleep(reconnect_delay_seconds(reconnect_attempt))
+            reconnect_attempt += 1
     return await runtime._clean_stop(None)
 
 

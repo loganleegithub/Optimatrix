@@ -2,6 +2,10 @@
 
 **Status:** ACTIVE
 
+**Implemented runtime capability:** `NONE`
+
+**Production Short Vol Radar:** `NOT_ESTABLISHED`
+
 **Task kind:** `IMPLEMENTATION`
 
 **Runtime implementation:** REQUIRED
@@ -84,9 +88,11 @@ hit-only recomputation, or provenance verification.
 - rates with a zero or unknown denominator are `null`, never `0`.
 
 Negative claims require complete scope: `NO_ANOMALY` requires every potentially eligible option
-to be usable or known liquidity-ineligible; `NO_ACTIVE_COMBO` requires the complete official combo
-catalog; and `NO_TARGET_SIZE_CREDIT_QUOTE` requires every matching active combo book to be usable
-or known insufficient. One complete active short leg can prove `ANOMALY_ACTIVE` with degraded
+to be usable or known liquidity-ineligible; `NO_ACTIVE_COMBO` requires complete option/combo
+catalog and lifecycle coverage, complete relevant option-leg metadata, and a known protective-leg
+universe; and `NO_TARGET_SIZE_CREDIT_QUOTE` requires every matching active combo book to be usable
+or known insufficient. Missing protective-leg metadata or an incomplete option catalog is
+`UNKNOWN`. One complete active short leg can prove `ANOMALY_ACTIVE` with degraded
 coverage, and one known atomic credit quote can prove positive availability. Neither positive
 witness claims a complete triggered set, best quote, or ranked full market.
 
@@ -288,10 +294,12 @@ or a connection close makes all dependent state `UNKNOWN` and ends affected epis
 Heartbeat traffic proves connection liveness only: it neither refreshes an economic quote nor
 creates a detector observation.
 
-The socket reader stamps each notification with local monotonic receive time before enqueue. Its
-bounded queue may not block RPC-response dispatch: overflow is a session gap. More than 1000 ms of
-receive-to-processing lag is likewise a session gap. The run summary records the fixed limit and
-maximum observed lag.
+The socket reader assigns every notification and RPC response one `ingress_seq` and local
+`received_monotonic_ms` immediately on receipt. Economic facts enter one reducer in ingress order.
+Heartbeat `test_request` control may answer `public/test` while catalog RPC work is blocked, but
+does not reorder economic facts. Bootstrap and steady state share the same 1000 ms receive-lag
+gate and maximum-lag diagnostic. The bounded queue may not block RPC-response dispatch: overflow
+is a session gap.
 
 Raw external payloads tolerate additional unknown fields. Missing, invalid, or changed fields
 that this task actually consumes fail closed at their smallest consumer. The implementation may
@@ -341,6 +349,12 @@ uncertainty interval lies within the band and outside the settlement window. Cro
 settlement, freshness, or lifecycle boundary may trigger reevaluation, but an arbitrary timer may
 not reuse an unproved or gapped quote to create an episode.
 
+Detector, aggregate, coverage, and membership share one pure time classification:
+`IN_BAND | ADJACENT_BAND_BOUNDARY | POLICY_GAP | FINAL_WINDOW | MONITOR_BOUNDARY |
+OUT_OF_MONITOR_SCOPE`. Adjacent/monitor boundaries are unresolved; known Policy gaps/final
+windows are known absent scope. Membership changes split coverage at one causal/monotonic
+boundary before subscription awaits.
+
 For every `public/get_time` request, local monotonic send/receive instants bound time at receipt as
 `base = [returned_server_ms, returned_server_ms + 1 ms + round_trip_ms]`. With monotonic elapsed
 `e_ms`, expand this by the fixed 1000 ppm operational drift budget:
@@ -362,6 +376,10 @@ interval, at least one assigned tick, trusted-time lower bound at/after minute e
 timestamp watermark at/after minute end. The close is the last causal tick in that minute; no
 near-boundary tick is required. A timestamp regression or late tick for a sealed minute is a gap:
 never rewrite the close, invalidate rolling returns, and restart warm-up.
+
+The baseline API also proves tail currentness against the minute immediately before the trusted
+clock's current minute. Sixty returns require 61 consecutive covered closes. An old consecutive
+window is `INDEX_BASELINE_STALE/UNKNOWN` and cannot become known again until fresh warm-up.
 
 ## Configured trailing-variance baseline
 
@@ -457,8 +475,13 @@ While non-active, any known observation below activation resets the activation c
 active/clearing, any known observation above clear resets the clear count and restores `ACTIVE`.
 A qualifying observation inside the minimum separation neither increments nor resets, but any
 intervening known non-qualifying observation resets immediately. Equality is inclusive.
-Repeated messages, heartbeats, metadata-only changes, and unchanged reduced economic state do not
-create observations or episodes.
+Each causal boundary may create one short-lived, non-durable `ScopeSnapshot` and returns current
+calculation separately from `observation_eligibility/reason`. Clock revision participates in
+current classification but is not a countable persistence observation. Observation identity
+contains only target-quantity bid levels, forward, current baseline, and discrete
+TTE/currentness classification. Ask-only changes, depth beyond the target, repeated messages,
+heartbeats, metadata-only changes, and unchanged reduced state do not activate, clear, or reset
+persistence.
 
 While trusted time straddles a boundary whose adjacent band has a rule for this instrument's
 option type, detector output is temporarily `UNKNOWN/TIME_BAND_BOUNDARY`; an active episode becomes
@@ -481,6 +504,12 @@ coverage; with none active and some unresolved, aggregate state is `UNKNOWN`.
 After complete resync, fresh activation persistence creates a new episode identity. It may
 reference the pre-gap episode as an uncertain predecessor, but never claims continuity across the
 gap.
+
+Session, clock/index, one-option channel, option catalog, combo Layer 2,
+transient/rate-limit request, and fatal consumed-protocol incompatibility are separate failure
+domains. Combo subscribe/unsubscribe/resnapshot failure makes only Layer 2 `UNKNOWN`. One root
+failure records one canonical `UNKNOWN` reason. Reconnect retains runtime identity, ends the old
+episode `UNKNOWN_AT_GAP`, and requires fresh activation for a new episode identity.
 
 Known target-depth/minimum-amount, OTM, or Delta ineligibility produces `NO_ANOMALY` and ends an
 active episode immediately as `KNOWN_INELIGIBLE` with detail. Expiry, deactivation, or catalog
@@ -558,8 +587,7 @@ atomic substitute.
 Only these small runtime evidence object kinds are permitted:
 
 1. `SHORT_VOL_ANOMALY_EVENT`, once per activated episode;
-2. `PUBLIC_ATOMIC_QUOTE_EVENT`, once per unique official combo first observed available inside an
-   anomaly episode;
+2. `PUBLIC_ATOMIC_QUOTE_EVENT`, once per `(episode_id, combo_id)` first observed available;
 3. one `RADAR_RUN_SUMMARY` when the process stops.
 
 An anomaly event records only:
@@ -578,6 +606,11 @@ An atomic event directly references its short-leg anomaly episode and records on
 identity, signed legs, that episode's current active detector causal binding, required combo order
 direction, target BTC quantity, consumed combo bid or ask levels, positive normalized gross entry
 credit, source times, and public-quote non-claims.
+
+Quote changes and `AVAILABLE -> unavailable -> AVAILABLE` within that pair do not rewrite the
+event; a second combo or new episode may write independently. The emitted pair is registered only
+after a successful exclusive write. Evidence conflicts remain hard errors and are never
+overwritten or caught-and-continued.
 
 The run summary records coverage time, usable detector evaluations, anomaly activations, episode
 ends by

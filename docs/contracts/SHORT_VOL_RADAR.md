@@ -86,7 +86,9 @@ While Layer 1 is active, the state is exactly:
 No Layer 2 result changes Layer 1. An anomaly with no combo is still a known anomaly. An empty or
 insufficient continuous combo book is known unavailability, not `UNKNOWN`.
 
-`NO_ACTIVE_COMBO` requires complete official combo-catalog coverage.
+`NO_ACTIVE_COMBO` requires complete official combo-catalog and lifecycle coverage, complete
+relevant option-leg metadata, and a known protective-leg universe. Missing protective-leg
+metadata or an incomplete option catalog is `UNKNOWN`, never `NO_ACTIVE_COMBO`.
 `NO_TARGET_SIZE_CREDIT_QUOTE` additionally requires every matching active combo book to be usable
 or known insufficient. One `PUBLIC_ATOMIC_QUOTE_AVAILABLE` witness is enough for a positive
 availability claim, but it does not claim the best quote or complete-market selection.
@@ -177,16 +179,25 @@ requires fresh subscriptions, snapshots, catalog reconciliation, and baseline co
 Heartbeat traffic proves only transport liveness: it never refreshes a book's economic timestamp,
 creates a detector observation, or bridges a market-data sequence gap.
 
-The socket reader records local monotonic receive time before enqueue. Its queue is bounded and
-must never block the sole RPC-response reader: overflow is a session gap. Processing more than
-1000 ms after receive is also a session gap, not a late market observation. The run summary freezes
-that operational limit and records the maximum observed notification queue lag.
+The socket reader assigns every inbound frame—notification or RPC response—one increasing
+`ingress_seq` and local `received_monotonic_ms` immediately after decode. Economic facts enter one
+ordered reducer by that sequence. Heartbeat `test_request` control may call `public/test` without
+waiting for catalog work, but neither the control message nor its response may apply an economic
+fact out of order. Bootstrap and steady state use the same receive-lag gate and update the same
+maximum queue-lag diagnostic. The queue is bounded and must never block the sole RPC-response
+reader: overflow is a session gap. Processing more than 1000 ms after receive is also a session
+gap, not a late market observation.
 
 ## Time and settlement boundary
 
 The Monitor advances last accepted Deribit server time with local monotonic elapsed time and
 carries an explicit uncertainty interval. A TTE band is usable only when that entire interval
-falls inside the same band.
+falls inside the same band. One pure classification is shared by detector, aggregate, coverage,
+and membership: `IN_BAND | ADJACENT_BAND_BOUNDARY | POLICY_GAP | FINAL_WINDOW |
+MONITOR_BOUNDARY | OUT_OF_MONITOR_SCOPE`. `ADJACENT_BAND_BOUNDARY` and `MONITOR_BOUNDARY`
+remain unresolved for coverage; a known Policy gap or final window is known absent scope.
+Membership changes split coverage at one causal/monotonic boundary before any subscribe or
+unsubscribe await.
 
 For each `public/get_time` request, record local monotonic send/receive instants and the returned
 integer server millisecond. At receipt, its 1 ms quantization and request round trip establish
@@ -286,9 +297,9 @@ Load-time validation requires:
 - positive-integer activation/clear counts and finite minimum separation `>= 0`.
 
 Quantity is expressed in BTC underlying units. The adapter validates official contract size,
-minimum trade amount, and the API's declared amount unit before mapping that quantity to an option
-or combo order-book amount. If a response also supplies `quantity`, its relationship to `amount`
-and `contract_size` must be consistent. This BTC-USDC contract requires official
+minimum trade amount, and the API's declared `amount` unit before mapping that quantity to an
+option or combo order-book amount. This closure does not consume a separate `quantity` field and
+does not infer any relationship from it. This BTC-USDC contract requires official
 `contract_size = 1` and option/combo `amount` in BTC; a source-contract change fails closed rather
 than activating a generic multiplier framework. The exact derived order amount must be at least
 `min_trade_amount`. When the optional official `qty_tick_size` field is present, it must be
@@ -363,6 +374,12 @@ within an arbitrary number of milliseconds of the boundary.
 A timestamp regression or a tick assigned to an already sealed minute is an index continuity gap:
 sealed closes are never rewritten, rolling returns are invalidated, and warm-up restarts from new
 continuous coverage.
+
+A baseline window is current only when its closes are internally consecutive and its tail is the
+minute immediately before the trusted clock's current minute. A 60-return maximum therefore needs
+61 consecutive covered closes. An older internally consecutive window is
+`INDEX_BASELINE_STALE/UNKNOWN`; stale or gap invalidates the window and known evaluation cannot
+resume until a fresh complete window is rebuilt.
 
 Missing or gapped minutes make only consumers whose configured window includes them `UNKNOWN`.
 Warm-up requires `largest_configured_lookback + 1` consecutive covered minute closes to form the
@@ -543,8 +560,14 @@ before the minimum separation neither increments nor resets the count, but any i
 non-qualifying observation resets it immediately. Equality uses the inclusive comparisons shown
 above.
 
-Duplicates, heartbeats, metadata-only changes, and unchanged reduced economic state do not create
-observations or episodes.
+At each accepted causal boundary the runtime may build one short-lived, non-durable
+`ScopeSnapshot`. It reports the recomputed current result separately from
+`observation_eligibility/reason`. Trusted-time revision can change TTE/current classification,
+but it is not a countable persistence observation. Observation identity contains only facts the
+formula consumes: target-quantity bid levels, forward, current baseline, and discrete
+TTE/currentness classification. Duplicates, ask-only changes, depth beyond the target,
+heartbeats, metadata-only changes, and unchanged reduced economic state do not activate, clear,
+or reset persistence and do not create observations or episodes.
 
 A trusted-time interval that straddles a boundary cannot select either parameter set. If the next
 adjacent band also has an `option_rules` entry for this instrument's option type, detector output
@@ -573,6 +596,14 @@ After complete resync, the instrument must pass fresh activation persistence and
 episode identity. It may reference the pre-gap episode as an uncertain predecessor, but neither
 object claims continuity across the gap. Unaffected instruments retain their own states, so one
 can keep the aggregate Radar active.
+
+Failure domains are explicit: session; clock/index; one option channel; option catalog; combo
+Layer 2; transient/rate-limit request; and fatal protocol incompatibility. Session gaps invalidate
+the session; clock/index gaps rebuild their dependent baseline; one-option failures stay local;
+option-catalog incompleteness blocks complete Layer 1 negatives; combo request/subscription/
+resnapshot failures make only Layer 2 `UNKNOWN`; fatal consumed-shape incompatibility stops.
+One root failure records one canonical `UNKNOWN` reason. Reconnect preserves runtime identity,
+ends pre-gap episodes as `UNKNOWN_AT_GAP`, and fresh activation receives a new episode identity.
 
 Other exits are explicit and immediate:
 
@@ -664,8 +695,12 @@ Written once per activated episode. It contains only:
 
 ### `PUBLIC_ATOMIC_QUOTE_EVENT`
 
-Written once per official combo first observed available inside one short-leg anomaly episode. It
-references that episode directly and contains only:
+Written once per `(episode_id, combo_id)` first observed available inside one short-leg anomaly
+episode. Quote changes or `AVAILABLE -> unavailable -> AVAILABLE` do not rewrite it. Another combo
+in the same episode and the same combo in a new episode may each write once. The emitted identity
+is registered only after the exclusive write succeeds; a conflicting existing file remains a
+hard error and is never overwritten or caught-and-continued. It references that episode directly
+and contains only:
 
 - official combo identity and signed legs;
 - the short-leg episode's current active detector causal binding;

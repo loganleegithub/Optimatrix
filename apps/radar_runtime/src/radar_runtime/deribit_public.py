@@ -33,6 +33,14 @@ class PublicProtocolError(RuntimeError):
     """The production-public JSON-RPC session violated the consumed contract."""
 
 
+class PublicSessionError(PublicProtocolError):
+    """The transport session is unusable and requires a full reconnect."""
+
+
+class PublicRequestError(PublicProtocolError):
+    """One public RPC or channel request failed without proving a session gap."""
+
+
 class PublicProtocolIncompatibility(PublicProtocolError):
     """The consumed official protocol shape is incompatible with this runtime."""
 
@@ -40,14 +48,23 @@ class PublicProtocolIncompatibility(PublicProtocolError):
 @dataclass(frozen=True)
 class _NotificationEnvelope:
     message: dict[str, object]
+    ingress_seq: int
     received_monotonic_ms: int
     channel: str | None
     subscription_generation: int | None
 
 
+@dataclass(frozen=True)
+class ReceivedRpcResult:
+    value: object
+    ingress_seq: int
+    received_monotonic_ms: int
+
+
 class ReceivedNotification(dict[str, object]):
     def __init__(self, envelope: _NotificationEnvelope) -> None:
         super().__init__(envelope.message)
+        self.ingress_seq = envelope.ingress_seq
         self.received_monotonic_ms = envelope.received_monotonic_ms
 
 
@@ -59,10 +76,11 @@ class DeribitPublicClient:
         self._connection: ClientConnection | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._next_request_id = 1
-        self._pending: dict[int, asyncio.Future[object]] = {}
+        self._pending: dict[int, asyncio.Future[ReceivedRpcResult]] = {}
         self._notifications: asyncio.Queue[_NotificationEnvelope] = asyncio.Queue(
             maxsize=MAX_PENDING_NOTIFICATIONS
         )
+        self._next_ingress_seq = 1
         self._next_subscription_generation = 1
         self._active_subscription_generations: dict[str, int] = {}
         self._reader_error: PublicProtocolError | None = None
@@ -88,7 +106,7 @@ class DeribitPublicClient:
                 await self._reader_task
         for future in self._pending.values():
             if not future.done():
-                future.set_exception(PublicProtocolError("public connection closed"))
+                future.set_exception(PublicSessionError("public connection closed"))
 
     async def request(
         self,
@@ -102,11 +120,11 @@ class DeribitPublicClient:
         if method == "public/test" and not responding_to_test_request:
             raise PublicProtocolError("public/test is allowed only as a heartbeat response")
         if self._connection is None:
-            raise PublicProtocolError("public connection is not open")
+            raise PublicSessionError("public connection is not open")
         request_id = self._next_request_id
         self._next_request_id += 1
         loop = asyncio.get_running_loop()
-        future: asyncio.Future[object] = loop.create_future()
+        future: asyncio.Future[ReceivedRpcResult] = loop.create_future()
         self._pending[request_id] = future
         message = {
             "jsonrpc": "2.0",
@@ -130,7 +148,7 @@ class DeribitPublicClient:
                 self._next_subscription_generation += 1
             try:
                 result = await self.request("public/subscribe", {"channels": list(batch)})
-                validate_subscription_ack(batch, result)
+                validate_subscription_ack(batch, _rpc_value(result))
             except Exception:
                 for channel, generation in previous.items():
                     if generation is None:
@@ -142,7 +160,7 @@ class DeribitPublicClient:
     async def unsubscribe(self, channels: Sequence[str]) -> None:
         for batch in subscription_batches(channels):
             result = await self.request("public/unsubscribe", {"channels": list(batch)})
-            validate_subscription_ack(batch, result)
+            validate_subscription_ack(batch, _rpc_value(result))
             for channel in batch:
                 self._active_subscription_generations.pop(channel, None)
 
@@ -183,6 +201,9 @@ class DeribitPublicClient:
         try:
             async for raw_message in self._connection:
                 self.last_inbound_monotonic = time.monotonic()
+                received_monotonic_ms = time.monotonic_ns() // 1_000_000
+                ingress_seq = self._next_ingress_seq
+                self._next_ingress_seq += 1
                 message = _decode_message(raw_message)
                 request_id = message.get("id")
                 if isinstance(request_id, int):
@@ -190,14 +211,20 @@ class DeribitPublicClient:
                         future = self._pending[request_id]
                         if "error" in message:
                             future.set_exception(
-                                PublicProtocolError(f"Deribit JSON-RPC error: {message['error']!r}")
+                                PublicRequestError(f"Deribit JSON-RPC error: {message['error']!r}")
                             )
                         elif "result" not in message:
                             future.set_exception(
-                                PublicProtocolError("JSON-RPC response lacks result")
+                                PublicProtocolIncompatibility("JSON-RPC response lacks result")
                             )
                         else:
-                            future.set_result(message["result"])
+                            future.set_result(
+                                ReceivedRpcResult(
+                                    value=message["result"],
+                                    ingress_seq=ingress_seq,
+                                    received_monotonic_ms=received_monotonic_ms,
+                                )
+                            )
                     continue
                 else:
                     channel: str | None = None
@@ -211,21 +238,22 @@ class DeribitPublicClient:
                         self._notifications.put_nowait(
                             _NotificationEnvelope(
                                 message=message,
-                                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                                ingress_seq=ingress_seq,
+                                received_monotonic_ms=received_monotonic_ms,
                                 channel=channel,
                                 subscription_generation=generation,
                             )
                         )
                     except asyncio.QueueFull as exc:
-                        raise PublicProtocolError("notification queue overflow") from exc
-            raise PublicProtocolError("production-public connection closed")
+                        raise PublicSessionError("notification queue overflow") from exc
+            raise PublicSessionError("production-public connection closed")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             error = (
                 exc
                 if isinstance(exc, PublicProtocolError)
-                else PublicProtocolError(f"production-public reader failed: {exc}")
+                else PublicSessionError(f"production-public reader failed: {exc}")
             )
             self._reader_error = error
             for future in self._pending.values():
@@ -239,18 +267,24 @@ class DeribitPublicClient:
                             "method": "connection_error",
                             "params": {"error": str(exc)},
                         },
+                        ingress_seq=self._next_ingress_seq,
                         received_monotonic_ms=time.monotonic_ns() // 1_000_000,
                         channel=None,
                         subscription_generation=None,
                     )
                 )
+            self._next_ingress_seq += 1
 
 
 def _decode_message(raw_message: str | bytes) -> dict[str, object]:
     try:
         decoded: Any = json.loads(raw_message, parse_float=Decimal)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise PublicProtocolError("invalid JSON-RPC message") from exc
+        raise PublicProtocolIncompatibility("invalid JSON-RPC message") from exc
     if not isinstance(decoded, dict) or decoded.get("jsonrpc") != "2.0":
-        raise PublicProtocolError("message is not a JSON-RPC 2.0 object")
+        raise PublicProtocolIncompatibility("message is not a JSON-RPC 2.0 object")
     return decoded
+
+
+def _rpc_value(result: object) -> object:
+    return result.value if isinstance(result, ReceivedRpcResult) else result

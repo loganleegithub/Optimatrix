@@ -4,11 +4,18 @@ import math
 from decimal import Decimal
 
 import pytest
+import short_vol_radar.radar as radar_module
 from conftest import PolicyFactory
 from market_monitor import ContinuousOrderBook, TimeInterval
 from options_domain import AmountMetadata, OptionInstrument, OptionType
 from short_vol_radar.black import black_price
-from short_vol_radar.detector import DetectorState, EpisodeEndReason, EpisodeTracker, TrackerState
+from short_vol_radar.detector import (
+    DetectorState,
+    EpisodeEndReason,
+    EpisodeTracker,
+    TrackerState,
+    TrackerTransition,
+)
 from short_vol_radar.policy import RadarPolicy, load_policy_bytes
 from short_vol_radar.radar import TickerState, evaluate_instrument, parse_ticker
 
@@ -103,6 +110,165 @@ def test_full_baseline_iv_delta_richness_path_can_activate(
     assert result.calculation is not None
     assert result.calculation.richness.lower > Decimal("1.2")
     assert result.calculation.baseline.annualized_volatility == Decimal("0.1")
+
+
+def test_clock_only_recalculation_is_not_a_countable_persistence_observation(
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(activation_count=2, clear_count=2, separation_ms=0)
+    policy = load_policy_bytes(exact, digest)
+    expiry = 60 * 60 * 1_000
+    strike = Decimal("100.01")
+    total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
+    price = Decimal(str(black_price(100, float(strike), total_volatility, OptionType.CALL)))
+    instrument = OptionInstrument(
+        "SHORT",
+        expiry,
+        strike,
+        OptionType.CALL,
+        AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+    )
+    tracker = EpisodeTracker(
+        runtime_identity="run",
+        policy_identity=policy.identity,
+        instrument_name=instrument.instrument_name,
+    )
+    book = make_book("SHORT", price)
+    ticker = TickerState(Decimal(100), "index_price", 1)
+    closes = (Decimal(100),) * 6
+
+    first = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=1,
+        option_book=book,
+        ticker=ticker,
+        causal_closes=closes,
+        observation_eligible=True,
+        observation_reason=None,
+    )
+    clock_only = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(1_000, 1_000),
+        causal_seq=2,
+        option_book=book,
+        ticker=ticker,
+        causal_closes=closes,
+        observation_eligible=False,
+        observation_reason="CLOCK_ONLY",
+    )
+
+    assert first.known_evaluation
+    assert clock_only.known_evaluation
+    assert not clock_only.observation_eligible
+    assert clock_only.observation_reason == "CLOCK_ONLY"
+    assert tracker.detector_state is DetectorState.NO_ANOMALY
+    assert tracker.episode_id is None
+
+
+def test_clock_only_current_ineligibility_does_not_clear_active_persistence(
+    policy_factory: PolicyFactory,
+) -> None:
+    policy, instrument, tracker, price = make_engine_inputs(policy_factory)
+    activated = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=1,
+        option_book=make_book("SHORT", price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100),) * 6,
+    )
+    episode_id = tracker.episode_id
+    assert activated.detector_state is DetectorState.ANOMALY_ACTIVE
+
+    current = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(1_000, 1_000),
+        causal_seq=2,
+        option_book=make_book("SHORT", None),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100),) * 6,
+        observation_eligible=False,
+        observation_reason="CLOCK_ONLY",
+    )
+
+    assert current.reason == "INSUFFICIENT_TARGET_BID_DEPTH"
+    assert not current.observation_eligible
+    assert current.observation_reason == "CLOCK_ONLY"
+    assert tracker.detector_state is DetectorState.ANOMALY_ACTIVE
+    assert tracker.episode_id == episode_id
+    assert current.transition == TrackerTransition()
+
+
+def test_observation_identity_ignores_ask_and_depth_beyond_target(
+    policy_factory: PolicyFactory,
+) -> None:
+    policy, instrument, _tracker, price = make_engine_inputs(policy_factory)
+    book = ContinuousOrderBook(instrument.instrument_name)
+    book.apply(
+        {
+            "type": "snapshot",
+            "timestamp": 1,
+            "instrument_name": instrument.instrument_name,
+            "change_id": 1,
+            "bids": [
+                ["new", price, "0.1"],
+                ["new", price / 2, "1.0"],
+            ],
+            "asks": [["new", price * 2, "1.0"]],
+        },
+        1,
+    )
+    ticker = TickerState(Decimal(100), "index_price", 1)
+    baseline_identity = (0, (Decimal(100),) * 6)
+    first = radar_module.detector_observation_identity(
+        policy=policy,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        option_book=book,
+        ticker=ticker,
+        baseline_identity=baseline_identity,
+    )
+
+    book.apply(
+        {
+            "type": "change",
+            "timestamp": 2,
+            "instrument_name": instrument.instrument_name,
+            "change_id": 2,
+            "prev_change_id": 1,
+            "bids": [["change", price / 2, "2.0"]],
+            "asks": [["change", price * 2, "2.0"]],
+        },
+        2,
+    )
+    after_unconsumed_change = radar_module.detector_observation_identity(
+        policy=policy,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        option_book=book,
+        ticker=ticker,
+        baseline_identity=baseline_identity,
+    )
+    after_forward_basis_label_change = radar_module.detector_observation_identity(
+        policy=policy,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        option_book=book,
+        ticker=TickerState(Decimal(100), "BTC_USDC-27SEP24", 2),
+        baseline_identity=baseline_identity,
+    )
+
+    assert first == after_unconsumed_change
+    assert first == after_forward_basis_label_change
 
 
 def test_known_liquidity_and_otm_failures_short_circuit_missing_inputs(

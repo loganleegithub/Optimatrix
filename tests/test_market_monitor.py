@@ -175,6 +175,52 @@ def test_index_consecutive_prices_detect_missing_minute() -> None:
     assert reducer.consecutive_prices(2) == (Decimal(101), Decimal(102), Decimal(103))
 
 
+def test_index_window_requires_tail_alignment_with_latest_complete_minute() -> None:
+    minute_ms = 60_000
+    reducer = IndexMinuteReducer(60)
+    reducer.start_continuous_coverage(0)
+    for sequence in range(1, 63):
+        timestamp = 1 if sequence == 1 else (sequence - 1) * minute_ms
+        reducer.accept_tick(
+            source_timestamp_ms=timestamp,
+            price=100 + sequence,
+            causal_seq=sequence,
+        )
+        reducer.seal_ready(timestamp)
+
+    current = reducer.current_window(60, trusted_time_lower_ms=61 * minute_ms)
+    assert current.reason is None
+    assert current.prices is not None
+    assert len(current.prices) == 61
+
+    intra_minute = reducer.current_window(
+        60,
+        trusted_time_lower_ms=61 * minute_ms + 30_000,
+    )
+    assert intra_minute.reason is None
+
+    stale = reducer.current_window(60, trusted_time_lower_ms=62 * minute_ms)
+    assert stale.prices is None
+    assert stale.reason == "INDEX_BASELINE_STALE"
+
+
+def test_index_window_classifies_an_interior_missing_minute_as_gap() -> None:
+    reducer = IndexMinuteReducer(2)
+    reducer.start_continuous_coverage(0)
+    for sequence, timestamp in enumerate((1, 60_000, 180_000, 240_000), start=1):
+        reducer.accept_tick(
+            source_timestamp_ms=timestamp,
+            price=100 + sequence,
+            causal_seq=sequence,
+        )
+        reducer.seal_ready(timestamp)
+
+    window = reducer.current_window(2, trusted_time_lower_ms=240_000)
+
+    assert window.prices is None
+    assert window.reason == "INDEX_BASELINE_GAP"
+
+
 def test_exact_channels_bounded_subscriptions_and_acknowledgements() -> None:
     assert INDEX_CHANNEL == "deribit_price_index.btc_usdc"
     assert ticker_channel("X") == "ticker.X.100ms"

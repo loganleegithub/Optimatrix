@@ -101,6 +101,7 @@ def classify_atomic_quotes(
     *,
     anomaly_active: bool,
     combo_catalog_complete: bool,
+    option_catalog_complete: bool,
     short_leg: OptionInstrument,
     options_by_name: dict[str, OptionInstrument],
     combos: tuple[ComboInstrument, ...],
@@ -122,7 +123,19 @@ def classify_atomic_quotes(
         )
         is not None
     )
-    if not matches and combo_catalog_complete:
+    if not matches:
+        missing_reasons: list[str] = []
+        if not option_catalog_complete:
+            missing_reasons.append("OPTION_CATALOG_INCOMPLETE")
+        if not _has_known_protective_leg(short_leg, options_by_name):
+            missing_reasons.append("PROTECTIVE_LEG_UNRESOLVED")
+        if not combo_catalog_complete:
+            missing_reasons.append("COMBO_CATALOG_INCOMPLETE")
+        if missing_reasons:
+            return AtomicResult(
+                PublicAtomicQuoteState.UNKNOWN,
+                unknown_reasons=tuple(sorted(set(missing_reasons))),
+            )
         return AtomicResult(PublicAtomicQuoteState.NO_ACTIVE_COMBO)
     quotes: list[AtomicQuote] = []
     unknown: list[str] = []
@@ -160,9 +173,30 @@ def classify_atomic_quotes(
         )
     if not combo_catalog_complete:
         unknown.append("COMBO_CATALOG_INCOMPLETE")
+    if not option_catalog_complete:
+        unknown.append("OPTION_CATALOG_INCOMPLETE")
     if unknown:
         return AtomicResult(
             PublicAtomicQuoteState.UNKNOWN,
-            unknown_reasons=tuple(sorted(unknown)),
+            unknown_reasons=tuple(sorted(set(unknown))),
         )
     return AtomicResult(PublicAtomicQuoteState.NO_TARGET_SIZE_CREDIT_QUOTE)
+
+
+def _has_known_protective_leg(
+    short_leg: OptionInstrument,
+    options_by_name: dict[str, OptionInstrument],
+) -> bool:
+    for candidate in options_by_name.values():
+        if (
+            candidate.instrument_name == short_leg.instrument_name
+            or candidate.expiration_timestamp_ms != short_leg.expiration_timestamp_ms
+            or candidate.option_type is not short_leg.option_type
+            or candidate.amount is None
+        ):
+            continue
+        if short_leg.option_type is OptionType.CALL and candidate.strike > short_leg.strike:
+            return True
+        if short_leg.option_type is OptionType.PUT and candidate.strike < short_leg.strike:
+            return True
+    return False

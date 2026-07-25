@@ -16,6 +16,12 @@ class MinuteClose:
     causal_seq: int
 
 
+@dataclass(frozen=True)
+class IndexWindow:
+    prices: tuple[Decimal, ...] | None
+    reason: str | None
+
+
 class IndexMinuteReducer:
     def __init__(self, maximum_return_count: int) -> None:
         if maximum_return_count <= 0:
@@ -108,3 +114,31 @@ class IndexMinuteReducer:
             if later.minute_start_ms - earlier.minute_start_ms != MINUTE_MS:
                 return None
         return tuple(close.price for close in closes)
+
+    def current_window(
+        self,
+        return_count: int,
+        *,
+        trusted_time_lower_ms: int,
+    ) -> IndexWindow:
+        if return_count <= 0:
+            raise ValueError("return_count must be positive")
+        required_closes = return_count + 1
+        if len(self._sealed) < required_closes:
+            return IndexWindow(None, "INDEX_BASELINE_WARMUP")
+        closes = self._sealed[-required_closes:]
+        if any(
+            later.minute_start_ms - earlier.minute_start_ms != MINUTE_MS
+            for earlier, later in pairwise(closes)
+        ):
+            return IndexWindow(None, "INDEX_BASELINE_GAP")
+        prices = tuple(close.price for close in closes)
+        if trusted_time_lower_ms <= 0:
+            return IndexWindow(None, "INDEX_BASELINE_GAP")
+        latest_complete_minute_start_ms = (trusted_time_lower_ms // MINUTE_MS - 1) * MINUTE_MS
+        latest_sealed_minute_start_ms = self._sealed[-1].minute_start_ms
+        if latest_sealed_minute_start_ms < latest_complete_minute_start_ms:
+            return IndexWindow(None, "INDEX_BASELINE_STALE")
+        if latest_sealed_minute_start_ms > latest_complete_minute_start_ms:
+            return IndexWindow(None, "INDEX_BASELINE_GAP")
+        return IndexWindow(prices, None)

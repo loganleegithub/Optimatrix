@@ -262,6 +262,7 @@ def test_official_vertical_direction_and_signed_credit(
     result = classify_atomic_quotes(
         anomaly_active=True,
         combo_catalog_complete=True,
+        option_catalog_complete=True,
         short_leg=short,
         options_by_name={"SHORT": short, "LONG": long},
         combos=(combo,),
@@ -274,6 +275,7 @@ def test_official_vertical_direction_and_signed_credit(
     incomplete_positive = classify_atomic_quotes(
         anomaly_active=True,
         combo_catalog_complete=False,
+        option_catalog_complete=True,
         short_leg=short,
         options_by_name={"SHORT": short, "LONG": long},
         combos=(combo,),
@@ -285,6 +287,7 @@ def test_official_vertical_direction_and_signed_credit(
     debit = classify_atomic_quotes(
         anomaly_active=True,
         combo_catalog_complete=True,
+        option_catalog_complete=True,
         short_leg=short,
         options_by_name={"SHORT": short, "LONG": long},
         combos=(combo,),
@@ -301,6 +304,7 @@ def test_combo_sell_direction_uses_bids_and_no_absolute_value() -> None:
     result = classify_atomic_quotes(
         anomaly_active=True,
         combo_catalog_complete=True,
+        option_catalog_complete=True,
         short_leg=short,
         options_by_name={"SHORT": short, "LONG": long},
         combos=(combo,),
@@ -320,6 +324,7 @@ def test_atomic_negative_claims_require_complete_relevant_scope() -> None:
         classify_atomic_quotes(
             anomaly_active=False,
             combo_catalog_complete=False,
+            option_catalog_complete=False,
             short_leg=short,
             options_by_name=options,
             combos=(),
@@ -332,6 +337,7 @@ def test_atomic_negative_claims_require_complete_relevant_scope() -> None:
         classify_atomic_quotes(
             anomaly_active=True,
             combo_catalog_complete=False,
+            option_catalog_complete=True,
             short_leg=short,
             options_by_name=options,
             combos=(),
@@ -340,6 +346,31 @@ def test_atomic_negative_claims_require_complete_relevant_scope() -> None:
         ).state
         is PublicAtomicQuoteState.UNKNOWN
     )
+    incomplete_options = classify_atomic_quotes(
+        anomaly_active=True,
+        combo_catalog_complete=True,
+        option_catalog_complete=False,
+        short_leg=short,
+        options_by_name=options,
+        combos=(),
+        combo_books={},
+        target_btc=Decimal("0.1"),
+    )
+    assert incomplete_options.state is PublicAtomicQuoteState.UNKNOWN
+    assert incomplete_options.unknown_reasons == ("OPTION_CATALOG_INCOMPLETE",)
+
+    missing_protective_leg = classify_atomic_quotes(
+        anomaly_active=True,
+        combo_catalog_complete=True,
+        option_catalog_complete=True,
+        short_leg=short,
+        options_by_name={"SHORT": short},
+        combos=(),
+        combo_books={},
+        target_btc=Decimal("0.1"),
+    )
+    assert missing_protective_leg.state is PublicAtomicQuoteState.UNKNOWN
+    assert missing_protective_leg.unknown_reasons == ("PROTECTIVE_LEG_UNRESOLVED",)
 
     unknown_amount_combo = ComboInstrument(
         combo.instrument_name,
@@ -350,6 +381,7 @@ def test_atomic_negative_claims_require_complete_relevant_scope() -> None:
     insufficient_known = classify_atomic_quotes(
         anomaly_active=True,
         combo_catalog_complete=True,
+        option_catalog_complete=True,
         short_leg=short,
         options_by_name=options,
         combos=(unknown_amount_combo,),
@@ -360,6 +392,7 @@ def test_atomic_negative_claims_require_complete_relevant_scope() -> None:
     enough_depth_unknown = classify_atomic_quotes(
         anomaly_active=True,
         combo_catalog_complete=True,
+        option_catalog_complete=True,
         short_leg=short,
         options_by_name=options,
         combos=(unknown_amount_combo,),
@@ -371,6 +404,7 @@ def test_atomic_negative_claims_require_complete_relevant_scope() -> None:
         classify_atomic_quotes(
             anomaly_active=True,
             combo_catalog_complete=True,
+            option_catalog_complete=True,
             short_leg=short,
             options_by_name=options,
             combos=(),
@@ -383,6 +417,7 @@ def test_atomic_negative_claims_require_complete_relevant_scope() -> None:
         classify_atomic_quotes(
             anomaly_active=True,
             combo_catalog_complete=True,
+            option_catalog_complete=True,
             short_leg=short,
             options_by_name=options,
             combos=(combo,),
@@ -421,6 +456,7 @@ def test_wrong_ratio_expiry_type_and_grid_do_not_create_atomic_quote() -> None:
     result = classify_atomic_quotes(
         anomaly_active=True,
         combo_catalog_complete=True,
+        option_catalog_complete=True,
         short_leg=short,
         options_by_name={"SHORT": short, "LONG": long},
         combos=(off_grid,),
@@ -439,11 +475,12 @@ def test_combo_state_never_changes_detector_truth(
     result = classify_atomic_quotes(
         anomaly_active=True,
         combo_catalog_complete=True,
+        option_catalog_complete=True,
         short_leg=short,
         options_by_name={"SHORT": short},
         combos=(),
         combo_books={},
         target_btc=Decimal("0.1"),
     )
-    assert result.state is PublicAtomicQuoteState.NO_ACTIVE_COMBO
+    assert result.state is PublicAtomicQuoteState.UNKNOWN
     assert tracker.detector_state is before is DetectorState.ANOMALY_ACTIVE
