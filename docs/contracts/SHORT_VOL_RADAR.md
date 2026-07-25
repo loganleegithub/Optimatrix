@@ -833,7 +833,7 @@ Tests must cover:
 - absence of replay, offline recomputation, private, maker, Candidate, Shadow, Position, and
   Outcome paths.
 
-### Production-public smoke
+### REACHABILITY_SMOKE
 
 After separate human authorization, run one exact Policy until either:
 
@@ -882,6 +882,36 @@ serialize as `null`. Evaluation and atomic-state transitions use their current b
 activation, clear, and duration metrics stay attributed to the episode's activation band. Direct
 integration spies and artifact inspection—not new runtime counters—prove zero private API calls,
 zero forbidden downstream artifacts, and zero persisted normal market/no-anomaly rows.
+
+This joint witness proves only real-wiring reachability. It is not a sustained-operation
+acceptance and cannot by itself establish the production Radar.
+
+### OPERATIONAL_SOAK — separately approved before production
+
+Production establishment also requires a human-approved continuous-operation plan naming the
+exact Policy path/digest, a new empty evidence directory, and its stop condition. No duration is
+fixed by this contract or inferred from a smoke witness.
+
+Before that gate can open, a reviewed diagnostic revision must record:
+
+- actual request/response count, latency, errors and rate-limit outcomes by consumed RPC method,
+  and received/processed counts plus observation-duration-derived rates by channel class;
+- subscribed instrument/channel counts, queue high-water, maximum receive-to-process lag, and
+  overflow;
+- heartbeat request/response round trips;
+- reconnect, gap, resync, and clock-refresh success/failure;
+- option/combo catalog refresh and recovery outcomes;
+- core RPC/channel appearance and consumed-field shape validation, retaining only keys, types,
+  and validation result rather than full market payloads;
+- the uninterrupted covered interval after the first joint full-formula complete-aggregate
+  witness.
+
+The human-approved stop condition owns the required post-witness interval. A session/index gap
+restarts warm-up, requires a new witness, and restarts that interval. These diagnostics never
+enter anomaly, episode, aggregate, atomic-availability, or later trading denominators. Adding
+them to the strict run summary requires an explicit schema/writer/task/contract revision and
+direct tests; the present implementation and closed gate do not imply that revision or authorize
+the soak.
 
 ## Evidence boundary
 

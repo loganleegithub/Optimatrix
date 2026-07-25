@@ -69,9 +69,9 @@ direction and positive normalized gross entry credit during that episode, it sep
 known anomaly into `UNKNOWN`.
 
 **Independent verification:** direct deterministic tests of the consumed formulas, state
-transitions, source continuity, result separation, and artifact projection, plus one
-production-public smoke observation. This task does not implement replay, a second calculator,
-hit-only recomputation, or provenance verification.
+transitions, source continuity, result separation, and artifact projection, plus separately
+authorized `REACHABILITY_SMOKE` and human-approved `OPERATIONAL_SOAK` evidence. This task does not
+implement replay, a second calculator, hit-only recomputation, or provenance verification.
 
 **Valid zero/no-hit/UNKNOWN result:**
 
@@ -679,8 +679,10 @@ The smallest proportional harness is:
 
 1. direct pure/state-sequence tests;
 2. integration tests with public source fixtures;
-3. one production-public smoke observation using one exact Policy;
-4. ordinary schema validation of any event actually emitted.
+3. one separately authorized `REACHABILITY_SMOKE` using one exact Policy;
+4. one separately approved `OPERATIONAL_SOAK` after its diagnostic contract and stop condition are
+   accepted by a human;
+5. ordinary schema validation of any event actually emitted.
 
 No replay, second calculation path, independent recomputation, provenance CLI, market archive,
 Outcome collector, or qualification run is required.
@@ -789,7 +791,7 @@ The live command rejects a missing/invalid/mismatched Policy digest, dirty Git w
 non-empty evidence directory. Evidence stays outside the Git worktree. There is no recomputation
 or provenance command.
 
-### Production-public smoke
+### REACHABILITY_SMOKE
 
 The process runs until:
 
@@ -840,6 +842,38 @@ activation, clear, and duration metrics stay attributed to the episode's activat
 Integration spies and artifact inspection—not new production counters—prove zero private API
 calls, zero forbidden downstream artifacts, and zero persisted normal market/no-anomaly rows.
 
+This witness proves only that the full formula and complete aggregate are reachable through the
+real public wiring. It is not a sustained-operation acceptance and cannot by itself establish the
+production Radar.
+
+### OPERATIONAL_SOAK — contract approval required before any production run
+
+Production establishment additionally requires a human-approved continuous-operation acceptance
+plan. The plan must name the exact Policy path/digest, a new empty evidence directory, and its
+stop condition. This task does not infer approval from the smoke witness, does not run the soak,
+and does not hard-code a duration.
+
+The approved diagnostic revision must record, without persisting full market payloads:
+
+- actual request count, response count, latency, error and rate-limit outcomes by consumed RPC
+  method, plus received/processed counts and observation-duration-derived rates by channel class;
+- subscribed instrument/channel counts, queue high-water mark, maximum receive-to-process lag,
+  and every overflow;
+- heartbeat `test_request`/`public/test` round-trip results;
+- reconnect, session/index/channel gap, resync, and clock-refresh success/failure;
+- option/combo catalog refresh and recovery attempts/results;
+- whether every core RPC/channel actually appeared and passed the consumed-field shape check,
+  retaining only keys, types, and validation result;
+- the uninterrupted covered interval after the first
+  `complete_aggregate_with_full_formula_evaluation` witness.
+
+The human-approved stop condition determines the required post-witness stable interval. Any
+session/index gap restarts warm-up, requires a new joint witness, and restarts that interval.
+These operational diagnostics never enter anomaly, episode, aggregate, atomic-availability, or
+future trading denominators. The current strict run-summary schema does not silently absorb these
+new fields; its schema, writer, active task, and this contract must be revised and directly tested
+before the production observation gate can open.
+
 ## Trader-readable acceptance gates
 
 1. **行情真的看得全。** 生产公共连接完成 warm-up，至少一个真实 aggregate 范围在目录与
@@ -887,10 +921,12 @@ or stage advancement.
 
 ## Definition of done
 
-The implementation is ready only when direct tests and `make check` pass. Runtime establishment
-requires every accepted invariant in **Production-public smoke**, including
+The implementation is ready only when direct tests and `make check` pass. `REACHABILITY_SMOKE`
+requires every accepted smoke invariant, including
 `complete_aggregate_with_full_formula_evaluation_count >= 1` and a balanced coverage partition; a
 covered zero-anomaly result is valid only when the joint full-formula witness also exists.
+Production establishment additionally requires the separately approved and implemented
+`OPERATIONAL_SOAK` contract above.
 
 Business acceptance still requires an explicit human decision. Until then this task remains
 incomplete, production Radar remains `NOT_ESTABLISHED`, no later closure is authorized, and no

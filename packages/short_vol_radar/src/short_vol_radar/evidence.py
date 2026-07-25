@@ -333,13 +333,21 @@ class EvidenceWriter:
                     f"conflicting evidence already exists for the same identity: {path}"
                 ) from exc
             raise EvidenceError(f"evidence path already exists: {path}") from exc
+        except OSError as exc:
+            raise EvidenceError(f"evidence publish failed: {path}") from exc
         finally:
-            temporary.unlink(missing_ok=True)
-        directory_fd = os.open(self.directory, os.O_RDONLY)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as exc:
+                raise EvidenceError(f"evidence temporary cleanup failed: {temporary}") from exc
         try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+            directory_fd = os.open(self.directory, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError as exc:
+            raise EvidenceError(f"evidence directory sync failed: {self.directory}") from exc
         return path
 
 

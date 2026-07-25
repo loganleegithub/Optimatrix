@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import StrEnum
 
 from market_monitor import BookState, ContinuousOrderBook, TimeInterval
 from options_domain import AmountState, OptionInstrument, OptionType, check_target_amount
@@ -61,6 +62,26 @@ class DetectorCalculation:
     richness: DecimalInterval
 
 
+class CurrentDisposition(StrEnum):
+    RICHNESS = "RICHNESS"
+    KNOWN_INELIGIBLE = "KNOWN_INELIGIBLE"
+    UNKNOWN = "UNKNOWN"
+    BAND_SUSPENDED = "BAND_SUSPENDED"
+    OUT_OF_BASELINE_SCOPE = "OUT_OF_BASELINE_SCOPE"
+
+
+@dataclass(frozen=True)
+class CurrentEvaluation:
+    disposition: CurrentDisposition
+    reason: str | None
+    known_evaluation: bool
+    full_formula_evaluation: bool
+    band_id: str | None
+    calculation: DetectorCalculation | None = None
+    observation: DetectorObservation | None = None
+    continuity_gap: bool = False
+
+
 @dataclass(frozen=True)
 class EvaluationResult:
     detector_state: DetectorState
@@ -72,6 +93,7 @@ class EvaluationResult:
     observation_eligible: bool = False
     observation_reason: str | None = None
     calculation: DetectorCalculation | None = None
+    current_evaluation: CurrentEvaluation | None = None
 
 
 def detector_observation_identity(
@@ -117,23 +139,63 @@ def evaluate_instrument(
     observation_eligible: bool = True,
     observation_reason: str | None = None,
 ) -> EvaluationResult:
-    def current_result(
+    current = calculate_current_evaluation(
+        policy=policy,
+        instrument=instrument,
+        trusted_time=trusted_time,
+        causal_seq=causal_seq,
+        option_book=option_book,
+        ticker=ticker,
+        causal_closes=causal_closes,
+        baseline_unavailable_reason=baseline_unavailable_reason,
+    )
+    transition = apply_current_evaluation(
+        tracker=tracker,
+        current=current,
+        causal_seq=causal_seq,
+        observation_eligible=observation_eligible,
+    )
+    return EvaluationResult(
+        detector_state=tracker.detector_state,
+        reason=current.reason,
+        known_evaluation=current.known_evaluation,
+        full_formula_evaluation=current.full_formula_evaluation,
+        band_id=current.band_id,
+        transition=transition,
+        observation_eligible=observation_eligible,
+        observation_reason=observation_reason,
+        calculation=current.calculation,
+        current_evaluation=current,
+    )
+
+
+def calculate_current_evaluation(
+    *,
+    policy: RadarPolicy,
+    instrument: OptionInstrument,
+    trusted_time: TimeInterval,
+    causal_seq: int,
+    option_book: ContinuousOrderBook | None,
+    ticker: TickerState | None,
+    causal_closes: tuple[Decimal, ...] | None,
+    baseline_unavailable_reason: str = "INDEX_BASELINE_WARMUP",
+) -> CurrentEvaluation:
+    def current(
+        disposition: CurrentDisposition,
         reason: str,
         *,
         known: bool,
         full_formula: bool,
         band_id: str | None,
-        transition: TrackerTransition,
-    ) -> EvaluationResult:
-        return EvaluationResult(
-            detector_state=tracker.detector_state,
+        continuity_gap: bool = False,
+    ) -> CurrentEvaluation:
+        return CurrentEvaluation(
+            disposition=disposition,
             reason=reason,
             known_evaluation=known,
             full_formula_evaluation=full_formula,
             band_id=band_id,
-            transition=transition,
-            observation_eligible=observation_eligible,
-            observation_reason=observation_reason,
+            continuity_gap=continuity_gap,
         )
 
     lower_tte_ms = instrument.expiration_timestamp_ms - trusted_time.upper_ms
@@ -145,38 +207,30 @@ def evaluate_instrument(
         option_type=instrument.option_type,
     )
     if applicability.classification is TimeApplicability.MONITOR_BOUNDARY:
-        transition = tracker.unknown(
-            reason="TIME_MONITOR_BOUNDARY",
-            causal_seq=causal_seq,
-        )
-        return current_result(
+        return current(
+            CurrentDisposition.UNKNOWN,
             "TIME_MONITOR_BOUNDARY",
             known=False,
             full_formula=False,
             band_id=None,
-            transition=transition,
         )
     if applicability.classification is TimeApplicability.ADJACENT_BAND_BOUNDARY:
-        transition = tracker.suspend_for_band_boundary()
-        return current_result(
+        return current(
+            CurrentDisposition.BAND_SUSPENDED,
             "TIME_BAND_BOUNDARY",
             known=False,
             full_formula=False,
             band_id=None,
-            transition=transition,
         )
     band = applicability.band
     if band is None:
-        transition = tracker.out_of_baseline_scope(causal_seq=causal_seq)
-        return current_result(
+        return current(
+            CurrentDisposition.OUT_OF_BASELINE_SCOPE,
             "OUT_OF_BASELINE_SCOPE",
             known=False,
             full_formula=False,
             band_id=None,
-            transition=transition,
         )
-    if tracker.state is TrackerState.BAND_SUSPENDED:
-        tracker.resume_after_band_boundary()
     rule = band.option_rules[instrument.option_type]
 
     amount_check = (
@@ -185,113 +239,63 @@ def evaluate_instrument(
         else None
     )
     if amount_check is not None and amount_check.state is AmountState.INELIGIBLE:
-        transition = (
-            tracker.known_ineligible(
-                reason=amount_check.reason or "TARGET_AMOUNT_INELIGIBLE",
-                causal_seq=causal_seq,
-            )
-            if observation_eligible
-            else TrackerTransition()
-        )
-        return current_result(
+        return current(
+            CurrentDisposition.KNOWN_INELIGIBLE,
             amount_check.reason or "TARGET_AMOUNT_INELIGIBLE",
             known=True,
             full_formula=False,
             band_id=band.band_id,
-            transition=transition,
         )
     if option_book is None or option_book.state is not BookState.USABLE:
-        transition = (
-            tracker.unknown(
-                reason="OPTION_BOOK_UNKNOWN",
-                causal_seq=causal_seq,
-                continuity_gap=option_book is not None
-                and option_book.reason not in {"SNAPSHOT_REQUIRED"},
-            )
-            if observation_eligible
-            else TrackerTransition()
-        )
-        return current_result(
+        return current(
+            CurrentDisposition.UNKNOWN,
             "OPTION_BOOK_UNKNOWN",
             known=False,
             full_formula=False,
             band_id=band.band_id,
-            transition=transition,
+            continuity_gap=option_book is not None
+            and option_book.reason not in {"SNAPSHOT_REQUIRED"},
         )
     target_bid = walk_target_depth(option_book.levels("bid"), policy.target_base_quantity_btc)
     if target_bid is None:
-        transition = (
-            tracker.known_ineligible(
-                reason="INSUFFICIENT_TARGET_BID_DEPTH",
-                causal_seq=causal_seq,
-            )
-            if observation_eligible
-            else TrackerTransition()
-        )
-        return current_result(
+        return current(
+            CurrentDisposition.KNOWN_INELIGIBLE,
             "INSUFFICIENT_TARGET_BID_DEPTH",
             known=True,
             full_formula=False,
             band_id=band.band_id,
-            transition=transition,
         )
     if amount_check is None:
-        transition = (
-            tracker.unknown(
-                reason="OPTION_AMOUNT_METADATA_UNKNOWN",
-                causal_seq=causal_seq,
-            )
-            if observation_eligible
-            else TrackerTransition()
-        )
-        return current_result(
+        return current(
+            CurrentDisposition.UNKNOWN,
             "OPTION_AMOUNT_METADATA_UNKNOWN",
             known=False,
             full_formula=False,
             band_id=band.band_id,
-            transition=transition,
         )
     if ticker is None:
-        transition = (
-            tracker.unknown(
-                reason="FORWARD_TICKER_UNKNOWN",
-                causal_seq=causal_seq,
-            )
-            if observation_eligible
-            else TrackerTransition()
-        )
-        return current_result(
+        return current(
+            CurrentDisposition.UNKNOWN,
             "FORWARD_TICKER_UNKNOWN",
             known=False,
             full_formula=False,
             band_id=band.band_id,
-            transition=transition,
         )
     if ticker.forward_usdc <= 0 or not ticker.forward_usdc.is_finite():
-        transition = (
-            tracker.unknown(reason="INVALID_FORWARD", causal_seq=causal_seq)
-            if observation_eligible
-            else TrackerTransition()
-        )
-        return current_result(
+        return current(
+            CurrentDisposition.UNKNOWN,
             "INVALID_FORWARD",
             known=False,
             full_formula=False,
             band_id=band.band_id,
-            transition=transition,
         )
     if not _is_otm(instrument.option_type, instrument.strike, ticker.forward_usdc):
-        transition = (
-            tracker.known_ineligible(reason="NOT_OTM", causal_seq=causal_seq)
-            if observation_eligible
-            else TrackerTransition()
-        )
-        return current_result(
+        return current(
+            CurrentDisposition.KNOWN_INELIGIBLE,
             "NOT_OTM",
             known=True,
             full_formula=False,
             band_id=band.band_id,
-            transition=transition,
         )
     remaining_years = DecimalInterval(
         Decimal(lower_tte_ms) / MILLISECONDS_PER_365_DAY_YEAR,
@@ -311,20 +315,12 @@ def evaluate_instrument(
             option_type=instrument.option_type,
         )
         if not delta_is_eligible(delta, rule):
-            transition = (
-                tracker.known_ineligible(
-                    reason="DELTA_INELIGIBLE",
-                    causal_seq=causal_seq,
-                )
-                if observation_eligible
-                else TrackerTransition()
-            )
-            return current_result(
+            return current(
+                CurrentDisposition.KNOWN_INELIGIBLE,
                 "DELTA_INELIGIBLE",
                 known=True,
                 full_formula=False,
                 band_id=band.band_id,
-                transition=transition,
             )
         if causal_closes is None:
             raise BaselineUnavailable(baseline_unavailable_reason)
@@ -341,53 +337,24 @@ def evaluate_instrument(
             time_years=remaining_years,
         )
         richness = ratio_interval(iv, baseline.annualized_volatility)
-        transition = (
-            tracker.observe(
-                DetectorObservation(
-                    causal_seq=causal_seq,
-                    trusted_time=trusted_time,
-                    band_id=band.band_id,
-                    richness=richness,
-                ),
-                rule,
-            )
-            if observation_eligible
-            else TrackerTransition()
-        )
     except NumericalBoundaryUnresolved:
-        transition = (
-            tracker.unknown(
-                reason="NUMERICAL_BOUNDARY_UNRESOLVED",
-                causal_seq=causal_seq,
-            )
-            if observation_eligible
-            else TrackerTransition()
-        )
-        return current_result(
+        return current(
+            CurrentDisposition.UNKNOWN,
             "NUMERICAL_BOUNDARY_UNRESOLVED",
             known=False,
             full_formula=False,
             band_id=band.band_id,
-            transition=transition,
         )
     except (NumericalUnknown, BaselineUnavailable) as exc:
         reason = str(exc) or type(exc).__name__
         currentness_gap = reason in {"INDEX_BASELINE_STALE", "INDEX_BASELINE_GAP"}
-        transition = (
-            tracker.unknown(
-                reason=reason,
-                causal_seq=causal_seq,
-                continuity_gap=currentness_gap,
-            )
-            if observation_eligible or currentness_gap
-            else TrackerTransition()
-        )
-        return current_result(
+        return current(
+            CurrentDisposition.UNKNOWN,
             reason,
             known=False,
             full_formula=False,
             band_id=band.band_id,
-            transition=transition,
+            continuity_gap=currentness_gap,
         )
     implied_total_variance = DecimalInterval(
         total_volatility.lower * total_volatility.lower,
@@ -407,17 +374,64 @@ def evaluate_instrument(
         implied_total_variance=implied_total_variance,
         richness=richness,
     )
-    return EvaluationResult(
-        detector_state=tracker.detector_state,
+    observation = DetectorObservation(
+        causal_seq=causal_seq,
+        trusted_time=trusted_time,
+        band_id=band.band_id,
+        richness=richness,
+    )
+    return CurrentEvaluation(
+        disposition=CurrentDisposition.RICHNESS,
         reason=None,
         known_evaluation=True,
         full_formula_evaluation=True,
         band_id=band.band_id,
-        transition=transition,
-        observation_eligible=observation_eligible,
-        observation_reason=observation_reason,
         calculation=calculation,
+        observation=observation,
     )
+
+
+def apply_current_evaluation(
+    *,
+    tracker: EpisodeTracker,
+    current: CurrentEvaluation,
+    causal_seq: int,
+    observation_eligible: bool,
+) -> TrackerTransition:
+    if current.disposition is CurrentDisposition.BAND_SUSPENDED:
+        return tracker.suspend_for_band_boundary()
+    if current.disposition is CurrentDisposition.OUT_OF_BASELINE_SCOPE:
+        return tracker.out_of_baseline_scope(causal_seq=causal_seq)
+
+    resumed = tracker.state is TrackerState.BAND_SUSPENDED
+    if resumed:
+        tracker.resume_after_band_boundary()
+    if current.disposition is CurrentDisposition.KNOWN_INELIGIBLE:
+        return tracker.known_ineligible(
+            reason=current.reason or "KNOWN_INELIGIBLE",
+            causal_seq=causal_seq,
+        )
+    if current.disposition is CurrentDisposition.UNKNOWN:
+        return tracker.unknown(
+            reason=current.reason or "UNKNOWN_DETECTOR",
+            causal_seq=causal_seq,
+            continuity_gap=current.continuity_gap,
+        )
+    if current.observation is None or current.calculation is None:
+        raise RuntimeError("richness evaluation lacks calculation or observation")
+    if not observation_eligible:
+        return TrackerTransition(state_changed=resumed)
+    transition = tracker.observe(
+        current.observation,
+        current.calculation.rule,
+    )
+    if resumed and not transition.state_changed:
+        return TrackerTransition(
+            activated_episode_id=transition.activated_episode_id,
+            ended_episode=transition.ended_episode,
+            state_changed=True,
+        )
+    return transition
 
 
 def parse_ticker(payload: object, expected_instrument_name: str) -> TickerState:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -14,7 +15,6 @@ from short_vol_radar.detector import (
     EpisodeEndReason,
     EpisodeTracker,
     TrackerState,
-    TrackerTransition,
 )
 from short_vol_radar.policy import RadarPolicy, load_policy_bytes
 from short_vol_radar.radar import TickerState, evaluate_instrument, parse_ticker
@@ -170,7 +170,7 @@ def test_clock_only_recalculation_is_not_a_countable_persistence_observation(
     assert tracker.episode_id is None
 
 
-def test_clock_only_current_ineligibility_does_not_clear_active_persistence(
+def test_current_hard_ineligibility_ends_active_episode_even_when_not_countable(
     policy_factory: PolicyFactory,
 ) -> None:
     policy, instrument, tracker, price = make_engine_inputs(policy_factory)
@@ -203,9 +203,99 @@ def test_clock_only_current_ineligibility_does_not_clear_active_persistence(
     assert current.reason == "INSUFFICIENT_TARGET_BID_DEPTH"
     assert not current.observation_eligible
     assert current.observation_reason == "CLOCK_ONLY"
-    assert tracker.detector_state is DetectorState.ANOMALY_ACTIVE
-    assert tracker.episode_id == episode_id
-    assert current.transition == TrackerTransition()
+    assert tracker.detector_state is DetectorState.NO_ANOMALY
+    assert tracker.episode_id is None
+    assert current.transition.ended_episode is not None
+    assert current.transition.ended_episode.episode_id == episode_id
+    assert current.transition.ended_episode.reason is EpisodeEndReason.KNOWN_INELIGIBLE
+
+
+def test_known_empty_book_recovers_unknown_to_no_anomaly_without_countability(
+    policy_factory: PolicyFactory,
+) -> None:
+    policy, instrument, tracker, _price = make_engine_inputs(policy_factory)
+    unknown = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=1,
+        option_book=None,
+        ticker=None,
+        causal_closes=None,
+        observation_eligible=True,
+    )
+    known_empty = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=2,
+        option_book=make_book("SHORT", None),
+        ticker=None,
+        causal_closes=None,
+        observation_eligible=False,
+        observation_reason="DUPLICATE_REDUCED_STATE",
+    )
+
+    assert unknown.detector_state is DetectorState.UNKNOWN
+    assert known_empty.reason == "INSUFFICIENT_TARGET_BID_DEPTH"
+    assert known_empty.known_evaluation
+    assert not known_empty.observation_eligible
+    assert known_empty.detector_state is DetectorState.NO_ANOMALY
+    assert tracker.state is TrackerState.ARMED
+
+
+@pytest.mark.parametrize(
+    ("replacement_amount", "expected_reason", "expected_end"),
+    [
+        (None, "OPTION_AMOUNT_METADATA_UNKNOWN", EpisodeEndReason.UNKNOWN_DETECTOR),
+        (
+            AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.3")),
+            "OFF_PUBLISHED_QUANTITY_GRID",
+            EpisodeEndReason.KNOWN_INELIGIBLE,
+        ),
+    ],
+)
+def test_current_amount_loss_ends_active_episode_without_countability(
+    policy_factory: PolicyFactory,
+    replacement_amount: AmountMetadata | None,
+    expected_reason: str,
+    expected_end: EpisodeEndReason,
+) -> None:
+    policy, instrument, tracker, price = make_engine_inputs(policy_factory)
+    activated = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=1,
+        option_book=make_book("SHORT", price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100),) * 6,
+    )
+    episode_id = tracker.episode_id
+    assert activated.detector_state is DetectorState.ANOMALY_ACTIVE
+    assert episode_id is not None
+
+    current = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=replace(instrument, amount=replacement_amount),
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=2,
+        option_book=make_book("SHORT", price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100),) * 6,
+        observation_eligible=False,
+        observation_reason="DUPLICATE_REDUCED_STATE",
+    )
+
+    assert current.reason == expected_reason
+    assert current.transition.ended_episode is not None
+    assert current.transition.ended_episode.episode_id == episode_id
+    assert current.transition.ended_episode.reason is expected_end
+    assert tracker.episode_id is None
 
 
 def test_observation_identity_ignores_ask_and_depth_beyond_target(

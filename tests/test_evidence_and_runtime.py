@@ -11,10 +11,11 @@ from typing import Any
 
 import pytest
 import radar_runtime.runtime as runtime_module
-from conftest import PolicyFactory
+from conftest import PolicyFactory, encode_policy, policy_document
 from market_monitor import (
     ContinuityGap,
     ContinuousOrderBook,
+    IndexWindow,
     PriceLevel,
     TimeInterval,
     TrustedClock,
@@ -30,10 +31,10 @@ from options_domain import (
 from radar_runtime.deribit_public import (
     PUBLIC_METHODS,
     DeribitPublicClient,
+    InboundEnvelope,
     PublicProtocolError,
     PublicRequestError,
     PublicSessionError,
-    ReceivedRpcResult,
 )
 from radar_runtime.identity import (
     StartupGuardError,
@@ -74,7 +75,11 @@ from short_vol_radar.evidence import (
     validate_run_summary,
 )
 from short_vol_radar.policy import OptionRule, load_policy_bytes
-from short_vol_radar.radar import EvaluationResult, TickerState
+from short_vol_radar.radar import (
+    CurrentDisposition,
+    CurrentEvaluation,
+    TickerState,
+)
 
 
 def anomaly_evidence() -> AnomalyEvidence:
@@ -418,10 +423,63 @@ def test_evidence_publish_failure_leaves_no_partial_final_or_temp_file(
         raise OSError("injected atomic publish failure")
 
     monkeypatch.setattr(os, "link", fail_publish)
-    with pytest.raises(OSError, match="publish"):
+    with pytest.raises(EvidenceError, match="publish"):
         writer.write_anomaly(project_anomaly_event(evidence))
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_evidence_oserror_is_fatal_without_reconnect(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    policy = load_policy_bytes(exact, digest)
+    connection_enters = 0
+
+    class CountingClient:
+        async def __aenter__(self) -> CountingClient:
+            nonlocal connection_enters
+            connection_enters += 1
+            if connection_enters > 1:
+                raise AssertionError("evidence failure attempted a reconnect")
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    async def write_failing_evidence(
+        runtime: LiveRadarRuntime,
+        _client: object,
+        _stop_event: asyncio.Event,
+    ) -> Path:
+        evidence = anomaly_evidence()
+        event = project_anomaly_event(evidence)
+        event["code_identity"] = runtime.code_identity
+        event["runtime_identity"] = runtime.runtime_identity
+        event["policy_identity"] = runtime.policy.identity
+        path = runtime.writer.write_anomaly(event)
+        raise AssertionError(f"write unexpectedly succeeded: {path}")
+
+    def fail_publish(_source: object, _target: object) -> None:
+        raise OSError("injected evidence publish failure")
+
+    monkeypatch.setattr(runtime_module, "DeribitPublicClient", CountingClient)
+    monkeypatch.setattr(LiveRadarRuntime, "run", write_failing_evidence)
+    monkeypatch.setattr(os, "link", fail_publish)
+
+    with pytest.raises(EvidenceError, match="publish"):
+        asyncio.run(
+            runtime_module.observe(
+                policy=policy,
+                code_identity="a" * 40,
+                evidence_directory=tmp_path,
+                stop_event=asyncio.Event(),
+            )
+        )
+
+    assert connection_enters == 1
 
 
 def test_public_client_has_exact_public_allowlist_and_test_request_guard() -> None:
@@ -471,14 +529,16 @@ class FakePublicClient:
             return []
         raise AssertionError(f"unexpected fake request {method} {params}")
 
-    async def subscribe(self, channels: tuple[str, ...] | list[str]) -> None:
+    async def subscribe(self, channels: tuple[str, ...] | list[str]) -> object:
         self.calls.append("public/subscribe")
         self.subscriptions.extend(channels)
+        return None
 
-    async def unsubscribe(self, channels: tuple[str, ...] | list[str]) -> None:
+    async def unsubscribe(self, channels: tuple[str, ...] | list[str]) -> object:
         self.calls.append("public/unsubscribe")
         for channel in channels:
             self.subscriptions.remove(channel)
+        return None
 
     async def next_notification(self, timeout_seconds: float | None = None) -> dict[str, object]:
         raise AssertionError(f"unexpected notification wait {timeout_seconds}")
@@ -525,7 +585,7 @@ def clear_fixture_connection_close(client: DeribitPublicClient) -> None:
             envelope = client._notifications.get_nowait()
         except asyncio.QueueEmpty:
             break
-        if envelope.message.get("method") != "connection_error":
+        if envelope.get("method") != "connection_error":
             retained.append(envelope)
     for envelope in retained:
         client._notifications.put_nowait(envelope)
@@ -537,7 +597,7 @@ def test_reader_stamps_rpc_and_notification_frames_in_one_ingress_order() -> Non
         channel = "instrument.state.option.USDC"
         client._active_subscription_generations[channel] = 1
         loop = asyncio.get_running_loop()
-        pending: asyncio.Future[ReceivedRpcResult] = loop.create_future()
+        pending: asyncio.Future[InboundEnvelope] = loop.create_future()
         client._pending[7] = pending
         client._connection = IncomingConnection(  # type: ignore[assignment]
             [
@@ -610,8 +670,8 @@ def test_rpc_fact_waits_for_earlier_notification_fact_in_runtime_reducer(
             responding_to_test_request: bool = False,
         ) -> object:
             del method, params, responding_to_test_request
-            return ReceivedRpcResult(
-                value=[],
+            return InboundEnvelope(
+                {"jsonrpc": "2.0", "id": 1, "result": []},
                 ingress_seq=2,
                 received_monotonic_ms=time.monotonic_ns() // 1_000_000,
             )
@@ -628,6 +688,251 @@ def test_rpc_fact_waits_for_earlier_notification_fact_in_runtime_reducer(
         {"instrument_name": "FIRST", "state": "closed"}
     ]
     assert runtime._last_applied_ingress_seq == 2
+
+
+def test_rpc_response_is_applied_before_simultaneously_ready_later_notification(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    runtime._bootstrap_in_progress = True
+    runtime.option_catalog.acknowledge_lifecycle()
+
+    class SimultaneousClient(FakePublicClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.release = asyncio.Event()
+            self.sent = False
+
+        async def request(
+            self,
+            method: str,
+            params: dict[str, object],
+            *,
+            responding_to_test_request: bool = False,
+        ) -> object:
+            del method, params, responding_to_test_request
+            await self.release.wait()
+            return InboundEnvelope(
+                {"jsonrpc": "2.0", "id": 1, "result": []},
+                ingress_seq=1,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+            )
+
+        async def next_notification(
+            self, timeout_seconds: float | None = None
+        ) -> dict[str, object]:
+            if self.sent:
+                await asyncio.sleep(timeout_seconds or 0)
+                raise TimeoutError
+            self.sent = True
+            self.release.set()
+            return InboundEnvelope(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "subscription",
+                    "params": {
+                        "channel": "instrument.state.option.USDC",
+                        "data": {"instrument_name": "LATER", "state": "closed"},
+                    },
+                },
+                ingress_seq=2,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                channel="instrument.state.option.USDC",
+                subscription_generation=1,
+            )
+
+    async def scenario() -> object:
+        client = SimultaneousClient()
+        result = await runtime._request_public(client, "public/get_instruments", {})
+        assert runtime._last_applied_ingress_seq == 1
+        assert runtime.option_catalog.buffered_events == []
+        await runtime._handle_bootstrap_message(
+            client,
+            await runtime._next_notification(client, timeout_seconds=0.1),
+        )
+        return result
+
+    assert asyncio.run(scenario()) == []
+    assert runtime.option_catalog.buffered_events == [
+        {"instrument_name": "LATER", "state": "closed"}
+    ]
+    assert runtime._last_applied_ingress_seq == 2
+
+
+def test_rpc_error_and_notification_share_the_same_ingress_envelope() -> None:
+    async def scenario() -> tuple[InboundEnvelope, InboundEnvelope]:
+        client = DeribitPublicClient()
+        channel = "instrument.state.option.USDC"
+        client._active_subscription_generations[channel] = 1
+        loop = asyncio.get_running_loop()
+        pending: asyncio.Future[InboundEnvelope] = loop.create_future()
+        client._pending[7] = pending
+        client._connection = IncomingConnection(  # type: ignore[assignment]
+            [
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "subscription",
+                        "params": {
+                            "channel": channel,
+                            "data": {"instrument_name": "FIRST", "state": "closed"},
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 7,
+                        "error": {"code": 10_028, "message": "too_many_requests"},
+                    }
+                ),
+            ]
+        )
+        await client._reader()
+        clear_fixture_connection_close(client)
+        response = await pending
+        notification = await client.next_notification(timeout_seconds=0.1)
+        assert isinstance(notification, InboundEnvelope)
+        return response, notification
+
+    response, notification = asyncio.run(scenario())
+
+    assert type(response) is type(notification) is InboundEnvelope
+    assert notification.ingress_seq < response.ingress_seq
+    with pytest.raises(PublicRequestError, match="too_many_requests"):
+        _ = response.value
+
+
+def test_subscribe_unsubscribe_success_and_failure_keep_rpc_envelopes() -> None:
+    async def scenario() -> None:
+        client = DeribitPublicClient()
+        sequence = 1
+
+        async def respond(
+            method: str,
+            params: dict[str, object],
+            *,
+            responding_to_test_request: bool = False,
+        ) -> object:
+            nonlocal sequence
+            del responding_to_test_request
+            envelope = InboundEnvelope(
+                {
+                    "jsonrpc": "2.0",
+                    "id": sequence,
+                    "result": params["channels"],
+                },
+                ingress_seq=sequence,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+            )
+            sequence += 1
+            assert method in {"public/subscribe", "public/unsubscribe"}
+            return envelope
+
+        client.request = respond  # type: ignore[method-assign]
+        subscribed = await client.subscribe(["book.TEST.100ms"])
+        unsubscribed = await client.unsubscribe(["book.TEST.100ms"])
+        assert all(type(item) is InboundEnvelope for item in (*subscribed, *unsubscribed))
+
+        async def fail(
+            method: str,
+            params: dict[str, object],
+            *,
+            responding_to_test_request: bool = False,
+        ) -> object:
+            del method, params, responding_to_test_request
+            return InboundEnvelope(
+                {
+                    "jsonrpc": "2.0",
+                    "id": sequence,
+                    "error": {"code": 10_028, "message": "too_many_requests"},
+                },
+                ingress_seq=sequence,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+            )
+
+        client.request = fail  # type: ignore[method-assign]
+        with pytest.raises(PublicRequestError) as exc_info:
+            await client.subscribe(["book.FAIL.100ms"])
+        assert type(exc_info.value.envelope) is InboundEnvelope
+
+    asyncio.run(scenario())
+
+
+def test_channel_rpc_drains_simultaneously_ready_later_notification(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+
+    class SimultaneousChannelClient(FakePublicClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.queued: dict[str, object] | None = InboundEnvelope(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "subscription",
+                    "params": {
+                        "channel": "instrument.state.option.USDC",
+                        "data": {"instrument_name": "LATER", "state": "closed"},
+                    },
+                },
+                ingress_seq=2,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                channel="instrument.state.option.USDC",
+                subscription_generation=1,
+            )
+
+        async def subscribe(
+            self, channels: tuple[str, ...] | list[str]
+        ) -> tuple[InboundEnvelope, ...]:
+            del channels
+            return (
+                InboundEnvelope(
+                    {"jsonrpc": "2.0", "id": 1, "result": []},
+                    ingress_seq=1,
+                    received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                ),
+            )
+
+        def drain_notifications(self) -> tuple[dict[str, object], ...]:
+            if self.queued is None:
+                return ()
+            queued, self.queued = self.queued, None
+            return (queued,)
+
+    asyncio.run(runtime._subscribe_public(SimultaneousChannelClient(), ["test"]))
+
+    assert runtime._last_applied_ingress_seq == 1
+    assert [item["params"] for item in runtime._deferred_notifications] == [
+        {
+            "channel": "instrument.state.option.USDC",
+            "data": {"instrument_name": "LATER", "state": "closed"},
+        }
+    ]
 
 
 def test_public_client_discards_notifications_from_an_old_subscription_generation() -> None:
@@ -693,7 +998,7 @@ def test_public_client_notification_overflow_cannot_block_rpc_resolution() -> No
         queued: Any = {"jsonrpc": "2.0", "method": "subscription", "params": {}}
         client._notifications.put_nowait(queued)
         loop = asyncio.get_running_loop()
-        pending: asyncio.Future[ReceivedRpcResult] = loop.create_future()
+        pending: asyncio.Future[InboundEnvelope] = loop.create_future()
         client._pending[1] = pending
         client._connection = IncomingConnection(  # type: ignore[assignment]
             [
@@ -1169,26 +1474,18 @@ def test_scope_evaluation_records_one_joint_aggregate_witness(
             instrument_name=name,
         )
 
-    def known_result(**kwargs: object) -> EvaluationResult:
-        tracker = kwargs["tracker"]
+    def known_result(**kwargs: object) -> CurrentEvaluation:
         instrument = kwargs["instrument"]
-        assert isinstance(tracker, EpisodeTracker)
         assert isinstance(instrument, OptionInstrument)
-        transition = tracker.known_ineligible(
-            reason="TEST_KNOWN",
-            causal_seq=runtime.causal_seq,
-        )
-        return EvaluationResult(
-            detector_state=DetectorState.NO_ANOMALY,
+        return CurrentEvaluation(
+            disposition=CurrentDisposition.KNOWN_INELIGIBLE,
             reason="TEST_KNOWN",
             known_evaluation=True,
             full_formula_evaluation=instrument.instrument_name == "FIRST",
             band_id=policy.tte_bands[0].band_id,
-            transition=transition,
-            observation_eligible=True,
         )
 
-    monkeypatch.setattr(runtime_module, "evaluate_instrument", known_result)
+    monkeypatch.setattr(runtime_module, "calculate_current_evaluation", known_result)
     asyncio.run(runtime._evaluate_all(FakePublicClient()))
 
     scope = runtime._scope_counter(OptionType.CALL, policy.tte_bands[0].band_id)
@@ -1900,8 +2197,8 @@ def test_clock_uses_reader_receive_boundary_not_later_processing_time(
         ) -> object:
             del params, responding_to_test_request
             assert method == "public/get_time"
-            return ReceivedRpcResult(
-                value=1_000_000,
+            return InboundEnvelope(
+                {"jsonrpc": "2.0", "id": 1, "result": 1_000_000},
                 ingress_seq=1,
                 received_monotonic_ms=10,
             )
@@ -2328,6 +2625,87 @@ def test_heartbeat_test_request_uses_only_guarded_public_test(
     assert client.calls == ["public/test"]
 
 
+def test_heartbeat_response_does_not_apply_or_fail_on_queued_economic_fact(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+
+    class ControlClient(FakePublicClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.queued: dict[str, object] | None = InboundEnvelope(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "subscription",
+                    "params": {
+                        "channel": "instrument.state.option.USDC",
+                        "data": {"instrument_name": "ECONOMIC", "state": "closed"},
+                    },
+                },
+                ingress_seq=1,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                channel="instrument.state.option.USDC",
+                subscription_generation=1,
+            )
+
+        async def request(
+            self,
+            method: str,
+            params: dict[str, object],
+            *,
+            responding_to_test_request: bool = False,
+        ) -> object:
+            del params
+            assert method == "public/test"
+            assert responding_to_test_request
+            return InboundEnvelope(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {"version": "2.1.1"},
+                },
+                ingress_seq=2,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+            )
+
+        def drain_notifications(self) -> tuple[dict[str, object], ...]:
+            if self.queued is None:
+                return ()
+            queued, self.queued = self.queued, None
+            return (queued,)
+
+    runtime._economic_reducer_depth = 1
+    result = asyncio.run(
+        runtime._request_public(
+            ControlClient(),
+            "public/test",
+            {},
+            responding_to_test_request=True,
+        )
+    )
+
+    assert result == {"version": "2.1.1"}
+    assert runtime._last_applied_ingress_seq == 0
+    assert [item["params"] for item in runtime._deferred_notifications] == [
+        {
+            "channel": "instrument.state.option.USDC",
+            "data": {"instrument_name": "ECONOMIC", "state": "closed"},
+        }
+    ]
+
+
 def test_heartbeat_rejects_non_official_public_test_result(
     tmp_path: Path, policy_factory: PolicyFactory
 ) -> None:
@@ -2640,6 +3018,824 @@ def test_ticker_timestamp_regression_resubscribes_only_affected_ticker(
     asyncio.run(apply_tickers())
     assert name not in runtime.tickers
     assert client.subscriptions == [ticker_channel(name)]
+
+
+def test_open_close_metadata_response_cannot_resurrect_option(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    option_payload_factory: Any,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    now = time.monotonic_ns() // 1_000_000
+    runtime.clock = TrustedClock.from_response(1_000_000, now, now)
+    runtime.option_catalog.complete = True
+
+    class RacingMetadataClient(FakePublicClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.metadata_started = asyncio.Event()
+            self.metadata_release = asyncio.Event()
+            self.close_sent = False
+
+        async def request(
+            self,
+            method: str,
+            params: dict[str, object],
+            *,
+            responding_to_test_request: bool = False,
+        ) -> object:
+            if method == "public/get_instrument":
+                self.metadata_started.set()
+                await self.metadata_release.wait()
+                return InboundEnvelope(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": option_payload_factory(
+                            name=str(params["instrument_name"]),
+                            expiry=2_000_000,
+                        ),
+                    },
+                    ingress_seq=3,
+                    received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                )
+            return await super().request(
+                method,
+                params,
+                responding_to_test_request=responding_to_test_request,
+            )
+
+        async def next_notification(
+            self, timeout_seconds: float | None = None
+        ) -> dict[str, object]:
+            await self.metadata_started.wait()
+            if self.close_sent:
+                await asyncio.sleep(timeout_seconds or 0)
+                raise TimeoutError
+            self.close_sent = True
+            self.metadata_release.set()
+            return StampedMessage(
+                {
+                    "method": "subscription",
+                    "params": {
+                        "channel": "instrument.state.option.USDC",
+                        "data": {"instrument_name": "RACE", "state": "closed"},
+                    },
+                },
+                ingress_seq=2,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+            )
+
+    async def scenario() -> None:
+        client = RacingMetadataClient()
+        await runtime._handle_message(
+            client,
+            StampedMessage(
+                {
+                    "method": "subscription",
+                    "params": {
+                        "channel": "instrument.state.option.USDC",
+                        "data": {"instrument_name": "RACE", "state": "open"},
+                    },
+                },
+                ingress_seq=1,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+            ),
+        )
+
+    asyncio.run(scenario())
+
+    assert "RACE" not in runtime.catalog_options
+    assert "RACE" not in runtime.options
+    assert runtime._max_economic_reducer_depth == 1
+
+
+def test_close_during_option_snapshot_pending_is_reconciled_after_snapshot(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    option_payload_factory: Any,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    now = time.monotonic_ns() // 1_000_000
+    runtime.clock = TrustedClock.from_response(1_000_000, now, now)
+    runtime.option_catalog.complete = False
+
+    class RacingSnapshotClient(FakePublicClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.snapshot_started = asyncio.Event()
+            self.snapshot_release = asyncio.Event()
+            self.close_sent = False
+            self.later_lifecycle_drained = False
+
+        async def request(
+            self,
+            method: str,
+            params: dict[str, object],
+            *,
+            responding_to_test_request: bool = False,
+        ) -> object:
+            if method == "public/get_instruments":
+                self.snapshot_started.set()
+                await self.snapshot_release.wait()
+                return InboundEnvelope(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": [option_payload_factory(name="SNAPSHOT", expiry=2_000_000)],
+                    },
+                    ingress_seq=2,
+                    received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                )
+            return await super().request(
+                method,
+                params,
+                responding_to_test_request=responding_to_test_request,
+            )
+
+        async def next_notification(
+            self, timeout_seconds: float | None = None
+        ) -> dict[str, object]:
+            await self.snapshot_started.wait()
+            if self.close_sent:
+                await asyncio.sleep(timeout_seconds or 0)
+                raise TimeoutError
+            self.close_sent = True
+            self.snapshot_release.set()
+            return StampedMessage(
+                {
+                    "method": "subscription",
+                    "params": {
+                        "channel": "instrument.state.option.USDC",
+                        "data": {"instrument_name": "SNAPSHOT", "state": "closed"},
+                    },
+                },
+                ingress_seq=1,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+            )
+
+        def drain_notifications(self) -> tuple[dict[str, object], ...]:
+            if self.later_lifecycle_drained:
+                return ()
+            self.later_lifecycle_drained = True
+            return (
+                StampedMessage(
+                    {
+                        "method": "subscription",
+                        "params": {
+                            "channel": "instrument.state.option.USDC",
+                            "data": {"instrument_name": "UNRELATED", "state": "closed"},
+                        },
+                    },
+                    ingress_seq=3,
+                    received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                ),
+            )
+
+    asyncio.run(runtime._recover_option_catalog(RacingSnapshotClient()))
+
+    assert "SNAPSHOT" not in runtime.catalog_options
+    assert "SNAPSHOT" not in runtime.options
+
+
+def test_combo_lifecycle_during_refresh_requests_one_trailing_refresh(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+
+    class LifecycleDuringRefreshClient(FakePublicClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.refresh_count = 0
+            self.first_started = asyncio.Event()
+            self.first_release = asyncio.Event()
+            self.lifecycle_sent = False
+
+        async def request(
+            self,
+            method: str,
+            params: dict[str, object],
+            *,
+            responding_to_test_request: bool = False,
+        ) -> object:
+            if method == "public/get_combos":
+                self.refresh_count += 1
+                if self.refresh_count == 1:
+                    self.first_started.set()
+                    await self.first_release.wait()
+                return InboundEnvelope(
+                    {"jsonrpc": "2.0", "id": self.refresh_count, "result": []},
+                    ingress_seq=self.refresh_count + 1,
+                    received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                )
+            return await super().request(
+                method,
+                params,
+                responding_to_test_request=responding_to_test_request,
+            )
+
+        async def next_notification(
+            self, timeout_seconds: float | None = None
+        ) -> dict[str, object]:
+            await self.first_started.wait()
+            if self.lifecycle_sent:
+                await asyncio.sleep(timeout_seconds or 0)
+                raise TimeoutError
+            self.lifecycle_sent = True
+            self.first_release.set()
+            return StampedMessage(
+                {
+                    "method": "subscription",
+                    "params": {
+                        "channel": "instrument.state.option_combo.USDC",
+                        "data": {"instrument_name": "COMBO", "state": "created"},
+                    },
+                },
+                ingress_seq=1,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+            )
+
+    client = LifecycleDuringRefreshClient()
+    asyncio.run(runtime._coalesced_combo_refresh(client))
+
+    assert client.refresh_count == 2
+
+
+def test_bootstrap_reconciliation_retains_lifecycle_arriving_during_metadata(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    option_payload_factory: Any,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+
+    class BootstrapLifecycleClient(FakePublicClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.notifications: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+            self.snapshot_started = asyncio.Event()
+            self.snapshot_release = asyncio.Event()
+            self.metadata_started = asyncio.Event()
+            self.metadata_release = asyncio.Event()
+
+        async def request(
+            self,
+            method: str,
+            params: dict[str, object],
+            *,
+            responding_to_test_request: bool = False,
+        ) -> object:
+            if method == "public/get_instruments":
+                self.snapshot_started.set()
+                await self.snapshot_release.wait()
+                return InboundEnvelope(
+                    {"jsonrpc": "2.0", "id": 1, "result": []},
+                    ingress_seq=2,
+                    received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                )
+            if method == "public/get_instrument":
+                self.metadata_started.set()
+                await self.metadata_release.wait()
+                return InboundEnvelope(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": option_payload_factory(
+                            name=str(params["instrument_name"]),
+                            expiry=2_000_000,
+                        ),
+                    },
+                    ingress_seq=4,
+                    received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                )
+            return await super().request(
+                method,
+                params,
+                responding_to_test_request=responding_to_test_request,
+            )
+
+        async def next_notification(
+            self, timeout_seconds: float | None = None
+        ) -> dict[str, object]:
+            if timeout_seconds is None:
+                return await self.notifications.get()
+            return await asyncio.wait_for(self.notifications.get(), timeout_seconds)
+
+        def drain_notifications(self) -> tuple[dict[str, object], ...]:
+            drained: list[dict[str, object]] = []
+            while True:
+                try:
+                    drained.append(self.notifications.get_nowait())
+                except asyncio.QueueEmpty:
+                    return tuple(drained)
+
+    async def scenario() -> None:
+        client = BootstrapLifecycleClient()
+        bootstrap = asyncio.create_task(runtime._bootstrap(client))
+        await client.snapshot_started.wait()
+        await client.notifications.put(
+            StampedMessage(
+                {
+                    "method": "subscription",
+                    "params": {
+                        "channel": "instrument.state.option.USDC",
+                        "data": {"instrument_name": "BOOT", "state": "open"},
+                    },
+                },
+                ingress_seq=1,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+            )
+        )
+        await asyncio.sleep(0)
+        client.snapshot_release.set()
+        await client.metadata_started.wait()
+        await client.notifications.put(
+            StampedMessage(
+                {
+                    "method": "subscription",
+                    "params": {
+                        "channel": "instrument.state.option.USDC",
+                        "data": {"instrument_name": "BOOT", "state": "closed"},
+                    },
+                },
+                ingress_seq=3,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+            )
+        )
+        await asyncio.sleep(0)
+        client.metadata_release.set()
+        await bootstrap
+
+    asyncio.run(scenario())
+
+    assert "BOOT" not in runtime.catalog_options
+    assert "BOOT" not in runtime.options
+
+
+@pytest.mark.parametrize("operation", ["subscribe", "unsubscribe"])
+def test_blocked_channel_change_still_services_test_request(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    operation: str,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    now = time.monotonic_ns() // 1_000_000
+    server_ms = 1_000_000
+    runtime.clock = TrustedClock.from_response(server_ms, now, now)
+    name = "CHANNEL"
+    instrument = OptionInstrument(
+        name,
+        server_ms + 60 * 60_000,
+        Decimal(110),
+        OptionType.CALL,
+        AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+    )
+    if operation == "subscribe":
+        runtime.catalog_options[name] = instrument
+    else:
+        runtime.options[name] = instrument
+        runtime.option_books[name] = ContinuousOrderBook(name)
+        runtime.trackers[name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=digest,
+            instrument_name=name,
+        )
+
+    class BlockingChannelClient(FakePublicClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.notifications: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+            self.change_started = asyncio.Event()
+            self.change_release = asyncio.Event()
+            self.test_answered = asyncio.Event()
+            if operation == "unsubscribe":
+                self.subscriptions.extend([ticker_channel(name), book_channel(name)])
+
+        async def subscribe(self, channels: tuple[str, ...] | list[str]) -> None:
+            self.change_started.set()
+            await self.change_release.wait()
+            await super().subscribe(channels)
+
+        async def unsubscribe(self, channels: tuple[str, ...] | list[str]) -> None:
+            self.change_started.set()
+            await self.change_release.wait()
+            await super().unsubscribe(channels)
+
+        async def request(
+            self,
+            method: str,
+            params: dict[str, object],
+            *,
+            responding_to_test_request: bool = False,
+        ) -> object:
+            if method == "public/test":
+                assert responding_to_test_request
+                self.test_answered.set()
+                return {"version": "2.1.1"}
+            return await super().request(
+                method,
+                params,
+                responding_to_test_request=responding_to_test_request,
+            )
+
+        async def next_notification(
+            self, timeout_seconds: float | None = None
+        ) -> dict[str, object]:
+            if timeout_seconds is None:
+                return await self.notifications.get()
+            return await asyncio.wait_for(self.notifications.get(), timeout_seconds)
+
+        def drain_notifications(self) -> tuple[dict[str, object], ...]:
+            return ()
+
+    async def scenario() -> bool:
+        client = BlockingChannelClient()
+        change = asyncio.create_task(runtime._sync_option_membership(client))
+        await client.change_started.wait()
+        await client.notifications.put(
+            StampedMessage(
+                {
+                    "method": "heartbeat",
+                    "params": {"type": "test_request"},
+                },
+                ingress_seq=1,
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+            )
+        )
+        try:
+            await asyncio.wait_for(client.test_answered.wait(), timeout=0.1)
+            answered = True
+        except TimeoutError:
+            answered = False
+        finally:
+            client.change_release.set()
+            await change
+        return answered
+
+    assert asyncio.run(scenario())
+    assert runtime._noted_notification_ids == set()
+
+
+@pytest.mark.parametrize(
+    ("amount", "expected_state", "expected_end"),
+    [
+        (None, DetectorState.UNKNOWN, EpisodeEndReason.UNKNOWN_DETECTOR),
+        (
+            AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.3")),
+            DetectorState.NO_ANOMALY,
+            EpisodeEndReason.KNOWN_INELIGIBLE,
+        ),
+    ],
+)
+def test_amount_loss_ends_episode_and_stops_layer_two_in_same_scope_snapshot(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    amount: AmountMetadata | None,
+    expected_state: DetectorState,
+    expected_end: EpisodeEndReason,
+) -> None:
+    exact, digest = policy_factory(activation_count=1, separation_ms=0)
+    policy = load_policy_bytes(exact, digest)
+    runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    now = time.monotonic_ns() // 1_000_000
+    server_ms = 1_000_000
+    runtime.clock = TrustedClock.from_response(server_ms, now, now)
+    runtime.platform.acknowledge(PLATFORM_CHANNELS)
+    runtime.platform.status_usable = True
+    runtime.platform.post_status_bootstrap_complete = True
+    runtime.platform.maintenance = False
+    runtime.platform.public_methods_allowed = True
+    runtime.option_catalog.complete = True
+    name = "AMOUNT"
+    runtime.options[name] = OptionInstrument(
+        name,
+        server_ms + 60 * 60_000,
+        Decimal(110),
+        OptionType.CALL,
+        amount,
+    )
+    tracker = runtime.trackers[name] = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=digest,
+        instrument_name=name,
+    )
+    tracker.observe(
+        DetectorObservation(
+            causal_seq=1,
+            trusted_time=TimeInterval(server_ms, server_ms),
+            band_id=policy.tte_bands[0].band_id,
+            richness=DecimalInterval(Decimal(2), Decimal(2)),
+        ),
+        policy.tte_bands[0].option_rules[OptionType.CALL],
+    )
+    episode_id = tracker.episode_id
+    assert episode_id is not None
+    runtime.atomic_states[episode_id] = PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE
+    book = runtime.option_books[name] = ContinuousOrderBook(name)
+    book.apply(
+        {
+            "type": "snapshot",
+            "timestamp": server_ms,
+            "instrument_name": name,
+            "change_id": 1,
+            "bids": [["new", 1, "0.1"]],
+            "asks": [],
+        },
+        now,
+    )
+
+    asyncio.run(
+        runtime._evaluate_one(
+            FakePublicClient(),
+            name,
+            evaluation_monotonic_ms=now,
+            boundary_observation_eligible=False,
+            observation_reason="METADATA_ONLY",
+        )
+    )
+
+    assert tracker.detector_state is expected_state
+    assert tracker.episode_id is None
+    assert episode_id not in runtime.atomic_states
+    assert runtime._episode_end_counts[expected_end.value] == 1
+
+
+def test_global_index_gap_changes_every_instrument_in_scope_in_one_pass(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory(activation_count=1, separation_ms=0)
+    policy = load_policy_bytes(exact, digest)
+    runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    now = time.monotonic_ns() // 1_000_000
+    server_ms = 1_000_000
+    runtime.clock = TrustedClock.from_response(server_ms, now, now)
+    runtime.platform.acknowledge(PLATFORM_CHANNELS)
+    runtime.platform.status_usable = True
+    runtime.platform.post_status_bootstrap_complete = True
+    runtime.platform.maintenance = False
+    runtime.platform.public_methods_allowed = True
+    runtime.option_catalog.complete = True
+    amount = AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1"))
+    for name, strike in (("FIRST", Decimal(110)), ("SECOND", Decimal(120))):
+        runtime.options[name] = OptionInstrument(
+            name,
+            server_ms + 60 * 60_000,
+            strike,
+            OptionType.CALL,
+            amount,
+        )
+        tracker = runtime.trackers[name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=digest,
+            instrument_name=name,
+        )
+        tracker.observe(
+            DetectorObservation(
+                causal_seq=1,
+                trusted_time=TimeInterval(server_ms, server_ms),
+                band_id=policy.tte_bands[0].band_id,
+                richness=DecimalInterval(Decimal(2), Decimal(2)),
+            ),
+            policy.tte_bands[0].option_rules[OptionType.CALL],
+        )
+    monkeypatch.setattr(
+        runtime.index,
+        "current_window",
+        lambda *_args, **_kwargs: IndexWindow(None, "INDEX_BASELINE_GAP"),
+    )
+    client = FakePublicClient()
+    client.subscriptions.append(INDEX_CHANNEL)
+
+    asyncio.run(runtime._evaluate_one(client, "FIRST", evaluation_monotonic_ms=now))
+
+    assert set(runtime.results) == {"FIRST", "SECOND"}
+    assert {result.reason for result in runtime.results.values()} == {"INDEX_BASELINE_GAP"}
+    assert all(
+        tracker.detector_state is DetectorState.UNKNOWN for tracker in runtime.trackers.values()
+    )
+    assert runtime._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 2
+
+
+def test_final_window_timer_boundary_ends_entire_scope_without_market_update(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(activation_count=1, separation_ms=0)
+    policy = load_policy_bytes(exact, digest)
+    runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    now = time.monotonic_ns() // 1_000_000
+    server_ms = 1_000_000
+    runtime.clock = TrustedClock.from_response(server_ms, now, now)
+    runtime.platform.acknowledge(PLATFORM_CHANNELS)
+    runtime.platform.status_usable = True
+    runtime.platform.post_status_bootstrap_complete = True
+    runtime.platform.maintenance = False
+    runtime.platform.public_methods_allowed = True
+    runtime.option_catalog.complete = True
+    amount = AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1"))
+    episode_ids: list[str] = []
+    for name, strike in (("FIRST", Decimal(110)), ("SECOND", Decimal(120))):
+        runtime.options[name] = OptionInstrument(
+            name,
+            server_ms + 30 * 60_000,
+            strike,
+            OptionType.CALL,
+            amount,
+        )
+        tracker = runtime.trackers[name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=digest,
+            instrument_name=name,
+        )
+        tracker.observe(
+            DetectorObservation(
+                causal_seq=1,
+                trusted_time=TimeInterval(server_ms - 1, server_ms - 1),
+                band_id=policy.tte_bands[0].band_id,
+                richness=DecimalInterval(Decimal(2), Decimal(2)),
+            ),
+            policy.tte_bands[0].option_rules[OptionType.CALL],
+        )
+        assert tracker.episode_id is not None
+        episode_ids.append(tracker.episode_id)
+        runtime.atomic_states[tracker.episode_id] = PublicAtomicQuoteState.UNKNOWN
+
+    asyncio.run(
+        runtime._evaluate_all(
+            FakePublicClient(),
+            evaluation_monotonic_ms=now,
+            boundary_observation_eligible=False,
+            observation_reason="CLOCK_ONLY",
+        )
+    )
+
+    assert all(tracker.episode_id is None for tracker in runtime.trackers.values())
+    assert runtime._episode_end_counts[EpisodeEndReason.OUT_OF_BASELINE_SCOPE.value] == 2
+    assert all(episode_id not in runtime.atomic_states for episode_id in episode_ids)
+    assert runtime._coverage._current_state is CoverageState.NO_APPLICABLE_SCOPE
+
+
+def test_policy_gap_timer_boundary_ends_entire_scope_without_market_update(
+    tmp_path: Path,
+) -> None:
+    document = policy_document(activation_count=1, separation_ms=0)
+    bands = document["tte_bands"]
+    assert isinstance(bands, list)
+    first_band, second_band = bands
+    assert isinstance(first_band, dict)
+    assert isinstance(second_band, dict)
+    first_band["upper_bound_minutes"] = 330
+    second_band["lower_bound_minutes"] = 390
+    exact, digest = encode_policy(document)
+    policy = load_policy_bytes(exact, digest)
+    runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    now = time.monotonic_ns() // 1_000_000
+    server_ms = 1_000_000
+    runtime.clock = TrustedClock.from_response(server_ms, now, now)
+    runtime.platform.acknowledge(PLATFORM_CHANNELS)
+    runtime.platform.status_usable = True
+    runtime.platform.post_status_bootstrap_complete = True
+    runtime.platform.maintenance = False
+    runtime.platform.public_methods_allowed = True
+    runtime.option_catalog.complete = True
+    amount = AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1"))
+    episode_ids: list[str] = []
+    for name, strike in (("FIRST", Decimal(110)), ("SECOND", Decimal(120))):
+        runtime.options[name] = OptionInstrument(
+            name,
+            server_ms + 360 * 60_000,
+            strike,
+            OptionType.CALL,
+            amount,
+        )
+        tracker = runtime.trackers[name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=digest,
+            instrument_name=name,
+        )
+        tracker.observe(
+            DetectorObservation(
+                causal_seq=1,
+                trusted_time=TimeInterval(server_ms - 1, server_ms - 1),
+                band_id=policy.tte_bands[0].band_id,
+                richness=DecimalInterval(Decimal(2), Decimal(2)),
+            ),
+            policy.tte_bands[0].option_rules[OptionType.CALL],
+        )
+        assert tracker.episode_id is not None
+        episode_ids.append(tracker.episode_id)
+        runtime.atomic_states[tracker.episode_id] = PublicAtomicQuoteState.UNKNOWN
+
+    asyncio.run(
+        runtime._evaluate_all(
+            FakePublicClient(),
+            evaluation_monotonic_ms=now,
+            boundary_observation_eligible=False,
+            observation_reason="CLOCK_ONLY",
+        )
+    )
+
+    assert all(tracker.episode_id is None for tracker in runtime.trackers.values())
+    assert runtime._episode_end_counts[EpisodeEndReason.OUT_OF_BASELINE_SCOPE.value] == 2
+    assert all(episode_id not in runtime.atomic_states for episode_id in episode_ids)
+    assert runtime._coverage._current_state is CoverageState.NO_APPLICABLE_SCOPE
 
 
 def test_band_suspension_pauses_known_active_duration(

@@ -5,7 +5,6 @@ import contextlib
 import json
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
@@ -40,32 +39,34 @@ class PublicSessionError(PublicProtocolError):
 class PublicRequestError(PublicProtocolError):
     """One public RPC or channel request failed without proving a session gap."""
 
+    def __init__(self, message: str, *, envelope: InboundEnvelope | None = None) -> None:
+        super().__init__(message)
+        self.envelope = envelope
+
 
 class PublicProtocolIncompatibility(PublicProtocolError):
     """The consumed official protocol shape is incompatible with this runtime."""
 
 
-@dataclass(frozen=True)
-class _NotificationEnvelope:
-    message: dict[str, object]
-    ingress_seq: int
-    received_monotonic_ms: int
-    channel: str | None
-    subscription_generation: int | None
+class InboundEnvelope(dict[str, object]):
+    def __init__(
+        self,
+        message: dict[str, object],
+        *,
+        ingress_seq: int,
+        received_monotonic_ms: int,
+        channel: str | None = None,
+        subscription_generation: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.ingress_seq = ingress_seq
+        self.received_monotonic_ms = received_monotonic_ms
+        self.channel = channel
+        self.subscription_generation = subscription_generation
 
-
-@dataclass(frozen=True)
-class ReceivedRpcResult:
-    value: object
-    ingress_seq: int
-    received_monotonic_ms: int
-
-
-class ReceivedNotification(dict[str, object]):
-    def __init__(self, envelope: _NotificationEnvelope) -> None:
-        super().__init__(envelope.message)
-        self.ingress_seq = envelope.ingress_seq
-        self.received_monotonic_ms = envelope.received_monotonic_ms
+    @property
+    def value(self) -> object:
+        return _rpc_value(self)
 
 
 class DeribitPublicClient:
@@ -76,8 +77,8 @@ class DeribitPublicClient:
         self._connection: ClientConnection | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._next_request_id = 1
-        self._pending: dict[int, asyncio.Future[ReceivedRpcResult]] = {}
-        self._notifications: asyncio.Queue[_NotificationEnvelope] = asyncio.Queue(
+        self._pending: dict[int, asyncio.Future[InboundEnvelope]] = {}
+        self._notifications: asyncio.Queue[InboundEnvelope] = asyncio.Queue(
             maxsize=MAX_PENDING_NOTIFICATIONS
         )
         self._next_ingress_seq = 1
@@ -124,7 +125,7 @@ class DeribitPublicClient:
         request_id = self._next_request_id
         self._next_request_id += 1
         loop = asyncio.get_running_loop()
-        future: asyncio.Future[ReceivedRpcResult] = loop.create_future()
+        future: asyncio.Future[InboundEnvelope] = loop.create_future()
         self._pending[request_id] = future
         message = {
             "jsonrpc": "2.0",
@@ -138,7 +139,8 @@ class DeribitPublicClient:
         finally:
             self._pending.pop(request_id, None)
 
-    async def subscribe(self, channels: Sequence[str]) -> None:
+    async def subscribe(self, channels: Sequence[str]) -> tuple[InboundEnvelope, ...]:
+        acknowledgements: list[InboundEnvelope] = []
         for batch in subscription_batches(channels):
             previous = {
                 channel: self._active_subscription_generations.get(channel) for channel in batch
@@ -149,6 +151,8 @@ class DeribitPublicClient:
             try:
                 result = await self.request("public/subscribe", {"channels": list(batch)})
                 validate_subscription_ack(batch, _rpc_value(result))
+                if isinstance(result, InboundEnvelope):
+                    acknowledgements.append(result)
             except Exception:
                 for channel, generation in previous.items():
                     if generation is None:
@@ -156,13 +160,18 @@ class DeribitPublicClient:
                     else:
                         self._active_subscription_generations[channel] = generation
                 raise
+        return tuple(acknowledgements)
 
-    async def unsubscribe(self, channels: Sequence[str]) -> None:
+    async def unsubscribe(self, channels: Sequence[str]) -> tuple[InboundEnvelope, ...]:
+        acknowledgements: list[InboundEnvelope] = []
         for batch in subscription_batches(channels):
             result = await self.request("public/unsubscribe", {"channels": list(batch)})
             validate_subscription_ack(batch, _rpc_value(result))
+            if isinstance(result, InboundEnvelope):
+                acknowledgements.append(result)
             for channel in batch:
                 self._active_subscription_generations.pop(channel, None)
+        return tuple(acknowledgements)
 
     async def next_notification(self, timeout_seconds: float | None = None) -> dict[str, object]:
         deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
@@ -175,7 +184,7 @@ class DeribitPublicClient:
             else:
                 envelope = await asyncio.wait_for(self._notifications.get(), remaining)
             if self._is_current(envelope):
-                return ReceivedNotification(envelope)
+                return envelope
 
     def drain_notifications(self) -> tuple[dict[str, object], ...]:
         values: list[dict[str, object]] = []
@@ -185,9 +194,9 @@ class DeribitPublicClient:
             except asyncio.QueueEmpty:
                 return tuple(values)
             if self._is_current(envelope):
-                values.append(ReceivedNotification(envelope))
+                values.append(envelope)
 
-    def _is_current(self, envelope: _NotificationEnvelope) -> bool:
+    def _is_current(self, envelope: InboundEnvelope) -> bool:
         if envelope.channel is None:
             return True
         return (
@@ -209,22 +218,13 @@ class DeribitPublicClient:
                 if isinstance(request_id, int):
                     if request_id in self._pending:
                         future = self._pending[request_id]
-                        if "error" in message:
-                            future.set_exception(
-                                PublicRequestError(f"Deribit JSON-RPC error: {message['error']!r}")
+                        future.set_result(
+                            InboundEnvelope(
+                                message,
+                                ingress_seq=ingress_seq,
+                                received_monotonic_ms=received_monotonic_ms,
                             )
-                        elif "result" not in message:
-                            future.set_exception(
-                                PublicProtocolIncompatibility("JSON-RPC response lacks result")
-                            )
-                        else:
-                            future.set_result(
-                                ReceivedRpcResult(
-                                    value=message["result"],
-                                    ingress_seq=ingress_seq,
-                                    received_monotonic_ms=received_monotonic_ms,
-                                )
-                            )
+                        )
                     continue
                 else:
                     channel: str | None = None
@@ -236,8 +236,8 @@ class DeribitPublicClient:
                             generation = self._active_subscription_generations.get(channel)
                     try:
                         self._notifications.put_nowait(
-                            _NotificationEnvelope(
-                                message=message,
+                            InboundEnvelope(
+                                message,
                                 ingress_seq=ingress_seq,
                                 received_monotonic_ms=received_monotonic_ms,
                                 channel=channel,
@@ -261,8 +261,8 @@ class DeribitPublicClient:
                     future.set_exception(error)
             with contextlib.suppress(asyncio.QueueFull):
                 self._notifications.put_nowait(
-                    _NotificationEnvelope(
-                        message={
+                    InboundEnvelope(
+                        {
                             "jsonrpc": "2.0",
                             "method": "connection_error",
                             "params": {"error": str(exc)},
@@ -287,4 +287,13 @@ def _decode_message(raw_message: str | bytes) -> dict[str, object]:
 
 
 def _rpc_value(result: object) -> object:
-    return result.value if isinstance(result, ReceivedRpcResult) else result
+    if not isinstance(result, InboundEnvelope):
+        return result
+    if "error" in result:
+        raise PublicRequestError(
+            f"Deribit JSON-RPC error: {result['error']!r}",
+            envelope=result,
+        )
+    if "result" not in result:
+        raise PublicProtocolIncompatibility("JSON-RPC response lacks result")
+    return result["result"]
