@@ -5,6 +5,7 @@ import json
 from typing import cast
 
 import pytest
+import radar_runtime.deribit_public as deribit_public
 from radar_runtime.deribit_public import (
     DeribitPublicClient,
     InboundEnvelope,
@@ -163,6 +164,28 @@ def test_transport_connection_deadline_has_no_implementation_default() -> None:
     )
 
     assert client.connection_timeout_seconds == 1.234
+
+
+def test_transport_ignores_ambient_system_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, object] = {}
+
+    async def fake_connect(uri: str, **kwargs: object) -> IncomingConnection:
+        observed["uri"] = uri
+        observed.update(kwargs)
+        return IncomingConnection([])
+
+    monkeypatch.setattr(deribit_public, "connect", fake_connect)
+
+    async def scenario() -> None:
+        async with DeribitPublicClient(session_epoch=1, rpc_deadline_ms=1_234):
+            pass
+
+    asyncio.run(scenario())
+
+    assert observed["uri"] == deribit_public.PRODUCTION_PUBLIC_ENDPOINT
+    assert observed["open_timeout"] == 1.234
+    assert observed["close_timeout"] == 1.234
+    assert observed["proxy"] is None
 
 
 def test_transport_records_real_queue_high_water_and_overflow() -> None:

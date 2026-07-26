@@ -100,6 +100,7 @@ class DeribitPublicClient:
             close_timeout=self.connection_timeout_seconds,
             ping_interval=None,
             max_size=2**24,
+            proxy=None,
         )
         self._reader_task = asyncio.create_task(self._reader(), name="deribit-public-reader")
         return self
