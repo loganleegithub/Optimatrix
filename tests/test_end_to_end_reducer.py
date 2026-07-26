@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from decimal import Decimal
 from pathlib import Path
@@ -136,10 +137,7 @@ def run_nonempty_scenario(
         processed_monotonic_ms=1_002,
     )
     status = only(commands, RpcPurpose.PLATFORM_STATUS)
-    clock = only(commands, RpcPurpose.CLOCK_BOOTSTRAP)
-    option_catalog = only(commands, RpcPurpose.OPTION_CATALOG)
-    combo_catalog = only(commands, RpcPurpose.COMBO_CATALOG)
-    reducer.reduce(
+    bootstrap_commands = reducer.reduce(
         response(
             status,
             {"locked": False, "locked_indices": [], "locked_currencies": []},
@@ -148,6 +146,9 @@ def run_nonempty_scenario(
         ),
         processed_monotonic_ms=1_003,
     )
+    clock = only(bootstrap_commands, RpcPurpose.CLOCK_BOOTSTRAP)
+    option_catalog = only(bootstrap_commands, RpcPurpose.OPTION_CATALOG)
+    combo_catalog = only(bootstrap_commands, RpcPurpose.COMBO_CATALOG)
     index_subscribe = only(
         reducer.reduce(
             response(clock, 600_000, seq=4, received_ms=1_004),
@@ -195,6 +196,8 @@ def run_nonempty_scenario(
                 "settlement_currency": "USDC",
                 "counter_currency": "USDC",
                 "instrument_type": "linear",
+                "is_active": True,
+                "state": "open",
                 "contract_size": 1,
                 "min_trade_amount": 0.1,
                 "qty_tick_size": 0.1,
@@ -352,6 +355,12 @@ def run_nonempty_scenario(
     assert tuple(reducer.combos) == ("COMBO",)
     summary_path = reducer.clean_stop(final_ms + 100)
     assert summary_path.name == "radar-run-summary.json"
+    summary = json.loads(summary_path.read_text())
+    witness = summary["operational_diagnostics"]["witness"]
+    assert witness == {
+        "first_joint_witness_monotonic_ms": final_ms + 2,
+        "continuous_covered_after_witness_ms": 98,
+    }
     return (
         tuple(
             sorted(

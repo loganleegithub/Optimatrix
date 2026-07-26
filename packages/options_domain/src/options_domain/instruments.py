@@ -24,6 +24,33 @@ class OptionType(StrEnum):
     PUT = "put"
 
 
+class InstrumentLifecycleState(StrEnum):
+    OPEN = "open"
+    SETTLEMENT = "settlement"
+    DELIVERED = "delivered"
+    INACTIVE = "inactive"
+    LOCKED = "locked"
+    HALTED = "halted"
+    ARCHIVIZED = "archivized"
+
+
+INSTRUMENT_LIFECYCLE_STATES = frozenset(state.value for state in InstrumentLifecycleState)
+FINAL_INSTRUMENT_LIFECYCLE_STATES = frozenset(
+    {
+        InstrumentLifecycleState.DELIVERED.value,
+        InstrumentLifecycleState.INACTIVE.value,
+        InstrumentLifecycleState.ARCHIVIZED.value,
+    }
+)
+TEMPORARILY_UNAVAILABLE_INSTRUMENT_STATES = frozenset(
+    {
+        InstrumentLifecycleState.SETTLEMENT.value,
+        InstrumentLifecycleState.LOCKED.value,
+        InstrumentLifecycleState.HALTED.value,
+    }
+)
+
+
 class Applicability(StrEnum):
     APPLICABLE = "APPLICABLE"
     OUT_OF_MONITOR_SCOPE = "OUT_OF_MONITOR_SCOPE"
@@ -45,6 +72,8 @@ class OptionInstrument:
     strike: Decimal
     option_type: OptionType
     amount: AmountMetadata | None
+    lifecycle_state: InstrumentLifecycleState = InstrumentLifecycleState.OPEN
+    is_active: bool = True
 
 
 @dataclass(frozen=True)
@@ -86,9 +115,13 @@ def parse_option_instrument(payload: object) -> OptionInstrument | None:
         "instrument_type": "linear",
     }:
         return None
-    if not require_bool(data.get("is_active"), "instrument.is_active"):
-        return None
-    if require_str(data.get("state"), "instrument.state") != "open":
+    is_active = require_bool(data.get("is_active"), "instrument.is_active")
+    state_raw = require_str(data.get("state"), "instrument.state")
+    try:
+        state = InstrumentLifecycleState(state_raw)
+    except ValueError as exc:
+        raise SourceDataError("instrument.state is unsupported") from exc
+    if state.value in FINAL_INSTRUMENT_LIFECYCLE_STATES:
         return None
     option_type_raw = require_str(data.get("option_type"), "instrument.option_type")
     try:
@@ -111,6 +144,8 @@ def parse_option_instrument(payload: object) -> OptionInstrument | None:
         strike=strike,
         option_type=option_type,
         amount=amount,
+        lifecycle_state=state,
+        is_active=is_active,
     )
 
 
@@ -150,6 +185,14 @@ def parse_combo_instrument(
         "counter_currency": "USDC",
         "instrument_type": "linear",
     }:
+        return None
+    is_active = require_bool(metadata.get("is_active"), "combo metadata.is_active")
+    state_raw = require_str(metadata.get("state"), "combo metadata.state")
+    try:
+        metadata_state = InstrumentLifecycleState(state_raw)
+    except ValueError as exc:
+        raise SourceDataError("combo metadata.state is unsupported") from exc
+    if not is_active or metadata_state is not InstrumentLifecycleState.OPEN:
         return None
     raw_legs = require_list(summary.get("legs"), "combo.legs")
     if len(raw_legs) != 2:

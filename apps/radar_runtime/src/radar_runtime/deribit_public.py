@@ -90,6 +90,8 @@ class DeribitPublicClient:
         self.last_inbound_monotonic = time.monotonic()
         self.queue_high_water_frames = 0
         self.overflow_count = 0
+        self.received_frame_count = 0
+        self.enqueued_envelope_count = 0
 
     async def __aenter__(self) -> DeribitPublicClient:
         self._connection = await connect(
@@ -151,6 +153,14 @@ class DeribitPublicClient:
             except asyncio.QueueEmpty:
                 return tuple(values)
 
+    async def stop_intake(self) -> None:
+        if self._reader_task is None:
+            return
+        self._reader_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._reader_task
+        self._reader_task = None
+
     async def _reader(self) -> None:
         if self._connection is None:
             raise RuntimeError("reader started without connection")
@@ -179,6 +189,7 @@ class DeribitPublicClient:
         *,
         received_monotonic_ms: int,
     ) -> None:
+        self.received_frame_count += 1
         envelope = InboundEnvelope(
             message,
             session_epoch=self.session_epoch,
@@ -191,19 +202,25 @@ class DeribitPublicClient:
         except asyncio.QueueFull as exc:
             self.overflow_count += 1
             raise PublicSessionError("inbound queue overflow") from exc
+        self.enqueued_envelope_count += 1
         self.queue_high_water_frames = max(
             self.queue_high_water_frames,
             self._inbound.qsize(),
         )
 
     def _enqueue_connection_error(self, error: PublicProtocolError) -> None:
+        kind = (
+            "PROTOCOL_INCOMPATIBILITY"
+            if isinstance(error, PublicProtocolIncompatibility)
+            else "SESSION_FAILURE"
+        )
         try:
             self._inbound.put_nowait(
                 InboundEnvelope(
                     {
                         "jsonrpc": "2.0",
                         "method": "connection_error",
-                        "params": {"error": str(error)},
+                        "params": {"error": str(error), "kind": kind},
                     },
                     session_epoch=self.session_epoch,
                     ingress_seq=self._next_ingress_seq,
@@ -213,6 +230,7 @@ class DeribitPublicClient:
         except asyncio.QueueFull:
             self.overflow_count += 1
             return
+        self.enqueued_envelope_count += 1
         self.queue_high_water_frames = max(
             self.queue_high_water_frames,
             self._inbound.qsize(),

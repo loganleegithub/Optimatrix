@@ -180,6 +180,8 @@ def calculate_current_evaluation(
     ticker: TickerState | None,
     causal_closes: tuple[Decimal, ...] | None,
     baseline_unavailable_reason: str = "INDEX_BASELINE_WARMUP",
+    ticker_unavailable_reason: str = "FORWARD_TICKER_UNKNOWN",
+    ticker_continuity_gap: bool = False,
 ) -> CurrentEvaluation:
     def current(
         disposition: CurrentDisposition,
@@ -277,10 +279,11 @@ def calculate_current_evaluation(
     if ticker is None:
         return current(
             CurrentDisposition.UNKNOWN,
-            "FORWARD_TICKER_UNKNOWN",
+            ticker_unavailable_reason,
             known=False,
             full_formula=False,
             band_id=band.band_id,
+            continuity_gap=ticker_continuity_gap,
         )
     if ticker.forward_usdc <= 0 or not ticker.forward_usdc.is_finite():
         return current(
@@ -348,9 +351,23 @@ def calculate_current_evaluation(
         )
     except (NumericalUnknown, BaselineUnavailable) as exc:
         reason = str(exc) or type(exc).__name__
-        currentness_gap = reason in {"INDEX_BASELINE_STALE", "INDEX_BASELINE_GAP"}
+        index_tail_pending = reason in {
+            "INDEX_TIME_BOUNDARY_PENDING",
+            "INDEX_WATERMARK_PENDING",
+        }
+        currentness_gap = reason in {
+            "INDEX_BASELINE_STALE",
+            "INDEX_BASELINE_GAP",
+            "INDEX_WINDOW_GAP",
+            "INDEX_SOURCE_STALE",
+            "INDEX_CONTINUITY_GAP",
+        }
         return current(
-            CurrentDisposition.UNKNOWN,
+            (
+                CurrentDisposition.INDEX_TAIL_PENDING
+                if index_tail_pending
+                else CurrentDisposition.UNKNOWN
+            ),
             reason,
             known=False,
             full_formula=False,

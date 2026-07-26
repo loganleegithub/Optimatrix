@@ -151,6 +151,21 @@ def classify_atomic_quotes(
     quotes: list[AtomicQuote] = []
     unknown: list[str] = []
     for combo, match in matches:
+        option_amount_unknown = False
+        option_amount_ineligible = False
+        for option_name in (
+            short_leg.instrument_name,
+            match.long_instrument_name,
+        ):
+            option = options_by_name[option_name]
+            if option.amount is None:
+                unknown.append(f"{option_name}:AMOUNT_METADATA_UNKNOWN")
+                option_amount_unknown = True
+                continue
+            if check_target_amount(target_btc, option.amount).state is AmountState.INELIGIBLE:
+                option_amount_ineligible = True
+        if option_amount_unknown or option_amount_ineligible:
+            continue
         amount_check = (
             check_target_amount(target_btc, combo.amount) if combo.amount is not None else None
         )

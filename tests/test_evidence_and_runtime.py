@@ -13,6 +13,7 @@ from market_monitor import (
     PriceLevel,
     TimeInterval,
 )
+from radar_runtime.deribit_public import InboundEnvelope
 from radar_runtime.identity import (
     StartupGuardError,
     prepare_evidence_directory,
@@ -143,7 +144,7 @@ def summary_object(
 
 def operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
     return {
-        "operational_diagnostics_schema_version": 1,
+        "operational_diagnostics_schema_version": 2,
         "runtime_limits": {
             "heartbeat_interval_seconds": 30,
             "session_liveness_deadline_ms": 60_000,
@@ -151,6 +152,7 @@ def operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
             "clock_refresh_interval_ms": 30_000,
             "clock_stale_deadline_ms": 60_000,
             "index_source_stale_deadline_ms": 90_000,
+            "ticker_source_stale_deadline_ms": 5_000,
             "notification_queue_lag_deadline_ms": 1_000,
             "time_boundary_poll_interval_ms": 1_000,
         },
@@ -407,7 +409,7 @@ def test_operational_diagnostics_are_strict_derived_and_payload_free() -> None:
     summary = summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
-    assert diagnostics["operational_diagnostics_schema_version"] == 1
+    assert diagnostics["operational_diagnostics_schema_version"] == 2
     assert "price" not in json.dumps(diagnostics)
 
     channels = diagnostics["channel_by_class"]
@@ -423,6 +425,133 @@ def test_operational_diagnostics_are_strict_derived_and_payload_free() -> None:
     assert isinstance(source_shapes, list)
     source_shapes[0]["payload"] = {"price": 100}
     with pytest.raises(EvidenceError, match="exact"):
+        validate_run_summary(summary)
+
+
+def test_operational_diagnostics_requires_exact_nine_runtime_limits() -> None:
+    summary = summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["operational_diagnostics_schema_version"] = 2
+    runtime_limits = diagnostics["runtime_limits"]
+    assert isinstance(runtime_limits, dict)
+    runtime_limits["ticker_source_stale_deadline_ms"] = 5_000
+
+    validate_run_summary(summary)
+
+
+def test_runtime_projects_exact_policy_runtime_limits(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=7_777)
+    policy = load_policy_bytes(exact, digest)
+    runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+
+    diagnostics = runtime.reducer._operational_diagnostics(0)
+
+    assert diagnostics["operational_diagnostics_schema_version"] == 2
+    assert diagnostics["runtime_limits"] == policy.runtime_limits.as_object()
+    runtime_limits = diagnostics["runtime_limits"]
+    assert isinstance(runtime_limits, dict)
+    assert len(runtime_limits) == 9
+    assert runtime_limits["ticker_source_stale_deadline_ms"] == 7_777
+
+
+def test_run_summary_rejects_legacy_operational_diagnostics_schema() -> None:
+    summary = summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["operational_diagnostics_schema_version"] = 1
+
+    with pytest.raises(EvidenceError, match="schema version must be 2"):
+        validate_run_summary(summary)
+
+
+def test_run_summary_rejects_legacy_eight_field_runtime_limits() -> None:
+    summary = summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    runtime_limits = diagnostics["runtime_limits"]
+    assert isinstance(runtime_limits, dict)
+    del runtime_limits["ticker_source_stale_deadline_ms"]
+
+    with pytest.raises(EvidenceError, match="exact repository-owned schema"):
+        validate_run_summary(summary)
+
+
+def test_run_summary_rejects_invalid_ticker_source_stale_deadline() -> None:
+    summary = summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    runtime_limits = diagnostics["runtime_limits"]
+    assert isinstance(runtime_limits, dict)
+    runtime_limits["ticker_source_stale_deadline_ms"] = 0
+
+    with pytest.raises(EvidenceError, match="must be positive"):
+        validate_run_summary(summary)
+
+
+def test_run_summary_rejects_ticker_deadline_shorter_than_poll_interval() -> None:
+    summary = summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    runtime_limits = diagnostics["runtime_limits"]
+    assert isinstance(runtime_limits, dict)
+    runtime_limits["ticker_source_stale_deadline_ms"] = 999
+
+    with pytest.raises(EvidenceError, match="ticker source stale deadline"):
+        validate_run_summary(summary)
+
+
+@pytest.mark.parametrize(
+    ("segments", "first_witness_ms", "continuous_ms", "message"),
+    (
+        (
+            (CoverageSegment(0, 20, CoverageState.KNOWN_COMPLETE),),
+            21,
+            0,
+            "within the runtime interval",
+        ),
+        (
+            (CoverageSegment(100, 120, CoverageState.KNOWN_COMPLETE),),
+            99,
+            21,
+            "within the runtime interval",
+        ),
+        (
+            (CoverageSegment(0, 20, CoverageState.KNOWN_COMPLETE),),
+            10,
+            9,
+            "continuous duration",
+        ),
+    ),
+)
+def test_run_summary_rejects_impossible_joint_witness_continuity(
+    segments: tuple[CoverageSegment, ...],
+    first_witness_ms: int,
+    continuous_ms: int,
+    message: str,
+) -> None:
+    summary = summary_object(segments=segments)
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    witness = diagnostics["witness"]
+    assert isinstance(witness, dict)
+    witness["first_joint_witness_monotonic_ms"] = first_witness_ms
+    witness["continuous_covered_after_witness_ms"] = continuous_ms
+
+    with pytest.raises(EvidenceError, match=message):
         validate_run_summary(summary)
 
 
@@ -549,3 +678,82 @@ def test_evidence_oserror_is_fatal_without_reconnect(
         )
 
     assert connection_enters == 1
+
+
+def test_continuous_inbound_flow_cannot_starve_absolute_time_boundaries(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    policy = load_policy_bytes(exact, digest)
+    runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    stop_event = asyncio.Event()
+    summary_path = tmp_path / "summary.json"
+    now_ms = 0
+    next_seq = 0
+    reduced: list[int] = []
+    timer_boundaries: list[int] = []
+
+    class ContinuousClient:
+        session_epoch = 1
+        queue_high_water_frames = 0
+        overflow_count = 0
+        received_frame_count = 0
+
+        async def next_envelope(
+            self,
+            timeout_seconds: float | None = None,
+        ) -> InboundEnvelope:
+            del timeout_seconds
+            nonlocal now_ms, next_seq
+            next_seq += 1
+            now_ms = next_seq * 400
+            if next_seq == 3:
+                stop_event.set()
+            return InboundEnvelope(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "heartbeat",
+                    "params": {"type": "heartbeat"},
+                },
+                session_epoch=1,
+                ingress_seq=next_seq,
+                received_monotonic_ms=now_ms,
+            )
+
+        async def send_request(self, **_kwargs: object) -> None:
+            raise AssertionError("patched reducer must not emit commands")
+
+    def reduce_frame(
+        frame: InboundEnvelope,
+        *,
+        processed_monotonic_ms: int,
+    ) -> tuple[object, ...]:
+        assert processed_monotonic_ms == now_ms
+        reduced.append(frame.ingress_seq)
+        return ()
+
+    def advance_time(boundary_ms: int) -> tuple[object, ...]:
+        timer_boundaries.append(boundary_ms)
+        return ()
+
+    monkeypatch.setattr(runtime_module, "_monotonic_ms", lambda: now_ms)
+    monkeypatch.setattr(runtime.reducer, "begin_session", lambda **_kwargs: ())
+    monkeypatch.setattr(runtime.reducer, "reduce", reduce_frame)
+    monkeypatch.setattr(runtime.reducer, "advance_time", advance_time)
+    monkeypatch.setattr(runtime.reducer, "clean_stop", lambda _stop_ms: summary_path)
+
+    assert asyncio.run(runtime.run(ContinuousClient(), stop_event)) == summary_path
+    assert reduced == [1, 2, 3]
+    assert timer_boundaries == [1_000]

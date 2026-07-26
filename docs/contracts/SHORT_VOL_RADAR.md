@@ -181,8 +181,29 @@ unobserved `maintenance = false`. It remains unusable until:
 
 That is the global platform boundary, not a global all-option barrier. Each current option's own
 initial ticker and book snapshot gates only that detector. A missing or invalid per-instrument
-fact makes that instrument `UNKNOWN`; it does not suppress a causally known active witness in
-another instrument, which is reported through the completeness-aware aggregate state.
+fact required by the evaluation gate actually reached makes that instrument `UNKNOWN`; it does
+not overwrite an earlier terminal known-ineligibility result or suppress a causally known active
+witness in another instrument, which is reported through the completeness-aware aggregate state.
+
+An accepted option ticker is current exactly while
+`ticker.source_timestamp_ms <= trusted_time.upper_ms <= ticker.source_timestamp_ms +
+ticker_source_stale_deadline_ms`; equality at either boundary remains current. A trusted upper
+bound even one millisecond beyond the upper cutoff latches the current ticker subscription
+generation stale. A later clock refresh or narrower trusted-time interval cannot resurrect that
+generation. Recovery requires a newly acknowledged ticker generation and a ticker whose source
+timestamp is strictly later than the latched one. A source timestamp even one millisecond above
+the trusted upper bound fails closed as `TICKER_TIMESTAMP_AHEAD`.
+
+Ticker stale/ahead is local to the option and requests exactly one ticker resubscription for that
+failed generation. When evaluation reaches the forward gate, its current detector becomes
+`UNKNOWN`, an active episode ends `UNKNOWN_AT_GAP`, and Layer 2 stops. A known amount/off-grid
+failure or insufficient target bid depth that terminates evaluation before the forward gate
+retains its earlier `KNOWN_INELIGIBLE` result; ticker unavailability cannot overwrite it.
+Heartbeat, book, index, metadata, and unchanged elapsed-time facts cannot refresh the ticker. A
+recovered ticker with the same numeric forward and only a newer source timestamp may restore
+current truth, but the freshness recovery itself is not a countable activation/clear observation.
+A change only between valid `underlying_index` labels with the same numeric forward is likewise
+not countable.
 
 `platform_state.public_methods_state.allow_unauthenticated_public_requests = false`, a relevant
 lock, or a maintenance/break notification latches the corresponding guard negative for that
@@ -337,7 +358,7 @@ facts are `UNKNOWN`.
 The only initially authorized detector family is
 `POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE`.
 
-One exact content-identified Policy file has `policy_schema_version = 2` and supplies:
+One exact content-identified Policy file has `policy_schema_version = 3` and supplies:
 
 - `target_base_quantity_btc`;
 - one exact `runtime_limits` object containing:
@@ -347,6 +368,7 @@ One exact content-identified Policy file has `policy_schema_version = 2` and sup
   - `clock_refresh_interval_ms`;
   - `clock_stale_deadline_ms`;
   - `index_source_stale_deadline_ms`;
+  - `ticker_source_stale_deadline_ms`;
   - `notification_queue_lag_deadline_ms`;
   - `time_boundary_poll_interval_ms`;
 - one non-empty list of exact TTE bands, where each band owns:
@@ -366,9 +388,10 @@ underlying return baseline for that band.
 Load-time validation requires:
 
 - exact repository-owned object keys at every nesting level (`additionalProperties = false`);
-- exactly `policy_schema_version = 2`;
+- exactly `policy_schema_version = 3`;
 - every runtime-limit field to be a positive integer, with
   `time_boundary_poll_interval_ms <= 1000`,
+  `time_boundary_poll_interval_ms <= ticker_source_stale_deadline_ms`,
   `rpc_deadline_ms >= time_boundary_poll_interval_ms`,
   `session_liveness_deadline_ms > heartbeat_interval_seconds × 1000`, and
   `clock_stale_deadline_ms > clock_refresh_interval_ms`;
@@ -876,10 +899,10 @@ are business-state transitions after reduced-state de-duplication, never message
 with a zero or unknown denominator are `null`.
 
 `operational_diagnostics` is a required strict object with
-`operational_diagnostics_schema_version = 1`. It is transport evidence only and has exactly these
+`operational_diagnostics_schema_version = 2`. It is transport evidence only and has exactly these
 members:
 
-- `runtime_limits`: the exact eight frozen Policy `runtime_limits`;
+- `runtime_limits`: the exact nine frozen Policy `runtime_limits`;
 - `ingress`: `received_envelope_count`, `reduced_envelope_count`,
   `ingress_gap_or_duplicate_count`, `queue_high_water_frames`,
   `max_receive_to_reduce_lag_ms`, and `overflow_count`;
@@ -953,9 +976,11 @@ evidence directory fail closed. Comparison compatibility across different Policy
 reported side by side, with no causal or quality inference. A schema or reader change requires an
 explicit task.
 
-This contract revision changes the exact Policy schema to version 2 and makes
-`operational_diagnostics_schema_version = 1` mandatory in `RADAR_RUN_SUMMARY`. Any locally created
-artifact using the prior Policy or summary shape is `MIGRATION_REQUIRED` and is not accepted.
+This contract revision changes the exact Policy schema to version 3 and makes
+`operational_diagnostics_schema_version = 2` mandatory in `RADAR_RUN_SUMMARY`. A version-2 Policy,
+a version-1 operational-diagnostics summary, or any locally created artifact using either prior
+shape is `MIGRATION_REQUIRED` and is not accepted. Missing
+`ticker_source_stale_deadline_ms` is never supplied by a default.
 `SHORT_VOL_ANOMALY_EVENT` and `PUBLIC_ATOMIC_QUOTE_EVENT` market-field semantics remain compatible.
 There is no accepted production artifact to migrate, and this task does not add a migration or
 replay tool.

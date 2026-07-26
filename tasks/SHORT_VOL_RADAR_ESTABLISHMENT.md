@@ -153,8 +153,8 @@ The runtime implements one bounded formula family. A Policy file supplies exact 
 
 - target base quantity in BTC;
 - one exact `runtime_limits` object containing heartbeat interval, session-liveness, RPC,
-  clock-refresh, clock-stale, index-source-stale, notification-queue-lag, and time-boundary-poll
-  deadlines;
+  clock-refresh, clock-stale, index-source-stale, ticker-source-stale, notification-queue-lag, and
+  time-boundary-poll deadlines;
 - one or more exact TTE bands, each with trailing-variance lookbacks, non-negative weights, and a
   strictly positive annualized variance floor;
 - in every band, a non-empty `option_rules` map keyed only by `call` and/or `put`;
@@ -165,7 +165,7 @@ A call or put omitted from a band is explicitly out of detector scope in that ba
 inside one band may use different detector boundaries but must share that band's one BTC
 underlying return baseline.
 
-The external file has exactly `policy_schema_version = 2`. Policy loading rejects an empty
+The external file has exactly `policy_schema_version = 3`. Policy loading rejects an empty
 TTE-band set or empty/unsupported per-band `option_rules`;
 empty/duplicate/non-positive lookbacks; missing or misaligned weights;
 non-finite/negative weights or a sum other than exactly one after canonical decimal parsing;
@@ -187,6 +187,7 @@ known to fail.
 
 Every runtime limit is a positive integer;
 `time_boundary_poll_interval_ms <= 1000`,
+`time_boundary_poll_interval_ms <= ticker_source_stale_deadline_ms`,
 `rpc_deadline_ms >= time_boundary_poll_interval_ms`,
 `session_liveness_deadline_ms > heartbeat_interval_seconds × 1000`, and
 `clock_stale_deadline_ms > clock_refresh_interval_ms`. The implementation has no operational
@@ -285,6 +286,22 @@ official metadata must be fetched before use.
 Every index/ticker channel must deliver its own initial usable notification and every book its own
 snapshot; reconnect invalidates all of them. Apart from status/time/catalog/new-member metadata
 bootstrap, no REST polling or alternate index/ticker interval may feed a detector observation.
+
+One option ticker remains current exactly while
+`ticker.source_timestamp_ms <= trusted_time.upper_ms <= ticker.source_timestamp_ms +
+ticker_source_stale_deadline_ms`; equality at either boundary is current. Crossing the upper
+cutoff is stale, while a source timestamp above `trusted_time.upper_ms` is ahead and fails closed.
+The first stale/ahead result latches that ticker subscription generation failed: clock refresh or
+a narrower time interval cannot revive it. Only a newly acknowledged generation with a strictly
+later ticker source timestamp may recover the option. Recovery with the same forward updates
+current truth but is not itself a countable activation/clear observation.
+Ticker failure is option-local and emits exactly one resubscription for the failed generation.
+When evaluation reaches the forward gate it produces `UNKNOWN`, ends an active episode
+`UNKNOWN_AT_GAP`, and stops Layer 2. A known amount/off-grid failure or insufficient target bid
+depth that terminates evaluation before that gate remains `KNOWN_INELIGIBLE`; ticker
+unavailability cannot overwrite it. Heartbeat, book, index, or metadata traffic cannot refresh
+the ticker. Here “same forward” means the same numeric forward: changing only between valid
+`underlying_index` labels is not countable either.
 
 Option and combo catalog bootstrap is race-free: acknowledge and buffer the lifecycle stream,
 fetch the catalog snapshot, then reconcile buffered events in causal order before declaring the
@@ -680,10 +697,10 @@ UNKNOWN_AT_GAP | CENSORED_AT_STOP`, known-active duration by end reason, band-su
 atomic-state transitions, detector `UNKNOWN` transitions by reason, and Policy identity. These are
 reduced business-state transitions, never message counts. It contains no full market chain.
 
-It also requires strict `operational_diagnostics_schema_version = 1` with the exact
+It also requires strict `operational_diagnostics_schema_version = 2` with the exact
 `SHORT_VOL_RADAR` schema:
 
-- all eight frozen `runtime_limits`;
+- all nine frozen `runtime_limits`;
 - ingress received/reduced/gap-or-duplicate counts, queue high-water, maximum receive-to-reduce
   lag, and overflow;
 - per-method request/success/error/late/rate-limit counts and latency count/sum/max;
@@ -725,9 +742,11 @@ binds one Policy and runtime identity; mixed identities fail closed. Cross-Polic
 is `NOT_COMPARABLE` for forecast or trading claims, although named operational counts may be
 displayed side by side without causal inference.
 
-The exact Policy schema is now version 2 and the strict run summary requires diagnostics schema
-version 1. Prior local Policy/summary artifacts are `MIGRATION_REQUIRED` and not accepted. There is
-no accepted production artifact to migrate, and this task adds no migration or replay path.
+The exact Policy schema is now version 3 and the strict run summary requires diagnostics schema
+version 2. A version-2 Policy, a version-1 operational-diagnostics summary, and prior local
+Policy/summary shapes are `MIGRATION_REQUIRED` and not accepted. Missing
+`ticker_source_stale_deadline_ms` is never filled by a default. There is no accepted production
+artifact to migrate, and this task adds no migration or replay path.
 
 Each object has a simple strict repository-owned schema and Policy content identity. No separate
 source-document manifest, Git-object provenance graph, hit-only recomputation command, full-feed

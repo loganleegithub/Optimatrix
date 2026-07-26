@@ -17,7 +17,13 @@ from short_vol_radar.detector import (
     TrackerState,
 )
 from short_vol_radar.policy import RadarPolicy, load_policy_bytes
-from short_vol_radar.radar import TickerState, evaluate_instrument, parse_ticker
+from short_vol_radar.radar import (
+    CurrentDisposition,
+    TickerState,
+    calculate_current_evaluation,
+    evaluate_instrument,
+    parse_ticker,
+)
 
 
 def make_book(name: str, bid_price: Decimal | None, amount: str = "0.1") -> ContinuousOrderBook:
@@ -443,6 +449,29 @@ def test_known_liquidity_and_otm_failures_short_circuit_missing_inputs(
     assert with_depth.reason == "OPTION_AMOUNT_METADATA_UNKNOWN"
 
 
+def test_insufficient_depth_short_circuits_stale_ticker_unknown(
+    policy_factory: PolicyFactory,
+) -> None:
+    policy, instrument, _tracker, _price = make_engine_inputs(policy_factory)
+
+    current = calculate_current_evaluation(
+        policy=policy,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=1,
+        option_book=make_book("SHORT", None),
+        ticker=None,
+        causal_closes=None,
+        ticker_unavailable_reason="TICKER_SOURCE_STALE",
+        ticker_continuity_gap=True,
+    )
+
+    assert current.disposition is CurrentDisposition.KNOWN_INELIGIBLE
+    assert current.reason == "INSUFFICIENT_TARGET_BID_DEPTH"
+    assert current.known_evaluation
+    assert not current.continuity_gap
+
+
 def test_missing_book_ticker_and_warmup_remain_unknown(
     policy_factory: PolicyFactory,
 ) -> None:
@@ -484,6 +513,103 @@ def test_missing_book_ticker_and_warmup_remain_unknown(
     )
     assert "WARMUP" in (warmup.reason or "")
     assert warmup.detector_state is DetectorState.UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_disposition", "expected_continuity_gap"),
+    [
+        ("INDEX_WARMUP", CurrentDisposition.UNKNOWN, False),
+        (
+            "INDEX_TIME_BOUNDARY_PENDING",
+            CurrentDisposition.INDEX_TAIL_PENDING,
+            False,
+        ),
+        (
+            "INDEX_WATERMARK_PENDING",
+            CurrentDisposition.INDEX_TAIL_PENDING,
+            False,
+        ),
+        ("INDEX_WINDOW_GAP", CurrentDisposition.UNKNOWN, True),
+        ("INDEX_SOURCE_STALE", CurrentDisposition.UNKNOWN, True),
+        ("INDEX_CONTINUITY_GAP", CurrentDisposition.UNKNOWN, True),
+    ],
+)
+def test_index_tail_unavailability_has_typed_current_semantics(
+    policy_factory: PolicyFactory,
+    reason: str,
+    expected_disposition: CurrentDisposition,
+    expected_continuity_gap: bool,
+) -> None:
+    policy, instrument, _tracker, price = make_engine_inputs(policy_factory)
+
+    current = calculate_current_evaluation(
+        policy=policy,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=1,
+        option_book=make_book("SHORT", price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=None,
+        baseline_unavailable_reason=reason,
+    )
+
+    assert current.reason == reason
+    assert current.disposition is expected_disposition
+    assert current.continuity_gap is expected_continuity_gap
+    assert not current.known_evaluation
+    assert not current.full_formula_evaluation
+
+
+def test_index_unavailability_is_lazy_behind_pricing_eligibility_gates(
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy, instrument, _tracker, price = make_engine_inputs(policy_factory)
+    unavailable = "INDEX_CONTINUITY_GAP"
+
+    def current(
+        candidate: OptionInstrument,
+        option_book: ContinuousOrderBook | None,
+        ticker: TickerState | None,
+    ) -> radar_module.CurrentEvaluation:
+        return calculate_current_evaluation(
+            policy=policy,
+            instrument=candidate,
+            trusted_time=TimeInterval(0, 0),
+            causal_seq=1,
+            option_book=option_book,
+            ticker=ticker,
+            causal_closes=None,
+            baseline_unavailable_reason=unavailable,
+        )
+
+    valid_book = make_book("SHORT", price)
+    valid_ticker = TickerState(Decimal(100), "index_price", 1)
+    amount_ineligible = current(
+        replace(
+            instrument,
+            amount=AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.3")),
+        ),
+        None,
+        None,
+    )
+    book_unknown = current(instrument, None, None)
+    depth_ineligible = current(instrument, make_book("SHORT", None), None)
+    ticker_unknown = current(instrument, valid_book, None)
+    not_otm = current(
+        replace(instrument, strike=Decimal(99)),
+        valid_book,
+        valid_ticker,
+    )
+    monkeypatch.setattr(radar_module, "delta_is_eligible", lambda *_args: False)
+    delta_ineligible = current(instrument, valid_book, valid_ticker)
+
+    assert amount_ineligible.reason == "OFF_PUBLISHED_QUANTITY_GRID"
+    assert book_unknown.reason == "OPTION_BOOK_UNKNOWN"
+    assert depth_ineligible.reason == "INSUFFICIENT_TARGET_BID_DEPTH"
+    assert ticker_unknown.reason == "FORWARD_TICKER_UNKNOWN"
+    assert not_otm.reason == "NOT_OTM"
+    assert delta_ineligible.reason == "DELTA_INELIGIBLE"
 
 
 def test_band_boundary_suspends_but_scope_gap_ends_episode(

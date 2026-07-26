@@ -72,6 +72,22 @@ def test_reader_enqueues_every_inbound_frame_once_in_one_continuous_sequence() -
     assert frames[-1].get("method") == "connection_error"
 
 
+def test_reader_preserves_fatal_protocol_failure_identity_in_ingress() -> None:
+    async def scenario() -> InboundEnvelope:
+        client = DeribitPublicClient(session_epoch=7, rpc_deadline_ms=30_000)
+        client._connection = IncomingConnection(["not-json"])  # type: ignore[assignment]
+
+        await client._reader()
+        return client.drain_envelopes()[-1]
+
+    frame = asyncio.run(scenario())
+    params = frame.get("params")
+
+    assert frame.get("method") == "connection_error"
+    assert isinstance(params, dict)
+    assert params["kind"] == "PROTOCOL_INCOMPATIBILITY"
+
+
 def test_client_sends_without_response_future_or_client_subscription_generation() -> None:
     async def scenario() -> dict[str, object]:
         client = DeribitPublicClient(session_epoch=3, rpc_deadline_ms=30_000)

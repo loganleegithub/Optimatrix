@@ -64,6 +64,7 @@ class RuntimeLimits:
     clock_refresh_interval_ms: int
     clock_stale_deadline_ms: int
     index_source_stale_deadline_ms: int
+    ticker_source_stale_deadline_ms: int
     notification_queue_lag_deadline_ms: int
     time_boundary_poll_interval_ms: int
 
@@ -75,6 +76,7 @@ class RuntimeLimits:
             "clock_refresh_interval_ms": self.clock_refresh_interval_ms,
             "clock_stale_deadline_ms": self.clock_stale_deadline_ms,
             "index_source_stale_deadline_ms": self.index_source_stale_deadline_ms,
+            "ticker_source_stale_deadline_ms": self.ticker_source_stale_deadline_ms,
             "notification_queue_lag_deadline_ms": self.notification_queue_lag_deadline_ms,
             "time_boundary_poll_interval_ms": self.time_boundary_poll_interval_ms,
         }
@@ -235,8 +237,8 @@ def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:
         "Policy",
     )
     schema_version = _positive_int(raw["policy_schema_version"], "policy_schema_version")
-    if schema_version != 2:
-        raise PolicyError("policy_schema_version must be exactly 2")
+    if schema_version != 3:
+        raise PolicyError("policy_schema_version must be exactly 3")
     family = raw["policy_family"]
     if family != POLICY_FAMILY:
         raise PolicyError(f"policy_family must be {POLICY_FAMILY}")
@@ -273,6 +275,7 @@ def _parse_runtime_limits(value: object) -> RuntimeLimits:
         "clock_refresh_interval_ms",
         "clock_stale_deadline_ms",
         "index_source_stale_deadline_ms",
+        "ticker_source_stale_deadline_ms",
         "notification_queue_lag_deadline_ms",
         "time_boundary_poll_interval_ms",
     }
@@ -280,6 +283,11 @@ def _parse_runtime_limits(value: object) -> RuntimeLimits:
     parsed = {field: _positive_int(value[field], f"runtime_limits.{field}") for field in fields}
     if parsed["time_boundary_poll_interval_ms"] > 1_000:
         raise PolicyError("runtime_limits.time_boundary_poll_interval_ms must be <= 1000")
+    if parsed["time_boundary_poll_interval_ms"] > parsed["ticker_source_stale_deadline_ms"]:
+        raise PolicyError(
+            "runtime_limits.ticker_source_stale_deadline_ms must cover "
+            "the time-boundary poll interval"
+        )
     if parsed["rpc_deadline_ms"] < parsed["time_boundary_poll_interval_ms"]:
         raise PolicyError(
             "runtime_limits.rpc_deadline_ms must cover the time-boundary poll interval"

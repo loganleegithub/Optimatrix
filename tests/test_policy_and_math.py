@@ -29,6 +29,55 @@ from short_vol_radar.policy import (
 )
 
 
+def _policy_with_ticker_stale_deadline(
+    policy_factory: PolicyFactory,
+    *,
+    deadline_ms: object = 5_000,
+) -> tuple[bytes, str]:
+    exact, _ = policy_factory()
+    document: dict[str, Any] = json.loads(exact)
+    document["policy_schema_version"] = 3
+    runtime_limits = document["runtime_limits"]
+    assert isinstance(runtime_limits, dict)
+    runtime_limits["ticker_source_stale_deadline_ms"] = deadline_ms
+    changed = json.dumps(document, separators=(",", ":"), sort_keys=True).encode()
+    return changed, digest_policy_bytes(changed)
+
+
+def test_policy_requires_and_binds_ticker_source_stale_deadline(
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = _policy_with_ticker_stale_deadline(policy_factory)
+
+    policy = load_policy_bytes(exact, digest)
+
+    assert policy.schema_version == 3
+    assert policy.runtime_limits.ticker_source_stale_deadline_ms == 5_000
+    assert policy.runtime_limits.as_object()["ticker_source_stale_deadline_ms"] == 5_000
+
+
+def test_ticker_source_stale_deadline_changes_policy_identity(
+    policy_factory: PolicyFactory,
+) -> None:
+    first_bytes, first_digest = _policy_with_ticker_stale_deadline(
+        policy_factory,
+        deadline_ms=5_000,
+    )
+    second_bytes, second_digest = _policy_with_ticker_stale_deadline(
+        policy_factory,
+        deadline_ms=10_000,
+    )
+
+    first = load_policy_bytes(first_bytes, first_digest)
+    second = load_policy_bytes(second_bytes, second_digest)
+
+    assert first.identity != second.identity
+    assert (
+        first.runtime_limits.ticker_source_stale_deadline_ms
+        != second.runtime_limits.ticker_source_stale_deadline_ms
+    )
+
+
 def test_policy_loads_exact_bytes_once_and_binds_digest(
     tmp_path: Path, policy_factory: PolicyFactory
 ) -> None:
@@ -37,10 +86,11 @@ def test_policy_loads_exact_bytes_once_and_binds_digest(
     path.write_bytes(exact)
     policy = load_policy(path, digest)
     assert policy.identity == digest
-    assert policy.schema_version == 2
+    assert policy.schema_version == 3
     assert policy.target_base_quantity_btc == Decimal("0.1")
     assert policy.largest_lookback_minutes == 5
     assert policy.runtime_limits.notification_queue_lag_deadline_ms == 1_000
+    assert policy.runtime_limits.ticker_source_stale_deadline_ms == 5_000
     assert policy.runtime_limits.time_boundary_poll_interval_ms == 1_000
 
     path.write_text("{}", encoding="utf-8")
@@ -136,11 +186,39 @@ def test_policy_rejects_invalid_steps_counts_bands_and_empty_rules(
         load_policy_bytes(changed, digest_policy_bytes(changed))
 
 
+def test_policy_rejects_missing_ticker_source_stale_deadline_without_default(
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, _ = policy_factory()
+    document: dict[str, Any] = json.loads(exact)
+    runtime_limits = document["runtime_limits"]
+    assert isinstance(runtime_limits, dict)
+    del runtime_limits["ticker_source_stale_deadline_ms"]
+    changed = json.dumps(document, separators=(",", ":"), sort_keys=True).encode()
+
+    with pytest.raises(PolicyError, match="ticker_source_stale_deadline_ms"):
+        load_policy_bytes(changed, digest_policy_bytes(changed))
+
+
+@pytest.mark.parametrize("deadline_ms", [0, -1, 1.5, "5000"])
+def test_policy_rejects_invalid_ticker_source_stale_deadline(
+    policy_factory: PolicyFactory,
+    deadline_ms: object,
+) -> None:
+    changed, digest = _policy_with_ticker_stale_deadline(
+        policy_factory,
+        deadline_ms=deadline_ms,
+    )
+
+    with pytest.raises(PolicyError, match="ticker_source_stale_deadline_ms"):
+        load_policy_bytes(changed, digest)
+
+
 @pytest.mark.parametrize(
     ("mutate", "error"),
     [
         (
-            lambda document: document.update(policy_schema_version=1),
+            lambda document: document.update(policy_schema_version=2),
             "policy_schema_version",
         ),
         (
@@ -154,6 +232,10 @@ def test_policy_rejects_invalid_steps_counts_bands_and_empty_rules(
                 time_boundary_poll_interval_ms=1_001
             ),
             "time_boundary_poll_interval_ms",
+        ),
+        (
+            lambda document: document["runtime_limits"].update(ticker_source_stale_deadline_ms=999),
+            "ticker_source_stale_deadline_ms",
         ),
         (
             lambda document: document["runtime_limits"].update(session_liveness_deadline_ms=30_000),

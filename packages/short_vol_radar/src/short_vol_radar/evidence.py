@@ -549,6 +549,8 @@ def validate_run_summary(value: Mapping[str, object]) -> None:
     _validate_operational_diagnostics(
         value["operational_diagnostics"],
         observation_interval_ms=expected["observation_interval_ms"],
+        runtime_started_monotonic_ms=segments[0].start_monotonic_ms,
+        clean_stop_monotonic_ms=segments[-1].end_monotonic_ms,
     )
     _non_negative_integer(value["band_suspended_duration_ms"], "band_suspended_duration_ms")
     _validate_scope_counts(value["counts_by_scope"])
@@ -813,6 +815,8 @@ def _validate_operational_diagnostics(
     value: object,
     *,
     observation_interval_ms: int,
+    runtime_started_monotonic_ms: int,
+    clean_stop_monotonic_ms: int,
 ) -> None:
     diagnostics = _mapping(value, "operational_diagnostics")
     _exact_keys(
@@ -831,8 +835,8 @@ def _validate_operational_diagnostics(
         },
         "operational_diagnostics",
     )
-    if diagnostics["operational_diagnostics_schema_version"] != 1:
-        raise EvidenceError("operational diagnostics schema version must be 1")
+    if diagnostics["operational_diagnostics_schema_version"] != 2:
+        raise EvidenceError("operational diagnostics schema version must be 2")
     _validate_runtime_limits(diagnostics["runtime_limits"])
     _validate_ingress_diagnostics(diagnostics["ingress"])
     _validate_rpc_diagnostics(diagnostics["rpc_by_method"])
@@ -920,12 +924,21 @@ def _validate_operational_diagnostics(
     )
     first = witness["first_joint_witness_monotonic_ms"]
     duration = witness["continuous_covered_after_witness_ms"]
-    if first is not None:
-        _non_negative_integer(first, "first_joint_witness_monotonic_ms")
-    if duration is not None:
-        _non_negative_integer(duration, "continuous_covered_after_witness_ms")
     if (first is None) != (duration is None):
         raise EvidenceError("joint witness time and continuous duration must both be null or known")
+    if first is not None and duration is not None:
+        ingress = _mapping(
+            diagnostics["ingress"],
+            "operational_diagnostics.ingress",
+        )
+        if ingress["ingress_gap_or_duplicate_count"] != 0 or ingress["overflow_count"] != 0:
+            raise EvidenceError("joint witness cannot cross an ingress gap or queue overflow")
+        first_ms = _non_negative_integer(first, "first_joint_witness_monotonic_ms")
+        duration_ms = _non_negative_integer(duration, "continuous_covered_after_witness_ms")
+        if not runtime_started_monotonic_ms <= first_ms <= clean_stop_monotonic_ms:
+            raise EvidenceError("joint witness time must be within the runtime interval")
+        if duration_ms != clean_stop_monotonic_ms - first_ms:
+            raise EvidenceError("joint witness continuous duration must equal stop minus first")
 
 
 def _validate_runtime_limits(value: object) -> None:
@@ -937,6 +950,7 @@ def _validate_runtime_limits(value: object) -> None:
         "clock_refresh_interval_ms",
         "clock_stale_deadline_ms",
         "index_source_stale_deadline_ms",
+        "ticker_source_stale_deadline_ms",
         "notification_queue_lag_deadline_ms",
         "time_boundary_poll_interval_ms",
     }
@@ -946,6 +960,8 @@ def _validate_runtime_limits(value: object) -> None:
     }
     if parsed["time_boundary_poll_interval_ms"] > 1_000:
         raise EvidenceError("time boundary poll interval exceeds one second")
+    if parsed["time_boundary_poll_interval_ms"] > parsed["ticker_source_stale_deadline_ms"]:
+        raise EvidenceError("ticker source stale deadline does not cover poll interval")
     if parsed["rpc_deadline_ms"] < parsed["time_boundary_poll_interval_ms"]:
         raise EvidenceError("RPC deadline does not cover time-boundary poll interval")
     if parsed["session_liveness_deadline_ms"] <= parsed["heartbeat_interval_seconds"] * 1_000:
@@ -977,8 +993,8 @@ def _validate_ingress_diagnostics(value: object) -> None:
         ingress["received_envelope_count"],
         "received_envelope_count",
     )
-    if reduced > received:
-        raise EvidenceError("reduced envelope count exceeds received count")
+    if reduced != received:
+        raise EvidenceError("clean-stop envelope counts must match exactly")
 
 
 def _validate_rpc_diagnostics(value: object) -> None:

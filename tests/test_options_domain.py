@@ -10,10 +10,12 @@ from options_domain import (
     AmountMetadata,
     AmountState,
     Applicability,
+    InstrumentLifecycleState,
     OptionType,
     check_target_amount,
     detector_window_applicability,
     monitor_applicability,
+    parse_combo_instrument,
     parse_option_instrument,
 )
 from options_domain.quotes import walk_target_depth
@@ -57,6 +59,108 @@ def test_option_parser_tolerates_extra_but_rejects_missing_consumed_field(
     amount_unknown = parse_option_instrument(payload)
     assert amount_unknown is not None
     assert amount_unknown.amount is None
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        InstrumentLifecycleState.SETTLEMENT,
+        InstrumentLifecycleState.LOCKED,
+        InstrumentLifecycleState.HALTED,
+    ],
+)
+def test_option_parser_preserves_temporary_lifecycle_identity(
+    option_payload_factory: OptionPayloadFactory,
+    state: InstrumentLifecycleState,
+) -> None:
+    payload = option_payload_factory()
+    payload["state"] = state.value
+    payload["is_active"] = False
+
+    instrument = parse_option_instrument(payload)
+
+    assert instrument is not None
+    assert instrument.lifecycle_state is state
+    assert not instrument.is_active
+
+
+def test_option_parser_preserves_open_but_inactive_identity(
+    option_payload_factory: OptionPayloadFactory,
+) -> None:
+    payload = option_payload_factory()
+    payload["is_active"] = False
+
+    instrument = parse_option_instrument(payload)
+
+    assert instrument is not None
+    assert instrument.lifecycle_state is InstrumentLifecycleState.OPEN
+    assert not instrument.is_active
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        InstrumentLifecycleState.DELIVERED,
+        InstrumentLifecycleState.INACTIVE,
+        InstrumentLifecycleState.ARCHIVIZED,
+    ],
+)
+def test_option_parser_excludes_final_lifecycle_states(
+    option_payload_factory: OptionPayloadFactory,
+    state: InstrumentLifecycleState,
+) -> None:
+    payload = option_payload_factory()
+    payload["state"] = state.value
+
+    assert parse_option_instrument(payload) is None
+
+
+def test_option_parser_rejects_unknown_lifecycle_state(
+    option_payload_factory: OptionPayloadFactory,
+) -> None:
+    payload = option_payload_factory()
+    payload["state"] = "closed"
+
+    with pytest.raises(SourceDataError, match="state"):
+        parse_option_instrument(payload)
+
+
+def test_combo_parser_requires_open_active_metadata() -> None:
+    summary = {
+        "id": "COMBO",
+        "state": "active",
+        "legs": [
+            {"instrument_name": "SHORT", "amount": -1},
+            {"instrument_name": "LONG", "amount": 1},
+        ],
+    }
+    metadata = {
+        "instrument_name": "COMBO",
+        "kind": "option_combo",
+        "base_currency": "BTC",
+        "quote_currency": "USDC",
+        "settlement_currency": "USDC",
+        "counter_currency": "USDC",
+        "instrument_type": "linear",
+        "state": "open",
+        "is_active": True,
+        "contract_size": 1,
+        "min_trade_amount": 0.1,
+        "qty_tick_size": 0.1,
+    }
+
+    assert parse_combo_instrument(summary, metadata) is not None
+    for state, is_active in (
+        ("locked", True),
+        ("halted", True),
+        ("inactive", False),
+        ("open", False),
+    ):
+        changed = {**metadata, "state": state, "is_active": is_active}
+        assert parse_combo_instrument(summary, changed) is None
+
+    with pytest.raises(SourceDataError, match="state"):
+        parse_combo_instrument(summary, {**metadata, "state": "closed"})
 
 
 @pytest.mark.parametrize(
