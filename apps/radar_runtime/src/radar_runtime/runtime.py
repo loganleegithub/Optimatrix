@@ -3773,12 +3773,9 @@ class RadarReducer:
                     "validation": (
                         "NOT_OBSERVED" if observed == 0 else "INVALID" if invalid else "VALID"
                     ),
-                    "consumed_fields": [
-                        {"key": key, "type": field_type}
-                        for key, field_type in sorted(
-                            self.diagnostics.source_consumed_fields.get(source, set())
-                        )
-                    ],
+                    "consumed_fields": _summarize_source_fields(
+                        self.diagnostics.source_consumed_fields.get(source, set())
+                    ),
                 }
             )
         post_witness = (
@@ -4258,6 +4255,22 @@ def _json_type_name(value: object) -> str:
     if isinstance(value, dict):
         return "object"
     return "object"
+
+
+def _summarize_source_fields(fields: set[tuple[str, str]]) -> list[dict[str, str]]:
+    types_by_key: dict[str, set[str]] = {}
+    for key, field_type in fields:
+        types_by_key.setdefault(key, set()).add(field_type)
+    summary: list[dict[str, str]] = []
+    for key, field_types in sorted(types_by_key.items()):
+        if len(field_types) == 1:
+            field_type = next(iter(field_types))
+        elif field_types <= {"integer", "number"}:
+            field_type = "number"
+        else:
+            raise RuntimeError(f"consumed source field changed JSON type: {key}")
+        summary.append({"key": key, "type": field_type})
+    return summary
 
 
 def _rate(count: int, observation_ms: int) -> str | None:

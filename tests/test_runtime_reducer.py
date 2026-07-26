@@ -2492,6 +2492,30 @@ def test_source_shape_diagnostics_keep_only_consumed_keys_and_types(
     ]
 
 
+def test_source_shape_diagnostics_widen_mixed_json_numbers_once(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+
+    reducer._note_source_shape(
+        "public/get_instrument",
+        {"min_trade_amount": 1},
+        valid=True,
+    )
+    reducer._note_source_shape(
+        "public/get_instrument",
+        {"min_trade_amount": Decimal("0.1")},
+        valid=True,
+    )
+
+    diagnostics = reducer._operational_diagnostics(1_000)
+    rows = diagnostics["source_shapes"]
+    assert isinstance(rows, list)
+    row = next(item for item in rows if item["source"] == "public/get_instrument")
+    assert row["consumed_fields"] == [{"key": "min_trade_amount", "type": "number"}]
+
+
 def test_incomplete_catalog_response_is_rpc_success_but_shape_invalid(
     tmp_path: Path,
     policy_factory: PolicyFactory,
