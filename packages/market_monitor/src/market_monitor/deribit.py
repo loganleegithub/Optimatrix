@@ -40,13 +40,18 @@ def subscription_batches(
     )
 
 
-def validate_subscription_ack(requested: Sequence[str], result: object) -> None:
+def validate_subscription_ack(requested: Sequence[str], result: object) -> tuple[str, ...]:
     acknowledged = tuple(
         require_str(channel, f"subscription result[{index}]")
         for index, channel in enumerate(require_list(result, "subscription result"))
     )
-    if sorted(acknowledged) != sorted(requested):
-        raise SourceDataError("subscription acknowledgement does not exactly match request")
+    requested_channels = tuple(requested)
+    acknowledged_set = set(acknowledged)
+    if len(acknowledged_set) != len(acknowledged) or not acknowledged_set <= set(
+        requested_channels
+    ):
+        raise SourceDataError("subscription acknowledgement is not a unique subset of request")
+    return tuple(channel for channel in requested_channels if channel in acknowledged_set)
 
 
 @dataclass

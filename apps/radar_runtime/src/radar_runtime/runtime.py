@@ -6,7 +6,7 @@ import signal
 import time
 import uuid
 from collections import Counter, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
@@ -783,6 +783,7 @@ class RadarReducer:
         )
         boundary = self._current_boundary(envelope)
         source_valid = True
+        source_shape_noted = False
         if request.purpose is RpcPurpose.SET_HEARTBEAT:
             if result != "ok":
                 raise PublicProtocolIncompatibility("heartbeat acknowledgement was not ok")
@@ -800,12 +801,29 @@ class RadarReducer:
             RpcPurpose.UNSUBSCRIBE_CHANNELS,
         }:
             try:
-                self._apply_channel_ack(request, result, boundary)
+                (
+                    acknowledged_channels,
+                    missing_channels,
+                    wire_partial,
+                ) = self._partition_channel_ack(request, result)
             except SourceDataError as exc:
                 self._note_source_shape(request.method, result, valid=False)
                 raise PublicProtocolIncompatibility(
                     f"{request.method} acknowledgement shape is incompatible"
                 ) from exc
+            self._note_source_shape(request.method, result, valid=True)
+            source_shape_noted = True
+            if wire_partial:
+                self.diagnostics.rpc_success_count[request.method] -= 1
+                self.diagnostics.rpc_error_count[request.method] += 1
+            if missing_channels:
+                self._apply_request_failure(
+                    replace(
+                        request,
+                        params={"channels": list(missing_channels)},
+                    )
+                )
+            self._apply_channel_ack(request, acknowledged_channels, boundary)
         elif request.purpose is RpcPurpose.PLATFORM_STATUS:
             prior_reason = self.platform.reason
             try:
@@ -908,7 +926,8 @@ class RadarReducer:
                 self.diagnostics.heartbeat_latency_max,
                 latency_ms,
             )
-        self._note_source_shape(request.method, result, valid=source_valid)
+        if not source_shape_noted:
+            self._note_source_shape(request.method, result, valid=source_valid)
         self._note_post_status_bootstrap_success(
             request,
             source_valid=source_valid,
@@ -1171,39 +1190,57 @@ class RadarReducer:
                     failure_scope=failure_scope,
                 )
 
-    def _apply_channel_ack(
+    def _partition_channel_ack(
         self,
         request: PendingRpc,
         result: object,
-        boundary: FactBoundary,
-    ) -> None:
+    ) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
         channels_raw = request.params.get("channels")
         if not isinstance(channels_raw, list) or not all(
             isinstance(channel, str) for channel in channels_raw
         ):
             raise RuntimeError("pending channel request lost its exact channels")
         channels = tuple(channels_raw)
-        validate_subscription_ack(channels, result)
+        acknowledged = validate_subscription_ack(channels, result)
+        acknowledged_set = set(acknowledged)
         current_channels = tuple(
             channel
             for channel in channels
             if self._channels[channel].generation == request.generation
         )
-        if not current_channels:
+        acknowledged_channels = tuple(
+            channel for channel in current_channels if channel in acknowledged_set
+        )
+        missing_channels = tuple(
+            channel for channel in current_channels if channel not in acknowledged_set
+        )
+        return (
+            acknowledged_channels,
+            missing_channels,
+            len(acknowledged) != len(channels),
+        )
+
+    def _apply_channel_ack(
+        self,
+        request: PendingRpc,
+        acknowledged_channels: tuple[str, ...],
+        boundary: FactBoundary,
+    ) -> None:
+        if not acknowledged_channels:
             return
         if request.purpose is RpcPurpose.UNSUBSCRIBE_CHANNELS:
-            for channel in current_channels:
+            for channel in acknowledged_channels:
                 slot = self._channels[channel]
                 slot.state = ChannelState.RETIRED
                 self._drop_held_frames(channel=channel)
             self._drain_held_frames(boundary)
-            self._reconcile_channel_intents(current_channels, boundary)
+            self._reconcile_channel_intents(acknowledged_channels, boundary)
             self._update_subscription_peaks()
             return
 
         admitted_channels = tuple(
             channel
-            for channel in current_channels
+            for channel in acknowledged_channels
             if self._channels[channel].desired_subscribed
             and not self._channels[channel].resync_requested
         )
@@ -1212,7 +1249,7 @@ class RadarReducer:
             self.option_catalog.acknowledge_lifecycle()
         if COMBO_LIFECYCLE_CHANNEL in admitted_channels:
             self.combo_catalog.acknowledge_lifecycle()
-        for channel in current_channels:
+        for channel in acknowledged_channels:
             slot = self._channels[channel]
             slot.state = ChannelState.ACKNOWLEDGED
             if channel not in admitted_channels:
@@ -1229,7 +1266,7 @@ class RadarReducer:
             if channel != INDEX_CHANNEL or self.clock is not None:
                 self._mark_held_frames_eligible((channel,), request.generation)
         self._drain_held_frames(boundary)
-        self._reconcile_channel_intents(current_channels, boundary)
+        self._reconcile_channel_intents(acknowledged_channels, boundary)
         self._update_subscription_peaks()
         if not self._bootstrap_queries_issued and all(
             self.channel_state(channel) is ChannelState.ACKNOWLEDGED

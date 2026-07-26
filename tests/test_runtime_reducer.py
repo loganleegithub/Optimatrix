@@ -284,6 +284,222 @@ def test_pre_ack_frames_do_not_change_truth_and_reconcile_once_after_ack(
     assert reducer.diagnostics.reduced_envelope_count == 3
 
 
+def test_reordered_subscription_ack_commits_the_requested_batch(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    subscribe, seq = begin_through_bootstrap_subscribe(reducer)
+    requested = exact_channels(subscribe)
+
+    commands = reducer.reduce(
+        response(subscribe, list(reversed(requested)), seq=seq),
+        processed_monotonic_ms=1_000 + seq,
+    )
+
+    assert all(reducer.channel_state(channel) is ChannelState.ACKNOWLEDGED for channel in requested)
+    assert only(commands, RpcPurpose.PLATFORM_STATUS)
+
+
+def test_partial_bootstrap_subscription_ack_is_a_session_failure(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    subscribe, seq = begin_through_bootstrap_subscribe(reducer)
+    requested = exact_channels(subscribe)
+    applied: list[int] = []
+    monkeypatch.setattr(
+        reducer,
+        "_apply_acknowledged_subscription",
+        lambda current, **_kwargs: applied.append(current.ingress_seq),
+    )
+    reducer.reduce(
+        envelope(
+            {
+                "method": "subscription",
+                "params": {"channel": requested[0], "data": {}},
+            },
+            seq=seq,
+        ),
+        processed_monotonic_ms=1_000 + seq,
+    )
+
+    with pytest.raises(PublicSessionError, match="SUBSCRIBE_CHANNELS"):
+        reducer.reduce(
+            response(subscribe, requested[:-1], seq=seq + 1),
+            processed_monotonic_ms=1_000 + seq + 1,
+        )
+    assert applied == []
+    assert reducer._held_subscription_frame_count == 0
+    assert reducer.diagnostics.rpc_success_count["public/subscribe"] == 0
+    assert reducer.diagnostics.rpc_error_count["public/subscribe"] == 1
+    assert reducer.diagnostics.source_valid_count["public/subscribe"] == 1
+    assert reducer.diagnostics.source_invalid_count["public/subscribe"] == 0
+
+
+def test_partial_channel_ack_commits_missing_truth_before_releasing_success_frame(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    reducer.pending_rpcs.clear()
+    first = "ticker.FIRST.100ms"
+    second = "ticker.SECOND.100ms"
+    reducer.options = {
+        name: _option_for_combo_test(name, strike)
+        for name, strike in (("FIRST", 100), ("SECOND", 110))
+    }
+    reducer._plan_channel_change(
+        (first, second),
+        subscribe=True,
+        origin_boundary=reducer._current_fact_boundary(),
+        failure_scope=FailureScope.OPTION,
+    )
+    subscribe = only(tuple(reducer.pending_rpcs.values()), RpcPurpose.SUBSCRIBE_CHANNELS)
+    reducer.reduce(
+        envelope(
+            {
+                "method": "subscription",
+                "params": {"channel": first, "data": {}},
+            },
+            seq=1,
+        ),
+        processed_monotonic_ms=1_001,
+    )
+    reducer.reduce(
+        envelope(
+            {
+                "method": "subscription",
+                "params": {"channel": second, "data": {}},
+            },
+            seq=2,
+        ),
+        processed_monotonic_ms=1_002,
+    )
+    applied: list[int] = []
+
+    def assert_atomic_release(
+        current: InboundEnvelope,
+        **_kwargs: object,
+    ) -> None:
+        assert reducer.channel_state(second) is ChannelState.RETIRED
+        assert reducer._channels[second].retry_after_ms is not None
+        assert reducer._ticker_unavailable["SECOND"] == (
+            "OPTION_CHANNEL_FAILURE",
+            True,
+        )
+        applied.append(current.ingress_seq)
+
+    monkeypatch.setattr(
+        reducer,
+        "_apply_acknowledged_subscription",
+        assert_atomic_release,
+    )
+
+    reducer.reduce(
+        response(subscribe, [first], seq=3),
+        processed_monotonic_ms=1_003,
+    )
+
+    assert applied == [1]
+    assert reducer._held_subscription_frame_count == 0
+
+
+def test_partial_channel_ack_commits_successes_and_scopes_missing_failure(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    reducer.pending_rpcs.clear()
+    first = "ticker.FIRST.100ms"
+    second = "ticker.SECOND.100ms"
+    reducer._plan_channel_change(
+        (first, second),
+        subscribe=True,
+        origin_boundary=reducer._current_fact_boundary(),
+        failure_scope=FailureScope.OPTION,
+    )
+    subscribe = only(tuple(reducer.pending_rpcs.values()), RpcPurpose.SUBSCRIBE_CHANNELS)
+
+    reducer.reduce(
+        response(subscribe, [first], seq=1),
+        processed_monotonic_ms=1_001,
+    )
+
+    assert reducer.channel_state(first) is ChannelState.ACKNOWLEDGED
+    assert reducer.channel_state(second) is ChannelState.RETIRED
+    assert reducer._channels[second].retry_after_ms is not None
+    assert reducer.diagnostics.rpc_success_count["public/subscribe"] == 0
+    assert reducer.diagnostics.rpc_error_count["public/subscribe"] == 1
+    assert reducer.diagnostics.source_valid_count["public/subscribe"] == 1
+    assert reducer.diagnostics.source_invalid_count["public/subscribe"] == 0
+
+    reducer._channels[first].desired_subscribed = False
+    reducer._channels[second].state = ChannelState.ACKNOWLEDGED
+    reducer._channels[second].desired_subscribed = False
+    reducer._channels[second].retry_after_ms = None
+    reducer._issue_channel_change(
+        (first, second),
+        subscribe=False,
+        origin_boundary=reducer._current_fact_boundary(),
+        failure_scope=FailureScope.OPTION,
+    )
+    unsubscribe = only(tuple(reducer.pending_rpcs.values()), RpcPurpose.UNSUBSCRIBE_CHANNELS)
+
+    reducer.reduce(
+        response(unsubscribe, [second], seq=2),
+        processed_monotonic_ms=1_002,
+    )
+
+    assert reducer.channel_state(second) is ChannelState.RETIRED
+    assert reducer.channel_state(first) is ChannelState.ACKNOWLEDGED
+    assert reducer._channels[first].retry_after_ms is not None
+    assert reducer.diagnostics.rpc_success_count["public/unsubscribe"] == 0
+    assert reducer.diagnostics.rpc_error_count["public/unsubscribe"] == 1
+    assert reducer.diagnostics.source_valid_count["public/unsubscribe"] == 1
+    assert reducer.diagnostics.source_invalid_count["public/unsubscribe"] == 0
+
+
+def test_partial_ack_does_not_fail_a_channel_owned_by_a_newer_generation(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    reducer.pending_rpcs.clear()
+    first = "ticker.FIRST.100ms"
+    second = "ticker.SECOND.100ms"
+    third = "ticker.THIRD.100ms"
+    reducer._plan_channel_change(
+        (first, second, third),
+        subscribe=True,
+        origin_boundary=reducer._current_fact_boundary(),
+        failure_scope=FailureScope.OPTION,
+    )
+    subscribe = only(tuple(reducer.pending_rpcs.values()), RpcPurpose.SUBSCRIBE_CHANNELS)
+    assert subscribe.generation is not None
+    newer_generation = subscribe.generation + 1
+    reducer._channels[second].generation = newer_generation
+    reducer._channels[second].state = ChannelState.SUBSCRIBE_PENDING
+
+    reducer.reduce(
+        response(subscribe, [second, first], seq=1),
+        processed_monotonic_ms=1_001,
+    )
+
+    assert reducer.channel_state(first) is ChannelState.ACKNOWLEDGED
+    assert reducer.channel_state(second) is ChannelState.SUBSCRIBE_PENDING
+    assert reducer._channels[second].generation == newer_generation
+    assert reducer._channels[second].retry_after_ms is None
+    assert reducer.channel_state(third) is ChannelState.RETIRED
+    assert reducer._channels[third].retry_after_ms is not None
+
+
 def test_tainted_pending_generation_is_dropped_at_ack_before_resubscribe(
     tmp_path: Path,
     policy_factory: PolicyFactory,

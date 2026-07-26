@@ -289,9 +289,10 @@ def test_exact_channels_bounded_subscriptions_and_acknowledgements() -> None:
         ("a", "b"),
         ("c",),
     )
-    validate_subscription_ack(("a", "b"), ["a", "b"])
-    validate_subscription_ack(("a", "b"), ["b", "a"])
-    for invalid in (["a"], ["a", "b", "c"], ["a", "a"], ["a", 1]):
+    assert validate_subscription_ack(("a", "b"), ["a", "b"]) == ("a", "b")
+    assert validate_subscription_ack(("a", "b"), ["b", "a"]) == ("a", "b")
+    assert validate_subscription_ack(("a", "b"), ["a"]) == ("a",)
+    for invalid in (["a", "b", "c"], ["a", "a"], ["a", 1]):
         with pytest.raises(SourceDataError):
             validate_subscription_ack(("a", "b"), invalid)
 
