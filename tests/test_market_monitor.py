@@ -290,8 +290,10 @@ def test_exact_channels_bounded_subscriptions_and_acknowledgements() -> None:
         ("c",),
     )
     validate_subscription_ack(("a", "b"), ["a", "b"])
-    with pytest.raises(SourceDataError, match="exactly"):
-        validate_subscription_ack(("a", "b"), ["b", "a"])
+    validate_subscription_ack(("a", "b"), ["b", "a"])
+    for invalid in (["a"], ["a", "b", "c"], ["a", "a"], ["a", 1]):
+        with pytest.raises(SourceDataError):
+            validate_subscription_ack(("a", "b"), invalid)
 
 
 def test_catalog_bootstrap_buffers_lifecycle_until_snapshot_reconciliation() -> None:
