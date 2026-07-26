@@ -15,8 +15,6 @@ OPTION_LIFECYCLE_CHANNEL = "instrument.state.option.USDC"
 COMBO_LIFECYCLE_CHANNEL = "instrument.state.option_combo.USDC"
 PLATFORM_CHANNELS = ("platform_state", "platform_state.public_methods_state")
 INDEX_CHANNEL = "deribit_price_index.btc_usdc"
-HEARTBEAT_INTERVAL_SECONDS = 30
-LIVENESS_DEADLINE_SECONDS = 60
 DEFAULT_SUBSCRIPTION_BATCH_SIZE = 100
 MAX_BUFFERED_LIFECYCLE_EVENTS = 10_000
 
@@ -62,6 +60,15 @@ class CatalogBootstrap:
         self.complete = False
         self.source_complete = True
 
+    def begin_reconciliation(self) -> None:
+        if not self.lifecycle_acknowledged:
+            raise RuntimeError("lifecycle must be acknowledged before catalog reconciliation")
+        if self.buffering:
+            return
+        self.buffering = True
+        self.complete = False
+        self.source_complete = True
+
     def accept_lifecycle(self, payload: object) -> dict[str, object] | None:
         event = require_mapping(payload, "instrument lifecycle")
         require_str(event.get("instrument_name"), "instrument lifecycle.instrument_name")
@@ -97,9 +104,15 @@ class CatalogBootstrap:
 
 @dataclass
 class PlatformReadiness:
+    bootstrap_epoch: int = 0
     platform_subscription_acknowledged: bool = False
     public_methods_subscription_acknowledged: bool = False
+    lock_snapshot: bool | None = None
     status_usable: bool = False
+    maintenance_guard: bool | None = None
+    public_method_guard: bool | None = None
+    post_status_probe: bool = False
+    fresh_index_coverage: bool = False
     post_status_bootstrap_complete: bool = False
     maintenance: bool | None = None
     public_methods_allowed: bool | None = None
@@ -111,15 +124,26 @@ class PlatformReadiness:
             self.platform_subscription_acknowledged
             and self.public_methods_subscription_acknowledged
             and self.status_usable
-            and self.post_status_bootstrap_complete
-            and self.maintenance is False
-            and self.public_methods_allowed is True
+            and self.lock_snapshot is False
+            and self.maintenance_guard is False
+            and self.public_method_guard is True
+            and self.post_status_probe
+            and self.fresh_index_coverage
         )
 
+    def start_epoch(self, epoch: int) -> None:
+        if epoch <= 0:
+            raise ValueError("platform bootstrap epoch must be positive")
+        replacement = PlatformReadiness(bootstrap_epoch=epoch)
+        self.__dict__.update(replacement.__dict__)
+
     def acknowledge(self, channels: Sequence[str]) -> None:
-        self.platform_subscription_acknowledged = "platform_state" in channels
+        self.platform_subscription_acknowledged = (
+            self.platform_subscription_acknowledged or "platform_state" in channels
+        )
         self.public_methods_subscription_acknowledged = (
-            "platform_state.public_methods_state" in channels
+            self.public_methods_subscription_acknowledged
+            or "platform_state.public_methods_state" in channels
         )
 
     def apply_status(self, payload: object) -> None:
@@ -140,23 +164,34 @@ class PlatformReadiness:
             if not all(isinstance(item, str) for item in locked_indices):
                 raise SourceDataError("public/status.locked_indices must contain strings")
         relevant_locked = all_locked or "btc_usdc" in locked_indices
-        self.status_usable = not relevant_locked
-        self.reason = (
-            "RELEVANT_PLATFORM_LOCK" if relevant_locked else "POST_STATUS_BOOTSTRAP_REQUIRED"
-        )
+        if self.lock_snapshot is not True:
+            self.lock_snapshot = relevant_locked
+        self.status_usable = self.lock_snapshot is False
+        if self.lock_snapshot is True:
+            self.reason = "RELEVANT_PLATFORM_LOCK"
+        elif self.maintenance_guard is True:
+            self.reason = "PLATFORM_MAINTENANCE"
+        elif self.public_method_guard is False:
+            self.reason = "PUBLIC_METHODS_DENIED"
+        else:
+            self.reason = "POST_STATUS_BOOTSTRAP_REQUIRED"
         self.post_status_bootstrap_complete = False
 
     def apply_platform_notification(self, payload: object) -> None:
         data = require_mapping(payload, "platform_state")
         if "maintenance" in data:
-            self.maintenance = require_bool(data["maintenance"], "platform_state.maintenance")
-            if self.maintenance:
+            observed = require_bool(data["maintenance"], "platform_state.maintenance")
+            if self.maintenance_guard is not True:
+                self.maintenance_guard = observed
+                self.maintenance = observed
+            if observed:
                 self._invalidate("PLATFORM_MAINTENANCE")
             return
         if "price_index" in data or "locked" in data:
             price_index = require_str(data.get("price_index"), "platform_state.price_index")
             locked = require_bool(data.get("locked"), "platform_state.locked")
             if price_index == "btc_usdc" and locked:
+                self.lock_snapshot = True
                 self._invalidate("RELEVANT_PLATFORM_LOCK")
             return
         else:
@@ -170,24 +205,42 @@ class PlatformReadiness:
             data.get("allow_unauthenticated_public_requests"),
             "platform_state.public_methods_state.allow_unauthenticated_public_requests",
         )
-        self.public_methods_allowed = allowed
+        if self.public_method_guard is not False:
+            self.public_method_guard = allowed
+            self.public_methods_allowed = allowed
         if not allowed:
             self._invalidate("PUBLIC_METHODS_DENIED")
 
+    def note_post_status_probe(self) -> None:
+        self.post_status_probe = True
+        self._derive_completion()
+
+    def note_fresh_index_coverage(self) -> None:
+        self.fresh_index_coverage = True
+        self._derive_completion()
+
+    def invalidate_fresh_index_coverage(self, reason: str) -> None:
+        self.fresh_index_coverage = False
+        self.post_status_bootstrap_complete = False
+        self.reason = reason
+
     def complete_post_status_bootstrap(self) -> None:
-        if not self.status_usable:
-            raise RuntimeError("public/status is not usable")
-        if self.public_methods_allowed is not True:
-            raise RuntimeError("public methods state is not usable")
-        if self.maintenance is not False:
-            raise RuntimeError("platform maintenance state is not usable")
-        self.post_status_bootstrap_complete = True
-        self.reason = "USABLE"
+        self._derive_completion()
+        if not self.post_status_bootstrap_complete:
+            raise RuntimeError("platform facts are not all usable")
 
     def prove_operational_from_post_status_public_success(self) -> None:
         if not self.status_usable:
             raise RuntimeError("public/status is not usable")
-        self.maintenance = False
+        if self.maintenance_guard is None:
+            self.maintenance_guard = False
+            self.maintenance = False
+        self.note_post_status_probe()
+
+    def _derive_completion(self) -> None:
+        self.post_status_bootstrap_complete = self.usable
+        if self.usable:
+            self.reason = "USABLE"
 
     def _invalidate(self, reason: str) -> None:
         self.status_usable = False

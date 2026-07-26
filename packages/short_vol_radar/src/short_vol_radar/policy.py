@@ -57,10 +57,36 @@ class TteBand:
 
 
 @dataclass(frozen=True)
+class RuntimeLimits:
+    heartbeat_interval_seconds: int
+    session_liveness_deadline_ms: int
+    rpc_deadline_ms: int
+    clock_refresh_interval_ms: int
+    clock_stale_deadline_ms: int
+    index_source_stale_deadline_ms: int
+    notification_queue_lag_deadline_ms: int
+    time_boundary_poll_interval_ms: int
+
+    def as_object(self) -> dict[str, int]:
+        return {
+            "heartbeat_interval_seconds": self.heartbeat_interval_seconds,
+            "session_liveness_deadline_ms": self.session_liveness_deadline_ms,
+            "rpc_deadline_ms": self.rpc_deadline_ms,
+            "clock_refresh_interval_ms": self.clock_refresh_interval_ms,
+            "clock_stale_deadline_ms": self.clock_stale_deadline_ms,
+            "index_source_stale_deadline_ms": self.index_source_stale_deadline_ms,
+            "notification_queue_lag_deadline_ms": self.notification_queue_lag_deadline_ms,
+            "time_boundary_poll_interval_ms": self.time_boundary_poll_interval_ms,
+        }
+
+
+@dataclass(frozen=True)
 class RadarPolicy:
     identity: str
+    schema_version: int
     family: str
     target_base_quantity_btc: Decimal
+    runtime_limits: RuntimeLimits
     tte_bands: tuple[TteBand, ...]
 
     @property
@@ -199,13 +225,23 @@ def _bands_are_adjacent(touched: tuple[TteBand, ...]) -> bool:
 def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:
     _require_exact_keys(
         raw,
-        {"policy_family", "target_base_quantity_btc", "tte_bands"},
+        {
+            "policy_schema_version",
+            "policy_family",
+            "target_base_quantity_btc",
+            "runtime_limits",
+            "tte_bands",
+        },
         "Policy",
     )
+    schema_version = _positive_int(raw["policy_schema_version"], "policy_schema_version")
+    if schema_version != 2:
+        raise PolicyError("policy_schema_version must be exactly 2")
     family = raw["policy_family"]
     if family != POLICY_FAMILY:
         raise PolicyError(f"policy_family must be {POLICY_FAMILY}")
     target = _positive_decimal(raw["target_base_quantity_btc"], "target_base_quantity_btc")
+    runtime_limits = _parse_runtime_limits(raw["runtime_limits"])
     bands_raw = raw["tte_bands"]
     if not isinstance(bands_raw, list) or not bands_raw:
         raise PolicyError("tte_bands must be a non-empty array")
@@ -219,10 +255,44 @@ def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:
             raise PolicyError("tte_bands must not overlap")
     return RadarPolicy(
         identity=identity,
+        schema_version=schema_version,
         family=family,
         target_base_quantity_btc=target,
+        runtime_limits=runtime_limits,
         tte_bands=ordered,
     )
+
+
+def _parse_runtime_limits(value: object) -> RuntimeLimits:
+    if not isinstance(value, dict):
+        raise PolicyError("runtime_limits must be an object")
+    fields = {
+        "heartbeat_interval_seconds",
+        "session_liveness_deadline_ms",
+        "rpc_deadline_ms",
+        "clock_refresh_interval_ms",
+        "clock_stale_deadline_ms",
+        "index_source_stale_deadline_ms",
+        "notification_queue_lag_deadline_ms",
+        "time_boundary_poll_interval_ms",
+    }
+    _require_exact_keys(value, fields, "runtime_limits")
+    parsed = {field: _positive_int(value[field], f"runtime_limits.{field}") for field in fields}
+    if parsed["time_boundary_poll_interval_ms"] > 1_000:
+        raise PolicyError("runtime_limits.time_boundary_poll_interval_ms must be <= 1000")
+    if parsed["rpc_deadline_ms"] < parsed["time_boundary_poll_interval_ms"]:
+        raise PolicyError(
+            "runtime_limits.rpc_deadline_ms must cover the time-boundary poll interval"
+        )
+    if parsed["session_liveness_deadline_ms"] <= parsed["heartbeat_interval_seconds"] * 1_000:
+        raise PolicyError(
+            "runtime_limits.session_liveness_deadline_ms must exceed heartbeat interval"
+        )
+    if parsed["clock_stale_deadline_ms"] <= parsed["clock_refresh_interval_ms"]:
+        raise PolicyError(
+            "runtime_limits.clock_stale_deadline_ms must exceed clock refresh interval"
+        )
+    return RuntimeLimits(**parsed)
 
 
 def _parse_band(value: object, index: int) -> TteBand:

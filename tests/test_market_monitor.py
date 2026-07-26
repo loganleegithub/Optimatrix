@@ -4,7 +4,6 @@ from decimal import Decimal
 
 import pytest
 from market_monitor import BookState, ContinuityGap, ContinuousOrderBook, TimeInterval, TrustedClock
-from market_monitor.clock import CLOCK_EXPIRY_MS
 from market_monitor.deribit import (
     INDEX_CHANNEL,
     CatalogBootstrap,
@@ -14,7 +13,7 @@ from market_monitor.deribit import (
     ticker_channel,
     validate_subscription_ack,
 )
-from market_monitor.index import IndexMinuteReducer
+from market_monitor.index import IndexMinuteReducer, IndexTailStatus
 from market_monitor.types import SourceDataError
 
 
@@ -36,7 +35,12 @@ def snapshot(
 
 
 def test_trusted_clock_outward_rounding_refresh_and_expiry() -> None:
-    clock = TrustedClock.from_response(10_000, 1_000, 1_010)
+    clock = TrustedClock.from_response(
+        10_000,
+        1_000,
+        1_010,
+        stale_deadline_ms=73_000,
+    )
     assert clock.interval_at(1_010) == TimeInterval(10_000, 10_011)
     advanced = clock.interval_at(2_011)
     assert advanced.lower_ms == 10_999
@@ -45,11 +49,16 @@ def test_trusted_clock_outward_rounding_refresh_and_expiry() -> None:
     refreshed = clock.refresh(11_002, 2_000, 2_010)
     assert refreshed.base == TimeInterval(11_002, 11_012)
     with pytest.raises(ContinuityGap, match="expired"):
-        refreshed.interval_at(2_010 + CLOCK_EXPIRY_MS)
+        refreshed.interval_at(2_010 + 73_000)
 
 
 def test_trusted_clock_rejects_disjoint_refresh_and_backward_monotonic() -> None:
-    clock = TrustedClock.from_response(10_000, 1_000, 1_010)
+    clock = TrustedClock.from_response(
+        10_000,
+        1_000,
+        1_010,
+        stale_deadline_ms=73_000,
+    )
     with pytest.raises(ContinuityGap, match="do not intersect"):
         clock.refresh(50_000, 2_000, 2_010)
     with pytest.raises(ValueError, match="backward"):
@@ -175,7 +184,7 @@ def test_index_consecutive_prices_detect_missing_minute() -> None:
     assert reducer.consecutive_prices(2) == (Decimal(101), Decimal(102), Decimal(103))
 
 
-def test_index_window_requires_tail_alignment_with_latest_complete_minute() -> None:
+def test_index_tail_rollover_pending_preserves_history_and_requires_exact_alignment() -> None:
     minute_ms = 60_000
     reducer = IndexMinuteReducer(60)
     reducer.start_continuous_coverage(0)
@@ -188,26 +197,39 @@ def test_index_window_requires_tail_alignment_with_latest_complete_minute() -> N
         )
         reducer.seal_ready(timestamp)
 
-    current = reducer.current_window(60, trusted_time_lower_ms=61 * minute_ms)
-    assert current.reason is None
+    current = reducer.current_tail(
+        60,
+        trusted_time=TimeInterval(61 * minute_ms + 1, 61 * minute_ms + 2),
+        source_stale_deadline_ms=90_000,
+    )
+    assert current.status is IndexTailStatus.AVAILABLE
     assert current.prices is not None
     assert len(current.prices) == 61
 
-    intra_minute = reducer.current_window(
+    across_boundary = reducer.current_tail(
         60,
-        trusted_time_lower_ms=61 * minute_ms + 30_000,
+        trusted_time=TimeInterval(62 * minute_ms - 1, 62 * minute_ms + 1),
+        source_stale_deadline_ms=90_000,
     )
-    assert intra_minute.reason is None
+    assert across_boundary.status is IndexTailStatus.TIME_BOUNDARY_PENDING
+    assert reducer.sealed == current.closes
 
-    stale = reducer.current_window(60, trusted_time_lower_ms=62 * minute_ms)
-    assert stale.prices is None
-    assert stale.reason == "INDEX_BASELINE_STALE"
+    rollover = reducer.current_tail(
+        60,
+        trusted_time=TimeInterval(62 * minute_ms + 1, 62 * minute_ms + 2),
+        source_stale_deadline_ms=90_000,
+    )
+    assert rollover.status is IndexTailStatus.WATERMARK_PENDING
+    assert reducer.sealed == current.closes
 
 
-def test_index_window_classifies_an_interior_missing_minute_as_gap() -> None:
-    reducer = IndexMinuteReducer(2)
+def test_index_window_gap_isolated_by_requested_lookback_without_resubscription() -> None:
+    reducer = IndexMinuteReducer(5)
     reducer.start_continuous_coverage(0)
-    for sequence, timestamp in enumerate((1, 60_000, 180_000, 240_000), start=1):
+    for sequence, timestamp in enumerate(
+        (1, 60_000, 120_000, 240_000, 300_000, 360_000, 420_000, 480_000),
+        start=1,
+    ):
         reducer.accept_tick(
             source_timestamp_ms=timestamp,
             price=100 + sequence,
@@ -215,10 +237,48 @@ def test_index_window_classifies_an_interior_missing_minute_as_gap() -> None:
         )
         reducer.seal_ready(timestamp)
 
-    window = reducer.current_window(2, trusted_time_lower_ms=240_000)
+    trusted = TimeInterval(480_001, 480_002)
+    short = reducer.current_tail(
+        2,
+        trusted_time=trusted,
+        source_stale_deadline_ms=90_000,
+    )
+    long = reducer.current_tail(
+        5,
+        trusted_time=trusted,
+        source_stale_deadline_ms=90_000,
+    )
 
-    assert window.prices is None
-    assert window.reason == "INDEX_BASELINE_GAP"
+    assert short.status is IndexTailStatus.AVAILABLE
+    assert long.status is IndexTailStatus.WINDOW_GAP
+
+
+def test_index_tail_distinguishes_warmup_source_stale_and_continuity_gap() -> None:
+    reducer = IndexMinuteReducer(2)
+    reducer.start_continuous_coverage(0)
+    reducer.accept_tick(source_timestamp_ms=1, price=100, causal_seq=1)
+
+    warmup = reducer.current_tail(
+        2,
+        trusted_time=TimeInterval(30_000, 30_001),
+        source_stale_deadline_ms=90_000,
+    )
+    assert warmup.status is IndexTailStatus.WARMUP
+
+    stale = reducer.current_tail(
+        2,
+        trusted_time=TimeInterval(100_002, 100_003),
+        source_stale_deadline_ms=90_000,
+    )
+    assert stale.status is IndexTailStatus.SOURCE_STALE
+
+    reducer.gap()
+    gap = reducer.current_tail(
+        2,
+        trusted_time=TimeInterval(100_002, 100_003),
+        source_stale_deadline_ms=90_000,
+    )
+    assert gap.status is IndexTailStatus.CONTINUITY_GAP
 
 
 def test_exact_channels_bounded_subscriptions_and_acknowledgements() -> None:
@@ -255,12 +315,15 @@ def test_catalog_bootstrap_buffers_lifecycle_until_snapshot_reconciliation() -> 
 
 def test_platform_readiness_never_defaults_unseen_maintenance_or_recovery() -> None:
     platform = PlatformReadiness()
+    platform.start_epoch(1)
     platform.acknowledge(("platform_state", "platform_state.public_methods_state"))
     platform.apply_status({"locked": "false", "extra": "ok"})
-    platform.public_methods_allowed = True
+    platform.apply_public_methods_notification({"allow_unauthenticated_public_requests": True})
     assert platform.maintenance is None
     assert not platform.usable
     platform.prove_operational_from_post_status_public_success()
+    assert not platform.usable
+    platform.note_fresh_index_coverage()
     platform.complete_post_status_bootstrap()
     assert platform.usable
 
@@ -268,16 +331,18 @@ def test_platform_readiness_never_defaults_unseen_maintenance_or_recovery() -> N
     assert not platform.usable
     platform.apply_platform_notification({"maintenance": False})
     assert not platform.usable
-    with pytest.raises(RuntimeError, match="status"):
+    with pytest.raises(RuntimeError, match="facts"):
         platform.complete_post_status_bootstrap()
 
 
 def test_platform_readiness_accepts_official_lock_notification_union() -> None:
     platform = PlatformReadiness()
+    platform.start_epoch(1)
     platform.acknowledge(("platform_state", "platform_state.public_methods_state"))
     platform.apply_status({"locked": "false"})
-    platform.public_methods_allowed = True
+    platform.apply_public_methods_notification({"allow_unauthenticated_public_requests": True})
     platform.prove_operational_from_post_status_public_success()
+    platform.note_fresh_index_coverage()
     platform.complete_post_status_bootstrap()
     assert platform.usable
 
@@ -290,6 +355,9 @@ def test_platform_readiness_accepts_official_lock_notification_union() -> None:
 
     platform.apply_platform_notification({"price_index": "btc_usdc", "locked": False})
     assert not platform.usable
+    platform.apply_status({"locked": "false"})
+    assert not platform.usable
+    assert platform.reason == "RELEVANT_PLATFORM_LOCK"
 
 
 def test_relevant_status_locks_and_public_method_denial_fail_closed() -> None:

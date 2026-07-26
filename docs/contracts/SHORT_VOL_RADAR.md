@@ -2,7 +2,7 @@
 
 **Status:** ACTIVE IMPLEMENTATION CONTRACT
 
-**Current implementation state:** IMPLEMENTED — AWAITING REVIEW AND SEPARATE PRODUCTION OBSERVATION
+**Current implementation state:** IMPLEMENTATION IN PROGRESS — PRODUCTION OBSERVATION GATE CLOSED
 
 **Owning closure:** `SHORT_VOL_RADAR_ESTABLISHMENT`
 
@@ -93,6 +93,19 @@ metadata or an incomplete option catalog is `UNKNOWN`, never `NO_ACTIVE_COMBO`.
 or known insufficient. One `PUBLIC_ATOMIC_QUOTE_AVAILABLE` witness is enough for a positive
 availability claim, but it does not claim the best quote or complete-market selection.
 
+Protective-wing applicability is exactly:
+
+```text
+KNOWN_PRESENT
+KNOWN_ABSENT
+UNRESOLVED
+```
+
+`KNOWN_PRESENT` means complete relevant option catalog/lifecycle/metadata proves at least one
+farther-OTM same-expiry/same-type long wing. `KNOWN_ABSENT` means the same complete scope proves
+none exists and is a known negative `NO_ACTIVE_COMBO` result. `UNRESOLVED` means any required
+catalog, lifecycle, or leg metadata is incomplete and forces Layer 2 `UNKNOWN`.
+
 ### Layer 3 — future execution
 
 Combo creation, RFQ, post-only maker placement, cancel/reprice, order acknowledgement, partial
@@ -140,7 +153,25 @@ lifecycle subscription, buffer its events, fetch the bootstrap catalog, then rec
 events in causal order before declaring catalog completeness. Until reconciliation finishes,
 negative aggregate or no-combo claims are `UNKNOWN`.
 
-Platform startup does not default an unobserved `maintenance = false`. It remains unusable until:
+Combo lifecycle notifications only mark the current combo-catalog generation dirty. While one
+authoritative `public/get_combos` refresh is pending, any burst is coalesced. Its response commits
+only if its epoch/generation/origin boundary is current; if dirty, the reducer emits exactly one
+trailing authoritative refresh for the latest generation. The burst never produces one refresh
+per notification.
+
+Platform state is reducer-owned as six independent facts:
+
+```text
+lock_snapshot
+maintenance_guard
+public_method_guard
+post_status_probe
+fresh_index_coverage
+bootstrap_epoch
+```
+
+`usable` is a pure derived predicate and is never assigned. Platform startup does not default an
+unobserved `maintenance = false`. It remains unusable until:
 
 1. buffered platform subscriptions are acknowledged;
 2. `public/status` succeeds and its official lock fields prove that neither all currencies nor the
@@ -154,11 +185,11 @@ fact makes that instrument `UNKNOWN`; it does not suppress a causally known acti
 another instrument, which is reported through the completeness-aware aggregate state.
 
 `platform_state.public_methods_state.allow_unauthenticated_public_requests = false`, a relevant
-lock, or a maintenance/break notification invalidates dependent state immediately. A later
-`true`, unlock, or maintenance-end notification is not sufficient by itself: the four bootstrap
-conditions above must be re-established. Thus the maintenance stream is a fail-closed transition
-guard, while successful post-status public bootstrap plus fresh data is the startup usability
-oracle.
+lock, or a maintenance/break notification latches the corresponding guard negative for that
+bootstrap epoch and invalidates dependent state immediately. A later `true`, unlock, or
+maintenance-end notification cannot overwrite that negative guard in the same epoch. Only a new
+bootstrap epoch with a fresh status snapshot, post-status probe, subscriptions, catalogs, clock,
+and index coverage can restore derived usability.
 
 No private, account, RFQ, combo-creation, order, trade, fill, maker, or test-environment method is
 permitted. The only allowed `public/test` call is the protocol-required response to a
@@ -168,25 +199,66 @@ a market/business probe.
 External responses may add unrelated fields. Only missing, invalid, or semantically changed fields
 actually consumed by this contract fail closed at their smallest consumer.
 
-The WebSocket enables `public/set_heartbeat` at a fixed operational interval of 30 seconds and
-acknowledges it before market state can become usable. This is transport safety, not a trading
-Policy parameter, and the run summary freezes it. The consumed official result shapes are
+The WebSocket enables `public/set_heartbeat` at the exact interval supplied by the frozen
+versioned external Policy and acknowledges it before market state can become usable. This is
+transport safety, not a trading threshold or an optimality claim. The consumed official result
+shapes are
 `public/set_heartbeat -> "ok"` and `public/test -> {"version": <non-empty string>, ...}`. Every
-`test_request` is answered with `public/test`. No inbound session activity for 60 seconds, a
+`test_request` is answered with `public/test`. Exceeding the Policy's session-liveness deadline, a
 failed heartbeat/test response, or a connection close invalidates every
 connection-dependent consumer and ends affected active episodes as `UNKNOWN_AT_GAP`. Reconnect
 requires fresh subscriptions, snapshots, catalog reconciliation, and baseline coverage.
 Heartbeat traffic proves only transport liveness: it never refreshes a book's economic timestamp,
 creates a detector observation, or bridges a market-data sequence gap.
 
-The socket reader assigns every inbound frame—notification or RPC response—one increasing
-`ingress_seq` and local `received_monotonic_ms` immediately after decode. Economic facts enter one
-ordered reducer by that sequence. Heartbeat `test_request` control may call `public/test` without
-waiting for catalog work, but neither the control message nor its response may apply an economic
-fact out of order. Bootstrap and steady state use the same receive-lag gate and update the same
-maximum queue-lag diagnostic. The queue is bounded and must never block the sole RPC-response
-reader: overflow is a session gap. Processing more than 1000 ms after receive is also a session
-gap, not a late market observation.
+The socket reader only decodes and stamps every inbound frame—notification, RPC success, RPC
+error, acknowledgement, heartbeat response, or late response—with `session_epoch`,
+`ingress_seq`, and `received_monotonic_ms`, then puts it into one bounded inbound queue. It never
+resolves a response future that applies economic state, never owns active subscription generation,
+and never has a second notification queue. `ingress_seq` is continuous within one session epoch.
+Every envelope is reduced exactly once or the epoch fails closed.
+
+One synchronous reducer exclusively owns session, channel, platform, catalog, market, detector,
+episode, coverage, and Layer 2 state. No function reachable from that reducer waits for network
+I/O. It returns a finite tuple of `PendingRpc`; the orchestrator sends those commands and feeds
+their success/error/acknowledgement envelopes back through the same queue. Heartbeat
+`test_request` may enqueue a guarded `public/test` command while catalog work is pending, but
+neither it nor its response mutates economic truth.
+
+Each `PendingRpc` freezes:
+
+- request id and one finite request purpose;
+- method and exact consumed params;
+- session epoch;
+- scope kind/id and channel generation when applicable;
+- origin `FactBoundary`;
+- absolute monotonic deadline derived from the frozen external Policy;
+- one failure scope from
+  `SESSION | CLOCK_INDEX | OPTION | OPTION_CATALOG | COMBO_LAYER | FATAL_PROTOCOL`.
+
+A response with the wrong epoch, unknown/retired request id, retired generation, or expired
+deadline is a reduced late response with zero business side effects. Reconnect retires every
+pending request and channel generation in that session epoch exactly once.
+
+Reducer-owned channel state is exactly:
+
+```text
+UNSUBSCRIBED
+SUBSCRIBE_PENDING
+ACKNOWLEDGED
+UNSUBSCRIBE_PENDING
+RETIRED
+```
+
+Frames received before a successful subscribe acknowledgement are buffered only for that exact
+epoch/generation and cannot alter market truth. A successful acknowledgement reconciles them once
+in ingress order. Frames for `UNSUBSCRIBE_PENDING` or `RETIRED` generations have zero business
+side effects. Membership/coverage changes occur at the originating fact boundary before the
+unsubscribe command is emitted.
+
+Bootstrap and steady state use the same Policy-supplied receive-lag deadline and update the same
+queue diagnostics. Queue overflow is a session gap. No operational deadline or cadence has an
+implementation default.
 
 ## Time and settlement boundary
 
@@ -207,7 +279,7 @@ the current interval is
 base.upper + e_ms × (1 + 1000/1_000_000)]`; 1000 ppm is a fixed conservative operational drift
 budget, not Policy. All clock math uses integer/rational milliseconds: round the lower bound toward
 negative infinity and the upper bound toward positive infinity; binary float may not narrow the
-interval. Refresh every 30 seconds and fail closed at 60 seconds without a refresh. If
+interval. Refresh and stale deadlines come only from `runtime_limits`. If
 two successive intervals are available, first advance the prior interval to the new receive
 instant. Their non-empty intersection becomes the new base interval; an empty intersection is a
 clock gap. This prevents the trusted lower bound from moving backward and forbids choosing
@@ -265,9 +337,18 @@ facts are `UNKNOWN`.
 The only initially authorized detector family is
 `POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE`.
 
-One exact content-identified Policy file supplies:
+One exact content-identified Policy file has `policy_schema_version = 2` and supplies:
 
 - `target_base_quantity_btc`;
+- one exact `runtime_limits` object containing:
+  - `heartbeat_interval_seconds`;
+  - `session_liveness_deadline_ms`;
+  - `rpc_deadline_ms`;
+  - `clock_refresh_interval_ms`;
+  - `clock_stale_deadline_ms`;
+  - `index_source_stale_deadline_ms`;
+  - `notification_queue_lag_deadline_ms`;
+  - `time_boundary_poll_interval_ms`;
 - one non-empty list of exact TTE bands, where each band owns:
   - trailing one-minute return lookbacks and non-negative weights;
   - a positive annualized-variance floor, converted to the reducer's per-minute unit before use;
@@ -285,6 +366,12 @@ underlying return baseline for that band.
 Load-time validation requires:
 
 - exact repository-owned object keys at every nesting level (`additionalProperties = false`);
+- exactly `policy_schema_version = 2`;
+- every runtime-limit field to be a positive integer, with
+  `time_boundary_poll_interval_ms <= 1000`,
+  `rpc_deadline_ms >= time_boundary_poll_interval_ms`,
+  `session_liveness_deadline_ms > heartbeat_interval_seconds × 1000`, and
+  `clock_stale_deadline_ms > clock_refresh_interval_ms`;
 - at least one TTE band and a non-empty supported `option_rules` map in every band;
 - at least one unique positive-integer lookback and one aligned finite non-negative weight per
   lookback, with weights summing exactly to one after canonical decimal parsing;
@@ -292,6 +379,11 @@ Load-time validation requires:
   `OUT_OF_BASELINE_SCOPE`;
 - `0 <= abs_delta_min < abs_delta_max <= 1`;
 - finite `target_base_quantity_btc > 0`;
+
+Reconnect backoff uses `time_boundary_poll_interval_ms` as its initial bound and
+`rpc_deadline_ms` as its maximum bound; it has no separate implementation cadence.
+WebSocket open and close also use `rpc_deadline_ms`; the transport has no hidden connection
+deadline.
 - finite annualized variance floor `> 0`;
 - finite `activation_ratio > 1` and `0 < clear_ratio < activation_ratio`;
 - positive-integer activation/clear counts and finite minimum separation `>= 0`.
@@ -309,8 +401,10 @@ optional field is not `UNKNOWN` and does not authorize inferring a grid from an 
 field. Missing or invalid required amount metadata, or an invalid present `qty_tick_size`, is
 `UNKNOWN` unless another independent gate is already known to fail.
 
-Numeric values are configuration, not universal trading truth. The implementation tests at least
-two materially different Policy fixtures so code constants cannot masquerade as Policy.
+Numeric values, including operational deadlines, are configuration, not universal trading truth.
+Operational limits are safety/calibration candidates, not scientifically optimal values. The
+implementation has no fallback constants and tests at least two materially different Policy
+fixtures so code constants cannot masquerade as Policy.
 Construction establishes the schema and loader, not a preferred live parameter set. A later human
 production-observation command names and approves the exact external Policy path and digest.
 
@@ -375,15 +469,58 @@ A timestamp regression or a tick assigned to an already sealed minute is an inde
 sealed closes are never rewritten, rolling returns are invalidated, and warm-up restarts from new
 continuous coverage.
 
-A baseline window is current only when its closes are internally consecutive and its tail is the
-minute immediately before the trusted clock's current minute. A 60-return maximum therefore needs
-61 consecutive covered closes. An older internally consecutive window is
-`INDEX_BASELINE_STALE/UNKNOWN`; stale or gap invalidates the window and known evaluation cannot
-resume until a fresh complete window is rebuilt.
+Index currentness is a structured per-band query. `IndexTailStatus` is exactly:
 
-Missing or gapped minutes make only consumers whose configured window includes them `UNKNOWN`.
-Warm-up requires `largest_configured_lookback + 1` consecutive covered minute closes to form the
-required number of returns; it is derived from Policy rather than a hard-coded close count.
+```text
+AVAILABLE
+WARMUP
+TIME_BOUNDARY_PENDING
+WATERMARK_PENDING
+WINDOW_GAP
+SOURCE_STALE
+CONTINUITY_GAP
+```
+
+The query receives the band's requested lookback, trusted-time interval, and the frozen
+`index_source_stale_deadline_ms`. It never destroys stored closes merely because a query is
+unavailable. Its classifications are:
+
+- `TIME_BOUNDARY_PENDING`: trusted-time lower and upper bounds imply different current UTC
+  minutes, so no one tail minute is valid for the whole interval;
+- `WATERMARK_PENDING`: trusted time implies one current minute, but the accepted index timestamp
+  watermark has not yet crossed the expected tail's end;
+- `WARMUP`: continuous coverage has not yet existed long enough to supply this band's requested
+  `lookback + 1` closes;
+- `WINDOW_GAP`: the watermark proves the requested tail should be complete, but at least one
+  minute inside this band's requested window is absent or nonconsecutive;
+- `SOURCE_STALE`: the trusted lower bound is beyond the last accepted index source timestamp by
+  more than the Policy's source-stale deadline;
+- `CONTINUITY_GAP`: timestamp regression, a late tick for a sealed minute, retired epoch/
+  generation, or explicit index-channel continuity failure has invalidated source continuity;
+- `AVAILABLE`: none of the above applies, the requested closes are internally consecutive, and
+  the last close is exactly the minute before the one trusted current minute.
+
+A 60-return band therefore needs 61 consecutive covered closes. A missing older minute can make
+only a longer-lookback band `WINDOW_GAP`; a shorter band whose entire requested tail is
+consecutive remains `AVAILABLE`. `WINDOW_GAP` never causes an index resubscription. Normal minute
+rollover first becomes `TIME_BOUNDARY_PENDING` and/or `WATERMARK_PENDING`; it never clears
+historical closes.
+
+The status truth table is normative:
+
+| `IndexTailStatus` | Current detector truth | Episode | Layer 2 | Coverage | Known-active duration | Index resubscribe |
+|---|---|---|---|---|---|---|
+| `AVAILABLE` | calculate current result | normal tracker transition; resume an index-tail-pending identity | current classification if active, otherwise `NOT_EVALUATED` | derive from all current scopes | running while active | no |
+| `WARMUP` | `UNKNOWN/INDEX_WARMUP` | active episode ends `UNKNOWN_DETECTOR`; no episode stays `UNKNOWN` | `NOT_EVALUATED` | `KNOWN_DEGRADED` only with another known active witness, otherwise `UNKNOWN` | stop at last trusted active boundary | no |
+| `TIME_BOUNDARY_PENDING` | `UNKNOWN/INDEX_TIME_BOUNDARY_PENDING` | preserve identity in `INDEX_TAIL_PENDING`; reset incomplete counts | `NOT_EVALUATED` | `KNOWN_DEGRADED` only with another known active witness, otherwise `UNKNOWN` | paused | no |
+| `WATERMARK_PENDING` | `UNKNOWN/INDEX_WATERMARK_PENDING` | preserve identity in `INDEX_TAIL_PENDING`; reset incomplete counts | `NOT_EVALUATED` | `KNOWN_DEGRADED` only with another known active witness, otherwise `UNKNOWN` | paused | no |
+| `WINDOW_GAP` | `UNKNOWN/INDEX_WINDOW_GAP` only for bands whose requested window contains the gap | affected active episodes end `UNKNOWN_AT_GAP` | `NOT_EVALUATED` for affected episodes | settle from unaffected scopes; otherwise `UNKNOWN` | stop at last trusted active boundary | no |
+| `SOURCE_STALE` | `UNKNOWN/INDEX_SOURCE_STALE` for every index consumer | every affected active episode ends `UNKNOWN_AT_GAP` | `NOT_EVALUATED` | `UNKNOWN` unless another independent known active witness exists | stop at last trusted active boundary | yes, affected index channel |
+| `CONTINUITY_GAP` | `UNKNOWN/INDEX_CONTINUITY_GAP` for every index consumer | every affected active episode ends `UNKNOWN_AT_GAP`; history restarts | `NOT_EVALUATED` | `UNKNOWN` | stop at last trusted active boundary | yes, affected index channel |
+
+Pending statuses are non-countable time/currentness facts. A timer may enter or leave them and
+recompute current truth, but cannot activate, clear, or reset persistence except for the explicit
+pending reset in the table.
 
 ### Baseline projection
 
@@ -529,6 +666,8 @@ ACTIVE    this instrument has passed activation
 CLEARING  this instrument's clear persistence is pending
 BAND_SUSPENDED
           trusted time straddles a Policy boundary while market-source continuity remains known
+INDEX_TAIL_PENDING
+          minute/timestamp watermark rollover is pending while index-source continuity remains known
 ```
 
 ```text
@@ -560,14 +699,25 @@ before the minimum separation neither increments nor resets the count, but any i
 non-qualifying observation resets it immediately. Equality uses the inclusive comparisons shown
 above.
 
-At each accepted causal boundary the runtime may build one short-lived, non-durable
-`ScopeSnapshot`. It reports the recomputed current result separately from
-`observation_eligibility/reason`. Trusted-time revision can change TTE/current classification,
-but it is not a countable persistence observation. Observation identity contains only facts the
-formula consumes: target-quantity bid levels, forward, current baseline, and discrete
-TTE/currentness classification. Duplicates, ask-only changes, depth beyond the target,
-heartbeats, metadata-only changes, and unchanged reduced economic state do not activate, clear,
-or reset persistence and do not create observations or episodes.
+Every committed economic fact creates one non-durable `FactBoundary` with epoch/ingress/causal
+identity and receive monotonic time, and explicitly supplies a finite set of affected
+`Policy × expiry × option_type` scopes to settlement. The reducer first commits the fact, then builds one
+short-lived `ScopeSnapshot` per affected scope, calculates every instrument's
+`CurrentEvaluation`, applies all unconditional state effects, settles the aggregate/coverage/
+Layer 2 once, and only then exposes that boundary's truth. Iteration order cannot expose a partial
+aggregate.
+
+`CurrentEvaluation` is separate from `observation_eligibility/reason`. Trusted-time revision can
+change TTE/current classification, but it is not a countable persistence observation. Hard
+`UNKNOWN`, known ineligibility, membership loss, scope exit, and the two declared pending
+suspensions apply even when `countable = false`. Only a richness evaluation with
+`countable = true` calls the persistence observation transition.
+
+Observation identity contains only facts the formula consumes: target-quantity bid levels,
+forward, the current per-band baseline, and discrete TTE/index-currentness classification.
+Duplicates, ask-only changes, depth beyond the target, heartbeats, metadata-only changes, and
+unchanged reduced economic state do not activate, clear, or reset persistence and do not create
+observations or episodes.
 
 A trusted-time interval that straddles a boundary cannot select either parameter set. If the next
 adjacent band also has an `option_rules` entry for this instrument's option type, detector output
@@ -586,6 +736,12 @@ clock interval to lie wholly outside and cannot resume that identity. Later entr
 same-option-type band requires fresh activation. A distinct episode is attributed to the band in
 which it activated; per-band evaluation counts use the band active at each known evaluation. No
 suspended interval is counted as known-active time.
+
+`INDEX_TAIL_PENDING` follows the `IndexTailStatus` table. It is not a second anomaly state:
+detector current truth is `UNKNOWN`, the episode identity is retained only while continuity is
+known, incomplete activation/clear counts reset, Layer 2 is `NOT_EVALUATED`, and known-active
+duration pauses. `AVAILABLE` resumes the same active identity; `WARMUP`, `WINDOW_GAP`,
+`SOURCE_STALE`, or `CONTINUITY_GAP` ends or leaves it unavailable exactly as the table specifies.
 
 A detector-dependent gap changes only the affected instrument to `UNKNOWN`, invalidates its
 option/combo quotes, cancels pending observations, and never infers what happened inside the gap.
@@ -717,8 +873,43 @@ activations, episode ends by
 UNKNOWN_AT_GAP | CENSORED_AT_STOP`, known-active duration by end reason, band-suspended duration,
 Layer 2 state transitions, detector `UNKNOWN` transitions by reason, and Policy identity. Counts
 are business-state transitions after reduced-state de-duplication, never message counts. Rates
-with a zero or unknown denominator are `null`. Operational diagnostics include the frozen
-notification queue-lag limit and the maximum observed queue lag.
+with a zero or unknown denominator are `null`.
+
+`operational_diagnostics` is a required strict object with
+`operational_diagnostics_schema_version = 1`. It is transport evidence only and has exactly these
+members:
+
+- `runtime_limits`: the exact eight frozen Policy `runtime_limits`;
+- `ingress`: `received_envelope_count`, `reduced_envelope_count`,
+  `ingress_gap_or_duplicate_count`, `queue_high_water_frames`,
+  `max_receive_to_reduce_lag_ms`, and `overflow_count`;
+- `rpc_by_method`: one row per consumed method, sorted by method, with `method`, `request_count`,
+  `success_count`, `error_count`, `late_response_count`, `rate_limit_count`,
+  `latency_observation_count`, `latency_ms_sum`, and `latency_ms_max`;
+- `channel_by_class`: exactly one sorted row for each
+  `PLATFORM | OPTION_LIFECYCLE | COMBO_LIFECYCLE | INDEX | OPTION_TICKER | OPTION_BOOK |
+  COMBO_BOOK | HEARTBEAT | CONNECTION_CONTROL | INVALID`, with `received_count`,
+  `processed_count`, `received_rate_per_second`, and `processed_rate_per_second`;
+- `subscriptions`: `current_subscribed_instrument_count`,
+  `peak_subscribed_instrument_count`, `current_subscribed_channel_count`, and
+  `peak_subscribed_channel_count`;
+- `heartbeat`: `test_request_count`, `public_test_success_count`, `public_test_error_count`,
+  `latency_observation_count`, `latency_ms_sum`, and `latency_ms_max`;
+- `recovery`: counts for reconnect, session gap, index gap, index resubscribe, option-channel
+  resync, and attempt/success/failure for clock refresh, option-catalog refresh, and combo
+  authoritative refresh;
+- `source_shapes`: one sorted row per core RPC/channel source with `source`, `observed_count`,
+  `valid_count`, `invalid_count`, `validation = NOT_OBSERVED | VALID | INVALID`, and a sorted list
+  of consumed `{key, type}` pairs; no value or complete payload is retained;
+- `witness`: nullable `first_joint_witness_monotonic_ms` and
+  `continuous_covered_after_witness_ms`.
+
+The two channel rates use the run observation interval in seconds; either rate is `null` when that
+denominator is zero or unknown. An RPC latency is counted only when its request send time and
+response receive time belong to the same non-retired session epoch. A session or index gap clears
+the witness start; warm-up and a new joint witness are required before post-witness duration runs
+again. Diagnostics count transport facts once per reduced envelope and never enter detector,
+episode, aggregate, coverage, atomic availability, or any trading denominator.
 
 Coverage is one exact half-open runtime interval
 `[runtime_started_monotonic_ms, clean_stop_monotonic_ms)`. At every monotonic millisecond it has
@@ -761,6 +952,13 @@ evidence directory fail closed. Comparison compatibility across different Policy
 `NOT_COMPARABLE` for forecast/trading claims; only the explicitly named operational counts may be
 reported side by side, with no causal or quality inference. A schema or reader change requires an
 explicit task.
+
+This contract revision changes the exact Policy schema to version 2 and makes
+`operational_diagnostics_schema_version = 1` mandatory in `RADAR_RUN_SUMMARY`. Any locally created
+artifact using the prior Policy or summary shape is `MIGRATION_REQUIRED` and is not accepted.
+`SHORT_VOL_ANOMALY_EVENT` and `PUBLIC_ATOMIC_QUOTE_EVENT` market-field semantics remain compatible.
+There is no accepted production artifact to migrate, and this task does not add a migration or
+replay tool.
 
 Ordinary market facts, `NO_ANOMALY`, theoretical structures, unmatched combos, and full chain
 state are transient. The objects do not contain the full option chain and cannot reconstruct the
@@ -892,7 +1090,7 @@ Production establishment also requires a human-approved continuous-operation pla
 exact Policy path/digest, a new empty evidence directory, and its stop condition. No duration is
 fixed by this contract or inferred from a smoke witness.
 
-Before that gate can open, a reviewed diagnostic revision must record:
+The construction implementation must record:
 
 - actual request/response count, latency, errors and rate-limit outcomes by consumed RPC method,
   and received/processed counts plus observation-duration-derived rates by channel class;
@@ -908,10 +1106,10 @@ Before that gate can open, a reviewed diagnostic revision must record:
 
 The human-approved stop condition owns the required post-witness interval. A session/index gap
 restarts warm-up, requires a new witness, and restarts that interval. These diagnostics never
-enter anomaly, episode, aggregate, atomic-availability, or later trading denominators. Adding
-them to the strict run summary requires an explicit schema/writer/task/contract revision and
-direct tests; the present implementation and closed gate do not imply that revision or authorize
-the soak.
+enter anomaly, episode, aggregate, atomic-availability, or later trading denominators. This
+revision defines the strict schema and requires direct writer/validator tests, but it neither
+approves a Policy nor a stop condition, opens the production gate, authorizes the soak, nor treats
+the reachability witness as sustained-operation acceptance.
 
 ## Evidence boundary
 

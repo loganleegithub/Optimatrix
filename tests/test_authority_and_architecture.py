@@ -232,8 +232,8 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
 
     for invariant in (
         (
-            "**Current implementation state:** IMPLEMENTED — AWAITING REVIEW AND SEPARATE "
-            "PRODUCTION OBSERVATION"
+            "**Current implementation state:** IMPLEMENTATION IN PROGRESS — PRODUCTION "
+            "OBSERVATION GATE CLOSED"
         ),
         "`POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE`",
         "`detector_state`",
@@ -253,6 +253,11 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "`public/status`",
         "`public/set_heartbeat`",
         "`BAND_SUSPENDED`",
+        "`INDEX_TAIL_PENDING`",
+        "`IndexTailStatus`",
+        "`TIME_BOUNDARY_PENDING`",
+        "`WATERMARK_PENDING`",
+        "`operational_diagnostics_schema_version = 1`",
         "`KNOWN_INELIGIBLE`",
         "`UNKNOWN_AT_GAP`",
         "required combo order direction",

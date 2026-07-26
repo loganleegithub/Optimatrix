@@ -152,6 +152,9 @@ costs, and maker execution belong to later Underwriting/Execution work.
 The runtime implements one bounded formula family. A Policy file supplies exact values for:
 
 - target base quantity in BTC;
+- one exact `runtime_limits` object containing heartbeat interval, session-liveness, RPC,
+  clock-refresh, clock-stale, index-source-stale, notification-queue-lag, and time-boundary-poll
+  deadlines;
 - one or more exact TTE bands, each with trailing-variance lookbacks, non-negative weights, and a
   strictly positive annualized variance floor;
 - in every band, a non-empty `option_rules` map keyed only by `call` and/or `put`;
@@ -162,7 +165,8 @@ A call or put omitted from a band is explicitly out of detector scope in that ba
 inside one band may use different detector boundaries but must share that band's one BTC
 underlying return baseline.
 
-Policy loading rejects an empty TTE-band set or empty/unsupported per-band `option_rules`;
+The external file has exactly `policy_schema_version = 2`. Policy loading rejects an empty
+TTE-band set or empty/unsupported per-band `option_rules`;
 empty/duplicate/non-positive lookbacks; missing or misaligned weights;
 non-finite/negative weights or a sum other than exactly one after canonical decimal parsing;
 overlapping or out-of-range TTE bands outside `(30 minutes, 72 hours]`; invalid
@@ -180,6 +184,18 @@ liquidity ineligibility; it is never rounded. Absence of that optional field is 
 does not authorize an inferred grid from any undocumented field. Missing/invalid required amount
 metadata, or an invalid present step, is `UNKNOWN` unless another independent gate is already
 known to fail.
+
+Every runtime limit is a positive integer;
+`time_boundary_poll_interval_ms <= 1000`,
+`rpc_deadline_ms >= time_boundary_poll_interval_ms`,
+`session_liveness_deadline_ms > heartbeat_interval_seconds × 1000`, and
+`clock_stale_deadline_ms > clock_refresh_interval_ms`. The implementation has no operational
+deadline defaults. These values are versioned operating calibration, not scientifically optimal
+trading parameters.
+
+Reconnect backoff uses `time_boundary_poll_interval_ms` as its initial bound and
+`rpc_deadline_ms` as its maximum bound; it has no separate implementation cadence.
+WebSocket open and close use that same `rpc_deadline_ms`; no connection deadline is hard-coded.
 
 The construction tests use at least two different Policy fixtures so a fixed implementation
 constant cannot masquerade as configuration.
@@ -284,22 +300,38 @@ A public-method denial, relevant lock, or maintenance/break notification invalid
 state immediately. Recovery notifications alone do not restore it; the same bootstrap conditions
 must be rebuilt.
 
-The WebSocket acknowledges `public/set_heartbeat` at the fixed operational interval of 30 seconds
-before market state becomes usable. The run summary freezes that value, but it is not a trading
-Policy parameter. The exact consumed response shapes are `public/set_heartbeat -> "ok"` and
+Reducer-owned platform state keeps six independent facts: lock snapshot, maintenance guard,
+public-method guard, post-status probe, fresh-index coverage, and bootstrap epoch. `usable` is a
+pure derived predicate over those facts. A negative maintenance or public-method guard is latched
+for its epoch and no later success of an unrelated probe in that same epoch may overwrite it.
+
+The WebSocket acknowledges `public/set_heartbeat` at the Policy's frozen
+`heartbeat_interval_seconds` before market state becomes usable. The exact consumed response
+shapes are `public/set_heartbeat -> "ok"` and
 `public/test -> {"version": <non-empty string>, ...}`. The client answers every `test_request` with
-`public/test`. Sixty seconds without inbound session activity, a failed heartbeat/test response,
-or a connection close makes all dependent state `UNKNOWN` and ends affected episodes
+`public/test`. Crossing the frozen `session_liveness_deadline_ms`, a failed heartbeat/test
+response, or a connection close makes all dependent state `UNKNOWN` and ends affected episodes
 `UNKNOWN_AT_GAP`; reconnect rebuilds subscriptions, snapshots, catalogs, and baseline coverage.
 Heartbeat traffic proves connection liveness only: it neither refreshes an economic quote nor
 creates a detector observation.
 
-The socket reader assigns every notification and RPC response one `ingress_seq` and local
-`received_monotonic_ms` immediately on receipt. Economic facts enter one reducer in ingress order.
-Heartbeat `test_request` control may answer `public/test` while catalog RPC work is blocked, but
-does not reorder economic facts. Bootstrap and steady state share the same 1000 ms receive-lag
-gate and maximum-lag diagnostic. The bounded queue may not block RPC-response dispatch: overflow
-is a session gap.
+The socket reader only decodes and stamps every notification, success/error/late RPC response, and
+heartbeat response with one `session_epoch`, `ingress_seq`, and local
+`received_monotonic_ms`. Every frame enters one bounded queue. One synchronous reducer owns all
+economic, subscription, catalog, platform, episode, coverage, and Layer 2 state; its complete call
+tree does not await network I/O. It returns finite `PendingRpc` commands whose responses re-enter
+the same queue. Heartbeat `test_request` control may enqueue guarded `public/test` work while
+catalog RPC work is blocked, but neither it nor its response recursively mutates economic state.
+Bootstrap and steady state share the same Policy
+`notification_queue_lag_deadline_ms` and maximum-lag diagnostic. Queue overflow is a session gap.
+Reconnect retires the old session epoch, pending requests, and channel generations exactly once.
+
+Each `PendingRpc` freezes request purpose, method/params, session epoch, scope, channel generation
+where applicable, origin `FactBoundary`, Policy-derived absolute deadline, and failure scope.
+Reducer-owned channel state is exactly
+`UNSUBSCRIBED | SUBSCRIBE_PENDING | ACKNOWLEDGED | UNSUBSCRIBE_PENDING | RETIRED`. Pre-ACK frames
+cannot change market truth and reconcile exactly once after successful ACK; retired epoch or
+generation frames have zero business side effects.
 
 Raw external payloads tolerate additional unknown fields. Missing, invalid, or changed fields
 that this task actually consumes fail closed at their smallest consumer. The implementation may
@@ -360,11 +392,12 @@ For every `public/get_time` request, local monotonic send/receive instants bound
 `e_ms`, expand this by the fixed 1000 ppm operational drift budget:
 `[base.lower + e_ms × (1 - 0.001), base.upper + e_ms × (1 + 0.001)]`. Clock math is
 integer/rational milliseconds with lower rounded down and upper rounded up, never binary-float
-inward rounding. Refresh every 30 seconds; advance the prior interval to the new receive instant
-and intersect it with the new interval as the next base. An empty intersection or 60 seconds
-without refresh is a clock gap: dependent state becomes `UNKNOWN`, an active episode ends
-`UNKNOWN_AT_GAP`, and a fresh clock bootstrap is required. The fixed heartbeat, liveness, and
-drift values are recorded in the run summary and are not trading calibration parameters.
+inward rounding. Refresh and stale deadlines come from the Policy's `runtime_limits`; advance the
+prior interval to the new receive instant and intersect it with the new interval as the next base.
+An empty intersection or crossing `clock_stale_deadline_ms` is a clock gap: dependent state becomes
+`UNKNOWN`, an active episode ends `UNKNOWN_AT_GAP`, and a fresh clock bootstrap is required. The
+fixed drift budget and frozen operational limits are recorded in the run summary and are not
+trading calibration parameters.
 
 ### Index-minute coverage
 
@@ -377,9 +410,22 @@ timestamp watermark at/after minute end. The close is the last causal tick in th
 near-boundary tick is required. A timestamp regression or late tick for a sealed minute is a gap:
 never rewrite the close, invalidate rolling returns, and restart warm-up.
 
-The baseline API also proves tail currentness against the minute immediately before the trusted
-clock's current minute. Sixty returns require 61 consecutive covered closes. An old consecutive
-window is `INDEX_BASELINE_STALE/UNKNOWN` and cannot become known again until fresh warm-up.
+The baseline API is a per-band structured `IndexTailStatus` query with exactly
+`AVAILABLE | WARMUP | TIME_BOUNDARY_PENDING | WATERMARK_PENDING | WINDOW_GAP | SOURCE_STALE |
+CONTINUITY_GAP`. It proves both internal continuity for the requested lookback and exact alignment
+to the minute immediately before the one trusted current minute. A trusted interval spanning a
+minute boundary is `TIME_BOUNDARY_PENDING`; a trusted single current minute whose source watermark
+has not crossed the expected tail end is `WATERMARK_PENDING`. Normal rollover never clears
+history. Sixty returns require 61 consecutive covered closes.
+
+`WINDOW_GAP` is isolated by requested band: an older missing minute can invalidate a longer
+lookback while a shorter consecutive tail remains `AVAILABLE`, and it never resubscribes the index.
+`SOURCE_STALE` and `CONTINUITY_GAP` invalidate all index consumers and require affected index
+resubscription. Pending statuses preserve episode identity in `INDEX_TAIL_PENDING`, pause known
+duration, stop Layer 2, reset incomplete persistence, and are never countable observations.
+`WARMUP` ends an active episode `UNKNOWN_DETECTOR`; gap statuses end it `UNKNOWN_AT_GAP`. The
+normative truth table is the one in `SHORT_VOL_RADAR`; implementation and direct tests may not
+override it with string-priority conditions.
 
 ## Configured trailing-variance baseline
 
@@ -461,6 +507,8 @@ ACTIVE    this instrument passed activation
 CLEARING  this instrument's clear persistence is pending
 BAND_SUSPENDED
           trusted time straddles a Policy boundary while market-source continuity stays known
+INDEX_TAIL_PENDING
+          normal minute rollover is unresolved while index continuity and stored history stay known
 ```
 
 Activation observations use
@@ -475,13 +523,19 @@ While non-active, any known observation below activation resets the activation c
 active/clearing, any known observation above clear resets the clear count and restores `ACTIVE`.
 A qualifying observation inside the minimum separation neither increments nor resets, but any
 intervening known non-qualifying observation resets immediately. Equality is inclusive.
-Each causal boundary may create one short-lived, non-durable `ScopeSnapshot` and returns current
-calculation separately from `observation_eligibility/reason`. Clock revision participates in
-current classification but is not a countable persistence observation. Observation identity
-contains only target-quantity bid levels, forward, current baseline, and discrete
-TTE/currentness classification. Ask-only changes, depth beyond the target, repeated messages,
-heartbeats, metadata-only changes, and unchanged reduced state do not activate, clear, or reset
-persistence.
+Every committed fact explicitly names all affected scopes and creates one short-lived,
+non-durable `FactBoundary`. For every affected scope the reducer first computes a pure
+`CurrentEvaluation`, then constructs one `ScopeSnapshot`, then settles current results, trackers,
+aggregate, coverage, and Layer 2 exactly once in that boundary. Hard `UNKNOWN`, known
+ineligibility, membership loss, and scope exit apply unconditionally. Only richness
+activation/clear calls persistence observation, and only when
+`observation_eligibility.countable = true`.
+
+Clock revision participates in current classification but is not itself a countable persistence
+observation. Observation identity contains only target-quantity bid levels, forward, current
+baseline, and discrete TTE/currentness classification. Ask-only changes, depth beyond the target,
+repeated messages, heartbeats, metadata-only changes, and unchanged reduced state do not activate,
+clear, or reset persistence.
 
 While trusted time straddles a boundary whose adjacent band has a rule for this instrument's
 option type, detector output is temporarily `UNKNOWN/TIME_BAND_BOUNDARY`; an active episode becomes
@@ -567,6 +621,13 @@ The two negative combo states require the completeness conditions above. Positiv
 existential and does not wait for unrelated combo books, but its event makes no best-price or
 complete-selection claim.
 
+Protective-leg discovery is independently
+`KNOWN_PRESENT | KNOWN_ABSENT | UNRESOLVED`. `KNOWN_ABSENT` after complete option catalog,
+relevant leg metadata, lifecycle, and combo catalog reconciliation is a known
+`NO_ACTIVE_COMBO`; `UNRESOLVED` is `UNKNOWN`. A lifecycle burst during one combo authoritative
+refresh marks it dirty and produces at most one trailing authoritative refresh; it never lets an
+older snapshot overwrite newer lifecycle truth.
+
 The component-leg bid/ask is not implemented in this closure and may never substitute for this
 state. No Greek sign gate, arbitrary wing-width percentage, future delivery-fee estimate,
 account-fee estimate, or total-loss qualification belongs to this availability fact.
@@ -617,8 +678,26 @@ ends by
 `CLEAR | KNOWN_INELIGIBLE | OUT_OF_BASELINE_SCOPE | MEMBERSHIP_LOSS | UNKNOWN_DETECTOR |
 UNKNOWN_AT_GAP | CENSORED_AT_STOP`, known-active duration by end reason, band-suspended duration,
 atomic-state transitions, detector `UNKNOWN` transitions by reason, and Policy identity. These are
-reduced business-state transitions, never message counts. It also records the fixed notification
-queue-lag limit and maximum observed lag. It contains no full market chain.
+reduced business-state transitions, never message counts. It contains no full market chain.
+
+It also requires strict `operational_diagnostics_schema_version = 1` with the exact
+`SHORT_VOL_RADAR` schema:
+
+- all eight frozen `runtime_limits`;
+- ingress received/reduced/gap-or-duplicate counts, queue high-water, maximum receive-to-reduce
+  lag, and overflow;
+- per-method request/success/error/late/rate-limit counts and latency count/sum/max;
+- received/processed counts and observation-duration-derived nullable rates for every fixed
+  channel class;
+- current/peak subscribed instrument and channel counts;
+- heartbeat request/result and latency diagnostics;
+- reconnect, session/index gap, index resubscribe, option resync, clock refresh,
+  option-catalog refresh, and combo authoritative-refresh diagnostics;
+- core source shape rows containing only source, counts, final validation, and sorted consumed
+  key/type pairs;
+- nullable first joint-witness time and continuous covered duration after that witness.
+
+These transport facts are counted once per reduced envelope and never enter business denominators.
 
 Coverage partitions the exact half-open interval
 `[runtime_started_monotonic_ms, clean_stop_monotonic_ms)` into one global state at every
@@ -645,6 +724,10 @@ validation, and only explicitly unavailable diagnostics may be nullable. One evi
 binds one Policy and runtime identity; mixed identities fail closed. Cross-Policy compatibility
 is `NOT_COMPARABLE` for forecast or trading claims, although named operational counts may be
 displayed side by side without causal inference.
+
+The exact Policy schema is now version 2 and the strict run summary requires diagnostics schema
+version 1. Prior local Policy/summary artifacts are `MIGRATION_REQUIRED` and not accepted. There is
+no accepted production artifact to migrate, and this task adds no migration or replay path.
 
 Each object has a simple strict repository-owned schema and Policy content identity. No separate
 source-document manifest, Git-object provenance graph, hit-only recomputation command, full-feed
@@ -778,6 +861,26 @@ future exit liquidity, Outcome, PnL, qualification, promotion, or execution perm
    normal full-chain/no-anomaly persistence; injected coverage overlap/gaps fail validation.
 8. Integration tests prove one public-only process and the absence of replay, recomputation,
    private, maker, Candidate, Shadow, Position, and Outcome paths.
+9. Root-cause orchestration tests prove every notification, success/error/late RPC response, and
+   heartbeat response receives consecutive ingress identity and reduces exactly once; sustained
+   market traffic cannot starve a successful metadata response; pre-ACK frames have zero market
+   effect and reconcile exactly once after ACK; retired session/generation frames have zero
+   business side effects; and a maintenance/public-method negative guard cannot be overwritten in
+   the same epoch.
+10. Causal-interleaving tests prove response receive-time ordering cannot regress coverage;
+    `open -> close -> metadata response`, snapshot-pending close, lifecycle during catalog
+    bootstrap reconciliation, and lifecycle during combo refresh all preserve newer lifecycle
+    truth; blocked subscribe/unsubscribe work still permits timely heartbeat control; and a combo
+    lifecycle burst produces exactly one trailing authoritative refresh.
+11. Currentness tests prove normal minute rollover enters pending without clearing history, a
+    trusted interval spanning a minute cannot select an old tail, window gaps are isolated by
+    per-band lookback without resubscription, `amount UNKNOWN -> VALID` yields known current and
+    `ARMED` with zero persistence count, known-absent protective wings are known negative, and the
+    main loop settles a final-window/Policy-gap boundary within the configured poll interval of at
+    most one second without a market update.
+12. Deterministic tests run the same interleaving sequence repeatedly and require identical
+    current results, episode states, coverage, emitted commands, and durable edges. Evidence
+    storage `OSError` is fatal with zero reconnect.
 
 ### Required commands after the construction gate
 
@@ -853,7 +956,7 @@ plan. The plan must name the exact Policy path/digest, a new empty evidence dire
 stop condition. This task does not infer approval from the smoke witness, does not run the soak,
 and does not hard-code a duration.
 
-The approved diagnostic revision must record, without persisting full market payloads:
+The implemented strict diagnostic schema records, without persisting full market payloads:
 
 - actual request count, response count, latency, error and rate-limit outcomes by consumed RPC
   method, plus received/processed counts and observation-duration-derived rates by channel class;
@@ -870,9 +973,9 @@ The approved diagnostic revision must record, without persisting full market pay
 The human-approved stop condition determines the required post-witness stable interval. Any
 session/index gap restarts warm-up, requires a new joint witness, and restarts that interval.
 These operational diagnostics never enter anomaly, episode, aggregate, atomic-availability, or
-future trading denominators. The current strict run-summary schema does not silently absorb these
-new fields; its schema, writer, active task, and this contract must be revised and directly tested
-before the production observation gate can open.
+future trading denominators. This task requires direct schema/writer tests, but it does not approve
+the Policy, stop condition, production connection, or soak, and it does not open the production
+observation gate.
 
 ## Trader-readable acceptance gates
 

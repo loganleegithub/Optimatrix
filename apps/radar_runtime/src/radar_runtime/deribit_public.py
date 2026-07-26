@@ -4,15 +4,13 @@ import asyncio
 import contextlib
 import json
 import time
-from collections.abc import Sequence
 from decimal import Decimal
 from typing import Any
 
-from market_monitor.deribit import subscription_batches, validate_subscription_ack
 from websockets.asyncio.client import ClientConnection, connect
 
 PRODUCTION_PUBLIC_ENDPOINT = "wss://www.deribit.com/ws/api/v2"
-MAX_PENDING_NOTIFICATIONS = 10_000
+MAX_PENDING_INBOUND_FRAMES = 10_000
 PUBLIC_METHODS = frozenset(
     {
         "public/subscribe",
@@ -36,62 +34,68 @@ class PublicSessionError(PublicProtocolError):
     """The transport session is unusable and requires a full reconnect."""
 
 
-class PublicRequestError(PublicProtocolError):
-    """One public RPC or channel request failed without proving a session gap."""
-
-    def __init__(self, message: str, *, envelope: InboundEnvelope | None = None) -> None:
-        super().__init__(message)
-        self.envelope = envelope
-
-
 class PublicProtocolIncompatibility(PublicProtocolError):
     """The consumed official protocol shape is incompatible with this runtime."""
 
 
 class InboundEnvelope(dict[str, object]):
+    """One wire frame stamped exactly once by the socket reader."""
+
     def __init__(
         self,
         message: dict[str, object],
         *,
+        session_epoch: int,
         ingress_seq: int,
         received_monotonic_ms: int,
-        channel: str | None = None,
-        subscription_generation: int | None = None,
     ) -> None:
+        if session_epoch <= 0 or ingress_seq <= 0 or received_monotonic_ms < 0:
+            raise ValueError("inbound envelope identity must be positive")
         super().__init__(message)
+        self.session_epoch = session_epoch
         self.ingress_seq = ingress_seq
         self.received_monotonic_ms = received_monotonic_ms
-        self.channel = channel
-        self.subscription_generation = subscription_generation
-
-    @property
-    def value(self) -> object:
-        return _rpc_value(self)
 
 
 class DeribitPublicClient:
-    def __init__(self, endpoint: str = PRODUCTION_PUBLIC_ENDPOINT) -> None:
+    """Thin production-public transport with one inbound queue and no fact ownership."""
+
+    def __init__(
+        self,
+        endpoint: str = PRODUCTION_PUBLIC_ENDPOINT,
+        *,
+        session_epoch: int,
+        rpc_deadline_ms: int,
+    ) -> None:
         if endpoint != PRODUCTION_PUBLIC_ENDPOINT:
             raise ValueError("only the Deribit production-public endpoint is authorized")
+        if session_epoch <= 0:
+            raise ValueError("session_epoch must be positive")
+        if (
+            isinstance(rpc_deadline_ms, bool)
+            or not isinstance(rpc_deadline_ms, int)
+            or rpc_deadline_ms <= 0
+        ):
+            raise ValueError("rpc_deadline_ms must be a positive integer")
         self.endpoint = endpoint
+        self.session_epoch = session_epoch
+        self.connection_timeout_seconds = rpc_deadline_ms / 1_000
         self._connection: ClientConnection | None = None
         self._reader_task: asyncio.Task[None] | None = None
-        self._next_request_id = 1
-        self._pending: dict[int, asyncio.Future[InboundEnvelope]] = {}
-        self._notifications: asyncio.Queue[InboundEnvelope] = asyncio.Queue(
-            maxsize=MAX_PENDING_NOTIFICATIONS
+        self._inbound: asyncio.Queue[InboundEnvelope] = asyncio.Queue(
+            maxsize=MAX_PENDING_INBOUND_FRAMES
         )
         self._next_ingress_seq = 1
-        self._next_subscription_generation = 1
-        self._active_subscription_generations: dict[str, int] = {}
         self._reader_error: PublicProtocolError | None = None
         self.last_inbound_monotonic = time.monotonic()
+        self.queue_high_water_frames = 0
+        self.overflow_count = 0
 
     async def __aenter__(self) -> DeribitPublicClient:
         self._connection = await connect(
             self.endpoint,
-            open_timeout=20,
-            close_timeout=10,
+            open_timeout=self.connection_timeout_seconds,
+            close_timeout=self.connection_timeout_seconds,
             ping_interval=None,
             max_size=2**24,
         )
@@ -105,28 +109,23 @@ class DeribitPublicClient:
             self._reader_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._reader_task
-        for future in self._pending.values():
-            if not future.done():
-                future.set_exception(PublicSessionError("public connection closed"))
 
-    async def request(
+    async def send_request(
         self,
+        *,
+        request_id: int,
         method: str,
         params: dict[str, object],
-        *,
         responding_to_test_request: bool = False,
-    ) -> object:
+    ) -> None:
         if method not in PUBLIC_METHODS:
             raise PublicProtocolError(f"method is outside production-public allowlist: {method}")
         if method == "public/test" and not responding_to_test_request:
             raise PublicProtocolError("public/test is allowed only as a heartbeat response")
+        if request_id <= 0:
+            raise PublicProtocolError("request id must be positive")
         if self._connection is None:
             raise PublicSessionError("public connection is not open")
-        request_id = self._next_request_id
-        self._next_request_id += 1
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[InboundEnvelope] = loop.create_future()
-        self._pending[request_id] = future
         message = {
             "jsonrpc": "2.0",
             "id": request_id,
@@ -134,75 +133,23 @@ class DeribitPublicClient:
             "params": params,
         }
         await self._connection.send(json.dumps(message, separators=(",", ":"), allow_nan=False))
-        try:
-            return await asyncio.wait_for(future, timeout=30)
-        finally:
-            self._pending.pop(request_id, None)
 
-    async def subscribe(self, channels: Sequence[str]) -> tuple[InboundEnvelope, ...]:
-        acknowledgements: list[InboundEnvelope] = []
-        for batch in subscription_batches(channels):
-            previous = {
-                channel: self._active_subscription_generations.get(channel) for channel in batch
-            }
-            for channel in batch:
-                self._active_subscription_generations[channel] = self._next_subscription_generation
-                self._next_subscription_generation += 1
-            try:
-                result = await self.request("public/subscribe", {"channels": list(batch)})
-                validate_subscription_ack(batch, _rpc_value(result))
-                if isinstance(result, InboundEnvelope):
-                    acknowledgements.append(result)
-            except Exception:
-                for channel, generation in previous.items():
-                    if generation is None:
-                        self._active_subscription_generations.pop(channel, None)
-                    else:
-                        self._active_subscription_generations[channel] = generation
-                raise
-        return tuple(acknowledgements)
+    async def next_envelope(self, timeout_seconds: float | None = None) -> InboundEnvelope:
+        if self._reader_error is not None and self._inbound.empty():
+            raise self._reader_error
+        if timeout_seconds is None:
+            envelope = await self._inbound.get()
+        else:
+            envelope = await asyncio.wait_for(self._inbound.get(), timeout_seconds)
+        return envelope
 
-    async def unsubscribe(self, channels: Sequence[str]) -> tuple[InboundEnvelope, ...]:
-        acknowledgements: list[InboundEnvelope] = []
-        for batch in subscription_batches(channels):
-            result = await self.request("public/unsubscribe", {"channels": list(batch)})
-            validate_subscription_ack(batch, _rpc_value(result))
-            if isinstance(result, InboundEnvelope):
-                acknowledgements.append(result)
-            for channel in batch:
-                self._active_subscription_generations.pop(channel, None)
-        return tuple(acknowledgements)
-
-    async def next_notification(self, timeout_seconds: float | None = None) -> dict[str, object]:
-        deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
-        while True:
-            if self._reader_error is not None:
-                raise self._reader_error
-            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
-            if remaining is None:
-                envelope = await self._notifications.get()
-            else:
-                envelope = await asyncio.wait_for(self._notifications.get(), remaining)
-            if self._is_current(envelope):
-                return envelope
-
-    def drain_notifications(self) -> tuple[dict[str, object], ...]:
-        values: list[dict[str, object]] = []
+    def drain_envelopes(self) -> tuple[InboundEnvelope, ...]:
+        values: list[InboundEnvelope] = []
         while True:
             try:
-                envelope = self._notifications.get_nowait()
+                values.append(self._inbound.get_nowait())
             except asyncio.QueueEmpty:
                 return tuple(values)
-            if self._is_current(envelope):
-                values.append(envelope)
-
-    def _is_current(self, envelope: InboundEnvelope) -> bool:
-        if envelope.channel is None:
-            return True
-        return (
-            self._active_subscription_generations.get(envelope.channel)
-            == envelope.subscription_generation
-        )
 
     async def _reader(self) -> None:
         if self._connection is None:
@@ -210,42 +157,10 @@ class DeribitPublicClient:
         try:
             async for raw_message in self._connection:
                 self.last_inbound_monotonic = time.monotonic()
-                received_monotonic_ms = time.monotonic_ns() // 1_000_000
-                ingress_seq = self._next_ingress_seq
-                self._next_ingress_seq += 1
-                message = _decode_message(raw_message)
-                request_id = message.get("id")
-                if isinstance(request_id, int):
-                    if request_id in self._pending:
-                        future = self._pending[request_id]
-                        future.set_result(
-                            InboundEnvelope(
-                                message,
-                                ingress_seq=ingress_seq,
-                                received_monotonic_ms=received_monotonic_ms,
-                            )
-                        )
-                    continue
-                else:
-                    channel: str | None = None
-                    generation: int | None = None
-                    if message.get("method") == "subscription":
-                        params = message.get("params")
-                        if isinstance(params, dict) and isinstance(params.get("channel"), str):
-                            channel = params["channel"]
-                            generation = self._active_subscription_generations.get(channel)
-                    try:
-                        self._notifications.put_nowait(
-                            InboundEnvelope(
-                                message,
-                                ingress_seq=ingress_seq,
-                                received_monotonic_ms=received_monotonic_ms,
-                                channel=channel,
-                                subscription_generation=generation,
-                            )
-                        )
-                    except asyncio.QueueFull as exc:
-                        raise PublicSessionError("notification queue overflow") from exc
+                self._enqueue_wire_message(
+                    _decode_message(raw_message),
+                    received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                )
             raise PublicSessionError("production-public connection closed")
         except asyncio.CancelledError:
             raise
@@ -256,24 +171,53 @@ class DeribitPublicClient:
                 else PublicSessionError(f"production-public reader failed: {exc}")
             )
             self._reader_error = error
-            for future in self._pending.values():
-                if not future.done():
-                    future.set_exception(error)
-            with contextlib.suppress(asyncio.QueueFull):
-                self._notifications.put_nowait(
-                    InboundEnvelope(
-                        {
-                            "jsonrpc": "2.0",
-                            "method": "connection_error",
-                            "params": {"error": str(exc)},
-                        },
-                        ingress_seq=self._next_ingress_seq,
-                        received_monotonic_ms=time.monotonic_ns() // 1_000_000,
-                        channel=None,
-                        subscription_generation=None,
-                    )
+            self._enqueue_connection_error(error)
+
+    def _enqueue_wire_message(
+        self,
+        message: dict[str, object],
+        *,
+        received_monotonic_ms: int,
+    ) -> None:
+        envelope = InboundEnvelope(
+            message,
+            session_epoch=self.session_epoch,
+            ingress_seq=self._next_ingress_seq,
+            received_monotonic_ms=received_monotonic_ms,
+        )
+        self._next_ingress_seq += 1
+        try:
+            self._inbound.put_nowait(envelope)
+        except asyncio.QueueFull as exc:
+            self.overflow_count += 1
+            raise PublicSessionError("inbound queue overflow") from exc
+        self.queue_high_water_frames = max(
+            self.queue_high_water_frames,
+            self._inbound.qsize(),
+        )
+
+    def _enqueue_connection_error(self, error: PublicProtocolError) -> None:
+        try:
+            self._inbound.put_nowait(
+                InboundEnvelope(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "connection_error",
+                        "params": {"error": str(error)},
+                    },
+                    session_epoch=self.session_epoch,
+                    ingress_seq=self._next_ingress_seq,
+                    received_monotonic_ms=time.monotonic_ns() // 1_000_000,
                 )
-            self._next_ingress_seq += 1
+            )
+        except asyncio.QueueFull:
+            self.overflow_count += 1
+            return
+        self.queue_high_water_frames = max(
+            self.queue_high_water_frames,
+            self._inbound.qsize(),
+        )
+        self._next_ingress_seq += 1
 
 
 def _decode_message(raw_message: str | bytes) -> dict[str, object]:
@@ -284,16 +228,3 @@ def _decode_message(raw_message: str | bytes) -> dict[str, object]:
     if not isinstance(decoded, dict) or decoded.get("jsonrpc") != "2.0":
         raise PublicProtocolIncompatibility("message is not a JSON-RPC 2.0 object")
     return decoded
-
-
-def _rpc_value(result: object) -> object:
-    if not isinstance(result, InboundEnvelope):
-        return result
-    if "error" in result:
-        raise PublicRequestError(
-            f"Deribit JSON-RPC error: {result['error']!r}",
-            envelope=result,
-        )
-    if "result" not in result:
-        raise PublicProtocolIncompatibility("JSON-RPC response lacks result")
-    return result["result"]

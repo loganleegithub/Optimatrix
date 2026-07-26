@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import StrEnum
 from itertools import pairwise
 
-from market_monitor.types import ContinuityGap, decimal_from_source
+from market_monitor.types import ContinuityGap, TimeInterval, decimal_from_source
 
 MINUTE_MS = 60_000
 
@@ -16,10 +17,26 @@ class MinuteClose:
     causal_seq: int
 
 
+class IndexTailStatus(StrEnum):
+    AVAILABLE = "AVAILABLE"
+    WARMUP = "WARMUP"
+    TIME_BOUNDARY_PENDING = "TIME_BOUNDARY_PENDING"
+    WATERMARK_PENDING = "WATERMARK_PENDING"
+    WINDOW_GAP = "WINDOW_GAP"
+    SOURCE_STALE = "SOURCE_STALE"
+    CONTINUITY_GAP = "CONTINUITY_GAP"
+
+
 @dataclass(frozen=True)
-class IndexWindow:
-    prices: tuple[Decimal, ...] | None
-    reason: str | None
+class IndexTail:
+    status: IndexTailStatus
+    closes: tuple[MinuteClose, ...] = ()
+
+    @property
+    def prices(self) -> tuple[Decimal, ...] | None:
+        if self.status is not IndexTailStatus.AVAILABLE:
+            return None
+        return tuple(close.price for close in self.closes)
 
 
 class IndexMinuteReducer:
@@ -32,6 +49,7 @@ class IndexMinuteReducer:
         self._watermark_ms: int | None = None
         self._working: dict[int, MinuteClose] = {}
         self._sealed: list[MinuteClose] = []
+        self._continuity_gap = True
 
     @property
     def sealed(self) -> tuple[MinuteClose, ...]:
@@ -49,6 +67,7 @@ class IndexMinuteReducer:
         self._watermark_ms = None
         self._working.clear()
         self._sealed.clear()
+        self._continuity_gap = False
 
     def gap(self) -> None:
         self._coverage_start_ms = None
@@ -56,6 +75,7 @@ class IndexMinuteReducer:
         self._watermark_ms = None
         self._working.clear()
         self._sealed.clear()
+        self._continuity_gap = True
 
     def accept_tick(
         self,
@@ -115,30 +135,54 @@ class IndexMinuteReducer:
                 return None
         return tuple(close.price for close in closes)
 
-    def current_window(
+    def current_tail(
         self,
         return_count: int,
         *,
-        trusted_time_lower_ms: int,
-    ) -> IndexWindow:
+        trusted_time: TimeInterval,
+        source_stale_deadline_ms: int,
+    ) -> IndexTail:
         if return_count <= 0:
             raise ValueError("return_count must be positive")
+        if source_stale_deadline_ms <= 0:
+            raise ValueError("index source stale deadline must be positive")
+        if self._continuity_gap:
+            return IndexTail(IndexTailStatus.CONTINUITY_GAP)
+        if (
+            self._last_source_timestamp_ms is not None
+            and trusted_time.lower_ms - self._last_source_timestamp_ms > source_stale_deadline_ms
+        ):
+            return IndexTail(IndexTailStatus.SOURCE_STALE)
+
+        lower_current_minute = trusted_time.lower_ms // MINUTE_MS
+        upper_current_minute = trusted_time.upper_ms // MINUTE_MS
+        if lower_current_minute != upper_current_minute:
+            return IndexTail(IndexTailStatus.TIME_BOUNDARY_PENDING)
+
+        current_minute_start_ms = lower_current_minute * MINUTE_MS
+        if self._watermark_ms is None or self._watermark_ms < current_minute_start_ms:
+            return IndexTail(IndexTailStatus.WATERMARK_PENDING)
+
         required_closes = return_count + 1
-        if len(self._sealed) < required_closes:
-            return IndexWindow(None, "INDEX_BASELINE_WARMUP")
-        closes = self._sealed[-required_closes:]
+        expected_tail_start_ms = current_minute_start_ms - MINUTE_MS
+        earliest_required_start_ms = expected_tail_start_ms - return_count * MINUTE_MS
+        closes = tuple(
+            close
+            for close in self._sealed
+            if earliest_required_start_ms <= close.minute_start_ms <= expected_tail_start_ms
+        )
+        if len(closes) < required_closes:
+            if (
+                self._coverage_start_ms is None
+                or self._coverage_start_ms > earliest_required_start_ms
+            ):
+                return IndexTail(IndexTailStatus.WARMUP, closes)
+            return IndexTail(IndexTailStatus.WINDOW_GAP, closes)
         if any(
             later.minute_start_ms - earlier.minute_start_ms != MINUTE_MS
             for earlier, later in pairwise(closes)
         ):
-            return IndexWindow(None, "INDEX_BASELINE_GAP")
-        prices = tuple(close.price for close in closes)
-        if trusted_time_lower_ms <= 0:
-            return IndexWindow(None, "INDEX_BASELINE_GAP")
-        latest_complete_minute_start_ms = (trusted_time_lower_ms // MINUTE_MS - 1) * MINUTE_MS
-        latest_sealed_minute_start_ms = self._sealed[-1].minute_start_ms
-        if latest_sealed_minute_start_ms < latest_complete_minute_start_ms:
-            return IndexWindow(None, "INDEX_BASELINE_STALE")
-        if latest_sealed_minute_start_ms > latest_complete_minute_start_ms:
-            return IndexWindow(None, "INDEX_BASELINE_GAP")
-        return IndexWindow(prices, None)
+            return IndexTail(IndexTailStatus.WINDOW_GAP, closes)
+        if closes[-1].minute_start_ms != expected_tail_start_ms:
+            return IndexTail(IndexTailStatus.WINDOW_GAP, closes)
+        return IndexTail(IndexTailStatus.AVAILABLE, closes)

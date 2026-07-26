@@ -23,6 +23,12 @@ class PublicAtomicQuoteState(StrEnum):
     PUBLIC_ATOMIC_QUOTE_AVAILABLE = "PUBLIC_ATOMIC_QUOTE_AVAILABLE"
 
 
+class ProtectiveLegState(StrEnum):
+    KNOWN_PRESENT = "KNOWN_PRESENT"
+    KNOWN_ABSENT = "KNOWN_ABSENT"
+    UNRESOLVED = "UNRESOLVED"
+
+
 class ComboOrderDirection(StrEnum):
     BUY = "BUY"
     SELL = "SELL"
@@ -123,11 +129,16 @@ def classify_atomic_quotes(
         )
         is not None
     )
+    protective_state = classify_protective_leg(
+        short_leg=short_leg,
+        options_by_name=options_by_name,
+        option_catalog_complete=option_catalog_complete,
+    )
     if not matches:
         missing_reasons: list[str] = []
         if not option_catalog_complete:
             missing_reasons.append("OPTION_CATALOG_INCOMPLETE")
-        if not _has_known_protective_leg(short_leg, options_by_name):
+        if protective_state is ProtectiveLegState.UNRESOLVED:
             missing_reasons.append("PROTECTIVE_LEG_UNRESOLVED")
         if not combo_catalog_complete:
             missing_reasons.append("COMBO_CATALOG_INCOMPLETE")
@@ -183,20 +194,29 @@ def classify_atomic_quotes(
     return AtomicResult(PublicAtomicQuoteState.NO_TARGET_SIZE_CREDIT_QUOTE)
 
 
-def _has_known_protective_leg(
+def classify_protective_leg(
+    *,
     short_leg: OptionInstrument,
     options_by_name: dict[str, OptionInstrument],
-) -> bool:
+    option_catalog_complete: bool,
+) -> ProtectiveLegState:
+    unresolved_candidate = False
     for candidate in options_by_name.values():
         if (
             candidate.instrument_name == short_leg.instrument_name
             or candidate.expiration_timestamp_ms != short_leg.expiration_timestamp_ms
             or candidate.option_type is not short_leg.option_type
-            or candidate.amount is None
         ):
             continue
-        if short_leg.option_type is OptionType.CALL and candidate.strike > short_leg.strike:
-            return True
-        if short_leg.option_type is OptionType.PUT and candidate.strike < short_leg.strike:
-            return True
-    return False
+        is_protective = (
+            short_leg.option_type is OptionType.CALL and candidate.strike > short_leg.strike
+        ) or (short_leg.option_type is OptionType.PUT and candidate.strike < short_leg.strike)
+        if not is_protective:
+            continue
+        if candidate.amount is None:
+            unresolved_candidate = True
+        else:
+            return ProtectiveLegState.KNOWN_PRESENT
+    if unresolved_candidate or not option_catalog_complete:
+        return ProtectiveLegState.UNRESOLVED
+    return ProtectiveLegState.KNOWN_ABSENT

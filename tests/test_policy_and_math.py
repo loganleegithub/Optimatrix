@@ -37,8 +37,11 @@ def test_policy_loads_exact_bytes_once_and_binds_digest(
     path.write_bytes(exact)
     policy = load_policy(path, digest)
     assert policy.identity == digest
+    assert policy.schema_version == 2
     assert policy.target_base_quantity_btc == Decimal("0.1")
     assert policy.largest_lookback_minutes == 5
+    assert policy.runtime_limits.notification_queue_lag_deadline_ms == 1_000
+    assert policy.runtime_limits.time_boundary_poll_interval_ms == 1_000
 
     path.write_text("{}", encoding="utf-8")
     assert policy.target_base_quantity_btc == Decimal("0.1")
@@ -130,6 +133,49 @@ def test_policy_rejects_invalid_steps_counts_bands_and_empty_rules(
     document["target_base_quantity_btc"] = "0.1"
     changed = json.dumps(document).encode()
     with pytest.raises(PolicyError, match="JSON numeric token"):
+        load_policy_bytes(changed, digest_policy_bytes(changed))
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (
+            lambda document: document.update(policy_schema_version=1),
+            "policy_schema_version",
+        ),
+        (
+            lambda document: document["runtime_limits"].update(
+                notification_queue_lag_deadline_ms=0
+            ),
+            "notification_queue_lag_deadline_ms",
+        ),
+        (
+            lambda document: document["runtime_limits"].update(
+                time_boundary_poll_interval_ms=1_001
+            ),
+            "time_boundary_poll_interval_ms",
+        ),
+        (
+            lambda document: document["runtime_limits"].update(session_liveness_deadline_ms=30_000),
+            "session_liveness_deadline_ms",
+        ),
+        (
+            lambda document: document["runtime_limits"].update(clock_stale_deadline_ms=30_000),
+            "clock_stale_deadline_ms",
+        ),
+    ],
+)
+def test_policy_owns_and_validates_all_runtime_deadlines(
+    policy_factory: PolicyFactory,
+    mutate: Any,
+    error: str,
+) -> None:
+    exact, _ = policy_factory()
+    document: dict[str, Any] = json.loads(exact)
+    mutate(document)
+    changed = json.dumps(document, separators=(",", ":"), sort_keys=True).encode()
+
+    with pytest.raises(PolicyError, match=error):
         load_policy_bytes(changed, digest_policy_bytes(changed))
 
 

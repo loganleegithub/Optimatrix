@@ -40,8 +40,19 @@ def policy_document(
         "minimum_separation_ms": separation_ms,
     }
     return {
+        "policy_schema_version": 2,
         "policy_family": "POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE",
         "target_base_quantity_btc": target,
+        "runtime_limits": {
+            "heartbeat_interval_seconds": 30,
+            "session_liveness_deadline_ms": 60_000,
+            "rpc_deadline_ms": 30_000,
+            "clock_refresh_interval_ms": 30_000,
+            "clock_stale_deadline_ms": 60_000,
+            "index_source_stale_deadline_ms": 90_000,
+            "notification_queue_lag_deadline_ms": 1_000,
+            "time_boundary_poll_interval_ms": 1_000,
+        },
         "tte_bands": [
             {
                 "band_id": "settlement-clear-to-six-hours",

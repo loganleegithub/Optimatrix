@@ -58,12 +58,25 @@ command, and archive are not Online Runtime semantics and cannot become prerequi
 
 ## Live event semantics
 
-Every accepted source event receives a monotonic internal causal sequence. Source timestamps are
-market facts; receipt time and monotonic sequence establish what the runtime knew and in what
-order. Deribit channels have no single exchange-global sequence, so strict as-of means the latest
-individually continuous facts known to the process at one causal sequence, not a
-matching-engine-wide simultaneous snapshot. Each emitted event binds the latest sequence it
-consumed.
+The socket reader only decodes and stamps every inbound frame with `session_epoch`,
+`ingress_seq`, and `received_monotonic_ms`, then places notifications and every RPC
+success/error/late response into one bounded queue. It never applies market truth, resolves an
+economic response future, or filters a frame by client-side subscription generation. One
+synchronous reducer is the sole owner of session, channel, platform, catalog, market, detector,
+episode, coverage, and Layer 2 state. It consumes each envelope exactly once in epoch/sequence
+order and never waits for network I/O anywhere in its call tree.
+
+Reducer output is a finite list of purpose-specific `PendingRpc` commands. Sending is an
+orchestration concern; every response, error, and acknowledgement returns through the same reader
+queue before the reducer can commit its effect. A reconnect retires one entire session epoch, so a
+late frame from that epoch or a retired channel generation has zero business side effects.
+
+Every committed source fact receives a monotonic internal causal sequence and one `FactBoundary`
+that names all affected scopes. Source timestamps are market facts; receive time and ingress
+sequence establish what the runtime knew and in what order. Deribit channels have no single
+exchange-global sequence, so strict as-of means the latest individually continuous facts known to
+the process at one causal boundary, not a matching-engine-wide simultaneous snapshot. Each emitted
+event binds the latest boundary it consumed.
 
 A relevant source change may update the current chain and evaluate the frozen detector. A time
 boundary is relevant only when it changes a declared discrete fact such as instrument membership,
@@ -86,11 +99,13 @@ the connection, subscription, instrument, platform, and sequence continuity rema
 last-mutation age is diagnostic, not a reason to resubscribe or mark the quote stale.
 
 Connection health is established, not assumed: the runtime acknowledges an official WebSocket
-heartbeat, answers test requests, and uses a monotonic liveness deadline. Heartbeat traffic cannot
-refresh any economic quote or create a detector observation. Platform health is bootstrapped from
-a successful public status call after platform notifications are acknowledged and buffered, then
-those notifications are reconciled. A half-open connection or unresolved initial platform state
-cannot preserve old books as current.
+heartbeat, answers test requests, and uses monotonic deadlines loaded from the exact external
+Policy artifact. Heartbeat traffic cannot refresh any economic quote or create a detector
+observation. Platform health is a pure predicate over independent reducer-owned facts: lock
+snapshot, latched maintenance guard, latched public-method guard, post-status probe, fresh-index
+coverage, and bootstrap epoch. A negative guard cannot be overwritten by a positive notification
+inside the same epoch. A half-open connection or unresolved initial platform state cannot preserve
+old books as current.
 
 A sequence gap, reconnect, missing snapshot, crossed/invalid book, missing instrument leg, or
 unavailable global input creates `UNKNOWN` only for its declared consumers.

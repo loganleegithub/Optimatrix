@@ -67,6 +67,7 @@ class CurrentDisposition(StrEnum):
     KNOWN_INELIGIBLE = "KNOWN_INELIGIBLE"
     UNKNOWN = "UNKNOWN"
     BAND_SUSPENDED = "BAND_SUSPENDED"
+    INDEX_TAIL_PENDING = "INDEX_TAIL_PENDING"
     OUT_OF_BASELINE_SCOPE = "OUT_OF_BASELINE_SCOPE"
 
 
@@ -400,6 +401,8 @@ def apply_current_evaluation(
 ) -> TrackerTransition:
     if current.disposition is CurrentDisposition.BAND_SUSPENDED:
         return tracker.suspend_for_band_boundary()
+    if current.disposition is CurrentDisposition.INDEX_TAIL_PENDING:
+        return tracker.suspend_for_index_tail()
     if current.disposition is CurrentDisposition.OUT_OF_BASELINE_SCOPE:
         return tracker.out_of_baseline_scope(causal_seq=causal_seq)
 
@@ -420,7 +423,8 @@ def apply_current_evaluation(
     if current.observation is None or current.calculation is None:
         raise RuntimeError("richness evaluation lacks calculation or observation")
     if not observation_eligible:
-        return TrackerTransition(state_changed=resumed)
+        known_current = tracker.establish_known_current()
+        return TrackerTransition(state_changed=resumed or known_current.state_changed)
     transition = tracker.observe(
         current.observation,
         current.calculation.rule,

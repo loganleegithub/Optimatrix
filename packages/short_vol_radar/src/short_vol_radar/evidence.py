@@ -32,6 +32,46 @@ SUMMARY_NON_CLAIMS = (
     "NO_EDGE_OR_PROFITABILITY_CLAIM",
     "NO_FILL_OR_EXECUTION_PERMISSION",
 )
+CHANNEL_CLASSES = tuple(
+    sorted(
+        (
+            "PLATFORM",
+            "OPTION_LIFECYCLE",
+            "COMBO_LIFECYCLE",
+            "INDEX",
+            "OPTION_TICKER",
+            "OPTION_BOOK",
+            "COMBO_BOOK",
+            "HEARTBEAT",
+            "CONNECTION_CONTROL",
+            "INVALID",
+        )
+    )
+)
+CORE_SOURCE_NAMES = tuple(
+    sorted(
+        (
+            "combo_book",
+            "combo_lifecycle",
+            "heartbeat",
+            "index",
+            "option_book",
+            "option_lifecycle",
+            "option_ticker",
+            "platform_state",
+            "platform_state.public_methods_state",
+            "public/get_combos",
+            "public/get_instrument",
+            "public/get_instruments",
+            "public/get_time",
+            "public/set_heartbeat",
+            "public/status",
+            "public/subscribe",
+            "public/test",
+            "public/unsubscribe",
+        )
+    )
+)
 
 
 class EvidenceError(ValueError):
@@ -191,11 +231,7 @@ def project_run_summary(
     anomaly_end_count_by_reason: Mapping[EpisodeEndReason | str, int],
     known_active_duration_ms_sum_by_end_reason: Mapping[EpisodeEndReason | str, int],
     public_atomic_quote_state_transition_count: Mapping[str, int],
-    heartbeat_interval_seconds: int,
-    liveness_deadline_seconds: int,
-    clock_drift_ppm: int,
-    notification_queue_lag_limit_ms: int,
-    max_notification_queue_lag_ms: int,
+    operational_diagnostics: Mapping[str, object],
 ) -> dict[str, object]:
     if not coverage_segments:
         raise EvidenceError("run summary requires at least one coverage segment")
@@ -207,12 +243,7 @@ def project_run_summary(
         "policy_identity": policy_identity,
         "runtime_started_monotonic_ms": coverage_segments[0].start_monotonic_ms,
         "clean_stop_monotonic_ms": coverage_segments[-1].end_monotonic_ms,
-        "operational_constants": {
-            "heartbeat_interval_seconds": heartbeat_interval_seconds,
-            "liveness_deadline_seconds": liveness_deadline_seconds,
-            "clock_drift_ppm": clock_drift_ppm,
-            "notification_queue_lag_limit_ms": notification_queue_lag_limit_ms,
-        },
+        "operational_diagnostics": dict(operational_diagnostics),
         "coverage_segments": [
             {
                 "start_monotonic_ms": segment.start_monotonic_ms,
@@ -223,7 +254,6 @@ def project_run_summary(
         ],
         "coverage": coverage,
         "band_suspended_duration_ms": band_suspended_duration_ms,
-        "max_notification_queue_lag_ms": max_notification_queue_lag_ms,
         "counts_by_scope": [dict(item) for item in counts_by_scope],
         "detector_unknown_transition_count_by_reason": dict(
             detector_unknown_transition_count_by_reason
@@ -488,11 +518,10 @@ def validate_run_summary(value: Mapping[str, object]) -> None:
             "policy_identity",
             "runtime_started_monotonic_ms",
             "clean_stop_monotonic_ms",
-            "operational_constants",
+            "operational_diagnostics",
             "coverage_segments",
             "coverage",
             "band_suspended_duration_ms",
-            "max_notification_queue_lag_ms",
             "counts_by_scope",
             "detector_unknown_transition_count_by_reason",
             "anomaly_end_count_by_reason",
@@ -506,19 +535,6 @@ def validate_run_summary(value: Mapping[str, object]) -> None:
         raise EvidenceError("wrong summary object_kind")
     _validate_non_claims(value["non_claims"], SUMMARY_NON_CLAIMS, "summary")
     _validate_identity_fields(value)
-    operational = _mapping(value["operational_constants"], "operational_constants")
-    _exact_keys(
-        operational,
-        {
-            "heartbeat_interval_seconds",
-            "liveness_deadline_seconds",
-            "clock_drift_ppm",
-            "notification_queue_lag_limit_ms",
-        },
-        "operational_constants",
-    )
-    for field in operational:
-        _positive_integer(operational[field], f"operational_constants.{field}")
     raw_segments = value["coverage_segments"]
     if not isinstance(raw_segments, list) or not raw_segments:
         raise EvidenceError("coverage_segments must be non-empty")
@@ -530,11 +546,11 @@ def validate_run_summary(value: Mapping[str, object]) -> None:
         raise EvidenceError("summary start does not match coverage")
     if value["clean_stop_monotonic_ms"] != segments[-1].end_monotonic_ms:
         raise EvidenceError("summary stop does not match coverage")
-    _non_negative_integer(value["band_suspended_duration_ms"], "band_suspended_duration_ms")
-    _non_negative_integer(
-        value["max_notification_queue_lag_ms"],
-        "max_notification_queue_lag_ms",
+    _validate_operational_diagnostics(
+        value["operational_diagnostics"],
+        observation_interval_ms=expected["observation_interval_ms"],
     )
+    _non_negative_integer(value["band_suspended_duration_ms"], "band_suspended_duration_ms")
     _validate_scope_counts(value["counts_by_scope"])
     for field in (
         "detector_unknown_transition_count_by_reason",
@@ -791,6 +807,343 @@ def _validate_scope_counts(value: object) -> None:
         for key in ("policy_identity", "option_type", "tte_band_id"):
             if not isinstance(item[key], str) or not item[key]:
                 raise EvidenceError(f"scope count {key} must be a non-empty string")
+
+
+def _validate_operational_diagnostics(
+    value: object,
+    *,
+    observation_interval_ms: int,
+) -> None:
+    diagnostics = _mapping(value, "operational_diagnostics")
+    _exact_keys(
+        diagnostics,
+        {
+            "operational_diagnostics_schema_version",
+            "runtime_limits",
+            "ingress",
+            "rpc_by_method",
+            "channel_by_class",
+            "subscriptions",
+            "heartbeat",
+            "recovery",
+            "source_shapes",
+            "witness",
+        },
+        "operational_diagnostics",
+    )
+    if diagnostics["operational_diagnostics_schema_version"] != 1:
+        raise EvidenceError("operational diagnostics schema version must be 1")
+    _validate_runtime_limits(diagnostics["runtime_limits"])
+    _validate_ingress_diagnostics(diagnostics["ingress"])
+    _validate_rpc_diagnostics(diagnostics["rpc_by_method"])
+    _validate_channel_diagnostics(
+        diagnostics["channel_by_class"],
+        observation_interval_ms=observation_interval_ms,
+    )
+    _validate_named_non_negative_counts(
+        diagnostics["subscriptions"],
+        {
+            "current_subscribed_instrument_count",
+            "peak_subscribed_instrument_count",
+            "current_subscribed_channel_count",
+            "peak_subscribed_channel_count",
+        },
+        "operational_diagnostics.subscriptions",
+    )
+    subscriptions = _mapping(
+        diagnostics["subscriptions"],
+        "operational_diagnostics.subscriptions",
+    )
+    current_instruments = _non_negative_integer(
+        subscriptions["current_subscribed_instrument_count"],
+        "current_subscribed_instrument_count",
+    )
+    peak_instruments = _non_negative_integer(
+        subscriptions["peak_subscribed_instrument_count"],
+        "peak_subscribed_instrument_count",
+    )
+    current_channels = _non_negative_integer(
+        subscriptions["current_subscribed_channel_count"],
+        "current_subscribed_channel_count",
+    )
+    peak_channels = _non_negative_integer(
+        subscriptions["peak_subscribed_channel_count"],
+        "peak_subscribed_channel_count",
+    )
+    if current_instruments > peak_instruments or current_channels > peak_channels:
+        raise EvidenceError("current subscriptions exceed peak subscriptions")
+    _validate_named_non_negative_counts(
+        diagnostics["heartbeat"],
+        {
+            "test_request_count",
+            "public_test_success_count",
+            "public_test_error_count",
+            "latency_observation_count",
+            "latency_ms_sum",
+            "latency_ms_max",
+        },
+        "operational_diagnostics.heartbeat",
+    )
+    _validate_latency_totals(
+        _mapping(diagnostics["heartbeat"], "operational_diagnostics.heartbeat"),
+        "operational_diagnostics.heartbeat",
+    )
+    _validate_named_non_negative_counts(
+        diagnostics["recovery"],
+        {
+            "reconnect_count",
+            "session_gap_count",
+            "index_gap_count",
+            "index_resubscribe_count",
+            "option_channel_resync_count",
+            "clock_refresh_attempt_count",
+            "clock_refresh_success_count",
+            "clock_refresh_failure_count",
+            "option_catalog_refresh_attempt_count",
+            "option_catalog_refresh_success_count",
+            "option_catalog_refresh_failure_count",
+            "combo_authoritative_refresh_attempt_count",
+            "combo_authoritative_refresh_success_count",
+            "combo_authoritative_refresh_failure_count",
+        },
+        "operational_diagnostics.recovery",
+    )
+    _validate_source_shapes(diagnostics["source_shapes"])
+    witness = _mapping(diagnostics["witness"], "operational_diagnostics.witness")
+    _exact_keys(
+        witness,
+        {
+            "first_joint_witness_monotonic_ms",
+            "continuous_covered_after_witness_ms",
+        },
+        "operational_diagnostics.witness",
+    )
+    first = witness["first_joint_witness_monotonic_ms"]
+    duration = witness["continuous_covered_after_witness_ms"]
+    if first is not None:
+        _non_negative_integer(first, "first_joint_witness_monotonic_ms")
+    if duration is not None:
+        _non_negative_integer(duration, "continuous_covered_after_witness_ms")
+    if (first is None) != (duration is None):
+        raise EvidenceError("joint witness time and continuous duration must both be null or known")
+
+
+def _validate_runtime_limits(value: object) -> None:
+    limits = _mapping(value, "operational_diagnostics.runtime_limits")
+    fields = {
+        "heartbeat_interval_seconds",
+        "session_liveness_deadline_ms",
+        "rpc_deadline_ms",
+        "clock_refresh_interval_ms",
+        "clock_stale_deadline_ms",
+        "index_source_stale_deadline_ms",
+        "notification_queue_lag_deadline_ms",
+        "time_boundary_poll_interval_ms",
+    }
+    _exact_keys(limits, fields, "operational_diagnostics.runtime_limits")
+    parsed = {
+        field: _positive_integer(limits[field], f"runtime_limits.{field}") for field in fields
+    }
+    if parsed["time_boundary_poll_interval_ms"] > 1_000:
+        raise EvidenceError("time boundary poll interval exceeds one second")
+    if parsed["rpc_deadline_ms"] < parsed["time_boundary_poll_interval_ms"]:
+        raise EvidenceError("RPC deadline does not cover time-boundary poll interval")
+    if parsed["session_liveness_deadline_ms"] <= parsed["heartbeat_interval_seconds"] * 1_000:
+        raise EvidenceError("session liveness deadline does not exceed heartbeat interval")
+    if parsed["clock_stale_deadline_ms"] <= parsed["clock_refresh_interval_ms"]:
+        raise EvidenceError("clock stale deadline does not exceed refresh interval")
+
+
+def _validate_ingress_diagnostics(value: object) -> None:
+    ingress = _mapping(value, "operational_diagnostics.ingress")
+    fields = {
+        "received_envelope_count",
+        "reduced_envelope_count",
+        "ingress_gap_or_duplicate_count",
+        "queue_high_water_frames",
+        "max_receive_to_reduce_lag_ms",
+        "overflow_count",
+    }
+    _validate_named_non_negative_counts(
+        ingress,
+        fields,
+        "operational_diagnostics.ingress",
+    )
+    reduced = _non_negative_integer(
+        ingress["reduced_envelope_count"],
+        "reduced_envelope_count",
+    )
+    received = _non_negative_integer(
+        ingress["received_envelope_count"],
+        "received_envelope_count",
+    )
+    if reduced > received:
+        raise EvidenceError("reduced envelope count exceeds received count")
+
+
+def _validate_rpc_diagnostics(value: object) -> None:
+    rows = _array(value, "operational_diagnostics.rpc_by_method")
+    methods: list[str] = []
+    for raw in rows:
+        row = _mapping(raw, "operational_diagnostics RPC row")
+        _exact_keys(
+            row,
+            {
+                "method",
+                "request_count",
+                "success_count",
+                "error_count",
+                "late_response_count",
+                "rate_limit_count",
+                "latency_observation_count",
+                "latency_ms_sum",
+                "latency_ms_max",
+            },
+            "operational_diagnostics RPC row",
+        )
+        method = _required_string(row, "method")
+        if not method.startswith("public/"):
+            raise EvidenceError("operational RPC method is not public")
+        methods.append(method)
+        for field in set(row) - {"method"}:
+            _non_negative_integer(row[field], f"RPC row {field}")
+        _validate_latency_totals(row, f"RPC row {method}")
+        rate_limits = _non_negative_integer(
+            row["rate_limit_count"],
+            "rate_limit_count",
+        )
+        errors = _non_negative_integer(row["error_count"], "error_count")
+        if rate_limits > errors:
+            raise EvidenceError("RPC rate-limit count exceeds errors")
+    if methods != sorted(set(methods)):
+        raise EvidenceError("operational RPC rows must be unique and sorted")
+
+
+def _validate_channel_diagnostics(
+    value: object,
+    *,
+    observation_interval_ms: int,
+) -> None:
+    rows = _array(value, "operational_diagnostics.channel_by_class")
+    classes: list[str] = []
+    for raw in rows:
+        row = _mapping(raw, "operational channel row")
+        _exact_keys(
+            row,
+            {
+                "channel_class",
+                "received_count",
+                "processed_count",
+                "received_rate_per_second",
+                "processed_rate_per_second",
+            },
+            "operational channel row",
+        )
+        channel_class = _required_string(row, "channel_class")
+        classes.append(channel_class)
+        received_count = _non_negative_integer(
+            row["received_count"],
+            f"{channel_class}.received_count",
+        )
+        processed_count = _non_negative_integer(
+            row["processed_count"],
+            f"{channel_class}.processed_count",
+        )
+        if processed_count > received_count:
+            raise EvidenceError("processed channel count exceeds received count")
+        for count_field, rate_field in (
+            ("received_count", "received_rate_per_second"),
+            ("processed_count", "processed_rate_per_second"),
+        ):
+            count = _non_negative_integer(
+                row[count_field],
+                f"{channel_class}.{count_field}",
+            )
+            expected = (
+                None
+                if observation_interval_ms == 0
+                else decimal_text(
+                    Decimal(count) / (Decimal(observation_interval_ms) / Decimal(1_000))
+                )
+            )
+            if row[rate_field] != expected:
+                raise EvidenceError(f"{channel_class}.{rate_field} does not match duration")
+    if tuple(classes) != CHANNEL_CLASSES:
+        raise EvidenceError("operational channel classes are incomplete or unsorted")
+
+
+def _validate_named_non_negative_counts(
+    value: object,
+    fields: set[str],
+    name: str,
+) -> None:
+    mapping = _mapping(value, name)
+    _exact_keys(mapping, fields, name)
+    for field in fields:
+        _non_negative_integer(mapping[field], f"{name}.{field}")
+
+
+def _validate_latency_totals(value: Mapping[str, object], name: str) -> None:
+    count = value["latency_observation_count"]
+    total = value["latency_ms_sum"]
+    maximum = value["latency_ms_max"]
+    if not isinstance(count, int) or not isinstance(total, int) or not isinstance(maximum, int):
+        return
+    if count == 0 and (total != 0 or maximum != 0):
+        raise EvidenceError(f"{name} has latency totals without observations")
+    if count > 0 and (maximum > total):
+        raise EvidenceError(f"{name} latency maximum exceeds sum")
+
+
+def _validate_source_shapes(value: object) -> None:
+    rows = _array(value, "operational_diagnostics.source_shapes")
+    sources: list[str] = []
+    for raw in rows:
+        row = _mapping(raw, "operational source-shape row")
+        _exact_keys(
+            row,
+            {
+                "source",
+                "observed_count",
+                "valid_count",
+                "invalid_count",
+                "validation",
+                "consumed_fields",
+            },
+            "operational source-shape row",
+        )
+        source = _required_string(row, "source")
+        sources.append(source)
+        observed = _non_negative_integer(row["observed_count"], f"{source}.observed_count")
+        valid = _non_negative_integer(row["valid_count"], f"{source}.valid_count")
+        invalid = _non_negative_integer(row["invalid_count"], f"{source}.invalid_count")
+        if valid + invalid != observed:
+            raise EvidenceError("source-shape valid/invalid counts do not match observed")
+        expected_validation = "NOT_OBSERVED" if observed == 0 else "INVALID" if invalid else "VALID"
+        if row["validation"] != expected_validation:
+            raise EvidenceError("source-shape final validation does not match counts")
+        fields = _array(row["consumed_fields"], f"{source}.consumed_fields")
+        keys: list[str] = []
+        for raw_field in fields:
+            field = _mapping(raw_field, f"{source} consumed field")
+            _exact_keys(field, {"key", "type"}, f"{source} consumed field")
+            key = _required_string(field, "key")
+            field_type = _required_string(field, "type")
+            if field_type not in {
+                "array",
+                "boolean",
+                "integer",
+                "null",
+                "number",
+                "object",
+                "string",
+            }:
+                raise EvidenceError("source-shape field type is invalid")
+            keys.append(key)
+        if keys != sorted(set(keys)):
+            raise EvidenceError("source-shape consumed fields must be unique and sorted")
+    if tuple(sources) != CORE_SOURCE_NAMES:
+        raise EvidenceError("operational source-shape rows are incomplete or unsorted")
 
 
 def _validate_identity_fields(value: Mapping[str, object]) -> None:

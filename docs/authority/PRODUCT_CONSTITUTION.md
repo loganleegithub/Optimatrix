@@ -281,9 +281,11 @@ stop.
     classification becoming numerically unresolved, source continuity loss, or run stop. Every
     end stops atomic availability and later recovery requires fresh activation. A source gap ends
     it with `UNKNOWN_AT_GAP`; resync never claims continuity across the gap. Only an explicitly
-    declared adjacent-TTE-band suspension may pause and resume the same identity while source
-    continuity remains known. Repeated observations and quote flicker do not multiply Radar
-    episodes.
+    declared adjacent-TTE-band suspension or the bounded index-tail
+    `TIME_BOUNDARY_PENDING | WATERMARK_PENDING` rollover state may pause and resume the same
+    identity while source continuity remains known. Both pause known-active duration, stop Layer
+    2, reset incomplete persistence counts, and cannot themselves create an observation. Repeated
+    observations and quote flicker do not multiply Radar episodes.
 11. A structure identity is its product, canonical legs, direction, expiry, and target quantity.
     Strict as-of state belongs to an observation, not the identity; quote flicker is not a new
     structure or Radar episode.

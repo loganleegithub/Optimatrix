@@ -8,8 +8,10 @@ from market_monitor import ContinuousOrderBook, TimeInterval
 from options_domain import AmountMetadata, ComboInstrument, ComboLeg, OptionInstrument, OptionType
 from short_vol_radar.atomic import (
     ComboOrderDirection,
+    ProtectiveLegState,
     PublicAtomicQuoteState,
     classify_atomic_quotes,
+    classify_protective_leg,
     match_vertical_combo,
 )
 from short_vol_radar.black import DecimalInterval
@@ -69,7 +71,7 @@ def test_activation_separation_equality_overlap_and_interruption(
     assert tracker.observe(observation(2, 2_009, 2_009, "1.3"), rule).activated_episode_id is None
     activated = tracker.observe(observation(3, 2_010, 2_011, "1.3"), rule)
     assert activated.activated_episode_id is not None
-    assert tracker.detector_state is DetectorState.ANOMALY_ACTIVE
+    assert tracker.detector_state.value == DetectorState.ANOMALY_ACTIVE.value
 
     tracker = EpisodeTracker(
         runtime_identity="run", policy_identity=digest, instrument_name="RESET"
@@ -140,6 +142,25 @@ def test_adjacent_band_suspend_resume_preserves_episode_identity(
     assert tracker.detector_state is DetectorState.UNKNOWN
     tracker.resume_after_band_boundary()
     assert tracker.state.value == TrackerState.ACTIVE.value
+    assert tracker.episode_id == episode_id
+
+
+def test_index_tail_pending_preserves_episode_identity_but_is_not_current_truth(
+    policy_factory: PolicyFactory,
+) -> None:
+    tracker, _rule = activated_tracker(policy_factory)
+    episode_id = tracker.episode_id
+
+    tracker.suspend_for_index_tail()
+
+    assert tracker.state is TrackerState.INDEX_TAIL_PENDING
+    assert tracker.detector_state is DetectorState.UNKNOWN
+    assert tracker.episode_id == episode_id
+
+    tracker.resume_after_index_tail()
+
+    assert tracker.state.value == TrackerState.ACTIVE.value
+    assert tracker.detector_state.value == DetectorState.ANOMALY_ACTIVE.value
     assert tracker.episode_id == episode_id
 
 
@@ -359,7 +380,7 @@ def test_atomic_negative_claims_require_complete_relevant_scope() -> None:
     assert incomplete_options.state is PublicAtomicQuoteState.UNKNOWN
     assert incomplete_options.unknown_reasons == ("OPTION_CATALOG_INCOMPLETE",)
 
-    missing_protective_leg = classify_atomic_quotes(
+    known_absent_protective_leg = classify_atomic_quotes(
         anomaly_active=True,
         combo_catalog_complete=True,
         option_catalog_complete=True,
@@ -369,8 +390,23 @@ def test_atomic_negative_claims_require_complete_relevant_scope() -> None:
         combo_books={},
         target_btc=Decimal("0.1"),
     )
-    assert missing_protective_leg.state is PublicAtomicQuoteState.UNKNOWN
-    assert missing_protective_leg.unknown_reasons == ("PROTECTIVE_LEG_UNRESOLVED",)
+    assert known_absent_protective_leg.state is PublicAtomicQuoteState.NO_ACTIVE_COMBO
+    assert (
+        classify_protective_leg(
+            short_leg=short,
+            options_by_name={"SHORT": short},
+            option_catalog_complete=True,
+        )
+        is ProtectiveLegState.KNOWN_ABSENT
+    )
+    assert (
+        classify_protective_leg(
+            short_leg=short,
+            options_by_name={"SHORT": short},
+            option_catalog_complete=False,
+        )
+        is ProtectiveLegState.UNRESOLVED
+    )
 
     unknown_amount_combo = ComboInstrument(
         combo.instrument_name,
@@ -482,5 +518,5 @@ def test_combo_state_never_changes_detector_truth(
         combo_books={},
         target_btc=Decimal("0.1"),
     )
-    assert result.state is PublicAtomicQuoteState.UNKNOWN
+    assert result.state is PublicAtomicQuoteState.NO_ACTIVE_COMBO
     assert tracker.detector_state is before is DetectorState.ANOMALY_ACTIVE
