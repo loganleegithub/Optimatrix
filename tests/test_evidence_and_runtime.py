@@ -256,7 +256,9 @@ def current_operational_diagnostics(*, observation_ms: int = 20) -> dict[str, ob
         "restart_count": 0,
         "restart_count_by_reason": {},
         "restart_edges": [],
+        "recovery_edges": [],
     }
+    diagnostics["rpc_orphan_late_wire_count"] = 0
     diagnostics["ticker_application"] = {
         "disposition_count": {
             "APPLIED": 0,
@@ -377,6 +379,55 @@ def current_summary_object(
         public_atomic_quote_state_transition_count={},
         operational_diagnostics=current_operational_diagnostics(),
     )
+
+
+def attach_joint_witness(
+    summary: dict[str, object],
+    *,
+    first_ms: int = 15,
+    expiration_timestamp_ms: int = 3_600_000,
+    option_type: str = "call",
+    tte_band_id: str = "band",
+    joint_count: int | None = None,
+) -> None:
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    witness = diagnostics["witness"]
+    assert isinstance(witness, dict)
+    clean_stop = summary["clean_stop_monotonic_ms"]
+    assert isinstance(clean_stop, int)
+    witness.update(
+        {
+            "first_joint_witness_monotonic_ms": first_ms,
+            "continuous_global_continuity_after_witness_ms": clean_stop - first_ms,
+            "scope": {
+                "expiration_timestamp_ms": expiration_timestamp_ms,
+                "option_type": option_type,
+                "tte_band_id": tte_band_id,
+            },
+            "boundary": {
+                "session_epoch": 1,
+                "ingress_seq": 1,
+                "received_monotonic_ms": first_ms,
+                "causal_seq": 1,
+            },
+            "formula_instrument": {
+                "instrument_name": "SHORT",
+                "expiration_timestamp_ms": expiration_timestamp_ms,
+                "option_type": option_type,
+                "tte_band_id": tte_band_id,
+            },
+        }
+    )
+    if joint_count is None:
+        return
+    scope = ScopeCounts("sha256:" + "b" * 64, option_type, tte_band_id)
+    scope.applicable_instrument_count = 1
+    scope.known_per_instrument_detector_evaluation_count = 1
+    scope.known_full_detector_formula_evaluation_count = 1
+    scope.complete_aggregate_detector_evaluation_count = 1
+    scope.complete_aggregate_with_full_formula_evaluation_count = joint_count
+    summary["counts_by_scope"] = [scope.as_object()]
 
 
 def test_minimal_events_are_strict_unit_bearing_and_carry_non_claims() -> None:
@@ -1401,11 +1452,13 @@ def test_schema_three_ticker_rpc_and_option_local_ledgers_must_conserve() -> Non
     rpc_rows.append(
         {
             "method": "public/test",
-            "request_count": 1,
+            "scheduled_count": 1,
+            "sent_count": 0,
             "success_count": 0,
             "error_count": 0,
-            "late_response_count": 0,
-            "retired_or_censored_count": 0,
+            "deadline_late_count": 0,
+            "retired_count": 0,
+            "censored_count": 0,
             "rate_limit_count": 0,
             "latency_observation_count": 0,
             "latency_ms_sum": 0,
@@ -1474,6 +1527,7 @@ def test_schema_three_epoch_edges_must_match_restart_incidents_one_for_one() -> 
                 },
             }
         ],
+        "recovery_edges": [],
     }
     witness = diagnostics["witness"]
     assert isinstance(witness, dict)
@@ -1481,3 +1535,284 @@ def test_schema_three_epoch_edges_must_match_restart_incidents_one_for_one() -> 
 
     with pytest.raises(EvidenceError, match="epoch edge"):
         validate_run_summary(summary)
+
+
+def test_schema_three_rejects_all_unknown_empty_count_joint_witness() -> None:
+    summary = current_summary_object(
+        segments=(
+            CoverageSegment(
+                0,
+                20,
+                CoverageState.UNKNOWN,
+                reason="RUNTIME_START",
+                affected_scopes=("GLOBAL",),
+                global_continuity_epoch=1,
+            ),
+        )
+    )
+    attach_joint_witness(summary, first_ms=10)
+
+    with pytest.raises(EvidenceError, match=r"KNOWN_COMPLETE|counts_by_scope|joint"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_joint_witness_binds_nonzero_scope_count() -> None:
+    summary = current_summary_object()
+    attach_joint_witness(summary, joint_count=0)
+
+    with pytest.raises(EvidenceError, match=r"joint|full-formula|counts_by_scope"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_joint_witness_must_fall_in_known_complete_segment() -> None:
+    summary = current_summary_object(
+        segments=(
+            CoverageSegment(
+                0,
+                20,
+                CoverageState.UNKNOWN,
+                reason="RUNTIME_START",
+                affected_scopes=("GLOBAL",),
+                global_continuity_epoch=1,
+            ),
+        )
+    )
+    attach_joint_witness(summary, first_ms=10, joint_count=1)
+
+    with pytest.raises(EvidenceError, match="KNOWN_COMPLETE"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_rejects_second_restart_before_incident_recovery() -> None:
+    summary = current_summary_object()
+    summary["coverage_segments"] = [
+        {
+            "start_monotonic_ms": 0,
+            "end_monotonic_ms": 5,
+            "state": "UNKNOWN",
+            "reason": "RUNTIME_START",
+            "affected_scopes": ["GLOBAL"],
+            "global_continuity_epoch": 1,
+        },
+        {
+            "start_monotonic_ms": 5,
+            "end_monotonic_ms": 10,
+            "state": "UNKNOWN",
+            "reason": "CLOCK_GAP",
+            "affected_scopes": ["GLOBAL"],
+            "global_continuity_epoch": 2,
+        },
+        {
+            "start_monotonic_ms": 10,
+            "end_monotonic_ms": 20,
+            "state": "UNKNOWN",
+            "reason": "INDEX_CONTINUITY_GAP",
+            "affected_scopes": ["GLOBAL"],
+            "global_continuity_epoch": 3,
+        },
+    ]
+    summary["coverage"] = {
+        "observation_interval_ms": 20,
+        "known_complete_ms": 0,
+        "known_degraded_ms": 0,
+        "unknown_ms": 20,
+        "no_applicable_scope_ms": 0,
+        "coverage_partition_error_ms": 0,
+    }
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["global_continuity"] = {
+        "current_epoch": 3,
+        "restart_count": 2,
+        "restart_count_by_reason": {
+            "CLOCK_GAP": 1,
+            "INDEX_CONTINUITY_GAP": 1,
+        },
+        "restart_edges": [
+            {
+                "incident_id": 1,
+                "from_epoch": 1,
+                "to_epoch": 2,
+                "reason": "CLOCK_GAP",
+                "failure_domain": "CLOCK_INDEX",
+                "affected_scopes": ["GLOBAL"],
+                "boundary": {
+                    "session_epoch": 1,
+                    "ingress_seq": 1,
+                    "received_monotonic_ms": 5,
+                    "causal_seq": 1,
+                },
+            },
+            {
+                "incident_id": 2,
+                "from_epoch": 2,
+                "to_epoch": 3,
+                "reason": "INDEX_CONTINUITY_GAP",
+                "failure_domain": "CLOCK_INDEX",
+                "affected_scopes": ["GLOBAL"],
+                "boundary": {
+                    "session_epoch": 1,
+                    "ingress_seq": 2,
+                    "received_monotonic_ms": 10,
+                    "causal_seq": 2,
+                },
+            },
+        ],
+        "recovery_edges": [],
+    }
+    witness = diagnostics["witness"]
+    assert isinstance(witness, dict)
+    witness["global_continuity_epoch"] = 3
+
+    with pytest.raises(EvidenceError, match=r"recover|incident"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_rejects_illegal_restart_cause_domain_scope_tuple() -> None:
+    summary = current_summary_object()
+    summary["coverage_segments"] = [
+        {
+            "start_monotonic_ms": 0,
+            "end_monotonic_ms": 10,
+            "state": "UNKNOWN",
+            "reason": "RUNTIME_START",
+            "affected_scopes": ["GLOBAL"],
+            "global_continuity_epoch": 1,
+        },
+        {
+            "start_monotonic_ms": 10,
+            "end_monotonic_ms": 20,
+            "state": "UNKNOWN",
+            "reason": "TICKER_APPLIED",
+            "affected_scopes": ["GLOBAL"],
+            "global_continuity_epoch": 2,
+        },
+    ]
+    summary["coverage"] = {
+        "observation_interval_ms": 20,
+        "known_complete_ms": 0,
+        "known_degraded_ms": 0,
+        "unknown_ms": 20,
+        "no_applicable_scope_ms": 0,
+        "coverage_partition_error_ms": 0,
+    }
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["global_continuity"] = {
+        "current_epoch": 2,
+        "restart_count": 1,
+        "restart_count_by_reason": {"TICKER_APPLIED": 1},
+        "restart_edges": [
+            {
+                "incident_id": 1,
+                "from_epoch": 1,
+                "to_epoch": 2,
+                "reason": "TICKER_APPLIED",
+                "failure_domain": "SESSION",
+                "affected_scopes": ["GLOBAL"],
+                "boundary": {
+                    "session_epoch": 1,
+                    "ingress_seq": 1,
+                    "received_monotonic_ms": 10,
+                    "causal_seq": 1,
+                },
+            }
+        ],
+        "recovery_edges": [],
+    }
+    witness = diagnostics["witness"]
+    assert isinstance(witness, dict)
+    witness["global_continuity_epoch"] = 2
+
+    with pytest.raises(EvidenceError, match=r"restart.*allowlist|cause.*domain.*scope"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_rpc_method_uses_exact_allowlist() -> None:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    rpc_rows = diagnostics["rpc_by_method"]
+    assert isinstance(rpc_rows, list)
+    rpc_rows.append(
+        {
+            "method": "public/not_authorized",
+            "scheduled_count": 1,
+            "sent_count": 1,
+            "success_count": 1,
+            "error_count": 0,
+            "deadline_late_count": 0,
+            "retired_count": 0,
+            "censored_count": 0,
+            "rate_limit_count": 0,
+            "latency_observation_count": 1,
+            "latency_ms_sum": 1,
+            "latency_ms_max": 1,
+        }
+    )
+
+    with pytest.raises(EvidenceError, match="allowlist"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_censored_interval_must_end_at_clean_stop() -> None:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    ledger = diagnostics["option_local_availability"]
+    assert isinstance(ledger, dict)
+    ledger.update(
+        {
+            "unavailable_count_by_reason": {"TICKER_SOURCE_STALE": 1},
+            "recovery_count_by_reason": {},
+            "end_count_by_disposition": {
+                "RECOVERED": 0,
+                "REASON_CHANGED": 0,
+                "CENSORED_AT_STOP": 1,
+            },
+            "intervals": [
+                {
+                    "instrument_name": "SHORT",
+                    "generation": 1,
+                    "reason": "TICKER_SOURCE_STALE",
+                    "start_monotonic_ms": 10,
+                    "end_monotonic_ms": 19,
+                    "duration_ms": 9,
+                    "end_disposition": "CENSORED_AT_STOP",
+                    "global_continuity_epoch": 1,
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(EvidenceError, match=r"CENSORED_AT_STOP.*clean stop"):
+        validate_run_summary(summary)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda event: event.update({"short_instrument_name": "LONG"}),
+            "short leg",
+        ),
+        (
+            lambda event: event.update({"detector_causal_seq": 9}),
+            "causal",
+        ),
+    ],
+)
+def test_evidence_directory_cross_binds_atomic_to_anomaly(
+    tmp_path: Path,
+    mutate: object,
+    message: str,
+) -> None:
+    anomaly = project_anomaly_event(anomaly_evidence())
+    atomic = project_atomic_event(atomic_evidence())
+    assert callable(mutate)
+    mutate(atomic)
+    (tmp_path / "anomaly.json").write_text(json.dumps(anomaly), encoding="utf-8")
+    (tmp_path / "atomic.json").write_text(json.dumps(atomic), encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match=message):
+        validate_evidence_directory(tmp_path)

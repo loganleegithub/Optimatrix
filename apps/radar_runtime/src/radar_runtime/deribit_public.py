@@ -48,13 +48,17 @@ class InboundEnvelope(dict[str, object]):
         session_epoch: int,
         ingress_seq: int,
         received_monotonic_ms: int,
+        request_sent_monotonic_ms: int | None = None,
     ) -> None:
         if session_epoch <= 0 or ingress_seq <= 0 or received_monotonic_ms < 0:
             raise ValueError("inbound envelope identity must be positive")
+        if request_sent_monotonic_ms is not None and request_sent_monotonic_ms < 0:
+            raise ValueError("request send boundary must be non-negative")
         super().__init__(message)
         self.session_epoch = session_epoch
         self.ingress_seq = ingress_seq
         self.received_monotonic_ms = received_monotonic_ms
+        self.request_sent_monotonic_ms = request_sent_monotonic_ms
 
 
 class DeribitPublicClient:

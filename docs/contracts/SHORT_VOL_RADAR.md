@@ -200,10 +200,13 @@ application disposition =
 `ingress_seq`, not source timestamp, orders applications inside one session epoch. A shape-valid
 snapshot with source timestamp lower than the currently accepted ticker is `LATE_IGNORED`. It
 does not overwrite the newer accepted fact, request resubscription, end or clear an episode,
-change current coverage, or restart `global_continuity_epoch`. Equal timestamps are ordered by
-`ingress_seq` and the later ingress may apply. A malformed snapshot is `SHAPE_REJECTED`; an
-ahead-of-trusted-time candidate is `AHEAD_IGNORED`. Neither overwrites a still-current accepted
-ticker or manufactures a continuity gap.
+or restart `global_continuity_epoch` by virtue of the rejected candidate. Its receive boundary
+still enters the sole reducer transaction and settles the already accepted ticker's currentness;
+if that independent fact crosses TTL at the same boundary, detector/coverage/Layer 2 truth changes
+under a concurrent `TICKER_SOURCE_STALE` effect while the received trigger remains
+`LATE_IGNORED`. Equal timestamps are ordered by `ingress_seq` and the later ingress may apply. A
+malformed snapshot is `SHAPE_REJECTED`; an ahead-of-trusted-time candidate is `AHEAD_IGNORED`.
+Neither overwrites a still-current accepted ticker or manufactures a continuity gap.
 
 When no trusted-time interval exists at receipt, candidate currentness is
 `TRUSTED_TIME_UNKNOWN`, never `CURRENT`. The complete snapshot may still be applied in ingress
@@ -806,11 +809,12 @@ option/combo quotes, cancels pending observations, and never infers what happene
 If an observed episode was active, it ends with `end_reason = UNKNOWN_AT_GAP`; its known-active
 duration stops at the last trusted boundary.
 
-An older complete ticker snapshot is not a detector-dependent gap. `LATE_IGNORED` has no tracker,
-aggregate, coverage, Layer 2, resubscription, or witness side effect. A rejected malformed or
-ahead candidate likewise cannot overwrite a still-current accepted ticker. Only actual
-option-local unavailability—no accepted current ticker or the accepted ticker crossing its
-TTL—can make the forward dependency unavailable.
+An older complete ticker snapshot is not itself a detector-dependent gap. `LATE_IGNORED` has no
+candidate-derived tracker, aggregate, coverage, Layer 2, resubscription, or witness effect, but
+the same receive boundary must settle independent source TTL before any of those current results.
+A rejected malformed or ahead candidate likewise cannot overwrite a still-current accepted
+ticker. Only actual option-local unavailability—no accepted current ticker or the accepted ticker
+crossing its TTL—can make the forward dependency unavailable.
 
 After complete resync, the instrument must pass fresh activation persistence and receives a new
 episode identity. It may reference the pre-gap episode as an uncertain predecessor, but neither
@@ -852,7 +856,9 @@ The runtime keeps three ledgers whose units and reset rules are not interchangea
    for each retired session, ingress gap/duplicate or queue overflow, trusted-clock gap, or real
    index continuity loss (`WINDOW_GAP | SOURCE_STALE | CONTINUITY_GAP`). Bootstrap
    `WARMUP`, normal `TIME_BOUNDARY_PENDING | WATERMARK_PENDING`, option ticker/book/catalog
-   unavailability, aggregate coverage changes, and episode transitions never increment it.
+   unavailability, aggregate coverage changes, and episode transitions never increment it. One
+   root `ContinuityIncident` can increment it at most once before an explicit recovery edge;
+   cause, failure domain, and affected scopes use the exact repository allowlist.
 2. `current_market_truth_coverage` remains the exact global time partition
    `NO_APPLICABLE_SCOPE | KNOWN_COMPLETE | KNOWN_DEGRADED | UNKNOWN`. Every segment records the
    reason that caused its state to begin, the bounded affected scope
@@ -990,9 +996,12 @@ these members:
 - `ingress`: `received_envelope_count`, `reduced_envelope_count`,
   `ingress_gap_or_duplicate_count`, `queue_high_water_frames`,
   `max_receive_to_reduce_lag_ms`, and `overflow_count`;
-- `rpc_by_method`: one row per consumed method, sorted by method, with `method`, `request_count`,
-  `success_count`, `error_count`, `late_response_count`, `rate_limit_count`,
-  `latency_observation_count`, `latency_ms_sum`, and `latency_ms_max`;
+- `rpc_by_method`: one row per exact-allowlisted consumed method, sorted by method, with `method`,
+  `scheduled_count`, `sent_count`, mutually exclusive `success_count`, `error_count`,
+  `deadline_late_count`, `retired_count`, `censored_count`, `rate_limit_count`,
+  `latency_observation_count`, `latency_ms_sum`, and `latency_ms_max`; unmatched or already
+  terminal wire responses are excluded from method outcomes and counted only in
+  `rpc_orphan_late_wire_count`;
 - `channel_by_class`: exactly one sorted row for each
   `PLATFORM | OPTION_LIFECYCLE | COMBO_LIFECYCLE | INDEX | OPTION_TICKER | OPTION_BOOK |
   COMBO_BOOK | HEARTBEAT | CONNECTION_CONTROL | INVALID`, with `received_count`,
@@ -1009,8 +1018,8 @@ these members:
   `valid_count`, `invalid_count`, `validation = NOT_OBSERVED | VALID | INVALID`, and a sorted list
   of consumed `{key, type}` pairs; this ledger reports parse/consumed-shape validity only, so a
   shape-valid `LATE_IGNORED` ticker increments `valid_count`, never `invalid_count`;
-- `global_continuity`: positive `current_epoch`, total `restart_count`, and
-  `restart_count_by_reason`;
+- `global_continuity`: positive `current_epoch`, total `restart_count`,
+  `restart_count_by_reason`, exact `restart_edges`, and explicit `recovery_edges`;
 - `ticker_application`: `disposition_count` has exact counts for
   `APPLIED | LATE_IGNORED | AHEAD_IGNORED | STALE_GENERATION_IGNORED | SHAPE_REJECTED`, a fixed
   `late_ignored_diagnostic_limit = 256`, `omitted_late_ignored_diagnostic_count`, and at most 256
@@ -1026,14 +1035,21 @@ these members:
   only `instrument_name`, ticker `generation`, `reason`, `start_monotonic_ms`,
   `end_monotonic_ms`, `duration_ms`,
   `end_disposition = RECOVERED | REASON_CHANGED | CENSORED_AT_STOP`, and
-  `global_continuity_epoch`;
+  `global_continuity_epoch`; every retained `CENSORED_AT_STOP.end_monotonic_ms` equals the clean
+  stop boundary exactly;
 - `witness`: current `global_continuity_epoch`, nullable
   `first_joint_witness_monotonic_ms`, and nullable
-  `continuous_global_continuity_after_witness_ms`.
+  `continuous_global_continuity_after_witness_ms`, plus its exact scope, fact boundary, and formula
+  instrument identity. A known witness must lie inside a current-epoch `KNOWN_COMPLETE` segment
+  and bind exactly one `counts_by_scope` row whose
+  `complete_aggregate_with_full_formula_evaluation_count > 0`.
 
 The two channel rates use the run observation interval in seconds; either rate is `null` when that
-denominator is zero or unknown. An RPC latency is counted only when its request send time and
-response receive time belong to the same non-retired session epoch. Only a
+denominator is zero or unknown. An RPC latency starts at the immutable actual `SENT` boundary and
+is counted only when its response receive time belongs to the same non-retired session epoch.
+Atomic evidence is directory-valid only when its code/runtime/Policy/episode identity, target,
+short leg, detector causal identity, and later quote causal order cross-bind to the owning anomaly
+event. Only a
 `global_continuity_epoch` restart clears the witness start. Current coverage or option-local
 availability loss remains explicit in its own ledger and does not reset global continuity.
 Diagnostics count source/application/currentness facts in their declared ledgers and never enter

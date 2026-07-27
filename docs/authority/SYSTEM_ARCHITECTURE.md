@@ -68,23 +68,33 @@ order and never waits for network I/O anywhere in its call tree.
 
 Reducer output is a finite list of purpose-specific `PendingRpc` commands. Sending is an
 orchestration concern; every response, error, and acknowledgement returns through the same reader
-queue before the reducer can commit its effect. A reconnect retires one entire session epoch, so a
-late frame from that epoch or a retired channel generation has zero business side effects.
+queue before the reducer can commit its effect. RPC ownership is explicit:
+`SCHEDULED -> SENT -> SUCCESS | ERROR | DEADLINE_LATE | RETIRED | CENSORED`; `SENT` is stamped at
+the actual transport send boundary, response latency begins there, and unmatched/terminal
+responses are retained separately as `ORPHAN_LATE_WIRE`. A reconnect retires one entire session
+epoch, so a late frame from that epoch or a retired channel generation has zero business side
+effects.
 
-Every committed source fact receives a monotonic internal causal sequence and one `FactBoundary`
-that names all affected scopes. Source timestamps are market facts; receive time and ingress
-sequence establish what the runtime knew and in what order. Deribit channels have no single
-exchange-global sequence, so strict as-of means the latest individually continuous facts known to
-the process at one causal boundary, not a matching-engine-wide simultaneous snapshot. Each emitted
-event binds the latest boundary it consumed.
+Every source boundary enters one non-reentrant reducer transaction: classify the candidate,
+settle all source currentness, freeze the received cause plus concurrent effects and their complete
+scope union once, commit current state, construct immutable full-scope snapshots, settle
+detector/aggregate/atomic current truth, update observation/episode state, then persist only
+resulting edges. Every committed source fact receives a monotonic internal causal sequence and one
+`FactBoundary`. Source timestamps are market facts; receive time and ingress sequence establish
+what the runtime knew and in what order. Deribit channels have no single exchange-global sequence,
+so strict as-of means the latest individually continuous facts known to the process at one causal
+boundary, not a matching-engine-wide simultaneous snapshot. Each emitted event binds the latest
+boundary it consumed.
 
 An option `ticker.<instrument_name>.100ms` notification is a complete snapshot, not a sequenced
 change stream. Its `timestamp` is an as-of/currentness fact and is not a continuity token.
 `ingress_seq` establishes application order. A shape-valid snapshot older than the currently
 accepted ticker is `LATE_IGNORED`: it cannot overwrite the newer fact, request resubscription,
-change detector/episode truth, or restart any continuity epoch. Equal-timestamp snapshots remain
-ordered by `ingress_seq`. Shape validity, accepted-ticker currentness, and application disposition
-are separate facts and diagnostics.
+or restart any continuity epoch. The ignored candidate itself cannot change detector/episode
+truth, but its receive boundary still settles independent accepted-source currentness; a TTL
+crossing at that boundary therefore becomes an explicit concurrent `TICKER_SOURCE_STALE` effect.
+Equal-timestamp snapshots remain ordered by `ingress_seq`. Shape validity, accepted-ticker
+currentness, and application disposition are separate facts and diagnostics.
 
 A relevant source change may update the current chain and evaluate the frozen detector. A time
 boundary is relevant only when it changes a declared discrete fact such as instrument membership,
@@ -92,9 +102,9 @@ freshness class, or expiry/settlement eligibility. Continuous clock movement, a 
 duplicate, an unrelated update, or an arbitrary polling interval does not create another
 Radar episode.
 
-Implementation may recompute the small authorized universe or only affected structures. Both are
-valid if they produce the same strict as-of business result. The architecture does not require a
-generic dependency engine.
+Implementation may reuse immutable member results, but every affected aggregate scope is frozen
+and settled as one complete snapshot before any aggregate, witness, or Layer 2 result is consumed.
+The architecture does not require a generic dependency engine.
 
 Detector clear, hysteresis, and re-arm rules define Radar episodes. Evaluations inside one armed
 episode update the current observation but do not multiply the Radar-episode count.
@@ -126,7 +136,8 @@ Operational truth is kept in three independent ledgers:
 
 1. `global_continuity_epoch` restarts only for a retired session, non-contiguous/overflowed
    ingress, a trusted-clock gap, or a real index continuity loss. Option-local unavailability and
-   current coverage changes never restart it.
+   current coverage changes never restart it. One root incident can restart at most once before
+   its explicit recovery edge.
 2. `current_market_truth_coverage` continues to partition every runtime millisecond into
    `NO_APPLICABLE_SCOPE | KNOWN_COMPLETE | KNOWN_DEGRADED | UNKNOWN`. Its segments identify why
    the state began, the affected global/aggregate/option scope, and the active continuity epoch.

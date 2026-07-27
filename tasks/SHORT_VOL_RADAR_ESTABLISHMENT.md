@@ -19,10 +19,15 @@
 
 **Prior subgate base HEAD:** `c66f987f7fd7513626e69c37f7f2552991ebf9e4`
 
-**Current construction subgate:** `FACT_LIFECYCLE_CLOSURE`
+**Prior construction subgate:** `FACT_LIFECYCLE_CLOSURE`
 `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_27`
 
-**Current subgate implementation anchor:** `d12a68812a36ed4ad420fc2e1ff9ace5583c801e`
+**Prior subgate implementation anchor:** `d12a68812a36ed4ad420fc2e1ff9ace5583c801e`
+
+**Current construction subgate:** `REDUCER_TRANSACTION_AND_EVIDENCE_VALIDATION_REPAIR`
+`OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_27`
+
+**Current subgate implementation anchor:** `fb32546d524c866762b4420fafbd1d89c782eb23`
 
 **REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`
 
@@ -55,6 +60,13 @@ registers only the bounded successor contract below. The resolved implementation
 gate closed. The immediately subsequent explicit human `开工` command, read with that registered
 closure and resolved anchor, opens only this construction gate; it grants no live authority.
 
+The subsequent 2026-07-27 command naming exact base
+`fb32546d524c866762b4420fafbd1d89c782eb23` opens only
+`REDUCER_TRANSACTION_AND_EVIDENCE_VALIDATION_REPAIR`: one append-only repair commit, TDD
+counterexamples, the offline acceptance suite, and sealed-directory hashing. It explicitly
+forbids production-public connection, heartbeat probe, Soak, push-as-accepted, and stage
+advancement.
+
 The prior `OPERATIONAL_SOAK` attempt at
 `/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001` is sealed
 `NOT_MET`. It is historical evidence only and may not be changed, replayed, recomputed, migrated,
@@ -76,8 +88,11 @@ The execution gates are independent:
 6. **`FACT_LIFECYCLE_CLOSURE` construction subgate:** opened by the subsequent explicit human
    `开工` command against the exact implementation anchor above. It authorizes only the bounded
    offline construction and acceptance checks below and no live command.
-7. **Heartbeat wire probe gate:** closed until a separate explicit human command.
-8. **Next `OPERATIONAL_SOAK` gate:** closed until the heartbeat probe is separately authorized,
+7. **`REDUCER_TRANSACTION_AND_EVIDENCE_VALIDATION_REPAIR` construction subgate:** opened against
+   exact base `fb32546d524c866762b4420fafbd1d89c782eb23`. It authorizes only the bounded offline
+   repair and append-only local commit below.
+8. **Heartbeat wire probe gate:** closed until a separate explicit human command.
+9. **Next `OPERATIONAL_SOAK` gate:** closed until the heartbeat probe is separately authorized,
    new global-continuity and local-availability thresholds are human-frozen, and a later command
    independently names exact accepted code, Policy path/digest, new empty evidence directory, and
    stop condition.
@@ -195,8 +210,9 @@ production-public connection, Smoke, Soak, private API, order, trade, or stage a
 `TICKER_SNAPSHOT_CURRENTNESS_REPAIR`. An option ticker is one complete snapshot without sequence
 continuity. Shape, candidate/accepted-fact currentness, and application disposition are separate.
 `ingress_seq` orders applications; a lower source timestamp is `LATE_IGNORED` and cannot overwrite
-newer truth, resubscribe, end an episode, change coverage, or reset a witness. Only a currently
-accepted ticker crossing its Policy TTL makes that option's forward unavailable.
+newer truth or itself resubscribe, end an episode, change coverage, or reset a witness. Its receive
+boundary nevertheless settles the accepted ticker's Policy TTL in the sole reducer transaction;
+an independently crossed TTL makes that option's forward unavailable with both causes retained.
 Candidates from that latched failed generation are separately `STALE_GENERATION_IGNORED`, never
 misreported as timestamp regressions.
 A candidate received without a trusted-time interval is `TRUSTED_TIME_UNKNOWN`, not falsely
@@ -222,9 +238,10 @@ source timestamp without implying a missing message.
 
 **When:** the reducer parses, classifies currentness, and applies or ignores that candidate.
 
-**Then:** an older snapshot is recorded as `LATE_IGNORED`; the existing newer accepted ticker,
-current detector/episode/Layer 2 state, current coverage, and global witness remain unchanged, and
-no option resubscription is emitted. A genuinely stale accepted ticker remains option-local
+**Then:** an older snapshot is recorded as `LATE_IGNORED` and does not overwrite the existing
+newer accepted ticker. When accepted-source currentness is otherwise unchanged, detector/episode/
+Layer 2 state, coverage, and witness remain unchanged and no resubscription is emitted. A TTL
+crossing at that same boundary is settled independently. A genuinely stale accepted ticker remains option-local
 `UNKNOWN` and recovers only through the existing fresh-generation rule.
 
 **Independent verification:** direct reducer/state/writer/validator tests plus `make check`,
@@ -398,6 +415,60 @@ This construction does not authorize production-public connection, heartbeat pro
 Policy creation or modification, private API, RFQ, combo creation, order, trade, replay, offline
 recomputation, full-market persistence, stage advancement, task acceptance, merge, or generalized
 lifecycle/evidence infrastructure. The sealed `attempt-001` remains permanently `NOT_MET`.
+
+### `REDUCER_TRANSACTION_AND_EVIDENCE_VALIDATION_REPAIR` — construction authorized
+
+The exact base is `fb32546d524c866762b4420fafbd1d89c782eb23`. History remains append-only.
+
+**Market/Decision input contract change:** `APPROVED` — make every accepted or ignored ticker,
+option/combo book, catalog, lifecycle, clock, time, and stop boundary enter one non-reentrant
+reducer transaction. The transaction validates/classifies the candidate, settles all source
+currentness, freezes complete cause/domain/scope attribution once, commits current state, builds
+immutable full-scope snapshots, settles detector/aggregate/atomic current truth, updates
+observation/episode state, and persists only resulting edges.
+
+**Decision Policy change:** `NONE` — no formula, threshold, quantity, TTE, Delta, persistence,
+clear/re-arm, or runtime-limit field changes.
+
+**Outcome/evaluation contract change:** `NONE` — no future label, replay, recomputation,
+historical relabelling, Candidate, Position, Outcome, comparator, or qualification.
+
+**Stage/authorization change:** `NONE` — permission stays `PUBLIC_SHADOW`, implemented capability
+stays `NONE`, and production Radar stays `NOT_ESTABLISHED`.
+
+#### Required repair
+
+1. Remove post-settlement `effective_commit` reconstruction. One frozen transaction must preserve
+   both the received fact attribution and every source-currentness effect, with the union of all
+   affected scopes decided before current-state mutation.
+2. Ignored late/ahead/stale-generation tickers and option/combo book/catalog facts still settle
+   source currentness before any detector or atomic result. An expired accepted ticker cannot
+   remain `CURRENT` and cannot support an atomic event.
+3. Model RPC lifecycle explicitly as
+   `SCHEDULED -> SENT -> SUCCESS | ERROR | DEADLINE_LATE | RETIRED/CENSORED`; account separately
+   for `ORPHAN_LATE_WIRE`, and derive latency only from the actual send boundary.
+4. Version-3 validation requires a joint witness inside a current-epoch `KNOWN_COMPLETE` segment,
+   bound to one exact nonzero joint `counts_by_scope` row; exact RPC method allowlist; exact
+   continuity cause/domain/scope combinations; no second restart before incident recovery;
+   clean-stop equality for every retained `CENSORED_AT_STOP` interval; and full
+   anomaly/atomic identity, short-leg, Policy/runtime, and causal-order cross-binding.
+
+#### Required red counterexamples
+
+- a late ticker after accepted-ticker TTL cannot preserve `CURRENT`;
+- a combo-book fact after short-leg ticker TTL cannot write atomic evidence;
+- the received fact and simultaneous source-stale effect retain their causes and scope union;
+- all-`UNKNOWN`/empty-count witness evidence is rejected;
+- unrecovered incident restart and an illegal restart reason/domain/scope tuple are rejected;
+- orphan late wire response is persisted separately;
+- non-allowlisted RPC, early clean-stop censor, and atomic short-leg mismatch are rejected.
+
+#### Offline acceptance
+
+Run focused reducer/transport/evidence tests, `make check`, the malicious version-3 rejection
+suite, explicit read-only validation of all 224 sealed version-2 objects, sealed-directory hashing,
+and authority/diff/worktree audit. No production-public command, heartbeat probe, Smoke, Soak,
+push-as-accepted, merge, or stage advancement is permitted.
 
 ## First-principles scope
 

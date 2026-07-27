@@ -21,12 +21,14 @@ def envelope(
     *,
     seq: int,
     received_ms: int,
+    sent_ms: int | None = None,
 ) -> InboundEnvelope:
     return InboundEnvelope(
         {"jsonrpc": "2.0", **message},
         session_epoch=1,
         ingress_seq=seq,
         received_monotonic_ms=received_ms,
+        request_sent_monotonic_ms=sent_ms,
     )
 
 
@@ -41,6 +43,7 @@ def response(
         {"id": command.request_id, "result": result},
         seq=seq,
         received_ms=received_ms,
+        sent_ms=command.origin_boundary.received_monotonic_ms,
     )
 
 

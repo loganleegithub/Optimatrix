@@ -53,12 +53,14 @@ def envelope(
     seq: int,
     received_ms: int | None = None,
     epoch: int = 1,
+    sent_ms: int | None = None,
 ) -> InboundEnvelope:
     return InboundEnvelope(
         {"jsonrpc": "2.0", **message},
         session_epoch=epoch,
         ingress_seq=seq,
         received_monotonic_ms=received_ms if received_ms is not None else 1_000 + seq,
+        request_sent_monotonic_ms=sent_ms,
     )
 
 
@@ -106,6 +108,7 @@ def response(
         seq=seq,
         received_ms=received_ms,
         epoch=command.session_epoch,
+        sent_ms=command.origin_boundary.received_monotonic_ms,
     )
 
 
@@ -576,6 +579,7 @@ def test_failed_intentional_unsubscribe_does_not_reopen_frame_admission(
                 "error": {"code": 10_028, "message": "too_many_requests"},
             },
             seq=1,
+            sent_ms=unsubscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -636,6 +640,7 @@ def test_removed_option_unsubscribe_failure_does_not_restore_current_result(
                 "error": {"code": 10_028, "message": "too_many_requests"},
             },
             seq=1,
+            sent_ms=unsubscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -958,6 +963,7 @@ def test_index_ack_then_clock_failure_still_releases_held_tick_once_on_recovery(
             },
             seq=4,
             received_ms=1_004,
+            sent_ms=first_clock.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_004,
     )
@@ -1242,6 +1248,7 @@ def test_success_error_late_notification_and_heartbeat_response_reduce_once(
                 "error": {"code": 10_028, "message": "too_many_requests"},
             },
             seq=seq + 1,
+            sent_ms=combo.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001 + seq,
     )
@@ -1585,6 +1592,64 @@ def test_relevant_platform_lock_status_fails_epoch_canonically(
     assert reducer.platform.reason == "RELEVANT_PLATFORM_LOCK"
     assert reducer.diagnostics.session_gap_count == 1
     assert reducer.pending_rpcs == {}
+
+
+def test_rpc_latency_starts_at_actual_send_boundary(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    heartbeat = only(
+        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
+        RpcPurpose.SET_HEARTBEAT,
+    )
+
+    reducer.mark_rpc_sent(heartbeat.request_id, sent_monotonic_ms=1_200)
+    reducer.reduce(
+        response(heartbeat, "ok", seq=1, received_ms=1_250),
+        processed_monotonic_ms=1_250,
+    )
+
+    diagnostics = reducer._operational_diagnostics(250)
+    rpc_rows = diagnostics["rpc_by_method"]
+    assert isinstance(rpc_rows, list)
+    row = next(
+        item
+        for item in rpc_rows
+        if isinstance(item, dict) and item["method"] == "public/set_heartbeat"
+    )
+    assert row["scheduled_count"] == 1
+    assert row["sent_count"] == 1
+    assert row["success_count"] == 1
+    assert row["latency_observation_count"] == 1
+    assert row["latency_ms_sum"] == 50
+    assert row["latency_ms_max"] == 50
+
+
+def test_orphan_late_wire_response_is_persisted_separately(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+
+    reducer.reduce(
+        envelope({"id": 999_999, "result": "orphan"}, seq=1, received_ms=1_001),
+        processed_monotonic_ms=1_001,
+    )
+
+    diagnostics = reducer._operational_diagnostics(1)
+    assert diagnostics["rpc_orphan_late_wire_count"] == 1
+    rpc_rows = diagnostics["rpc_by_method"]
+    assert isinstance(rpc_rows, list)
+    assert (
+        sum(
+            row["deadline_late_count"]
+            for row in rpc_rows
+            if isinstance(row, dict) and isinstance(row.get("deadline_late_count"), int)
+        )
+        == 0
+    )
 
 
 def test_invalid_option_lifecycle_enters_catalog_recovery_not_session_failure(

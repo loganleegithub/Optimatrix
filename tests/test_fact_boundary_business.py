@@ -506,6 +506,7 @@ def test_minute_rollover_preserves_witness_through_recovery_and_summary(
         "restart_count": 0,
         "restart_count_by_reason": {},
         "restart_edges": [],
+        "recovery_edges": [],
     }
     assert {segment["global_continuity_epoch"] for segment in summary["coverage_segments"]} == {1}
     assert all(segment["reason"] for segment in summary["coverage_segments"])
@@ -618,6 +619,17 @@ def test_real_index_gap_requires_recovery_and_a_new_summary_witness(
                     "ingress_seq": 2,
                     "received_monotonic_ms": 2_000,
                     "causal_seq": 2,
+                },
+            }
+        ],
+        "recovery_edges": [
+            {
+                "incident_id": 1,
+                "boundary": {
+                    "session_epoch": 1,
+                    "ingress_seq": 3,
+                    "received_monotonic_ms": 3_000,
+                    "causal_seq": 30,
                 },
             }
         ],
@@ -778,6 +790,7 @@ def test_clock_refresh_failure_keeps_fresh_clock_until_real_stale_boundary(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_001,
+            request_sent_monotonic_ms=request.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -826,6 +839,7 @@ def test_clock_refresh_response_settles_final_window_in_same_fact_boundary(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_100,
+            request_sent_monotonic_ms=refresh.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_100,
     )
@@ -1052,7 +1066,9 @@ def test_late_ticker_snapshot_is_shape_valid_and_has_no_truth_side_effects(
     )
 
     assert reducer.tickers[name] is accepted
-    assert reducer.results[name] is result
+    assert reducer.results[name].detector_state is result.detector_state
+    assert reducer.results[name].known_evaluation == result.known_evaluation
+    assert reducer.results[name].full_formula_evaluation == result.full_formula_evaluation
     assert reducer.trackers[name].episode_id == episode_id
     assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 0
     assert reducer._first_joint_witness_ms == witness
@@ -1371,6 +1387,7 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=2_001,
+            request_sent_monotonic_ms=(unsubscribe.origin_boundary.received_monotonic_ms),
         ),
         processed_monotonic_ms=2_001,
     )
@@ -1389,6 +1406,7 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
             session_epoch=1,
             ingress_seq=2,
             received_monotonic_ms=2_002,
+            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=2_002,
     )
@@ -1550,6 +1568,7 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
             session_epoch=1,
             ingress_seq=2,
             received_monotonic_ms=2_002,
+            request_sent_monotonic_ms=(unsubscribe.origin_boundary.received_monotonic_ms),
         ),
         processed_monotonic_ms=2_002,
     )
@@ -1568,6 +1587,7 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
             session_epoch=1,
             ingress_seq=3,
             received_monotonic_ms=2_003,
+            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=2_003,
     )
@@ -1655,6 +1675,7 @@ def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recov
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=2_001,
+            request_sent_monotonic_ms=(first_unsubscribe.origin_boundary.received_monotonic_ms),
         ),
         processed_monotonic_ms=2_001,
     )
@@ -1680,6 +1701,7 @@ def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recov
             session_epoch=1,
             ingress_seq=2,
             received_monotonic_ms=3_002,
+            request_sent_monotonic_ms=(retry_unsubscribe.origin_boundary.received_monotonic_ms),
         ),
         processed_monotonic_ms=3_002,
     )
@@ -1698,6 +1720,7 @@ def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recov
             session_epoch=1,
             ingress_seq=3,
             received_monotonic_ms=3_003,
+            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=3_003,
     )
@@ -1780,6 +1803,7 @@ def test_ticker_channel_rpc_failure_preserves_known_insufficient_book_depth(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_001,
+            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -1846,6 +1870,7 @@ def test_option_channel_rpc_failure_is_scoped_to_exact_failed_channels(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_001,
+            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -1926,7 +1951,9 @@ def test_ahead_and_malformed_ticker_candidates_do_not_overwrite_or_resync(
     )
 
     assert reducer.tickers[name] is accepted
-    assert reducer.results[name] is result
+    assert reducer.results[name].detector_state is result.detector_state
+    assert reducer.results[name].known_evaluation == result.known_evaluation
+    assert reducer.results[name].full_formula_evaluation == result.full_formula_evaluation
     assert reducer.trackers[name].episode_id == episode_id
     assert reducer._first_joint_witness_ms == witness
     assert name not in reducer._ticker_currentness_latches
@@ -2004,6 +2031,7 @@ def test_option_book_gap_quarantines_old_generation_snapshot(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_001,
+            request_sent_monotonic_ms=(unsubscribe.origin_boundary.received_monotonic_ms),
         ),
         processed_monotonic_ms=1_001,
     )
@@ -2047,7 +2075,9 @@ def test_combo_book_gap_quarantines_old_generation_atomic_quote(
         OptionType.CALL,
         short.amount,
     )
-    reducer.options = {"SHORT": short, "LONG": long}
+    seed_flat_available_index(reducer)
+    configure_full_formula_scope(reducer, short)
+    reducer.options["LONG"] = long
     reducer.catalog_options = dict(reducer.options)
     episode_id = activate_directly(reducer, short)
     reducer._last_detector_causal_seq["SHORT"] = 1
@@ -2160,7 +2190,9 @@ def test_combo_subscribe_failure_only_makes_layer_two_unknown(
         OptionType.CALL,
         short.amount,
     )
-    reducer.options = {"SHORT": short, "LONG": long}
+    seed_flat_available_index(reducer)
+    configure_full_formula_scope(reducer, short)
+    reducer.options["LONG"] = long
     reducer.catalog_options = dict(reducer.options)
     episode_id = activate_directly(reducer, short)
     reducer.combos["COMBO"] = ComboInstrument(
@@ -2188,6 +2220,7 @@ def test_combo_subscribe_failure_only_makes_layer_two_unknown(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_001,
+            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -2247,8 +2280,8 @@ def test_combo_lifecycle_immediately_invalidates_old_layer_two_negative(
         "BTC_USDC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
-    reducer.options = {instrument.instrument_name: instrument}
-    reducer.catalog_options = dict(reducer.options)
+    seed_flat_available_index(reducer)
+    configure_full_formula_scope(reducer, instrument)
     episode_id = activate_directly(reducer, instrument)
     reducer.combo_catalog.complete = True
     reducer.combo_catalog.source_complete = True
@@ -2344,6 +2377,7 @@ def test_one_option_subscribe_failure_is_local_to_that_instrument(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_001,
+            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -2922,3 +2956,176 @@ def test_option_lifecycle_unknown_recomputes_aggregate_from_one_full_scope_snaps
     assert reducer.results[first.instrument_name].reason == "OPTION_LIFECYCLE_HALTED"
     aggregate = next(iter(reducer.aggregate_results.values()))
     assert aggregate.coverage is DetectorCoverage.UNKNOWN
+
+
+def test_late_ticker_after_ttl_settles_the_accepted_ticker_to_unknown(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(
+        activation_count=1,
+        ticker_source_stale_deadline_ms=1_000,
+    )
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    name = "BTC_USDC-27SEP24-100010-C"
+    instrument = make_option(name, 1_000_000 + 60 * 60_000)
+    establish_joint_witness(reducer, instrument)
+    accepted = reducer.tickers[name]
+    episode_id = reducer.trackers[name].episode_id
+    assert episode_id is not None
+    channel = ticker_channel(name)
+    acknowledge_channel(reducer, channel, generation=7)
+    reducer._ticker_generations[name] = 7
+
+    reducer.reduce(
+        subscription_frame(
+            channel,
+            {
+                "instrument_name": name,
+                "timestamp": accepted.source_timestamp_ms - 1,
+                "underlying_price": 99,
+                "underlying_index": "index_price",
+            },
+            ingress_seq=1,
+            received_monotonic_ms=2_001,
+        ),
+        processed_monotonic_ms=2_001,
+    )
+
+    assert reducer.tickers[name] is accepted
+    assert reducer._settled_ticker_currentness[name].state.value == "SOURCE_STALE"
+    assert reducer.results[name].reason == "TICKER_SOURCE_STALE"
+    assert reducer.trackers[name].detector_state is DetectorState.UNKNOWN
+    assert reducer.trackers[name].episode_id is None
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
+
+
+def test_combo_book_after_short_ticker_ttl_cannot_emit_atomic_evidence(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(
+        activation_count=1,
+        ticker_source_stale_deadline_ms=1_000,
+    )
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    expiry = 1_000_000 + 60 * 60_000
+    short = make_option("SHORT", expiry)
+    establish_joint_witness(reducer, short)
+    episode_id = reducer.trackers[short.instrument_name].episode_id
+    assert episode_id is not None
+    long = OptionInstrument(
+        "LONG",
+        expiry,
+        Decimal(110),
+        OptionType.CALL,
+        short.amount,
+    )
+    reducer.options[long.instrument_name] = long
+    reducer.catalog_options[long.instrument_name] = long
+    reducer.trackers[long.instrument_name] = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=reducer.policy.identity,
+        instrument_name=long.instrument_name,
+    )
+    reducer.option_books[long.instrument_name] = make_book(long.instrument_name, None)
+    reducer.combos["COMBO"] = ComboInstrument(
+        "COMBO",
+        "active",
+        (ComboLeg("SHORT", Decimal("-1")), ComboLeg("LONG", Decimal("1"))),
+        AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+    )
+    reducer.combo_catalog.complete = True
+    reducer.combo_catalog.source_complete = True
+    reducer.combo_books["COMBO"] = ContinuousOrderBook("COMBO")
+
+    assert reducer._apply_book(
+        "COMBO",
+        {
+            "type": "snapshot",
+            "timestamp": 2,
+            "instrument_name": "COMBO",
+            "change_id": 1,
+            "bids": [],
+            "asks": [["new", "-1", "0.1"]],
+        },
+        FactBoundary(1, 1, 2_001, 2),
+    )
+
+    assert reducer.results[short.instrument_name].reason == "TICKER_SOURCE_STALE"
+    assert reducer.trackers[short.instrument_name].episode_id is None
+    assert episode_id not in reducer.atomic_states
+    assert not tuple(tmp_path.glob("public-atomic-quote-*.json"))
+
+
+def test_fact_transaction_preserves_trigger_and_concurrent_source_stale_attribution(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=1_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    first = make_option("FIRST", 1_000_000 + 60 * 60_000)
+    second = make_option("SECOND", first.expiration_timestamp_ms + 60_000)
+    configure_full_formula_scope(reducer, first)
+    reducer.options[second.instrument_name] = second
+    reducer.catalog_options[second.instrument_name] = second
+    reducer.trackers[second.instrument_name] = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=reducer.policy.identity,
+        instrument_name=second.instrument_name,
+    )
+    reducer.option_books[second.instrument_name] = make_book(second.instrument_name, "1")
+    reducer.tickers[second.instrument_name] = TickerState(
+        Decimal(100),
+        "index_price",
+        1_000_000,
+    )
+    reducer.settle_fact(
+        commit=CausalCommit(
+            boundary=FactBoundary(1, 1, 1_001, 1),
+            cause=CausalCause.TIME_BOUNDARY,
+            failure_domain=FailureScope.CLOCK_INDEX,
+            affected_scopes=("GLOBAL",),
+        ),
+        affected_instruments=tuple(reducer.options),
+        countable=False,
+    )
+    reducer.clock = TrustedClock.from_response(
+        1_001_001,
+        2_000,
+        2_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    captured: list[ScopeSnapshot] = []
+    current_scope_truth = reducer._current_scope_truth
+
+    def capture_snapshot(snapshot: ScopeSnapshot) -> object:
+        captured.append(snapshot)
+        return current_scope_truth(snapshot)
+
+    monkeypatch.setattr(reducer, "_current_scope_truth", capture_snapshot)
+    assert reducer._apply_book(
+        first.instrument_name,
+        {
+            "type": "change",
+            "timestamp": 2,
+            "instrument_name": first.instrument_name,
+            "change_id": 2,
+            "prev_change_id": 1,
+            "bids": [["new", "999", "0.1"]],
+            "asks": [],
+        },
+        FactBoundary(1, 2, 2_001, 2),
+    )
+
+    assert captured
+    for snapshot in captured:
+        assert snapshot.commit.cause is CausalCause.OPTION_BOOK_CHANGED
+        assert snapshot.commit.source_currentness_causes == (CausalCause.TICKER_SOURCE_STALE,)
+        assert snapshot.commit.affected_scopes == (
+            "OPTION:FIRST",
+            "OPTION:SECOND",
+        )
+    assert reducer.results[second.instrument_name].reason == "TICKER_SOURCE_STALE"
