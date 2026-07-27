@@ -4,7 +4,9 @@ import asyncio
 import contextlib
 import json
 import time
+from dataclasses import dataclass
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any
 
 from websockets.asyncio.client import ClientConnection, connect
@@ -38,8 +40,46 @@ class PublicProtocolIncompatibility(PublicProtocolError):
     """The consumed official protocol shape is incompatible with this runtime."""
 
 
+class SendControlKind(StrEnum):
+    SEND_COMPLETED = "SEND_COMPLETED"
+    SEND_FAILED = "SEND_FAILED"
+
+
+class SendFailureKind(StrEnum):
+    CANCELLED = "CANCELLED"
+    ERROR = "ERROR"
+
+
+@dataclass(frozen=True)
+class SendControlEvent:
+    kind: SendControlKind
+    request_id: int
+    boundary_monotonic_ms: int
+    failure: SendFailureKind | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, SendControlKind):
+            raise TypeError("send control kind must be a SendControlKind")
+        if self.failure is not None and not isinstance(self.failure, SendFailureKind):
+            raise TypeError("send control failure must be a SendFailureKind")
+        if isinstance(self.request_id, bool) or not isinstance(self.request_id, int):
+            raise TypeError("send control request id must be an integer")
+        if self.request_id <= 0:
+            raise ValueError("send control request id must be positive")
+        if isinstance(self.boundary_monotonic_ms, bool) or not isinstance(
+            self.boundary_monotonic_ms, int
+        ):
+            raise TypeError("send control boundary must be an integer")
+        if self.boundary_monotonic_ms < 0:
+            raise ValueError("send control boundary must be non-negative")
+        if self.kind is SendControlKind.SEND_COMPLETED and self.failure is not None:
+            raise ValueError("successful send control cannot carry a failure")
+        if self.kind is SendControlKind.SEND_FAILED and self.failure is None:
+            raise ValueError("failed send control requires a failure kind")
+
+
 class InboundEnvelope(dict[str, object]):
-    """One wire frame stamped exactly once by the socket reader."""
+    """One wire frame or ordered internal transport control boundary."""
 
     def __init__(
         self,
@@ -48,17 +88,19 @@ class InboundEnvelope(dict[str, object]):
         session_epoch: int,
         ingress_seq: int,
         received_monotonic_ms: int,
-        request_sent_monotonic_ms: int | None = None,
+        control_event: SendControlEvent | None = None,
     ) -> None:
         if session_epoch <= 0 or ingress_seq <= 0 or received_monotonic_ms < 0:
             raise ValueError("inbound envelope identity must be positive")
-        if request_sent_monotonic_ms is not None and request_sent_monotonic_ms < 0:
-            raise ValueError("request send boundary must be non-negative")
+        if control_event is not None and not isinstance(control_event, SendControlEvent):
+            raise TypeError("inbound control event must be immutable")
+        if control_event is not None and message:
+            raise ValueError("inbound control event cannot also carry a wire message")
         super().__init__(message)
         self.session_epoch = session_epoch
         self.ingress_seq = ingress_seq
         self.received_monotonic_ms = received_monotonic_ms
-        self.request_sent_monotonic_ms = request_sent_monotonic_ms
+        self.control_event = control_event
 
 
 class DeribitPublicClient:
@@ -96,6 +138,8 @@ class DeribitPublicClient:
         self.overflow_count = 0
         self.received_frame_count = 0
         self.enqueued_envelope_count = 0
+        self.send_control_event_count = 0
+        self.connection_error_event_count = 0
 
     async def __aenter__(self) -> DeribitPublicClient:
         self._connection = await connect(
@@ -157,6 +201,28 @@ class DeribitPublicClient:
                 values.append(self._inbound.get_nowait())
             except asyncio.QueueEmpty:
                 return tuple(values)
+
+    def enqueue_send_control(self, event: SendControlEvent) -> None:
+        if not isinstance(event, SendControlEvent):
+            raise TypeError("transport send control must be immutable")
+        envelope = InboundEnvelope(
+            {},
+            session_epoch=self.session_epoch,
+            ingress_seq=self._next_ingress_seq,
+            received_monotonic_ms=event.boundary_monotonic_ms,
+            control_event=event,
+        )
+        try:
+            self._inbound.put_nowait(envelope)
+        except asyncio.QueueFull as exc:
+            self.overflow_count += 1
+            raise PublicSessionError("inbound queue overflow") from exc
+        self.send_control_event_count += 1
+        self.enqueued_envelope_count += 1
+        self.queue_high_water_frames = max(
+            self.queue_high_water_frames,
+            self._inbound.qsize(),
+        )
 
     async def stop_intake(self) -> None:
         if self._reader_task is None:
@@ -235,6 +301,7 @@ class DeribitPublicClient:
         except asyncio.QueueFull:
             self.overflow_count += 1
             return
+        self.connection_error_event_count += 1
         self.enqueued_envelope_count += 1
         self.queue_high_water_frames = max(
             self.queue_high_water_frames,

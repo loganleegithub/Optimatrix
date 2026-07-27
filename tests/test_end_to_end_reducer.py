@@ -8,7 +8,11 @@ from pathlib import Path
 from conftest import encode_policy, policy_document
 from market_monitor.deribit import PLATFORM_CHANNELS
 from options_domain import OptionType
-from radar_runtime.deribit_public import InboundEnvelope
+from radar_runtime.deribit_public import (
+    InboundEnvelope,
+    SendControlEvent,
+    SendControlKind,
+)
 from radar_runtime.runtime import PendingRpc, RadarReducer, RpcPurpose
 from short_vol_radar.black import black_price
 from short_vol_radar.detector import DetectorState
@@ -21,29 +25,41 @@ def envelope(
     *,
     seq: int,
     received_ms: int,
-    sent_ms: int | None = None,
 ) -> InboundEnvelope:
     return InboundEnvelope(
         {"jsonrpc": "2.0", **message},
         session_epoch=1,
         ingress_seq=seq,
         received_monotonic_ms=received_ms,
-        request_sent_monotonic_ms=sent_ms,
     )
 
 
 def response(
+    reducer: RadarReducer,
     command: PendingRpc,
     result: object,
     *,
     seq: int,
     received_ms: int,
 ) -> InboundEnvelope:
+    reducer.reduce(
+        InboundEnvelope(
+            {},
+            session_epoch=command.session_epoch,
+            ingress_seq=seq,
+            received_monotonic_ms=command.origin_boundary.received_monotonic_ms,
+            control_event=SendControlEvent(
+                kind=SendControlKind.SEND_COMPLETED,
+                request_id=command.request_id,
+                boundary_monotonic_ms=command.origin_boundary.received_monotonic_ms,
+            ),
+        ),
+        processed_monotonic_ms=command.origin_boundary.received_monotonic_ms,
+    )
     return envelope(
         {"id": command.request_id, "result": result},
         seq=seq,
         received_ms=received_ms,
-        sent_ms=command.origin_boundary.received_monotonic_ms,
     )
 
 
@@ -125,13 +141,14 @@ def run_nonempty_scenario(
     )
     subscribe = only(
         reducer.reduce(
-            response(heartbeat, "ok", seq=1, received_ms=1_001),
+            response(reducer, heartbeat, "ok", seq=1, received_ms=1_001),
             processed_monotonic_ms=1_001,
         ),
         RpcPurpose.SUBSCRIBE_CHANNELS,
     )
     commands = reducer.reduce(
         response(
+            reducer,
             subscribe,
             exact_channels(subscribe),
             seq=2,
@@ -142,6 +159,7 @@ def run_nonempty_scenario(
     status = only(commands, RpcPurpose.PLATFORM_STATUS)
     bootstrap_commands = reducer.reduce(
         response(
+            reducer,
             status,
             {"locked": False, "locked_indices": [], "locked_currencies": []},
             seq=3,
@@ -154,13 +172,14 @@ def run_nonempty_scenario(
     combo_catalog = only(bootstrap_commands, RpcPurpose.COMBO_CATALOG)
     index_subscribe = only(
         reducer.reduce(
-            response(clock, 600_000, seq=4, received_ms=1_004),
+            response(reducer, clock, 600_000, seq=4, received_ms=1_004),
             processed_monotonic_ms=1_004,
         ),
         RpcPurpose.SUBSCRIBE_CHANNELS,
     )
     reducer.reduce(
         response(
+            reducer,
             index_subscribe,
             exact_channels(index_subscribe),
             seq=5,
@@ -170,6 +189,7 @@ def run_nonempty_scenario(
     )
     membership_commands = reducer.reduce(
         response(
+            reducer,
             option_catalog,
             [
                 option_payload(short_name, expiry_ms, "100.01"),
@@ -183,13 +203,14 @@ def run_nonempty_scenario(
     option_subscribe = only(membership_commands, RpcPurpose.SUBSCRIBE_CHANNELS)
     combo_metadata = only(
         reducer.reduce(
-            response(combo_catalog, [summary], seq=7, received_ms=1_007),
+            response(reducer, combo_catalog, [summary], seq=7, received_ms=1_007),
             processed_monotonic_ms=1_007,
         ),
         RpcPurpose.COMBO_METADATA,
     )
     reducer.reduce(
         response(
+            reducer,
             combo_metadata,
             {
                 "instrument_name": "COMBO",
@@ -212,6 +233,7 @@ def run_nonempty_scenario(
     )
     reducer.reduce(
         response(
+            reducer,
             option_subscribe,
             exact_channels(option_subscribe),
             seq=9,

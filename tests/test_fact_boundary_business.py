@@ -11,6 +11,7 @@ import pytest
 import radar_runtime.runtime as runtime_module
 from conftest import PolicyFactory, encode_policy, policy_document
 from market_monitor import (
+    ContinuityGap,
     ContinuousOrderBook,
     IndexTail,
     IndexTailStatus,
@@ -25,7 +26,12 @@ from options_domain import (
     OptionInstrument,
     OptionType,
 )
-from radar_runtime.deribit_public import InboundEnvelope, PublicSessionError
+from radar_runtime.deribit_public import (
+    InboundEnvelope,
+    PublicSessionError,
+    SendControlEvent,
+    SendControlKind,
+)
 from radar_runtime.runtime import (
     CausalCause,
     CausalCommit,
@@ -45,7 +51,12 @@ from short_vol_radar.detector import (
     EpisodeEndReason,
     EpisodeTracker,
 )
-from short_vol_radar.evidence import CoverageState, EvidenceWriter, validate_run_summary
+from short_vol_radar.evidence import (
+    CoverageState,
+    EvidenceWriter,
+    validate_evidence_directory,
+    validate_run_summary,
+)
 from short_vol_radar.policy import RadarPolicy, load_policy_bytes
 from short_vol_radar.radar import CurrentEvaluation, TickerState
 
@@ -157,6 +168,30 @@ def subscription_frame(
         session_epoch=1,
         ingress_seq=ingress_seq,
         received_monotonic_ms=received_monotonic_ms,
+    )
+
+
+def complete_rpc_send(
+    reducer: RadarReducer,
+    request: object,
+    *,
+    ingress_seq: int,
+) -> None:
+    assert isinstance(request, runtime_module.PendingRpc)
+    sent_ms = request.origin_boundary.received_monotonic_ms
+    reducer.reduce(
+        InboundEnvelope(
+            {},
+            session_epoch=request.session_epoch,
+            ingress_seq=ingress_seq,
+            received_monotonic_ms=sent_ms,
+            control_event=SendControlEvent(
+                kind=SendControlKind.SEND_COMPLETED,
+                request_id=request.request_id,
+                boundary_monotonic_ms=sent_ms,
+            ),
+        ),
+        processed_monotonic_ms=sent_ms,
     )
 
 
@@ -507,6 +542,20 @@ def test_minute_rollover_preserves_witness_through_recovery_and_summary(
         "restart_count_by_reason": {},
         "restart_edges": [],
         "recovery_edges": [],
+        "current_epoch_joint_evaluation_count_by_scope": [
+            {
+                "policy_identity": reducer.policy.identity,
+                "option_type": "call",
+                "tte_band_id": witness_band,
+                "count": 2,
+                "first_joint_evaluation_boundary": {
+                    "session_epoch": 1,
+                    "ingress_seq": 1,
+                    "received_monotonic_ms": 1_001,
+                    "causal_seq": 1,
+                },
+            }
+        ],
     }
     assert {segment["global_continuity_epoch"] for segment in summary["coverage_segments"]} == {1}
     assert all(segment["reason"] for segment in summary["coverage_segments"])
@@ -573,7 +622,17 @@ def test_real_index_gap_requires_recovery_and_a_new_summary_witness(
     )
 
     assert reducer.results[instrument.instrument_name].full_formula_evaluation
-    assert reducer._first_joint_witness_ms == 3_000
+    assert reducer._first_joint_witness_ms is None
+    reducer._causal_seq = 31
+    assert reducer._apply_index(
+        {
+            "timestamp": 1_440_001,
+            "price": 100,
+            "index_name": "btc_usdc",
+        },
+        FactBoundary(1, 4, 3_001, 31),
+    )
+    assert reducer._first_joint_witness_ms == 3_001
     assert reducer._global_continuity_epoch == 2
     assert not reducer._index_gap_active
 
@@ -582,8 +641,8 @@ def test_real_index_gap_requires_recovery_and_a_new_summary_witness(
     witness_band = reducer.results[instrument.instrument_name].band_id
     assert summary["operational_diagnostics"]["witness"] == {
         "global_continuity_epoch": 2,
-        "first_joint_witness_monotonic_ms": 3_000,
-        "continuous_global_continuity_after_witness_ms": 1_000,
+        "first_joint_witness_monotonic_ms": 3_001,
+        "continuous_global_continuity_after_witness_ms": 999,
         "scope": {
             "expiration_timestamp_ms": instrument.expiration_timestamp_ms,
             "option_type": "call",
@@ -591,9 +650,9 @@ def test_real_index_gap_requires_recovery_and_a_new_summary_witness(
         },
         "boundary": {
             "session_epoch": 1,
-            "ingress_seq": 3,
-            "received_monotonic_ms": 3_000,
-            "causal_seq": 30,
+            "ingress_seq": 4,
+            "received_monotonic_ms": 3_001,
+            "causal_seq": 31,
         },
         "formula_instrument": {
             "instrument_name": instrument.instrument_name,
@@ -630,6 +689,20 @@ def test_real_index_gap_requires_recovery_and_a_new_summary_witness(
                     "ingress_seq": 3,
                     "received_monotonic_ms": 3_000,
                     "causal_seq": 30,
+                },
+            }
+        ],
+        "current_epoch_joint_evaluation_count_by_scope": [
+            {
+                "policy_identity": reducer.policy.identity,
+                "option_type": "call",
+                "tte_band_id": witness_band,
+                "count": 2,
+                "first_joint_evaluation_boundary": {
+                    "session_epoch": 1,
+                    "ingress_seq": 4,
+                    "received_monotonic_ms": 3_001,
+                    "causal_seq": 31,
                 },
             }
         ],
@@ -780,6 +853,7 @@ def test_clock_refresh_failure_keeps_fresh_clock_until_real_stale_boundary(
         failure_scope=FailureScope.CLOCK_INDEX,
     )
 
+    complete_rpc_send(reducer, request, ingress_seq=1)
     commands = reducer.reduce(
         InboundEnvelope(
             {
@@ -790,7 +864,6 @@ def test_clock_refresh_failure_keeps_fresh_clock_until_real_stale_boundary(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_001,
-            request_sent_monotonic_ms=request.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -829,6 +902,7 @@ def test_clock_refresh_response_settles_final_window_in_same_fact_boundary(
         origin_boundary=FactBoundary(1, 0, 1_000, 1),
         failure_scope=FailureScope.CLOCK_INDEX,
     )
+    complete_rpc_send(reducer, refresh, ingress_seq=1)
     reducer.reduce(
         InboundEnvelope(
             {
@@ -839,7 +913,6 @@ def test_clock_refresh_response_settles_final_window_in_same_fact_boundary(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_100,
-            request_sent_monotonic_ms=refresh.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_100,
     )
@@ -1377,6 +1450,7 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
         and request.request_id != unsubscribe.request_id
     )
 
+    complete_rpc_send(reducer, unsubscribe, ingress_seq=1)
     subscribe_commands = reducer.reduce(
         InboundEnvelope(
             {
@@ -1387,7 +1461,6 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=2_001,
-            request_sent_monotonic_ms=(unsubscribe.origin_boundary.received_monotonic_ms),
         ),
         processed_monotonic_ms=2_001,
     )
@@ -1396,6 +1469,7 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
         for command in subscribe_commands
         if command.purpose is RpcPurpose.SUBSCRIBE_CHANNELS
     )
+    complete_rpc_send(reducer, subscribe, ingress_seq=2)
     reducer.reduce(
         InboundEnvelope(
             {
@@ -1406,7 +1480,6 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
             session_epoch=1,
             ingress_seq=2,
             received_monotonic_ms=2_002,
-            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=2_002,
     )
@@ -1558,6 +1631,7 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
     )
     assert reducer.results[name].reason == "TICKER_SOURCE_STALE"
 
+    complete_rpc_send(reducer, unsubscribe, ingress_seq=2)
     subscribe_commands = reducer.reduce(
         InboundEnvelope(
             {
@@ -1568,7 +1642,6 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
             session_epoch=1,
             ingress_seq=2,
             received_monotonic_ms=2_002,
-            request_sent_monotonic_ms=(unsubscribe.origin_boundary.received_monotonic_ms),
         ),
         processed_monotonic_ms=2_002,
     )
@@ -1577,6 +1650,7 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
         for command in subscribe_commands
         if command.purpose is RpcPurpose.SUBSCRIBE_CHANNELS
     )
+    complete_rpc_send(reducer, subscribe, ingress_seq=3)
     reducer.reduce(
         InboundEnvelope(
             {
@@ -1587,7 +1661,6 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
             session_epoch=1,
             ingress_seq=3,
             received_monotonic_ms=2_003,
-            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=2_003,
     )
@@ -1665,6 +1738,7 @@ def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recov
     first_unsubscribe = next(
         command for command in commands if command.purpose is RpcPurpose.UNSUBSCRIBE_CHANNELS
     )
+    complete_rpc_send(reducer, first_unsubscribe, ingress_seq=1)
     reducer.reduce(
         InboundEnvelope(
             {
@@ -1675,7 +1749,6 @@ def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recov
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=2_001,
-            request_sent_monotonic_ms=(first_unsubscribe.origin_boundary.received_monotonic_ms),
         ),
         processed_monotonic_ms=2_001,
     )
@@ -1691,6 +1764,7 @@ def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recov
     retry_unsubscribe = next(
         command for command in retry_commands if command.purpose is RpcPurpose.UNSUBSCRIBE_CHANNELS
     )
+    complete_rpc_send(reducer, retry_unsubscribe, ingress_seq=2)
     subscribe_commands = reducer.reduce(
         InboundEnvelope(
             {
@@ -1701,7 +1775,6 @@ def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recov
             session_epoch=1,
             ingress_seq=2,
             received_monotonic_ms=3_002,
-            request_sent_monotonic_ms=(retry_unsubscribe.origin_boundary.received_monotonic_ms),
         ),
         processed_monotonic_ms=3_002,
     )
@@ -1710,6 +1783,7 @@ def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recov
         for command in subscribe_commands
         if command.purpose is RpcPurpose.SUBSCRIBE_CHANNELS
     )
+    complete_rpc_send(reducer, subscribe, ingress_seq=3)
     reducer.reduce(
         InboundEnvelope(
             {
@@ -1720,7 +1794,6 @@ def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recov
             session_epoch=1,
             ingress_seq=3,
             received_monotonic_ms=3_003,
-            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=3_003,
     )
@@ -1793,6 +1866,7 @@ def test_ticker_channel_rpc_failure_preserves_known_insufficient_book_depth(
         if request.purpose is RpcPurpose.SUBSCRIBE_CHANNELS
     )
 
+    complete_rpc_send(reducer, subscribe, ingress_seq=1)
     reducer.reduce(
         InboundEnvelope(
             {
@@ -1803,7 +1877,6 @@ def test_ticker_channel_rpc_failure_preserves_known_insufficient_book_depth(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_001,
-            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -1860,6 +1933,7 @@ def test_option_channel_rpc_failure_is_scoped_to_exact_failed_channels(
         if request.purpose is RpcPurpose.SUBSCRIBE_CHANNELS
     )
 
+    complete_rpc_send(reducer, subscribe, ingress_seq=1)
     reducer.reduce(
         InboundEnvelope(
             {
@@ -1870,7 +1944,6 @@ def test_option_channel_rpc_failure_is_scoped_to_exact_failed_channels(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_001,
-            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -2021,6 +2094,7 @@ def test_option_book_gap_quarantines_old_generation_snapshot(
         for request in reducer.pending_rpcs.values()
         if request.purpose is RpcPurpose.UNSUBSCRIBE_CHANNELS
     )
+    complete_rpc_send(reducer, unsubscribe, ingress_seq=1)
     reducer.reduce(
         InboundEnvelope(
             {
@@ -2031,7 +2105,6 @@ def test_option_book_gap_quarantines_old_generation_snapshot(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_001,
-            request_sent_monotonic_ms=(unsubscribe.origin_boundary.received_monotonic_ms),
         ),
         processed_monotonic_ms=1_001,
     )
@@ -2080,7 +2153,6 @@ def test_combo_book_gap_quarantines_old_generation_atomic_quote(
     reducer.options["LONG"] = long
     reducer.catalog_options = dict(reducer.options)
     episode_id = activate_directly(reducer, short)
-    reducer._last_detector_causal_seq["SHORT"] = 1
     reducer._causal_seq = 1
     reducer.combos["COMBO"] = ComboInstrument(
         "COMBO",
@@ -2210,6 +2282,7 @@ def test_combo_subscribe_failure_only_makes_layer_two_unknown(
         if request.purpose is RpcPurpose.SUBSCRIBE_CHANNELS
     )
 
+    complete_rpc_send(reducer, subscribe, ingress_seq=1)
     reducer.reduce(
         InboundEnvelope(
             {
@@ -2220,7 +2293,6 @@ def test_combo_subscribe_failure_only_makes_layer_two_unknown(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_001,
-            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -2324,8 +2396,23 @@ def test_temporary_protective_leg_lifecycle_is_scope_local_atomic_unknown(
     short_episode = activate_directly(reducer, short)
     unrelated_episode = activate_directly(reducer, unrelated)
 
-    reducer._evaluate_atomic(reducer.trackers["SHORT"])
-    reducer._evaluate_atomic(reducer.trackers["UNRELATED"])
+    commit = fact_commit(
+        FactBoundary(1, 0, 1_000, 1),
+        CausalCause.COMBO_CATALOG,
+        failure_domain=FailureScope.COMBO_LAYER,
+    )
+    short_snapshot = reducer._freeze_atomic_scope_snapshot(
+        reducer.trackers["SHORT"],
+        commit=commit,
+    )
+    unrelated_snapshot = reducer._freeze_atomic_scope_snapshot(
+        reducer.trackers["UNRELATED"],
+        commit=commit,
+    )
+    assert short_snapshot is not None
+    assert unrelated_snapshot is not None
+    reducer._evaluate_atomic(short_snapshot)
+    reducer._evaluate_atomic(unrelated_snapshot)
 
     assert reducer.atomic_states[short_episode] is PublicAtomicQuoteState.UNKNOWN
     assert reducer.atomic_states[unrelated_episode] is PublicAtomicQuoteState.NO_ACTIVE_COMBO
@@ -2367,6 +2454,7 @@ def test_one_option_subscribe_failure_is_local_to_that_instrument(
         if request.purpose is RpcPurpose.SUBSCRIBE_CHANNELS
     )
 
+    complete_rpc_send(reducer, subscribe, ingress_seq=1)
     reducer.reduce(
         InboundEnvelope(
             {
@@ -2377,7 +2465,6 @@ def test_one_option_subscribe_failure_is_local_to_that_instrument(
             session_epoch=1,
             ingress_seq=1,
             received_monotonic_ms=1_001,
-            request_sent_monotonic_ms=subscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -2593,7 +2680,10 @@ def test_one_continuity_incident_restarts_once_then_recovery_allows_one_new_rest
     assert reducer._global_continuity_epoch == 2
     assert sum(reducer.diagnostics.global_continuity_restart_count.values()) == 1
 
-    reducer._recover_continuity_incident(incident)
+    reducer._recover_continuity_incident(
+        incident,
+        boundary=FactBoundary(1, 2, 1_002, 2),
+    )
     later_commit = CausalCommit(
         boundary=FactBoundary(1, 2, 2_001, 2),
         cause=CausalCause.INDEX_CONTINUITY_GAP,
@@ -3058,6 +3148,78 @@ def test_combo_book_after_short_ticker_ttl_cannot_emit_atomic_evidence(
     assert not tuple(tmp_path.glob("public-atomic-quote-*.json"))
 
 
+def test_runtime_writer_validates_activation_then_later_atomic_combo_boundary(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(
+        activation_count=1,
+        ticker_source_stale_deadline_ms=300_000,
+    )
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    expiry = 1_000_000 + 60 * 60_000
+    short = make_option("SHORT", expiry)
+    establish_joint_witness(reducer, short)
+    episode_id = reducer.trackers[short.instrument_name].episode_id
+    assert episode_id is not None
+    long = OptionInstrument(
+        "LONG",
+        expiry,
+        Decimal(110),
+        OptionType.CALL,
+        short.amount,
+    )
+    reducer.options[long.instrument_name] = long
+    reducer.catalog_options[long.instrument_name] = long
+    reducer.trackers[long.instrument_name] = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=reducer.policy.identity,
+        instrument_name=long.instrument_name,
+    )
+    reducer.option_books[long.instrument_name] = make_book(long.instrument_name, None)
+    reducer.tickers[long.instrument_name] = TickerState(
+        Decimal(100),
+        "index_price",
+        1_000_000,
+    )
+    reducer.combos["COMBO"] = ComboInstrument(
+        "COMBO",
+        "active",
+        (ComboLeg("SHORT", Decimal("-1")), ComboLeg("LONG", Decimal("1"))),
+        AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+    )
+    reducer.combo_catalog.complete = True
+    reducer.combo_catalog.source_complete = True
+    reducer.combo_books["COMBO"] = ContinuousOrderBook("COMBO")
+    reducer._causal_seq = 2
+
+    assert reducer._apply_book(
+        "COMBO",
+        {
+            "type": "snapshot",
+            "timestamp": 2,
+            "instrument_name": "COMBO",
+            "change_id": 1,
+            "bids": [],
+            "asks": [["new", "-1", "0.1"]],
+        },
+        FactBoundary(1, 2, 1_100, 2),
+    )
+    reducer.clean_stop(1_200)
+
+    assert not hasattr(reducer, "_last_detector_causal_seq")
+    objects = validate_evidence_directory(tmp_path)
+    anomaly = next(item for item in objects if item["object_kind"] == "SHORT_VOL_ANOMALY_EVENT")
+    atomic = next(item for item in objects if item["object_kind"] == "PUBLIC_ATOMIC_QUOTE_EVENT")
+    assert anomaly["episode_identity"] == atomic["episode_identity"] == episode_id
+    anomaly_causal_seq = anomaly["causal_seq"]
+    detector_causal_seq = atomic["detector_causal_seq"]
+    assert isinstance(anomaly_causal_seq, int)
+    assert isinstance(detector_causal_seq, int)
+    assert anomaly_causal_seq < detector_causal_seq
+    assert atomic["detector_causal_seq"] == atomic["quote_causal_seq"] == 2
+
+
 def test_fact_transaction_preserves_trigger_and_concurrent_source_stale_attribution(
     tmp_path: Path,
     policy_factory: PolicyFactory,
@@ -3123,9 +3285,77 @@ def test_fact_transaction_preserves_trigger_and_concurrent_source_stale_attribut
     assert captured
     for snapshot in captured:
         assert snapshot.commit.cause is CausalCause.OPTION_BOOK_CHANGED
-        assert snapshot.commit.source_currentness_causes == (CausalCause.TICKER_SOURCE_STALE,)
-        assert snapshot.commit.affected_scopes == (
+        assert snapshot.commit.affected_scopes == ("OPTION:FIRST",)
+        assert tuple(
+            (effect.cause, effect.failure_domain, effect.affected_scopes)
+            for effect in snapshot.commit.concurrent_effects
+        ) == (
+            (
+                CausalCause.TICKER_SOURCE_STALE,
+                FailureScope.OPTION,
+                ("OPTION:FIRST", "OPTION:SECOND"),
+            ),
+        )
+        assert snapshot.commit.transaction_affected_scopes == (
             "OPTION:FIRST",
             "OPTION:SECOND",
         )
     assert reducer.results[second.instrument_name].reason == "TICKER_SOURCE_STALE"
+
+
+def test_clock_gap_is_a_concurrent_effect_of_original_market_fact_commit(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    captured_restart: list[CausalCommit] = []
+    captured_coverage: list[CausalCommit] = []
+    restart = reducer._restart_global_continuity
+    transition = reducer._transition_coverage
+
+    def fail_clock(_clock: TrustedClock, _monotonic_ms: int) -> TimeInterval:
+        raise ContinuityGap("injected clock gap")
+
+    def capture_restart(commit: CausalCommit, **kwargs: object) -> object:
+        captured_restart.append(commit)
+        return restart(commit, **kwargs)  # type: ignore[arg-type]
+
+    def capture_transition(
+        state: CoverageState,
+        *,
+        commit: CausalCommit,
+        **kwargs: object,
+    ) -> None:
+        captured_coverage.append(commit)
+        transition(state, commit=commit, **kwargs)  # type: ignore[arg-type]
+
+    assert reducer.clock is not None
+    monkeypatch.setattr(TrustedClock, "interval_at", fail_clock)
+    monkeypatch.setattr(reducer, "_restart_global_continuity", capture_restart)
+    monkeypatch.setattr(reducer, "_transition_coverage", capture_transition)
+    original = CausalCommit(
+        boundary=FactBoundary(1, 9, 1_100, 9),
+        cause=CausalCause.OPTION_BOOK_CHANGED,
+        failure_domain=FailureScope.OPTION,
+        affected_scopes=("OPTION:SHORT",),
+    )
+
+    reducer.settle_fact(
+        commit=original,
+        affected_instruments=(),
+        countable=False,
+    )
+
+    assert len(captured_restart) == len(captured_coverage) == 1
+    frozen = captured_restart[0]
+    assert captured_coverage[0] is frozen
+    assert frozen.cause is CausalCause.OPTION_BOOK_CHANGED
+    assert frozen.failure_domain is FailureScope.OPTION
+    assert frozen.affected_scopes == ("OPTION:SHORT",)
+    assert frozen.transaction_affected_scopes == ("GLOBAL",)
+    assert tuple(
+        (effect.cause, effect.failure_domain, effect.affected_scopes)
+        for effect in frozen.concurrent_effects
+    ) == ((CausalCause.CLOCK_GAP, FailureScope.CLOCK_INDEX, ("GLOBAL",)),)

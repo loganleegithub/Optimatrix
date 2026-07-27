@@ -24,10 +24,15 @@
 
 **Prior subgate implementation anchor:** `d12a68812a36ed4ad420fc2e1ff9ace5583c801e`
 
-**Current construction subgate:** `REDUCER_TRANSACTION_AND_EVIDENCE_VALIDATION_REPAIR`
+**Prior construction subgate:** `REDUCER_TRANSACTION_AND_EVIDENCE_VALIDATION_REPAIR`
 `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_27`
 
-**Current subgate implementation anchor:** `fb32546d524c866762b4420fafbd1d89c782eb23`
+**Prior subgate implementation anchor:** `fb32546d524c866762b4420fafbd1d89c782eb23`
+
+**Current construction subgate:** `RPC_ATOMIC_EVIDENCE_CAUSAL_NORMALIZATION_REPAIR`
+`OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_28`
+
+**Current subgate implementation anchor:** `a7e2cbfff52b0553ab3d2ab3bcb1d032a7f2406f`
 
 **REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`
 
@@ -67,6 +72,13 @@ counterexamples, the offline acceptance suite, and sealed-directory hashing. It 
 forbids production-public connection, heartbeat probe, Soak, push-as-accepted, and stage
 advancement.
 
+The 2026-07-28 command naming abbreviated base `a7e2cbf`, resolved exactly to
+`a7e2cbfff52b0553ab3d2ab3bcb1d032a7f2406f`, opens only
+`RPC_ATOMIC_EVIDENCE_CAUSAL_NORMALIZATION_REPAIR`: one append-only local repair commit, TDD
+counterexamples, offline validation, strict read-only legacy validation, and sealed-directory
+hashing. It explicitly forbids production-public connection, Policy changes, push, merge, stage
+advancement, private APIs, orders, and trades.
+
 The prior `OPERATIONAL_SOAK` attempt at
 `/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001` is sealed
 `NOT_MET`. It is historical evidence only and may not be changed, replayed, recomputed, migrated,
@@ -91,8 +103,11 @@ The execution gates are independent:
 7. **`REDUCER_TRANSACTION_AND_EVIDENCE_VALIDATION_REPAIR` construction subgate:** opened against
    exact base `fb32546d524c866762b4420fafbd1d89c782eb23`. It authorizes only the bounded offline
    repair and append-only local commit below.
-8. **Heartbeat wire probe gate:** closed until a separate explicit human command.
-9. **Next `OPERATIONAL_SOAK` gate:** closed until the heartbeat probe is separately authorized,
+8. **`RPC_ATOMIC_EVIDENCE_CAUSAL_NORMALIZATION_REPAIR` construction subgate:** opened against
+   exact base `a7e2cbfff52b0553ab3d2ab3bcb1d032a7f2406f`. It authorizes only the bounded offline
+   normalization repair and one append-only local commit below.
+9. **Heartbeat wire probe gate:** closed until a separate explicit human command.
+10. **Next `OPERATIONAL_SOAK` gate:** closed until the heartbeat probe is separately authorized,
    new global-continuity and local-availability thresholds are human-frozen, and a later command
    independently names exact accepted code, Policy path/digest, new empty evidence directory, and
    stop condition.
@@ -469,6 +484,70 @@ Run focused reducer/transport/evidence tests, `make check`, the malicious versio
 suite, explicit read-only validation of all 224 sealed version-2 objects, sealed-directory hashing,
 and authority/diff/worktree audit. No production-public command, heartbeat probe, Smoke, Soak,
 push-as-accepted, merge, or stage advancement is permitted.
+
+### `RPC_ATOMIC_EVIDENCE_CAUSAL_NORMALIZATION_REPAIR` — construction authorized
+
+The exact base is `a7e2cbfff52b0553ab3d2ab3bcb1d032a7f2406f`. History remains append-only.
+
+**Market/Decision input contract change:** `APPROVED` — normalize transport send completion and
+failure into ordered reducer control events; distinguish Policy-bounded send deadline from the
+response deadline that starts only at immutable `SENT`; freeze atomic availability from one
+immutable `AtomicScopeSnapshot`; and preserve clock/currentness only as concurrent effects of the
+original fact commit.
+
+**Decision Policy change:** `NONE` — no Policy file, formula, target quantity, TTE, Delta,
+baseline, activation/clear, persistence, or runtime-limit value changes.
+
+**Outcome/evaluation contract change:** `NONE` — no future label, replay, recomputation,
+historical relabelling, Candidate, Position, Outcome, comparator, qualification, order, or trade.
+
+**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
+capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`.
+
+#### Required repair
+
+1. The sender may not call reducer state-transition methods directly. It emits ordered
+   `SEND_COMPLETED` or `SEND_FAILED` control events into the same reducer-owned sequence as wire
+   responses. Only completed transport send creates the immutable `SENT` boundary. `SCHEDULED`
+   has a separate send deadline; the response deadline begins at `SENT`. Terminal transitions are
+   idempotent and cannot be rewritten.
+2. Freeze one immutable `AtomicScopeSnapshot` containing the episode activation, current detector,
+   official combo quote, catalog/currentness, and one causal boundary. Remove post-hoc
+   `_last_detector_causal_seq` lookup. At every combo boundary enforce
+   `anomaly_activation_seq <= detector_causal_seq == quote_causal_seq` through one invariant helper
+   shared by writer projection and strict validation.
+3. A known witness binds a joint evaluation from the current continuity epoch, not a historical
+   cumulative scope count. It is invalid unless the latest incident strictly recovered before the
+   witness. Recovery must be strictly later than restart and inside the runtime interval.
+4. Version-3 validation cross-conserves heartbeat `test_request`, `public/test` RPC, source shape,
+   latency, orphan, and ingress ledgers. Directory validation attributes anomaly objects to exact
+   Policy/option-type/TTE-band scope counts rather than checking only one global episode total.
+   Each single-field malicious mutation fails closed.
+5. Clock and currentness are concurrent effects of the received fact commit. Detector, aggregate,
+   witness, atomic, and coverage consume the same once-frozen transaction; a derived `CLOCK_GAP`
+   may not replace the original cause or affected scope.
+
+#### Required red counterexamples
+
+- blocked, cancelled, and failed sends; response racing its send receipt; cancellation after the
+  send deadline; and clean stop censoring `SCHEDULED` and `SENT` independently;
+- anomaly activation followed by a later combo arrival whose writer-generated anomaly and atomic
+  directory passes strict validation with one normalized causal snapshot;
+- historical joint counts reused after an epoch restart, witness before incident recovery,
+  recovery equal to restart, and recovery outside the runtime interval;
+- one-field mutations across heartbeat/public-test/source-shape/latency/orphan/ingress
+  conservation and per-scope anomaly episode attribution;
+- a received market fact whose simultaneous clock/currentness effect attempts to replace its
+  original cause or scope.
+
+#### Offline acceptance
+
+Run focused red-to-green reducer/transport/atomic/evidence tests, `make check`, the complete
+malicious version-3 validator suite, strict validation of a writer-generated anomaly plus later
+atomic directory, explicit read-only validation of all 224 immutable version-2 objects in sealed
+`attempt-001`, sealed-directory hashing, `git diff --check`, and final authority/diff/worktree
+audit. No production-public command, Policy change, push, merge, stage advancement, private API,
+order, or trade is permitted.
 
 ## First-principles scope
 

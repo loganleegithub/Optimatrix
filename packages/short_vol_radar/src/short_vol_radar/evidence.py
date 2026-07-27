@@ -225,6 +225,7 @@ class AtomicEvidence:
     runtime_identity: str
     policy_identity: str
     episode_identity: str
+    anomaly_activation_seq: int
     detector_causal_seq: int
     quote_causal_seq: int
     short_instrument_name: str
@@ -289,6 +290,11 @@ def project_anomaly_event(value: AnomalyEvidence) -> dict[str, object]:
 
 
 def project_atomic_event(value: AtomicEvidence) -> dict[str, object]:
+    validate_atomic_causal_invariant(
+        anomaly_activation_seq=value.anomaly_activation_seq,
+        detector_causal_seq=value.detector_causal_seq,
+        quote_causal_seq=value.quote_causal_seq,
+    )
     event: dict[str, object] = {
         "object_kind": "PUBLIC_ATOMIC_QUOTE_EVENT",
         "code_identity": value.code_identity,
@@ -580,8 +586,11 @@ def validate_atomic_event(value: Mapping[str, object]) -> None:
         _required_string(value, field)
     detector_causal_seq = _non_negative_integer(value["detector_causal_seq"], "detector_causal_seq")
     quote_causal_seq = _non_negative_integer(value["quote_causal_seq"], "quote_causal_seq")
-    if quote_causal_seq < detector_causal_seq:
-        raise EvidenceError("atomic quote causal sequence precedes detector activation")
+    validate_atomic_causal_invariant(
+        anomaly_activation_seq=None,
+        detector_causal_seq=detector_causal_seq,
+        quote_causal_seq=quote_causal_seq,
+    )
     if value["required_combo_order_direction"] not in {"BUY", "SELL"}:
         raise EvidenceError("required_combo_order_direction is invalid")
     signed_amount = _decimal_text_value(value["signed_order_amount_btc"], "signed_order_amount_btc")
@@ -617,6 +626,32 @@ def validate_atomic_event(value: Mapping[str, object]) -> None:
     if -signed_amount * vwap != gross_credit:
         raise EvidenceError("atomic gross credit does not match signed quote economics")
     _non_negative_integer(value["source_timestamp_ms"], "source_timestamp_ms")
+
+
+def validate_atomic_causal_invariant(
+    *,
+    anomaly_activation_seq: int | None,
+    detector_causal_seq: int,
+    quote_causal_seq: int,
+) -> None:
+    detector_seq = _non_negative_integer(
+        detector_causal_seq,
+        "atomic detector_causal_seq",
+    )
+    quote_seq = _non_negative_integer(
+        quote_causal_seq,
+        "atomic quote_causal_seq",
+    )
+    if detector_seq != quote_seq:
+        raise EvidenceError("atomic detector and quote must share one causal boundary")
+    if anomaly_activation_seq is None:
+        return
+    activation_seq = _non_negative_integer(
+        anomaly_activation_seq,
+        "atomic anomaly_activation_seq",
+    )
+    if activation_seq > detector_seq:
+        raise EvidenceError("atomic causal boundary precedes anomaly activation")
 
 
 def validate_run_summary(value: Mapping[str, object]) -> None:
@@ -848,21 +883,42 @@ def _validate_evidence_directory(
             atomic["quote_causal_seq"],
             "atomic quote_causal_seq",
         )
-        if detector_causal_seq != anomaly_causal_seq:
-            raise EvidenceError("atomic detector causal identity does not match anomaly activation")
-        if quote_causal_seq < anomaly_causal_seq:
-            raise EvidenceError("atomic causal order precedes anomaly activation")
+        validate_atomic_causal_invariant(
+            anomaly_activation_seq=anomaly_causal_seq,
+            detector_causal_seq=detector_causal_seq,
+            quote_causal_seq=quote_causal_seq,
+        )
     if summaries:
         counts = _array(summaries[0]["counts_by_scope"], "counts_by_scope")
-        declared_episodes = sum(
-            _non_negative_integer(
-                _mapping(item, "scope count")["distinct_anomaly_episode_count"],
+        declared_by_scope: Counter[tuple[str, str, str]] = Counter()
+        for item in counts:
+            row = _mapping(item, "scope count")
+            identity = (
+                _required_string(row, "policy_identity"),
+                _required_string(row, "option_type"),
+                _required_string(row, "tte_band_id"),
+            )
+            declared_by_scope[identity] = _non_negative_integer(
+                row["distinct_anomaly_episode_count"],
                 "scope distinct_anomaly_episode_count",
             )
-            for item in counts
-        )
-        if declared_episodes != len(anomalies_by_episode):
-            raise EvidenceError("summary episode count does not match anomaly evidence")
+        actual_by_scope: Counter[tuple[str, str, str]] = Counter()
+        for anomaly in anomalies_by_episode.values():
+            instrument = _mapping(anomaly["instrument"], "anomaly instrument")
+            actual_by_scope[
+                (
+                    _required_string(anomaly, "policy_identity"),
+                    _required_string(instrument, "option_type"),
+                    _required_string(anomaly, "activation_band_id"),
+                )
+            ] += 1
+        if legacy_schema:
+            if sum(declared_by_scope.values()) != len(anomalies_by_episode):
+                raise EvidenceError("summary episode count does not match anomaly evidence")
+        elif declared_by_scope != actual_by_scope:
+            raise EvidenceError(
+                "summary scope episode counts do not match anomaly option_type and band"
+            )
     return tuple(objects)
 
 
@@ -1094,7 +1150,10 @@ def _validate_operational_diagnostics(
         "operational_diagnostics",
     )
     _validate_runtime_limits(diagnostics["runtime_limits"])
-    _validate_ingress_diagnostics(diagnostics["ingress"])
+    _validate_ingress_diagnostics(
+        diagnostics["ingress"],
+        diagnostics_version=version,
+    )
     _validate_rpc_diagnostics(diagnostics["rpc_by_method"], diagnostics_version=version)
     if version == 3:
         _non_negative_integer(
@@ -1176,8 +1235,26 @@ def _validate_operational_diagnostics(
     source_shape_counts = _validate_source_shapes(diagnostics["source_shapes"])
     current_epoch = 1
     restart_edges: tuple[Mapping[str, object], ...] = ()
+    recovery_edges: Mapping[int, Mapping[str, object]] = {}
+    current_epoch_joint_counts: Mapping[
+        tuple[str, str, str],
+        tuple[int, Mapping[str, object] | None],
+    ] = {}
     if version == 3:
-        current_epoch, restart_edges = _validate_global_continuity(diagnostics["global_continuity"])
+        _validate_cross_ledger_conservation(
+            diagnostics,
+            source_shape_counts=source_shape_counts,
+        )
+        (
+            current_epoch,
+            restart_edges,
+            recovery_edges,
+            current_epoch_joint_counts,
+        ) = _validate_global_continuity(
+            diagnostics["global_continuity"],
+            runtime_started_monotonic_ms=runtime_started_monotonic_ms,
+            clean_stop_monotonic_ms=clean_stop_monotonic_ms,
+        )
         ticker_application = _validate_ticker_application(diagnostics["ticker_application"])
         ticker_currentness = _validate_ticker_currentness(diagnostics["ticker_currentness"])
         ticker_observed, ticker_valid, ticker_invalid = source_shape_counts["option_ticker"]
@@ -1306,14 +1383,16 @@ def _validate_operational_diagnostics(
                 )
             ):
                 raise EvidenceError("witness identity scope and formula instrument do not match")
+            scope_option_type = _required_string(scope, "option_type")
+            scope_band_id = _required_string(scope, "tte_band_id")
             matching_counts = tuple(
                 _mapping(raw_scope, "scope count")
                 for raw_scope in counts_by_scope
                 if (
                     isinstance(raw_scope, dict)
                     and raw_scope.get("policy_identity") == policy_identity
-                    and raw_scope.get("option_type") == scope["option_type"]
-                    and raw_scope.get("tte_band_id") == scope["tte_band_id"]
+                    and raw_scope.get("option_type") == scope_option_type
+                    and raw_scope.get("tte_band_id") == scope_band_id
                 )
             )
             if len(matching_counts) != 1:
@@ -1324,6 +1403,43 @@ def _validate_operational_diagnostics(
             )
             if joint_count <= 0:
                 raise EvidenceError("joint witness full-formula count must be positive")
+            current_joint_evaluation = current_epoch_joint_counts.get(
+                (
+                    policy_identity,
+                    scope_option_type,
+                    scope_band_id,
+                ),
+            )
+            if current_joint_evaluation is None or current_joint_evaluation[0] <= 0:
+                raise EvidenceError(
+                    "joint witness must bind a current-epoch joint scope evaluation"
+                )
+            current_joint_count, first_joint_boundary = current_joint_evaluation
+            if current_joint_count > joint_count:
+                raise EvidenceError(
+                    "current-epoch joint scope count exceeds its cumulative counts_by_scope row"
+                )
+            if first_joint_boundary is None or _fact_boundary_order(
+                first_joint_boundary
+            ) != _fact_boundary_order(boundary):
+                raise EvidenceError(
+                    "joint witness boundary does not match its current-epoch joint evaluation"
+                )
+            if restart_edges:
+                latest_incident_id = len(restart_edges)
+                recovery = recovery_edges.get(latest_incident_id)
+                if recovery is None:
+                    raise EvidenceError(
+                        "known witness requires strict recovery of the latest incident"
+                    )
+                recovery_boundary = _mapping(
+                    recovery["boundary"],
+                    "global continuity recovery boundary",
+                )
+                if _fact_boundary_order(recovery_boundary) >= _fact_boundary_order(boundary):
+                    raise EvidenceError(
+                        "latest incident recovery must be strictly before the known witness"
+                    )
 
 
 def _validate_runtime_limits(value: object) -> None:
@@ -1355,7 +1471,11 @@ def _validate_runtime_limits(value: object) -> None:
         raise EvidenceError("clock stale deadline does not exceed refresh interval")
 
 
-def _validate_ingress_diagnostics(value: object) -> None:
+def _validate_ingress_diagnostics(
+    value: object,
+    *,
+    diagnostics_version: int,
+) -> None:
     ingress = _mapping(value, "operational_diagnostics.ingress")
     fields = {
         "received_envelope_count",
@@ -1365,6 +1485,13 @@ def _validate_ingress_diagnostics(value: object) -> None:
         "max_receive_to_reduce_lag_ms",
         "overflow_count",
     }
+    if diagnostics_version == 3:
+        fields.update(
+            {
+                "send_control_event_count",
+                "connection_error_event_count",
+            }
+        )
     _validate_named_non_negative_counts(
         ingress,
         fields,
@@ -1604,9 +1731,199 @@ def _validate_source_shapes(value: object) -> dict[str, tuple[int, int, int]]:
     return counts
 
 
+def _validate_cross_ledger_conservation(
+    diagnostics: Mapping[str, object],
+    *,
+    source_shape_counts: Mapping[str, tuple[int, int, int]],
+) -> None:
+    ingress = _mapping(
+        diagnostics["ingress"],
+        "operational_diagnostics.ingress",
+    )
+    channel_rows = _array(
+        diagnostics["channel_by_class"],
+        "operational_diagnostics.channel_by_class",
+    )
+    channels = {
+        _required_string(
+            _mapping(raw, "operational channel row"),
+            "channel_class",
+        ): _mapping(raw, "operational channel row")
+        for raw in channel_rows
+    }
+    for ingress_field, channel_field in (
+        ("received_envelope_count", "received_count"),
+        ("reduced_envelope_count", "processed_count"),
+    ):
+        ingress_count = _non_negative_integer(
+            ingress[ingress_field],
+            f"operational_diagnostics.ingress.{ingress_field}",
+        )
+        channel_count = sum(
+            _non_negative_integer(
+                row[channel_field],
+                f"{channel_class}.{channel_field}",
+            )
+            for channel_class, row in channels.items()
+        )
+        if ingress_count != channel_count:
+            raise EvidenceError("cross-ledger ingress/channel conservation does not reconcile")
+
+    rpc_rows = _array(
+        diagnostics["rpc_by_method"],
+        "operational_diagnostics.rpc_by_method",
+    )
+    rpc_by_method = {
+        _required_string(_mapping(raw, "operational RPC row"), "method"): _mapping(
+            raw,
+            "operational RPC row",
+        )
+        for raw in rpc_rows
+    }
+    rpc_latency_count = 0
+    for method in RPC_METHOD_ALLOWLIST:
+        row = rpc_by_method.get(method)
+        latency_count = (
+            0
+            if row is None
+            else _non_negative_integer(
+                row["latency_observation_count"],
+                f"RPC row {method}.latency_observation_count",
+            )
+        )
+        rpc_latency_count += latency_count
+        if source_shape_counts[method][0] != latency_count:
+            raise EvidenceError(
+                "cross-ledger RPC latency/source-shape conservation does not reconcile"
+            )
+
+    orphan_count = _non_negative_integer(
+        diagnostics["rpc_orphan_late_wire_count"],
+        "rpc_orphan_late_wire_count",
+    )
+    expected_connection_control_count = (
+        _non_negative_integer(
+            ingress["send_control_event_count"],
+            "ingress.send_control_event_count",
+        )
+        + _non_negative_integer(
+            ingress["connection_error_event_count"],
+            "ingress.connection_error_event_count",
+        )
+        + rpc_latency_count
+        + orphan_count
+    )
+    connection_control = channels["CONNECTION_CONTROL"]
+    for field in ("received_count", "processed_count"):
+        if (
+            _non_negative_integer(
+                connection_control[field],
+                f"CONNECTION_CONTROL.{field}",
+            )
+            != expected_connection_control_count
+        ):
+            raise EvidenceError("cross-ledger connection-control conservation does not reconcile")
+
+    heartbeat_source_count = source_shape_counts["heartbeat"][0]
+    heartbeat_channel = channels["HEARTBEAT"]
+    for field in ("received_count", "processed_count"):
+        if (
+            _non_negative_integer(
+                heartbeat_channel[field],
+                f"HEARTBEAT.{field}",
+            )
+            != heartbeat_source_count
+        ):
+            raise EvidenceError(
+                "cross-ledger heartbeat channel/source conservation does not reconcile"
+            )
+
+    heartbeat = _mapping(
+        diagnostics["heartbeat"],
+        "operational_diagnostics.heartbeat",
+    )
+    public_test = rpc_by_method.get("public/test")
+    rpc_public_test = {
+        field: (
+            0
+            if public_test is None
+            else _non_negative_integer(
+                public_test[field],
+                f"RPC row public/test.{field}",
+            )
+        )
+        for field in (
+            "scheduled_count",
+            "success_count",
+            "latency_observation_count",
+            "latency_ms_sum",
+            "latency_ms_max",
+        )
+    }
+    heartbeat_counts = {
+        field: _non_negative_integer(
+            heartbeat[field],
+            f"operational_diagnostics.heartbeat.{field}",
+        )
+        for field in (
+            "test_request_count",
+            "public_test_success_count",
+            "public_test_error_count",
+            "latency_observation_count",
+            "latency_ms_sum",
+            "latency_ms_max",
+        )
+    }
+    if heartbeat_counts["test_request_count"] != rpc_public_test["scheduled_count"]:
+        raise EvidenceError(
+            "cross-ledger heartbeat/public-test scheduling conservation does not reconcile"
+        )
+    if heartbeat_counts["test_request_count"] > source_shape_counts["heartbeat"][1]:
+        raise EvidenceError(
+            "cross-ledger heartbeat test-request/source conservation does not reconcile"
+        )
+    for heartbeat_field, rpc_field in (
+        ("public_test_success_count", "success_count"),
+        ("latency_observation_count", "latency_observation_count"),
+        ("latency_ms_sum", "latency_ms_sum"),
+        ("latency_ms_max", "latency_ms_max"),
+    ):
+        if heartbeat_counts[heartbeat_field] != rpc_public_test[rpc_field]:
+            raise EvidenceError(
+                "cross-ledger heartbeat/public-test latency conservation does not reconcile"
+            )
+    public_test_observed, public_test_valid, public_test_invalid = source_shape_counts[
+        "public/test"
+    ]
+    if (
+        public_test_observed != rpc_public_test["latency_observation_count"]
+        or public_test_valid != rpc_public_test["success_count"]
+        or public_test_invalid != heartbeat_counts["public_test_error_count"]
+        or public_test_observed
+        != (
+            heartbeat_counts["public_test_success_count"]
+            + heartbeat_counts["public_test_error_count"]
+        )
+    ):
+        raise EvidenceError(
+            "cross-ledger heartbeat/public-test source conservation does not reconcile"
+        )
+
+
 def _validate_global_continuity(
     value: object,
-) -> tuple[int, tuple[Mapping[str, object], ...]]:
+    *,
+    runtime_started_monotonic_ms: int,
+    clean_stop_monotonic_ms: int,
+) -> tuple[
+    int,
+    tuple[Mapping[str, object], ...],
+    Mapping[int, Mapping[str, object]],
+    Mapping[
+        tuple[str, str, str],
+        tuple[int, Mapping[str, object] | None],
+    ],
+]:
     continuity = _mapping(value, "operational_diagnostics.global_continuity")
     _exact_keys(
         continuity,
@@ -1616,6 +1933,7 @@ def _validate_global_continuity(
             "restart_count_by_reason",
             "restart_edges",
             "recovery_edges",
+            "current_epoch_joint_evaluation_count_by_scope",
         },
         "operational_diagnostics.global_continuity",
     )
@@ -1718,8 +2036,16 @@ def _validate_global_continuity(
             edges[incident_id - 1]["boundary"],
             "global continuity restart boundary",
         )
-        if _fact_boundary_order(boundary) < _fact_boundary_order(restart_boundary):
-            raise EvidenceError("global continuity incident recovered before its restart")
+        if _fact_boundary_order(boundary) <= _fact_boundary_order(restart_boundary):
+            raise EvidenceError(
+                "global continuity recovery must be strictly later than its restart"
+            )
+        recovery_ms = _non_negative_integer(
+            boundary["received_monotonic_ms"],
+            "global continuity recovery monotonic boundary",
+        )
+        if not runtime_started_monotonic_ms <= recovery_ms <= clean_stop_monotonic_ms:
+            raise EvidenceError("global continuity recovery is outside the runtime interval")
         recoveries[incident_id] = recovery
     for incident_id in range(1, restart_count):
         recovered_edge = recoveries.get(incident_id)
@@ -1735,7 +2061,89 @@ def _validate_global_continuity(
         )
         if _fact_boundary_order(recovery_boundary) >= _fact_boundary_order(next_restart_boundary):
             raise EvidenceError("global continuity incident restarted again before recovery")
-    return current_epoch, tuple(edges)
+    current_joint_rows = _array(
+        continuity["current_epoch_joint_evaluation_count_by_scope"],
+        "global continuity current-epoch joint scope counts",
+    )
+    current_joint_counts: dict[
+        tuple[str, str, str],
+        tuple[int, Mapping[str, object] | None],
+    ] = {}
+    identities: list[tuple[str, str, str]] = []
+    for raw_row in current_joint_rows:
+        row = _mapping(raw_row, "current-epoch joint scope count")
+        _exact_keys(
+            row,
+            {
+                "policy_identity",
+                "option_type",
+                "tte_band_id",
+                "count",
+                "first_joint_evaluation_boundary",
+            },
+            "current-epoch joint scope count",
+        )
+        identity = (
+            _required_string(row, "policy_identity"),
+            _required_string(row, "option_type"),
+            _required_string(row, "tte_band_id"),
+        )
+        if identity[1] not in {"call", "put"}:
+            raise EvidenceError("current-epoch joint scope option_type is invalid")
+        count = _positive_integer(
+            row["count"],
+            "current-epoch joint scope count",
+        )
+        raw_first_boundary = row["first_joint_evaluation_boundary"]
+        first_boundary = (
+            None
+            if raw_first_boundary is None
+            else _validate_fact_boundary(
+                raw_first_boundary,
+                "current-epoch first joint evaluation boundary",
+            )
+        )
+        if first_boundary is not None:
+            first_ms = _non_negative_integer(
+                first_boundary["received_monotonic_ms"],
+                "current-epoch first joint evaluation monotonic boundary",
+            )
+            if not runtime_started_monotonic_ms <= first_ms <= clean_stop_monotonic_ms:
+                raise EvidenceError(
+                    "current-epoch first joint evaluation is outside the runtime interval"
+                )
+            if current_epoch == 1:
+                if first_ms <= runtime_started_monotonic_ms:
+                    raise EvidenceError(
+                        "current-epoch first joint evaluation must be after runtime start"
+                    )
+            else:
+                current_epoch_restart = _mapping(
+                    edges[-1]["boundary"],
+                    "current epoch restart boundary",
+                )
+                if _fact_boundary_order(first_boundary) <= _fact_boundary_order(
+                    current_epoch_restart
+                ):
+                    raise EvidenceError(
+                        "current-epoch first joint evaluation must follow its restart"
+                    )
+                current_epoch_recovery = recoveries.get(restart_count)
+                if current_epoch_recovery is None:
+                    raise EvidenceError("current-epoch joint evaluation requires incident recovery")
+                recovery_boundary = _mapping(
+                    current_epoch_recovery["boundary"],
+                    "current epoch recovery boundary",
+                )
+                if _fact_boundary_order(first_boundary) <= _fact_boundary_order(recovery_boundary):
+                    raise EvidenceError("current-epoch first joint evaluation must follow recovery")
+        if identity in current_joint_counts:
+            raise EvidenceError("current-epoch joint scope identities must be unique")
+        identities.append(identity)
+        current_joint_counts[identity] = (count, first_boundary)
+    if identities != sorted(identities):
+        raise EvidenceError("current-epoch joint scope rows must be sorted")
+    return current_epoch, tuple(edges), recoveries, current_joint_counts
 
 
 def _validate_ticker_application(value: object) -> dict[str, int]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import FrozenInstanceError
 from typing import cast
 
 import pytest
@@ -204,3 +205,25 @@ def test_transport_records_real_queue_high_water_and_overflow() -> None:
 
     assert client.queue_high_water_frames == 1
     assert client.overflow_count == 1
+
+
+def test_send_receipt_is_an_immutable_control_event_in_the_same_ordered_queue() -> None:
+    client = DeribitPublicClient(session_epoch=7, rpc_deadline_ms=30_000)
+    event = deribit_public.SendControlEvent(
+        kind=deribit_public.SendControlKind.SEND_COMPLETED,
+        request_id=41,
+        boundary_monotonic_ms=1_001,
+    )
+
+    client.enqueue_send_control(event)
+    client._enqueue_wire_message(
+        {"jsonrpc": "2.0", "id": 41, "result": "ok"},
+        received_monotonic_ms=1_002,
+    )
+
+    control, response = client.drain_envelopes()
+    assert control.control_event is event
+    assert response.control_event is None
+    assert control.ingress_seq == response.ingress_seq == 1
+    with pytest.raises(FrozenInstanceError):
+        event.boundary_monotonic_ms = 1_003  # type: ignore[misc]

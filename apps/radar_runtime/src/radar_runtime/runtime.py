@@ -14,10 +14,12 @@ from pathlib import Path
 from typing import Protocol
 
 from market_monitor import (
+    BookState,
     ContinuityGap,
     ContinuousOrderBook,
     IndexMinuteReducer,
     IndexTailStatus,
+    PriceLevel,
     TimeInterval,
     TrustedClock,
 )
@@ -52,6 +54,7 @@ from options_domain import (
     parse_option_instrument,
 )
 from short_vol_radar.atomic import (
+    AtomicResult,
     PublicAtomicQuoteState,
     classify_atomic_quotes,
     match_vertical_combo,
@@ -80,6 +83,7 @@ from short_vol_radar.evidence import (
     project_atomic_event,
     project_run_summary,
     ratio_or_none,
+    validate_atomic_causal_invariant,
 )
 from short_vol_radar.evidence import (
     CausalCause as CausalCause,
@@ -110,6 +114,9 @@ from radar_runtime.deribit_public import (
     PublicProtocolError,
     PublicProtocolIncompatibility,
     PublicSessionError,
+    SendControlEvent,
+    SendControlKind,
+    SendFailureKind,
 )
 
 
@@ -129,6 +136,8 @@ class PublicClient(Protocol):
     ) -> None: ...
 
     async def next_envelope(self, timeout_seconds: float | None = None) -> InboundEnvelope: ...
+
+    def enqueue_send_control(self, event: SendControlEvent) -> None: ...
 
 
 @dataclass
@@ -212,6 +221,37 @@ class ScopeSnapshot:
     boundary_countable: bool
     acceptance_eligible: bool
     catalog_complete: bool
+
+
+@dataclass(frozen=True)
+class AtomicBookSnapshot:
+    instrument_name: str
+    state: BookState
+    reason: str | None
+    change_id: int | None
+    economic_revision: int
+    source_timestamp_ms: int | None
+    last_mutation_monotonic_ms: int | None
+    bids: tuple[PriceLevel, ...]
+    asks: tuple[PriceLevel, ...]
+
+
+@dataclass(frozen=True)
+class AtomicScopeSnapshot:
+    commit: CausalCommit
+    episode_identity: str
+    anomaly_activation_seq: int
+    activation_band_id: str
+    detector_state: DetectorState
+    detector_causal_seq: int
+    short_leg: OptionInstrument
+    short_current: CurrentEvaluation | None
+    option_catalog_complete: bool
+    combo_catalog_complete: bool
+    current_options: tuple[OptionInstrument, ...]
+    combos: tuple[ComboInstrument, ...]
+    combo_books: tuple[AtomicBookSnapshot, ...]
+    result: AtomicResult
 
 
 @dataclass(frozen=True)
@@ -318,12 +358,13 @@ class CausalCommit:
             raise TypeError("causal commit concurrent effects must be an immutable tuple")
         if not all(isinstance(effect, CausalEffect) for effect in self.concurrent_effects):
             raise TypeError("causal commit effects must be CausalEffect values")
-        expected_scopes = _merge_causal_scopes(
+
+    @property
+    def transaction_affected_scopes(self) -> tuple[str, ...]:
+        return _merge_causal_scopes(
             self.affected_scopes,
             *(effect.affected_scopes for effect in self.concurrent_effects),
         )
-        if expected_scopes != self.affected_scopes:
-            raise ValueError("causal commit affected scopes must include every concurrent effect")
 
     @property
     def source_currentness_causes(self) -> tuple[CausalCause, ...]:
@@ -376,7 +417,7 @@ class PendingRpc:
     scope: str
     generation: int | None
     origin_boundary: FactBoundary
-    deadline_monotonic_ms: int
+    send_deadline_monotonic_ms: int
     failure_scope: FailureScope
 
 
@@ -385,8 +426,9 @@ class _RpcLifecycle:
     request: PendingRpc
     state: RpcState = RpcState.SCHEDULED
     sent_monotonic_ms: int | None = None
-    deadline_monotonic_ms: int | None = None
+    response_deadline_monotonic_ms: int | None = None
     terminal_monotonic_ms: int | None = None
+    terminal_from_state: RpcState | None = None
 
 
 @dataclass
@@ -401,6 +443,8 @@ class RuntimeDiagnostics:
     overflow_count: int = 0
     late_response_count: int = 0
     rpc_orphan_late_wire_count: int = 0
+    send_control_event_count: int = 0
+    connection_error_event_count: int = 0
     combo_authoritative_refresh_attempt_count: int = 0
     reconnect_count: int = 0
     session_gap_count: int = 0
@@ -533,6 +577,7 @@ class RadarReducer:
         self.diagnostics = RuntimeDiagnostics()
         self.pending_rpcs: dict[int, PendingRpc] = {}
         self._rpc_lifecycles: dict[int, _RpcLifecycle] = {}
+        self._early_rpc_responses: dict[int, InboundEnvelope] = {}
         self._channels: dict[str, _ChannelSlot] = {}
         self._held_subscription_frames: list[_HeldSubscriptionFrame] = []
         self._held_subscription_frame_count = 0
@@ -585,14 +630,19 @@ class RadarReducer:
         self._band_suspended_started_ms: int | None = None
         self._global_continuity_epoch = 1
         self._current_continuity_epoch_started_ms = initialized_ms
+        self._current_epoch_joint_evaluation_counts: Counter[tuple[str, str, str]] = Counter()
+        self._current_epoch_joint_evaluation_first_boundaries: dict[
+            tuple[str, str, str],
+            FactBoundary,
+        ] = {}
         self._active_continuity_incident: ContinuityIncident | None = None
+        self._latest_continuity_recovery_boundary: FactBoundary | None = None
         self._next_continuity_incident_id = 1
         self._first_joint_witness_ms: int | None = None
         self._first_joint_witness_identity: _JointWitnessIdentity | None = None
         self._last_observation_identity: dict[str, tuple[object, ...]] = {}
         self._last_index_tail_identity: dict[str, tuple[object, ...]] = {}
         self._last_unknown_reason: dict[str, str | None] = {}
-        self._last_detector_causal_seq: dict[str, int] = {}
         self._emitted_atomic_quotes: set[tuple[str, str]] = set()
         self._episode_started_ms: dict[str, int] = {}
         self._episode_last_trusted_ms: dict[str, int] = {}
@@ -652,6 +702,7 @@ class RadarReducer:
         self._held_subscription_frames.clear()
         self._held_subscription_frame_count = 0
         self.pending_rpcs.clear()
+        self._early_rpc_responses.clear()
         self.platform = PlatformReadiness()
         self.platform.start_epoch(session_epoch)
         self.option_catalog = CatalogBootstrap()
@@ -728,6 +779,10 @@ class RadarReducer:
         self.diagnostics.channel_received_count[channel_class] += 1
         self.diagnostics.reduced_envelope_count += 1
         self.diagnostics.channel_processed_count[channel_class] += 1
+        if envelope.control_event is not None:
+            self.diagnostics.send_control_event_count += 1
+        elif envelope.get("method") == "connection_error":
+            self.diagnostics.connection_error_event_count += 1
         if (
             envelope.session_epoch != self._session_epoch
             or envelope.session_epoch in self._retired_epochs
@@ -751,6 +806,25 @@ class RadarReducer:
                 monotonic_ms=envelope.received_monotonic_ms,
             )
             raise PublicSessionError("inbound queue lag deadline exceeded")
+        if envelope.control_event is not None:
+            if envelope.ingress_seq not in {
+                self._last_ingress_seq,
+                self._last_ingress_seq + 1,
+            }:
+                raise PublicProtocolError("send control is outside the ordered ingress frontier")
+            self._last_inbound_received_ms = max(
+                self._last_inbound_received_ms,
+                envelope.received_monotonic_ms,
+            )
+            self._last_boundary_monotonic_ms = max(
+                self._last_boundary_monotonic_ms,
+                envelope.received_monotonic_ms,
+            )
+            self._apply_send_control(
+                envelope.control_event,
+                boundary=self._current_boundary(envelope),
+            )
+            return self._take_commands()
         if envelope.ingress_seq != self._last_ingress_seq + 1:
             self.diagnostics.ingress_gap_or_duplicate_count += 1
             self._retire_current_epoch(
@@ -846,7 +920,7 @@ class RadarReducer:
             scope=scope,
             generation=generation,
             origin_boundary=origin_boundary,
-            deadline_monotonic_ms=(
+            send_deadline_monotonic_ms=(
                 origin_boundary.received_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
             ),
             failure_scope=failure_scope,
@@ -861,14 +935,15 @@ class RadarReducer:
             self._combo_refresh_request_id = request.request_id
         return request
 
-    def mark_rpc_sent(self, request_id: int, *, sent_monotonic_ms: int) -> bool:
-        if isinstance(request_id, bool) or not isinstance(request_id, int):
-            raise TypeError("RPC request id must be an integer")
-        if isinstance(sent_monotonic_ms, bool) or not isinstance(sent_monotonic_ms, int):
-            raise TypeError("RPC send boundary must be an integer")
-        lifecycle = self._rpc_lifecycles.get(request_id)
+    def _apply_send_control(
+        self,
+        event: SendControlEvent,
+        *,
+        boundary: FactBoundary,
+    ) -> None:
+        lifecycle = self._rpc_lifecycles.get(event.request_id)
         if lifecycle is None:
-            raise KeyError(f"unknown RPC request id {request_id}")
+            return
         if lifecycle.state in {
             RpcState.SUCCESS,
             RpcState.ERROR,
@@ -876,33 +951,61 @@ class RadarReducer:
             RpcState.RETIRED,
             RpcState.CENSORED,
         }:
-            return False
-        if lifecycle.state is RpcState.SENT:
-            if lifecycle.sent_monotonic_ms != sent_monotonic_ms:
-                raise RuntimeError("RPC send boundary cannot be rewritten")
-            return True
-        if sent_monotonic_ms < lifecycle.request.origin_boundary.received_monotonic_ms:
-            raise ValueError("RPC send boundary precedes scheduling boundary")
-        lifecycle.state = RpcState.SENT
-        lifecycle.sent_monotonic_ms = sent_monotonic_ms
-        lifecycle.deadline_monotonic_ms = (
-            sent_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
-        )
-        self.diagnostics.rpc_sent_count[lifecycle.request.method] += 1
-        return True
-
-    def mark_rpc_send_error(self, request_id: int, *, failed_monotonic_ms: int) -> None:
-        lifecycle = self._rpc_lifecycles.get(request_id)
-        if lifecycle is None:
             return
         request = lifecycle.request
-        self.pending_rpcs.pop(request_id, None)
-        self._finish_rpc(
+        if (
+            lifecycle.state is RpcState.SCHEDULED
+            and event.boundary_monotonic_ms > request.send_deadline_monotonic_ms
+        ):
+            held_response = self._early_rpc_responses.pop(event.request_id, None)
+            if held_response is not None:
+                self.diagnostics.late_response_count += 1
+                self.diagnostics.rpc_orphan_late_wire_count += 1
+            self.pending_rpcs.pop(event.request_id, None)
+            transitioned = self._finish_rpc(
+                request,
+                state=RpcState.DEADLINE_LATE,
+                terminal_monotonic_ms=event.boundary_monotonic_ms,
+                record_latency=False,
+                allow_unsent=True,
+            )
+            if transitioned:
+                self._apply_request_failure(request)
+            return
+        if event.kind is SendControlKind.SEND_COMPLETED:
+            if lifecycle.state is RpcState.SENT:
+                return
+            if event.boundary_monotonic_ms < request.origin_boundary.received_monotonic_ms:
+                raise PublicProtocolError("RPC send boundary precedes scheduling boundary")
+            lifecycle.state = RpcState.SENT
+            lifecycle.sent_monotonic_ms = event.boundary_monotonic_ms
+            lifecycle.response_deadline_monotonic_ms = (
+                event.boundary_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
+            )
+            self.diagnostics.rpc_sent_count[request.method] += 1
+            held_response = self._early_rpc_responses.pop(event.request_id, None)
+            if held_response is not None:
+                self._apply_response(
+                    held_response,
+                    commit_boundary=boundary,
+                )
+            return
+        if event.kind is not SendControlKind.SEND_FAILED:
+            raise PublicProtocolError("unknown send control kind")
+        held_response = self._early_rpc_responses.pop(event.request_id, None)
+        if held_response is not None:
+            self.diagnostics.late_response_count += 1
+            self.diagnostics.rpc_orphan_late_wire_count += 1
+        self.pending_rpcs.pop(event.request_id, None)
+        transitioned = self._finish_rpc(
             request,
             state=RpcState.ERROR,
-            terminal_monotonic_ms=failed_monotonic_ms,
+            terminal_monotonic_ms=event.boundary_monotonic_ms,
             record_latency=False,
+            allow_unsent=True,
         )
+        if transitioned:
+            self._apply_request_failure(request)
 
     def _finish_rpc(
         self,
@@ -911,7 +1014,8 @@ class RadarReducer:
         state: RpcState,
         terminal_monotonic_ms: int,
         record_latency: bool,
-    ) -> None:
+        allow_unsent: bool = False,
+    ) -> bool:
         lifecycle = self._rpc_lifecycles.get(request.request_id)
         if lifecycle is None or lifecycle.request != request:
             raise RuntimeError("RPC lifecycle identity is missing")
@@ -925,9 +1029,7 @@ class RadarReducer:
         if state not in terminal_states:
             raise ValueError("RPC terminal state is invalid")
         if lifecycle.state in terminal_states:
-            if lifecycle.state is not state:
-                raise RuntimeError("RPC terminal state cannot be rewritten")
-            return
+            return False
         if (
             state
             in {
@@ -936,6 +1038,7 @@ class RadarReducer:
                 RpcState.DEADLINE_LATE,
             }
             and lifecycle.state is not RpcState.SENT
+            and not allow_unsent
         ):
             raise RuntimeError("wire RPC terminal state requires a send boundary")
         if (
@@ -943,7 +1046,9 @@ class RadarReducer:
             and terminal_monotonic_ms < lifecycle.sent_monotonic_ms
         ):
             raise PublicProtocolError("RPC terminal boundary precedes its send boundary")
+        previous_state = lifecycle.state
         lifecycle.state = state
+        lifecycle.terminal_from_state = previous_state
         lifecycle.terminal_monotonic_ms = terminal_monotonic_ms
         method = request.method
         if state is RpcState.SUCCESS:
@@ -967,6 +1072,27 @@ class RadarReducer:
                 self.diagnostics.rpc_latency_max[method],
                 latency_ms,
             )
+        return True
+
+    def _record_heartbeat_wire_terminal(
+        self,
+        request: PendingRpc,
+        *,
+        latency_ms: int,
+        success: bool,
+    ) -> None:
+        if request.purpose is not RpcPurpose.HEARTBEAT_TEST:
+            return
+        if success:
+            self.diagnostics.heartbeat_public_test_success_count += 1
+        else:
+            self.diagnostics.heartbeat_public_test_error_count += 1
+        self.diagnostics.heartbeat_latency_count += 1
+        self.diagnostics.heartbeat_latency_sum += latency_ms
+        self.diagnostics.heartbeat_latency_max = max(
+            self.diagnostics.heartbeat_latency_max,
+            latency_ms,
+        )
 
     def _take_commands(self) -> tuple[PendingRpc, ...]:
         commands = tuple(self._commands)
@@ -1054,7 +1180,12 @@ class RadarReducer:
             self._causal_seq,
         )
 
-    def _apply_response(self, envelope: InboundEnvelope) -> None:
+    def _apply_response(
+        self,
+        envelope: InboundEnvelope,
+        *,
+        commit_boundary: FactBoundary | None = None,
+    ) -> None:
         request_id = envelope.get("id")
         if isinstance(request_id, bool) or not isinstance(request_id, int):
             raise PublicProtocolError("response id is invalid")
@@ -1065,35 +1196,44 @@ class RadarReducer:
             return
         lifecycle = self._rpc_lifecycles[request_id]
         if lifecycle.state is RpcState.SCHEDULED:
-            sent_monotonic_ms = envelope.request_sent_monotonic_ms
-            if sent_monotonic_ms is None:
-                raise PublicProtocolError("RPC response arrived without a send boundary")
-            self.mark_rpc_sent(
-                request_id,
-                sent_monotonic_ms=sent_monotonic_ms,
-            )
+            if request_id in self._early_rpc_responses:
+                self.diagnostics.late_response_count += 1
+                self.diagnostics.rpc_orphan_late_wire_count += 1
+            else:
+                self._early_rpc_responses[request_id] = envelope
+            return
         if lifecycle.state is not RpcState.SENT:
             self.pending_rpcs.pop(request_id, None)
             self.diagnostics.late_response_count += 1
             self.diagnostics.rpc_orphan_late_wire_count += 1
             return
         sent_monotonic_ms = lifecycle.sent_monotonic_ms
-        deadline_monotonic_ms = lifecycle.deadline_monotonic_ms
+        deadline_monotonic_ms = lifecycle.response_deadline_monotonic_ms
         if sent_monotonic_ms is None or deadline_monotonic_ms is None:
             raise RuntimeError("sent RPC lacks its immutable send boundary")
+        terminal_monotonic_ms = max(
+            envelope.received_monotonic_ms,
+            sent_monotonic_ms,
+        )
+        latency_ms = terminal_monotonic_ms - sent_monotonic_ms
         self.pending_rpcs.pop(request_id, None)
         if request.purpose not in {
             RpcPurpose.SET_HEARTBEAT,
             RpcPurpose.HEARTBEAT_TEST,
         }:
             self._causal_seq += 1
-        if envelope.received_monotonic_ms > deadline_monotonic_ms:
+        if terminal_monotonic_ms > deadline_monotonic_ms:
             self.diagnostics.late_response_count += 1
             self._finish_rpc(
                 request,
                 state=RpcState.DEADLINE_LATE,
-                terminal_monotonic_ms=envelope.received_monotonic_ms,
+                terminal_monotonic_ms=terminal_monotonic_ms,
                 record_latency=True,
+            )
+            self._record_heartbeat_wire_terminal(
+                request,
+                latency_ms=latency_ms,
+                success=False,
             )
             self._note_source_shape(request.method, envelope.get("result"), valid=False)
             self._apply_request_failure(request)
@@ -1102,39 +1242,68 @@ class RadarReducer:
             self._finish_rpc(
                 request,
                 state=RpcState.ERROR,
-                terminal_monotonic_ms=envelope.received_monotonic_ms,
+                terminal_monotonic_ms=terminal_monotonic_ms,
                 record_latency=True,
+            )
+            self._record_heartbeat_wire_terminal(
+                request,
+                latency_ms=latency_ms,
+                success=False,
             )
             self._note_source_shape(request.method, envelope["error"], valid=False)
             if _is_rate_limit_error(envelope["error"]):
                 self.diagnostics.rpc_rate_limit_count[request.method] += 1
-            if request.purpose is RpcPurpose.HEARTBEAT_TEST:
-                self.diagnostics.heartbeat_public_test_error_count += 1
             self._apply_request_failure(request)
             return
         if "result" not in envelope:
             self._finish_rpc(
                 request,
                 state=RpcState.ERROR,
-                terminal_monotonic_ms=envelope.received_monotonic_ms,
+                terminal_monotonic_ms=terminal_monotonic_ms,
                 record_latency=True,
+            )
+            self._record_heartbeat_wire_terminal(
+                request,
+                latency_ms=latency_ms,
+                success=False,
             )
             self._note_source_shape(request.method, None, valid=False)
             raise PublicProtocolIncompatibility("JSON-RPC response lacks result")
         result = envelope["result"]
-        latency_ms = envelope.received_monotonic_ms - sent_monotonic_ms
         channel_change_response = request.purpose in {
             RpcPurpose.SUBSCRIBE_CHANNELS,
             RpcPurpose.UNSUBSCRIBE_CHANNELS,
         }
+        if request.purpose is RpcPurpose.HEARTBEAT_TEST and (
+            not isinstance(result, dict)
+            or not isinstance(result.get("version"), str)
+            or not result["version"]
+        ):
+            self._finish_rpc(
+                request,
+                state=RpcState.ERROR,
+                terminal_monotonic_ms=terminal_monotonic_ms,
+                record_latency=True,
+            )
+            self._record_heartbeat_wire_terminal(
+                request,
+                latency_ms=latency_ms,
+                success=False,
+            )
+            self._note_source_shape(request.method, result, valid=False)
+            raise PublicProtocolIncompatibility("public/test result lacks a valid version")
         if not channel_change_response:
             self._finish_rpc(
                 request,
                 state=RpcState.SUCCESS,
-                terminal_monotonic_ms=envelope.received_monotonic_ms,
+                terminal_monotonic_ms=terminal_monotonic_ms,
                 record_latency=True,
             )
-        boundary = self._current_boundary(envelope)
+        boundary = (
+            replace(commit_boundary, causal_seq=self._causal_seq)
+            if commit_boundary is not None
+            else self._current_boundary(envelope)
+        )
         source_valid = True
         source_shape_noted = False
         if request.purpose is RpcPurpose.SET_HEARTBEAT:
@@ -1163,7 +1332,7 @@ class RadarReducer:
                 self._finish_rpc(
                     request,
                     state=RpcState.ERROR,
-                    terminal_monotonic_ms=envelope.received_monotonic_ms,
+                    terminal_monotonic_ms=terminal_monotonic_ms,
                     record_latency=True,
                 )
                 self._note_source_shape(request.method, result, valid=False)
@@ -1173,7 +1342,7 @@ class RadarReducer:
             self._finish_rpc(
                 request,
                 state=RpcState.ERROR if wire_partial else RpcState.SUCCESS,
-                terminal_monotonic_ms=envelope.received_monotonic_ms,
+                terminal_monotonic_ms=terminal_monotonic_ms,
                 record_latency=True,
             )
             self._note_source_shape(request.method, result, valid=True)
@@ -1218,22 +1387,31 @@ class RadarReducer:
                     self.clock = TrustedClock.from_response(
                         server_ms,
                         sent_monotonic_ms,
-                        envelope.received_monotonic_ms,
+                        terminal_monotonic_ms,
                         stale_deadline_ms=self.policy.runtime_limits.clock_stale_deadline_ms,
                     )
                 else:
                     self.clock = self.clock.refresh(
                         server_ms,
                         sent_monotonic_ms,
-                        envelope.received_monotonic_ms,
+                        terminal_monotonic_ms,
                     )
             except ContinuityGap:
-                self._invalidate_clock_index(boundary, reason="CLOCK_GAP")
+                self._invalidate_clock_index(
+                    boundary,
+                    reason="CLOCK_GAP",
+                    triggering_commit=CausalCommit(
+                        boundary=boundary,
+                        cause=CausalCause.CLOCK_FACT,
+                        failure_domain=FailureScope.CLOCK_INDEX,
+                        affected_scopes=("GLOBAL",),
+                    ),
+                )
                 self._note_source_shape(request.method, result, valid=True)
                 return
             self._clock_revision += 1
             self._next_clock_refresh_ms = (
-                envelope.received_monotonic_ms
+                boundary.received_monotonic_ms
                 + self.policy.runtime_limits.clock_refresh_interval_ms
             )
             index_slot = self._channels.get(INDEX_CHANNEL)
@@ -1279,18 +1457,10 @@ class RadarReducer:
         elif request.purpose is RpcPurpose.COMBO_METADATA:
             source_valid = self._apply_combo_metadata(request, result, boundary)
         elif request.purpose is RpcPurpose.HEARTBEAT_TEST:
-            if (
-                not isinstance(result, dict)
-                or not isinstance(result.get("version"), str)
-                or not result["version"]
-            ):
-                raise PublicProtocolIncompatibility("public/test result lacks a valid version")
-            self.diagnostics.heartbeat_public_test_success_count += 1
-            self.diagnostics.heartbeat_latency_count += 1
-            self.diagnostics.heartbeat_latency_sum += latency_ms
-            self.diagnostics.heartbeat_latency_max = max(
-                self.diagnostics.heartbeat_latency_max,
-                latency_ms,
+            self._record_heartbeat_wire_terminal(
+                request,
+                latency_ms=latency_ms,
+                success=True,
             )
         if not source_shape_noted:
             self._note_source_shape(request.method, result, valid=source_valid)
@@ -1319,7 +1489,14 @@ class RadarReducer:
                 )
                 return
             self.platform.invalidate_fresh_index_coverage("CLOCK_GAP")
-            self._settle_clock_gap(boundary)
+            self._settle_clock_gap(
+                CausalCommit(
+                    boundary=boundary,
+                    cause=CausalCause.CLOCK_GAP,
+                    failure_domain=FailureScope.CLOCK_INDEX,
+                    affected_scopes=("GLOBAL",),
+                )
+            )
             self._next_clock_refresh_ms = (
                 boundary.received_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
             )
@@ -3360,6 +3537,9 @@ class RadarReducer:
         self._active_continuity_incident = incident
         self._global_continuity_epoch += 1
         self._current_continuity_epoch_started_ms = commit.boundary.received_monotonic_ms
+        self._current_epoch_joint_evaluation_counts.clear()
+        self._current_epoch_joint_evaluation_first_boundaries.clear()
+        self._latest_continuity_recovery_boundary = None
         self.diagnostics.global_continuity_restart_count[restart_effect.cause.value] += 1
         self.diagnostics.global_continuity_restart_edges.append(
             {
@@ -3402,11 +3582,10 @@ class RadarReducer:
                     >= incident.root_commit.boundary.received_monotonic_ms
                     else incident.root_commit.boundary
                 )
-            if (
-                recovery_boundary.received_monotonic_ms
-                < incident.root_commit.boundary.received_monotonic_ms
+            if _fact_boundary_key(recovery_boundary) <= _fact_boundary_key(
+                incident.root_commit.boundary
             ):
-                raise ValueError("continuity recovery precedes its incident")
+                raise ValueError("continuity recovery must be strictly later than its incident")
             self.diagnostics.global_continuity_recovery_edges.append(
                 {
                     "incident_id": incident.incident_id,
@@ -3414,17 +3593,21 @@ class RadarReducer:
                 }
             )
             self._active_continuity_incident = None
+            self._latest_continuity_recovery_boundary = recovery_boundary
+            self._current_epoch_joint_evaluation_counts.clear()
+            self._current_epoch_joint_evaluation_first_boundaries.clear()
 
-    def _settle_clock_gap(self, boundary: FactBoundary) -> None:
-        commit = CausalCommit(
-            boundary=boundary,
-            cause=CausalCause.CLOCK_GAP,
-            failure_domain=FailureScope.CLOCK_INDEX,
-            affected_scopes=("GLOBAL",),
-        )
+    def _settle_clock_gap(
+        self,
+        commit: CausalCommit,
+        *,
+        effect: CausalEffect | None = None,
+    ) -> None:
+        boundary = commit.boundary
         active = self._active_continuity_incident
         self._restart_global_continuity(
             commit,
+            effect=effect,
             incident=(
                 active
                 if active is not None
@@ -3443,12 +3626,43 @@ class RadarReducer:
         self._transition_coverage(
             CoverageState.UNKNOWN,
             commit=commit,
+            causal_effect=effect,
         )
 
-    def _invalidate_clock_index(self, boundary: FactBoundary, *, reason: str) -> None:
+    def _invalidate_clock_index(
+        self,
+        boundary: FactBoundary,
+        *,
+        reason: str,
+        triggering_commit: CausalCommit | None = None,
+    ) -> None:
         if reason != CausalCause.CLOCK_GAP.value:
             raise ValueError("clock/index invalidation requires CLOCK_GAP cause")
-        self._settle_clock_gap(boundary)
+        clock_effect = CausalEffect(
+            cause=CausalCause.CLOCK_GAP,
+            failure_domain=FailureScope.CLOCK_INDEX,
+            affected_scopes=("GLOBAL",),
+        )
+        if triggering_commit is None:
+            transaction_commit = CausalCommit(
+                boundary=boundary,
+                cause=CausalCause.CLOCK_GAP,
+                failure_domain=FailureScope.CLOCK_INDEX,
+                affected_scopes=("GLOBAL",),
+            )
+            transaction_effect = None
+        else:
+            if triggering_commit.boundary != boundary:
+                raise ValueError("clock gap triggering commit boundary does not match")
+            transaction_commit = self._freeze_fact_commit(
+                triggering_commit,
+                (clock_effect,),
+            )
+            transaction_effect = clock_effect
+        self._settle_clock_gap(
+            transaction_commit,
+            effect=transaction_effect,
+        )
         self.clock = None
         self._last_time_currentness_token = None
         self.index.gap()
@@ -3535,13 +3749,8 @@ class RadarReducer:
         concurrent_effects: tuple[CausalEffect, ...],
     ) -> CausalCommit:
         effects = tuple(dict.fromkeys((*commit.concurrent_effects, *concurrent_effects)))
-        affected_scopes = _merge_causal_scopes(
-            commit.affected_scopes,
-            *(effect.affected_scopes for effect in effects),
-        )
         return replace(
             commit,
-            affected_scopes=affected_scopes,
             concurrent_effects=effects,
         )
 
@@ -3601,7 +3810,15 @@ class RadarReducer:
         try:
             trusted = self.clock.interval_at(boundary.received_monotonic_ms)
         except ContinuityGap:
-            self._invalidate_clock_index(boundary, reason="CLOCK_GAP")
+            transaction_commit = self._freeze_fact_commit(
+                commit,
+                ((source_currentness_effect,) if source_currentness_effect is not None else ()),
+            )
+            self._invalidate_clock_index(
+                boundary,
+                reason="CLOCK_GAP",
+                triggering_commit=transaction_commit,
+            )
             return
 
         names = tuple(
@@ -3992,14 +4209,6 @@ class RadarReducer:
                                 boundary.received_monotonic_ms - paused_at,
                             )
                         self._episode_last_trusted_ms[episode_id] = boundary.received_monotonic_ms
-                if (
-                    tracker.episode_id is not None
-                    and current.known_evaluation
-                    and tracker.detector_state is DetectorState.ANOMALY_ACTIVE
-                ):
-                    self._last_detector_causal_seq[instrument.instrument_name] = (
-                        snapshot.commit.boundary.causal_seq
-                    )
                 value = (
                     instrument,
                     result,
@@ -4055,10 +4264,30 @@ class RadarReducer:
                 counter.complete_aggregate_detector_evaluation_count += 1
                 if scope_truth.has_current_full_formula:
                     counter.complete_aggregate_with_full_formula_evaluation_count += 1
-                    if (
-                        self._first_joint_witness_ms is None
+                    epoch_scope = (
+                        self.policy.identity,
+                        representative.option_type.value,
+                        scope_results[0][1].band_id or "",
+                    )
+                    self._current_epoch_joint_evaluation_counts[epoch_scope] += 1
+                    latest_recovery = self._latest_continuity_recovery_boundary
+                    witness_eligible = (
+                        self._active_continuity_incident is None
                         and boundary.received_monotonic_ms
                         > self._current_continuity_epoch_started_ms
+                        and (
+                            latest_recovery is None
+                            or _fact_boundary_key(boundary) > _fact_boundary_key(latest_recovery)
+                        )
+                    )
+                    if witness_eligible:
+                        self._current_epoch_joint_evaluation_first_boundaries.setdefault(
+                            epoch_scope,
+                            boundary,
+                        )
+                    if (
+                        self._first_joint_witness_ms is None
+                        and witness_eligible
                         and scope_truth.formula_instrument is not None
                     ):
                         self._first_joint_witness_ms = boundary.received_monotonic_ms
@@ -4083,9 +4312,14 @@ class RadarReducer:
                 if acceptance_eligible and result.full_formula_evaluation:
                     counter.known_full_detector_formula_evaluation_count += 1
 
-        for tracker in self.trackers.values():
-            if tracker.episode_id is not None:
-                self._evaluate_atomic(tracker)
+        for instrument, _result, _state, _episode in evaluated:
+            tracker = self.trackers[instrument.instrument_name]
+            atomic_snapshot = self._freeze_atomic_scope_snapshot(
+                tracker,
+                commit=transaction_commit,
+            )
+            if atomic_snapshot is not None:
+                self._evaluate_atomic(atomic_snapshot)
 
         self._sync_combo_subscriptions(boundary)
         self._update_coverage(
@@ -4345,12 +4579,23 @@ class RadarReducer:
             )
         return self._scope_counts[key]
 
-    def _evaluate_atomic(self, tracker: EpisodeTracker) -> None:
-        if tracker.episode_id is None:
-            return
+    def _freeze_atomic_scope_snapshot(
+        self,
+        tracker: EpisodeTracker,
+        *,
+        commit: CausalCommit,
+    ) -> AtomicScopeSnapshot | None:
+        episode_identity = tracker.episode_id
+        anomaly_activation_seq = tracker.activation_causal_seq
+        activation_band_id = tracker.activation_band_id
         short_leg = self.options.get(tracker.instrument_name)
-        if short_leg is None:
-            return
+        if (
+            episode_identity is None
+            or anomaly_activation_seq is None
+            or activation_band_id is None
+            or short_leg is None
+        ):
+            return None
         current_options = (
             {
                 name: option
@@ -4370,6 +4615,41 @@ class RadarReducer:
             )
             for name, candidate in self.options.items()
         )
+        frozen_books = tuple(
+            AtomicBookSnapshot(
+                instrument_name=name,
+                state=book.state,
+                reason=book.reason,
+                change_id=book.change_id,
+                economic_revision=book.economic_revision,
+                source_timestamp_ms=book.source_timestamp_ms,
+                last_mutation_monotonic_ms=book.last_mutation_monotonic_ms,
+                bids=tuple(
+                    PriceLevel(price, amount)
+                    for price, amount in sorted(book.bids.items(), reverse=True)
+                ),
+                asks=tuple(
+                    PriceLevel(price, amount) for price, amount in sorted(book.asks.items())
+                ),
+            )
+            for name, book in sorted(self.combo_books.items())
+        )
+        frozen_book_values: dict[str, ContinuousOrderBook] = {}
+        for frozen in frozen_books:
+            book = ContinuousOrderBook(frozen.instrument_name)
+            book.state = frozen.state
+            book.reason = frozen.reason
+            book.change_id = frozen.change_id
+            book.economic_revision = frozen.economic_revision
+            book.source_timestamp_ms = frozen.source_timestamp_ms
+            book.last_mutation_monotonic_ms = frozen.last_mutation_monotonic_ms
+            book.bids = {level.price: level.amount for level in frozen.bids}
+            book.asks = {level.price: level.amount for level in frozen.asks}
+            frozen_book_values[frozen.instrument_name] = book
+        frozen_options = tuple(
+            sorted(current_options.values(), key=lambda value: value.instrument_name)
+        )
+        frozen_combos = tuple(sorted(self.combos.values(), key=lambda value: value.instrument_name))
         result = classify_atomic_quotes(
             anomaly_active=tracker.detector_state is DetectorState.ANOMALY_ACTIVE,
             combo_catalog_complete=self.combo_catalog.complete,
@@ -4379,44 +4659,73 @@ class RadarReducer:
                 and not unresolved_protective_lifecycle
             ),
             short_leg=short_leg,
-            options_by_name=current_options,
-            combos=tuple(self.combos.values()),
-            combo_books=self.combo_books,
+            options_by_name={option.instrument_name: option for option in frozen_options},
+            combos=frozen_combos,
+            combo_books=frozen_book_values,
             target_btc=self.policy.target_base_quantity_btc,
         )
-        previous = self.atomic_states.get(tracker.episode_id)
+        current_result = self.results.get(tracker.instrument_name)
+        return AtomicScopeSnapshot(
+            commit=commit,
+            episode_identity=episode_identity,
+            anomaly_activation_seq=anomaly_activation_seq,
+            activation_band_id=activation_band_id,
+            detector_state=tracker.detector_state,
+            detector_causal_seq=commit.boundary.causal_seq,
+            short_leg=short_leg,
+            short_current=(
+                current_result.current_evaluation if current_result is not None else None
+            ),
+            option_catalog_complete=(
+                self.option_catalog.complete
+                and self._option_positive_scope_safe
+                and not unresolved_protective_lifecycle
+            ),
+            combo_catalog_complete=self.combo_catalog.complete,
+            current_options=frozen_options,
+            combos=frozen_combos,
+            combo_books=frozen_books,
+            result=result,
+        )
+
+    def _evaluate_atomic(self, snapshot: AtomicScopeSnapshot) -> None:
+        result = snapshot.result
+        previous = self.atomic_states.get(snapshot.episode_identity)
         if previous is not result.state:
-            self.atomic_states[tracker.episode_id] = result.state
+            self.atomic_states[snapshot.episode_identity] = result.state
             self._atomic_transition_counts[result.state.value] += 1
-            short_type = self.options[tracker.instrument_name].option_type
-            if tracker.activation_band_id is None:
-                raise RuntimeError("active tracker lacks activation band")
-            counter = self._scope_counter(short_type, tracker.activation_band_id)
+            counter = self._scope_counter(
+                snapshot.short_leg.option_type,
+                snapshot.activation_band_id,
+            )
             counter.public_atomic_quote_state_transition_count[result.state.value] += 1
         if result.state is not PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE:
             return
+        combos = {combo.instrument_name: combo for combo in snapshot.combos}
+        books = {book.instrument_name: book for book in snapshot.combo_books}
         for quote in result.quotes:
             combo_name = quote.match.combo_instrument_name
-            emitted_key = (tracker.episode_id, combo_name)
+            emitted_key = (snapshot.episode_identity, combo_name)
             if emitted_key in self._emitted_atomic_quotes:
                 continue
-            combo = self.combos[combo_name]
-            book = self.combo_books[combo_name]
-            detector_causal_seq = self._last_detector_causal_seq.get(
-                tracker.instrument_name,
-                tracker.activation_causal_seq,
-            )
-            if detector_causal_seq is None or book.source_timestamp_ms is None:
+            combo = combos[combo_name]
+            book = books[combo_name]
+            if book.source_timestamp_ms is None:
                 raise RuntimeError("available atomic quote lacks causal source identity")
+            validate_atomic_causal_invariant(
+                anomaly_activation_seq=snapshot.anomaly_activation_seq,
+                detector_causal_seq=snapshot.detector_causal_seq,
+                quote_causal_seq=snapshot.commit.boundary.causal_seq,
+            )
             event = project_atomic_event(
                 AtomicEvidence(
                     code_identity=self.code_identity,
                     runtime_identity=self.runtime_identity,
                     policy_identity=self.policy.identity,
-                    episode_identity=tracker.episode_id,
-                    detector_causal_seq=detector_causal_seq,
-                    quote_causal_seq=self._causal_seq,
-                    short_instrument_name=tracker.instrument_name,
+                    episode_identity=snapshot.episode_identity,
+                    detector_causal_seq=snapshot.detector_causal_seq,
+                    quote_causal_seq=snapshot.commit.boundary.causal_seq,
+                    short_instrument_name=snapshot.short_leg.instrument_name,
                     combo_legs=(
                         (combo.legs[0].instrument_name, combo.legs[0].amount),
                         (combo.legs[1].instrument_name, combo.legs[1].amount),
@@ -4424,6 +4733,7 @@ class RadarReducer:
                     quote=quote,
                     target_base_quantity_btc=self.policy.target_base_quantity_btc,
                     source_timestamp_ms=book.source_timestamp_ms,
+                    anomaly_activation_seq=snapshot.anomaly_activation_seq,
                 )
             )
             self.writer.write_atomic(event)
@@ -4652,6 +4962,10 @@ class RadarReducer:
         for slot in self._channels.values():
             slot.state = ChannelState.RETIRED
         self._drop_held_frames()
+        if self._early_rpc_responses:
+            self.diagnostics.late_response_count += len(self._early_rpc_responses)
+            self.diagnostics.rpc_orphan_late_wire_count += len(self._early_rpc_responses)
+            self._early_rpc_responses.clear()
         for request in tuple(self.pending_rpcs.values()):
             self._finish_rpc(
                 request,
@@ -4802,18 +5116,31 @@ class RadarReducer:
             request
             for request in self.pending_rpcs.values()
             if (
-                (lifecycle := self._rpc_lifecycles[request.request_id]).state is RpcState.SENT
-                and lifecycle.deadline_monotonic_ms is not None
-                and monotonic_ms > lifecycle.deadline_monotonic_ms
+                (
+                    (lifecycle := self._rpc_lifecycles[request.request_id]).state
+                    is RpcState.SCHEDULED
+                    and monotonic_ms > request.send_deadline_monotonic_ms
+                )
+                or (
+                    lifecycle.state is RpcState.SENT
+                    and lifecycle.response_deadline_monotonic_ms is not None
+                    and monotonic_ms > lifecycle.response_deadline_monotonic_ms
+                )
             )
         )
         for request in expired:
             self.pending_rpcs.pop(request.request_id, None)
+            lifecycle = self._rpc_lifecycles[request.request_id]
+            held_response = self._early_rpc_responses.pop(request.request_id, None)
+            if held_response is not None:
+                self.diagnostics.late_response_count += 1
+                self.diagnostics.rpc_orphan_late_wire_count += 1
             self._finish_rpc(
                 request,
                 state=RpcState.DEADLINE_LATE,
                 terminal_monotonic_ms=monotonic_ms,
                 record_latency=False,
+                allow_unsent=(lifecycle.state is RpcState.SCHEDULED),
             )
             self._apply_request_failure(request)
         due_channel_retries = tuple(
@@ -4829,7 +5156,16 @@ class RadarReducer:
             try:
                 trusted = self.clock.interval_at(monotonic_ms)
             except ContinuityGap:
-                self._invalidate_clock_index(boundary, reason="CLOCK_GAP")
+                self._invalidate_clock_index(
+                    boundary,
+                    reason="CLOCK_GAP",
+                    triggering_commit=CausalCommit(
+                        boundary=boundary,
+                        cause=CausalCause.TIME_BOUNDARY,
+                        failure_domain=FailureScope.CLOCK_INDEX,
+                        affected_scopes=("GLOBAL",),
+                    ),
+                )
             else:
                 self.index.seal_ready(trusted.lower_ms)
                 self._sync_membership(boundary)
@@ -4929,6 +5265,10 @@ class RadarReducer:
             monotonic_ms,
             end_disposition="CENSORED_AT_STOP",
         )
+        if self._early_rpc_responses:
+            self.diagnostics.late_response_count += len(self._early_rpc_responses)
+            self.diagnostics.rpc_orphan_late_wire_count += len(self._early_rpc_responses)
+            self._early_rpc_responses.clear()
         for request in tuple(self.pending_rpcs.values()):
             self._finish_rpc(
                 request,
@@ -5058,6 +5398,8 @@ class RadarReducer:
                 "queue_high_water_frames": self.diagnostics.queue_high_water_frames,
                 "max_receive_to_reduce_lag_ms": (self.diagnostics.max_receive_to_reduce_lag_ms),
                 "overflow_count": self.diagnostics.overflow_count,
+                "send_control_event_count": self.diagnostics.send_control_event_count,
+                "connection_error_event_count": self.diagnostics.connection_error_event_count,
             },
             "rpc_by_method": [
                 {
@@ -5131,6 +5473,34 @@ class RadarReducer:
                 ),
                 "restart_edges": list(self.diagnostics.global_continuity_restart_edges),
                 "recovery_edges": list(self.diagnostics.global_continuity_recovery_edges),
+                "current_epoch_joint_evaluation_count_by_scope": [
+                    {
+                        "policy_identity": policy_identity,
+                        "option_type": option_type,
+                        "tte_band_id": band_id,
+                        "count": count,
+                        "first_joint_evaluation_boundary": (
+                            _fact_boundary_object(
+                                self._current_epoch_joint_evaluation_first_boundaries[
+                                    (policy_identity, option_type, band_id)
+                                ]
+                            )
+                            if (
+                                policy_identity,
+                                option_type,
+                                band_id,
+                            )
+                            in self._current_epoch_joint_evaluation_first_boundaries
+                            else None
+                        ),
+                    }
+                    for (
+                        policy_identity,
+                        option_type,
+                        band_id,
+                    ), count in sorted(self._current_epoch_joint_evaluation_counts.items())
+                    if count > 0
+                ],
             },
             "ticker_application": {
                 "disposition_count": {
@@ -5420,6 +5790,12 @@ class LiveRadarRuntime:
                     )
                 except TimeoutError:
                     self.reducer._retire_current_epoch()
+                else:
+                    for envelope in self._drain_client_envelopes(client):
+                        self.reducer.reduce(
+                            envelope,
+                            processed_monotonic_ms=_monotonic_ms(),
+                        )
             try:
                 self._capture_transport_metrics(client)
             except BaseException as exc:
@@ -5450,28 +5826,53 @@ class LiveRadarRuntime:
         while True:
             command = await outbound.get()
             try:
-                sent_monotonic_ms = _monotonic_ms()
-                if self.reducer.mark_rpc_sent(
-                    command.request_id,
-                    sent_monotonic_ms=sent_monotonic_ms,
-                ):
-                    try:
-                        await client.send_request(
-                            request_id=command.request_id,
-                            method=command.method,
-                            params=command.params,
-                            responding_to_test_request=(
-                                command.purpose is RpcPurpose.HEARTBEAT_TEST
-                            ),
-                        )
-                    except BaseException:
-                        self.reducer.mark_rpc_send_error(
-                            command.request_id,
-                            failed_monotonic_ms=_monotonic_ms(),
-                        )
-                        raise
+                await self._send_one(client, command)
             finally:
                 outbound.task_done()
+
+    async def _send_one(
+        self,
+        client: PublicClient,
+        command: PendingRpc,
+    ) -> None:
+        try:
+            remaining_ms = command.send_deadline_monotonic_ms - _monotonic_ms()
+            if remaining_ms <= 0:
+                raise TimeoutError("RPC send deadline expired before transport send")
+            async with asyncio.timeout(remaining_ms / 1_000):
+                await client.send_request(
+                    request_id=command.request_id,
+                    method=command.method,
+                    params=command.params,
+                    responding_to_test_request=(command.purpose is RpcPurpose.HEARTBEAT_TEST),
+                )
+        except asyncio.CancelledError:
+            client.enqueue_send_control(
+                SendControlEvent(
+                    kind=SendControlKind.SEND_FAILED,
+                    request_id=command.request_id,
+                    boundary_monotonic_ms=_monotonic_ms(),
+                    failure=SendFailureKind.CANCELLED,
+                )
+            )
+            raise
+        except BaseException:
+            client.enqueue_send_control(
+                SendControlEvent(
+                    kind=SendControlKind.SEND_FAILED,
+                    request_id=command.request_id,
+                    boundary_monotonic_ms=_monotonic_ms(),
+                    failure=SendFailureKind.ERROR,
+                )
+            )
+            raise
+        client.enqueue_send_control(
+            SendControlEvent(
+                kind=SendControlKind.SEND_COMPLETED,
+                request_id=command.request_id,
+                boundary_monotonic_ms=_monotonic_ms(),
+            )
+        )
 
     def _enqueue_commands(
         self,
@@ -5534,25 +5935,7 @@ class LiveRadarRuntime:
     ) -> None:
         """Compatibility helper for focused transport tests; `run` uses the sender queue."""
         for command in commands:
-            sent_monotonic_ms = _monotonic_ms()
-            if not self.reducer.mark_rpc_sent(
-                command.request_id,
-                sent_monotonic_ms=sent_monotonic_ms,
-            ):
-                continue
-            try:
-                await client.send_request(
-                    request_id=command.request_id,
-                    method=command.method,
-                    params=command.params,
-                    responding_to_test_request=command.purpose is RpcPurpose.HEARTBEAT_TEST,
-                )
-            except BaseException:
-                self.reducer.mark_rpc_send_error(
-                    command.request_id,
-                    failed_monotonic_ms=_monotonic_ms(),
-                )
-                raise
+            await self._send_one(client, command)
 
     def prepare_reconnect(self, reason: str) -> None:
         self.reducer.prepare_reconnect(reason)
@@ -5636,6 +6019,15 @@ def _fact_boundary_object(boundary: FactBoundary) -> dict[str, int]:
     }
 
 
+def _fact_boundary_key(boundary: FactBoundary) -> tuple[int, int, int, int]:
+    return (
+        boundary.received_monotonic_ms,
+        boundary.session_epoch,
+        boundary.ingress_seq,
+        boundary.causal_seq,
+    )
+
+
 _CONSUMED_FIELDS_BY_SOURCE: dict[str, frozenset[str]] = {
     "combo_book": frozenset(
         {"type", "timestamp", "instrument_name", "change_id", "prev_change_id", "bids", "asks"}
@@ -5669,6 +6061,8 @@ def _channel_class(
     *,
     combo_names: set[str],
 ) -> str:
+    if envelope.control_event is not None:
+        return "CONNECTION_CONTROL"
     if isinstance(envelope.get("id"), int):
         return "CONNECTION_CONTROL"
     method = envelope.get("method")

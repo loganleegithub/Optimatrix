@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from pathlib import Path
 from types import MethodType
 
 import pytest
+import radar_runtime.deribit_public as public_module
 import radar_runtime.runtime as runtime_module
 from conftest import OptionPayloadFactory, PolicyFactory
 from market_monitor import ContinuousOrderBook, TrustedClock
@@ -25,7 +27,7 @@ from radar_runtime.runtime import (
     RpcPurpose,
 )
 from short_vol_radar.detector import DetectorState, EpisodeTracker
-from short_vol_radar.evidence import EvidenceWriter
+from short_vol_radar.evidence import EvidenceWriter, validate_run_summary
 from short_vol_radar.policy import load_policy_bytes
 
 
@@ -53,14 +55,12 @@ def envelope(
     seq: int,
     received_ms: int | None = None,
     epoch: int = 1,
-    sent_ms: int | None = None,
 ) -> InboundEnvelope:
     return InboundEnvelope(
         {"jsonrpc": "2.0", **message},
         session_epoch=epoch,
         ingress_seq=seq,
         received_monotonic_ms=received_ms if received_ms is not None else 1_000 + seq,
-        request_sent_monotonic_ms=sent_ms,
     )
 
 
@@ -97,18 +97,51 @@ def _option_for_combo_test(
 
 
 def response(
+    reducer: RadarReducer,
     command: PendingRpc,
     result: object,
     *,
     seq: int,
     received_ms: int | None = None,
 ) -> InboundEnvelope:
+    reducer.reduce(
+        send_control(
+            command,
+            kind="SEND_COMPLETED",
+            boundary_ms=command.origin_boundary.received_monotonic_ms,
+            ingress_seq=seq,
+        ),
+        processed_monotonic_ms=command.origin_boundary.received_monotonic_ms,
+    )
     return envelope(
         {"id": command.request_id, "result": result},
         seq=seq,
         received_ms=received_ms,
         epoch=command.session_epoch,
-        sent_ms=command.origin_boundary.received_monotonic_ms,
+    )
+
+
+def send_control(
+    command: PendingRpc,
+    *,
+    kind: str,
+    boundary_ms: int,
+    ingress_seq: int = 1,
+    failure: str | None = None,
+) -> InboundEnvelope:
+    control_kind = public_module.SendControlKind(kind)
+    failure_kind = None if failure is None else public_module.SendFailureKind(failure)
+    return InboundEnvelope(
+        {},
+        session_epoch=command.session_epoch,
+        ingress_seq=ingress_seq,
+        received_monotonic_ms=boundary_ms,
+        control_event=public_module.SendControlEvent(
+            kind=control_kind,
+            request_id=command.request_id,
+            boundary_monotonic_ms=boundary_ms,
+            failure=failure_kind,
+        ),
     )
 
 
@@ -119,7 +152,9 @@ def begin_through_bootstrap_subscribe(
         reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
         RpcPurpose.SET_HEARTBEAT,
     )
-    commands = reducer.reduce(response(heartbeat, "ok", seq=1), processed_monotonic_ms=1_001)
+    commands = reducer.reduce(
+        response(reducer, heartbeat, "ok", seq=1), processed_monotonic_ms=1_001
+    )
     subscribe = only(commands, RpcPurpose.SUBSCRIBE_CHANNELS)
     return subscribe, 2
 
@@ -133,6 +168,7 @@ def accept_platform_status(
     status = only(commands, RpcPurpose.PLATFORM_STATUS)
     commands = reducer.reduce(
         response(
+            reducer,
             status,
             {"locked": False, "locked_indices": [], "locked_currencies": []},
             seq=seq,
@@ -145,18 +181,18 @@ def accept_platform_status(
 def complete_empty_option_bootstrap(reducer: RadarReducer) -> int:
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
     clock = only(commands, RpcPurpose.CLOCK_BOOTSTRAP)
     option_catalog = only(commands, RpcPurpose.OPTION_CATALOG)
     reducer.reduce(
-        response(clock, 1_000_000, seq=seq + 1),
+        response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_000 + seq + 1,
     )
     reducer.reduce(
-        response(option_catalog, [], seq=seq + 2),
+        response(reducer, option_catalog, [], seq=seq + 2),
         processed_monotonic_ms=1_000 + seq + 2,
     )
     return seq + 3
@@ -169,7 +205,7 @@ def test_each_accepted_clock_fact_advances_explicit_revision_and_causal_sequence
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
@@ -177,7 +213,7 @@ def test_each_accepted_clock_fact_advances_explicit_revision_and_causal_sequence
     causal_before = reducer.causal_seq
 
     reducer.reduce(
-        response(bootstrap, 1_000_000, seq=seq + 1),
+        response(reducer, bootstrap, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_000 + seq + 1,
     )
     refresh = reducer._schedule(
@@ -190,7 +226,7 @@ def test_each_accepted_clock_fact_advances_explicit_revision_and_causal_sequence
         failure_scope=FailureScope.CLOCK_INDEX,
     )
     reducer.reduce(
-        response(refresh, 1_000_001, seq=seq + 2),
+        response(reducer, refresh, 1_000_001, seq=seq + 2),
         processed_monotonic_ms=1_000 + seq + 2,
     )
 
@@ -219,7 +255,7 @@ def test_clock_refresh_preserves_established_index_generation_and_history(
     )
     subscribe = only(tuple(reducer.pending_rpcs.values()), RpcPurpose.SUBSCRIBE_CHANNELS)
     reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=1, received_ms=1_001),
+        response(reducer, subscribe, exact_channels(subscribe), seq=1, received_ms=1_001),
         processed_monotonic_ms=1_001,
     )
     reducer.index.start_continuous_coverage(600_000)
@@ -246,7 +282,7 @@ def test_clock_refresh_preserves_established_index_generation_and_history(
     )
 
     reducer.reduce(
-        response(refresh, 1_020_010, seq=2, received_ms=1_010),
+        response(reducer, refresh, 1_020_010, seq=2, received_ms=1_010),
         processed_monotonic_ms=1_010,
     )
 
@@ -278,7 +314,7 @@ def test_pre_ack_frames_do_not_change_truth_and_reconcile_once_after_ack(
     assert reducer.option_catalog.buffered_events == []
 
     reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq + 1),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq + 1),
         processed_monotonic_ms=1_003,
     )
 
@@ -286,7 +322,8 @@ def test_pre_ack_frames_do_not_change_truth_and_reconcile_once_after_ack(
     assert reducer.option_catalog.buffered_events == [
         {"instrument_name": "CLOSED", "state": "closed"}
     ]
-    assert reducer.diagnostics.reduced_envelope_count == 3
+    assert reducer.diagnostics.reduced_envelope_count == 5
+    assert reducer.diagnostics.send_control_event_count == 2
 
 
 def test_reordered_subscription_ack_commits_the_requested_batch(
@@ -298,7 +335,7 @@ def test_reordered_subscription_ack_commits_the_requested_batch(
     requested = exact_channels(subscribe)
 
     commands = reducer.reduce(
-        response(subscribe, list(reversed(requested)), seq=seq),
+        response(reducer, subscribe, list(reversed(requested)), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
 
@@ -333,7 +370,7 @@ def test_partial_bootstrap_subscription_ack_is_a_session_failure(
 
     with pytest.raises(PublicSessionError, match="SUBSCRIBE_CHANNELS"):
         reducer.reduce(
-            response(subscribe, requested[:-1], seq=seq + 1),
+            response(reducer, subscribe, requested[:-1], seq=seq + 1),
             processed_monotonic_ms=1_000 + seq + 1,
         )
     assert applied == []
@@ -406,7 +443,7 @@ def test_partial_channel_ack_commits_missing_truth_before_releasing_success_fram
     )
 
     reducer.reduce(
-        response(subscribe, [first], seq=3),
+        response(reducer, subscribe, [first], seq=3),
         processed_monotonic_ms=1_003,
     )
 
@@ -432,7 +469,7 @@ def test_partial_channel_ack_commits_successes_and_scopes_missing_failure(
     subscribe = only(tuple(reducer.pending_rpcs.values()), RpcPurpose.SUBSCRIBE_CHANNELS)
 
     reducer.reduce(
-        response(subscribe, [first], seq=1),
+        response(reducer, subscribe, [first], seq=1),
         processed_monotonic_ms=1_001,
     )
 
@@ -457,7 +494,7 @@ def test_partial_channel_ack_commits_successes_and_scopes_missing_failure(
     unsubscribe = only(tuple(reducer.pending_rpcs.values()), RpcPurpose.UNSUBSCRIBE_CHANNELS)
 
     reducer.reduce(
-        response(unsubscribe, [second], seq=2),
+        response(reducer, unsubscribe, [second], seq=2),
         processed_monotonic_ms=1_002,
     )
 
@@ -493,7 +530,7 @@ def test_partial_ack_does_not_fail_a_channel_owned_by_a_newer_generation(
     reducer._channels[second].state = ChannelState.SUBSCRIBE_PENDING
 
     reducer.reduce(
-        response(subscribe, [second, first], seq=1),
+        response(reducer, subscribe, [second, first], seq=1),
         processed_monotonic_ms=1_001,
     )
 
@@ -540,7 +577,7 @@ def test_tainted_pending_generation_is_dropped_at_ack_before_resubscribe(
     reducer._channels[channel].resync_requested = True
 
     commands = reducer.reduce(
-        response(subscribe, [channel], seq=2),
+        response(reducer, subscribe, [channel], seq=2),
         processed_monotonic_ms=1_002,
     )
 
@@ -573,13 +610,21 @@ def test_failed_intentional_unsubscribe_does_not_reopen_frame_admission(
     )
     unsubscribe = only(tuple(reducer.pending_rpcs.values()), RpcPurpose.UNSUBSCRIBE_CHANNELS)
     reducer.reduce(
+        send_control(
+            unsubscribe,
+            kind="SEND_COMPLETED",
+            boundary_ms=unsubscribe.origin_boundary.received_monotonic_ms,
+            ingress_seq=1,
+        ),
+        processed_monotonic_ms=unsubscribe.origin_boundary.received_monotonic_ms,
+    )
+    reducer.reduce(
         envelope(
             {
                 "id": unsubscribe.request_id,
                 "error": {"code": 10_028, "message": "too_many_requests"},
             },
             seq=1,
-            sent_ms=unsubscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -634,13 +679,21 @@ def test_removed_option_unsubscribe_failure_does_not_restore_current_result(
     unsubscribe = only(tuple(reducer.pending_rpcs.values()), RpcPurpose.UNSUBSCRIBE_CHANNELS)
 
     reducer.reduce(
+        send_control(
+            unsubscribe,
+            kind="SEND_COMPLETED",
+            boundary_ms=unsubscribe.origin_boundary.received_monotonic_ms,
+            ingress_seq=1,
+        ),
+        processed_monotonic_ms=unsubscribe.origin_boundary.received_monotonic_ms,
+    )
+    reducer.reduce(
         envelope(
             {
                 "id": unsubscribe.request_id,
                 "error": {"code": 10_028, "message": "too_many_requests"},
             },
             seq=1,
-            sent_ms=unsubscribe.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001,
     )
@@ -706,7 +759,7 @@ def test_pre_ack_frames_from_one_batch_replay_in_global_ingress_order(
     )
 
     reducer.reduce(
-        response(request, ["alpha", "beta"], seq=seq + 2),
+        response(reducer, request, ["alpha", "beta"], seq=seq + 2),
         processed_monotonic_ms=1_002 + seq,
     )
 
@@ -775,13 +828,13 @@ def test_pre_ack_frames_from_different_batches_release_at_own_ack_boundary(
         processed_monotonic_ms=1_002,
     )
     reducer.reduce(
-        response(first, exact_channels(first), seq=3),
+        response(reducer, first, exact_channels(first), seq=3),
         processed_monotonic_ms=1_003,
     )
     assert applied == [2]
 
     reducer.reduce(
-        response(second, exact_channels(second), seq=4),
+        response(reducer, second, exact_channels(second), seq=4),
         processed_monotonic_ms=1_004,
     )
 
@@ -806,7 +859,7 @@ def test_pending_channel_does_not_block_acknowledged_channel_fact(
         RpcPurpose.SUBSCRIBE_CHANNELS,
     )
     reducer.reduce(
-        response(acknowledged, ["acknowledged"], seq=1),
+        response(reducer, acknowledged, ["acknowledged"], seq=1),
         processed_monotonic_ms=1_001,
     )
     reducer._plan_channel_change(
@@ -860,7 +913,7 @@ def test_pending_channel_does_not_block_acknowledged_channel_fact(
 
     assert applied == [3]
     reducer.reduce(
-        response(pending, ["pending"], seq=4),
+        response(reducer, pending, ["pending"], seq=4),
         processed_monotonic_ms=1_004,
     )
     assert applied == [3, 2]
@@ -921,7 +974,7 @@ def test_index_ack_then_clock_failure_still_releases_held_tick_once_on_recovery(
         processed_monotonic_ms=1_001,
     )
     reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=2, received_ms=1_002),
+        response(reducer, subscribe, exact_channels(subscribe), seq=2, received_ms=1_002),
         processed_monotonic_ms=1_002,
     )
     assert applied == []
@@ -956,6 +1009,15 @@ def test_index_ack_then_clock_failure_still_releases_held_tick_once_on_recovery(
         failure_scope=FailureScope.CLOCK_INDEX,
     )
     reducer.reduce(
+        send_control(
+            first_clock,
+            kind="SEND_COMPLETED",
+            boundary_ms=first_clock.origin_boundary.received_monotonic_ms,
+            ingress_seq=4,
+        ),
+        processed_monotonic_ms=first_clock.origin_boundary.received_monotonic_ms,
+    )
+    reducer.reduce(
         envelope(
             {
                 "id": first_clock.request_id,
@@ -963,7 +1025,6 @@ def test_index_ack_then_clock_failure_still_releases_held_tick_once_on_recovery(
             },
             seq=4,
             received_ms=1_004,
-            sent_ms=first_clock.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_004,
     )
@@ -979,7 +1040,7 @@ def test_index_ack_then_clock_failure_still_releases_held_tick_once_on_recovery(
         failure_scope=FailureScope.CLOCK_INDEX,
     )
     reducer.reduce(
-        response(recovered_clock, 660_000, seq=5, received_ms=1_005),
+        response(reducer, recovered_clock, 660_000, seq=5, received_ms=1_005),
         processed_monotonic_ms=1_005,
     )
 
@@ -1015,7 +1076,7 @@ def test_index_coverage_starts_at_trusted_upper_bound(
     subscribe = only(tuple(reducer.pending_rpcs.values()), RpcPurpose.SUBSCRIBE_CHANNELS)
 
     reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=1, received_ms=1_050),
+        response(reducer, subscribe, exact_channels(subscribe), seq=1, received_ms=1_050),
         processed_monotonic_ms=1_050,
     )
     reducer.index.accept_tick(
@@ -1108,6 +1169,7 @@ def test_response_then_later_ingress_with_earlier_receive_time_cannot_regress_bo
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
         response(
+            reducer,
             subscribe,
             exact_channels(subscribe),
             seq=seq,
@@ -1118,6 +1180,7 @@ def test_response_then_later_ingress_with_earlier_receive_time_cannot_regress_bo
     status = only(commands, RpcPurpose.PLATFORM_STATUS)
     reducer.reduce(
         response(
+            reducer,
             status,
             {"locked": False, "locked_indices": []},
             seq=seq + 1,
@@ -1152,7 +1215,7 @@ def test_retired_channel_generation_frame_has_zero_business_effect(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     channel = "instrument.state.option.USDC"
@@ -1164,7 +1227,7 @@ def test_retired_channel_generation_frame_has_zero_business_effect(
     )
     unsubscribe = only(tuple(reducer.pending_rpcs.values()), RpcPurpose.UNSUBSCRIBE_CHANNELS)
     reducer.reduce(
-        response(unsubscribe, exact_channels(unsubscribe), seq=seq + 1),
+        response(reducer, unsubscribe, exact_channels(unsubscribe), seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
     reducer.reduce(
@@ -1193,7 +1256,7 @@ def test_every_frame_reduces_once_and_retired_epoch_has_zero_business_effect(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_002,
     )
     before = reducer.business_fingerprint()
@@ -1219,12 +1282,12 @@ def test_every_frame_reduces_once_and_retired_epoch_has_zero_business_effect(
 
     current_heartbeat = next(iter(reducer.pending_rpcs.values()))
     reducer.reduce(
-        response(current_heartbeat, "ok", seq=1, received_ms=2_001),
+        response(reducer, current_heartbeat, "ok", seq=1, received_ms=2_001),
         processed_monotonic_ms=2_002,
     )
     with pytest.raises(PublicSessionError, match="ingress"):
         reducer.reduce(
-            response(current_heartbeat, "ok", seq=1, received_ms=2_002),
+            response(reducer, current_heartbeat, "ok", seq=1, received_ms=2_002),
             processed_monotonic_ms=2_003,
         )
 
@@ -1236,11 +1299,20 @@ def test_success_error_late_notification_and_heartbeat_response_reduce_once(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
     combo = only(commands, RpcPurpose.COMBO_CATALOG)
+    reducer.reduce(
+        send_control(
+            combo,
+            kind="SEND_COMPLETED",
+            boundary_ms=combo.origin_boundary.received_monotonic_ms,
+            ingress_seq=seq + 1,
+        ),
+        processed_monotonic_ms=combo.origin_boundary.received_monotonic_ms,
+    )
     reducer.reduce(
         envelope(
             {
@@ -1248,7 +1320,6 @@ def test_success_error_late_notification_and_heartbeat_response_reduce_once(
                 "error": {"code": 10_028, "message": "too_many_requests"},
             },
             seq=seq + 1,
-            sent_ms=combo.origin_boundary.received_monotonic_ms,
         ),
         processed_monotonic_ms=1_001 + seq,
     )
@@ -1268,6 +1339,7 @@ def test_success_error_late_notification_and_heartbeat_response_reduce_once(
     )
     reducer.reduce(
         response(
+            reducer,
             heartbeat_command,
             {"version": "2.1.1"},
             seq=seq + 4,
@@ -1275,7 +1347,8 @@ def test_success_error_late_notification_and_heartbeat_response_reduce_once(
         processed_monotonic_ms=1_004 + seq,
     )
 
-    assert reducer.diagnostics.reduced_envelope_count == seq + 4
+    assert reducer.diagnostics.reduced_envelope_count == seq + 9
+    assert reducer.diagnostics.send_control_event_count == 5
     assert reducer.diagnostics.rpc_success_count["public/status"] == 1
     assert reducer.diagnostics.rpc_error_count["public/get_combos"] == 1
     assert reducer.diagnostics.late_response_count == 1
@@ -1318,11 +1391,11 @@ def test_one_receive_lag_gate_retires_bootstrap_and_normal_frames(
             reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
             RpcPurpose.SET_HEARTBEAT,
         )
-        delayed = response(heartbeat, "ok", seq=1, received_ms=1_001)
+        delayed = response(reducer, heartbeat, "ok", seq=1, received_ms=1_001)
     else:
         subscribe, seq = begin_through_bootstrap_subscribe(reducer)
         reducer.reduce(
-            response(subscribe, exact_channels(subscribe), seq=seq),
+            response(reducer, subscribe, exact_channels(subscribe), seq=seq),
             processed_monotonic_ms=1_000 + seq,
         )
         delayed = envelope(
@@ -1349,7 +1422,7 @@ def test_negative_platform_guard_cannot_be_overwritten_in_same_epoch(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_002,
     )
     status = only(commands, RpcPurpose.PLATFORM_STATUS)
@@ -1370,6 +1443,7 @@ def test_negative_platform_guard_cannot_be_overwritten_in_same_epoch(
         )
     reducer.reduce(
         response(
+            reducer,
             status,
             {"locked": False, "locked_indices": [], "locked_currencies": []},
             seq=seq + 2,
@@ -1406,7 +1480,7 @@ def test_heartbeat_success_cannot_satisfy_post_status_business_probe(
     )
 
     reducer.reduce(
-        response(old_request, {"version": "1"}, seq=6),
+        response(reducer, old_request, {"version": "1"}, seq=6),
         processed_monotonic_ms=1_006,
     )
     assert not reducer.platform.post_status_probe
@@ -1421,7 +1495,7 @@ def test_heartbeat_success_cannot_satisfy_post_status_business_probe(
         failure_scope=FailureScope.SESSION,
     )
     reducer.reduce(
-        response(new_request, {"version": "1"}, seq=7),
+        response(reducer, new_request, {"version": "1"}, seq=7),
         processed_monotonic_ms=1_007,
     )
 
@@ -1550,14 +1624,14 @@ def test_invalid_core_status_shape_is_fatal_protocol_incompatibility(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     status = only(commands, RpcPurpose.PLATFORM_STATUS)
 
     with pytest.raises(PublicProtocolError, match="public/status"):
         reducer.reduce(
-            response(status, {"locked": "unsupported"}, seq=seq + 1),
+            response(reducer, status, {"locked": "unsupported"}, seq=seq + 1),
             processed_monotonic_ms=1_001 + seq,
         )
 
@@ -1577,14 +1651,14 @@ def test_relevant_platform_lock_status_fails_epoch_canonically(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     request = only(commands, RpcPurpose.PLATFORM_STATUS)
 
     with pytest.raises(PublicSessionError, match="RELEVANT_PLATFORM_LOCK"):
         reducer.reduce(
-            response(request, status, seq=seq + 1),
+            response(reducer, request, status, seq=seq + 1),
             processed_monotonic_ms=1_001 + seq,
         )
 
@@ -1604,9 +1678,20 @@ def test_rpc_latency_starts_at_actual_send_boundary(
         RpcPurpose.SET_HEARTBEAT,
     )
 
-    reducer.mark_rpc_sent(heartbeat.request_id, sent_monotonic_ms=1_200)
     reducer.reduce(
-        response(heartbeat, "ok", seq=1, received_ms=1_250),
+        send_control(
+            heartbeat,
+            kind="SEND_COMPLETED",
+            boundary_ms=1_200,
+        ),
+        processed_monotonic_ms=1_200,
+    )
+    reducer.reduce(
+        envelope(
+            {"id": heartbeat.request_id, "result": "ok"},
+            seq=1,
+            received_ms=1_250,
+        ),
         processed_monotonic_ms=1_250,
     )
 
@@ -1638,7 +1723,10 @@ def test_orphan_late_wire_response_is_persisted_separately(
         processed_monotonic_ms=1_001,
     )
 
-    diagnostics = reducer._operational_diagnostics(1)
+    summary = json.loads(reducer.clean_stop(1_002).read_text())
+    validate_run_summary(summary)
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
     assert diagnostics["rpc_orphan_late_wire_count"] == 1
     rpc_rows = diagnostics["rpc_by_method"]
     assert isinstance(rpc_rows, list)
@@ -1650,6 +1738,227 @@ def test_orphan_late_wire_response_is_persisted_separately(
         )
         == 0
     )
+
+
+def test_blocked_send_keeps_scheduled_until_completed_receipt_starts_response_deadline(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    command = only(
+        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
+        RpcPurpose.SET_HEARTBEAT,
+    )
+    lifecycle = reducer._rpc_lifecycles[command.request_id]
+
+    reducer.advance_time(30_000)
+
+    assert lifecycle.state is runtime_module.RpcState.SCHEDULED
+    assert lifecycle.sent_monotonic_ms is None
+    assert lifecycle.response_deadline_monotonic_ms is None
+    reducer.reduce(
+        send_control(
+            command,
+            kind="SEND_COMPLETED",
+            boundary_ms=30_000,
+        ),
+        processed_monotonic_ms=30_000,
+    )
+    lifecycle = reducer._rpc_lifecycles[command.request_id]
+    assert lifecycle.state is runtime_module.RpcState.SENT
+    assert lifecycle.sent_monotonic_ms == 30_000
+    assert lifecycle.response_deadline_monotonic_ms == 60_000
+
+
+@pytest.mark.parametrize("failure", ("CANCELLED", "ERROR"))
+def test_send_cancel_and_failure_enter_reducer_as_terminal_control_events(
+    failure: str,
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    command = only(
+        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
+        RpcPurpose.SET_HEARTBEAT,
+    )
+
+    with pytest.raises(PublicSessionError, match="SET_HEARTBEAT"):
+        reducer.reduce(
+            send_control(
+                command,
+                kind="SEND_FAILED",
+                boundary_ms=1_200,
+                failure=failure,
+            ),
+            processed_monotonic_ms=1_200,
+        )
+
+    lifecycle = reducer._rpc_lifecycles[command.request_id]
+    assert lifecycle.state is runtime_module.RpcState.ERROR
+    assert lifecycle.sent_monotonic_ms is None
+    assert command.request_id not in reducer.pending_rpcs
+    assert reducer.diagnostics.rpc_sent_count[command.method] == 0
+    assert reducer.diagnostics.rpc_error_count[command.method] == 1
+
+
+def test_response_racing_send_receipt_is_held_then_reduced_once(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    command = only(
+        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
+        RpcPurpose.SET_HEARTBEAT,
+    )
+
+    assert (
+        reducer.reduce(
+            envelope(
+                {"id": command.request_id, "result": "ok"},
+                seq=1,
+                received_ms=1_250,
+            ),
+            processed_monotonic_ms=1_250,
+        )
+        == ()
+    )
+    lifecycle = reducer._rpc_lifecycles[command.request_id]
+    assert lifecycle.state is runtime_module.RpcState.SCHEDULED
+    assert reducer.diagnostics.rpc_orphan_late_wire_count == 0
+
+    commands = reducer.reduce(
+        send_control(
+            command,
+            kind="SEND_COMPLETED",
+            boundary_ms=1_260,
+            ingress_seq=2,
+        ),
+        processed_monotonic_ms=1_260,
+    )
+
+    lifecycle = reducer._rpc_lifecycles[command.request_id]
+    assert lifecycle.state is runtime_module.RpcState.SUCCESS
+    assert reducer.diagnostics.rpc_success_count[command.method] == 1
+    assert reducer.diagnostics.rpc_latency_sum[command.method] == 0
+    assert only(commands, RpcPurpose.SUBSCRIBE_CHANNELS)
+
+
+def test_nonheartbeat_response_race_commits_after_the_send_receipt_boundary(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    command = reducer._schedule(
+        purpose=RpcPurpose.CLOCK_BOOTSTRAP,
+        method="public/get_time",
+        params={},
+        scope="CLOCK_INDEX",
+        generation=None,
+        origin_boundary=FactBoundary(1, 0, 1_000, 0),
+        failure_scope=FailureScope.CLOCK_INDEX,
+    )
+    captured: list[CausalCommit] = []
+    settle = reducer._settle_fact
+
+    def capture_settlement(**kwargs: object) -> None:
+        commit = kwargs["commit"]
+        assert isinstance(commit, CausalCommit)
+        captured.append(commit)
+        settle(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(reducer, "_settle_fact", capture_settlement)
+    reducer.reduce(
+        envelope(
+            {"id": command.request_id, "result": 1_000_000},
+            seq=1,
+            received_ms=1_250,
+        ),
+        processed_monotonic_ms=1_250,
+    )
+
+    reducer.reduce(
+        send_control(
+            command,
+            kind="SEND_COMPLETED",
+            boundary_ms=1_260,
+            ingress_seq=2,
+        ),
+        processed_monotonic_ms=1_260,
+    )
+
+    assert reducer.causal_seq == 1
+    assert len(captured) == 1
+    assert captured[0].boundary == FactBoundary(1, 2, 1_260, 1)
+    assert reducer.diagnostics.rpc_latency_sum[command.method] == 0
+
+
+def test_send_cancellation_after_send_deadline_cannot_rewrite_terminal_state(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    command = only(
+        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
+        RpcPurpose.SET_HEARTBEAT,
+    )
+
+    with pytest.raises(PublicSessionError, match="SET_HEARTBEAT"):
+        reducer.reduce(
+            send_control(
+                command,
+                kind="SEND_FAILED",
+                boundary_ms=31_002,
+                failure="CANCELLED",
+            ),
+            processed_monotonic_ms=31_002,
+        )
+
+    lifecycle = reducer._rpc_lifecycles[command.request_id]
+    assert lifecycle.state is runtime_module.RpcState.DEADLINE_LATE
+    assert lifecycle.terminal_monotonic_ms == 31_002
+    assert reducer.diagnostics.rpc_deadline_late_count[command.method] == 1
+    assert reducer.diagnostics.rpc_error_count[command.method] == 0
+
+
+def test_clean_stop_censors_scheduled_and_sent_without_collapsing_boundaries(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    scheduled = only(
+        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
+        RpcPurpose.SET_HEARTBEAT,
+    )
+    sent = reducer._schedule(
+        purpose=RpcPurpose.CLOCK_BOOTSTRAP,
+        method="public/get_time",
+        params={},
+        scope="CLOCK_INDEX",
+        generation=None,
+        origin_boundary=FactBoundary(1, 0, 1_000, 0),
+        failure_scope=FailureScope.CLOCK_INDEX,
+    )
+    reducer.reduce(
+        send_control(
+            sent,
+            kind="SEND_COMPLETED",
+            boundary_ms=1_100,
+        ),
+        processed_monotonic_ms=1_100,
+    )
+
+    reducer.clean_stop(1_200)
+
+    scheduled_lifecycle = reducer._rpc_lifecycles[scheduled.request_id]
+    sent_lifecycle = reducer._rpc_lifecycles[sent.request_id]
+    assert scheduled_lifecycle.state is runtime_module.RpcState.CENSORED
+    assert scheduled_lifecycle.sent_monotonic_ms is None
+    assert sent_lifecycle.state is runtime_module.RpcState.CENSORED
+    assert sent_lifecycle.sent_monotonic_ms == 1_100
+    assert reducer.diagnostics.rpc_censored_count["public/set_heartbeat"] == 1
+    assert reducer.diagnostics.rpc_censored_count["public/get_time"] == 1
 
 
 def test_invalid_option_lifecycle_enters_catalog_recovery_not_session_failure(
@@ -1716,7 +2025,7 @@ def test_open_close_then_metadata_response_cannot_resurrect_contract(
         processed_monotonic_ms=1_001 + seq,
     )
     reducer.reduce(
-        response(metadata, option_payload_factory(name=name), seq=seq + 2),
+        response(reducer, metadata, option_payload_factory(name=name), seq=seq + 2),
         processed_monotonic_ms=1_002 + seq,
     )
 
@@ -1750,7 +2059,7 @@ def test_open_option_is_catalog_incomplete_until_matching_metadata_commits(
 
     assert not reducer.option_catalog.complete
     reducer.reduce(
-        response(metadata, option_payload_factory(name=name), seq=seq + 1),
+        response(reducer, metadata, option_payload_factory(name=name), seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
 
@@ -1766,7 +2075,7 @@ def test_same_name_metadata_response_replaces_current_option_object(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
@@ -1774,13 +2083,14 @@ def test_same_name_metadata_response_replaces_current_option_object(
     catalog = only(commands, RpcPurpose.OPTION_CATALOG)
     name = "BTC_USDC-TEST-110000-C"
     reducer.reduce(
-        response(clock, 1_000_000, seq=seq + 1),
+        response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
     initial_payload = option_payload_factory(name=name, step=None)
     initial_payload.pop("min_trade_amount")
     reducer.reduce(
         response(
+            reducer,
             catalog,
             [initial_payload],
             seq=seq + 2,
@@ -1807,6 +2117,7 @@ def test_same_name_metadata_response_replaces_current_option_object(
     )
     reducer.reduce(
         response(
+            reducer,
             metadata,
             option_payload_factory(name=name, step=0.1),
             seq=seq + 4,
@@ -1847,7 +2158,7 @@ def test_valid_irrelevant_usdc_option_metadata_does_not_poison_btc_catalog(
     payload["price_index"] = "eth_usdc"
 
     reducer.reduce(
-        response(metadata, payload, seq=seq + 1),
+        response(reducer, metadata, payload, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
 
@@ -1863,7 +2174,7 @@ def test_temporary_option_lifecycle_state_retains_member_as_local_unknown(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
@@ -1871,11 +2182,11 @@ def test_temporary_option_lifecycle_state_retains_member_as_local_unknown(
     catalog = only(commands, RpcPurpose.OPTION_CATALOG)
     name = "BTC_USDC-TEST-110000-C"
     reducer.reduce(
-        response(clock, 1_000_000, seq=seq + 1),
+        response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
     reducer.reduce(
-        response(catalog, [option_payload_factory(name=name)], seq=seq + 2),
+        response(reducer, catalog, [option_payload_factory(name=name)], seq=seq + 2),
         processed_monotonic_ms=1_002 + seq,
     )
 
@@ -1967,7 +2278,7 @@ def test_direct_option_metadata_cannot_recover_unavailable_contract_as_usable(
     payload["is_active"] = is_active
 
     reducer.reduce(
-        response(metadata, payload, seq=seq + 1),
+        response(reducer, metadata, payload, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
 
@@ -1996,7 +2307,7 @@ def test_bootstrap_unavailable_option_state_is_complete_local_unknown(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
@@ -2004,7 +2315,7 @@ def test_bootstrap_unavailable_option_state_is_complete_local_unknown(
     catalog = only(commands, RpcPurpose.OPTION_CATALOG)
     name = "BTC_USDC-TEST-110000-C"
     reducer.reduce(
-        response(clock, 1_000_000, seq=seq + 1),
+        response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
     payload = option_payload_factory(name=name)
@@ -2012,7 +2323,7 @@ def test_bootstrap_unavailable_option_state_is_complete_local_unknown(
     payload["is_active"] = False
 
     reducer.reduce(
-        response(catalog, [payload], seq=seq + 2),
+        response(reducer, catalog, [payload], seq=seq + 2),
         processed_monotonic_ms=1_002 + seq,
     )
 
@@ -2032,7 +2343,7 @@ def test_bootstrap_final_option_state_is_complete_and_out_of_scope(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
@@ -2040,14 +2351,14 @@ def test_bootstrap_final_option_state_is_complete_and_out_of_scope(
     catalog = only(commands, RpcPurpose.OPTION_CATALOG)
     name = "BTC_USDC-TEST-110000-C"
     reducer.reduce(
-        response(clock, 1_000_000, seq=seq + 1),
+        response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
     payload = option_payload_factory(name=name)
     payload["state"] = state
 
     reducer.reduce(
-        response(catalog, [payload], seq=seq + 2),
+        response(reducer, catalog, [payload], seq=seq + 2),
         processed_monotonic_ms=1_002 + seq,
     )
 
@@ -2064,7 +2375,7 @@ def test_lifecycle_overflow_incompleteness_survives_snapshot_reconciliation(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
@@ -2072,7 +2383,7 @@ def test_lifecycle_overflow_incompleteness_survives_snapshot_reconciliation(
     reducer.option_catalog.mark_incomplete()
 
     reducer.reduce(
-        response(catalog, [], seq=seq + 1),
+        response(reducer, catalog, [], seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
 
@@ -2087,7 +2398,7 @@ def test_metadata_response_commits_after_sustained_market_ingress(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
@@ -2096,11 +2407,12 @@ def test_metadata_response_commits_after_sustained_market_ingress(
     existing = "BTC_USDC-TEST-100010-C"
     name = "BTC_USDC-TEST-110000-C"
     reducer.reduce(
-        response(clock, 1_000_000, seq=seq + 1),
+        response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
     dynamic = reducer.reduce(
         response(
+            reducer,
             catalog,
             [option_payload_factory(name=existing, strike=100_010)],
             seq=seq + 2,
@@ -2110,7 +2422,7 @@ def test_metadata_response_commits_after_sustained_market_ingress(
     next_seq = seq + 3
     for command in tuple(item for item in dynamic if item.purpose is RpcPurpose.SUBSCRIBE_CHANNELS):
         reducer.reduce(
-            response(command, exact_channels(command), seq=next_seq),
+            response(reducer, command, exact_channels(command), seq=next_seq),
             processed_monotonic_ms=1_000 + next_seq,
         )
         next_seq += 1
@@ -2154,7 +2466,7 @@ def test_metadata_response_commits_after_sustained_market_ingress(
         next_seq += 1
 
     reducer.reduce(
-        response(metadata, option_payload_factory(name=name), seq=next_seq),
+        response(reducer, metadata, option_payload_factory(name=name), seq=next_seq),
         processed_monotonic_ms=1_000 + next_seq,
     )
 
@@ -2170,7 +2482,7 @@ def test_close_while_option_snapshot_is_pending_wins_over_old_snapshot(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
@@ -2192,6 +2504,7 @@ def test_close_while_option_snapshot_is_pending_wins_over_old_snapshot(
     )
     reducer.reduce(
         response(
+            reducer,
             catalog,
             [option_payload_factory(name=name)],
             seq=seq + 2,
@@ -2213,7 +2526,7 @@ def test_heartbeat_is_live_while_unsubscribe_ack_is_blocked(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     channel = "instrument.state.option.USDC"
@@ -2245,14 +2558,14 @@ def test_combo_refresh_repeats_until_one_generation_has_no_lifecycle_crossing(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
     option_catalog = only(commands, RpcPurpose.OPTION_CATALOG)
     first = only(commands, RpcPurpose.COMBO_CATALOG)
     reducer.reduce(
-        response(option_catalog, [], seq=seq + 1),
+        response(reducer, option_catalog, [], seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
     seq += 1
@@ -2279,7 +2592,7 @@ def test_combo_refresh_repeats_until_one_generation_has_no_lifecycle_crossing(
         )
 
     trailing = reducer.reduce(
-        response(first, [], seq=seq + 6),
+        response(reducer, first, [], seq=seq + 6),
         processed_monotonic_ms=1_000 + seq + 6,
     )
     second = only(trailing, RpcPurpose.COMBO_CATALOG)
@@ -2304,7 +2617,7 @@ def test_combo_refresh_repeats_until_one_generation_has_no_lifecycle_crossing(
             processed_monotonic_ms=1_000 + current_seq,
         )
     third_commands = reducer.reduce(
-        response(second, [], seq=seq + 10),
+        response(reducer, second, [], seq=seq + 10),
         processed_monotonic_ms=1_000 + seq + 10,
     )
     third = only(third_commands, RpcPurpose.COMBO_CATALOG)
@@ -2312,7 +2625,7 @@ def test_combo_refresh_repeats_until_one_generation_has_no_lifecycle_crossing(
 
     assert (
         reducer.reduce(
-            response(third, [], seq=seq + 11),
+            response(reducer, third, [], seq=seq + 11),
             processed_monotonic_ms=1_000 + seq + 11,
         )
         == ()
@@ -2328,7 +2641,7 @@ def test_nonempty_combo_catalog_fetches_metadata_once_and_reuses_unchanged(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
@@ -2349,12 +2662,13 @@ def test_nonempty_combo_catalog_fetches_metadata_once_and_reuses_unchanged(
     }
 
     metadata_commands = reducer.reduce(
-        response(catalog, [summary], seq=seq + 1),
+        response(reducer, catalog, [summary], seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
     metadata = only(metadata_commands, RpcPurpose.COMBO_METADATA)
     reducer.reduce(
         response(
+            reducer,
             metadata,
             {
                 "instrument_name": "COMBO",
@@ -2383,7 +2697,7 @@ def test_nonempty_combo_catalog_fetches_metadata_once_and_reuses_unchanged(
     )
     assert (
         reducer.reduce(
-            response(refresh, [summary], seq=seq + 3),
+            response(reducer, refresh, [summary], seq=seq + 3),
             processed_monotonic_ms=1_003 + seq,
         )
         == ()
@@ -2409,7 +2723,7 @@ def test_unavailable_combo_metadata_never_enters_atomic_catalog(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
@@ -2423,6 +2737,7 @@ def test_unavailable_combo_metadata_never_enters_atomic_catalog(
     metadata = only(
         reducer.reduce(
             response(
+                reducer,
                 catalog,
                 [
                     {
@@ -2443,6 +2758,7 @@ def test_unavailable_combo_metadata_never_enters_atomic_catalog(
 
     reducer.reduce(
         response(
+            reducer,
             metadata,
             {
                 "instrument_name": "COMBO",
@@ -2474,7 +2790,7 @@ def test_operational_recovery_and_subscription_peaks_are_runtime_facts(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     initial_channel_peak = reducer.diagnostics.peak_subscribed_channel_count
@@ -2595,7 +2911,7 @@ def test_incomplete_catalog_response_is_rpc_success_but_shape_invalid(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
@@ -2603,6 +2919,7 @@ def test_incomplete_catalog_response_is_rpc_success_but_shape_invalid(
 
     reducer.reduce(
         response(
+            reducer,
             catalog,
             [{"instrument_name": "BROKEN"}],
             seq=seq + 1,
@@ -2628,7 +2945,7 @@ def test_incomplete_option_snapshot_cannot_create_membership_loss(
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
     commands = reducer.reduce(
-        response(subscribe, exact_channels(subscribe), seq=seq),
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
@@ -2636,11 +2953,12 @@ def test_incomplete_option_snapshot_cannot_create_membership_loss(
     catalog = only(commands, RpcPurpose.OPTION_CATALOG)
     name = "BTC_USDC-TEST-110000-C"
     reducer.reduce(
-        response(clock, 1_000_000, seq=seq + 1),
+        response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
     )
     reducer.reduce(
         response(
+            reducer,
             catalog,
             [option_payload_factory(name=name)],
             seq=seq + 2,
@@ -2652,6 +2970,7 @@ def test_incomplete_option_snapshot_cannot_create_membership_loss(
     recovery = reducer._schedule_option_catalog_refresh(reducer._current_fact_boundary())
     reducer.reduce(
         response(
+            reducer,
             recovery,
             {"not": "an array"},
             seq=seq + 3,
@@ -2722,6 +3041,7 @@ def test_lifecycle_during_option_catalog_recovery_wins_over_snapshot(
     )
     reducer.reduce(
         response(
+            reducer,
             recovery,
             [option_payload_factory(name=name)],
             seq=seq + 1,

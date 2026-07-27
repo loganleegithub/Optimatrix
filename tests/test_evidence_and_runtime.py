@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from market_monitor import (
     PriceLevel,
     TimeInterval,
 )
-from radar_runtime.deribit_public import InboundEnvelope
+from radar_runtime.deribit_public import InboundEnvelope, SendControlEvent
 from radar_runtime.identity import (
     StartupGuardError,
     prepare_evidence_directory,
@@ -120,7 +121,8 @@ def atomic_evidence() -> AtomicEvidence:
         runtime_identity="runtime",
         policy_identity="sha256:" + "b" * 64,
         episode_identity="episode",
-        detector_causal_seq=10,
+        anomaly_activation_seq=10,
+        detector_causal_seq=11,
         quote_causal_seq=11,
         short_instrument_name="SHORT",
         combo_legs=(("SHORT", Decimal(-1)), ("LONG", Decimal(1))),
@@ -251,12 +253,17 @@ def operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
 def current_operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
     diagnostics = operational_diagnostics(observation_ms=observation_ms)
     diagnostics["operational_diagnostics_schema_version"] = 3
+    ingress = diagnostics["ingress"]
+    assert isinstance(ingress, dict)
+    ingress["send_control_event_count"] = 0
+    ingress["connection_error_event_count"] = 0
     diagnostics["global_continuity"] = {
         "current_epoch": 1,
         "restart_count": 0,
         "restart_count_by_reason": {},
         "restart_edges": [],
         "recovery_edges": [],
+        "current_epoch_joint_evaluation_count_by_scope": [],
     }
     diagnostics["rpc_orphan_late_wire_count"] = 0
     diagnostics["ticker_application"] = {
@@ -428,6 +435,287 @@ def attach_joint_witness(
     scope.complete_aggregate_detector_evaluation_count = 1
     scope.complete_aggregate_with_full_formula_evaluation_count = joint_count
     summary["counts_by_scope"] = [scope.as_object()]
+    continuity = diagnostics["global_continuity"]
+    assert isinstance(continuity, dict)
+    continuity["current_epoch_joint_evaluation_count_by_scope"] = (
+        []
+        if joint_count <= 0
+        else [
+            {
+                "policy_identity": "sha256:" + "b" * 64,
+                "option_type": option_type,
+                "tte_band_id": tte_band_id,
+                "count": joint_count,
+                "first_joint_evaluation_boundary": dict(witness["boundary"]),
+            }
+        ]
+    )
+
+
+def epoch_two_summary(
+    *,
+    recovery_ms: int | None,
+    witness_ms: int | None = None,
+) -> dict[str, object]:
+    summary = current_summary_object()
+    summary["coverage_segments"] = [
+        {
+            "start_monotonic_ms": 0,
+            "end_monotonic_ms": 10,
+            "state": "UNKNOWN",
+            "reason": "RUNTIME_START",
+            "affected_scopes": ["GLOBAL"],
+            "global_continuity_epoch": 1,
+        },
+        {
+            "start_monotonic_ms": 10,
+            "end_monotonic_ms": 20,
+            "state": "KNOWN_COMPLETE",
+            "reason": "CLOCK_GAP",
+            "affected_scopes": ["GLOBAL"],
+            "global_continuity_epoch": 2,
+        },
+    ]
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["global_continuity"] = {
+        "current_epoch": 2,
+        "restart_count": 1,
+        "restart_count_by_reason": {"CLOCK_GAP": 1},
+        "restart_edges": [
+            {
+                "incident_id": 1,
+                "from_epoch": 1,
+                "to_epoch": 2,
+                "reason": "CLOCK_GAP",
+                "failure_domain": "CLOCK_INDEX",
+                "affected_scopes": ["GLOBAL"],
+                "boundary": {
+                    "session_epoch": 1,
+                    "ingress_seq": 1,
+                    "received_monotonic_ms": 10,
+                    "causal_seq": 1,
+                },
+            }
+        ],
+        "recovery_edges": (
+            []
+            if recovery_ms is None
+            else [
+                {
+                    "incident_id": 1,
+                    "boundary": {
+                        "session_epoch": 1,
+                        "ingress_seq": 1 if recovery_ms == 10 else 2,
+                        "received_monotonic_ms": recovery_ms,
+                        "causal_seq": 1 if recovery_ms == 10 else 2,
+                    },
+                }
+            ]
+        ),
+        "current_epoch_joint_evaluation_count_by_scope": [],
+    }
+    witness = diagnostics["witness"]
+    assert isinstance(witness, dict)
+    witness["global_continuity_epoch"] = 2
+    if witness_ms is not None:
+        attach_joint_witness(summary, first_ms=witness_ms, joint_count=1)
+        witness["global_continuity_epoch"] = 2
+    return summary
+
+
+def cross_ledger_summary() -> dict[str, object]:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    ingress = diagnostics["ingress"]
+    assert isinstance(ingress, dict)
+    ingress.update(
+        {
+            "received_envelope_count": 3,
+            "reduced_envelope_count": 3,
+            "send_control_event_count": 1,
+            "connection_error_event_count": 0,
+        }
+    )
+    channels = diagnostics["channel_by_class"]
+    assert isinstance(channels, list)
+    for channel in channels:
+        if channel["channel_class"] == "HEARTBEAT":
+            channel.update(
+                {
+                    "received_count": 1,
+                    "processed_count": 1,
+                    "received_rate_per_second": "50",
+                    "processed_rate_per_second": "50",
+                }
+            )
+        elif channel["channel_class"] == "CONNECTION_CONTROL":
+            channel.update(
+                {
+                    "received_count": 2,
+                    "processed_count": 2,
+                    "received_rate_per_second": "100",
+                    "processed_rate_per_second": "100",
+                }
+            )
+    diagnostics["rpc_by_method"] = [
+        {
+            "method": "public/test",
+            "scheduled_count": 1,
+            "sent_count": 1,
+            "success_count": 1,
+            "error_count": 0,
+            "deadline_late_count": 0,
+            "retired_count": 0,
+            "censored_count": 0,
+            "rate_limit_count": 0,
+            "latency_observation_count": 1,
+            "latency_ms_sum": 5,
+            "latency_ms_max": 5,
+        }
+    ]
+    heartbeat = diagnostics["heartbeat"]
+    assert isinstance(heartbeat, dict)
+    heartbeat.update(
+        {
+            "test_request_count": 1,
+            "public_test_success_count": 1,
+            "public_test_error_count": 0,
+            "latency_observation_count": 1,
+            "latency_ms_sum": 5,
+            "latency_ms_max": 5,
+        }
+    )
+    source_shapes = diagnostics["source_shapes"]
+    assert isinstance(source_shapes, list)
+    for row in source_shapes:
+        if row["source"] in {"heartbeat", "public/test"}:
+            row.update(
+                {
+                    "observed_count": 1,
+                    "valid_count": 1,
+                    "invalid_count": 0,
+                    "validation": "VALID",
+                }
+            )
+    return summary
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "heartbeat.test_request_count",
+        "heartbeat.public_test_success_count",
+        "heartbeat.public_test_error_count",
+        "heartbeat.latency_observation_count",
+        "heartbeat.latency_ms_sum",
+        "heartbeat.latency_ms_max",
+        "rpc.latency_ms_sum",
+        "rpc.latency_ms_max",
+        "source_shapes.public/test.observed_count",
+        "source_shapes.public/test.valid_count",
+        "source_shapes.public/test.invalid_count",
+        "source_shapes.public/test.validation",
+        "rpc_orphan_late_wire_count",
+        "ingress.received_envelope_count",
+        "ingress.reduced_envelope_count",
+        "ingress.send_control_event_count",
+        "ingress.connection_error_event_count",
+        "channel.CONNECTION_CONTROL.received_count",
+        "channel.CONNECTION_CONTROL.processed_count",
+        "channel.CONNECTION_CONTROL.received_rate_per_second",
+        "channel.CONNECTION_CONTROL.processed_rate_per_second",
+    ),
+)
+def test_schema_three_cross_ledger_conservation_rejects_single_point_tampering(
+    field: str,
+) -> None:
+    summary = cross_ledger_summary()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    heartbeat = diagnostics["heartbeat"]
+    ingress = diagnostics["ingress"]
+    rpc_rows = diagnostics["rpc_by_method"]
+    source_rows = diagnostics["source_shapes"]
+    channel_rows = diagnostics["channel_by_class"]
+    assert isinstance(heartbeat, dict)
+    assert isinstance(ingress, dict)
+    assert isinstance(rpc_rows, list)
+    assert isinstance(source_rows, list)
+    assert isinstance(channel_rows, list)
+
+    if field.startswith("heartbeat."):
+        heartbeat[field.removeprefix("heartbeat.")] += 1
+    elif field.startswith("rpc."):
+        rpc_rows[0][field.removeprefix("rpc.")] += 1
+    elif field.startswith("source_shapes.public/test."):
+        public_test = next(row for row in source_rows if row["source"] == "public/test")
+        source_field = field.removeprefix("source_shapes.public/test.")
+        if source_field == "validation":
+            public_test[source_field] = "INVALID"
+        else:
+            public_test[source_field] += 1
+    elif field == "rpc_orphan_late_wire_count":
+        diagnostics[field] = 1
+    elif field.startswith("ingress."):
+        ingress[field.removeprefix("ingress.")] += 1
+    elif field.startswith("channel.CONNECTION_CONTROL."):
+        connection_control = next(
+            row for row in channel_rows if row["channel_class"] == "CONNECTION_CONTROL"
+        )
+        channel_field = field.removeprefix("channel.CONNECTION_CONTROL.")
+        if channel_field.endswith("_count"):
+            connection_control[channel_field] += 1
+        else:
+            connection_control[channel_field] = "150"
+    else:  # pragma: no cover - parameter list is the exhaustive mutation authority
+        raise AssertionError(field)
+
+    with pytest.raises(EvidenceError):
+        validate_run_summary(summary)
+
+
+@pytest.mark.parametrize(
+    "ledger",
+    (
+        "source_shapes.public/test",
+        "ingress",
+        "channel.CONNECTION_CONTROL",
+    ),
+)
+def test_schema_three_cross_ledger_rejects_internally_consistent_row_tampering(
+    ledger: str,
+) -> None:
+    summary = cross_ledger_summary()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    if ledger == "source_shapes.public/test":
+        source_rows = diagnostics["source_shapes"]
+        assert isinstance(source_rows, list)
+        public_test = next(row for row in source_rows if row["source"] == "public/test")
+        public_test.update({"observed_count": 2, "valid_count": 2})
+    elif ledger == "ingress":
+        ingress = diagnostics["ingress"]
+        assert isinstance(ingress, dict)
+        ingress.update({"received_envelope_count": 4, "reduced_envelope_count": 4})
+    else:
+        channel_rows = diagnostics["channel_by_class"]
+        assert isinstance(channel_rows, list)
+        connection_control = next(
+            row for row in channel_rows if row["channel_class"] == "CONNECTION_CONTROL"
+        )
+        connection_control.update(
+            {
+                "received_count": 3,
+                "processed_count": 3,
+                "received_rate_per_second": "150",
+                "processed_rate_per_second": "150",
+            }
+        )
+
+    with pytest.raises(EvidenceError, match=r"conservation|reconcile|cross-ledger"):
+        validate_run_summary(summary)
 
 
 def test_minimal_events_are_strict_unit_bearing_and_carry_non_claims() -> None:
@@ -553,6 +841,31 @@ def test_evidence_directory_cross_checks_summary_episode_count(tmp_path: Path) -
     (tmp_path / "radar-run-summary.json").write_text(json.dumps(summary), encoding="utf-8")
 
     with pytest.raises(EvidenceError, match="episode count"):
+        validate_evidence_directory(tmp_path)
+
+
+def test_evidence_directory_attributes_anomaly_count_to_exact_option_type_and_band(
+    tmp_path: Path,
+) -> None:
+    anomaly = project_anomaly_event(anomaly_evidence())
+    wrong_scope = ScopeCounts("sha256:" + "b" * 64, "put", "other-band")
+    wrong_scope.applicable_instrument_count = 1
+    wrong_scope.distinct_anomaly_episode_count = 1
+    wrong_scope.anomaly_activation_transition_count = 1
+    wrong_scope.anomaly_end_count_by_reason[EpisodeEndReason.CENSORED_AT_STOP.value] = 1
+    summary = current_summary_object()
+    summary["counts_by_scope"] = [wrong_scope.as_object()]
+    summary["anomaly_end_count_by_reason"] = {
+        reason.value: int(reason is EpisodeEndReason.CENSORED_AT_STOP)
+        for reason in EpisodeEndReason
+    }
+    summary["known_active_duration_ms_sum_by_end_reason"] = {
+        reason.value: 0 for reason in EpisodeEndReason
+    }
+    (tmp_path / "anomaly.json").write_text(json.dumps(anomaly), encoding="utf-8")
+    (tmp_path / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match=r"scope|option_type|band"):
         validate_evidence_directory(tmp_path)
 
 
@@ -1202,6 +1515,9 @@ def test_continuous_inbound_flow_cannot_starve_absolute_time_boundaries(
         async def send_request(self, **_kwargs: object) -> None:
             raise AssertionError("patched reducer must not emit commands")
 
+        def enqueue_send_control(self, event: SendControlEvent) -> None:
+            raise AssertionError(f"patched reducer unexpectedly emitted {event}")
+
     def reduce_frame(
         frame: InboundEnvelope,
         *,
@@ -1224,6 +1540,81 @@ def test_continuous_inbound_flow_cannot_starve_absolute_time_boundaries(
     assert asyncio.run(runtime.run(ContinuousClient(), stop_event)) == summary_path
     assert reduced == [1, 2, 3]
     assert timer_boundaries == [1_000]
+
+
+@pytest.mark.parametrize("outcome", ("SUCCESS", "CANCELLED", "ERROR"))
+def test_sender_reports_transport_completion_without_mutating_reducer(
+    outcome: str,
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    command = runtime.reducer.begin_session(session_epoch=1, monotonic_ms=1_000)[0]
+    monkeypatch.setattr(runtime_module, "_monotonic_ms", lambda: 1_100)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class ControlledClient:
+        def __init__(self) -> None:
+            self.controls: list[object] = []
+
+        async def send_request(self, **_kwargs: object) -> None:
+            started.set()
+            await release.wait()
+            if outcome == "ERROR":
+                raise RuntimeError("send failed")
+
+        def enqueue_send_control(self, event: object) -> None:
+            self.controls.append(event)
+
+    client = ControlledClient()
+
+    async def scenario() -> tuple[object, ...]:
+        task = asyncio.create_task(runtime._send_commands(client, (command,)))  # type: ignore[arg-type]
+        await started.wait()
+        assert (
+            runtime.reducer._rpc_lifecycles[command.request_id].state
+            is runtime_module.RpcState.SCHEDULED
+        )
+        if outcome == "CANCELLED":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            release.set()
+            if outcome == "ERROR":
+                with pytest.raises(RuntimeError, match="send failed"):
+                    await task
+            else:
+                await task
+        return tuple(client.controls)
+
+    controls = asyncio.run(scenario())
+
+    assert len(controls) == 1
+    event = controls[0]
+    assert isinstance(event, SendControlEvent)
+    assert event.request_id == command.request_id
+    assert event.kind.value == ("SEND_COMPLETED" if outcome == "SUCCESS" else "SEND_FAILED")
+    assert (None if event.failure is None else event.failure.value) == (
+        None if outcome == "SUCCESS" else outcome
+    )
+    assert (
+        runtime.reducer._rpc_lifecycles[command.request_id].state
+        is runtime_module.RpcState.SCHEDULED
+    )
 
 
 def test_transport_metrics_finalize_before_sender_exception_propagates(
@@ -1250,11 +1641,17 @@ def test_transport_metrics_finalize_before_sender_exception_propagates(
         enqueued_envelope_count = 0
         received_frame_count = 0
 
+        def __init__(self) -> None:
+            self.send_controls: list[object] = []
+
         async def send_request(self, **_kwargs: object) -> None:
             self.queue_high_water_frames = 7
             self.enqueued_envelope_count = 7
             self.received_frame_count = 7
             raise RuntimeError("sender exploded")
+
+        def enqueue_send_control(self, event: object) -> None:
+            self.send_controls.append(event)
 
         async def next_envelope(
             self,
@@ -1528,6 +1925,7 @@ def test_schema_three_epoch_edges_must_match_restart_incidents_one_for_one() -> 
             }
         ],
         "recovery_edges": [],
+        "current_epoch_joint_evaluation_count_by_scope": [],
     }
     witness = diagnostics["witness"]
     assert isinstance(witness, dict)
@@ -1564,6 +1962,24 @@ def test_schema_three_joint_witness_binds_nonzero_scope_count() -> None:
         validate_run_summary(summary)
 
 
+def test_schema_three_joint_witness_binds_exact_current_epoch_evaluation_boundary() -> None:
+    summary = current_summary_object()
+    attach_joint_witness(summary, joint_count=1)
+    validate_run_summary(summary)
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    continuity = diagnostics["global_continuity"]
+    assert isinstance(continuity, dict)
+    rows = continuity["current_epoch_joint_evaluation_count_by_scope"]
+    assert isinstance(rows, list)
+    first_boundary = rows[0]["first_joint_evaluation_boundary"]
+    assert isinstance(first_boundary, dict)
+    first_boundary["causal_seq"] = 2
+
+    with pytest.raises(EvidenceError, match=r"current.epoch|joint|boundary"):
+        validate_run_summary(summary)
+
+
 def test_schema_three_joint_witness_must_fall_in_known_complete_segment() -> None:
     summary = current_summary_object(
         segments=(
@@ -1580,6 +1996,46 @@ def test_schema_three_joint_witness_must_fall_in_known_complete_segment() -> Non
     attach_joint_witness(summary, first_ms=10, joint_count=1)
 
     with pytest.raises(EvidenceError, match="KNOWN_COMPLETE"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_rejects_current_epoch_witness_without_strict_recovery() -> None:
+    summary = epoch_two_summary(recovery_ms=None, witness_ms=15)
+
+    with pytest.raises(EvidenceError, match=r"recover|incident"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_rejects_witness_that_precedes_latest_recovery() -> None:
+    summary = epoch_two_summary(recovery_ms=18, witness_ms=15)
+
+    with pytest.raises(EvidenceError, match=r"recover|witness"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_recovery_must_be_strictly_later_than_restart() -> None:
+    summary = epoch_two_summary(recovery_ms=10)
+
+    with pytest.raises(EvidenceError, match=r"strict|recover|restart"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_recovery_must_be_inside_runtime_interval() -> None:
+    summary = epoch_two_summary(recovery_ms=21)
+
+    with pytest.raises(EvidenceError, match=r"runtime|interval|recover"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_rejects_historical_joint_count_after_epoch_restart() -> None:
+    summary = epoch_two_summary(recovery_ms=12, witness_ms=15)
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    continuity = diagnostics["global_continuity"]
+    assert isinstance(continuity, dict)
+    continuity["current_epoch_joint_evaluation_count_by_scope"] = []
+
+    with pytest.raises(EvidenceError, match=r"current.epoch|joint|scope"):
         validate_run_summary(summary)
 
 
@@ -1659,6 +2115,7 @@ def test_schema_three_rejects_second_restart_before_incident_recovery() -> None:
             },
         ],
         "recovery_edges": [],
+        "current_epoch_joint_evaluation_count_by_scope": [],
     }
     witness = diagnostics["witness"]
     assert isinstance(witness, dict)
@@ -1719,6 +2176,7 @@ def test_schema_three_rejects_illegal_restart_cause_domain_scope_tuple() -> None
             }
         ],
         "recovery_edges": [],
+        "current_epoch_joint_evaluation_count_by_scope": [],
     }
     witness = diagnostics["witness"]
     assert isinstance(witness, dict)
@@ -1816,3 +2274,47 @@ def test_evidence_directory_cross_binds_atomic_to_anomaly(
 
     with pytest.raises(EvidenceError, match=message):
         validate_evidence_directory(tmp_path)
+
+
+def test_atomic_causal_invariant_allows_later_quote_only_when_detector_is_same_boundary() -> None:
+    evidence_module.validate_atomic_causal_invariant(
+        anomaly_activation_seq=10,
+        detector_causal_seq=11,
+        quote_causal_seq=11,
+    )
+    with pytest.raises(EvidenceError, match=r"detector.*quote|causal"):
+        evidence_module.validate_atomic_causal_invariant(
+            anomaly_activation_seq=10,
+            detector_causal_seq=10,
+            quote_causal_seq=11,
+        )
+    with pytest.raises(EvidenceError, match=r"activation|causal"):
+        evidence_module.validate_atomic_causal_invariant(
+            anomaly_activation_seq=12,
+            detector_causal_seq=11,
+            quote_causal_seq=11,
+        )
+
+
+def test_writer_directory_accepts_anomaly_then_later_normalized_atomic_boundary(
+    tmp_path: Path,
+) -> None:
+    writer = EvidenceWriter(
+        tmp_path,
+        code_identity="a" * 40,
+        runtime_identity="runtime",
+        policy_identity="sha256:" + "b" * 64,
+    )
+    anomaly = project_anomaly_event(anomaly_evidence())
+    later_atomic = project_atomic_event(
+        replace(
+            atomic_evidence(),
+            detector_causal_seq=11,
+            quote_causal_seq=11,
+        )
+    )
+
+    writer.write_anomaly(anomaly)
+    writer.write_atomic(later_atomic)
+
+    assert len(validate_evidence_directory(tmp_path)) == 2
