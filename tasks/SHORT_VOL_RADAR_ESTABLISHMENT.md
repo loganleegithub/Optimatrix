@@ -29,10 +29,15 @@
 
 **Prior subgate implementation anchor:** `fb32546d524c866762b4420fafbd1d89c782eb23`
 
-**Current construction subgate:** `RPC_ATOMIC_EVIDENCE_CAUSAL_NORMALIZATION_REPAIR`
+**Prior construction subgate:** `RPC_ATOMIC_EVIDENCE_CAUSAL_NORMALIZATION_REPAIR`
 `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_28`
 
-**Current subgate implementation anchor:** `a7e2cbfff52b0553ab3d2ab3bcb1d032a7f2406f`
+**Prior subgate implementation anchor:** `a7e2cbfff52b0553ab3d2ab3bcb1d032a7f2406f`
+
+**Current construction subgate:** `APPLICATION_SEQUENCE_AND_LIFECYCLE_BARRIER_REPAIR`
+`OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_28`
+
+**Current subgate implementation anchor:** `2a2f6fb6954992ad593a2405f2f33f66b897544d`
 
 **REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`
 
@@ -79,6 +84,16 @@ counterexamples, offline validation, strict read-only legacy validation, and sea
 hashing. It explicitly forbids production-public connection, Policy changes, push, merge, stage
 advancement, private APIs, orders, and trades.
 
+The subsequent independent review identified that FIFO dequeue order had been mistaken for one
+unique application fact lifecycle. The 2026-07-28 explicit human `批准开工` command opens only
+`APPLICATION_SEQUENCE_AND_LIFECYCLE_BARRIER_REPAIR` against exact clean implementation anchor
+`2a2f6fb6954992ad593a2405f2f33f66b897544d`: one append-only local repair commit, orchestration
+TDD counterexamples, contract/schema alignment, repeated offline validation, strict read-only
+legacy validation, and sealed-directory hashing. Its completion establishes only readiness to
+request the separately gated heartbeat wire probe; it does not itself authorize any
+production-public connection, heartbeat probe, Soak, Policy mutation, push, merge, stage
+advancement, private API, order, or trade.
+
 The prior `OPERATIONAL_SOAK` attempt at
 `/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001` is sealed
 `NOT_MET`. It is historical evidence only and may not be changed, replayed, recomputed, migrated,
@@ -106,8 +121,12 @@ The execution gates are independent:
 8. **`RPC_ATOMIC_EVIDENCE_CAUSAL_NORMALIZATION_REPAIR` construction subgate:** opened against
    exact base `a7e2cbfff52b0553ab3d2ab3bcb1d032a7f2406f`. It authorizes only the bounded offline
    normalization repair and one append-only local commit below.
-9. **Heartbeat wire probe gate:** closed until a separate explicit human command.
-10. **Next `OPERATIONAL_SOAK` gate:** closed until the heartbeat probe is separately authorized,
+9. **`APPLICATION_SEQUENCE_AND_LIFECYCLE_BARRIER_REPAIR` construction subgate:** opened against
+   exact base `2a2f6fb6954992ad593a2405f2f33f66b897544d`. It authorizes only the bounded
+   offline repair, contract alignment, repeated acceptance checks, and one append-only local
+   commit below.
+10. **Heartbeat wire probe gate:** closed until a separate explicit human command.
+11. **Next `OPERATIONAL_SOAK` gate:** closed until the heartbeat probe is separately authorized,
    new global-continuity and local-availability thresholds are human-frozen, and a later command
    independently names exact accepted code, Policy path/digest, new empty evidence directory, and
    stop condition.
@@ -549,6 +568,87 @@ atomic directory, explicit read-only validation of all 224 immutable version-2 o
 audit. No production-public command, Policy change, push, merge, stage advancement, private API,
 order, or trade is permitted.
 
+### `APPLICATION_SEQUENCE_AND_LIFECYCLE_BARRIER_REPAIR` — construction authorized
+
+The exact base is `2a2f6fb6954992ad593a2405f2f33f66b897544d`. History remains append-only.
+
+**Market/Decision input contract change:** `APPROVED` — replace queue position as an implicit fact
+identity with one reducer-consumed, unique, consecutive application sequence shared by wire,
+send-control, and connection-control events; make sender failure, reconnect, and clean stop
+explicit reducer barriers that settle every already accepted event before propagation or durable
+summary projection.
+
+**Decision Policy change:** `NONE` — no Policy file, formula, quantity, TTE, Delta, baseline,
+activation/clear, persistence, or runtime-limit value changes.
+
+**Outcome/evaluation contract change:** `NONE` — no future label, replay, recomputation,
+historical relabelling, Candidate, Position, Outcome, comparator, qualification, order, or trade.
+
+**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
+capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`.
+
+#### Required repair
+
+1. One application-sequence allocator stamps every wire frame, `SEND_COMPLETED`,
+   `SEND_FAILED`, and connection-control event. Every accepted application event consumes one
+   number. The reducer accepts exactly `last + 1` for every event kind, advances its frontier
+   exactly once, and never treats FIFO order or a shared number as fact identity.
+2. The sender only produces send facts. Expected send success, failure, or cancellation must
+   reach and be reduced before their consequence can terminate or retire a session. An
+   unexpected sender exit is fail-closed and cannot silently leave an RPC `SCHEDULED`.
+3. A failure/reconnect barrier first retires the current epoch, then settles every event already
+   accepted by the transport or buffered by the runtime as retired/orphan application facts,
+   preserving exact `received == reduced` conservation before propagation or reconnect.
+4. A clean-stop barrier rejects further outbound work, stops producers, settles in-flight
+   cancellation controls, drains all accepted events, and only then censors remaining
+   `SCHEDULED` and `SENT` RPCs and writes the summary. No queued RPC may begin transport send
+   after the barrier opens.
+5. RPC diagnostics freeze terminal provenance. At minimum they prove
+   `scheduled = sent + pre-send terminals` and `sent = post-send terminals`; success, error,
+   deadline-late, retired, and censored totals must reconcile to their pre-/post-send origin.
+6. Session liveness advances only on a real socket frame. Local send or connection controls
+   never refresh market-wire currentness.
+7. A current-epoch joint-witness row freezes full
+   `Policy identity × expiry_timestamp × option_type × TTE band × formula instrument × boundary`
+   identity. Validator lookup binds every field, not a witness-authored partial scope.
+8. Runtime and validator share one exact consumed-field specification. A field absent from that
+   source or an impossible value type is invalid; an unobserved source cannot claim consumed
+   fields.
+9. Every atomic event maps to the owning anomaly's Policy/option-type/TTE-band summary scope and
+   requires a corresponding `PUBLIC_ATOMIC_QUOTE_AVAILABLE` transition in that scope.
+10. The owning `SHORT_VOL_RADAR` exact version-3 diagnostic contract changes in the same commit
+    as writer and validator. Policy schema version 3 and sealed version-2 evidence remain
+    unchanged; `CURRENT_STAGE` remains `NONE / NOT_ESTABLISHED`.
+
+#### Required red counterexamples
+
+- consecutive send controls followed by a wire frame have distinct consecutive application
+  identities, and the reducer rejects any duplicate or gap for every event kind;
+- blocked send, send cancellation, send `OSError`, fast response racing its send receipt,
+  pre-send deadline, post-deadline cancellation, and unexpected sender cancellation all settle
+  through the reducer exactly once;
+- a reducer-triggered failure with additional buffered/queued frames drains all accepted facts
+  with `received == reduced`;
+- blocked-send clean stop censors `SCHEDULED`, ordinary clean stop censors `SENT`, emits no
+  post-barrier send, and writes a strictly valid summary;
+- repeated local controls during wire silence cannot postpone session-liveness failure;
+- legal pre-send `ERROR`/`DEADLINE_LATE` and post-send terminals each pass writer plus strict
+  validation under the two conservation equations;
+- mutating only witness expiry or formula instrument, forging a source-shape consumed field, or
+  omitting the owning atomic-availability scope transition makes strict validation fail;
+- every sealable orchestration case above produces a complete writer directory accepted by the
+  strict current validator.
+
+#### Offline acceptance
+
+Run the focused transport/reducer/orchestration/writer/validator red-to-green set repeatedly,
+`make check`, the complete malicious version-3 validator suite, strict validation of
+writer-generated anomaly-plus-later-atomic evidence, explicit read-only validation of all 224
+sealed version-2 objects, sealed-directory hashing before and after, `git diff --check`, and
+authority/diff/worktree audit. The resulting exact local commit may be reported as ready for an
+independently authorized heartbeat wire probe. No production-public command, probe, Smoke, Soak,
+Policy change, push, merge, stage advancement, private API, order, or trade is permitted.
+
 ## First-principles scope
 
 This task answers only:
@@ -754,19 +854,23 @@ response, or a connection close makes all dependent state `UNKNOWN` and ends aff
 Heartbeat traffic proves connection liveness only: it neither refreshes an economic quote nor
 creates a detector observation.
 
-The socket reader only decodes and stamps every notification, success/error/late RPC response, and
-heartbeat response with one `session_epoch`, `ingress_seq`, and local
-`received_monotonic_ms`. Every frame enters one bounded queue. One synchronous reducer owns all
-economic, subscription, catalog, platform, episode, coverage, and Layer 2 state; its complete call
-tree does not await network I/O. It returns finite `PendingRpc` commands whose responses re-enter
-the same queue. Heartbeat `test_request` control may enqueue guarded `public/test` work while
+One transport allocator stamps every wire, send-control, and connection-control event with one
+unique consecutive `session_epoch + ingress_seq` application identity and local
+`received_monotonic_ms`. Every accepted event enters one bounded queue. The reducer accepts
+exactly `last + 1` for every event kind. One synchronous reducer owns all RPC, economic,
+subscription, catalog, platform, episode, coverage, and Layer 2 state; its complete call tree does
+not await network I/O. It returns finite `PendingRpc` commands; immutable transport send
+completion/failure and wire responses re-enter the same queue. Only real socket frames update
+session liveness. Heartbeat `test_request` control may enqueue guarded `public/test` work while
 catalog RPC work is blocked, but neither it nor its response recursively mutates economic state.
 Bootstrap and steady state share the same Policy
 `notification_queue_lag_deadline_ms` and maximum-lag diagnostic. Queue overflow is a session gap.
-Reconnect retires the old session epoch, pending requests, and channel generations exactly once.
+Reconnect and clean stop use explicit producer-stop/drain barriers before failure propagation or
+summary projection.
 
 Each `PendingRpc` freezes request purpose, method/params, session epoch, scope, channel generation
-where applicable, origin `FactBoundary`, Policy-derived absolute deadline, and failure scope.
+where applicable, origin `FactBoundary`, Policy-derived send deadline, and failure scope. Only
+completed transport send creates `SENT` and starts the separate response deadline and latency.
 Reducer-owned channel state is exactly
 `UNSUBSCRIBED | SUBSCRIBE_PENDING | ACKNOWLEDGED | UNSUBSCRIBE_PENDING | RETIRED`. Pre-ACK frames
 cannot change market truth and reconcile exactly once after successful ACK; retired epoch or
@@ -1124,8 +1228,9 @@ It also requires strict `operational_diagnostics_schema_version = 3` with the ex
 
 - all nine frozen `runtime_limits`;
 - ingress received/reduced/gap-or-duplicate counts, queue high-water, maximum receive-to-reduce
-  lag, and overflow;
-- per-method request/success/error/late/rate-limit counts and latency count/sum/max;
+  lag, overflow, send-control count, and connection-error-control count;
+- per-method scheduled/sent/terminal totals, exact pre-/post-send terminal provenance,
+  rate-limit counts, and latency count/sum/max, plus separately conserved orphan-late wire count;
 - received/processed counts and observation-duration-derived nullable rates for every fixed
   channel class;
 - current/peak subscribed instrument and channel counts;
@@ -1133,9 +1238,10 @@ It also requires strict `operational_diagnostics_schema_version = 3` with the ex
 - reconnect, session/index gap, index resubscribe, option resync, clock refresh,
   option-catalog refresh, and combo authoritative-refresh diagnostics;
 - core source shape rows containing only source, counts, final validation, and sorted consumed
-  key/type pairs;
+  key/type pairs governed by the runtime/validator shared exact field specification;
 - separate ticker application/currentness counts and bounded late-regression rows;
-- global continuity epoch/restart counts and bounded option-local unavailable/recovery intervals;
+- global continuity epoch/restart/recovery edges, complete current-epoch joint identity rows, and
+  bounded option-local unavailable/recovery intervals;
 - nullable first same-current-scope joint-witness time and continuous global-continuity duration
   after that witness.
 

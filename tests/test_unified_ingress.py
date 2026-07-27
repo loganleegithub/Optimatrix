@@ -72,6 +72,7 @@ def test_reader_enqueues_every_inbound_frame_once_in_one_continuous_sequence() -
     assert all(isinstance(frame.received_monotonic_ms, int) for frame in wire_frames)
     assert [frame.get("id") for frame in wire_frames[1:]] == [10, 11, 999, 12]
     assert frames[-1].get("method") == "connection_error"
+    assert frames[-1].ingress_seq == 6
 
 
 def test_reader_preserves_fatal_protocol_failure_identity_in_ingress() -> None:
@@ -205,25 +206,42 @@ def test_transport_records_real_queue_high_water_and_overflow() -> None:
 
     assert client.queue_high_water_frames == 1
     assert client.overflow_count == 1
+    assert client.drain_envelopes()[0].ingress_seq == 1
+    client._enqueue_wire_message(
+        {"jsonrpc": "2.0", "id": 3, "result": "retry"},
+        received_monotonic_ms=1_002,
+    )
+    assert client.drain_envelopes()[0].ingress_seq == 2
 
 
 def test_send_receipt_is_an_immutable_control_event_in_the_same_ordered_queue() -> None:
     client = DeribitPublicClient(session_epoch=7, rpc_deadline_ms=30_000)
-    event = deribit_public.SendControlEvent(
+    first_event = deribit_public.SendControlEvent(
         kind=deribit_public.SendControlKind.SEND_COMPLETED,
         request_id=41,
         boundary_monotonic_ms=1_001,
     )
-
-    client.enqueue_send_control(event)
-    client._enqueue_wire_message(
-        {"jsonrpc": "2.0", "id": 41, "result": "ok"},
-        received_monotonic_ms=1_002,
+    second_event = deribit_public.SendControlEvent(
+        kind=deribit_public.SendControlKind.SEND_COMPLETED,
+        request_id=42,
+        boundary_monotonic_ms=1_002,
     )
 
-    control, response = client.drain_envelopes()
-    assert control.control_event is event
+    client.enqueue_send_control(first_event)
+    client.enqueue_send_control(second_event)
+    client._enqueue_wire_message(
+        {"jsonrpc": "2.0", "id": 41, "result": "ok"},
+        received_monotonic_ms=1_003,
+    )
+
+    first_control, second_control, response = client.drain_envelopes()
+    assert first_control.control_event is first_event
+    assert second_control.control_event is second_event
     assert response.control_event is None
-    assert control.ingress_seq == response.ingress_seq == 1
+    assert [
+        first_control.ingress_seq,
+        second_control.ingress_seq,
+        response.ingress_seq,
+    ] == [1, 2, 3]
     with pytest.raises(FrozenInstanceError):
-        event.boundary_monotonic_ms = 1_003  # type: ignore[misc]
+        first_event.boundary_monotonic_ms = 1_004  # type: ignore[misc]

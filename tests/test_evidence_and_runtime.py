@@ -15,7 +15,12 @@ from market_monitor import (
     PriceLevel,
     TimeInterval,
 )
-from radar_runtime.deribit_public import InboundEnvelope, SendControlEvent
+from radar_runtime.deribit_public import (
+    DeribitPublicClient,
+    InboundEnvelope,
+    PublicSessionError,
+    SendControlEvent,
+)
 from radar_runtime.identity import (
     StartupGuardError,
     prepare_evidence_directory,
@@ -443,8 +448,10 @@ def attach_joint_witness(
         else [
             {
                 "policy_identity": "sha256:" + "b" * 64,
+                "expiration_timestamp_ms": expiration_timestamp_ms,
                 "option_type": option_type,
                 "tte_band_id": tte_band_id,
+                "formula_instrument_name": "SHORT",
                 "count": joint_count,
                 "first_joint_evaluation_boundary": dict(witness["boundary"]),
             }
@@ -569,6 +576,15 @@ def cross_ledger_summary() -> dict[str, object]:
             "deadline_late_count": 0,
             "retired_count": 0,
             "censored_count": 0,
+            "pre_send_error_count": 0,
+            "pre_send_deadline_late_count": 0,
+            "pre_send_retired_count": 0,
+            "pre_send_censored_count": 0,
+            "post_send_success_count": 1,
+            "post_send_error_count": 0,
+            "post_send_deadline_late_count": 0,
+            "post_send_retired_count": 0,
+            "post_send_censored_count": 0,
             "rate_limit_count": 0,
             "latency_observation_count": 1,
             "latency_ms_sum": 5,
@@ -611,6 +627,24 @@ def cross_ledger_summary() -> dict[str, object]:
         "heartbeat.latency_observation_count",
         "heartbeat.latency_ms_sum",
         "heartbeat.latency_ms_max",
+        "rpc.scheduled_count",
+        "rpc.sent_count",
+        "rpc.success_count",
+        "rpc.error_count",
+        "rpc.deadline_late_count",
+        "rpc.retired_count",
+        "rpc.censored_count",
+        "rpc.pre_send_error_count",
+        "rpc.pre_send_deadline_late_count",
+        "rpc.pre_send_retired_count",
+        "rpc.pre_send_censored_count",
+        "rpc.post_send_success_count",
+        "rpc.post_send_error_count",
+        "rpc.post_send_deadline_late_count",
+        "rpc.post_send_retired_count",
+        "rpc.post_send_censored_count",
+        "rpc.rate_limit_count",
+        "rpc.latency_observation_count",
         "rpc.latency_ms_sum",
         "rpc.latency_ms_max",
         "source_shapes.public/test.observed_count",
@@ -632,6 +666,7 @@ def test_schema_three_cross_ledger_conservation_rejects_single_point_tampering(
     field: str,
 ) -> None:
     summary = cross_ledger_summary()
+    validate_run_summary(summary)
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
     heartbeat = diagnostics["heartbeat"]
@@ -1594,11 +1629,7 @@ def test_sender_reports_transport_completion_without_mutating_reducer(
                 await task
         else:
             release.set()
-            if outcome == "ERROR":
-                with pytest.raises(RuntimeError, match="send failed"):
-                    await task
-            else:
-                await task
+            await task
         return tuple(client.controls)
 
     controls = asyncio.run(scenario())
@@ -1634,39 +1665,235 @@ def test_transport_metrics_finalize_before_sender_exception_propagates(
         runtime_identity="runtime",
     )
 
-    class FailingClient:
-        session_epoch = 1
-        queue_high_water_frames = 0
-        overflow_count = 0
-        enqueued_envelope_count = 0
-        received_frame_count = 0
-
-        def __init__(self) -> None:
-            self.send_controls: list[object] = []
-
+    class FailingClient(DeribitPublicClient):
         async def send_request(self, **_kwargs: object) -> None:
             self.queue_high_water_frames = 7
-            self.enqueued_envelope_count = 7
-            self.received_frame_count = 7
             raise RuntimeError("sender exploded")
 
-        def enqueue_send_control(self, event: object) -> None:
-            self.send_controls.append(event)
+    client = FailingClient(session_epoch=1, rpc_deadline_ms=30_000)
+    with pytest.raises(PublicSessionError, match="SET_HEARTBEAT"):
+        asyncio.run(runtime.run(client, asyncio.Event()))
+
+    assert runtime.reducer.diagnostics.queue_high_water_frames == 7
+    assert runtime.reducer.diagnostics.transport_enqueued_envelope_count == 1
+
+
+def test_send_failure_is_reduced_before_session_failure_propagates(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+
+    class SendFailureClient(DeribitPublicClient):
+        async def send_request(self, **_kwargs: object) -> None:
+            raise OSError("injected transport send failure")
+
+    client = SendFailureClient(session_epoch=1, rpc_deadline_ms=30_000)
+
+    with pytest.raises(PublicSessionError, match="SET_HEARTBEAT"):
+        asyncio.run(runtime.run(client, asyncio.Event()))
+
+    lifecycle = next(iter(runtime.reducer._rpc_lifecycles.values()))
+    assert lifecycle.state is runtime_module.RpcState.ERROR
+    assert runtime.reducer.diagnostics.rpc_error_count["public/set_heartbeat"] == 1
+    assert runtime.reducer.diagnostics.received_envelope_count == 1
+    assert runtime.reducer.diagnostics.reduced_envelope_count == 1
+
+
+def test_failure_barrier_drains_every_already_accepted_application_event(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    blocked = asyncio.Event()
+
+    class BufferedFailureClient(DeribitPublicClient):
+        async def send_request(self, **_kwargs: object) -> None:
+            await blocked.wait()
+
+    client = BufferedFailureClient(session_epoch=1, rpc_deadline_ms=30_000)
+    first_received_ms = runtime_module._monotonic_ms()
+    client._enqueue_wire_message(
+        {"jsonrpc": "2.0", "id": 999_999, "result": "orphan"},
+        received_monotonic_ms=first_received_ms,
+    )
+    client._enqueue_connection_error(PublicSessionError("injected connection failure"))
+    client._enqueue_wire_message(
+        {
+            "jsonrpc": "2.0",
+            "method": "heartbeat",
+            "params": {"type": "heartbeat"},
+        },
+        received_monotonic_ms=runtime_module._monotonic_ms(),
+    )
+
+    with pytest.raises(PublicSessionError, match="connection"):
+        asyncio.run(runtime.run(client, asyncio.Event()))
+
+    assert client.enqueued_envelope_count == runtime.reducer.diagnostics.received_envelope_count
+    assert (
+        runtime.reducer.diagnostics.received_envelope_count
+        == runtime.reducer.diagnostics.reduced_envelope_count
+    )
+    assert runtime.reducer.diagnostics.retired_epoch_frame_count >= 1
+
+
+def test_blocked_send_clean_stop_drains_cancellation_then_censors_scheduled(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    original_begin_session = runtime.reducer.begin_session
+
+    def begin_with_second_queued_command(
+        *,
+        session_epoch: int,
+        monotonic_ms: int,
+    ) -> tuple[runtime_module.PendingRpc, ...]:
+        commands = original_begin_session(
+            session_epoch=session_epoch,
+            monotonic_ms=monotonic_ms,
+        )
+        queued = runtime.reducer._schedule(
+            purpose=runtime_module.RpcPurpose.CLOCK_BOOTSTRAP,
+            method="public/get_time",
+            params={},
+            scope="CLOCK_INDEX",
+            generation=None,
+            origin_boundary=FactBoundary(session_epoch, 0, monotonic_ms, 0),
+            failure_scope=FailureScope.CLOCK_INDEX,
+        )
+        return (*commands, queued)
+
+    monkeypatch.setattr(runtime.reducer, "begin_session", begin_with_second_queued_command)
+    stop_event = asyncio.Event()
+    send_started = asyncio.Event()
+    never_release = asyncio.Event()
+
+    class BlockingClient(DeribitPublicClient):
+        send_attempt_count = 0
+
+        async def send_request(self, **_kwargs: object) -> None:
+            self.send_attempt_count += 1
+            send_started.set()
+            await never_release.wait()
 
         async def next_envelope(
             self,
             timeout_seconds: float | None = None,
         ) -> InboundEnvelope:
             del timeout_seconds
-            await asyncio.sleep(0)
+            await stop_event.wait()
             raise TimeoutError
 
-    client = FailingClient()
-    with pytest.raises(RuntimeError, match="sender exploded"):
-        asyncio.run(runtime.run(client, asyncio.Event()))
+    client = BlockingClient(session_epoch=1, rpc_deadline_ms=30_000)
 
-    assert runtime.reducer.diagnostics.queue_high_water_frames == 7
-    assert runtime.reducer.diagnostics.wire_received_envelope_count == 7
+    async def scenario() -> Path:
+        task = asyncio.create_task(runtime.run(client, stop_event))
+        await send_started.wait()
+        stop_event.set()
+        return await task
+
+    summary_path = asyncio.run(scenario())
+    summary = json.loads(summary_path.read_text())
+    validate_run_summary(summary)
+    lifecycles = tuple(runtime.reducer._rpc_lifecycles.values())
+    assert len(lifecycles) == 2
+    assert {lifecycle.state for lifecycle in lifecycles} == {runtime_module.RpcState.CENSORED}
+    assert {lifecycle.terminal_from_state for lifecycle in lifecycles} == {
+        runtime_module.RpcState.SCHEDULED
+    }
+    assert runtime.reducer.diagnostics.rpc_retired_count["public/set_heartbeat"] == 0
+    assert runtime.reducer.diagnostics.rpc_censored_count["public/set_heartbeat"] == 1
+    assert runtime.reducer.diagnostics.rpc_censored_count["public/get_time"] == 1
+    assert client.enqueued_envelope_count == runtime.reducer.diagnostics.reduced_envelope_count
+    assert client.send_attempt_count == 1
+
+
+def test_unexpected_sender_cancellation_fails_closed(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+
+    async def cancelled_sender(*_args: object, **_kwargs: object) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(runtime, "_sender_loop", cancelled_sender)
+
+    class WaitingClient:
+        session_epoch = 1
+        queue_high_water_frames = 0
+        overflow_count = 0
+        enqueued_envelope_count = 0
+        received_frame_count = 0
+        next_call_count = 0
+
+        async def next_envelope(
+            self,
+            timeout_seconds: float | None = None,
+        ) -> InboundEnvelope:
+            del timeout_seconds
+            self.next_call_count += 1
+            await asyncio.sleep(0)
+            if self.next_call_count > 1:
+                raise AssertionError("cancelled sender was ignored")
+            raise TimeoutError
+
+        async def send_request(self, **_kwargs: object) -> None:
+            raise AssertionError("patched sender must own transport calls")
+
+        def enqueue_send_control(self, _event: object) -> None:
+            raise AssertionError("patched sender must not emit controls")
+
+    with pytest.raises(PublicSessionError, match="sender"):
+        asyncio.run(runtime.run(WaitingClient(), asyncio.Event()))
 
 
 def test_current_writer_and_validator_are_schema_three_only_with_explicit_legacy_entry(
@@ -1856,13 +2083,22 @@ def test_schema_three_ticker_rpc_and_option_local_ledgers_must_conserve() -> Non
             "deadline_late_count": 0,
             "retired_count": 0,
             "censored_count": 0,
+            "pre_send_error_count": 0,
+            "pre_send_deadline_late_count": 0,
+            "pre_send_retired_count": 0,
+            "pre_send_censored_count": 0,
+            "post_send_success_count": 0,
+            "post_send_error_count": 0,
+            "post_send_deadline_late_count": 0,
+            "post_send_retired_count": 0,
+            "post_send_censored_count": 0,
             "rate_limit_count": 0,
             "latency_observation_count": 0,
             "latency_ms_sum": 0,
             "latency_ms_max": 0,
         }
     )
-    with pytest.raises(EvidenceError, match="RPC conservation"):
+    with pytest.raises(EvidenceError, match=r"RPC.*scheduled|conservation"):
         validate_run_summary(rpc)
 
     availability = current_summary_object()
@@ -1977,6 +2213,52 @@ def test_schema_three_joint_witness_binds_exact_current_epoch_evaluation_boundar
     first_boundary["causal_seq"] = 2
 
     with pytest.raises(EvidenceError, match=r"current.epoch|joint|boundary"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_joint_witness_binds_exact_formula_instrument_identity() -> None:
+    summary = current_summary_object()
+    attach_joint_witness(summary, joint_count=1)
+    validate_run_summary(summary)
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    witness = diagnostics["witness"]
+    assert isinstance(witness, dict)
+    formula_instrument = witness["formula_instrument"]
+    assert isinstance(formula_instrument, dict)
+    formula_instrument["instrument_name"] = "NON_EXISTENT"
+
+    with pytest.raises(EvidenceError, match=r"current.epoch|joint|instrument"):
+        validate_run_summary(summary)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("expiration_timestamp_ms", 3_600_001),
+        ("option_type", "put"),
+        ("tte_band_id", "other-band"),
+    ),
+)
+def test_schema_three_joint_witness_binds_every_exact_scope_identity_field(
+    field: str,
+    replacement: object,
+) -> None:
+    summary = current_summary_object()
+    attach_joint_witness(summary, joint_count=1)
+    validate_run_summary(summary)
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    witness = diagnostics["witness"]
+    assert isinstance(witness, dict)
+    scope = witness["scope"]
+    formula_instrument = witness["formula_instrument"]
+    assert isinstance(scope, dict)
+    assert isinstance(formula_instrument, dict)
+    scope[field] = replacement
+    formula_instrument[field] = replacement
+
+    with pytest.raises(EvidenceError, match=r"current.epoch|joint|scope|counts"):
         validate_run_summary(summary)
 
 
@@ -2202,6 +2484,15 @@ def test_schema_three_rpc_method_uses_exact_allowlist() -> None:
             "deadline_late_count": 0,
             "retired_count": 0,
             "censored_count": 0,
+            "pre_send_error_count": 0,
+            "pre_send_deadline_late_count": 0,
+            "pre_send_retired_count": 0,
+            "pre_send_censored_count": 0,
+            "post_send_success_count": 1,
+            "post_send_error_count": 0,
+            "post_send_deadline_late_count": 0,
+            "post_send_retired_count": 0,
+            "post_send_censored_count": 0,
             "rate_limit_count": 0,
             "latency_observation_count": 1,
             "latency_ms_sum": 1,
@@ -2210,6 +2501,69 @@ def test_schema_three_rpc_method_uses_exact_allowlist() -> None:
     )
 
     with pytest.raises(EvidenceError, match="allowlist"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_source_shape_rejects_unobserved_fabricated_consumed_field() -> None:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    source_rows = diagnostics["source_shapes"]
+    assert isinstance(source_rows, list)
+    heartbeat = next(
+        row for row in source_rows if isinstance(row, dict) and row.get("source") == "heartbeat"
+    )
+    heartbeat["consumed_fields"] = [{"key": "fabricated", "type": "string"}]
+
+    with pytest.raises(EvidenceError, match=r"source|consumed|field"):
+        validate_run_summary(summary)
+
+
+@pytest.mark.parametrize(
+    "consumed_field",
+    (
+        {"key": "fabricated", "type": "string"},
+        {"key": "type", "type": "integer"},
+    ),
+)
+def test_schema_three_source_shape_rejects_observed_field_outside_shared_spec(
+    consumed_field: dict[str, str],
+) -> None:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    source_rows = diagnostics["source_shapes"]
+    assert isinstance(source_rows, list)
+    heartbeat = next(
+        row for row in source_rows if isinstance(row, dict) and row.get("source") == "heartbeat"
+    )
+    heartbeat.update(
+        {
+            "observed_count": 1,
+            "valid_count": 1,
+            "invalid_count": 0,
+            "validation": "VALID",
+            "consumed_fields": [consumed_field],
+        }
+    )
+    heartbeat_channel = next(
+        row
+        for row in diagnostics["channel_by_class"]
+        if isinstance(row, dict) and row.get("channel_class") == "HEARTBEAT"
+    )
+    heartbeat_channel.update(
+        {
+            "received_count": 1,
+            "processed_count": 1,
+            "received_rate_per_second": "50",
+            "processed_rate_per_second": "50",
+        }
+    )
+    ingress = diagnostics["ingress"]
+    assert isinstance(ingress, dict)
+    ingress.update({"received_envelope_count": 1, "reduced_envelope_count": 1})
+
+    with pytest.raises(EvidenceError, match=r"source|consumed|field|specification"):
         validate_run_summary(summary)
 
 
@@ -2273,6 +2627,29 @@ def test_evidence_directory_cross_binds_atomic_to_anomaly(
     (tmp_path / "atomic.json").write_text(json.dumps(atomic), encoding="utf-8")
 
     with pytest.raises(EvidenceError, match=message):
+        validate_evidence_directory(tmp_path)
+
+
+def test_atomic_event_requires_available_transition_in_owning_summary_scope(
+    tmp_path: Path,
+) -> None:
+    anomaly = project_anomaly_event(anomaly_evidence())
+    atomic = project_atomic_event(atomic_evidence())
+    summary = current_summary_object()
+    scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
+    scope.applicable_instrument_count = 1
+    scope.distinct_anomaly_episode_count = 1
+    scope.anomaly_activation_transition_count = 1
+    scope.anomaly_end_count_by_reason[EpisodeEndReason.CENSORED_AT_STOP.value] = 1
+    summary["counts_by_scope"] = [scope.as_object()]
+    summary["anomaly_end_count_by_reason"] = {
+        EpisodeEndReason.CENSORED_AT_STOP.value: 1,
+    }
+    (tmp_path / "anomaly.json").write_text(json.dumps(anomaly), encoding="utf-8")
+    (tmp_path / "atomic.json").write_text(json.dumps(atomic), encoding="utf-8")
+    (tmp_path / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match=r"atomic|AVAILABLE|scope"):
         validate_evidence_directory(tmp_path)
 
 

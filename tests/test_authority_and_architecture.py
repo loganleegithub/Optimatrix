@@ -147,17 +147,17 @@ def test_current_stage_authorizes_exactly_one_next_closure() -> None:
     assert "## Queued sequence — not authorized" in current_stage
 
 
-def test_short_vol_task_has_open_rpc_atomic_repair_and_closed_live_gates() -> None:
+def test_short_vol_task_has_open_application_lifecycle_repair_and_closed_live_gates() -> None:
     task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-    opening = "\n".join(task.splitlines()[:40])
+    opening = "\n".join(task.splitlines()[:50])
 
     assert "**Status:** ACTIVE" in opening
     assert "**Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`" in opening
     assert (
-        "**Current construction subgate:** `RPC_ATOMIC_EVIDENCE_CAUSAL_NORMALIZATION_REPAIR`"
+        "**Current construction subgate:** `APPLICATION_SEQUENCE_AND_LIFECYCLE_BARRIER_REPAIR`"
     ) in opening
     assert (
-        "**Current subgate implementation anchor:** `a7e2cbfff52b0553ab3d2ab3bcb1d032a7f2406f`"
+        "**Current subgate implementation anchor:** `2a2f6fb6954992ad593a2405f2f33f66b897544d`"
     ) in opening
     assert "**REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`" in opening
     assert "**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_001_NOT_MET`" in opening

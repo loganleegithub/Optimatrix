@@ -58,22 +58,42 @@ command, and archive are not Online Runtime semantics and cannot become prerequi
 
 ## Live event semantics
 
-The socket reader only decodes and stamps every inbound frame with `session_epoch`,
-`ingress_seq`, and `received_monotonic_ms`, then places notifications and every RPC
-success/error/late response into one bounded queue. It never applies market truth, resolves an
-economic response future, or filters a frame by client-side subscription generation. One
-synchronous reducer is the sole owner of session, channel, platform, catalog, market, detector,
-episode, coverage, and Layer 2 state. It consumes each envelope exactly once in epoch/sequence
-order and never waits for network I/O anywhere in its call tree.
+The transport has one application-sequence allocator per session epoch. It stamps every decoded
+socket frame, immutable send-completion/failure control, and connection-failure control with
+`session_epoch`, one unique consecutive `ingress_seq`, and `received_monotonic_ms`, then places all
+of them into one bounded queue. Here `ingress_seq` is the persisted application sequence, not a
+wire-only sequence or a queue position. The allocator advances only after an event is accepted by
+the queue. The reducer accepts exactly `last + 1` for every event kind and advances its frontier
+exactly once; a duplicate or gap fails the epoch closed.
+
+The socket reader and sender never apply market truth, resolve an economic response future, or
+filter a frame by client-side subscription generation. One synchronous reducer is the sole owner
+of session, channel, platform, catalog, market, detector, episode, coverage, RPC lifecycle, and
+Layer 2 state. It consumes each accepted application event exactly once and never waits for
+network I/O anywhere in its call tree. Only a real decoded socket frame advances session-wire
+liveness; local send and connection controls cannot keep market truth current.
 
 Reducer output is a finite list of purpose-specific `PendingRpc` commands. Sending is an
-orchestration concern; every response, error, and acknowledgement returns through the same reader
-queue before the reducer can commit its effect. RPC ownership is explicit:
-`SCHEDULED -> SENT -> SUCCESS | ERROR | DEADLINE_LATE | RETIRED | CENSORED`; `SENT` is stamped at
-the actual transport send boundary, response latency begins there, and unmatched/terminal
-responses are retained separately as `ORPHAN_LATE_WIRE`. A reconnect retires one entire session
-epoch, so a late frame from that epoch or a retired channel generation has zero business side
-effects.
+orchestration concern. Only successful completion of the transport send creates an immutable
+`SENT` control boundary; the sender reports expected success, failure, or cancellation through
+the application queue and does not own session termination. RPC ownership is explicit:
+
+```text
+SCHEDULED -> SENT | ERROR | DEADLINE_LATE | RETIRED | CENSORED
+SENT      -> SUCCESS | ERROR | DEADLINE_LATE | RETIRED | CENSORED
+```
+
+`SCHEDULED` has a send deadline. `SENT` starts a separate response deadline and response latency
+at its actual send-completion boundary. Terminal transitions are idempotent and cannot be
+rewritten; unmatched or already-terminal responses remain separately counted as
+`ORPHAN_LATE_WIRE`.
+
+A failure/reconnect barrier first retires the epoch, stops producers, and then drains every event
+already accepted by the transport or buffered by orchestration as retired/orphan facts before
+propagating the failure. A clean-stop barrier rejects further outbound work, stops producers,
+settles in-flight cancellation controls, drains every accepted event, and only then censors
+remaining `SCHEDULED` and `SENT` RPCs and writes the summary. No queued RPC begins a transport
+send after that barrier opens.
 
 Every source boundary enters one non-reentrant reducer transaction: classify the candidate,
 settle all source currentness, freeze the received cause plus concurrent effects and their complete
@@ -147,9 +167,11 @@ Operational truth is kept in three independent ledgers:
    continuity.
 
 One joint operational witness is derived from one settled full current
-`Policy identity × expiry_timestamp × option_type` scope snapshot. The same snapshot supplies both
-complete aggregate coverage and `has_current_full_formula`; a historical formula result or only
-the boundary's affected subset cannot be combined with a separately computed complete scope.
+`Policy identity × expiry_timestamp × option_type` scope snapshot. Its current-epoch durable row
+freezes `Policy identity × expiry_timestamp × option_type × TTE band × formula instrument ×
+boundary`. The same snapshot supplies both complete aggregate coverage and
+`has_current_full_formula`; a historical formula result, a different instrument, or only the
+boundary's affected subset cannot be combined with a separately computed complete scope.
 `EvidenceWriter` persists only detector/atomic episode edges and the clean-stop summary and never
 participates in current-truth decisions.
 

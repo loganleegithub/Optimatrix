@@ -263,12 +263,21 @@ requires fresh subscriptions, snapshots, catalog reconciliation, and baseline co
 Heartbeat traffic proves only transport liveness: it never refreshes a book's economic timestamp,
 creates a detector observation, or bridges a market-data sequence gap.
 
-The socket reader only decodes and stamps every inbound frame—notification, RPC success, RPC
-error, acknowledgement, heartbeat response, or late response—with `session_epoch`,
-`ingress_seq`, and `received_monotonic_ms`, then puts it into one bounded inbound queue. It never
-resolves a response future that applies economic state, never owns active subscription generation,
-and never has a second notification queue. `ingress_seq` is continuous within one session epoch.
-Every envelope is reduced exactly once or the epoch fails closed.
+The transport owns one application-sequence allocator per session epoch. Every decoded inbound
+frame—notification, RPC success/error/acknowledgement, heartbeat response, or late response—and
+every immutable `SEND_COMPLETED`, `SEND_FAILED`, or connection-failure control consumes one unique
+consecutive application identity. That identity is persisted as `session_epoch + ingress_seq`;
+`received_monotonic_ms` freezes its local boundary. Allocation advances only after the bounded
+inbound queue accepts the event. The reducer accepts exactly `last + 1` for every event kind and
+advances its frontier once; a duplicate or gap fails the epoch closed. FIFO position without this
+identity is not a fact lifecycle.
+
+The socket reader never resolves a response future that applies economic state, never owns active
+subscription generation, and never has a second notification queue. The sender likewise never
+mutates the reducer or owns session termination: expected send completion, failure, and
+cancellation are facts that must return through the same application queue. Only decoded socket
+frames update the wire-liveness timestamp. Local send or connection controls never refresh
+session liveness, economic currentness, a book timestamp, or a detector observation.
 
 One synchronous reducer exclusively owns session, channel, platform, catalog, market, detector,
 episode, coverage, and Layer 2 state. No function reachable from that reducer waits for network
@@ -284,13 +293,36 @@ Each `PendingRpc` freezes:
 - session epoch;
 - scope kind/id and channel generation when applicable;
 - origin `FactBoundary`;
-- absolute monotonic deadline derived from the frozen external Policy;
+- absolute monotonic send deadline derived from the scheduling boundary and frozen external
+  Policy; a separate response deadline exists only after `SENT`;
 - one failure scope from
   `SESSION | CLOCK_INDEX | OPTION | OPTION_CATALOG | COMBO_LAYER | FATAL_PROTOCOL`.
 
 A response with the wrong epoch, unknown/retired request id, retired generation, or expired
-deadline is a reduced late response with zero business side effects. Reconnect retires every
-pending request and channel generation in that session epoch exactly once.
+deadline is a reduced late response with zero business side effects. The exact RPC transitions
+are:
+
+```text
+SCHEDULED -> SENT | ERROR | DEADLINE_LATE | RETIRED | CENSORED
+SENT      -> SUCCESS | ERROR | DEADLINE_LATE | RETIRED | CENSORED
+```
+
+Only completed transport send creates the immutable `SENT` boundary. It starts the response
+deadline and latency clock. A terminal transition is idempotent and cannot be rewritten by a
+later control, deadline, cancellation, or response. A response received before its send receipt
+is retained until the reducer settles that receipt; if no legal `SENT` transition follows, it is
+retained as `ORPHAN_LATE_WIRE`.
+
+Reconnect first retires every pending request and channel generation in that session epoch
+exactly once. The failure barrier then stops producers and reduces every event already accepted by
+the transport or held in the runtime buffer as a retired/orphan application fact before failure
+propagation.
+
+Clean stop has a distinct barrier: reject further outbound work, stop producers, settle in-flight
+cancellation controls, drain every accepted application event, then censor remaining
+`SCHEDULED` and `SENT` requests and project the summary. No queued request may begin transport
+send after this barrier opens. A cancellation settled after its send deadline remains
+`DEADLINE_LATE`; clean stop cannot rewrite an earlier terminal fact.
 
 Reducer-owned channel state is exactly:
 
@@ -995,13 +1027,17 @@ these members:
 - `runtime_limits`: the exact nine frozen Policy `runtime_limits`;
 - `ingress`: `received_envelope_count`, `reduced_envelope_count`,
   `ingress_gap_or_duplicate_count`, `queue_high_water_frames`,
-  `max_receive_to_reduce_lag_ms`, and `overflow_count`;
+  `max_receive_to_reduce_lag_ms`, `overflow_count`, `send_control_event_count`, and
+  `connection_error_event_count`;
 - `rpc_by_method`: one row per exact-allowlisted consumed method, sorted by method, with `method`,
   `scheduled_count`, `sent_count`, mutually exclusive `success_count`, `error_count`,
-  `deadline_late_count`, `retired_count`, `censored_count`, `rate_limit_count`,
-  `latency_observation_count`, `latency_ms_sum`, and `latency_ms_max`; unmatched or already
-  terminal wire responses are excluded from method outcomes and counted only in
-  `rpc_orphan_late_wire_count`;
+  `deadline_late_count`, `retired_count`, `censored_count`, the provenance fields
+  `pre_send_error_count`, `pre_send_deadline_late_count`, `pre_send_retired_count`,
+  `pre_send_censored_count`, `post_send_success_count`, `post_send_error_count`,
+  `post_send_deadline_late_count`, `post_send_retired_count`, and
+  `post_send_censored_count`, followed by `rate_limit_count`, `latency_observation_count`,
+  `latency_ms_sum`, and `latency_ms_max`; unmatched or already terminal wire responses are
+  excluded from method outcomes and counted only in top-level `rpc_orphan_late_wire_count`;
 - `channel_by_class`: exactly one sorted row for each
   `PLATFORM | OPTION_LIFECYCLE | COMBO_LIFECYCLE | INDEX | OPTION_TICKER | OPTION_BOOK |
   COMBO_BOOK | HEARTBEAT | CONNECTION_CONTROL | INVALID`, with `received_count`,
@@ -1016,10 +1052,16 @@ these members:
   authoritative refresh;
 - `source_shapes`: one sorted row per core RPC/channel source with `source`, `observed_count`,
   `valid_count`, `invalid_count`, `validation = NOT_OBSERVED | VALID | INVALID`, and a sorted list
-  of consumed `{key, type}` pairs; this ledger reports parse/consumed-shape validity only, so a
-  shape-valid `LATE_IGNORED` ticker increments `valid_count`, never `invalid_count`;
+  of consumed `{key, type}` pairs governed by the exact shared field specification below; an
+  unobserved source has no consumed fields, and any undeclared key or impossible JSON type fails;
+  this ledger reports parse/consumed-shape validity only, so a shape-valid `LATE_IGNORED` ticker
+  increments `valid_count`, never `invalid_count`;
 - `global_continuity`: positive `current_epoch`, total `restart_count`,
-  `restart_count_by_reason`, exact `restart_edges`, and explicit `recovery_edges`;
+  `restart_count_by_reason`, exact `restart_edges`, explicit `recovery_edges`, and
+  `current_epoch_joint_evaluation_count_by_scope`; each current-epoch row has exactly
+  `policy_identity`, `expiration_timestamp_ms`, `option_type`, `tte_band_id`,
+  `formula_instrument_name`, positive `count`, and nullable
+  `first_joint_evaluation_boundary`;
 - `ticker_application`: `disposition_count` has exact counts for
   `APPLIED | LATE_IGNORED | AHEAD_IGNORED | STALE_GENERATION_IGNORED | SHAPE_REJECTED`, a fixed
   `late_ignored_diagnostic_limit = 256`, `omitted_late_ignored_diagnostic_count`, and at most 256
@@ -1031,8 +1073,9 @@ these members:
   `CURRENT | SOURCE_STALE | TIMESTAMP_AHEAD | TRUSTED_TIME_UNKNOWN`, separately from de-duplicated
   `accepted_transition_count_by_state` for `MISSING | CURRENT | SOURCE_STALE`;
 - `option_local_availability`: `unavailable_count_by_reason`, `recovery_count_by_reason`, fixed
-  `retained_interval_limit = 256`, `omitted_interval_count`, and at most 256 `intervals` containing
-  only `instrument_name`, ticker `generation`, `reason`, `start_monotonic_ms`,
+  `end_count_by_disposition`, fixed `retained_interval_limit = 256`,
+  `omitted_interval_count`, `omitted_interval_count_by_reason`, and at most 256 `intervals`
+  containing only `instrument_name`, ticker `generation`, `reason`, `start_monotonic_ms`,
   `end_monotonic_ms`, `duration_ms`,
   `end_disposition = RECOVERED | REASON_CHANGED | CENSORED_AT_STOP`, and
   `global_continuity_epoch`; every retained `CENSORED_AT_STOP.end_monotonic_ms` equals the clean
@@ -1040,16 +1083,74 @@ these members:
 - `witness`: current `global_continuity_epoch`, nullable
   `first_joint_witness_monotonic_ms`, and nullable
   `continuous_global_continuity_after_witness_ms`, plus its exact scope, fact boundary, and formula
-  instrument identity. A known witness must lie inside a current-epoch `KNOWN_COMPLETE` segment
-  and bind exactly one `counts_by_scope` row whose
-  `complete_aggregate_with_full_formula_evaluation_count > 0`.
+  instrument identity. A known witness must lie inside a current-epoch `KNOWN_COMPLETE` segment,
+  follow strict recovery of the latest incident, bind exactly one `counts_by_scope` row whose
+  `complete_aggregate_with_full_formula_evaluation_count > 0`, and match one current-epoch joint
+  row on every Policy/expiry/option-type/band/formula-instrument field and its first eligible
+  boundary.
+
+For `rpc_by_method`, the validator proves both equations for every row:
+
+```text
+scheduled_count =
+    sent_count
+  + pre_send_error_count
+  + pre_send_deadline_late_count
+  + pre_send_retired_count
+  + pre_send_censored_count
+
+sent_count =
+    post_send_success_count
+  + post_send_error_count
+  + post_send_deadline_late_count
+  + post_send_retired_count
+  + post_send_censored_count
+```
+
+Each aggregate terminal total equals the sum of its pre-/post-send provenance; success is
+post-send only. Rate limits are a subset of post-send errors. Latency observations are a subset
+of post-send response terminals and start at the real immutable `SENT` boundary.
+
+The shared `source_shapes` field specification uses JSON types `S = string`, `B = boolean`,
+`I = integer`, `N = integer | number | string`, and `A = array`:
+
+```text
+combo_book, option_book:
+  type:S timestamp:I instrument_name:S change_id:I
+  prev_change_id:I|null bids:A asks:A
+combo_lifecycle, option_lifecycle:
+  instrument_name:S state:S
+heartbeat:
+  type:S
+index:
+  timestamp:I index_name:S price:N
+option_ticker:
+  instrument_name:S timestamp:I underlying_price:N underlying_index:S
+platform_state:
+  maintenance:B price_index:S locked:B
+platform_state.public_methods_state:
+  allow_unauthenticated_public_requests:B
+public/get_combos:
+  id:S state:S legs:A
+public/get_instrument, public/get_instruments:
+  instrument_name:S kind:S base_currency:S quote_currency:S settlement_currency:S
+  counter_currency:S price_index:S instrument_type:S is_active:B state:S option_type:S
+  expiration_timestamp:I strike:N contract_size:N min_trade_amount:N qty_tick_size:N
+public/status:
+  locked:B|S locked_indices:A
+public/test:
+  version:S
+public/get_time, public/set_heartbeat, public/subscribe, public/unsubscribe:
+  no object-key fields
+```
 
 The two channel rates use the run observation interval in seconds; either rate is `null` when that
-denominator is zero or unknown. An RPC latency starts at the immutable actual `SENT` boundary and
-is counted only when its response receive time belongs to the same non-retired session epoch.
-Atomic evidence is directory-valid only when its code/runtime/Policy/episode identity, target,
-short leg, detector causal identity, and later quote causal order cross-bind to the owning anomaly
-event. Only a
+denominator is zero or unknown. Ingress, channel classes, send/connection controls, RPC response
+latency, orphan wire responses, heartbeat/public-test facts, and source shapes cross-conserve
+exactly. Atomic evidence is directory-valid only when its code/runtime/Policy/episode identity,
+target, short leg, detector causal identity, and later quote causal order cross-bind to the owning
+anomaly event and that anomaly's Policy/option-type/activation-band scope has a positive
+`PUBLIC_ATOMIC_QUOTE_AVAILABLE` transition in `counts_by_scope`. Only a
 `global_continuity_epoch` restart clears the witness start. Current coverage or option-local
 availability loss remains explicit in its own ledger and does not reset global continuity.
 Diagnostics count source/application/currentness facts in their declared ledgers and never enter

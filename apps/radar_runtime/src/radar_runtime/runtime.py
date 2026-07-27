@@ -73,6 +73,7 @@ from short_vol_radar.evidence import (
     CHANNEL_CLASSES,
     CORE_SOURCE_NAMES,
     RPC_METHOD_ALLOWLIST,
+    SOURCE_CONSUMED_FIELD_TYPES,
     AnomalyEvidence,
     AtomicEvidence,
     CoverageSegment,
@@ -433,7 +434,7 @@ class _RpcLifecycle:
 
 @dataclass
 class RuntimeDiagnostics:
-    wire_received_envelope_count: int = 0
+    transport_enqueued_envelope_count: int = 0
     received_envelope_count: int = 0
     reduced_envelope_count: int = 0
     ingress_gap_or_duplicate_count: int = 0
@@ -467,6 +468,8 @@ class RuntimeDiagnostics:
     rpc_deadline_late_count: Counter[str] = field(default_factory=Counter)
     rpc_retired_count: Counter[str] = field(default_factory=Counter)
     rpc_censored_count: Counter[str] = field(default_factory=Counter)
+    rpc_pre_send_terminal_count: Counter[tuple[str, str]] = field(default_factory=Counter)
+    rpc_post_send_terminal_count: Counter[tuple[str, str]] = field(default_factory=Counter)
     rpc_rate_limit_count: Counter[str] = field(default_factory=Counter)
     rpc_latency_count: Counter[str] = field(default_factory=Counter)
     rpc_latency_sum: Counter[str] = field(default_factory=Counter)
@@ -583,9 +586,10 @@ class RadarReducer:
         self._held_subscription_frame_count = 0
         self._session_epoch: int | None = None
         self._retired_epochs: set[int] = set()
+        self._application_frontier_by_epoch: dict[int, int] = {}
         self._last_ingress_seq = 0
         self._last_boundary_monotonic_ms = 0
-        self._last_inbound_received_ms = 0
+        self._last_wire_received_ms = 0
         self._causal_seq = 0
         self._clock_revision = 0
         self._last_time_currentness_token: tuple[object, ...] | None = None
@@ -630,9 +634,11 @@ class RadarReducer:
         self._band_suspended_started_ms: int | None = None
         self._global_continuity_epoch = 1
         self._current_continuity_epoch_started_ms = initialized_ms
-        self._current_epoch_joint_evaluation_counts: Counter[tuple[str, str, str]] = Counter()
+        self._current_epoch_joint_evaluation_counts: Counter[tuple[str, int, str, str, str]] = (
+            Counter()
+        )
         self._current_epoch_joint_evaluation_first_boundaries: dict[
-            tuple[str, str, str],
+            tuple[str, int, str, str, str],
             FactBoundary,
         ] = {}
         self._active_continuity_incident: ContinuityIncident | None = None
@@ -657,6 +663,7 @@ class RadarReducer:
         self._next_option_catalog_recovery_ms: int | None = None
         self._next_combo_catalog_recovery_ms: int | None = None
         self._fact_transaction_active = False
+        self._clean_stop_barrier_open = False
 
     def begin_session(
         self,
@@ -666,6 +673,8 @@ class RadarReducer:
     ) -> tuple[PendingRpc, ...]:
         if session_epoch <= 0 or monotonic_ms < 0:
             raise ValueError("session identity must be positive")
+        if self._session_epoch is not None and session_epoch <= self._session_epoch:
+            raise ValueError("session epoch must increase and cannot be reused")
         if self._session_epoch is not None:
             self.diagnostics.reconnect_count += 1
             self._retire_current_epoch()
@@ -693,8 +702,9 @@ class RadarReducer:
             )
         self._session_epoch = session_epoch
         self._last_ingress_seq = 0
+        self._application_frontier_by_epoch[session_epoch] = 0
         self._last_boundary_monotonic_ms = monotonic_ms
-        self._last_inbound_received_ms = monotonic_ms
+        self._last_wire_received_ms = monotonic_ms
         self._bootstrap_queries_issued = False
         self._platform_status_ingress_seq = None
         self._post_status_bootstrap_successes.clear()
@@ -772,6 +782,22 @@ class RadarReducer:
     ) -> tuple[PendingRpc, ...]:
         self._commands = []
         self.diagnostics.received_envelope_count += 1
+        last_application_seq = self._application_frontier_by_epoch.get(
+            envelope.session_epoch,
+            0,
+        )
+        if envelope.ingress_seq != last_application_seq + 1:
+            self.diagnostics.ingress_gap_or_duplicate_count += 1
+            if (
+                envelope.session_epoch == self._session_epoch
+                and envelope.session_epoch not in self._retired_epochs
+            ):
+                self._retire_current_epoch(
+                    "INGRESS_GAP_OR_DUPLICATE",
+                    monotonic_ms=envelope.received_monotonic_ms,
+                )
+            raise PublicSessionError("application event sequence is not continuous")
+        self._application_frontier_by_epoch[envelope.session_epoch] = envelope.ingress_seq
         channel_class = _channel_class(
             envelope,
             combo_names=set(self.combos) | self._subscribed_combo_names,
@@ -783,11 +809,25 @@ class RadarReducer:
             self.diagnostics.send_control_event_count += 1
         elif envelope.get("method") == "connection_error":
             self.diagnostics.connection_error_event_count += 1
+        if envelope.session_epoch == self._session_epoch:
+            self._last_ingress_seq = envelope.ingress_seq
         if (
             envelope.session_epoch != self._session_epoch
             or envelope.session_epoch in self._retired_epochs
         ):
             self.diagnostics.retired_epoch_frame_count += 1
+            if channel_class == "HEARTBEAT":
+                params = envelope.get("params")
+                try:
+                    heartbeat_params = require_mapping(params, "heartbeat.params")
+                    heartbeat_type = require_str(
+                        heartbeat_params.get("type"),
+                        "heartbeat.params.type",
+                    )
+                    valid_heartbeat = heartbeat_type in {"heartbeat", "test_request"}
+                except SourceDataError:
+                    valid_heartbeat = False
+                self._note_source_shape("heartbeat", params, valid=valid_heartbeat)
             response_id = envelope.get("id")
             if isinstance(response_id, int) and not isinstance(response_id, bool):
                 self.diagnostics.late_response_count += 1
@@ -807,15 +847,6 @@ class RadarReducer:
             )
             raise PublicSessionError("inbound queue lag deadline exceeded")
         if envelope.control_event is not None:
-            if envelope.ingress_seq not in {
-                self._last_ingress_seq,
-                self._last_ingress_seq + 1,
-            }:
-                raise PublicProtocolError("send control is outside the ordered ingress frontier")
-            self._last_inbound_received_ms = max(
-                self._last_inbound_received_ms,
-                envelope.received_monotonic_ms,
-            )
             self._last_boundary_monotonic_ms = max(
                 self._last_boundary_monotonic_ms,
                 envelope.received_monotonic_ms,
@@ -825,18 +856,11 @@ class RadarReducer:
                 boundary=self._current_boundary(envelope),
             )
             return self._take_commands()
-        if envelope.ingress_seq != self._last_ingress_seq + 1:
-            self.diagnostics.ingress_gap_or_duplicate_count += 1
-            self._retire_current_epoch(
-                "INGRESS_GAP_OR_DUPLICATE",
-                monotonic_ms=envelope.received_monotonic_ms,
+        if envelope.get("method") != "connection_error":
+            self._last_wire_received_ms = max(
+                self._last_wire_received_ms,
+                envelope.received_monotonic_ms,
             )
-            raise PublicSessionError("inbound frame ingress sequence is not continuous")
-        self._last_ingress_seq = envelope.ingress_seq
-        self._last_inbound_received_ms = max(
-            self._last_inbound_received_ms,
-            envelope.received_monotonic_ms,
-        )
         self._last_boundary_monotonic_ms = max(
             self._last_boundary_monotonic_ms,
             envelope.received_monotonic_ms,
@@ -935,6 +959,9 @@ class RadarReducer:
             self._combo_refresh_request_id = request.request_id
         return request
 
+    def begin_clean_stop(self) -> None:
+        self._clean_stop_barrier_open = True
+
     def _apply_send_control(
         self,
         event: SendControlEvent,
@@ -992,11 +1019,22 @@ class RadarReducer:
             return
         if event.kind is not SendControlKind.SEND_FAILED:
             raise PublicProtocolError("unknown send control kind")
+        if lifecycle.state is RpcState.SENT:
+            raise PublicProtocolError("RPC send failure cannot follow a completed send boundary")
         held_response = self._early_rpc_responses.pop(event.request_id, None)
         if held_response is not None:
             self.diagnostics.late_response_count += 1
             self.diagnostics.rpc_orphan_late_wire_count += 1
         self.pending_rpcs.pop(event.request_id, None)
+        if event.failure is SendFailureKind.CANCELLED and self._clean_stop_barrier_open:
+            self._finish_rpc(
+                request,
+                state=RpcState.CENSORED,
+                terminal_monotonic_ms=event.boundary_monotonic_ms,
+                record_latency=False,
+                allow_unsent=True,
+            )
+            return
         transitioned = self._finish_rpc(
             request,
             state=RpcState.ERROR,
@@ -1061,6 +1099,14 @@ class RadarReducer:
             self.diagnostics.rpc_retired_count[method] += 1
         else:
             self.diagnostics.rpc_censored_count[method] += 1
+        terminal_origin = (
+            self.diagnostics.rpc_pre_send_terminal_count
+            if previous_state is RpcState.SCHEDULED
+            else self.diagnostics.rpc_post_send_terminal_count
+        )
+        if previous_state not in {RpcState.SCHEDULED, RpcState.SENT}:
+            raise RuntimeError("RPC terminal origin is invalid")
+        terminal_origin[(method, state.value)] += 1
         if record_latency:
             sent_monotonic_ms = lifecycle.sent_monotonic_ms
             if sent_monotonic_ms is None:
@@ -4264,10 +4310,17 @@ class RadarReducer:
                 counter.complete_aggregate_detector_evaluation_count += 1
                 if scope_truth.has_current_full_formula:
                     counter.complete_aggregate_with_full_formula_evaluation_count += 1
+                    formula_instrument = scope_truth.formula_instrument
+                    if formula_instrument is None:
+                        raise RuntimeError(
+                            "full-formula joint evaluation lacks formula instrument identity"
+                        )
                     epoch_scope = (
                         self.policy.identity,
+                        formula_instrument.expiration_timestamp_ms,
                         representative.option_type.value,
                         scope_results[0][1].band_id or "",
+                        formula_instrument.instrument_name,
                     )
                     self._current_epoch_joint_evaluation_counts[epoch_scope] += 1
                     latest_recovery = self._latest_continuity_recovery_boundary
@@ -4285,13 +4338,8 @@ class RadarReducer:
                             epoch_scope,
                             boundary,
                         )
-                    if (
-                        self._first_joint_witness_ms is None
-                        and witness_eligible
-                        and scope_truth.formula_instrument is not None
-                    ):
+                    if self._first_joint_witness_ms is None and witness_eligible:
                         self._first_joint_witness_ms = boundary.received_monotonic_ms
-                        formula_instrument = scope_truth.formula_instrument
                         self._first_joint_witness_identity = _JointWitnessIdentity(
                             boundary=boundary,
                             expiration_timestamp_ms=(formula_instrument.expiration_timestamp_ms),
@@ -5035,8 +5083,8 @@ class RadarReducer:
             if enqueued < 0:
                 raise ValueError("transport enqueued envelope count cannot be negative")
             if session_epoch is None:
-                self.diagnostics.wire_received_envelope_count = max(
-                    self.diagnostics.wire_received_envelope_count,
+                self.diagnostics.transport_enqueued_envelope_count = max(
+                    self.diagnostics.transport_enqueued_envelope_count,
                     enqueued,
                 )
             else:
@@ -5044,7 +5092,7 @@ class RadarReducer:
                     self._transport_enqueued_by_epoch.get(session_epoch, 0),
                     enqueued,
                 )
-                self.diagnostics.wire_received_envelope_count = sum(
+                self.diagnostics.transport_enqueued_envelope_count = sum(
                     self._transport_enqueued_by_epoch.values()
                 )
 
@@ -5057,7 +5105,7 @@ class RadarReducer:
         else:
             self.diagnostics.source_invalid_count[source] += 1
         fields = self.diagnostics.source_consumed_fields.setdefault(source, set())
-        consumed_keys = _CONSUMED_FIELDS_BY_SOURCE[source]
+        consumed_keys = SOURCE_CONSUMED_FIELD_TYPES[source]
         payloads: tuple[dict[str, object], ...]
         if isinstance(payload, dict):
             payloads = (payload,)
@@ -5097,7 +5145,7 @@ class RadarReducer:
         if self._session_epoch is None:
             return ()
         if (
-            monotonic_ms - self._last_inbound_received_ms
+            monotonic_ms - self._last_wire_received_ms
             > self.policy.runtime_limits.session_liveness_deadline_ms
         ):
             self._last_boundary_monotonic_ms = max(
@@ -5235,6 +5283,7 @@ class RadarReducer:
         self._retire_current_epoch()
 
     def clean_stop(self, monotonic_ms: int) -> Path:
+        self.begin_clean_stop()
         self._last_boundary_monotonic_ms = max(
             self._last_boundary_monotonic_ms,
             monotonic_ms,
@@ -5391,7 +5440,7 @@ class RadarReducer:
             "ingress": {
                 "received_envelope_count": max(
                     self.diagnostics.received_envelope_count,
-                    self.diagnostics.wire_received_envelope_count,
+                    self.diagnostics.transport_enqueued_envelope_count,
                 ),
                 "reduced_envelope_count": self.diagnostics.reduced_envelope_count,
                 "ingress_gap_or_duplicate_count": (self.diagnostics.ingress_gap_or_duplicate_count),
@@ -5411,6 +5460,37 @@ class RadarReducer:
                     "deadline_late_count": (self.diagnostics.rpc_deadline_late_count[method]),
                     "retired_count": self.diagnostics.rpc_retired_count[method],
                     "censored_count": self.diagnostics.rpc_censored_count[method],
+                    "pre_send_error_count": self.diagnostics.rpc_pre_send_terminal_count[
+                        (method, RpcState.ERROR.value)
+                    ],
+                    "pre_send_deadline_late_count": (
+                        self.diagnostics.rpc_pre_send_terminal_count[
+                            (method, RpcState.DEADLINE_LATE.value)
+                        ]
+                    ),
+                    "pre_send_retired_count": self.diagnostics.rpc_pre_send_terminal_count[
+                        (method, RpcState.RETIRED.value)
+                    ],
+                    "pre_send_censored_count": self.diagnostics.rpc_pre_send_terminal_count[
+                        (method, RpcState.CENSORED.value)
+                    ],
+                    "post_send_success_count": self.diagnostics.rpc_post_send_terminal_count[
+                        (method, RpcState.SUCCESS.value)
+                    ],
+                    "post_send_error_count": self.diagnostics.rpc_post_send_terminal_count[
+                        (method, RpcState.ERROR.value)
+                    ],
+                    "post_send_deadline_late_count": (
+                        self.diagnostics.rpc_post_send_terminal_count[
+                            (method, RpcState.DEADLINE_LATE.value)
+                        ]
+                    ),
+                    "post_send_retired_count": self.diagnostics.rpc_post_send_terminal_count[
+                        (method, RpcState.RETIRED.value)
+                    ],
+                    "post_send_censored_count": self.diagnostics.rpc_post_send_terminal_count[
+                        (method, RpcState.CENSORED.value)
+                    ],
                     "rate_limit_count": self.diagnostics.rpc_rate_limit_count[method],
                     "latency_observation_count": self.diagnostics.rpc_latency_count[method],
                     "latency_ms_sum": self.diagnostics.rpc_latency_sum[method],
@@ -5476,19 +5556,29 @@ class RadarReducer:
                 "current_epoch_joint_evaluation_count_by_scope": [
                     {
                         "policy_identity": policy_identity,
+                        "expiration_timestamp_ms": expiration_timestamp_ms,
                         "option_type": option_type,
                         "tte_band_id": band_id,
+                        "formula_instrument_name": formula_instrument_name,
                         "count": count,
                         "first_joint_evaluation_boundary": (
                             _fact_boundary_object(
                                 self._current_epoch_joint_evaluation_first_boundaries[
-                                    (policy_identity, option_type, band_id)
+                                    (
+                                        policy_identity,
+                                        expiration_timestamp_ms,
+                                        option_type,
+                                        band_id,
+                                        formula_instrument_name,
+                                    )
                                 ]
                             )
                             if (
                                 policy_identity,
+                                expiration_timestamp_ms,
                                 option_type,
                                 band_id,
+                                formula_instrument_name,
                             )
                             in self._current_epoch_joint_evaluation_first_boundaries
                             else None
@@ -5496,8 +5586,10 @@ class RadarReducer:
                     }
                     for (
                         policy_identity,
+                        expiration_timestamp_ms,
                         option_type,
                         band_id,
+                        formula_instrument_name,
                     ), count in sorted(self._current_epoch_joint_evaluation_counts.items())
                     if count > 0
                 ],
@@ -5725,23 +5817,6 @@ class LiveRadarRuntime:
                 self._raise_sender_failure(sender_task)
                 buffered.extend(self._drain_client_envelopes(client))
                 if stop_event.is_set():
-                    await self._stop_client_intake(client)
-                    buffered.extend(self._drain_client_envelopes(client))
-                    while buffered:
-                        envelope = buffered.popleft()
-                        while next_poll_ms < envelope.received_monotonic_ms:
-                            self._enqueue_commands(
-                                outbound,
-                                self.reducer.advance_time(next_poll_ms),
-                            )
-                            next_poll_ms += poll_ms
-                        self._enqueue_commands(
-                            outbound,
-                            self.reducer.reduce(
-                                envelope,
-                                processed_monotonic_ms=_monotonic_ms(),
-                            ),
-                        )
                     break
                 if buffered:
                     envelope = buffered.popleft()
@@ -5775,45 +5850,77 @@ class LiveRadarRuntime:
                 buffered.append(envelope)
         except BaseException as exc:
             failure = exc
-        finally:
-            if failure is None and stop_event.is_set() and not sender_task.done():
-                try:
-                    await asyncio.wait_for(
-                        outbound.join(),
-                        timeout=(
-                            min(
-                                self.policy.runtime_limits.rpc_deadline_ms,
-                                self.policy.runtime_limits.notification_queue_lag_deadline_ms,
-                            )
-                            / 1_000
-                        ),
-                    )
-                except TimeoutError:
-                    self.reducer._retire_current_epoch()
-                else:
-                    for envelope in self._drain_client_envelopes(client):
-                        self.reducer.reduce(
-                            envelope,
-                            processed_monotonic_ms=_monotonic_ms(),
-                        )
-            try:
-                self._capture_transport_metrics(client)
-            except BaseException as exc:
-                if failure is None:
-                    failure = exc
-            if failure is None:
-                try:
-                    self._raise_sender_failure(sender_task)
-                except BaseException as exc:
-                    failure = exc
+
+        clean_stop_requested = failure is None and stop_event.is_set()
+        if clean_stop_requested:
+            self.reducer.begin_clean_stop()
+        else:
+            self.reducer.prepare_reconnect(
+                type(failure).__name__ if failure is not None else "runtime failure"
+            )
+
+        sender_cancelled_by_barrier = False
+        if not sender_task.done():
+            sender_cancelled_by_barrier = True
             sender_task.cancel()
+        try:
+            await self._stop_client_intake(client)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+        try:
+            await sender_task
+        except asyncio.CancelledError:
+            if not sender_cancelled_by_barrier and failure is None:
+                failure = PublicSessionError("outbound sender cancelled unexpectedly")
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+
+        if failure is not None and clean_stop_requested:
+            self.reducer.prepare_reconnect(type(failure).__name__)
+            clean_stop_requested = False
+
+        buffered.extend(self._drain_client_envelopes(client))
+        if clean_stop_requested:
             try:
-                await sender_task
-            except asyncio.CancelledError:
-                pass
+                while buffered:
+                    envelope = buffered.popleft()
+                    while next_poll_ms < envelope.received_monotonic_ms:
+                        self.reducer.advance_time(next_poll_ms)
+                        next_poll_ms += poll_ms
+                    self.reducer.reduce(
+                        envelope,
+                        processed_monotonic_ms=_monotonic_ms(),
+                    )
             except BaseException as exc:
-                if failure is None:
-                    failure = exc
+                failure = exc
+                self.reducer.prepare_reconnect(type(exc).__name__)
+
+        if failure is not None:
+            while buffered:
+                envelope = buffered.popleft()
+                try:
+                    self.reducer.reduce(
+                        envelope,
+                        processed_monotonic_ms=_monotonic_ms(),
+                    )
+                except BaseException:
+                    continue
+
+        while True:
+            try:
+                outbound.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            else:
+                outbound.task_done()
+
+        try:
+            self._capture_transport_metrics(client)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
         if failure is not None:
             raise failure.with_traceback(failure.__traceback__)
         return self.reducer.clean_stop(_monotonic_ms())
@@ -5856,7 +5963,7 @@ class LiveRadarRuntime:
                 )
             )
             raise
-        except BaseException:
+        except Exception:
             client.enqueue_send_control(
                 SendControlEvent(
                     kind=SendControlKind.SEND_FAILED,
@@ -5865,7 +5972,7 @@ class LiveRadarRuntime:
                     failure=SendFailureKind.ERROR,
                 )
             )
-            raise
+            return
         client.enqueue_send_control(
             SendControlEvent(
                 kind=SendControlKind.SEND_COMPLETED,
@@ -5888,8 +5995,10 @@ class LiveRadarRuntime:
 
     @staticmethod
     def _raise_sender_failure(sender_task: asyncio.Task[None]) -> None:
-        if not sender_task.done() or sender_task.cancelled():
+        if not sender_task.done():
             return
+        if sender_task.cancelled():
+            raise PublicSessionError("outbound sender cancelled unexpectedly")
         exception = sender_task.exception()
         if exception is not None:
             raise exception
@@ -5944,44 +6053,6 @@ class LiveRadarRuntime:
         return self.reducer.clean_stop(_monotonic_ms())
 
 
-_OPTION_INSTRUMENT_FIELDS = frozenset(
-    {
-        "instrument_name",
-        "kind",
-        "base_currency",
-        "quote_currency",
-        "settlement_currency",
-        "counter_currency",
-        "price_index",
-        "instrument_type",
-        "is_active",
-        "state",
-        "option_type",
-        "expiration_timestamp",
-        "strike",
-        "contract_size",
-        "min_trade_amount",
-        "qty_tick_size",
-    }
-)
-_COMBO_METADATA_FIELDS = frozenset(
-    {
-        "instrument_name",
-        "kind",
-        "base_currency",
-        "quote_currency",
-        "settlement_currency",
-        "counter_currency",
-        "instrument_type",
-        "is_active",
-        "state",
-        "contract_size",
-        "min_trade_amount",
-        "qty_tick_size",
-    }
-)
-
-
 def _merge_causal_scopes(*scope_groups: tuple[str, ...]) -> tuple[str, ...]:
     scopes = {scope for group in scope_groups for scope in group}
     if "GLOBAL" in scopes:
@@ -6028,34 +6099,6 @@ def _fact_boundary_key(boundary: FactBoundary) -> tuple[int, int, int, int]:
     )
 
 
-_CONSUMED_FIELDS_BY_SOURCE: dict[str, frozenset[str]] = {
-    "combo_book": frozenset(
-        {"type", "timestamp", "instrument_name", "change_id", "prev_change_id", "bids", "asks"}
-    ),
-    "combo_lifecycle": frozenset({"instrument_name", "state"}),
-    "heartbeat": frozenset({"type"}),
-    "index": frozenset({"timestamp", "index_name", "price"}),
-    "option_book": frozenset(
-        {"type", "timestamp", "instrument_name", "change_id", "prev_change_id", "bids", "asks"}
-    ),
-    "option_lifecycle": frozenset({"instrument_name", "state"}),
-    "option_ticker": frozenset(
-        {"instrument_name", "timestamp", "underlying_price", "underlying_index"}
-    ),
-    "platform_state": frozenset({"maintenance", "price_index", "locked"}),
-    "platform_state.public_methods_state": frozenset({"allow_unauthenticated_public_requests"}),
-    "public/get_combos": frozenset({"id", "state", "legs"}),
-    "public/get_instrument": _OPTION_INSTRUMENT_FIELDS | _COMBO_METADATA_FIELDS,
-    "public/get_instruments": _OPTION_INSTRUMENT_FIELDS,
-    "public/get_time": frozenset(),
-    "public/set_heartbeat": frozenset(),
-    "public/status": frozenset({"locked", "locked_indices"}),
-    "public/subscribe": frozenset(),
-    "public/test": frozenset({"version"}),
-    "public/unsubscribe": frozenset(),
-}
-
-
 def _channel_class(
     envelope: InboundEnvelope,
     *,
@@ -6063,7 +6106,7 @@ def _channel_class(
 ) -> str:
     if envelope.control_event is not None:
         return "CONNECTION_CONTROL"
-    if isinstance(envelope.get("id"), int):
+    if isinstance(envelope.get("id"), int) and not isinstance(envelope.get("id"), bool):
         return "CONNECTION_CONTROL"
     method = envelope.get("method")
     if method == "heartbeat":

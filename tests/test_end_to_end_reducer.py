@@ -19,6 +19,15 @@ from short_vol_radar.detector import DetectorState
 from short_vol_radar.evidence import EvidenceWriter
 from short_vol_radar.policy import load_policy_bytes
 
+_next_application_seq = 1
+
+
+def next_application_seq() -> int:
+    global _next_application_seq
+    value = _next_application_seq
+    _next_application_seq += 1
+    return value
+
 
 def envelope(
     message: dict[str, object],
@@ -29,7 +38,7 @@ def envelope(
     return InboundEnvelope(
         {"jsonrpc": "2.0", **message},
         session_epoch=1,
-        ingress_seq=seq,
+        ingress_seq=next_application_seq(),
         received_monotonic_ms=received_ms,
     )
 
@@ -46,7 +55,7 @@ def response(
         InboundEnvelope(
             {},
             session_epoch=command.session_epoch,
-            ingress_seq=seq,
+            ingress_seq=next_application_seq(),
             received_monotonic_ms=command.origin_boundary.received_monotonic_ms,
             control_event=SendControlEvent(
                 kind=SendControlKind.SEND_COMPLETED,
@@ -100,6 +109,8 @@ def option_payload(name: str, expiry_ms: int, strike: str) -> dict[str, object]:
 def run_nonempty_scenario(
     tmp_path: Path,
 ) -> tuple[object, ...]:
+    global _next_application_seq
+    _next_application_seq = 1
     tmp_path.mkdir(parents=True, exist_ok=True)
     document = policy_document(
         activation_count=1,
@@ -393,7 +404,7 @@ def run_nonempty_scenario(
         },
         "boundary": {
             "session_epoch": 1,
-            "ingress_seq": 21,
+            "ingress_seq": 30,
             "received_monotonic_ms": final_ms + 2,
             "causal_seq": 20,
         },

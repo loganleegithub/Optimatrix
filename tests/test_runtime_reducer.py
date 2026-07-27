@@ -30,11 +30,20 @@ from short_vol_radar.detector import DetectorState, EpisodeTracker
 from short_vol_radar.evidence import EvidenceWriter, validate_run_summary
 from short_vol_radar.policy import load_policy_bytes
 
+_next_application_seq_by_epoch: dict[int, int] = {}
+
+
+def next_application_seq(epoch: int) -> int:
+    value = _next_application_seq_by_epoch.get(epoch, 1)
+    _next_application_seq_by_epoch[epoch] = value + 1
+    return value
+
 
 def make_reducer(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> RadarReducer:
+    _next_application_seq_by_epoch.clear()
     exact, digest = policy_factory()
     return RadarReducer(
         policy=load_policy_bytes(exact, digest),
@@ -55,11 +64,12 @@ def envelope(
     seq: int,
     received_ms: int | None = None,
     epoch: int = 1,
+    application_seq: int | None = None,
 ) -> InboundEnvelope:
     return InboundEnvelope(
         {"jsonrpc": "2.0", **message},
         session_epoch=epoch,
-        ingress_seq=seq,
+        ingress_seq=(next_application_seq(epoch) if application_seq is None else application_seq),
         received_monotonic_ms=received_ms if received_ms is not None else 1_000 + seq,
     )
 
@@ -128,13 +138,19 @@ def send_control(
     boundary_ms: int,
     ingress_seq: int = 1,
     failure: str | None = None,
+    application_seq: int | None = None,
 ) -> InboundEnvelope:
+    del ingress_seq
     control_kind = public_module.SendControlKind(kind)
     failure_kind = None if failure is None else public_module.SendFailureKind(failure)
     return InboundEnvelope(
         {},
         session_epoch=command.session_epoch,
-        ingress_seq=ingress_seq,
+        ingress_seq=(
+            next_application_seq(command.session_epoch)
+            if application_seq is None
+            else application_seq
+        ),
         received_monotonic_ms=boundary_ms,
         control_event=public_module.SendControlEvent(
             kind=control_kind,
@@ -763,7 +779,7 @@ def test_pre_ack_frames_from_one_batch_replay_in_global_ingress_order(
         processed_monotonic_ms=1_002 + seq,
     )
 
-    assert applied == [seq, seq + 1]
+    assert applied == [3, 4]
 
 
 def test_pre_ack_frames_from_different_batches_release_at_own_ack_boundary(
@@ -911,12 +927,12 @@ def test_pending_channel_does_not_block_acknowledged_channel_fact(
         processed_monotonic_ms=1_003,
     )
 
-    assert applied == [3]
+    assert applied == [4]
     reducer.reduce(
         response(reducer, pending, ["pending"], seq=4),
         processed_monotonic_ms=1_004,
     )
-    assert applied == [3, 2]
+    assert applied == [4, 3]
 
 
 def test_index_ack_then_clock_failure_still_releases_held_tick_once_on_recovery(
@@ -1045,7 +1061,10 @@ def test_index_ack_then_clock_failure_still_releases_held_tick_once_on_recovery(
     )
 
     assert len(applied) == 2
-    assert [ingress_seq for ingress_seq, _causal_seq in applied] == [5, 5]
+    assert [ingress_seq for ingress_seq, _causal_seq in applied] == [
+        reducer._last_ingress_seq,
+        reducer._last_ingress_seq,
+    ]
     assert reducer._held_subscription_frame_count == 0
     assert reducer.index.has_accepted_tick
     assert reducer.index._last_source_timestamp_ms == 660_020
@@ -1204,7 +1223,7 @@ def test_response_then_later_ingress_with_earlier_receive_time_cannot_regress_bo
     )
 
     assert reducer._current_fact_boundary().received_monotonic_ms == 2_000
-    assert reducer._last_inbound_received_ms == 2_000
+    assert reducer._last_wire_received_ms == 2_000
     assert reducer.diagnostics.source_observed_count["option_lifecycle"] == 1
 
 
@@ -1285,11 +1304,77 @@ def test_every_frame_reduces_once_and_retired_epoch_has_zero_business_effect(
         response(reducer, current_heartbeat, "ok", seq=1, received_ms=2_001),
         processed_monotonic_ms=2_002,
     )
-    with pytest.raises(PublicSessionError, match="ingress"):
+    duplicate_application_seq = reducer._last_ingress_seq
+    with pytest.raises(PublicSessionError, match="sequence"):
         reducer.reduce(
-            response(reducer, current_heartbeat, "ok", seq=1, received_ms=2_002),
+            envelope(
+                {"id": current_heartbeat.request_id, "result": "ok"},
+                seq=1,
+                epoch=2,
+                received_ms=2_002,
+                application_seq=duplicate_application_seq,
+            ),
             processed_monotonic_ms=2_003,
         )
+
+
+def test_retired_heartbeat_remains_cross_ledger_conserved_after_reconnect(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    with pytest.raises(PublicSessionError, match="connection"):
+        reducer.reduce(
+            InboundEnvelope(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "connection_error",
+                    "params": {"kind": "SESSION_FAILURE", "error": "injected"},
+                },
+                session_epoch=1,
+                ingress_seq=1,
+                received_monotonic_ms=1_100,
+            ),
+            processed_monotonic_ms=1_100,
+        )
+    reducer.reduce(
+        InboundEnvelope(
+            {
+                "jsonrpc": "2.0",
+                "method": "heartbeat",
+                "params": {"type": "heartbeat"},
+            },
+            session_epoch=1,
+            ingress_seq=2,
+            received_monotonic_ms=1_101,
+        ),
+        processed_monotonic_ms=1_101,
+    )
+    reducer.begin_session(session_epoch=2, monotonic_ms=2_000)
+
+    summary = json.loads(reducer.clean_stop(2_100).read_text())
+    validate_run_summary(summary)
+    heartbeat_source = next(
+        row
+        for row in summary["operational_diagnostics"]["source_shapes"]
+        if row["source"] == "heartbeat"
+    )
+    assert heartbeat_source["observed_count"] == 1
+    assert reducer.diagnostics.retired_epoch_frame_count == 1
+
+
+def test_session_epoch_cannot_be_reused_or_regressed(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=2, monotonic_ms=1_000)
+
+    with pytest.raises(ValueError, match=r"increase|reused"):
+        reducer.begin_session(session_epoch=2, monotonic_ms=2_000)
+    with pytest.raises(ValueError, match=r"increase|reused"):
+        reducer.begin_session(session_epoch=1, monotonic_ms=2_000)
 
 
 def test_success_error_late_notification_and_heartbeat_response_reduce_once(
@@ -1843,6 +1928,225 @@ def test_response_racing_send_receipt_is_held_then_reduced_once(
     assert only(commands, RpcPurpose.SUBSCRIBE_CHANNELS)
 
 
+def test_every_control_and_wire_event_advances_one_application_frontier(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    command = only(
+        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
+        RpcPurpose.SET_HEARTBEAT,
+    )
+
+    reducer.reduce(
+        send_control(
+            command,
+            kind="SEND_COMPLETED",
+            boundary_ms=1_100,
+            ingress_seq=1,
+        ),
+        processed_monotonic_ms=1_100,
+    )
+    reducer.reduce(
+        send_control(
+            command,
+            kind="SEND_COMPLETED",
+            boundary_ms=1_101,
+            ingress_seq=2,
+        ),
+        processed_monotonic_ms=1_101,
+    )
+    commands = reducer.reduce(
+        envelope(
+            {"id": command.request_id, "result": "ok"},
+            seq=3,
+            received_ms=1_102,
+        ),
+        processed_monotonic_ms=1_102,
+    )
+
+    assert reducer._last_ingress_seq == 3
+    assert reducer._rpc_lifecycles[command.request_id].state is runtime_module.RpcState.SUCCESS
+    assert only(commands, RpcPurpose.SUBSCRIBE_CHANNELS)
+
+
+def test_duplicate_control_application_identity_fails_closed(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    command = only(
+        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
+        RpcPurpose.SET_HEARTBEAT,
+    )
+    control = send_control(
+        command,
+        kind="SEND_COMPLETED",
+        boundary_ms=1_100,
+        ingress_seq=1,
+    )
+    reducer.reduce(control, processed_monotonic_ms=1_100)
+
+    with pytest.raises(PublicSessionError, match="sequence"):
+        reducer.reduce(control, processed_monotonic_ms=1_101)
+
+    assert reducer.diagnostics.ingress_gap_or_duplicate_count == 1
+
+
+@pytest.mark.parametrize("event_kind", ("WIRE", "SEND_CONTROL", "CONNECTION_CONTROL"))
+def test_application_sequence_gap_fails_closed_for_every_event_kind(
+    event_kind: str,
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    command = only(
+        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
+        RpcPurpose.SET_HEARTBEAT,
+    )
+    if event_kind == "WIRE":
+        event = envelope(
+            {"method": "heartbeat", "params": {"type": "heartbeat"}},
+            seq=2,
+            received_ms=1_100,
+            application_seq=2,
+        )
+    elif event_kind == "SEND_CONTROL":
+        event = send_control(
+            command,
+            kind="SEND_COMPLETED",
+            boundary_ms=1_100,
+            application_seq=2,
+        )
+    else:
+        event = InboundEnvelope(
+            {
+                "jsonrpc": "2.0",
+                "method": "connection_error",
+                "params": {"kind": "SESSION_FAILURE", "error": "injected"},
+            },
+            session_epoch=1,
+            ingress_seq=2,
+            received_monotonic_ms=1_100,
+        )
+
+    with pytest.raises(PublicSessionError, match="sequence"):
+        reducer.reduce(event, processed_monotonic_ms=1_100)
+
+    assert reducer._application_frontier_by_epoch[1] == 0
+    assert reducer.diagnostics.reduced_envelope_count == 0
+    assert reducer.diagnostics.ingress_gap_or_duplicate_count == 1
+
+
+def test_local_send_control_does_not_refresh_wire_liveness(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    reducer.reduce(
+        envelope(
+            {
+                "method": "heartbeat",
+                "params": {"type": "heartbeat"},
+            },
+            seq=1,
+            received_ms=1_002,
+        ),
+        processed_monotonic_ms=1_002,
+    )
+    reducer.reduce(
+        InboundEnvelope(
+            {},
+            session_epoch=1,
+            ingress_seq=2,
+            received_monotonic_ms=61_000,
+            control_event=public_module.SendControlEvent(
+                kind=public_module.SendControlKind.SEND_COMPLETED,
+                request_id=999_999,
+                boundary_monotonic_ms=61_000,
+            ),
+        ),
+        processed_monotonic_ms=61_000,
+    )
+
+    with pytest.raises(PublicSessionError, match="liveness"):
+        reducer.advance_time(61_003)
+
+
+def test_pre_send_rpc_terminal_summary_is_strictly_valid(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    command = reducer._schedule(
+        purpose=RpcPurpose.UNSUBSCRIBE_CHANNELS,
+        method="public/unsubscribe",
+        params={"channels": []},
+        scope="CHANNELS",
+        generation=1,
+        origin_boundary=FactBoundary(1, 0, 1_000, 0),
+        failure_scope=FailureScope.OPTION,
+    )
+    reducer.reduce(
+        send_control(
+            command,
+            kind="SEND_FAILED",
+            boundary_ms=1_100,
+            failure="ERROR",
+            ingress_seq=1,
+        ),
+        processed_monotonic_ms=1_100,
+    )
+
+    summary = json.loads(reducer.clean_stop(1_200).read_text())
+    validate_run_summary(summary)
+    rows = summary["operational_diagnostics"]["rpc_by_method"]
+    row = next(item for item in rows if item["method"] == "public/unsubscribe")
+    assert row["scheduled_count"] == 1
+    assert row["sent_count"] == 0
+    assert row["error_count"] == 1
+
+
+def test_pre_send_deadline_terminal_summary_is_strictly_valid(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    heartbeat = only(
+        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
+        RpcPurpose.SET_HEARTBEAT,
+    )
+    reducer.pending_rpcs.pop(heartbeat.request_id)
+    reducer._finish_rpc(
+        heartbeat,
+        state=runtime_module.RpcState.CENSORED,
+        terminal_monotonic_ms=1_000,
+        record_latency=False,
+    )
+    command = reducer._schedule(
+        purpose=RpcPurpose.UNSUBSCRIBE_CHANNELS,
+        method="public/unsubscribe",
+        params={"channels": []},
+        scope="CHANNELS",
+        generation=1,
+        origin_boundary=FactBoundary(1, 0, 1_000, 0),
+        failure_scope=FailureScope.OPTION,
+    )
+
+    reducer.advance_time(command.send_deadline_monotonic_ms + 1)
+
+    summary = json.loads(reducer.clean_stop(command.send_deadline_monotonic_ms + 2).read_text())
+    validate_run_summary(summary)
+    rows = summary["operational_diagnostics"]["rpc_by_method"]
+    row = next(item for item in rows if item["method"] == "public/unsubscribe")
+    assert row["scheduled_count"] == 1
+    assert row["sent_count"] == 0
+    assert row["deadline_late_count"] == 1
+    assert row["pre_send_deadline_late_count"] == 1
+
+
 def test_nonheartbeat_response_race_commits_after_the_send_receipt_boundary(
     tmp_path: Path,
     policy_factory: PolicyFactory,
@@ -1920,6 +2224,42 @@ def test_send_cancellation_after_send_deadline_cannot_rewrite_terminal_state(
     assert lifecycle.terminal_monotonic_ms == 31_002
     assert reducer.diagnostics.rpc_deadline_late_count[command.method] == 1
     assert reducer.diagnostics.rpc_error_count[command.method] == 0
+
+
+def test_send_failure_cannot_rewrite_a_completed_send_boundary(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    command = only(
+        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
+        RpcPurpose.SET_HEARTBEAT,
+    )
+    reducer.reduce(
+        send_control(
+            command,
+            kind="SEND_COMPLETED",
+            boundary_ms=1_100,
+            application_seq=1,
+        ),
+        processed_monotonic_ms=1_100,
+    )
+
+    with pytest.raises(PublicProtocolError, match=r"failure.*completed|completed.*failure"):
+        reducer.reduce(
+            send_control(
+                command,
+                kind="SEND_FAILED",
+                boundary_ms=1_101,
+                failure="ERROR",
+                application_seq=2,
+            ),
+            processed_monotonic_ms=1_101,
+        )
+
+    lifecycle = reducer._rpc_lifecycles[command.request_id]
+    assert lifecycle.state is runtime_module.RpcState.SENT
+    assert lifecycle.terminal_monotonic_ms is None
 
 
 def test_clean_stop_censors_scheduled_and_sent_without_collapsing_boundaries(

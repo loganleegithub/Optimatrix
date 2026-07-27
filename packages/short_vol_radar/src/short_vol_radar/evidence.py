@@ -49,30 +49,90 @@ CHANNEL_CLASSES = tuple(
         )
     )
 )
-CORE_SOURCE_NAMES = tuple(
-    sorted(
-        (
-            "combo_book",
-            "combo_lifecycle",
-            "heartbeat",
-            "index",
-            "option_book",
-            "option_lifecycle",
-            "option_ticker",
-            "platform_state",
-            "platform_state.public_methods_state",
-            "public/get_combos",
-            "public/get_instrument",
-            "public/get_instruments",
-            "public/get_time",
-            "public/set_heartbeat",
-            "public/status",
-            "public/subscribe",
-            "public/test",
-            "public/unsubscribe",
-        )
-    )
-)
+_STRING_FIELD_TYPES = frozenset({"string"})
+_BOOLEAN_FIELD_TYPES = frozenset({"boolean"})
+_INTEGER_FIELD_TYPES = frozenset({"integer"})
+_NUMERIC_FIELD_TYPES = frozenset({"integer", "number", "string"})
+_ARRAY_FIELD_TYPES = frozenset({"array"})
+_BOOK_SOURCE_FIELDS: Mapping[str, frozenset[str]] = {
+    "type": _STRING_FIELD_TYPES,
+    "timestamp": _INTEGER_FIELD_TYPES,
+    "instrument_name": _STRING_FIELD_TYPES,
+    "change_id": _INTEGER_FIELD_TYPES,
+    "prev_change_id": frozenset({"integer", "null"}),
+    "bids": _ARRAY_FIELD_TYPES,
+    "asks": _ARRAY_FIELD_TYPES,
+}
+_INSTRUMENT_SOURCE_FIELDS: Mapping[str, frozenset[str]] = {
+    "instrument_name": _STRING_FIELD_TYPES,
+    "kind": _STRING_FIELD_TYPES,
+    "base_currency": _STRING_FIELD_TYPES,
+    "quote_currency": _STRING_FIELD_TYPES,
+    "settlement_currency": _STRING_FIELD_TYPES,
+    "counter_currency": _STRING_FIELD_TYPES,
+    "price_index": _STRING_FIELD_TYPES,
+    "instrument_type": _STRING_FIELD_TYPES,
+    "is_active": _BOOLEAN_FIELD_TYPES,
+    "state": _STRING_FIELD_TYPES,
+    "option_type": _STRING_FIELD_TYPES,
+    "expiration_timestamp": _INTEGER_FIELD_TYPES,
+    "strike": _NUMERIC_FIELD_TYPES,
+    "contract_size": _NUMERIC_FIELD_TYPES,
+    "min_trade_amount": _NUMERIC_FIELD_TYPES,
+    "qty_tick_size": _NUMERIC_FIELD_TYPES,
+}
+SOURCE_CONSUMED_FIELD_TYPES: Mapping[
+    str,
+    Mapping[str, frozenset[str]],
+] = {
+    "combo_book": _BOOK_SOURCE_FIELDS,
+    "combo_lifecycle": {
+        "instrument_name": _STRING_FIELD_TYPES,
+        "state": _STRING_FIELD_TYPES,
+    },
+    "heartbeat": {"type": _STRING_FIELD_TYPES},
+    "index": {
+        "timestamp": _INTEGER_FIELD_TYPES,
+        "index_name": _STRING_FIELD_TYPES,
+        "price": _NUMERIC_FIELD_TYPES,
+    },
+    "option_book": _BOOK_SOURCE_FIELDS,
+    "option_lifecycle": {
+        "instrument_name": _STRING_FIELD_TYPES,
+        "state": _STRING_FIELD_TYPES,
+    },
+    "option_ticker": {
+        "instrument_name": _STRING_FIELD_TYPES,
+        "timestamp": _INTEGER_FIELD_TYPES,
+        "underlying_price": _NUMERIC_FIELD_TYPES,
+        "underlying_index": _STRING_FIELD_TYPES,
+    },
+    "platform_state": {
+        "maintenance": _BOOLEAN_FIELD_TYPES,
+        "price_index": _STRING_FIELD_TYPES,
+        "locked": _BOOLEAN_FIELD_TYPES,
+    },
+    "platform_state.public_methods_state": {
+        "allow_unauthenticated_public_requests": _BOOLEAN_FIELD_TYPES,
+    },
+    "public/get_combos": {
+        "id": _STRING_FIELD_TYPES,
+        "state": _STRING_FIELD_TYPES,
+        "legs": _ARRAY_FIELD_TYPES,
+    },
+    "public/get_instrument": _INSTRUMENT_SOURCE_FIELDS,
+    "public/get_instruments": _INSTRUMENT_SOURCE_FIELDS,
+    "public/get_time": {},
+    "public/set_heartbeat": {},
+    "public/status": {
+        "locked": frozenset({"boolean", "string"}),
+        "locked_indices": _ARRAY_FIELD_TYPES,
+    },
+    "public/subscribe": {},
+    "public/test": dict(version=_STRING_FIELD_TYPES),
+    "public/unsubscribe": {},
+}
+CORE_SOURCE_NAMES = tuple(sorted(SOURCE_CONSUMED_FIELD_TYPES))
 
 
 class EvidenceError(ValueError):
@@ -891,6 +951,7 @@ def _validate_evidence_directory(
     if summaries:
         counts = _array(summaries[0]["counts_by_scope"], "counts_by_scope")
         declared_by_scope: Counter[tuple[str, str, str]] = Counter()
+        atomic_available_by_scope: Counter[tuple[str, str, str]] = Counter()
         for item in counts:
             row = _mapping(item, "scope count")
             identity = (
@@ -901,6 +962,14 @@ def _validate_evidence_directory(
             declared_by_scope[identity] = _non_negative_integer(
                 row["distinct_anomaly_episode_count"],
                 "scope distinct_anomaly_episode_count",
+            )
+            scope_atomic_transitions = _mapping(
+                row["public_atomic_quote_state_transition_count"],
+                "scope public atomic quote transitions",
+            )
+            atomic_available_by_scope[identity] = _non_negative_integer(
+                scope_atomic_transitions.get("PUBLIC_ATOMIC_QUOTE_AVAILABLE", 0),
+                "scope PUBLIC_ATOMIC_QUOTE_AVAILABLE transition count",
             )
         actual_by_scope: Counter[tuple[str, str, str]] = Counter()
         for anomaly in anomalies_by_episode.values():
@@ -919,6 +988,20 @@ def _validate_evidence_directory(
             raise EvidenceError(
                 "summary scope episode counts do not match anomaly option_type and band"
             )
+        if not legacy_schema:
+            for atomic in atomic_events:
+                anomaly = anomalies_by_episode[_required_string(atomic, "episode_identity")]
+                instrument = _mapping(anomaly["instrument"], "anomaly instrument")
+                owning_scope = (
+                    _required_string(anomaly, "policy_identity"),
+                    _required_string(instrument, "option_type"),
+                    _required_string(anomaly, "activation_band_id"),
+                )
+                if atomic_available_by_scope[owning_scope] <= 0:
+                    raise EvidenceError(
+                        "atomic event lacks a PUBLIC_ATOMIC_QUOTE_AVAILABLE transition "
+                        "in its owning summary scope"
+                    )
     return tuple(objects)
 
 
@@ -1237,7 +1320,7 @@ def _validate_operational_diagnostics(
     restart_edges: tuple[Mapping[str, object], ...] = ()
     recovery_edges: Mapping[int, Mapping[str, object]] = {}
     current_epoch_joint_counts: Mapping[
-        tuple[str, str, str],
+        tuple[str, int, str, str, str],
         tuple[int, Mapping[str, object] | None],
     ] = {}
     if version == 3:
@@ -1406,8 +1489,13 @@ def _validate_operational_diagnostics(
             current_joint_evaluation = current_epoch_joint_counts.get(
                 (
                     policy_identity,
+                    _positive_integer(
+                        scope["expiration_timestamp_ms"],
+                        "witness scope expiration_timestamp_ms",
+                    ),
                     scope_option_type,
                     scope_band_id,
+                    _required_string(instrument, "instrument_name"),
                 ),
             )
             if current_joint_evaluation is None or current_joint_evaluation[0] <= 0:
@@ -1524,6 +1612,15 @@ def _validate_rpc_diagnostics(value: object, *, diagnostics_version: int) -> Non
                 "deadline_late_count",
                 "retired_count",
                 "censored_count",
+                "pre_send_error_count",
+                "pre_send_deadline_late_count",
+                "pre_send_retired_count",
+                "pre_send_censored_count",
+                "post_send_success_count",
+                "post_send_error_count",
+                "post_send_deadline_late_count",
+                "post_send_retired_count",
+                "post_send_censored_count",
                 "rate_limit_count",
                 "latency_observation_count",
                 "latency_ms_sum",
@@ -1559,43 +1656,109 @@ def _validate_rpc_diagnostics(value: object, *, diagnostics_version: int) -> Non
         errors = _non_negative_integer(row["error_count"], "error_count")
         if rate_limits > errors:
             raise EvidenceError("RPC rate-limit count exceeds errors")
+
         if diagnostics_version == 3:
             scheduled_count = _non_negative_integer(
                 row["scheduled_count"],
                 "scheduled_count",
             )
             sent_count = _non_negative_integer(row["sent_count"], "sent_count")
-            terminal_count = sum(
+            pre_send_terminal_count = sum(
                 _non_negative_integer(row[field], f"RPC row {field}")
                 for field in (
-                    "success_count",
-                    "error_count",
-                    "deadline_late_count",
-                    "retired_count",
-                    "censored_count",
+                    "pre_send_error_count",
+                    "pre_send_deadline_late_count",
+                    "pre_send_retired_count",
+                    "pre_send_censored_count",
                 )
             )
-            if scheduled_count != terminal_count:
+            post_send_terminal_count = sum(
+                _non_negative_integer(row[field], f"RPC row {field}")
+                for field in (
+                    "post_send_success_count",
+                    "post_send_error_count",
+                    "post_send_deadline_late_count",
+                    "post_send_retired_count",
+                    "post_send_censored_count",
+                )
+            )
+            if scheduled_count != sent_count + pre_send_terminal_count:
                 raise EvidenceError(
-                    "RPC conservation does not reconcile scheduled and terminal states"
+                    "RPC scheduled count does not reconcile sent and pre-send terminals"
                 )
-            if sent_count > scheduled_count:
-                raise EvidenceError("RPC sent count exceeds scheduled count")
-            wire_terminal_count = sum(
+            if sent_count != post_send_terminal_count:
+                raise EvidenceError("RPC sent count does not reconcile post-send terminals")
+            terminal_reconciliations = {
+                "success_count": _non_negative_integer(
+                    row["post_send_success_count"],
+                    "post_send_success_count",
+                ),
+                "error_count": _non_negative_integer(
+                    row["pre_send_error_count"],
+                    "pre_send_error_count",
+                )
+                + _non_negative_integer(
+                    row["post_send_error_count"],
+                    "post_send_error_count",
+                ),
+                "deadline_late_count": _non_negative_integer(
+                    row["pre_send_deadline_late_count"],
+                    "pre_send_deadline_late_count",
+                )
+                + _non_negative_integer(
+                    row["post_send_deadline_late_count"],
+                    "post_send_deadline_late_count",
+                ),
+                "retired_count": _non_negative_integer(
+                    row["pre_send_retired_count"],
+                    "pre_send_retired_count",
+                )
+                + _non_negative_integer(
+                    row["post_send_retired_count"],
+                    "post_send_retired_count",
+                ),
+                "censored_count": _non_negative_integer(
+                    row["pre_send_censored_count"],
+                    "pre_send_censored_count",
+                )
+                + _non_negative_integer(
+                    row["post_send_censored_count"],
+                    "post_send_censored_count",
+                ),
+            }
+            for total_field, expected_total in terminal_reconciliations.items():
+                if row[total_field] != expected_total:
+                    raise EvidenceError(f"RPC {total_field} does not match terminal provenance")
+            post_send_errors = _non_negative_integer(
+                row["post_send_error_count"],
+                "post_send_error_count",
+            )
+            if rate_limits > post_send_errors:
+                raise EvidenceError("RPC rate-limit count exceeds post-send errors")
+            response_terminal_count = sum(
                 _non_negative_integer(row[field], f"RPC row {field}")
                 for field in (
-                    "success_count",
-                    "error_count",
-                    "deadline_late_count",
+                    "post_send_success_count",
+                    "post_send_error_count",
+                    "post_send_deadline_late_count",
                 )
             )
-            if wire_terminal_count > sent_count:
-                raise EvidenceError("RPC wire terminal count exceeds sent count")
             latency_count = _non_negative_integer(
                 row["latency_observation_count"],
                 "latency_observation_count",
             )
-            if latency_count > wire_terminal_count:
+            required_response_latency_count = (
+                _non_negative_integer(
+                    row["post_send_success_count"],
+                    "post_send_success_count",
+                )
+                + post_send_errors
+            )
+            if latency_count < required_response_latency_count:
+                raise EvidenceError(
+                    "RPC success/error response terminals require latency observations"
+                )
+            if latency_count > response_terminal_count:
                 raise EvidenceError("RPC latency observations exceed wire terminal states")
     if methods != sorted(set(methods)):
         raise EvidenceError("operational RPC rows must be unique and sorted")
@@ -1707,22 +1870,23 @@ def _validate_source_shapes(value: object) -> dict[str, tuple[int, int, int]]:
         if row["validation"] != expected_validation:
             raise EvidenceError("source-shape final validation does not match counts")
         fields = _array(row["consumed_fields"], f"{source}.consumed_fields")
+        source_field_spec = SOURCE_CONSUMED_FIELD_TYPES.get(source)
+        if source_field_spec is None:
+            raise EvidenceError("source-shape source is outside the exact field specification")
+        if observed == 0 and fields:
+            raise EvidenceError("unobserved source cannot claim consumed fields")
         keys: list[str] = []
         for raw_field in fields:
             field = _mapping(raw_field, f"{source} consumed field")
             _exact_keys(field, {"key", "type"}, f"{source} consumed field")
             key = _required_string(field, "key")
             field_type = _required_string(field, "type")
-            if field_type not in {
-                "array",
-                "boolean",
-                "integer",
-                "null",
-                "number",
-                "object",
-                "string",
-            }:
-                raise EvidenceError("source-shape field type is invalid")
+            allowed_types = source_field_spec.get(key)
+            if allowed_types is None or field_type not in allowed_types:
+                raise EvidenceError(
+                    f"source-shape consumed field {source}.{key}:{field_type} is outside "
+                    "the shared field specification"
+                )
             keys.append(key)
         if keys != sorted(set(keys)):
             raise EvidenceError("source-shape consumed fields must be unique and sorted")
@@ -1920,7 +2084,7 @@ def _validate_global_continuity(
     tuple[Mapping[str, object], ...],
     Mapping[int, Mapping[str, object]],
     Mapping[
-        tuple[str, str, str],
+        tuple[str, int, str, str, str],
         tuple[int, Mapping[str, object] | None],
     ],
 ]:
@@ -2066,18 +2230,20 @@ def _validate_global_continuity(
         "global continuity current-epoch joint scope counts",
     )
     current_joint_counts: dict[
-        tuple[str, str, str],
+        tuple[str, int, str, str, str],
         tuple[int, Mapping[str, object] | None],
     ] = {}
-    identities: list[tuple[str, str, str]] = []
+    identities: list[tuple[str, int, str, str, str]] = []
     for raw_row in current_joint_rows:
         row = _mapping(raw_row, "current-epoch joint scope count")
         _exact_keys(
             row,
             {
                 "policy_identity",
+                "expiration_timestamp_ms",
                 "option_type",
                 "tte_band_id",
+                "formula_instrument_name",
                 "count",
                 "first_joint_evaluation_boundary",
             },
@@ -2085,10 +2251,15 @@ def _validate_global_continuity(
         )
         identity = (
             _required_string(row, "policy_identity"),
+            _positive_integer(
+                row["expiration_timestamp_ms"],
+                "current-epoch joint scope expiration_timestamp_ms",
+            ),
             _required_string(row, "option_type"),
             _required_string(row, "tte_band_id"),
+            _required_string(row, "formula_instrument_name"),
         )
-        if identity[1] not in {"call", "put"}:
+        if identity[2] not in {"call", "put"}:
             raise EvidenceError("current-epoch joint scope option_type is invalid")
         count = _positive_integer(
             row["count"],

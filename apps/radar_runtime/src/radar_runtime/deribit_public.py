@@ -79,7 +79,7 @@ class SendControlEvent:
 
 
 class InboundEnvelope(dict[str, object]):
-    """One wire frame or ordered internal transport control boundary."""
+    """One wire or control event in the unique application sequence."""
 
     def __init__(
         self,
@@ -131,7 +131,7 @@ class DeribitPublicClient:
         self._inbound: asyncio.Queue[InboundEnvelope] = asyncio.Queue(
             maxsize=MAX_PENDING_INBOUND_FRAMES
         )
-        self._next_ingress_seq = 1
+        self._next_application_seq = 1
         self._reader_error: PublicProtocolError | None = None
         self.last_inbound_monotonic = time.monotonic()
         self.queue_high_water_frames = 0
@@ -205,24 +205,12 @@ class DeribitPublicClient:
     def enqueue_send_control(self, event: SendControlEvent) -> None:
         if not isinstance(event, SendControlEvent):
             raise TypeError("transport send control must be immutable")
-        envelope = InboundEnvelope(
+        self._enqueue_application_event(
             {},
-            session_epoch=self.session_epoch,
-            ingress_seq=self._next_ingress_seq,
             received_monotonic_ms=event.boundary_monotonic_ms,
             control_event=event,
         )
-        try:
-            self._inbound.put_nowait(envelope)
-        except asyncio.QueueFull as exc:
-            self.overflow_count += 1
-            raise PublicSessionError("inbound queue overflow") from exc
         self.send_control_event_count += 1
-        self.enqueued_envelope_count += 1
-        self.queue_high_water_frames = max(
-            self.queue_high_water_frames,
-            self._inbound.qsize(),
-        )
 
     async def stop_intake(self) -> None:
         if self._reader_task is None:
@@ -261,22 +249,9 @@ class DeribitPublicClient:
         received_monotonic_ms: int,
     ) -> None:
         self.received_frame_count += 1
-        envelope = InboundEnvelope(
+        self._enqueue_application_event(
             message,
-            session_epoch=self.session_epoch,
-            ingress_seq=self._next_ingress_seq,
             received_monotonic_ms=received_monotonic_ms,
-        )
-        self._next_ingress_seq += 1
-        try:
-            self._inbound.put_nowait(envelope)
-        except asyncio.QueueFull as exc:
-            self.overflow_count += 1
-            raise PublicSessionError("inbound queue overflow") from exc
-        self.enqueued_envelope_count += 1
-        self.queue_high_water_frames = max(
-            self.queue_high_water_frames,
-            self._inbound.qsize(),
         )
 
     def _enqueue_connection_error(self, error: PublicProtocolError) -> None:
@@ -286,28 +261,43 @@ class DeribitPublicClient:
             else "SESSION_FAILURE"
         )
         try:
-            self._inbound.put_nowait(
-                InboundEnvelope(
-                    {
-                        "jsonrpc": "2.0",
-                        "method": "connection_error",
-                        "params": {"error": str(error), "kind": kind},
-                    },
-                    session_epoch=self.session_epoch,
-                    ingress_seq=self._next_ingress_seq,
-                    received_monotonic_ms=time.monotonic_ns() // 1_000_000,
-                )
+            self._enqueue_application_event(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "connection_error",
+                    "params": {"error": str(error), "kind": kind},
+                },
+                received_monotonic_ms=time.monotonic_ns() // 1_000_000,
             )
-        except asyncio.QueueFull:
-            self.overflow_count += 1
+        except PublicSessionError:
             return
         self.connection_error_event_count += 1
+
+    def _enqueue_application_event(
+        self,
+        message: dict[str, object],
+        *,
+        received_monotonic_ms: int,
+        control_event: SendControlEvent | None = None,
+    ) -> None:
+        envelope = InboundEnvelope(
+            message,
+            session_epoch=self.session_epoch,
+            ingress_seq=self._next_application_seq,
+            received_monotonic_ms=received_monotonic_ms,
+            control_event=control_event,
+        )
+        try:
+            self._inbound.put_nowait(envelope)
+        except asyncio.QueueFull as exc:
+            self.overflow_count += 1
+            raise PublicSessionError("inbound queue overflow") from exc
+        self._next_application_seq += 1
         self.enqueued_envelope_count += 1
         self.queue_high_water_frames = max(
             self.queue_high_water_frames,
             self._inbound.qsize(),
         )
-        self._next_ingress_seq += 1
 
 
 def _decode_message(raw_message: str | bytes) -> dict[str, object]:
