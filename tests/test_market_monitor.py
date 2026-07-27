@@ -281,6 +281,25 @@ def test_index_tail_distinguishes_warmup_source_stale_and_continuity_gap() -> No
     assert gap.status is IndexTailStatus.CONTINUITY_GAP
 
 
+def test_index_tail_treats_unstarted_bootstrap_as_warmup_not_continuity_gap() -> None:
+    reducer = IndexMinuteReducer(2)
+
+    bootstrap = reducer.current_tail(
+        2,
+        trusted_time=TimeInterval(30_000, 30_001),
+        source_stale_deadline_ms=90_000,
+    )
+    assert bootstrap.status is IndexTailStatus.WARMUP
+
+    reducer.gap()
+    real_gap = reducer.current_tail(
+        2,
+        trusted_time=TimeInterval(30_000, 30_001),
+        source_stale_deadline_ms=90_000,
+    )
+    assert real_gap.status is IndexTailStatus.CONTINUITY_GAP
+
+
 def test_exact_channels_bounded_subscriptions_and_acknowledgements() -> None:
     assert INDEX_CHANNEL == "deribit_price_index.btc_usdc"
     assert ticker_channel("X") == "ticker.X.100ms"

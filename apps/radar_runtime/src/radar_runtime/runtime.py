@@ -1921,6 +1921,7 @@ class RadarReducer:
             if not self._index_gap_active:
                 self.diagnostics.index_gap_count += 1
                 self._index_gap_active = True
+            self._first_joint_witness_ms = None
             self.index.gap()
             self._index_coverage_generation = None
             self.platform.invalidate_fresh_index_coverage("INDEX_CONTINUITY_GAP")
@@ -2972,7 +2973,25 @@ class RadarReducer:
                 self._evaluate_atomic(tracker)
 
         self._sync_combo_subscriptions(boundary)
-        self._update_coverage(boundary.received_monotonic_ms)
+        pending_reasons = {
+            "INDEX_TIME_BOUNDARY_PENDING",
+            "INDEX_WATERMARK_PENDING",
+        }
+        preserve_operational_witness = (
+            self.platform.usable
+            and self.option_catalog.complete
+            and any(item.current.reason in pending_reasons for item in prepared)
+            and all(
+                item.current.reason in pending_reasons
+                or item.current.known_evaluation
+                or item.current.disposition is CurrentDisposition.OUT_OF_BASELINE_SCOPE
+                for item in prepared
+            )
+        )
+        self._update_coverage(
+            boundary.received_monotonic_ms,
+            preserve_operational_witness=preserve_operational_witness,
+        )
         if set(names) == set(self.options):
             self._last_time_currentness_token = self._time_currentness_token(trusted)
 
@@ -3166,9 +3185,15 @@ class RadarReducer:
             boundary.received_monotonic_ms,
         )
 
-    def _transition_coverage(self, state: CoverageState, monotonic_ms: int) -> None:
+    def _transition_coverage(
+        self,
+        state: CoverageState,
+        monotonic_ms: int,
+        *,
+        preserve_operational_witness: bool = False,
+    ) -> None:
         self._coverage.transition(state, monotonic_ms)
-        if state is not CoverageState.KNOWN_COMPLETE:
+        if state is not CoverageState.KNOWN_COMPLETE and not preserve_operational_witness:
             self._first_joint_witness_ms = None
 
     def _scope_counter(self, option_type: OptionType, band_id: str) -> ScopeCounts:
@@ -3334,7 +3359,12 @@ class RadarReducer:
                 failure_scope=FailureScope.COMBO_LAYER,
             )
 
-    def _update_coverage(self, monotonic_ms: int) -> None:
+    def _update_coverage(
+        self,
+        monotonic_ms: int,
+        *,
+        preserve_operational_witness: bool = False,
+    ) -> None:
         self._update_band_suspension(monotonic_ms)
         if self.clock is None:
             self.aggregate_results.clear()
@@ -3345,13 +3375,18 @@ class RadarReducer:
             self._transition_coverage(
                 CoverageState.KNOWN_DEGRADED if positive else CoverageState.UNKNOWN,
                 monotonic_ms,
+                preserve_operational_witness=preserve_operational_witness,
             )
             return
         try:
             trusted = self.clock.interval_at(monotonic_ms)
         except ContinuityGap:
             self.aggregate_results.clear()
-            self._transition_coverage(CoverageState.UNKNOWN, monotonic_ms)
+            self._transition_coverage(
+                CoverageState.UNKNOWN,
+                monotonic_ms,
+                preserve_operational_witness=preserve_operational_witness,
+            )
             return
         self._refresh_current_aggregates(trusted)
         if not self.platform.usable or not self.option_catalog.complete:
@@ -3362,6 +3397,7 @@ class RadarReducer:
             self._transition_coverage(
                 CoverageState.KNOWN_DEGRADED if positive else CoverageState.UNKNOWN,
                 monotonic_ms,
+                preserve_operational_witness=preserve_operational_witness,
             )
             return
         scoped: list[OptionInstrument] = []
@@ -3384,6 +3420,7 @@ class RadarReducer:
             self._transition_coverage(
                 CoverageState.UNKNOWN if unresolved else CoverageState.NO_APPLICABLE_SCOPE,
                 monotonic_ms,
+                preserve_operational_witness=preserve_operational_witness,
             )
             return
         states = [self.trackers[item.instrument_name].detector_state for item in scoped]
@@ -3395,7 +3432,11 @@ class RadarReducer:
             state = CoverageState.KNOWN_DEGRADED
         else:
             state = CoverageState.UNKNOWN
-        self._transition_coverage(state, monotonic_ms)
+        self._transition_coverage(
+            state,
+            monotonic_ms,
+            preserve_operational_witness=preserve_operational_witness,
+        )
 
     def _refresh_current_aggregates(self, trusted: TimeInterval) -> None:
         grouped: dict[

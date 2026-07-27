@@ -10,11 +10,18 @@
 
 **Runtime implementation:** REQUIRED
 
-**Live commands:** REQUIRED only after the separate production observation gate opens
+**Live commands:** REQUIRED only after the exact named Smoke or Soak gate opens
 
 **Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`
 
-**Production observation gate:** `CLOSED_UNTIL_IMPLEMENTATION_REVIEW_AND_EXPLICIT_HUMAN_COMMAND`
+**Current construction subgate:** `OPERATIONAL_SOAK_PRECONDITIONS`
+`OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_27`
+
+**Current subgate base HEAD:** `29c5701939eca203a497d50818f111572820be3d`
+
+**REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`
+
+**OPERATIONAL_SOAK gate:** `CLOSED_UNTIL_EXPLICIT_HUMAN_COMMAND`
 
 **Product/stage:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md) /
@@ -30,20 +37,29 @@
 ## Human execution gates
 
 The design DRAFT did not authorize construction. The explicit human command naming
-`SHORT_VOL_RADAR_ESTABLISHMENT` on 2026-07-25 opened the construction gate for this exact task
-revision. Branch switch, dependency sync, bounded runtime edits, direct tests, commit, push, and
-Draft PR delivery are now authorized. Production-public connection, live artifact collection,
-merge, business acceptance, task archival, and stage advancement remain unauthorized.
+`SHORT_VOL_RADAR_ESTABLISHMENT` on 2026-07-25 opened the original construction gate. The explicit
+2026-07-27 command naming `OPERATIONAL_SOAK_PRECONDITIONS` and base
+`29c5701939eca203a497d50818f111572820be3d` separately authorizes only the bounded witness/gap
+truth repair, its direct tests, Smoke/Soak gate wording, a parameter-preserving candidate
+successor Policy, its acceptance checklist, commit, and push.
 
-Two later human gates are distinct:
+The execution gates are independent:
 
-1. **Construction gate:** an explicit command naming `SHORT_VOL_RADAR_ESTABLISHMENT` authorizes
-   implementation of this exact task revision and no more.
-2. **Production observation gate:** after code review and tests, an explicit command names the
-   exact Policy file and authorizes one production-public observation run.
+1. **Original construction gate:** authorizes implementation of the active task contract and no
+   production-public connection.
+2. **`REACHABILITY_SMOKE` gate:** one explicit command authorizes only the one named Smoke run
+   against its exact code, Policy, evidence directory, and stop boundary. A completed or accepted
+   Smoke does not authorize Soak.
+3. **`OPERATIONAL_SOAK_PRECONDITIONS` construction subgate:** the current command authorizes the
+   exact bounded construction work above. It does not reopen Smoke or open Soak.
+4. **`OPERATIONAL_SOAK` gate:** remains closed. A later explicit command must independently name
+   the exact accepted code `HEAD`, Policy path/digest, new empty evidence directory, and stop
+   condition before one production-public Soak run.
 
-The delivery stops at a Draft PR. Merge, business acceptance, task archival, stage advancement,
-and any later research or execution authority each require a separate explicit human decision.
+Production-public connection, live artifact collection, private API, order, trade, merge,
+business acceptance, task archival, stage advancement, and any later research or execution
+authority remain unauthorized. The current delivery stops after committed and pushed
+preconditions plus a request for separate Soak authorization.
 
 ## Business closure
 
@@ -128,6 +144,25 @@ combo availability only; they cannot prove that one Policy predicts better or ea
 **Stage/authorization change:** `APPROVED` — conditional public Radar capability only. Permission
 remains `PUBLIC_SHADOW`. Private APIs, RFQ, combo creation, maker orders, fills, account facts,
 capital, training, automatic Policy evolution, and execution remain unauthorized.
+
+### `OPERATIONAL_SOAK_PRECONDITIONS` subgate change declarations
+
+**Market/Decision input contract change:** `APPROVED` — classify initial index bootstrap as
+`INDEX_WARMUP`, not a real `INDEX_CONTINUITY_GAP`, and preserve the operational witness across
+normal `TIME_BOUNDARY_PENDING`/`WATERMARK_PENDING` minute rollover. Real continuity gaps and other
+non-pending coverage loss continue to clear the witness.
+
+**Decision Policy change:** `NONE` — the candidate Soak successor preserves every business and
+operational numeric parameter from the exact predecessor Smoke Policy. Its sole Policy-field
+delta is the non-behavioral band identity label required to create a new content identity; no
+threshold, scope, formula, source, quantity, persistence, or deadline changes.
+
+**Outcome/evaluation contract change:** `NONE` — no new future fact, denominator, label, replay,
+recomputation, Candidate, Position, Outcome, or performance claim.
+
+**Stage/authorization change:** `NONE` — `PUBLIC_SHADOW`, implemented capability `NONE`, and
+production Radar `NOT_ESTABLISHED` remain unchanged. This subgate does not authorize
+production-public connection, Smoke, Soak, private API, order, trade, or stage advancement.
 
 ## First-principles scope
 
@@ -891,8 +926,10 @@ future exit liquidity, Outcome, PnL, qualification, promotion, or execution perm
     bootstrap reconciliation, and lifecycle during combo refresh all preserve newer lifecycle
     truth; blocked subscribe/unsubscribe work still permits timely heartbeat control; and a combo
     lifecycle burst produces exactly one trailing authoritative refresh.
-11. Currentness tests prove normal minute rollover enters pending without clearing history, a
-    trusted interval spanning a minute cannot select an old tail, window gaps are isolated by
+11. Currentness tests prove initial bootstrap warm-up is not a real index gap, normal minute
+    rollover enters pending without clearing history or the operational witness, a trusted
+    interval spanning a minute cannot select an old tail, a real gap clears the witness and
+    recovery establishes a new one with exact summary duration, window gaps are isolated by
     per-band lookback without resubscription, `amount UNKNOWN -> VALID` yields known current and
     `ARMED` with zero persistence count, known-absent protective wings are known negative, and the
     main loop settles a final-window/Policy-gap boundary within the configured poll interval of at
@@ -972,8 +1009,9 @@ production Radar.
 
 Production establishment additionally requires a human-approved continuous-operation acceptance
 plan. The plan must name the exact Policy path/digest, a new empty evidence directory, and its
-stop condition. This task does not infer approval from the smoke witness, does not run the soak,
-and does not hard-code a duration.
+stop condition. This task does not infer approval from the smoke witness and does not run the
+soak. The contract fixes no universal duration; the candidate plan below proposes one exact
+validation-harness duration for a later authorization decision.
 
 The implemented strict diagnostic schema records, without persisting full market payloads:
 
@@ -995,6 +1033,93 @@ These operational diagnostics never enter anomaly, episode, aggregate, atomic-av
 future trading denominators. This task requires direct schema/writer tests, but it does not approve
 the Policy, stop condition, production connection, or soak, and it does not open the production
 observation gate.
+
+### Candidate successor Soak Policy and explicit acceptance checklist
+
+The `OPERATIONAL_SOAK_PRECONDITIONS` construction subgate prepares, but does not authorize, this
+candidate successor:
+
+```text
+predecessor Policy digest =
+  sha256:faeff9740a43df6de5c85268571592a5d47d90f9c146b2ba8b812d4e3525e50d
+
+candidate successor Policy path =
+  /Users/logan/Optimatrix-soak/policies/operational-soak-successor.json
+candidate successor Policy digest =
+  sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4
+
+reserved evidence directory =
+  /Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001
+```
+
+The candidate successor keeps the predecessor's exact formula family, `0.1 BTC` target,
+`(30, 4320]` minute scope, one-minute lookback with weight `1`, `0.01` annualized variance floor,
+call/put Delta range `[0, 1]`, activation/clear ratios `1.2/0.9`, activation/clear counts `2/2`,
+`1000 ms` separation, and all nine runtime limits. The only parsed field delta is
+`band_id: reachability-smoke-30m-to-72h -> operational-soak-30m-to-72h`; this changes content
+identity without tuning business behavior. Both exact files must load through the production
+Policy loader, and their parsed JSON must be identical after normalizing only that band label.
+
+The proposed Soak stop condition is:
+
+```text
+SUCCESS:
+  after the most recent real session/index continuity gap,
+  a new complete-aggregate full-formula joint witness exists
+  AND continuous_covered_after_witness_ms >= 3_600_000,
+  then a human performs clean stop.
+
+EARLY STOP OR PROCESS FAILURE:
+  write or preserve every truthful artifact available,
+  but acceptance = NOT_MET.
+```
+
+Normal `TIME_BOUNDARY_PENDING`/`WATERMARK_PENDING` minute rollover does not restart the interval.
+A real session/index continuity gap clears the witness, restarts warm-up, requires a new joint
+witness, and restarts the full `3_600_000 ms` interval. The duration is an explicit proposed
+validation-harness stop boundary, not a product cadence, detector holding rule, or authorization
+to connect.
+
+Before a later Soak authorization request can be executed, all of these pre-run items must pass:
+
+- the exact committed code `HEAD` is reviewed, clean, and equal to its pushed remote branch;
+- the candidate Policy exists at the exact path, its SHA-256 equals the exact digest above, and
+  the production loader accepts that path/digest pair;
+- semantic comparison to the predecessor Smoke Policy proves that only `band_id` changed;
+- the reserved evidence directory exists and is empty immediately before startup;
+- the later human command repeats the exact code `HEAD`, Policy path/digest, evidence directory,
+  and `3_600_000 ms` post-witness stop condition;
+- no private credential, private API, RFQ, combo creation, order, trade, or stage change is
+  included or implied.
+
+The resulting clean-stop summary meets Soak acceptance only if every item below passes:
+
+- summary code and Policy identities equal the authorized exact `HEAD` and digest;
+- strict summary validation passes and `coverage_partition_error_ms = 0`;
+- ingress received and reduced counts are equal, with
+  `ingress_gap_or_duplicate_count = 0`, `overflow_count = 0`, and maximum lag at or below the
+  frozen `5000 ms` deadline;
+- every observed core source has `invalid_count = 0`; every source required for the joint formula
+  witness is observed and `VALID`; conditional anomaly/combo sources may truthfully remain
+  `NOT_OBSERVED`;
+- every consumed RPC row has zero error, late-response, and rate-limit counts; heartbeat has at
+  least one successful round trip and zero error; clock refresh has at least one success;
+- at least one real scope has all five reachability counts greater than or equal to one:
+  applicable instrument, known per-instrument, known full formula, complete aggregate, and
+  complete aggregate with full formula;
+- `first_joint_witness_monotonic_ms` is non-null and
+  `continuous_covered_after_witness_ms >= 3_600_000`;
+- reconnect/gap/resync/recovery counts and every `UNKNOWN` reason are reported exactly; historical
+  recoveries do not fail acceptance by themselves, but the final witness interval must have
+  restarted after the most recent reset-worthy gap;
+- anomaly and public atomic quote occurrence are separately reported
+  `OBSERVED | NOT_OBSERVED`; neither is required for Soak acceptance;
+- artifact inspection proves zero private calls, zero order/trade/downstream artifacts, and zero
+  persisted normal-market/no-anomaly rows.
+
+Green precondition tests, a prepared Policy, an empty directory, or prior Smoke evidence do not
+open the Soak gate. The production command remains prohibited until a new explicit human
+authorization names the final committed `HEAD` and every boundary above.
 
 ## Trader-readable acceptance gates
 
@@ -1051,5 +1176,5 @@ Production establishment additionally requires the separately approved and imple
 `OPERATIONAL_SOAK` contract above.
 
 Business acceptance still requires an explicit human decision. Until then this task remains
-incomplete, production Radar remains `NOT_ESTABLISHED`, no later closure is authorized, and no
-Policy successor or live command may be inferred from green tests or a Draft PR.
+incomplete, production Radar remains `NOT_ESTABLISHED`, no later closure is authorized, and the
+prepared candidate successor Policy grants no live command or Soak authority.

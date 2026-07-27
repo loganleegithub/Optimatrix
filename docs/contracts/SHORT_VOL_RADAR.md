@@ -523,11 +523,16 @@ unavailable. Its classifications are:
 - `AVAILABLE`: none of the above applies, the requested closes are internally consecutive, and
   the last close is exactly the minute before the one trusted current minute.
 
+A fresh reducer that has not yet started its first acknowledged index generation reports
+bootstrap `WARMUP`, not `CONTINUITY_GAP`. Bootstrap warm-up cannot increment `index_gap_count`,
+invalidate platform index coverage, or request an index resubscription. `CONTINUITY_GAP` begins
+only after an actual continuity-breaking fact.
+
 A 60-return band therefore needs 61 consecutive covered closes. A missing older minute can make
 only a longer-lookback band `WINDOW_GAP`; a shorter band whose entire requested tail is
 consecutive remains `AVAILABLE`. `WINDOW_GAP` never causes an index resubscription. Normal minute
 rollover first becomes `TIME_BOUNDARY_PENDING` and/or `WATERMARK_PENDING`; it never clears
-historical closes.
+historical closes or the operational witness start.
 
 The status truth table is normative:
 
@@ -929,10 +934,13 @@ members:
 
 The two channel rates use the run observation interval in seconds; either rate is `null` when that
 denominator is zero or unknown. An RPC latency is counted only when its request send time and
-response receive time belong to the same non-retired session epoch. A session or index gap clears
-the witness start; warm-up and a new joint witness are required before post-witness duration runs
-again. Diagnostics count transport facts once per reduced envelope and never enter detector,
-episode, aggregate, coverage, atomic availability, or any trading denominator.
+response receive time belong to the same non-retired session epoch. A real session/index
+continuity gap or another non-pending loss of covered detector truth clears the witness start;
+warm-up and a new joint witness are required before post-witness duration runs again. Normal
+`TIME_BOUNDARY_PENDING`/`WATERMARK_PENDING` rollover preserves the witness and elapsed
+post-witness interval, and initial bootstrap warm-up is not recorded as a gap. Diagnostics count
+transport facts once per reduced envelope and never enter detector, episode, aggregate, coverage,
+atomic availability, or any trading denominator.
 
 Coverage is one exact half-open runtime interval
 `[runtime_started_monotonic_ms, clean_stop_monotonic_ms)`. At every monotonic millisecond it has
@@ -1053,12 +1061,18 @@ Tests must cover:
 - minimal schema projection, Policy identity, unit-bearing decimals, null denominators, and absence
   of normal full-chain/no-anomaly persistence, plus dirty-worktree rejection and exact clean
   `HEAD` code identity; coverage fixtures inject interval overlap/gaps and must fail;
+- initial bootstrap warm-up distinct from a real `INDEX_CONTINUITY_GAP`, normal cross-minute
+  pending that preserves the operational witness, real-gap reset, post-gap recovery with a new
+  witness, and exact summary post-witness duration;
 - absence of replay, offline recomputation, private, maker, Candidate, Shadow, Position, and
   Outcome paths.
 
 ### REACHABILITY_SMOKE
 
-After separate human authorization, run one exact Policy until either:
+`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent per-run production-public gates.
+Authorization, evidence, or acceptance for either one never authorizes or accepts the other.
+
+After separate Smoke authorization, run one exact Policy until either:
 
 - warm-up completes and at least one real
   `Policy identity × expiry_timestamp × option_type` aggregate scope contains at least one current
@@ -1114,6 +1128,10 @@ acceptance and cannot by itself establish the production Radar.
 Production establishment also requires a human-approved continuous-operation plan naming the
 exact Policy path/digest, a new empty evidence directory, and its stop condition. No duration is
 fixed by this contract or inferred from a smoke witness.
+
+The Soak command must independently name the exact accepted code `HEAD`, Policy path/digest,
+evidence directory, and stop condition. A prior Smoke command or witness supplies none of this
+authority.
 
 The construction implementation must record:
 

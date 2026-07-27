@@ -147,20 +147,33 @@ def test_current_stage_authorizes_exactly_one_next_closure() -> None:
     assert "## Queued sequence — not authorized" in current_stage
 
 
-def test_short_vol_task_has_open_construction_and_closed_live_gates() -> None:
+def test_short_vol_task_has_open_preconditions_and_independent_closed_live_gates() -> None:
     task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-    opening = "\n".join(task.splitlines()[:24])
+    opening = "\n".join(task.splitlines()[:32])
 
     assert "**Status:** ACTIVE" in opening
     assert "**Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`" in opening
+    assert "**Current construction subgate:** `OPERATIONAL_SOAK_PRECONDITIONS`" in opening
+    assert "**Current subgate base HEAD:** `29c5701939eca203a497d50818f111572820be3d`" in opening
+    assert "**REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`" in opening
+    assert "**OPERATIONAL_SOAK gate:** `CLOSED_UNTIL_EXPLICIT_HUMAN_COMMAND`" in opening
     assert (
-        "**Production observation gate:** "
-        "`CLOSED_UNTIL_IMPLEMENTATION_REVIEW_AND_EXPLICIT_HUMAN_COMMAND`" in opening
+        "Live commands:** REQUIRED only after the exact named Smoke or Soak gate opens" in opening
     )
-    assert (
-        "Live commands:** REQUIRED only after the separate production observation gate opens"
-        in opening
-    )
+
+
+def test_soak_preconditions_freeze_candidate_policy_and_acceptance_boundary() -> None:
+    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
+
+    for invariant in (
+        "/Users/logan/Optimatrix-soak/policies/operational-soak-successor.json",
+        "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4",
+        "/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001",
+        "continuous_covered_after_witness_ms >= 3_600_000",
+        "semantic comparison to the predecessor Smoke Policy proves that only `band_id` changed",
+        "prepared candidate successor Policy grants no live command or Soak authority",
+    ):
+        assert invariant in task
 
 
 def test_authority_defines_one_live_short_vol_business_flow() -> None:
@@ -202,13 +215,14 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
 
     for invariant in (
         "Root blocker",
-        "A covered `NO_ANOMALY` interval is valid establishment evidence",
+        "A covered `NO_ANOMALY` interval is valid reachability evidence",
         "human may approve a successor inside the same authorized Policy schema",
         "no replay, independent offline recomputation",
         (
-            "Runtime construction and production-public observation each require their own "
+            "Runtime construction and each production-public observation require their own "
             "explicit human command"
         ),
+        "`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent per-run gates",
     ):
         assert invariant in current_stage
 
@@ -227,6 +241,7 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
     assert "Do not require full replay" in delivery
     assert "Predetermined elapsed time neither accepts nor rejects a capability" in delivery
     assert "human-approved successor identity and new forward interval" in delivery
+    assert "`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent" in delivery
     assert "## Denominator integrity" in delivery
     assert "`UNKNOWN` is neither numeric zero nor economic `ABSTAIN`" in delivery
 
@@ -257,6 +272,9 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "`IndexTailStatus`",
         "`TIME_BOUNDARY_PENDING`",
         "`WATERMARK_PENDING`",
+        "bootstrap `WARMUP`, not `CONTINUITY_GAP`",
+        "Normal `TIME_BOUNDARY_PENDING`/`WATERMARK_PENDING` rollover preserves the witness",
+        "`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent per-run",
         "`policy_schema_version = 3`",
         "`ticker_source_stale_deadline_ms`",
         "`TICKER_TIMESTAMP_AHEAD`",

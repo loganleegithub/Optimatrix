@@ -118,6 +118,9 @@ independent public atomic-quote availability state, denominators, minimal events
 establishment acceptance. One process freezes one exact content-identified Policy before live
 evidence. Direct tests prove deterministic boundaries; production-public observation proves only
 the connectivity, coverage, usable evaluations, anomalies, and quotes that actually occurred.
+`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent, per-run human gates with separately
+named exact code, Policy, evidence, and stop boundaries. Authorization, completion, or acceptance
+of one never authorizes or accepts the other.
 
 The service runs continuously until a human stops it or the process fails. Predetermined elapsed
 time neither accepts nor rejects a capability and may not trigger threshold changes. A covered

@@ -49,7 +49,7 @@ class IndexMinuteReducer:
         self._watermark_ms: int | None = None
         self._working: dict[int, MinuteClose] = {}
         self._sealed: list[MinuteClose] = []
-        self._continuity_gap = True
+        self._continuity_gap = False
 
     @property
     def sealed(self) -> tuple[MinuteClose, ...]:
@@ -148,6 +148,8 @@ class IndexMinuteReducer:
             raise ValueError("index source stale deadline must be positive")
         if self._continuity_gap:
             return IndexTail(IndexTailStatus.CONTINUITY_GAP)
+        if self._coverage_start_ms is None:
+            return IndexTail(IndexTailStatus.WARMUP)
         if (
             self._last_source_timestamp_ms is not None
             and trusted_time.lower_ms - self._last_source_timestamp_ms > source_stale_deadline_ms

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import math
 from decimal import Decimal
 from pathlib import Path
 
@@ -30,14 +32,14 @@ from radar_runtime.runtime import (
     RpcPurpose,
 )
 from short_vol_radar.atomic import PublicAtomicQuoteState
-from short_vol_radar.black import DecimalInterval
+from short_vol_radar.black import DecimalInterval, black_price
 from short_vol_radar.detector import (
     DetectorObservation,
     DetectorState,
     EpisodeEndReason,
     EpisodeTracker,
 )
-from short_vol_radar.evidence import CoverageState, EvidenceWriter
+from short_vol_radar.evidence import CoverageState, EvidenceWriter, validate_run_summary
 from short_vol_radar.policy import RadarPolicy, load_policy_bytes
 from short_vol_radar.radar import TickerState
 
@@ -165,6 +167,59 @@ def seed_flat_available_index(reducer: RadarReducer) -> None:
         reducer.index.seal_ready(timestamp)
 
 
+def configure_full_formula_scope(
+    reducer: RadarReducer,
+    instrument: OptionInstrument,
+    *,
+    ticker_source_timestamp_ms: int = 1_000_000,
+) -> None:
+    total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
+    bid = Decimal(
+        str(
+            black_price(
+                100,
+                float(instrument.strike),
+                total_volatility,
+                instrument.option_type,
+            )
+        )
+    )
+    reducer.options = {instrument.instrument_name: instrument}
+    reducer.catalog_options = dict(reducer.options)
+    reducer.trackers[instrument.instrument_name] = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=reducer.policy.identity,
+        instrument_name=instrument.instrument_name,
+    )
+    reducer.option_books[instrument.instrument_name] = make_book(
+        instrument.instrument_name,
+        str(bid),
+    )
+    reducer.tickers[instrument.instrument_name] = TickerState(
+        Decimal(100),
+        "index_price",
+        ticker_source_timestamp_ms,
+    )
+
+
+def establish_joint_witness(
+    reducer: RadarReducer,
+    instrument: OptionInstrument,
+    *,
+    monotonic_ms: int = 1_001,
+) -> None:
+    seed_flat_available_index(reducer)
+    configure_full_formula_scope(reducer, instrument)
+    reducer._causal_seq = 1
+    reducer.settle_fact(
+        boundary=FactBoundary(1, 1, monotonic_ms, 1),
+        affected_instruments=(instrument.instrument_name,),
+        countable=True,
+    )
+    assert reducer.results[instrument.instrument_name].full_formula_evaluation
+    assert reducer._first_joint_witness_ms == monotonic_ms
+
+
 def activate_directly(
     reducer: RadarReducer,
     instrument: OptionInstrument,
@@ -275,6 +330,190 @@ def test_index_regression_commits_platform_detector_aggregate_and_coverage_atomi
     )
     assert reducer._coverage._current_state.value == CoverageState.UNKNOWN.value
     assert reducer.atomic_states == {}
+
+
+def test_bootstrap_warmup_does_not_report_or_recover_a_real_index_gap(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    instrument = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    configure_full_formula_scope(reducer, instrument)
+
+    reducer.settle_fact(
+        boundary=FactBoundary(1, 1, 1_001, 1),
+        affected_instruments=(instrument.instrument_name,),
+        countable=False,
+        observation_reason="BOOTSTRAP",
+    )
+
+    assert reducer.results[instrument.instrument_name].reason == "INDEX_WARMUP"
+    assert reducer.diagnostics.index_gap_count == 0
+    assert not reducer._index_gap_active
+    assert not reducer._index_resubscribe_pending
+
+
+def test_minute_rollover_preserves_witness_through_recovery_and_summary(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    instrument = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    establish_joint_witness(reducer, instrument)
+    known_ineligible = make_option(
+        "BTC_USDC-27SEP24-100020-C",
+        instrument.expiration_timestamp_ms,
+    )
+    out_of_scope = make_option(
+        "BTC_USDC-27SEP24-100030-C",
+        1_000_000 + 15 * 60_000,
+    )
+    for candidate in (known_ineligible, out_of_scope):
+        reducer.options[candidate.instrument_name] = candidate
+        reducer.catalog_options[candidate.instrument_name] = candidate
+        reducer.trackers[candidate.instrument_name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=reducer.policy.identity,
+            instrument_name=candidate.instrument_name,
+        )
+        reducer.option_books[candidate.instrument_name] = make_book(
+            candidate.instrument_name,
+            None,
+        )
+
+    reducer.clock = TrustedClock.from_response(
+        1_019_999,
+        20_999,
+        20_999,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer._causal_seq = 2
+    reducer.settle_fact(
+        boundary=FactBoundary(1, 2, 20_999, 2),
+        affected_instruments=(instrument.instrument_name,),
+        countable=False,
+        observation_reason="TIME_BOUNDARY",
+    )
+
+    assert reducer.results[instrument.instrument_name].reason == "INDEX_TIME_BOUNDARY_PENDING"
+    assert reducer._first_joint_witness_ms == 1_001
+    assert reducer.diagnostics.index_gap_count == 0
+
+    reducer.clock = TrustedClock.from_response(
+        1_020_000,
+        21_000,
+        21_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer._causal_seq = 3
+    reducer.settle_fact(
+        boundary=FactBoundary(1, 3, 21_000, 3),
+        affected_instruments=(instrument.instrument_name,),
+        countable=False,
+        observation_reason="TIME_BOUNDARY",
+    )
+
+    assert reducer.results[instrument.instrument_name].reason == "INDEX_WATERMARK_PENDING"
+    assert reducer._first_joint_witness_ms == 1_001
+    assert reducer.diagnostics.index_gap_count == 0
+
+    reducer._causal_seq = 4
+    assert reducer._apply_index(
+        {
+            "timestamp": 1_020_000,
+            "price": 100,
+            "index_name": "btc_usdc",
+        },
+        FactBoundary(1, 4, 21_001, 4),
+    )
+    assert reducer.results[instrument.instrument_name].full_formula_evaluation
+    assert reducer._first_joint_witness_ms == 1_001
+
+    summary = json.loads(reducer.clean_stop(22_000).read_text())
+    validate_run_summary(summary)
+    assert summary["coverage"]["coverage_partition_error_ms"] == 0
+    assert summary["operational_diagnostics"]["witness"] == {
+        "first_joint_witness_monotonic_ms": 1_001,
+        "continuous_covered_after_witness_ms": 20_999,
+    }
+
+
+def test_real_index_gap_requires_recovery_and_a_new_summary_witness(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    instrument = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    establish_joint_witness(reducer, instrument)
+
+    reducer._causal_seq = 2
+    assert not reducer._apply_index(
+        {
+            "timestamp": 900_000,
+            "price": 100,
+            "index_name": "btc_usdc",
+        },
+        FactBoundary(1, 2, 2_000, 2),
+    )
+    assert reducer._first_joint_witness_ms is None
+    assert reducer.diagnostics.index_gap_count == 1
+    assert reducer.platform.reason == "INDEX_CONTINUITY_GAP"
+
+    reducer.index.start_continuous_coverage(1_020_000)
+    for causal_seq, timestamp in enumerate(
+        (1_020_001, 1_080_000, 1_140_000, 1_200_000, 1_260_000, 1_320_000, 1_380_000),
+        start=10,
+    ):
+        reducer.index.accept_tick(
+            source_timestamp_ms=timestamp,
+            price=100,
+            causal_seq=causal_seq,
+        )
+        reducer.index.seal_ready(timestamp)
+    reducer._index_resubscribe_pending = False
+    reducer.clock = TrustedClock.from_response(
+        1_440_001,
+        3_000,
+        3_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer.tickers[instrument.instrument_name] = TickerState(
+        Decimal(100),
+        "index_price",
+        1_440_000,
+    )
+    reducer._causal_seq = 30
+    assert reducer._apply_index(
+        {
+            "timestamp": 1_440_000,
+            "price": 100,
+            "index_name": "btc_usdc",
+        },
+        FactBoundary(1, 3, 3_000, 30),
+    )
+
+    assert reducer.results[instrument.instrument_name].full_formula_evaluation
+    assert reducer._first_joint_witness_ms == 3_000
+    assert not reducer._index_gap_active
+
+    summary = json.loads(reducer.clean_stop(4_000).read_text())
+    validate_run_summary(summary)
+    assert summary["operational_diagnostics"]["witness"] == {
+        "first_joint_witness_monotonic_ms": 3_000,
+        "continuous_covered_after_witness_ms": 1_000,
+    }
 
 
 def test_clock_refresh_failure_keeps_fresh_clock_until_real_stale_boundary(

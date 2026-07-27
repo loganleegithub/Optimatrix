@@ -23,9 +23,11 @@ establish the production-public Short Vol Radar defined by
 entry, Position runtime, Outcome cohort, private/account data, orders, fills, capital,
 qualification, Challenger automation, promotion, and execution remain unauthorized.
 
-Runtime construction and production-public observation each require their own explicit human
-command. The construction gate is open for the active task; the production-observation gate
-remains closed.
+Runtime construction and each production-public observation require their own explicit human
+command. `REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent per-run gates: authorization
+or evidence for either one never opens the other. The
+`OPERATIONAL_SOAK_PRECONDITIONS` construction gate is open for the active task; both
+production-public gates remain closed.
 
 ## Reset baseline and current construction truth
 
@@ -112,17 +114,22 @@ Implementation readiness requires:
 3. inspection confirming that no replay, second calculator, full-market persistence, private
    path, maker path, or later-stage object was added.
 
-Runtime establishment additionally requires one separately authorized production-public
-observation that completes warm-up and produces at least one known per-instrument evaluation
-inside one non-empty real
-`Policy identity × expiry_timestamp × option_type` aggregate, then produces a complete aggregate
+Runtime establishment additionally requires two independently authorized and accepted
+production-public observations. `REACHABILITY_SMOKE` must complete warm-up and produce at least
+one known per-instrument evaluation inside one non-empty real
+`Policy identity × expiry_timestamp × option_type` aggregate, then produce a complete aggregate
 `NO_ANOMALY` or `ANOMALY_ACTIVE` result. At least one instrument must also pass all preliminary
 eligibility gates and reach a known baseline/IV/Delta/richness calculation; short-circuit
 ineligibility alone cannot establish the Radar. Empty scope cannot pass vacuously. A covered
-`NO_ANOMALY` interval is valid establishment evidence. A degraded positive witness is truthful but
+`NO_ANOMALY` interval is valid reachability evidence. A degraded positive witness is truthful but
 does not alone establish the full Radar. Natural anomaly occurrence and official atomic-quote
 availability are separately reported `OBSERVED | NOT_OBSERVED`; neither is required for code
 acceptance and neither may be forced through in-place tuning.
+
+`OPERATIONAL_SOAK` must then satisfy its separately approved exact Policy, evidence-directory,
+and stop-condition checklist. A Smoke authorization, run, or accepted witness proves no sustained
+operation and grants no Soak authority. A Soak authorization likewise cannot retroactively supply
+or relabel the Smoke reachability witness.
 
 An all-`UNKNOWN` or pre-warm-up stop is truthful but does not establish runtime capability. Rates
 with a zero or unknown denominator remain `null`.
