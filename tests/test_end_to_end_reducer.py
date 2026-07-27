@@ -361,6 +361,23 @@ def run_nonempty_scenario(
         "global_continuity_epoch": 1,
         "first_joint_witness_monotonic_ms": final_ms + 2,
         "continuous_global_continuity_after_witness_ms": 98,
+        "scope": {
+            "expiration_timestamp_ms": expiry_ms,
+            "option_type": "call",
+            "tte_band_id": "settlement-clear-to-six-hours",
+        },
+        "boundary": {
+            "session_epoch": 1,
+            "ingress_seq": 21,
+            "received_monotonic_ms": final_ms + 2,
+            "causal_seq": 20,
+        },
+        "formula_instrument": {
+            "instrument_name": short_name,
+            "expiration_timestamp_ms": expiry_ms,
+            "option_type": "call",
+            "tte_band_id": "settlement-clear-to-six-hours",
+        },
     }
     return (
         tuple(

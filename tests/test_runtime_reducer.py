@@ -15,6 +15,8 @@ from radar_runtime.deribit_public import (
     PublicSessionError,
 )
 from radar_runtime.runtime import (
+    CausalCause,
+    CausalCommit,
     ChannelState,
     FactBoundary,
     FailureScope,
@@ -887,9 +889,9 @@ def test_index_ack_then_clock_failure_still_releases_held_tick_once_on_recovery(
         return original_apply_index(payload, boundary)
 
     def record_settle(**kwargs: object) -> None:
-        boundary = kwargs["boundary"]
-        assert isinstance(boundary, FactBoundary)
-        settled_causal.append(boundary.causal_seq)
+        commit = kwargs["commit"]
+        assert isinstance(commit, CausalCommit)
+        settled_causal.append(commit.boundary.causal_seq)
         original_settle(**kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(reducer, "_apply_index", record_index)
@@ -1472,10 +1474,14 @@ def test_final_post_status_success_recomputes_current_truth_in_same_boundary(
     )
     reducer.option_books[instrument.instrument_name] = book
     reducer._settle_fact(
-        boundary=FactBoundary(1, 1, 1_000, 1),
+        commit=CausalCommit(
+            boundary=FactBoundary(1, 1, 1_000, 1),
+            cause=CausalCause.PLATFORM_FACT,
+            failure_domain=FailureScope.SESSION,
+            affected_scopes=("GLOBAL",),
+        ),
         affected_instruments=(instrument.instrument_name,),
         countable=False,
-        observation_reason="PLATFORM_UNESTABLISHED",
     )
     assert reducer.trackers[instrument.instrument_name].detector_state is DetectorState.UNKNOWN
 

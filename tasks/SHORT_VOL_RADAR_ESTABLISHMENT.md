@@ -14,10 +14,15 @@
 
 **Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`
 
-**Current construction subgate:** `SHORT_VOL_RADAR_FACT_SEMANTICS_CLOSURE`
+**Prior construction subgate:** `SHORT_VOL_RADAR_FACT_SEMANTICS_CLOSURE`
 `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_27`
 
-**Current subgate base HEAD:** `c66f987f7fd7513626e69c37f7f2552991ebf9e4`
+**Prior subgate base HEAD:** `c66f987f7fd7513626e69c37f7f2552991ebf9e4`
+
+**Current construction subgate:** `FACT_LIFECYCLE_CLOSURE`
+`OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_27`
+
+**Current subgate implementation anchor:** `d12a68812a36ed4ad420fc2e1ff9ace5583c801e`
 
 **REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`
 
@@ -44,6 +49,12 @@ The design DRAFT did not authorize construction. The explicit human command nami
 three-ledger, same-current-scope witness, diagnostic/evidence contract repair, direct tests,
 authority/artifact inspection, commit, and push.
 
+The 2026-07-27 command naming `FACT_LIFECYCLE_CLOSURE` and abbreviated base `d12a688`
+registers only the bounded successor contract below. The resolved implementation anchor is
+`d12a68812a36ed4ad420fc2e1ff9ace5583c801e`. The same command explicitly kept its construction
+gate closed. The immediately subsequent explicit human `开工` command, read with that registered
+closure and resolved anchor, opens only this construction gate; it grants no live authority.
+
 The prior `OPERATIONAL_SOAK` attempt at
 `/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001` is sealed
 `NOT_MET`. It is historical evidence only and may not be changed, replayed, recomputed, migrated,
@@ -60,11 +71,13 @@ The execution gates are independent:
    `c66f987f7fd7513626e69c37f7f2552991ebf9e4`; it granted no continuing live authority.
 4. **Prior `OPERATIONAL_SOAK` gate:** consumed by `attempt-001`, whose acceptance is permanently
    `NOT_MET`.
-5. **`SHORT_VOL_RADAR_FACT_SEMANTICS_CLOSURE` construction subgate:** the current command
-   authorizes only the exact bounded construction work above. It does not authorize any live
-   command.
-6. **Heartbeat wire probe gate:** closed until a separate explicit human command.
-7. **Next `OPERATIONAL_SOAK` gate:** closed until the heartbeat probe is separately authorized,
+5. **`SHORT_VOL_RADAR_FACT_SEMANTICS_CLOSURE` construction subgate:** the prior explicit command
+   authorized only its exact bounded construction work. It granted no continuing live authority.
+6. **`FACT_LIFECYCLE_CLOSURE` construction subgate:** opened by the subsequent explicit human
+   `开工` command against the exact implementation anchor above. It authorizes only the bounded
+   offline construction and acceptance checks below and no live command.
+7. **Heartbeat wire probe gate:** closed until a separate explicit human command.
+8. **Next `OPERATIONAL_SOAK` gate:** closed until the heartbeat probe is separately authorized,
    new global-continuity and local-availability thresholds are human-frozen, and a later command
    independently names exact accepted code, Policy path/digest, new empty evidence directory, and
    stop condition.
@@ -251,9 +264,140 @@ has no input to current-truth decisions.
 
 New summaries use `operational_diagnostics_schema_version = 3`, at most 256 late-regression rows,
 at most 256 option-local availability intervals, and attributed coverage rows. They persist no
-prices, Greeks, books, full ticker payloads, or reconstructable chain. The strict reader still
-validates version-2 summaries under their original schema; version 2 is not eligible for the new
+prices, Greeks, books, full ticker payloads, or reconstructable chain. The current writer and
+current strict reader accept only version 3. Version-2 summaries validate only through the
+explicit legacy entry point under their original schema; version 2 is not eligible for the new
 acceptance semantics and no migration/replay path exists.
+
+### `FACT_LIFECYCLE_CLOSURE` — construction authorized
+
+The explicit subsequent human `开工` command opens only this bounded successor construction
+against the exact implementation anchor above. The current four-axis state is:
+
+**Market/Decision input contract change:** `APPROVED` — `FACT_LIFECYCLE_CLOSURE`.
+
+**Decision Policy change:** `NONE` — the formula, business parameters, operational limits, and
+every Policy path/digest remain unchanged.
+
+**Outcome/evaluation contract change:** `NONE` — no new future fact, replay, recomputation,
+historical relabelling, Outcome, comparator, or qualification is authorized.
+
+**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
+capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`.
+
+#### Business closure
+
+**Given:** the reducer can currently let one received fact produce multiple lifecycle effects,
+derive evidence attribution after the resulting state is known, or evaluate a partial current
+scope through paths that do not share one frozen causal input.
+
+**When:** one accepted fact or declared time/stop boundary is committed and all affected current
+truth is settled.
+
+**Then:** one explicit causal commit owns the cause, failure domain, affected scopes, continuity
+incident, source-currentness settlement, immutable full-scope snapshot, aggregate/witness
+decision, and attributable evidence edges without defaults or reverse inference.
+
+**Independent verification:** first add one stable failing direct test for every counterexample
+below, observe those tests fail on the approved base, then make the smallest owning-module repair
+and run the prescribed offline checks. No production evidence is required or permitted.
+
+**Valid zero/no-hit/UNKNOWN result:** a run with no incident, witness, RPC, ticker candidate, or
+local unavailability interval may truthfully produce a zero count, null witness, or empty ledger.
+Those zeros do not waive a conservation equation, create a default cause, or establish Radar
+capability.
+
+**Upstream prerequisite:** exact implementation anchor
+`d12a68812a36ed4ad420fc2e1ff9ace5583c801e`. A later construction command must repeat the exact
+approved clean base HEAD; the current command supplies construction authority only for this
+bounded closure.
+
+#### Minimum causal lifecycle
+
+1. Introduce one minimal `CausalCommit` that freezes exactly one `FactBoundary`, one finite
+   whitelisted cause enum value, one existing whitelisted failure domain, and one bounded set of
+   affected scopes before settlement. Coverage receives that cause and those scopes directly.
+   Delete every default coverage reason and every path that infers a cause from the computed
+   coverage/result after settlement.
+2. Introduce one minimal `ContinuityIncident` identity per root continuity accident. One incident
+   can increment `global_continuity_epoch` at most once. A clock gap and any index gap derived from
+   that clock failure carry the same incident identity and cannot increment twice. Only after
+   recovery closes that incident may a later independent root accident create a new incident and
+   increment the epoch again. This does not authorize a generic incident framework.
+3. Extract a network-free `settle_source_currentness(now)` reducer step. It runs before detector
+   evaluation at every market-fact boundary, every time advance, and clean-stop projection.
+   Detector current truth consumes only its settled result; it may not independently recompute or
+   bypass source currentness.
+4. Make `ScopeSnapshot` immutable and populate it with every current member and that member's
+   current evaluation for one exact
+   `Policy identity × expiry_timestamp × option_type` scope at one boundary. Aggregate coverage
+   and the full-formula joint witness consume only that snapshot, never an affected subset,
+   mutable reducer maps, or historical counters.
+
+#### Evidence closure
+
+1. Transport request/outcome metrics are finalized in `finally` before the original exception is
+   propagated. Diagnostic accounting neither swallows nor replaces the exception.
+2. A joint witness is valid only when its boundary is strictly later than the current continuity
+   epoch start. Version-3 evidence persists only the minimum identity needed to audit it: exact
+   scope, causal boundary, and formula-instrument identity.
+3. Version-3 validation enforces conservation rather than trusting precomputed summary totals:
+   every received ticker candidate has exactly one shape classification and one application
+   disposition; every shape-valid candidate has exactly one currentness classification while a
+   shape-invalid candidate has none; RPC requests and their mutually exclusive lifecycle
+   outcomes reconcile under one exhaustive request state machine, with deadline-late terminal
+   outcomes distinguished from orphan late wire responses; and every option-local interval start
+   has exactly one recovery, reason-change, or clean-stop censor edge after retained and omitted
+   rows are accounted for.
+4. The current writer emits only `operational_diagnostics_schema_version = 3`. The normal current
+   validator accepts only version 3. Immutable version-2 evidence is reachable only through one
+   explicit read-only legacy validation entry point; it is never selected implicitly, rewritten,
+   migrated, or accepted under version-3 semantics.
+5. Version-3 `reason` and scope labels are finite whitelists. Every continuity-epoch edge has
+   exactly one matching incident/restart edge with the same causal attribution, and every such
+   incident/restart edge has exactly one epoch edge. Missing, duplicate, orphaned, defaulted, or
+   inferred edges fail validation.
+
+#### Counterexamples and acceptance order
+
+The red-test set must independently demonstrate all of these pre-fix failures:
+
+1. missing/defaulted or result-inferred coverage cause, mutable cause/scope attribution, and an
+   unrecognized cause or failure domain;
+2. one clock-rooted accident incrementing once for the clock gap and again for its derived index
+   gap, plus a recovered later independent incident that must increment once;
+3. accepted source TTL crossing on a non-ticker market fact, a time advance, and clean stop before
+   detector settlement;
+4. an affected subset omitting a still-current member, cross-scope member contamination, and an
+   aggregate or witness reading outside its immutable full-scope snapshot;
+5. a transport exception escaping before request/outcome diagnostics are finalized;
+6. a witness at or before the epoch start, or a witness missing its scope, boundary, or
+   formula-instrument identity;
+7. non-conserving ticker, RPC, or option-local interval ledgers, including bounded omitted rows;
+8. a current writer emitting version 2, implicit version-2 acceptance through the current
+   validator, and explicit read-only legacy validation of the sealed version-2 evidence;
+9. malicious version-3 summaries with unknown reason/scope labels, missing/duplicate/orphaned
+   epoch edges, false conservation totals, or cross-identity witness fields.
+
+Only after the red set fails for the intended reasons may the minimal repair begin. Acceptance
+then runs, in order:
+
+1. focused direct tests for the owning reducer, detector/snapshot, transport, writer, and
+   validator paths;
+2. `make check`;
+3. explicit legacy validation of all 224 immutable objects in
+   `/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001`, with zero rewrite,
+   migration, replay, or offline recomputation;
+4. malicious version-3 summary rejection tests for every whitelist, identity, epoch-edge, and
+   conservation invariant above;
+5. authority, artifact, and final-diff inspection proving that only this closure changed.
+
+#### Closed boundaries
+
+This construction does not authorize production-public connection, heartbeat probe, Smoke, Soak,
+Policy creation or modification, private API, RFQ, combo creation, order, trade, replay, offline
+recomputation, full-market persistence, stage advancement, task acceptance, merge, or generalized
+lifecycle/evidence infrastructure. The sealed `attempt-001` remains permanently `NOT_MET`.
 
 ## First-principles scope
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 import radar_runtime.runtime as runtime_module
+import short_vol_radar.evidence as evidence_module
 from conftest import PolicyFactory
 from market_monitor import (
     PriceLevel,
@@ -19,7 +20,15 @@ from radar_runtime.identity import (
     prepare_evidence_directory,
     validate_clean_git_outputs,
 )
-from radar_runtime.runtime import CoverageLedger, LiveRadarRuntime, ScopeCounts
+from radar_runtime.runtime import (
+    CausalCause,
+    CausalCommit,
+    CoverageLedger,
+    FactBoundary,
+    FailureScope,
+    LiveRadarRuntime,
+    ScopeCounts,
+)
 from short_vol_radar.atomic import (
     AtomicMatch,
     AtomicQuote,
@@ -48,6 +57,8 @@ from short_vol_radar.evidence import (
     validate_anomaly_event,
     validate_atomic_event,
     validate_evidence_directory,
+    validate_legacy_evidence_directory,
+    validate_legacy_run_summary,
     validate_run_summary,
 )
 from short_vol_radar.policy import OptionRule, load_policy_bytes
@@ -123,8 +134,22 @@ def summary_object(
     *,
     runtime_identity: str = "runtime",
     segments: tuple[CoverageSegment, ...] = (
-        CoverageSegment(0, 10, CoverageState.UNKNOWN),
-        CoverageSegment(10, 20, CoverageState.KNOWN_COMPLETE),
+        CoverageSegment(
+            0,
+            10,
+            CoverageState.UNKNOWN,
+            reason="RUNTIME_START",
+            affected_scopes=("GLOBAL",),
+            global_continuity_epoch=1,
+        ),
+        CoverageSegment(
+            10,
+            20,
+            CoverageState.KNOWN_COMPLETE,
+            reason="TICKER_APPLIED",
+            affected_scopes=("OPTION:SHORT",),
+            global_continuity_epoch=1,
+        ),
     ),
 ) -> dict[str, object]:
     return project_run_summary(
@@ -138,7 +163,7 @@ def summary_object(
         anomaly_end_count_by_reason={EpisodeEndReason.CLEAR: 0},
         known_active_duration_ms_sum_by_end_reason={EpisodeEndReason.CLEAR: 0},
         public_atomic_quote_state_transition_count={},
-        operational_diagnostics=operational_diagnostics(),
+        operational_diagnostics=current_operational_diagnostics(),
     )
 
 
@@ -230,6 +255,7 @@ def current_operational_diagnostics(*, observation_ms: int = 20) -> dict[str, ob
         "current_epoch": 1,
         "restart_count": 0,
         "restart_count_by_reason": {},
+        "restart_edges": [],
     }
     diagnostics["ticker_application"] = {
         "disposition_count": {
@@ -259,16 +285,62 @@ def current_operational_diagnostics(*, observation_ms: int = 20) -> dict[str, ob
     diagnostics["option_local_availability"] = {
         "unavailable_count_by_reason": {},
         "recovery_count_by_reason": {},
+        "end_count_by_disposition": {
+            "RECOVERED": 0,
+            "REASON_CHANGED": 0,
+            "CENSORED_AT_STOP": 0,
+        },
         "retained_interval_limit": 256,
         "omitted_interval_count": 0,
+        "omitted_interval_count_by_reason": {},
         "intervals": [],
     }
     diagnostics["witness"] = {
         "global_continuity_epoch": 1,
         "first_joint_witness_monotonic_ms": None,
         "continuous_global_continuity_after_witness_ms": None,
+        "scope": None,
+        "boundary": None,
+        "formula_instrument": None,
     }
     return diagnostics
+
+
+def legacy_summary_object(
+    *,
+    runtime_identity: str = "runtime",
+    segments: tuple[CoverageSegment, ...] = (
+        CoverageSegment(
+            0,
+            10,
+            CoverageState.UNKNOWN,
+            reason="RUNTIME_START",
+            affected_scopes=("GLOBAL",),
+            global_continuity_epoch=1,
+        ),
+        CoverageSegment(
+            10,
+            20,
+            CoverageState.KNOWN_COMPLETE,
+            reason="TICKER_APPLIED",
+            affected_scopes=("OPTION:SHORT",),
+            global_continuity_epoch=1,
+        ),
+    ),
+) -> dict[str, object]:
+    summary = summary_object(runtime_identity=runtime_identity, segments=segments)
+    summary["operational_diagnostics"] = operational_diagnostics(
+        observation_ms=segments[-1].end_monotonic_ms - segments[0].start_monotonic_ms
+    )
+    summary["coverage_segments"] = [
+        {
+            "start_monotonic_ms": segment.start_monotonic_ms,
+            "end_monotonic_ms": segment.end_monotonic_ms,
+            "state": segment.state.value,
+        }
+        for segment in segments
+    ]
+    return summary
 
 
 def current_summary_object(
@@ -437,15 +509,43 @@ def test_coverage_segments_reject_overlap_gap_negative_and_mismatched_totals() -
     with pytest.raises(EvidenceError, match="overlap or contain a gap"):
         summary_object(
             segments=(
-                CoverageSegment(0, 10, CoverageState.UNKNOWN),
-                CoverageSegment(9, 20, CoverageState.KNOWN_COMPLETE),
+                CoverageSegment(
+                    0,
+                    10,
+                    CoverageState.UNKNOWN,
+                    reason="RUNTIME_START",
+                    affected_scopes=("GLOBAL",),
+                    global_continuity_epoch=1,
+                ),
+                CoverageSegment(
+                    9,
+                    20,
+                    CoverageState.KNOWN_COMPLETE,
+                    reason="TICKER_APPLIED",
+                    affected_scopes=("OPTION:SHORT",),
+                    global_continuity_epoch=1,
+                ),
             )
         )
     with pytest.raises(EvidenceError, match="overlap or contain a gap"):
         summary_object(
             segments=(
-                CoverageSegment(0, 10, CoverageState.UNKNOWN),
-                CoverageSegment(11, 20, CoverageState.KNOWN_COMPLETE),
+                CoverageSegment(
+                    0,
+                    10,
+                    CoverageState.UNKNOWN,
+                    reason="RUNTIME_START",
+                    affected_scopes=("GLOBAL",),
+                    global_continuity_epoch=1,
+                ),
+                CoverageSegment(
+                    11,
+                    20,
+                    CoverageState.KNOWN_COMPLETE,
+                    reason="TICKER_APPLIED",
+                    affected_scopes=("OPTION:SHORT",),
+                    global_continuity_epoch=1,
+                ),
             )
         )
     summary = summary_object()
@@ -457,12 +557,23 @@ def test_coverage_segments_reject_overlap_gap_negative_and_mismatched_totals() -
 
 
 def test_coverage_ledger_splits_same_state_on_global_continuity_restart() -> None:
-    ledger = CoverageLedger(0)
+    ledger = CoverageLedger(
+        0,
+        initial_commit=CausalCommit(
+            boundary=FactBoundary(1, 0, 0, 0),
+            cause=CausalCause.RUNTIME_START,
+            failure_domain=FailureScope.SESSION,
+            affected_scopes=("GLOBAL",),
+        ),
+    )
     ledger.transition(
         CoverageState.UNKNOWN,
-        10,
-        reason="INDEX_CONTINUITY_GAP",
-        affected_scopes=("GLOBAL",),
+        commit=CausalCommit(
+            boundary=FactBoundary(1, 1, 10, 1),
+            cause=CausalCause.INDEX_CONTINUITY_GAP,
+            failure_domain=FailureScope.CLOCK_INDEX,
+            affected_scopes=("GLOBAL",),
+        ),
         global_continuity_epoch=2,
         force=True,
     )
@@ -532,7 +643,7 @@ def test_run_summary_cross_checks_episode_activation_and_end_totals() -> None:
 
 
 def test_version_two_operational_diagnostics_remain_strict_and_payload_free() -> None:
-    summary = summary_object()
+    summary = legacy_summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
     assert diagnostics["operational_diagnostics_schema_version"] == 2
@@ -542,16 +653,16 @@ def test_version_two_operational_diagnostics_remain_strict_and_payload_free() ->
     assert isinstance(channels, list)
     channels[0]["received_count"] = 1
     with pytest.raises(EvidenceError, match="rate"):
-        validate_run_summary(summary)
+        evidence_module.validate_legacy_run_summary(summary)
 
-    summary = summary_object()
+    summary = legacy_summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
     source_shapes = diagnostics["source_shapes"]
     assert isinstance(source_shapes, list)
     source_shapes[0]["payload"] = {"price": 100}
     with pytest.raises(EvidenceError, match="exact"):
-        validate_run_summary(summary)
+        evidence_module.validate_legacy_run_summary(summary)
 
 
 def test_version_three_diagnostics_and_attributed_coverage_are_strict() -> None:
@@ -617,6 +728,20 @@ def test_version_three_late_diagnostics_are_bounded_and_payload_free() -> None:
     }
     ticker_application["disposition_count"]["LATE_IGNORED"] = 1
     ticker_application["late_ignored_diagnostics"] = [row]
+    source_shapes = diagnostics["source_shapes"]
+    assert isinstance(source_shapes, list)
+    ticker_shape = next(item for item in source_shapes if item["source"] == "option_ticker")
+    ticker_shape.update(
+        {
+            "observed_count": 1,
+            "valid_count": 1,
+            "invalid_count": 0,
+            "validation": "VALID",
+        }
+    )
+    ticker_currentness = diagnostics["ticker_currentness"]
+    assert isinstance(ticker_currentness, dict)
+    ticker_currentness["candidate_count_by_classification"]["CURRENT"] = 1
     validate_run_summary(summary)
 
     row["payload"] = {"underlying_price": 100}
@@ -631,6 +756,22 @@ def test_version_three_late_diagnostics_are_bounded_and_payload_free() -> None:
     over_limit_disposition_count = over_limit_application["disposition_count"]
     assert isinstance(over_limit_disposition_count, dict)
     over_limit_disposition_count["LATE_IGNORED"] = 257
+    over_limit_shapes = over_limit_diagnostics["source_shapes"]
+    assert isinstance(over_limit_shapes, list)
+    over_limit_ticker_shape = next(
+        item for item in over_limit_shapes if item["source"] == "option_ticker"
+    )
+    over_limit_ticker_shape.update(
+        {
+            "observed_count": 257,
+            "valid_count": 257,
+            "invalid_count": 0,
+            "validation": "VALID",
+        }
+    )
+    over_limit_currentness = over_limit_diagnostics["ticker_currentness"]
+    assert isinstance(over_limit_currentness, dict)
+    over_limit_currentness["candidate_count_by_classification"]["CURRENT"] = 257
     over_limit_application["late_ignored_diagnostics"] = [
         {
             "instrument_name": f"SHORT-{index}",
@@ -663,7 +804,6 @@ def test_operational_diagnostics_requires_exact_nine_runtime_limits() -> None:
     summary = summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
-    diagnostics["operational_diagnostics_schema_version"] = 2
     runtime_limits = diagnostics["runtime_limits"]
     assert isinstance(runtime_limits, dict)
     runtime_limits["ticker_source_stale_deadline_ms"] = 5_000
@@ -749,19 +889,46 @@ def test_run_summary_rejects_ticker_deadline_shorter_than_poll_interval() -> Non
     ("segments", "first_witness_ms", "continuous_ms", "message"),
     (
         (
-            (CoverageSegment(0, 20, CoverageState.KNOWN_COMPLETE),),
+            (
+                CoverageSegment(
+                    0,
+                    20,
+                    CoverageState.KNOWN_COMPLETE,
+                    reason="RUNTIME_START",
+                    affected_scopes=("GLOBAL",),
+                    global_continuity_epoch=1,
+                ),
+            ),
             21,
             0,
             "within the runtime interval",
         ),
         (
-            (CoverageSegment(100, 120, CoverageState.KNOWN_COMPLETE),),
+            (
+                CoverageSegment(
+                    100,
+                    120,
+                    CoverageState.KNOWN_COMPLETE,
+                    reason="RUNTIME_START",
+                    affected_scopes=("GLOBAL",),
+                    global_continuity_epoch=1,
+                ),
+            ),
             99,
             21,
             "within the runtime interval",
         ),
         (
-            (CoverageSegment(0, 20, CoverageState.KNOWN_COMPLETE),),
+            (
+                CoverageSegment(
+                    0,
+                    20,
+                    CoverageState.KNOWN_COMPLETE,
+                    reason="RUNTIME_START",
+                    affected_scopes=("GLOBAL",),
+                    global_continuity_epoch=1,
+                ),
+            ),
             10,
             9,
             "continuous duration",
@@ -774,7 +941,7 @@ def test_run_summary_rejects_impossible_joint_witness_continuity(
     continuous_ms: int,
     message: str,
 ) -> None:
-    summary = summary_object(segments=segments)
+    summary = legacy_summary_object(segments=segments)
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
     witness = diagnostics["witness"]
@@ -783,12 +950,30 @@ def test_run_summary_rejects_impossible_joint_witness_continuity(
     witness["continuous_covered_after_witness_ms"] = continuous_ms
 
     with pytest.raises(EvidenceError, match=message):
-        validate_run_summary(summary)
+        evidence_module.validate_legacy_run_summary(summary)
 
 
 def test_zero_duration_coverage_is_truthful_not_fabricated() -> None:
-    segments = CoverageLedger(100).close(100)
-    assert segments == (CoverageSegment(100, 100, CoverageState.UNKNOWN),)
+    ledger = CoverageLedger(
+        100,
+        initial_commit=CausalCommit(
+            boundary=FactBoundary(1, 0, 100, 0),
+            cause=CausalCause.RUNTIME_START,
+            failure_domain=FailureScope.SESSION,
+            affected_scopes=("GLOBAL",),
+        ),
+    )
+    segments = ledger.close(100)
+    assert segments == (
+        CoverageSegment(
+            100,
+            100,
+            CoverageState.UNKNOWN,
+            reason="RUNTIME_START",
+            affected_scopes=("GLOBAL",),
+            global_continuity_epoch=1,
+        ),
+    )
     summary = project_run_summary(
         code_identity="a" * 40,
         runtime_identity="runtime",
@@ -800,7 +985,7 @@ def test_zero_duration_coverage_is_truthful_not_fabricated() -> None:
         anomaly_end_count_by_reason={},
         known_active_duration_ms_sum_by_end_reason={},
         public_atomic_quote_state_transition_count={},
-        operational_diagnostics=operational_diagnostics(observation_ms=0),
+        operational_diagnostics=current_operational_diagnostics(observation_ms=0),
     )
     assert summary["runtime_started_monotonic_ms"] == 100
     assert summary["clean_stop_monotonic_ms"] == 100
@@ -988,3 +1173,311 @@ def test_continuous_inbound_flow_cannot_starve_absolute_time_boundaries(
     assert asyncio.run(runtime.run(ContinuousClient(), stop_event)) == summary_path
     assert reduced == [1, 2, 3]
     assert timer_boundaries == [1_000]
+
+
+def test_transport_metrics_finalize_before_sender_exception_propagates(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+
+    class FailingClient:
+        session_epoch = 1
+        queue_high_water_frames = 0
+        overflow_count = 0
+        enqueued_envelope_count = 0
+        received_frame_count = 0
+
+        async def send_request(self, **_kwargs: object) -> None:
+            self.queue_high_water_frames = 7
+            self.enqueued_envelope_count = 7
+            self.received_frame_count = 7
+            raise RuntimeError("sender exploded")
+
+        async def next_envelope(
+            self,
+            timeout_seconds: float | None = None,
+        ) -> InboundEnvelope:
+            del timeout_seconds
+            await asyncio.sleep(0)
+            raise TimeoutError
+
+    client = FailingClient()
+    with pytest.raises(RuntimeError, match="sender exploded"):
+        asyncio.run(runtime.run(client, asyncio.Event()))
+
+    assert runtime.reducer.diagnostics.queue_high_water_frames == 7
+    assert runtime.reducer.diagnostics.wire_received_envelope_count == 7
+
+
+def test_current_writer_and_validator_are_schema_three_only_with_explicit_legacy_entry(
+    tmp_path: Path,
+) -> None:
+    legacy = legacy_summary_object()
+    writer = EvidenceWriter(
+        tmp_path,
+        code_identity="a" * 40,
+        runtime_identity="runtime",
+        policy_identity="sha256:" + "b" * 64,
+    )
+
+    with pytest.raises(EvidenceError, match="version 3"):
+        validate_run_summary(legacy)
+    with pytest.raises(EvidenceError, match="version 3"):
+        writer.write_summary(legacy)
+
+    validate_legacy_run_summary(legacy)
+    (tmp_path / "radar-run-summary.json").write_text(
+        json.dumps(legacy),
+        encoding="utf-8",
+    )
+    with pytest.raises(EvidenceError, match="version 3"):
+        validate_evidence_directory(tmp_path)
+    assert len(validate_legacy_evidence_directory(tmp_path)) == 1
+
+
+def test_coverage_cause_has_no_default_and_rejects_unknown_reason() -> None:
+    with pytest.raises(TypeError):
+        CoverageSegment(0, 1, CoverageState.UNKNOWN)  # type: ignore[call-arg]
+
+    summary = current_summary_object()
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    segment = segments[1]
+    assert isinstance(segment, dict)
+    segment["reason"] = "RESULT_INFERRED_UNKNOWN_REASON"
+
+    with pytest.raises(EvidenceError, match="cause whitelist"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_rejects_unknown_coverage_scope_and_option_local_reason() -> None:
+    unknown_scope = current_summary_object()
+    segments = unknown_scope["coverage_segments"]
+    assert isinstance(segments, list)
+    segment = segments[1]
+    assert isinstance(segment, dict)
+    segment["affected_scopes"] = ["EVERYTHING"]
+    with pytest.raises(EvidenceError, match="scope label"):
+        validate_run_summary(unknown_scope)
+
+    unknown_local_reason = current_summary_object()
+    diagnostics = unknown_local_reason["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    ledger = diagnostics["option_local_availability"]
+    assert isinstance(ledger, dict)
+    ledger.update(
+        {
+            "unavailable_count_by_reason": {"UNRECOGNIZED_LOCAL_REASON": 1},
+            "recovery_count_by_reason": {},
+            "end_count_by_disposition": {
+                "RECOVERED": 0,
+                "REASON_CHANGED": 0,
+                "CENSORED_AT_STOP": 1,
+            },
+            "omitted_interval_count": 0,
+            "omitted_interval_count_by_reason": {},
+            "intervals": [
+                {
+                    "instrument_name": "SHORT",
+                    "generation": 1,
+                    "reason": "UNRECOGNIZED_LOCAL_REASON",
+                    "start_monotonic_ms": 0,
+                    "end_monotonic_ms": 20,
+                    "duration_ms": 20,
+                    "end_disposition": "CENSORED_AT_STOP",
+                    "global_continuity_epoch": 1,
+                }
+            ],
+        }
+    )
+    with pytest.raises(EvidenceError, match="option-local reason whitelist"):
+        validate_run_summary(unknown_local_reason)
+
+
+def test_schema_three_witness_is_strictly_after_epoch_start_and_has_cross_checked_identity() -> (
+    None
+):
+    at_start = current_summary_object()
+    diagnostics = at_start["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    witness = diagnostics["witness"]
+    assert isinstance(witness, dict)
+    witness.update(
+        {
+            "first_joint_witness_monotonic_ms": 0,
+            "continuous_global_continuity_after_witness_ms": 20,
+            "scope": {
+                "expiration_timestamp_ms": 3_600_000,
+                "option_type": "call",
+                "tte_band_id": "band",
+            },
+            "boundary": {
+                "session_epoch": 1,
+                "ingress_seq": 1,
+                "received_monotonic_ms": 0,
+                "causal_seq": 1,
+            },
+            "formula_instrument": {
+                "instrument_name": "SHORT",
+                "expiration_timestamp_ms": 3_600_000,
+                "option_type": "call",
+                "tte_band_id": "band",
+            },
+        }
+    )
+    with pytest.raises(EvidenceError, match="strictly later"):
+        validate_run_summary(at_start)
+
+    cross_identity = current_summary_object()
+    diagnostics = cross_identity["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    witness = diagnostics["witness"]
+    assert isinstance(witness, dict)
+    witness.update(
+        {
+            "first_joint_witness_monotonic_ms": 10,
+            "continuous_global_continuity_after_witness_ms": 10,
+            "scope": {
+                "expiration_timestamp_ms": 3_600_000,
+                "option_type": "call",
+                "tte_band_id": "band",
+            },
+            "boundary": {
+                "session_epoch": 1,
+                "ingress_seq": 1,
+                "received_monotonic_ms": 10,
+                "causal_seq": 1,
+            },
+            "formula_instrument": {
+                "instrument_name": "SHORT",
+                "expiration_timestamp_ms": 3_600_001,
+                "option_type": "call",
+                "tte_band_id": "band",
+            },
+        }
+    )
+    with pytest.raises(EvidenceError, match="witness identity"):
+        validate_run_summary(cross_identity)
+
+
+def test_schema_three_ticker_rpc_and_option_local_ledgers_must_conserve() -> None:
+    ticker = current_summary_object()
+    diagnostics = ticker["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    source_shapes = diagnostics["source_shapes"]
+    assert isinstance(source_shapes, list)
+    source_row = next(row for row in source_shapes if row["source"] == "option_ticker")
+    source_row.update(
+        {
+            "observed_count": 1,
+            "valid_count": 1,
+            "invalid_count": 0,
+            "validation": "VALID",
+        }
+    )
+    ticker_currentness = diagnostics["ticker_currentness"]
+    assert isinstance(ticker_currentness, dict)
+    ticker_currentness["candidate_count_by_classification"]["CURRENT"] = 1
+    with pytest.raises(EvidenceError, match="ticker conservation"):
+        validate_run_summary(ticker)
+
+    rpc = current_summary_object()
+    diagnostics = rpc["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    rpc_rows = diagnostics["rpc_by_method"]
+    assert isinstance(rpc_rows, list)
+    rpc_rows.append(
+        {
+            "method": "public/test",
+            "request_count": 1,
+            "success_count": 0,
+            "error_count": 0,
+            "late_response_count": 0,
+            "retired_or_censored_count": 0,
+            "rate_limit_count": 0,
+            "latency_observation_count": 0,
+            "latency_ms_sum": 0,
+            "latency_ms_max": 0,
+        }
+    )
+    with pytest.raises(EvidenceError, match="RPC conservation"):
+        validate_run_summary(rpc)
+
+    availability = current_summary_object()
+    diagnostics = availability["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    ledger = diagnostics["option_local_availability"]
+    assert isinstance(ledger, dict)
+    ledger.update(
+        {
+            "unavailable_count_by_reason": {"TICKER_SOURCE_STALE": 1},
+            "recovery_count_by_reason": {},
+            "end_count_by_disposition": {
+                "RECOVERED": 0,
+                "REASON_CHANGED": 0,
+                "CENSORED_AT_STOP": 0,
+            },
+            "omitted_interval_count": 1,
+            "omitted_interval_count_by_reason": {
+                "TICKER_SOURCE_STALE": {
+                    "RECOVERED": 0,
+                    "REASON_CHANGED": 0,
+                    "CENSORED_AT_STOP": 1,
+                }
+            },
+        }
+    )
+    with pytest.raises(EvidenceError, match="option-local conservation"):
+        validate_run_summary(availability)
+
+
+def test_schema_three_epoch_edges_must_match_restart_incidents_one_for_one() -> None:
+    summary = current_summary_object()
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    second = segments[1]
+    assert isinstance(second, dict)
+    second["reason"] = "INDEX_CONTINUITY_GAP"
+    second["affected_scopes"] = ["GLOBAL"]
+    second["global_continuity_epoch"] = 2
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["global_continuity"] = {
+        "current_epoch": 2,
+        "restart_count": 1,
+        "restart_count_by_reason": {"CLOCK_GAP": 1},
+        "restart_edges": [
+            {
+                "incident_id": 1,
+                "from_epoch": 1,
+                "to_epoch": 2,
+                "reason": "CLOCK_GAP",
+                "failure_domain": "CLOCK_INDEX",
+                "affected_scopes": ["GLOBAL"],
+                "boundary": {
+                    "session_epoch": 1,
+                    "ingress_seq": 1,
+                    "received_monotonic_ms": 10,
+                    "causal_seq": 1,
+                },
+            }
+        ],
+    }
+    witness = diagnostics["witness"]
+    assert isinstance(witness, dict)
+    witness["global_continuity_epoch"] = 2
+
+    with pytest.raises(EvidenceError, match="epoch edge"):
+        validate_run_summary(summary)

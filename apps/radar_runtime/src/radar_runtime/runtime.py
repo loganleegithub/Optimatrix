@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 import signal
 import time
 import uuid
@@ -79,6 +80,9 @@ from short_vol_radar.evidence import (
     project_run_summary,
     ratio_or_none,
 )
+from short_vol_radar.evidence import (
+    CausalCause as CausalCause,
+)
 from short_vol_radar.policy import (
     RadarPolicy,
     TimeApplicability,
@@ -90,9 +94,11 @@ from short_vol_radar.radar import (
     EvaluationResult,
     TickerState,
     apply_current_evaluation,
-    calculate_current_evaluation,
     detector_observation_identity,
     parse_ticker,
+)
+from short_vol_radar.radar import (
+    calculate_current_evaluation as calculate_current_evaluation,
 )
 from websockets.exceptions import WebSocketException
 
@@ -193,23 +199,25 @@ class ScopeCurrent:
     observation_eligible: bool
     previous_tracker_state: TrackerState
     previous_episode_id: str | None
+    result: EvaluationResult | None = None
 
 
 @dataclass(frozen=True)
 class ScopeSnapshot:
-    boundary: FactBoundary
+    commit: CausalCommit
     trusted_time: TimeInterval
     clock_revision: int
     current: tuple[ScopeCurrent, ...]
     boundary_countable: bool
     acceptance_eligible: bool
-    observation_reason: str | None
+    catalog_complete: bool
 
 
 @dataclass(frozen=True)
 class _CurrentScopeTruth:
     aggregate: AggregateDetectorResult
     has_current_full_formula: bool
+    formula_instrument: OptionInstrument | None
 
 
 class ChannelState(StrEnum):
@@ -261,6 +269,56 @@ class FactBoundary:
 
 
 @dataclass(frozen=True)
+class CausalCommit:
+    boundary: FactBoundary
+    cause: CausalCause
+    failure_domain: FailureScope
+    affected_scopes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.boundary, FactBoundary):
+            raise TypeError("causal commit boundary must be a FactBoundary")
+        if not isinstance(self.cause, CausalCause):
+            raise TypeError("causal commit cause must be a CausalCause")
+        if not isinstance(self.failure_domain, FailureScope):
+            raise TypeError("causal commit failure domain must be a FailureScope")
+        if not isinstance(self.affected_scopes, tuple):
+            raise TypeError("causal commit affected scopes must be an immutable tuple")
+        _validate_causal_scopes(self.affected_scopes)
+
+
+@dataclass(frozen=True)
+class ContinuityIncident:
+    incident_id: int
+    root_commit: CausalCommit
+    from_epoch: int
+    to_epoch: int
+
+
+class TickerAcceptedCurrentness(StrEnum):
+    MISSING = "MISSING"
+    CURRENT = "CURRENT"
+    SOURCE_STALE = "SOURCE_STALE"
+
+
+@dataclass(frozen=True)
+class _SettledTickerCurrentness:
+    ticker: TickerState | None
+    state: TickerAcceptedCurrentness
+    reason: str
+    continuity_gap: bool
+
+
+@dataclass(frozen=True)
+class _JointWitnessIdentity:
+    boundary: FactBoundary
+    expiration_timestamp_ms: int
+    option_type: OptionType
+    tte_band_id: str
+    instrument_name: str
+
+
+@dataclass(frozen=True)
 class PendingRpc:
     request_id: int
     purpose: RpcPurpose
@@ -304,6 +362,7 @@ class RuntimeDiagnostics:
     rpc_success_count: Counter[str] = field(default_factory=Counter)
     rpc_error_count: Counter[str] = field(default_factory=Counter)
     rpc_late_count: Counter[str] = field(default_factory=Counter)
+    rpc_retired_or_censored_count: Counter[str] = field(default_factory=Counter)
     rpc_rate_limit_count: Counter[str] = field(default_factory=Counter)
     rpc_latency_count: Counter[str] = field(default_factory=Counter)
     rpc_latency_sum: Counter[str] = field(default_factory=Counter)
@@ -321,6 +380,7 @@ class RuntimeDiagnostics:
     source_invalid_count: Counter[str] = field(default_factory=Counter)
     source_consumed_fields: dict[str, set[tuple[str, str]]] = field(default_factory=dict)
     global_continuity_restart_count: Counter[str] = field(default_factory=Counter)
+    global_continuity_restart_edges: list[dict[str, object]] = field(default_factory=list)
     ticker_application_count: Counter[str] = field(default_factory=Counter)
     ticker_candidate_currentness_count: Counter[str] = field(default_factory=Counter)
     ticker_accepted_currentness_transition_count: Counter[str] = field(default_factory=Counter)
@@ -328,8 +388,12 @@ class RuntimeDiagnostics:
     omitted_late_ticker_diagnostic_count: int = 0
     option_local_unavailable_count: Counter[str] = field(default_factory=Counter)
     option_local_recovery_count: Counter[str] = field(default_factory=Counter)
+    option_local_end_count: Counter[str] = field(default_factory=Counter)
     option_local_intervals: list[dict[str, object]] = field(default_factory=list)
     omitted_option_local_interval_count: int = 0
+    omitted_option_local_interval_count_by_reason: Counter[tuple[str, str]] = field(
+        default_factory=Counter
+    )
 
 
 @dataclass
@@ -394,6 +458,7 @@ class RadarReducer:
         self._ticker_currentness_latches: dict[str, _TickerCurrentnessLatch] = {}
         self._ticker_unavailable: dict[str, tuple[str, bool]] = {}
         self._ticker_accepted_currentness: dict[str, str] = {}
+        self._settled_ticker_currentness: dict[str, _SettledTickerCurrentness] = {}
         self._option_local_unavailable: dict[str, _OptionLocalUnavailable] = {}
         self.trackers: dict[str, EpisodeTracker] = {}
         self.results: dict[str, EvaluationResult] = {}
@@ -437,7 +502,16 @@ class RadarReducer:
         self._combo_metadata_revisions: Counter[str] = Counter()
         self._combo_metadata_pending: dict[str, int] = {}
         self._combo_lifecycle_state: dict[str, str] = {}
-        self._coverage = CoverageLedger(_monotonic_ms())
+        initialized_ms = _monotonic_ms()
+        self._coverage = CoverageLedger(
+            initialized_ms,
+            initial_commit=CausalCommit(
+                boundary=FactBoundary(1, 0, initialized_ms, 0),
+                cause=CausalCause.RUNTIME_START,
+                failure_domain=FailureScope.SESSION,
+                affected_scopes=("GLOBAL",),
+            ),
+        )
         self._transport_enqueued_by_epoch: dict[int, int] = {}
         self._transport_overflow_by_epoch: dict[int, int] = {}
         self._scope_counts: dict[tuple[str, OptionType, str], ScopeCounts] = {}
@@ -448,7 +522,11 @@ class RadarReducer:
         self._band_suspended_duration_ms = 0
         self._band_suspended_started_ms: int | None = None
         self._global_continuity_epoch = 1
+        self._current_continuity_epoch_started_ms = initialized_ms
+        self._active_continuity_incident: ContinuityIncident | None = None
+        self._next_continuity_incident_id = 1
         self._first_joint_witness_ms: int | None = None
+        self._first_joint_witness_identity: _JointWitnessIdentity | None = None
         self._last_observation_identity: dict[str, tuple[object, ...]] = {}
         self._last_index_tail_identity: dict[str, tuple[object, ...]] = {}
         self._last_unknown_reason: dict[str, str | None] = {}
@@ -479,7 +557,17 @@ class RadarReducer:
             self.diagnostics.reconnect_count += 1
             self._retire_current_epoch()
         else:
-            self._coverage = CoverageLedger(monotonic_ms)
+            self._coverage = CoverageLedger(
+                monotonic_ms,
+                initial_commit=CausalCommit(
+                    boundary=FactBoundary(session_epoch, 0, monotonic_ms, self._causal_seq),
+                    cause=CausalCause.RUNTIME_START,
+                    failure_domain=FailureScope.SESSION,
+                    affected_scopes=("GLOBAL",),
+                ),
+            )
+            self._current_continuity_epoch_started_ms = monotonic_ms
+        self._active_continuity_incident = None
         self._session_epoch = session_epoch
         self._last_ingress_seq = 0
         self._last_boundary_monotonic_ms = monotonic_ms
@@ -505,6 +593,7 @@ class RadarReducer:
         self._ticker_currentness_latches.clear()
         self._ticker_unavailable.clear()
         self._ticker_accepted_currentness.clear()
+        self._settled_ticker_currentness.clear()
         self._option_local_unavailable.clear()
         self.results.clear()
         self.atomic_states.clear()
@@ -807,6 +896,8 @@ class RadarReducer:
             self._apply_request_failure(request)
             return
         if "result" not in envelope:
+            self.diagnostics.rpc_error_count[request.method] += 1
+            self._note_source_shape(request.method, None, valid=False)
             raise PublicProtocolIncompatibility("JSON-RPC response lacks result")
         result = envelope["result"]
         latency_ms = max(
@@ -875,7 +966,7 @@ class RadarReducer:
             if prior_reason in {"PLATFORM_MAINTENANCE", "PUBLIC_METHODS_DENIED"}:
                 self.platform.reason = prior_reason
             if self.platform.reason == "RELEVANT_PLATFORM_LOCK":
-                self._retire_current_epoch()
+                self._retire_current_epoch(CausalCause.RELEVANT_PLATFORM_LOCK.value)
                 raise PublicSessionError(
                     "platform status invalidated bootstrap epoch: RELEVANT_PLATFORM_LOCK"
                 )
@@ -932,10 +1023,14 @@ class RadarReducer:
                 self.diagnostics.clock_refresh_success_count += 1
             self._sync_membership(boundary)
             self._settle_fact(
-                boundary=boundary,
+                commit=CausalCommit(
+                    boundary=boundary,
+                    cause=CausalCause.CLOCK_FACT,
+                    failure_domain=FailureScope.CLOCK_INDEX,
+                    affected_scopes=("GLOBAL",),
+                ),
                 affected_instruments=tuple(self.options),
                 countable=False,
-                observation_reason="CLOCK_FACT",
             )
             if release_index_generation is not None:
                 self._mark_held_frames_eligible(
@@ -1046,24 +1141,34 @@ class RadarReducer:
                 )
             self._drain_held_frames(boundary)
         if request.failure_scope is FailureScope.OPTION_CATALOG:
+            failure_boundary = self._current_fact_boundary()
+            cause = CausalCause.OPTION_CATALOG
+            catalog_affected_instruments = tuple(self.options)
+            catalog_affected_scopes: tuple[str, ...] = ("GLOBAL",)
             if (
                 request.purpose is RpcPurpose.OPTION_METADATA
                 and self._option_metadata_pending.get(request.scope) == request.generation
             ):
                 self._option_metadata_pending.pop(request.scope, None)
                 self._option_lifecycle_unavailable[request.scope] = "OPTION_METADATA_REQUEST_FAILED"
-                self._commit_forced_unknown(
-                    request.scope,
-                    reason="OPTION_METADATA_REQUEST_FAILED",
-                    boundary=self._current_fact_boundary(),
-                    continuity_gap=False,
-                )
+                cause = CausalCause.OPTION_METADATA_REQUEST_FAILED
+                catalog_affected_instruments = (request.scope,)
+                catalog_affected_scopes = self._option_local_coverage_scopes((request.scope,))
             self.option_catalog.mark_incomplete()
             self._next_option_catalog_recovery_ms = (
                 self._last_boundary_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
             )
             self._refresh_atomic_current()
-            self._update_coverage(self._last_boundary_monotonic_ms)
+            self._settle_fact(
+                commit=CausalCommit(
+                    boundary=failure_boundary,
+                    cause=cause,
+                    failure_domain=FailureScope.OPTION_CATALOG,
+                    affected_scopes=catalog_affected_scopes,
+                ),
+                affected_instruments=catalog_affected_instruments,
+                countable=False,
+            )
         elif request.failure_scope is FailureScope.OPTION:
             option_channels = (
                 current_subscription_channels
@@ -1091,11 +1196,18 @@ class RadarReducer:
                     if book is not None:
                         book.invalidate("OPTION_CHANNEL_FAILURE")
             if affected_instruments:
+                failure_boundary = self._current_fact_boundary()
                 self._settle_fact(
-                    boundary=self._current_fact_boundary(),
+                    commit=CausalCommit(
+                        boundary=failure_boundary,
+                        cause=CausalCause.OPTION_CHANNEL_FAILURE,
+                        failure_domain=FailureScope.OPTION,
+                        affected_scopes=self._option_local_coverage_scopes(
+                            tuple(sorted(affected_instruments))
+                        ),
+                    ),
                     affected_instruments=tuple(sorted(affected_instruments)),
                     countable=False,
-                    observation_reason="OPTION_CHANNEL_FAILURE",
                 )
         elif request.failure_scope is FailureScope.COMBO_LAYER:
             self.combo_catalog.mark_incomplete()
@@ -1368,10 +1480,14 @@ class RadarReducer:
             self.platform.prove_operational_from_post_status_public_success()
             if not was_usable and self.platform.usable:
                 self._settle_fact(
-                    boundary=boundary,
+                    commit=CausalCommit(
+                        boundary=boundary,
+                        cause=CausalCause.PLATFORM_READY,
+                        failure_domain=FailureScope.SESSION,
+                        affected_scopes=("GLOBAL",),
+                    ),
                     affected_instruments=tuple(self.options),
                     countable=False,
-                    observation_reason="PLATFORM_READY",
                 )
 
     def _schedule_option_catalog_refresh(self, boundary: FactBoundary) -> PendingRpc:
@@ -1480,10 +1596,14 @@ class RadarReducer:
                     epoch_failure_reason = self.platform.reason
                 else:
                     self._settle_fact(
-                        boundary=boundary,
+                        commit=CausalCommit(
+                            boundary=boundary,
+                            cause=CausalCause.PLATFORM_FACT,
+                            failure_domain=FailureScope.SESSION,
+                            affected_scopes=("GLOBAL",),
+                        ),
                         affected_instruments=tuple(self.options),
                         countable=False,
-                        observation_reason="PLATFORM_FACT",
                     )
             elif channel == "platform_state.public_methods_state":
                 self.platform.apply_public_methods_notification(data)
@@ -1491,10 +1611,14 @@ class RadarReducer:
                     epoch_failure_reason = self.platform.reason
                 else:
                     self._settle_fact(
-                        boundary=boundary,
+                        commit=CausalCommit(
+                            boundary=boundary,
+                            cause=CausalCause.PLATFORM_FACT,
+                            failure_domain=FailureScope.SESSION,
+                            affected_scopes=("GLOBAL",),
+                        ),
                         affected_instruments=tuple(self.options),
                         countable=False,
-                        observation_reason="PLATFORM_FACT",
                     )
             elif channel == INDEX_CHANNEL:
                 valid = self._apply_index(data, boundary)
@@ -1519,7 +1643,7 @@ class RadarReducer:
             ) from exc
         self._note_source_shape(source, data, valid=valid)
         if epoch_failure_reason is not None:
-            self._retire_current_epoch()
+            self._retire_current_epoch(epoch_failure_reason)
             raise PublicSessionError(
                 f"platform guard invalidated bootstrap epoch: {epoch_failure_reason}"
             )
@@ -1530,7 +1654,16 @@ class RadarReducer:
             boundary.received_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
         )
         self._refresh_atomic_current()
-        self._update_coverage(boundary.received_monotonic_ms)
+        self._settle_fact(
+            commit=CausalCommit(
+                boundary=boundary,
+                cause=CausalCause.OPTION_LIFECYCLE,
+                failure_domain=FailureScope.OPTION_CATALOG,
+                affected_scopes=("GLOBAL",),
+            ),
+            affected_instruments=tuple(self.options),
+            countable=False,
+        )
 
     def _mark_combo_catalog_incomplete(self, boundary: FactBoundary) -> None:
         self.combo_catalog.mark_incomplete()
@@ -1587,12 +1720,6 @@ class RadarReducer:
                     positive_scope_safe = False
                 else:
                     self._option_lifecycle_unavailable[instrument_name] = "OPTION_SNAPSHOT_INVALID"
-                    self._commit_forced_unknown(
-                        instrument_name,
-                        reason="OPTION_SNAPSHOT_INVALID",
-                        boundary=boundary,
-                        continuity_gap=False,
-                    )
                 continue
             if instrument is not None:
                 parsed[instrument.instrument_name] = instrument
@@ -1624,12 +1751,6 @@ class RadarReducer:
             else:
                 self._option_lifecycle_unavailable[instrument_name] = (
                     f"OPTION_SNAPSHOT_{state.upper()}"
-                )
-                self._commit_forced_unknown(
-                    instrument_name,
-                    reason=self._option_lifecycle_unavailable[instrument_name],
-                    boundary=boundary,
-                    continuity_gap=False,
                 )
         reconciliation_intact = self.option_catalog.source_complete
         if complete:
@@ -1671,10 +1792,14 @@ class RadarReducer:
         self._sync_membership(boundary)
         self._refresh_atomic_current()
         self._settle_fact(
-            boundary=boundary,
+            commit=CausalCommit(
+                boundary=boundary,
+                cause=CausalCause.OPTION_CATALOG,
+                failure_domain=FailureScope.OPTION_CATALOG,
+                affected_scopes=("GLOBAL",),
+            ),
             affected_instruments=tuple(self.options),
             countable=False,
-            observation_reason="OPTION_CATALOG",
         )
         self._ensure_combo_catalog_refresh(boundary)
         return complete
@@ -1698,12 +1823,6 @@ class RadarReducer:
             self._option_lifecycle_unavailable[instrument_name] = (
                 f"OPTION_LIFECYCLE_UNKNOWN:{state}"
             )
-            self._commit_forced_unknown(
-                instrument_name,
-                reason=self._option_lifecycle_unavailable[instrument_name],
-                boundary=boundary,
-                continuity_gap=False,
-            )
             raise SourceDataError("option lifecycle.state is unsupported")
         if state in FINAL_INSTRUMENT_LIFECYCLE_STATES:
             self._option_metadata_pending.pop(instrument_name, None)
@@ -1712,40 +1831,50 @@ class RadarReducer:
             self._complete_option_catalog_if_ready()
             self._sync_membership(boundary)
             self._settle_fact(
-                boundary=boundary,
+                commit=CausalCommit(
+                    boundary=boundary,
+                    cause=CausalCause.OPTION_LIFECYCLE,
+                    failure_domain=FailureScope.OPTION_CATALOG,
+                    affected_scopes=("GLOBAL",),
+                ),
                 affected_instruments=tuple(self.options),
                 countable=False,
-                observation_reason="OPTION_LIFECYCLE",
             )
             return
         if state in TEMPORARILY_UNAVAILABLE_INSTRUMENT_STATES:
             reason = f"OPTION_LIFECYCLE_{state.upper()}"
             self._option_metadata_pending.pop(instrument_name, None)
             self._option_lifecycle_unavailable[instrument_name] = reason
-            self._commit_forced_unknown(
-                instrument_name,
-                reason=reason,
-                boundary=boundary,
-                continuity_gap=False,
-            )
             if instrument_name in self.catalog_options:
                 self._complete_option_catalog_if_ready()
                 self._refresh_atomic_current()
-                self._update_coverage(boundary.received_monotonic_ms)
+                self._settle_fact(
+                    commit=CausalCommit(
+                        boundary=boundary,
+                        cause=CausalCause.OPTION_LIFECYCLE,
+                        failure_domain=FailureScope.OPTION_CATALOG,
+                        affected_scopes=self._option_local_coverage_scopes((instrument_name,)),
+                    ),
+                    affected_instruments=(instrument_name,),
+                    countable=False,
+                )
             else:
                 self._mark_option_catalog_incomplete(boundary)
             return
         self._option_metadata_pending[instrument_name] = generation
         self._option_lifecycle_unavailable[instrument_name] = "OPTION_METADATA_PENDING"
         self.option_catalog.complete = False
-        self._commit_forced_unknown(
-            instrument_name,
-            reason="OPTION_METADATA_PENDING",
-            boundary=boundary,
-            continuity_gap=False,
-        )
         self._refresh_atomic_current()
-        self._update_coverage(boundary.received_monotonic_ms)
+        self._settle_fact(
+            commit=CausalCommit(
+                boundary=boundary,
+                cause=CausalCause.OPTION_METADATA_PENDING,
+                failure_domain=FailureScope.OPTION_CATALOG,
+                affected_scopes=self._option_local_coverage_scopes((instrument_name,)),
+            ),
+            affected_instruments=(instrument_name,),
+            countable=False,
+        )
         self._schedule(
             purpose=RpcPurpose.OPTION_METADATA,
             method="public/get_instrument",
@@ -1782,10 +1911,14 @@ class RadarReducer:
                 boundary = self._current_fact_boundary()
                 self._sync_membership(boundary)
                 self._settle_fact(
-                    boundary=boundary,
+                    commit=CausalCommit(
+                        boundary=boundary,
+                        cause=CausalCause.OPTION_METADATA_ABSENT,
+                        failure_domain=FailureScope.OPTION_CATALOG,
+                        affected_scopes=("GLOBAL",),
+                    ),
                     affected_instruments=tuple(self.options),
                     countable=False,
-                    observation_reason="OPTION_METADATA_ABSENT",
                 )
                 self._ensure_combo_catalog_refresh(boundary)
                 return True
@@ -1793,17 +1926,21 @@ class RadarReducer:
                 self._option_metadata_pending.pop(request.scope, None)
             self._option_lifecycle_unavailable[request.scope] = "OPTION_METADATA_INVALID"
             self.option_catalog.mark_incomplete()
-            self._commit_forced_unknown(
-                request.scope,
-                reason="OPTION_METADATA_INVALID",
-                boundary=self._current_fact_boundary(),
-                continuity_gap=False,
-            )
             self._next_option_catalog_recovery_ms = (
                 self._last_boundary_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
             )
             self._refresh_atomic_current()
-            self._update_coverage(self._last_boundary_monotonic_ms)
+            failure_boundary = self._current_fact_boundary()
+            self._settle_fact(
+                commit=CausalCommit(
+                    boundary=failure_boundary,
+                    cause=CausalCause.OPTION_METADATA_INVALID,
+                    failure_domain=FailureScope.OPTION_CATALOG,
+                    affected_scopes=self._option_local_coverage_scopes((request.scope,)),
+                ),
+                affected_instruments=(request.scope,),
+                countable=False,
+            )
             return False
         if self._option_metadata_pending.get(request.scope) == request.generation:
             self._option_metadata_pending.pop(request.scope, None)
@@ -1824,10 +1961,14 @@ class RadarReducer:
         boundary = self._current_fact_boundary()
         self._sync_membership(boundary)
         self._settle_fact(
-            boundary=boundary,
+            commit=CausalCommit(
+                boundary=boundary,
+                cause=CausalCause.OPTION_METADATA,
+                failure_domain=FailureScope.OPTION_CATALOG,
+                affected_scopes=("GLOBAL",),
+            ),
             affected_instruments=tuple(self.options),
             countable=False,
-            observation_reason="OPTION_METADATA",
         )
         self._ensure_combo_catalog_refresh(boundary)
         return True
@@ -1894,6 +2035,7 @@ class RadarReducer:
             self._ticker_generations.pop(name, None)
             self._ticker_currentness_latches.pop(name, None)
             self._ticker_unavailable.pop(name, None)
+            self._settled_ticker_currentness.pop(name, None)
             self.option_books.pop(name, None)
             self._last_observation_identity.pop(name, None)
             self._last_index_tail_identity.pop(name, None)
@@ -1963,12 +2105,24 @@ class RadarReducer:
                 causal_seq=self._causal_seq,
             )
         except (ContinuityGap, SourceDataError, ValueError):
+            gap_commit = CausalCommit(
+                boundary=boundary,
+                cause=CausalCause.INDEX_CONTINUITY_GAP,
+                failure_domain=FailureScope.CLOCK_INDEX,
+                affected_scopes=("GLOBAL",),
+            )
             if not self._index_gap_active:
                 self.diagnostics.index_gap_count += 1
                 self._index_gap_active = True
+                active = self._active_continuity_incident
                 self._restart_global_continuity(
-                    "INDEX_CONTINUITY_GAP",
-                    boundary.received_monotonic_ms,
+                    gap_commit,
+                    incident=(
+                        active
+                        if active is not None
+                        and active.root_commit.failure_domain is FailureScope.CLOCK_INDEX
+                        else None
+                    ),
                 )
             self.index.gap()
             self._index_coverage_generation = None
@@ -1981,20 +2135,23 @@ class RadarReducer:
                     failure_scope=FailureScope.CLOCK_INDEX,
                 )
             self._settle_fact(
-                boundary=boundary,
+                commit=gap_commit,
                 affected_instruments=tuple(self.options),
                 countable=False,
-                observation_reason="INDEX_CONTINUITY_GAP",
             )
             return False
         trusted = self.clock.interval_at(boundary.received_monotonic_ms)
         self.index.seal_ready(trusted.lower_ms)
         self.platform.note_fresh_index_coverage()
         self._settle_fact(
-            boundary=boundary,
+            commit=CausalCommit(
+                boundary=boundary,
+                cause=CausalCause.INDEX_TICK,
+                failure_domain=FailureScope.CLOCK_INDEX,
+                affected_scopes=("GLOBAL",),
+            ),
             affected_instruments=tuple(self.options),
             countable=True,
-            observation_reason=None,
         )
         return True
 
@@ -2116,6 +2273,10 @@ class RadarReducer:
             self.diagnostics.option_local_intervals.append(row)
         else:
             self.diagnostics.omitted_option_local_interval_count += 1
+            self.diagnostics.omitted_option_local_interval_count_by_reason[
+                (unavailable.reason, end_disposition)
+            ] += 1
+        self.diagnostics.option_local_end_count[end_disposition] += 1
         if end_disposition == "RECOVERED":
             self.diagnostics.option_local_recovery_count[unavailable.reason] += 1
 
@@ -2179,7 +2340,6 @@ class RadarReducer:
         generation: int,
         source_timestamp_ms: int,
         reason: str,
-        boundary: FactBoundary,
     ) -> None:
         previous = self._ticker_currentness_latches.get(instrument_name)
         if previous is not None and previous.generation == generation:
@@ -2189,75 +2349,140 @@ class RadarReducer:
             source_timestamp_ms=source_timestamp_ms,
             reason=reason,
         )
-        self._request_ticker_resubscribe_once(instrument_name, boundary)
+
+    def settle_source_currentness(
+        self,
+        boundary: FactBoundary,
+    ) -> tuple[str, ...]:
+        """Settle accepted source as-of state without invoking detector evaluation."""
+        trusted: TimeInterval | None = None
+        if self.clock is not None:
+            try:
+                trusted = self.clock.interval_at(boundary.received_monotonic_ms)
+            except ContinuityGap:
+                trusted = None
+        newly_stale: list[str] = []
+        settled: dict[str, _SettledTickerCurrentness] = {}
+        for instrument_name in sorted(self.options):
+            previous_state = self._ticker_accepted_currentness.get(instrument_name)
+            unavailable = self._ticker_unavailable.get(instrument_name)
+            latch = self._ticker_currentness_latches.get(instrument_name)
+            if trusted is None:
+                settled[instrument_name] = _SettledTickerCurrentness(
+                    ticker=None,
+                    state=TickerAcceptedCurrentness.MISSING,
+                    reason="TRUSTED_TIME_UNKNOWN",
+                    continuity_gap=True,
+                )
+                continue
+            if latch is not None:
+                self._transition_ticker_accepted_currentness(
+                    instrument_name,
+                    state=TickerAcceptedCurrentness.SOURCE_STALE.value,
+                    reason=latch.reason,
+                    boundary=boundary,
+                )
+                settled[instrument_name] = _SettledTickerCurrentness(
+                    ticker=None,
+                    state=TickerAcceptedCurrentness.SOURCE_STALE,
+                    reason=latch.reason,
+                    continuity_gap=True,
+                )
+                if previous_state != TickerAcceptedCurrentness.SOURCE_STALE.value:
+                    newly_stale.append(instrument_name)
+                continue
+            if unavailable is not None:
+                self._transition_ticker_accepted_currentness(
+                    instrument_name,
+                    state=TickerAcceptedCurrentness.MISSING.value,
+                    reason=unavailable[0],
+                    boundary=boundary,
+                )
+                settled[instrument_name] = _SettledTickerCurrentness(
+                    ticker=None,
+                    state=TickerAcceptedCurrentness.MISSING,
+                    reason=unavailable[0],
+                    continuity_gap=unavailable[1],
+                )
+                continue
+            ticker = self.tickers.get(instrument_name)
+            if ticker is None:
+                self._transition_ticker_accepted_currentness(
+                    instrument_name,
+                    state=TickerAcceptedCurrentness.MISSING.value,
+                    reason="FORWARD_TICKER_UNKNOWN",
+                    boundary=boundary,
+                )
+                settled[instrument_name] = _SettledTickerCurrentness(
+                    ticker=None,
+                    state=TickerAcceptedCurrentness.MISSING,
+                    reason="FORWARD_TICKER_UNKNOWN",
+                    continuity_gap=False,
+                )
+                continue
+            if ticker.source_timestamp_ms > trusted.upper_ms:
+                self._transition_ticker_accepted_currentness(
+                    instrument_name,
+                    state=TickerAcceptedCurrentness.MISSING.value,
+                    reason="TICKER_TIMESTAMP_AHEAD",
+                    boundary=boundary,
+                )
+                settled[instrument_name] = _SettledTickerCurrentness(
+                    ticker=None,
+                    state=TickerAcceptedCurrentness.MISSING,
+                    reason="TICKER_TIMESTAMP_AHEAD",
+                    continuity_gap=False,
+                )
+                continue
+            if (
+                trusted.upper_ms
+                > ticker.source_timestamp_ms
+                + self.policy.runtime_limits.ticker_source_stale_deadline_ms
+            ):
+                self._latch_ticker_currentness(
+                    instrument_name,
+                    generation=self._ticker_generation(instrument_name),
+                    source_timestamp_ms=ticker.source_timestamp_ms,
+                    reason=CausalCause.TICKER_SOURCE_STALE.value,
+                )
+                self._transition_ticker_accepted_currentness(
+                    instrument_name,
+                    state=TickerAcceptedCurrentness.SOURCE_STALE.value,
+                    reason=CausalCause.TICKER_SOURCE_STALE.value,
+                    boundary=boundary,
+                )
+                settled[instrument_name] = _SettledTickerCurrentness(
+                    ticker=None,
+                    state=TickerAcceptedCurrentness.SOURCE_STALE,
+                    reason=CausalCause.TICKER_SOURCE_STALE.value,
+                    continuity_gap=True,
+                )
+                if previous_state != TickerAcceptedCurrentness.SOURCE_STALE.value:
+                    newly_stale.append(instrument_name)
+                continue
+            self._transition_ticker_accepted_currentness(
+                instrument_name,
+                state=TickerAcceptedCurrentness.CURRENT.value,
+                reason=TickerAcceptedCurrentness.CURRENT.value,
+                boundary=boundary,
+            )
+            settled[instrument_name] = _SettledTickerCurrentness(
+                ticker=ticker,
+                state=TickerAcceptedCurrentness.CURRENT,
+                reason=TickerAcceptedCurrentness.CURRENT.value,
+                continuity_gap=False,
+            )
+        self._settled_ticker_currentness = settled
+        return tuple(newly_stale)
 
     def _current_ticker(
         self,
         instrument_name: str,
-        trusted: TimeInterval,
-        boundary: FactBoundary,
     ) -> tuple[TickerState | None, str, bool]:
-        unavailable = self._ticker_unavailable.get(instrument_name)
-        latch = self._ticker_currentness_latches.get(instrument_name)
-        if latch is not None:
-            self._transition_ticker_accepted_currentness(
-                instrument_name,
-                state="SOURCE_STALE",
-                reason=latch.reason,
-                boundary=boundary,
-            )
-            return None, latch.reason, True
-        if unavailable is not None:
-            self._transition_ticker_accepted_currentness(
-                instrument_name,
-                state="MISSING",
-                reason=unavailable[0],
-                boundary=boundary,
-            )
-            return None, unavailable[0], unavailable[1]
-        ticker = self.tickers.get(instrument_name)
-        if ticker is None:
-            self._transition_ticker_accepted_currentness(
-                instrument_name,
-                state="MISSING",
-                reason="FORWARD_TICKER_UNKNOWN",
-                boundary=boundary,
-            )
-            return None, "FORWARD_TICKER_UNKNOWN", False
-        if ticker.source_timestamp_ms > trusted.upper_ms:
-            self._transition_ticker_accepted_currentness(
-                instrument_name,
-                state="MISSING",
-                reason="TICKER_TIMESTAMP_AHEAD",
-                boundary=boundary,
-            )
-            return None, "TICKER_TIMESTAMP_AHEAD", False
-        if (
-            trusted.upper_ms
-            > ticker.source_timestamp_ms
-            + self.policy.runtime_limits.ticker_source_stale_deadline_ms
-        ):
-            self._latch_ticker_currentness(
-                instrument_name,
-                generation=self._ticker_generation(instrument_name),
-                source_timestamp_ms=ticker.source_timestamp_ms,
-                reason="TICKER_SOURCE_STALE",
-                boundary=boundary,
-            )
-            self._transition_ticker_accepted_currentness(
-                instrument_name,
-                state="SOURCE_STALE",
-                reason="TICKER_SOURCE_STALE",
-                boundary=boundary,
-            )
-            return None, "TICKER_SOURCE_STALE", True
-        self._transition_ticker_accepted_currentness(
-            instrument_name,
-            state="CURRENT",
-            reason="CURRENT",
-            boundary=boundary,
-        )
-        return ticker, "FORWARD_TICKER_UNKNOWN", False
+        settled = self._settled_ticker_currentness.get(instrument_name)
+        if settled is None:
+            raise RuntimeError("detector current truth requires settled source currentness")
+        return settled.ticker, settled.reason, settled.continuity_gap
 
     def _apply_ticker(
         self,
@@ -2335,10 +2560,14 @@ class RadarReducer:
         )
         countable = previous is None or ticker.forward_usdc != previous.forward_usdc
         self._settle_fact(
-            boundary=boundary,
+            commit=CausalCommit(
+                boundary=boundary,
+                cause=CausalCause.TICKER_APPLIED,
+                failure_domain=FailureScope.OPTION,
+                affected_scopes=self._option_local_coverage_scopes((instrument_name,)),
+            ),
             affected_instruments=(instrument_name,),
             countable=countable,
-            observation_reason="TICKER_APPLIED",
         )
         return True
 
@@ -2358,10 +2587,14 @@ class RadarReducer:
             except (ContinuityGap, SourceDataError):
                 book.invalidate("OPTION_BOOK_GAP")
                 self._settle_fact(
-                    boundary=boundary,
+                    commit=CausalCommit(
+                        boundary=boundary,
+                        cause=CausalCause.OPTION_BOOK_GAP,
+                        failure_domain=FailureScope.OPTION,
+                        affected_scopes=self._option_local_coverage_scopes((instrument_name,)),
+                    ),
                     affected_instruments=(instrument_name,),
                     countable=False,
-                    observation_reason="OPTION_BOOK_GAP",
                 )
                 self.option_books[instrument_name] = ContinuousOrderBook(instrument_name)
                 self._plan_resubscribe(
@@ -2370,13 +2603,18 @@ class RadarReducer:
                     failure_scope=FailureScope.OPTION,
                 )
                 return False
-            if changed:
-                self._settle_fact(
+            self._settle_fact(
+                commit=CausalCommit(
                     boundary=boundary,
-                    affected_instruments=(instrument_name,),
-                    countable=True,
-                    observation_reason=None,
-                )
+                    cause=(
+                        CausalCause.OPTION_BOOK_CHANGED if changed else CausalCause.OPTION_BOOK_FACT
+                    ),
+                    failure_domain=FailureScope.OPTION,
+                    affected_scopes=self._option_local_coverage_scopes((instrument_name,)),
+                ),
+                affected_instruments=(instrument_name,),
+                countable=changed,
+            )
             return True
         if instrument_name not in self.combos:
             return False
@@ -2694,39 +2932,86 @@ class RadarReducer:
     def settle_fact(
         self,
         *,
-        boundary: FactBoundary,
+        commit: CausalCommit,
         affected_instruments: tuple[str, ...],
         countable: bool,
-        observation_reason: str | None = None,
     ) -> None:
         self._settle_fact(
-            boundary=boundary,
+            commit=commit,
             affected_instruments=affected_instruments,
             countable=countable,
-            observation_reason=observation_reason,
         )
 
     def _restart_global_continuity(
         self,
-        reason: str,
-        monotonic_ms: int,
+        commit: CausalCommit,
         *,
-        affected_scopes: tuple[str, ...] = ("GLOBAL",),
-    ) -> None:
+        incident: ContinuityIncident | None = None,
+    ) -> ContinuityIncident:
+        if incident is not None:
+            if (
+                self._active_continuity_incident is None
+                or incident.incident_id != self._active_continuity_incident.incident_id
+            ):
+                raise ValueError("continuity incident is not active")
+            return incident
+        from_epoch = self._global_continuity_epoch
+        incident = ContinuityIncident(
+            incident_id=self._next_continuity_incident_id,
+            root_commit=commit,
+            from_epoch=from_epoch,
+            to_epoch=from_epoch + 1,
+        )
+        self._next_continuity_incident_id += 1
+        self._active_continuity_incident = incident
         self._global_continuity_epoch += 1
-        self.diagnostics.global_continuity_restart_count[reason] += 1
+        self._current_continuity_epoch_started_ms = commit.boundary.received_monotonic_ms
+        self.diagnostics.global_continuity_restart_count[commit.cause.value] += 1
+        self.diagnostics.global_continuity_restart_edges.append(
+            {
+                "incident_id": incident.incident_id,
+                "from_epoch": incident.from_epoch,
+                "to_epoch": incident.to_epoch,
+                "reason": commit.cause.value,
+                "failure_domain": commit.failure_domain.value,
+                "affected_scopes": list(commit.affected_scopes),
+                "boundary": _fact_boundary_object(commit.boundary),
+            }
+        )
         self._first_joint_witness_ms = None
+        self._first_joint_witness_identity = None
         self._coverage.transition(
             self._coverage._current_state,
-            monotonic_ms,
-            reason=reason,
-            affected_scopes=affected_scopes,
+            commit=commit,
             global_continuity_epoch=self._global_continuity_epoch,
             force=True,
         )
+        return incident
+
+    def _recover_continuity_incident(self, incident: ContinuityIncident) -> None:
+        if (
+            self._active_continuity_incident is not None
+            and self._active_continuity_incident.incident_id == incident.incident_id
+        ):
+            self._active_continuity_incident = None
 
     def _settle_clock_gap(self, boundary: FactBoundary) -> None:
-        self._restart_global_continuity("CLOCK_GAP", boundary.received_monotonic_ms)
+        commit = CausalCommit(
+            boundary=boundary,
+            cause=CausalCause.CLOCK_GAP,
+            failure_domain=FailureScope.CLOCK_INDEX,
+            affected_scopes=("GLOBAL",),
+        )
+        active = self._active_continuity_incident
+        self._restart_global_continuity(
+            commit,
+            incident=(
+                active
+                if active is not None
+                and active.root_commit.failure_domain is FailureScope.CLOCK_INDEX
+                else None
+            ),
+        )
         self.aggregate_results.clear()
         for name in self.trackers:
             self._commit_forced_unknown(
@@ -2737,12 +3022,12 @@ class RadarReducer:
             )
         self._transition_coverage(
             CoverageState.UNKNOWN,
-            boundary.received_monotonic_ms,
-            reason="CLOCK_GAP",
-            affected_scopes=("GLOBAL",),
+            commit=commit,
         )
 
     def _invalidate_clock_index(self, boundary: FactBoundary, *, reason: str) -> None:
+        if reason != CausalCause.CLOCK_GAP.value:
+            raise ValueError("clock/index invalidation requires CLOCK_GAP cause")
         self._settle_clock_gap(boundary)
         self.clock = None
         self._last_time_currentness_token = None
@@ -2827,14 +3112,38 @@ class RadarReducer:
     def _settle_fact(
         self,
         *,
-        boundary: FactBoundary,
+        commit: CausalCommit,
         affected_instruments: tuple[str, ...],
         countable: bool,
-        observation_reason: str | None,
         acceptance_eligible: bool = True,
     ) -> None:
+        boundary = commit.boundary
+        newly_stale = self.settle_source_currentness(boundary)
+        if commit.cause is not CausalCause.CLEAN_STOP:
+            for instrument_name in newly_stale:
+                self._request_ticker_resubscribe_once(instrument_name, boundary)
+        effective_commit = commit
+        if newly_stale and commit.cause not in {
+            CausalCause.CLOCK_GAP,
+            CausalCause.INDEX_CONTINUITY_GAP,
+            CausalCause.INDEX_SOURCE_STALE,
+            CausalCause.INDEX_WINDOW_GAP,
+            CausalCause.SESSION_GAP,
+            CausalCause.QUEUE_LAG_DEADLINE,
+            CausalCause.INGRESS_GAP_OR_DUPLICATE,
+            CausalCause.QUEUE_OVERFLOW,
+            CausalCause.PLATFORM_MAINTENANCE,
+            CausalCause.PUBLIC_METHODS_DENIED,
+            CausalCause.RELEVANT_PLATFORM_LOCK,
+        }:
+            effective_commit = CausalCommit(
+                boundary=boundary,
+                cause=CausalCause.TICKER_SOURCE_STALE,
+                failure_domain=FailureScope.OPTION,
+                affected_scopes=self._option_local_coverage_scopes(newly_stale),
+            )
         if self.clock is None:
-            self._update_coverage(boundary.received_monotonic_ms)
+            self._update_coverage(commit=effective_commit)
             return
         try:
             trusted = self.clock.interval_at(boundary.received_monotonic_ms)
@@ -2843,11 +3152,34 @@ class RadarReducer:
             return
 
         names = tuple(
-            sorted(dict.fromkeys(name for name in affected_instruments if name in self.options))
+            sorted(
+                dict.fromkeys(
+                    name for name in (*affected_instruments, *newly_stale) if name in self.options
+                )
+            )
         )
         countable_names = set(names) if countable else set()
         if self._time_currentness_token(trusted) != self._last_time_currentness_token:
             names = tuple(sorted(self.options))
+        else:
+            affected_scope_keys = {
+                (
+                    self.options[name].expiration_timestamp_ms,
+                    self.options[name].option_type,
+                )
+                for name in names
+            }
+            names = tuple(
+                sorted(
+                    name
+                    for name, instrument in self.options.items()
+                    if (
+                        instrument.expiration_timestamp_ms,
+                        instrument.option_type,
+                    )
+                    in affected_scope_keys
+                )
+            )
         prepared: list[ScopeCurrent] = []
         global_gap_reasons: set[str] = set()
         global_gap_scope_labels: set[str] = set()
@@ -2913,18 +3245,36 @@ class RadarReducer:
                 or len(global_gap_scope_labels) > 256
                 else tuple(sorted(global_gap_scope_labels))
             )
+            effective_commit = CausalCommit(
+                boundary=boundary,
+                cause=CausalCause(global_gap_reason),
+                failure_domain=FailureScope.CLOCK_INDEX,
+                affected_scopes=gap_affected_scopes,
+            )
             if not self._index_gap_active:
                 self.diagnostics.index_gap_count += 1
                 self._index_gap_active = True
+                active = self._active_continuity_incident
                 self._restart_global_continuity(
-                    global_gap_reason,
-                    boundary.received_monotonic_ms,
-                    affected_scopes=gap_affected_scopes,
+                    effective_commit,
+                    incident=(
+                        active
+                        if active is not None
+                        and active.root_commit.failure_domain is FailureScope.CLOCK_INDEX
+                        else None
+                    ),
                 )
             names = tuple(sorted(self.options))
             prepared.clear()
         elif set(names) == set(self.options):
             self._index_gap_active = False
+            active = self._active_continuity_incident
+            if (
+                commit.cause is CausalCause.INDEX_TICK
+                and active is not None
+                and active.root_commit.failure_domain is FailureScope.CLOCK_INDEX
+            ):
+                self._recover_continuity_incident(active)
         if global_resubscribe:
             self.platform.invalidate_fresh_index_coverage(
                 global_resubscribe_reason or "INDEX_CONTINUITY_GAP"
@@ -2958,7 +3308,16 @@ class RadarReducer:
                 else None
             )
             band_id = applicability.band.band_id if applicability.band is not None else None
-            if not self.platform.usable:
+            if name in self._option_lifecycle_unavailable:
+                current = CurrentEvaluation(
+                    disposition=CurrentDisposition.UNKNOWN,
+                    reason=self._option_lifecycle_unavailable[name],
+                    known_evaluation=False,
+                    full_formula_evaluation=False,
+                    band_id=band_id,
+                    continuity_gap=False,
+                )
+            elif not self.platform.usable:
                 current = CurrentEvaluation(
                     disposition=CurrentDisposition.UNKNOWN,
                     reason=self.platform.reason,
@@ -2973,21 +3332,8 @@ class RadarReducer:
                         "INDEX_CONTINUITY_GAP",
                     },
                 )
-            elif name in self._option_lifecycle_unavailable:
-                current = CurrentEvaluation(
-                    disposition=CurrentDisposition.UNKNOWN,
-                    reason=self._option_lifecycle_unavailable[name],
-                    known_evaluation=False,
-                    full_formula_evaluation=False,
-                    band_id=band_id,
-                    continuity_gap=False,
-                )
             else:
-                current_ticker, ticker_reason, ticker_continuity_gap = self._current_ticker(
-                    name,
-                    trusted,
-                    boundary,
-                )
+                current_ticker, ticker_reason, ticker_continuity_gap = self._current_ticker(name)
                 baseline_reason = (
                     _index_tail_reason(tail.status)
                     if tail is not None and tail.status is not IndexTailStatus.AVAILABLE
@@ -3052,13 +3398,13 @@ class RadarReducer:
             current_by_scope.setdefault(scope_key, []).append(item)
         snapshots = tuple(
             ScopeSnapshot(
-                boundary=boundary,
+                commit=effective_commit,
                 trusted_time=trusted,
                 clock_revision=self._clock_revision,
                 current=tuple(current),
                 boundary_countable=countable,
                 acceptance_eligible=acceptance_eligible,
-                observation_reason=observation_reason,
+                catalog_complete=self.option_catalog.complete,
             )
             for current in current_by_scope.values()
         )
@@ -3104,7 +3450,7 @@ class RadarReducer:
                 transition = apply_current_evaluation(
                     tracker=tracker,
                     current=current,
-                    causal_seq=snapshot.boundary.causal_seq,
+                    causal_seq=snapshot.commit.boundary.causal_seq,
                     observation_eligible=eligible,
                 )
                 if current.disposition is CurrentDisposition.RICHNESS:
@@ -3131,11 +3477,7 @@ class RadarReducer:
                     band_id=current.band_id,
                     transition=transition,
                     observation_eligible=eligible,
-                    observation_reason=(
-                        None
-                        if eligible
-                        else snapshot.observation_reason or "NON_COUNTABLE_FACT_BOUNDARY"
-                    ),
+                    observation_reason=(None if eligible else snapshot.commit.cause.value),
                     calculation=current.calculation,
                     current_evaluation=current,
                 )
@@ -3179,7 +3521,7 @@ class RadarReducer:
                     and tracker.detector_state is DetectorState.ANOMALY_ACTIVE
                 ):
                     self._last_detector_causal_seq[instrument.instrument_name] = (
-                        snapshot.boundary.causal_seq
+                        snapshot.commit.boundary.causal_seq
                     )
                 value = (
                     instrument,
@@ -3190,21 +3532,36 @@ class RadarReducer:
                 evaluated.append(value)
                 evaluated_by_name[instrument.instrument_name] = value
 
-        for snapshot in snapshots:
+        settled_snapshots = tuple(
+            replace(
+                snapshot,
+                current=tuple(
+                    replace(
+                        item,
+                        result=evaluated_by_name[item.instrument.instrument_name][1],
+                    )
+                    for item in snapshot.current
+                ),
+            )
+            for snapshot in snapshots
+        )
+        for snapshot in settled_snapshots:
             scope_results = [
                 (
-                    evaluated_by_name[item.instrument.instrument_name][0],
-                    evaluated_by_name[item.instrument.instrument_name][1],
+                    item.instrument,
+                    item.result,
                 )
                 for item in snapshot.current
-                if evaluated_by_name[item.instrument.instrument_name][1].band_id is not None
+                if item.result is not None and item.result.band_id is not None
             ]
             if not scope_results:
                 continue
             representative = scope_results[0][0]
-            scope_truth = self._current_scope_truth(representative, snapshot.trusted_time)
+            scope_truth = self._current_scope_truth(snapshot)
             aggregate = scope_truth.aggregate
             for instrument, result in scope_results:
+                if result is None:
+                    raise RuntimeError("settled scope snapshot lacks a current result")
                 if result.transition.activated_episode_id is not None:
                     self._record_activation(
                         instrument,
@@ -3221,8 +3578,21 @@ class RadarReducer:
                 counter.complete_aggregate_detector_evaluation_count += 1
                 if scope_truth.has_current_full_formula:
                     counter.complete_aggregate_with_full_formula_evaluation_count += 1
-                    if self._first_joint_witness_ms is None:
+                    if (
+                        self._first_joint_witness_ms is None
+                        and boundary.received_monotonic_ms
+                        > self._current_continuity_epoch_started_ms
+                        and scope_truth.formula_instrument is not None
+                    ):
                         self._first_joint_witness_ms = boundary.received_monotonic_ms
+                        formula_instrument = scope_truth.formula_instrument
+                        self._first_joint_witness_identity = _JointWitnessIdentity(
+                            boundary=boundary,
+                            expiration_timestamp_ms=(formula_instrument.expiration_timestamp_ms),
+                            option_type=formula_instrument.option_type,
+                            tte_band_id=scope_results[0][1].band_id or "",
+                            instrument_name=formula_instrument.instrument_name,
+                        )
 
         for instrument, result, _state, _episode in evaluated:
             if result.band_id is not None:
@@ -3240,107 +3610,80 @@ class RadarReducer:
                 self._evaluate_atomic(tracker)
 
         self._sync_combo_subscriptions(boundary)
-        local_unavailable = tuple(
-            item
-            for item in prepared
-            if item.current.reason == "FORWARD_TICKER_UNKNOWN"
-            or (item.current.reason or "").startswith("TICKER_")
-            or item.current.reason == "OPTION_CHANNEL_FAILURE"
-        )
-        if global_gap_reason is not None:
-            coverage_reason = global_gap_reason
-            coverage_scopes = (
-                ("GLOBAL",)
-                if global_gap_reason
-                in {
-                    "INDEX_CONTINUITY_GAP",
-                    "INDEX_SOURCE_STALE",
-                }
-                or not global_gap_scope_labels
-                or len(global_gap_scope_labels) > 256
-                else tuple(sorted(global_gap_scope_labels))
-            )
-        elif local_unavailable:
-            local_reasons = {
-                item.current.reason for item in local_unavailable if item.current.reason is not None
-            }
-            coverage_reason = (
-                next(iter(local_reasons))
-                if len(local_reasons) == 1
-                else "OPTION_LOCAL_AVAILABILITY"
-            )
-            coverage_scopes = self._option_local_coverage_scopes(
-                tuple(item.instrument.instrument_name for item in local_unavailable)
-            )
-        else:
-            coverage_reason = observation_reason or "CURRENT_TRUTH_RECOMPUTE"
-            coverage_scopes = self._coverage_affected_scopes(names)
-        self._update_coverage(
-            boundary.received_monotonic_ms,
-            reason=coverage_reason,
-            affected_scopes=coverage_scopes,
-        )
+        self._update_coverage(commit=effective_commit)
         if set(names) == set(self.options):
             self._last_time_currentness_token = self._time_currentness_token(trusted)
 
     def _current_scope_truth(
         self,
-        instrument: OptionInstrument,
-        trusted: TimeInterval,
+        snapshot: ScopeSnapshot,
     ) -> _CurrentScopeTruth:
-        applicability = classify_time_applicability(
-            self.policy,
-            expiration_timestamp_ms=instrument.expiration_timestamp_ms,
-            trusted_time=trusted,
-            option_type=instrument.option_type,
-        )
-        if applicability.band is None:
+        if not snapshot.current:
             return _CurrentScopeTruth(
                 aggregate=aggregate_detector(
                     (),
-                    catalog_complete=self.option_catalog.complete,
+                    catalog_complete=snapshot.catalog_complete,
                     has_applicable_scope=False,
                 ),
                 has_current_full_formula=False,
+                formula_instrument=None,
             )
-        instruments = tuple(
-            candidate
-            for candidate in self.options.values()
-            if candidate.expiration_timestamp_ms == instrument.expiration_timestamp_ms
-            and candidate.option_type is instrument.option_type
-        )
+        first = snapshot.current[0]
+        instrument = first.instrument
+        band_id = first.result.band_id if first.result is not None else first.current.band_id
+        if band_id is None:
+            return _CurrentScopeTruth(
+                aggregate=aggregate_detector(
+                    (),
+                    catalog_complete=snapshot.catalog_complete,
+                    has_applicable_scope=False,
+                ),
+                has_current_full_formula=False,
+                formula_instrument=None,
+            )
+        for item in snapshot.current:
+            if (
+                item.instrument.expiration_timestamp_ms != instrument.expiration_timestamp_ms
+                or item.instrument.option_type is not instrument.option_type
+                or item.result is None
+                or item.result.band_id != band_id
+            ):
+                raise RuntimeError("scope snapshot contains cross-scope or unsettled current truth")
         states = tuple(
-            self.trackers[candidate.instrument_name].detector_state for candidate in instruments
+            item.result.detector_state for item in snapshot.current if item.result is not None
         )
         counter = self._scope_counter(
             instrument.option_type,
-            applicability.band.band_id,
+            band_id,
         )
         counter.applicable_instrument_count = max(
             counter.applicable_instrument_count,
-            len(instruments),
+            len(snapshot.current),
         )
         aggregate = aggregate_detector(
             states,
-            catalog_complete=self.option_catalog.complete,
-            has_applicable_scope=bool(instruments),
+            catalog_complete=snapshot.catalog_complete,
+            has_applicable_scope=True,
         )
         self.aggregate_results[
             (
                 instrument.expiration_timestamp_ms,
                 instrument.option_type,
-                applicability.band.band_id,
+                band_id,
             )
         ] = aggregate
-        has_current_full_formula = any(
-            (result := self.results.get(candidate.instrument_name)) is not None
-            and result.band_id == applicability.band.band_id
-            and result.full_formula_evaluation
-            for candidate in instruments
+        formula_instrument = next(
+            (
+                item.instrument
+                for item in snapshot.current
+                if item.result is not None and item.result.full_formula_evaluation
+            ),
+            None,
         )
         return _CurrentScopeTruth(
             aggregate=aggregate,
-            has_current_full_formula=has_current_full_formula,
+            has_current_full_formula=formula_instrument is not None,
+            formula_instrument=formula_instrument,
         )
 
     def _record_activation(
@@ -3488,17 +3831,13 @@ class RadarReducer:
     def _transition_coverage(
         self,
         state: CoverageState,
-        monotonic_ms: int,
         *,
-        reason: str = "CURRENT_TRUTH_RECOMPUTE",
-        affected_scopes: tuple[str, ...] = ("GLOBAL",),
+        commit: CausalCommit,
         force: bool = False,
     ) -> None:
         self._coverage.transition(
             state,
-            monotonic_ms,
-            reason=reason,
-            affected_scopes=affected_scopes,
+            commit=commit,
             global_continuity_epoch=self._global_continuity_epoch,
             force=force,
         )
@@ -3678,11 +4017,10 @@ class RadarReducer:
 
     def _update_coverage(
         self,
-        monotonic_ms: int,
         *,
-        reason: str = "CURRENT_TRUTH_RECOMPUTE",
-        affected_scopes: tuple[str, ...] = ("GLOBAL",),
+        commit: CausalCommit,
     ) -> None:
+        monotonic_ms = commit.boundary.received_monotonic_ms
         self._update_band_suspension(monotonic_ms)
         if self.clock is None:
             self.aggregate_results.clear()
@@ -3692,9 +4030,7 @@ class RadarReducer:
             )
             self._transition_coverage(
                 CoverageState.KNOWN_DEGRADED if positive else CoverageState.UNKNOWN,
-                monotonic_ms,
-                reason=reason,
-                affected_scopes=affected_scopes,
+                commit=commit,
             )
             return
         try:
@@ -3703,12 +4039,9 @@ class RadarReducer:
             self.aggregate_results.clear()
             self._transition_coverage(
                 CoverageState.UNKNOWN,
-                monotonic_ms,
-                reason=reason,
-                affected_scopes=affected_scopes,
+                commit=commit,
             )
             return
-        self._refresh_current_aggregates(trusted)
         if not self.platform.usable or not self.option_catalog.complete:
             positive = any(
                 tracker.detector_state is DetectorState.ANOMALY_ACTIVE
@@ -3716,12 +4049,10 @@ class RadarReducer:
             )
             self._transition_coverage(
                 CoverageState.KNOWN_DEGRADED if positive else CoverageState.UNKNOWN,
-                monotonic_ms,
-                reason=reason,
-                affected_scopes=affected_scopes,
+                commit=commit,
             )
             return
-        scoped: list[OptionInstrument] = []
+        scoped_keys: set[tuple[int, OptionType, str]] = set()
         unresolved = False
         for instrument in self.options.values():
             applicability = classify_time_applicability(
@@ -3730,67 +4061,51 @@ class RadarReducer:
                 trusted_time=trusted,
                 option_type=instrument.option_type,
             )
-            if applicability.classification is TimeApplicability.IN_BAND:
-                scoped.append(instrument)
+            if (
+                applicability.classification is TimeApplicability.IN_BAND
+                and applicability.band is not None
+            ):
+                scoped_keys.add(
+                    (
+                        instrument.expiration_timestamp_ms,
+                        instrument.option_type,
+                        applicability.band.band_id,
+                    )
+                )
             elif applicability.classification in {
                 TimeApplicability.ADJACENT_BAND_BOUNDARY,
                 TimeApplicability.MONITOR_BOUNDARY,
             }:
                 unresolved = True
-        if not scoped:
+        if not scoped_keys:
             self._transition_coverage(
                 CoverageState.UNKNOWN if unresolved else CoverageState.NO_APPLICABLE_SCOPE,
-                monotonic_ms,
-                reason=reason,
-                affected_scopes=affected_scopes,
+                commit=commit,
             )
             return
-        states = [self.trackers[item.instrument_name].detector_state for item in scoped]
-        if unresolved:
-            states.append(DetectorState.UNKNOWN)
-        if all(state is not DetectorState.UNKNOWN for state in states):
+        aggregates = tuple(
+            self.aggregate_results.get(key)
+            for key in sorted(
+                scoped_keys,
+                key=lambda item: (item[0], item[1].value, item[2]),
+            )
+        )
+        if not unresolved and all(
+            aggregate is not None and aggregate.coverage is DetectorCoverage.COMPLETE
+            for aggregate in aggregates
+        ):
             state = CoverageState.KNOWN_COMPLETE
-        elif DetectorState.ANOMALY_ACTIVE in states:
+        elif any(
+            aggregate is not None and aggregate.state is DetectorState.ANOMALY_ACTIVE
+            for aggregate in aggregates
+        ):
             state = CoverageState.KNOWN_DEGRADED
         else:
             state = CoverageState.UNKNOWN
         self._transition_coverage(
             state,
-            monotonic_ms,
-            reason=reason,
-            affected_scopes=affected_scopes,
+            commit=commit,
         )
-
-    def _refresh_current_aggregates(self, trusted: TimeInterval) -> None:
-        grouped: dict[
-            tuple[int, OptionType, str],
-            list[DetectorState],
-        ] = {}
-        for instrument in self.options.values():
-            applicability = classify_time_applicability(
-                self.policy,
-                expiration_timestamp_ms=instrument.expiration_timestamp_ms,
-                trusted_time=trusted,
-                option_type=instrument.option_type,
-            )
-            if applicability.band is None:
-                continue
-            key = (
-                instrument.expiration_timestamp_ms,
-                instrument.option_type,
-                applicability.band.band_id,
-            )
-            grouped.setdefault(key, []).append(
-                self.trackers[instrument.instrument_name].detector_state
-            )
-        self.aggregate_results = {
-            key: aggregate_detector(
-                tuple(states),
-                catalog_complete=self.option_catalog.complete,
-                has_applicable_scope=True,
-            )
-            for key, states in grouped.items()
-        }
 
     def _update_band_suspension(self, monotonic_ms: int) -> None:
         suspended = any(
@@ -3807,7 +4122,7 @@ class RadarReducer:
 
     def _retire_current_epoch(
         self,
-        reason: str = "SESSION_GAP",
+        reason: str = CausalCause.SESSION_GAP.value,
         *,
         monotonic_ms: int | None = None,
     ) -> None:
@@ -3820,7 +4135,19 @@ class RadarReducer:
         )
         self._last_boundary_monotonic_ms = retired_ms
         self.diagnostics.session_gap_count += 1
-        self._restart_global_continuity(reason, retired_ms)
+        boundary = FactBoundary(
+            self._session_epoch,
+            self._last_ingress_seq,
+            retired_ms,
+            self._causal_seq,
+        )
+        commit = CausalCommit(
+            boundary=boundary,
+            cause=CausalCause(reason),
+            failure_domain=FailureScope.SESSION,
+            affected_scopes=("GLOBAL",),
+        )
+        self._restart_global_continuity(commit)
         self._close_all_option_local_unavailable(
             retired_ms,
             end_disposition="REASON_CHANGED",
@@ -3850,13 +4177,13 @@ class RadarReducer:
         for slot in self._channels.values():
             slot.state = ChannelState.RETIRED
         self._drop_held_frames()
+        for request in self.pending_rpcs.values():
+            self.diagnostics.rpc_retired_or_censored_count[request.method] += 1
         self.pending_rpcs.clear()
         self._update_band_suspension(retired_ms)
         self._transition_coverage(
             CoverageState.UNKNOWN,
-            retired_ms,
-            reason=reason,
-            affected_scopes=("GLOBAL",),
+            commit=commit,
         )
 
     def _update_subscription_peaks(self) -> None:
@@ -4019,10 +4346,14 @@ class RadarReducer:
                 self._sync_membership(boundary)
                 token = self._time_currentness_token(trusted)
                 self._settle_fact(
-                    boundary=boundary,
+                    commit=CausalCommit(
+                        boundary=boundary,
+                        cause=CausalCause.TIME_BOUNDARY,
+                        failure_domain=FailureScope.CLOCK_INDEX,
+                        affected_scopes=("GLOBAL",),
+                    ),
                     affected_instruments=tuple(self.options),
                     countable=False,
-                    observation_reason="TIME_BOUNDARY",
                     acceptance_eligible=(token != self._last_time_currentness_token),
                 )
         if (
@@ -4077,7 +4408,6 @@ class RadarReducer:
     def prepare_reconnect(self, reason: str) -> None:
         del reason
         self._retire_current_epoch()
-        self._transition_coverage(CoverageState.UNKNOWN, _monotonic_ms())
 
     def clean_stop(self, monotonic_ms: int) -> Path:
         self._last_boundary_monotonic_ms = max(
@@ -4085,10 +4415,34 @@ class RadarReducer:
             monotonic_ms,
         )
         self._causal_seq += 1
+        boundary = FactBoundary(
+            self._session_epoch or 1,
+            self._last_ingress_seq,
+            monotonic_ms,
+            self._causal_seq,
+        )
+        clean_commit = CausalCommit(
+            boundary=boundary,
+            cause=CausalCause.CLEAN_STOP,
+            failure_domain=FailureScope.SESSION,
+            affected_scopes=("GLOBAL",),
+        )
+        self._settle_fact(
+            commit=clean_commit,
+            affected_instruments=tuple(self.options),
+            countable=False,
+            acceptance_eligible=False,
+        )
         for tracker in self.trackers.values():
             transition = tracker.stop(causal_seq=self._causal_seq)
             self._record_episode_end(transition.ended_episode, monotonic_ms)
-        self._update_coverage(monotonic_ms)
+        self._close_all_option_local_unavailable(
+            monotonic_ms,
+            end_disposition="CENSORED_AT_STOP",
+        )
+        for request in self.pending_rpcs.values():
+            self.diagnostics.rpc_retired_or_censored_count[request.method] += 1
+        self.pending_rpcs.clear()
         segments = self._coverage.close(monotonic_ms)
         observation_ms = segments[-1].end_monotonic_ms - segments[0].start_monotonic_ms
         summary = project_run_summary(
@@ -4163,6 +4517,10 @@ class RadarReducer:
         )
         option_local_intervals = list(self.diagnostics.option_local_intervals)
         omitted_option_local_intervals = self.diagnostics.omitted_option_local_interval_count
+        option_local_end_counts = Counter(self.diagnostics.option_local_end_count)
+        omitted_option_local_by_reason = Counter(
+            self.diagnostics.omitted_option_local_interval_count_by_reason
+        )
         for unavailable in sorted(
             self._option_local_unavailable.values(),
             key=lambda item: (item.start_monotonic_ms, item.instrument_name),
@@ -4184,6 +4542,15 @@ class RadarReducer:
                 option_local_intervals.append(row)
             else:
                 omitted_option_local_intervals += 1
+                omitted_option_local_by_reason[(unavailable.reason, "CENSORED_AT_STOP")] += 1
+            option_local_end_counts["CENSORED_AT_STOP"] += 1
+        omitted_reason_rows: dict[str, dict[str, int]] = {}
+        for reason, _disposition in sorted(omitted_option_local_by_reason):
+            omitted_reason_rows[reason] = {
+                disposition: omitted_option_local_by_reason[(reason, disposition)]
+                for disposition in ("RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP")
+            }
+        witness_identity = self._first_joint_witness_identity
         return {
             "operational_diagnostics_schema_version": 3,
             "runtime_limits": self.policy.runtime_limits.as_object(),
@@ -4205,6 +4572,9 @@ class RadarReducer:
                     "success_count": self.diagnostics.rpc_success_count[method],
                     "error_count": self.diagnostics.rpc_error_count[method],
                     "late_response_count": self.diagnostics.rpc_late_count[method],
+                    "retired_or_censored_count": (
+                        self.diagnostics.rpc_retired_or_censored_count[method]
+                    ),
                     "rate_limit_count": self.diagnostics.rpc_rate_limit_count[method],
                     "latency_observation_count": self.diagnostics.rpc_latency_count[method],
                     "latency_ms_sum": self.diagnostics.rpc_latency_sum[method],
@@ -4264,6 +4634,7 @@ class RadarReducer:
                 "restart_count_by_reason": dict(
                     sorted(self.diagnostics.global_continuity_restart_count.items())
                 ),
+                "restart_edges": list(self.diagnostics.global_continuity_restart_edges),
             },
             "ticker_application": {
                 "disposition_count": {
@@ -4306,37 +4677,78 @@ class RadarReducer:
                 "recovery_count_by_reason": dict(
                     sorted(self.diagnostics.option_local_recovery_count.items())
                 ),
+                "end_count_by_disposition": {
+                    disposition: option_local_end_counts[disposition]
+                    for disposition in (
+                        "RECOVERED",
+                        "REASON_CHANGED",
+                        "CENSORED_AT_STOP",
+                    )
+                },
                 "retained_interval_limit": 256,
                 "omitted_interval_count": omitted_option_local_intervals,
+                "omitted_interval_count_by_reason": omitted_reason_rows,
                 "intervals": option_local_intervals,
             },
             "witness": {
                 "global_continuity_epoch": self._global_continuity_epoch,
                 "first_joint_witness_monotonic_ms": self._first_joint_witness_ms,
                 "continuous_global_continuity_after_witness_ms": post_witness,
+                "scope": (
+                    None
+                    if witness_identity is None
+                    else {
+                        "expiration_timestamp_ms": (witness_identity.expiration_timestamp_ms),
+                        "option_type": witness_identity.option_type.value,
+                        "tte_band_id": witness_identity.tte_band_id,
+                    }
+                ),
+                "boundary": (
+                    None
+                    if witness_identity is None
+                    else _fact_boundary_object(witness_identity.boundary)
+                ),
+                "formula_instrument": (
+                    None
+                    if witness_identity is None
+                    else {
+                        "instrument_name": witness_identity.instrument_name,
+                        "expiration_timestamp_ms": (witness_identity.expiration_timestamp_ms),
+                        "option_type": witness_identity.option_type.value,
+                        "tte_band_id": witness_identity.tte_band_id,
+                    }
+                ),
             },
         }
 
 
 class CoverageLedger:
-    def __init__(self, started_monotonic_ms: int) -> None:
+    def __init__(
+        self,
+        started_monotonic_ms: int,
+        *,
+        initial_commit: CausalCommit,
+    ) -> None:
+        if initial_commit.boundary.received_monotonic_ms != started_monotonic_ms:
+            raise ValueError("initial coverage commit must match the ledger start")
+        if initial_commit.cause is not CausalCause.RUNTIME_START:
+            raise ValueError("initial coverage commit cause must be RUNTIME_START")
         self._current_state = CoverageState.UNKNOWN
         self._current_start_ms = started_monotonic_ms
-        self._current_reason = "RUNTIME_START"
-        self._current_affected_scopes: tuple[str, ...] = ("GLOBAL",)
+        self._current_reason = initial_commit.cause.value
+        self._current_affected_scopes = initial_commit.affected_scopes
         self._current_global_continuity_epoch = 1
         self._segments: list[CoverageSegment] = []
 
     def transition(
         self,
         state: CoverageState,
-        monotonic_ms: int,
         *,
-        reason: str = "CURRENT_TRUTH_RECOMPUTE",
-        affected_scopes: tuple[str, ...] = ("GLOBAL",),
-        global_continuity_epoch: int = 1,
+        commit: CausalCommit,
+        global_continuity_epoch: int,
         force: bool = False,
     ) -> None:
+        monotonic_ms = commit.boundary.received_monotonic_ms
         if monotonic_ms < self._current_start_ms:
             raise RuntimeError("coverage monotonic time moved backward")
         if state is self._current_state and not force:
@@ -4354,8 +4766,8 @@ class CoverageLedger:
             )
         self._current_start_ms = monotonic_ms
         self._current_state = state
-        self._current_reason = reason
-        self._current_affected_scopes = affected_scopes
+        self._current_reason = commit.cause.value
+        self._current_affected_scopes = commit.affected_scopes
         self._current_global_continuity_epoch = global_continuity_epoch
 
     def close(self, stop_monotonic_ms: int) -> tuple[CoverageSegment, ...]:
@@ -4436,6 +4848,7 @@ class LiveRadarRuntime:
         self._enqueue_commands(outbound, commands)
         poll_ms = self.policy.runtime_limits.time_boundary_poll_interval_ms
         next_poll_ms = started_monotonic_ms + poll_ms
+        failure: BaseException | None = None
         try:
             while True:
                 self._raise_sender_failure(sender_task)
@@ -4489,8 +4902,10 @@ class LiveRadarRuntime:
                 except TimeoutError:
                     continue
                 buffered.append(envelope)
+        except BaseException as exc:
+            failure = exc
         finally:
-            if stop_event.is_set() and not sender_task.done():
+            if failure is None and stop_event.is_set() and not sender_task.done():
                 try:
                     await asyncio.wait_for(
                         outbound.join(),
@@ -4504,13 +4919,26 @@ class LiveRadarRuntime:
                     )
                 except TimeoutError:
                     self.reducer._retire_current_epoch()
-            self._raise_sender_failure(sender_task)
+            try:
+                self._capture_transport_metrics(client)
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+            if failure is None:
+                try:
+                    self._raise_sender_failure(sender_task)
+                except BaseException as exc:
+                    failure = exc
             sender_task.cancel()
             try:
                 await sender_task
             except asyncio.CancelledError:
                 pass
-        self._capture_transport_metrics(client)
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+        if failure is not None:
+            raise failure.with_traceback(failure.__traceback__)
         return self.reducer.clean_stop(_monotonic_ms())
 
     async def _sender_loop(
@@ -4641,6 +5069,36 @@ _COMBO_METADATA_FIELDS = frozenset(
         "qty_tick_size",
     }
 )
+
+
+def _validate_causal_scopes(scopes: tuple[str, ...]) -> None:
+    if not scopes or len(scopes) > 256:
+        raise ValueError("causal commit affected scopes must contain 1 to 256 labels")
+    scope_pattern = re.compile(r"SCOPE:[0-9]+:(?:call|put):[^:]+$")
+    for scope in scopes:
+        if not isinstance(scope, str) or not scope:
+            raise TypeError("causal commit affected scope must be a non-empty string")
+        if not (
+            scope in {"GLOBAL", "OPTION_LOCAL"}
+            or (scope.startswith("OPTION:") and len(scope) > len("OPTION:"))
+            or scope_pattern.fullmatch(scope) is not None
+        ):
+            raise ValueError("causal commit affected scope label is invalid")
+    if tuple(sorted(set(scopes))) != scopes:
+        raise ValueError("causal commit affected scopes must be unique and sorted")
+    if ("GLOBAL" in scopes or "OPTION_LOCAL" in scopes) and len(scopes) != 1:
+        raise ValueError("global causal scope labels must stand alone")
+
+
+def _fact_boundary_object(boundary: FactBoundary) -> dict[str, int]:
+    return {
+        "session_epoch": boundary.session_epoch,
+        "ingress_seq": boundary.ingress_seq,
+        "received_monotonic_ms": boundary.received_monotonic_ms,
+        "causal_seq": boundary.causal_seq,
+    }
+
+
 _CONSUMED_FIELDS_BY_SOURCE: dict[str, frozenset[str]] = {
     "combo_book": frozenset(
         {"type", "timestamp", "instrument_name", "change_id", "prev_change_id", "bids", "asks"}
