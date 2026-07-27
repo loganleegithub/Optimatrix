@@ -1330,6 +1330,7 @@ def test_one_receive_lag_gate_retires_bootstrap_and_normal_frames(
 
     assert reducer.diagnostics.max_receive_to_reduce_lag_ms == 1_001
     assert reducer.diagnostics.session_gap_count == 1
+    assert reducer.diagnostics.global_continuity_restart_count == {"QUEUE_LAG_DEADLINE": 1}
 
 
 def test_negative_platform_guard_cannot_be_overwritten_in_same_epoch(

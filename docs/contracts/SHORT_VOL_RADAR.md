@@ -185,25 +185,53 @@ fact required by the evaluation gate actually reached makes that instrument `UNK
 not overwrite an earlier terminal known-ineligibility result or suppress a causally known active
 witness in another instrument, which is reported through the completeness-aware aggregate state.
 
-An accepted option ticker is current exactly while
-`ticker.source_timestamp_ms <= trusted_time.upper_ms <= ticker.source_timestamp_ms +
-ticker_source_stale_deadline_ms`; equality at either boundary remains current. A trusted upper
-bound even one millisecond beyond the upper cutoff latches the current ticker subscription
-generation stale. A later clock refresh or narrower trusted-time interval cannot resurrect that
-generation. Recovery requires a newly acknowledged ticker generation and a ticker whose source
-timestamp is strictly later than the latched one. A source timestamp even one millisecond above
-the trusted upper bound fails closed as `TICKER_TIMESTAMP_AHEAD`.
+An option ticker notification is a complete snapshot. It has no `change_id`, `prev_change_id`, or
+other sequence-continuity contract. The reducer validates its consumed shape, classifies the
+candidate's currentness, and then records one application disposition as three separate facts:
 
-Ticker stale/ahead is local to the option and requests exactly one ticker resubscription for that
-failed generation. When evaluation reaches the forward gate, its current detector becomes
-`UNKNOWN`, an active episode ends `UNKNOWN_AT_GAP`, and Layer 2 stops. A known amount/off-grid
-failure or insufficient target bid depth that terminates evaluation before the forward gate
-retains its earlier `KNOWN_INELIGIBLE` result; ticker unavailability cannot overwrite it.
-Heartbeat, book, index, metadata, and unchanged elapsed-time facts cannot refresh the ticker. A
-recovered ticker with the same numeric forward and only a newer source timestamp may restore
-current truth, but the freshness recovery itself is not a countable activation/clear observation.
-A change only between valid `underlying_index` labels with the same numeric forward is likewise
-not countable.
+```text
+shape = VALID | INVALID
+candidate currentness =
+  CURRENT | SOURCE_STALE | TIMESTAMP_AHEAD | TRUSTED_TIME_UNKNOWN
+application disposition =
+  APPLIED | LATE_IGNORED | AHEAD_IGNORED | STALE_GENERATION_IGNORED | SHAPE_REJECTED
+```
+
+`ingress_seq`, not source timestamp, orders applications inside one session epoch. A shape-valid
+snapshot with source timestamp lower than the currently accepted ticker is `LATE_IGNORED`. It
+does not overwrite the newer accepted fact, request resubscription, end or clear an episode,
+change current coverage, or restart `global_continuity_epoch`. Equal timestamps are ordered by
+`ingress_seq` and the later ingress may apply. A malformed snapshot is `SHAPE_REJECTED`; an
+ahead-of-trusted-time candidate is `AHEAD_IGNORED`. Neither overwrites a still-current accepted
+ticker or manufactures a continuity gap.
+
+When no trusted-time interval exists at receipt, candidate currentness is
+`TRUSTED_TIME_UNKNOWN`, never `CURRENT`. The complete snapshot may still be applied in ingress
+order, but it cannot make detector truth current; the accepted fact is classified against trusted
+time when that dependency recovers.
+
+After accepted-ticker TTL loss has latched one failed subscription generation, a candidate from
+that same generation is `STALE_GENERATION_IGNORED` even if its timestamp is later. It cannot
+recover or overwrite the latched fact; it is not counted as timestamp regression.
+
+The currently accepted option ticker is usable exactly while
+`ticker.source_timestamp_ms <= trusted_time.upper_ms <= ticker.source_timestamp_ms +
+ticker_source_stale_deadline_ms`; equality at either boundary remains current. Only the accepted
+fact crossing that upper TTL cutoff latches its ticker generation `SOURCE_STALE`, makes the
+smallest dependent option truth unavailable, and requests exactly one resubscription for that
+failed generation. A later clock refresh or narrower trusted-time interval cannot resurrect that
+generation. Recovery requires a newly acknowledged ticker generation and an applied ticker whose
+source timestamp is strictly later than the latched accepted fact.
+
+At the forward gate, a missing accepted ticker or genuinely stale accepted ticker makes that
+option `UNKNOWN`; an active episode ends `UNKNOWN_AT_GAP` and Layer 2 stops. This is
+option-local availability loss, not global continuity loss. A known amount/off-grid failure or
+insufficient target bid depth that terminates evaluation before the forward gate retains its
+earlier `KNOWN_INELIGIBLE` result. Heartbeat, book, index, metadata, a rejected candidate, and
+unchanged elapsed-time facts cannot refresh the accepted ticker. A recovered ticker with the same
+numeric forward and only a newer source timestamp restores current truth but is not a countable
+activation/clear observation. A change only between valid `underlying_index` labels with the same
+numeric forward is likewise not countable.
 
 `platform_state.public_methods_state.allow_unauthenticated_public_requests = false`, a relevant
 lock, or a maintenance/break notification latches the corresponding guard negative for that
@@ -330,8 +358,10 @@ this process at one `causal_seq`; it does not claim a simultaneous exchange snap
 
 When one fact affects multiple instruments in the same
 `Policy identity × expiry_timestamp × option_type` scope, the runtime evaluates every affected
-instrument first and settles that aggregate exactly once from that same causal pass. It may not
-publish transient partial truth produced by iteration order.
+instrument first and then settles one full current-scope snapshot exactly once from that causal
+pass. Unaffected members contribute only their still-current settled results; the reducer may not
+replace the full current scope with the affected subset or publish transient partial truth
+produced by iteration order.
 
 An order book becomes usable only after:
 
@@ -776,6 +806,12 @@ option/combo quotes, cancels pending observations, and never infers what happene
 If an observed episode was active, it ends with `end_reason = UNKNOWN_AT_GAP`; its known-active
 duration stops at the last trusted boundary.
 
+An older complete ticker snapshot is not a detector-dependent gap. `LATE_IGNORED` has no tracker,
+aggregate, coverage, Layer 2, resubscription, or witness side effect. A rejected malformed or
+ahead candidate likewise cannot overwrite a still-current accepted ticker. Only actual
+option-local unavailability—no accepted current ticker or the accepted ticker crossing its
+TTL—can make the forward dependency unavailable.
+
 After complete resync, the instrument must pass fresh activation persistence and receives a new
 episode identity. It may reference the pre-gap episode as an uncertain predecessor, but neither
 object claims continuity across the gap. Unaffected instruments retain their own states, so one
@@ -807,6 +843,49 @@ adjacent-band suspension rule above preserves an episode identity.
 
 One instrument's `ARMED -> ACTIVE` transition writes one `SHORT_VOL_ANOMALY_EVENT` for that short
 leg. It is not rewritten as quotes change.
+
+### Global continuity, current coverage, and option-local availability
+
+The runtime keeps three ledgers whose units and reset rules are not interchangeable:
+
+1. `global_continuity_epoch` is a positive integer starting at `1`. It increments exactly once
+   for each retired session, ingress gap/duplicate or queue overflow, trusted-clock gap, or real
+   index continuity loss (`WINDOW_GAP | SOURCE_STALE | CONTINUITY_GAP`). Bootstrap
+   `WARMUP`, normal `TIME_BOUNDARY_PENDING | WATERMARK_PENDING`, option ticker/book/catalog
+   unavailability, aggregate coverage changes, and episode transitions never increment it.
+2. `current_market_truth_coverage` remains the exact global time partition
+   `NO_APPLICABLE_SCOPE | KNOWN_COMPLETE | KNOWN_DEGRADED | UNKNOWN`. Every segment records the
+   reason that caused its state to begin, the bounded affected scope
+   (`GLOBAL`, one exact aggregate scope, or one option-local scope), and the active
+   `global_continuity_epoch`. A local loss remains visible here even though it does not erase
+   global continuity.
+3. `option_local_availability` records ticker-local unavailable intervals by instrument,
+   subscription generation, reason, start, end/recovery disposition, recovery time when known,
+   duration, and continuity epoch. It is diagnostic and cannot change detector truth by itself;
+   detector truth continues to consume the same accepted current facts.
+
+The joint operational witness is one property of one settled full current
+`Policy identity × expiry_timestamp × option_type` scope snapshot. That exact snapshot contains
+every current member and derives both:
+
+```text
+detector_coverage = COMPLETE
+has_current_full_formula = true
+```
+
+The reducer may reuse an unchanged member's current result, but it cannot combine complete
+coverage calculated over the full scope with `full_formula_evaluation` taken only from the
+boundary's affected subset or from historical counters. `EvidenceWriter` receives only a settled
+episode edge or clean-stop projection; write success, file presence, and historical event content
+never decide current scope truth.
+
+The first joint witness in the current `global_continuity_epoch` starts
+`continuous_global_continuity_after_witness_ms`. Current coverage and option-local availability
+continue to be reported independently and do not reset that clock. An epoch restart clears the
+witness and requires a new same-snapshot joint witness. Human acceptance must separately freeze
+both the required global-continuity duration and the permitted local-availability/coverage
+thresholds before a later Soak; elapsed global continuity alone cannot silently waive poor local
+availability.
 
 ## Official atomic credit availability
 
@@ -904,8 +983,8 @@ are business-state transitions after reduced-state de-duplication, never message
 with a zero or unknown denominator are `null`.
 
 `operational_diagnostics` is a required strict object with
-`operational_diagnostics_schema_version = 2`. It is transport evidence only and has exactly these
-members:
+`operational_diagnostics_schema_version = 3`. It is operational evidence only and has exactly
+these members:
 
 - `runtime_limits`: the exact nine frozen Policy `runtime_limits`;
 - `ingress`: `received_envelope_count`, `reduced_envelope_count`,
@@ -928,19 +1007,37 @@ members:
   authoritative refresh;
 - `source_shapes`: one sorted row per core RPC/channel source with `source`, `observed_count`,
   `valid_count`, `invalid_count`, `validation = NOT_OBSERVED | VALID | INVALID`, and a sorted list
-  of consumed `{key, type}` pairs; no value or complete payload is retained;
-- `witness`: nullable `first_joint_witness_monotonic_ms` and
-  `continuous_covered_after_witness_ms`.
+  of consumed `{key, type}` pairs; this ledger reports parse/consumed-shape validity only, so a
+  shape-valid `LATE_IGNORED` ticker increments `valid_count`, never `invalid_count`;
+- `global_continuity`: positive `current_epoch`, total `restart_count`, and
+  `restart_count_by_reason`;
+- `ticker_application`: `disposition_count` has exact counts for
+  `APPLIED | LATE_IGNORED | AHEAD_IGNORED | STALE_GENERATION_IGNORED | SHAPE_REJECTED`, a fixed
+  `late_ignored_diagnostic_limit = 256`, `omitted_late_ignored_diagnostic_count`, and at most 256
+  strict-regression `late_ignored_diagnostics` rows containing only `instrument_name`, channel
+  `generation`, `ingress_seq`, `previous_source_timestamp_ms`,
+  `candidate_source_timestamp_ms`, signed `timestamp_delta_ms`, `received_monotonic_ms`, and
+  `disposition = LATE_IGNORED`;
+- `ticker_currentness`: `candidate_count_by_classification` has exact counts for
+  `CURRENT | SOURCE_STALE | TIMESTAMP_AHEAD | TRUSTED_TIME_UNKNOWN`, separately from de-duplicated
+  `accepted_transition_count_by_state` for `MISSING | CURRENT | SOURCE_STALE`;
+- `option_local_availability`: `unavailable_count_by_reason`, `recovery_count_by_reason`, fixed
+  `retained_interval_limit = 256`, `omitted_interval_count`, and at most 256 `intervals` containing
+  only `instrument_name`, ticker `generation`, `reason`, `start_monotonic_ms`,
+  `end_monotonic_ms`, `duration_ms`,
+  `end_disposition = RECOVERED | REASON_CHANGED | CENSORED_AT_STOP`, and
+  `global_continuity_epoch`;
+- `witness`: current `global_continuity_epoch`, nullable
+  `first_joint_witness_monotonic_ms`, and nullable
+  `continuous_global_continuity_after_witness_ms`.
 
 The two channel rates use the run observation interval in seconds; either rate is `null` when that
 denominator is zero or unknown. An RPC latency is counted only when its request send time and
-response receive time belong to the same non-retired session epoch. A real session/index
-continuity gap or another non-pending loss of covered detector truth clears the witness start;
-warm-up and a new joint witness are required before post-witness duration runs again. Normal
-`TIME_BOUNDARY_PENDING`/`WATERMARK_PENDING` rollover preserves the witness and elapsed
-post-witness interval, and initial bootstrap warm-up is not recorded as a gap. Diagnostics count
-transport facts once per reduced envelope and never enter detector, episode, aggregate, coverage,
-atomic availability, or any trading denominator.
+response receive time belong to the same non-retired session epoch. Only a
+`global_continuity_epoch` restart clears the witness start. Current coverage or option-local
+availability loss remains explicit in its own ledger and does not reset global continuity.
+Diagnostics count source/application/currentness facts in their declared ledgers and never enter
+detector, episode, aggregate, atomic availability, or any trading denominator.
 
 Coverage is one exact half-open runtime interval
 `[runtime_started_monotonic_ms, clean_stop_monotonic_ms)`. At every monotonic millisecond it has
@@ -971,6 +1068,16 @@ coverage_partition_error_ms =
 
 Any overlap, gap, negative duration, or nonzero error fails validation.
 
+Every version-3 `coverage_segments` row has exactly
+`start_monotonic_ms`, `end_monotonic_ms`, `state`, `reason`, `affected_scopes`, and
+`global_continuity_epoch`. `reason` is the reduced fact that caused entry into that state.
+`affected_scopes` is a sorted array of 1–256 labels whose bounded labels are exactly `GLOBAL`,
+`OPTION_LOCAL`, `SCOPE:<expiry_timestamp_ms>:<call|put>:<band_id>`, or
+`OPTION:<instrument_name>`. `OPTION_LOCAL` is the aggregate representation when a proper
+option-local subset would otherwise require more than 256 instrument labels; it does not mean
+global continuity was lost. A same-state fact does not split a segment merely to log activity; an
+epoch restart always splits at its exact boundary even when the coverage state is unchanged.
+
 ### Writer, reader, and compatibility
 
 `radar_runtime` is the only writer. The current readers are the strict repository-owned schema
@@ -984,14 +1091,14 @@ evidence directory fail closed. Comparison compatibility across different Policy
 reported side by side, with no causal or quality inference. A schema or reader change requires an
 explicit task.
 
-This contract revision changes the exact Policy schema to version 3 and makes
-`operational_diagnostics_schema_version = 2` mandatory in `RADAR_RUN_SUMMARY`. A version-2 Policy,
-a version-1 operational-diagnostics summary, or any locally created artifact using either prior
-shape is `MIGRATION_REQUIRED` and is not accepted. Missing
-`ticker_source_stale_deadline_ms` is never supplied by a default.
-`SHORT_VOL_ANOMALY_EVENT` and `PUBLIC_ATOMIC_QUOTE_EVENT` market-field semantics remain compatible.
-There is no accepted production artifact to migrate, and this task does not add a migration or
-replay tool.
+The Policy schema remains exactly version 3 and is unchanged by this repair. New summaries use
+`operational_diagnostics_schema_version = 3` and the attributed coverage-segment shape above.
+The strict reader continues to validate version-2 summaries under their original schema so the
+sealed `operational-soak-attempt-001` remains truthful, immutable `NOT_MET` evidence. Version 2 is
+`MIGRATION_REQUIRED` for any new global-continuity/local-availability acceptance and can never be
+relabelled as version 3; there is no migration, replay, or offline recomputation tool. New writers
+emit only version 3. `SHORT_VOL_ANOMALY_EVENT` and `PUBLIC_ATOMIC_QUOTE_EVENT` semantics remain
+compatible and unchanged.
 
 Ordinary market facts, `NO_ANOMALY`, theoretical structures, unmatched combos, and full chain
 state are transient. The objects do not contain the full option chain and cannot reconstruct the
@@ -1040,8 +1147,11 @@ Tests must cover:
   unrelated source fields;
 - TTE and trusted-clock interval boundaries, including final delivery-price window exclusion;
 - snapshot/change continuity, quiet unchanged books, empty/insufficient depth, gap/resnapshot,
-  affected-only invalidation, exact `data.timestamp` mapping and index-minute sealing, timestamp
-  regression, and a late tick for a sealed minute;
+  affected-only invalidation, exact `data.timestamp` mapping and index-minute sealing, index
+  timestamp regression, and a late index tick for a sealed minute; ticker tests separately prove
+  complete-snapshot semantics, equal-timestamp ingress ordering, older
+  `LATE_IGNORED` without resync/episode/witness side effects, malformed/ahead candidate rejection
+  without overwriting a current accepted fact, and true accepted-ticker TTL expiry/recovery;
 - configured lookbacks, weights, floor, warm-up, missing minutes, exact remaining-life scaling,
   target-size bid walking, canonical total-volatility Black inversion, fixed OTM and configurable
   Delta eligibility, numerical-boundary fail-closed behavior, finite values, locked Decimal/model
@@ -1062,8 +1172,12 @@ Tests must cover:
   of normal full-chain/no-anomaly persistence, plus dirty-worktree rejection and exact clean
   `HEAD` code identity; coverage fixtures inject interval overlap/gaps and must fail;
 - initial bootstrap warm-up distinct from a real `INDEX_CONTINUITY_GAP`, normal cross-minute
-  pending that preserves the operational witness, real-gap reset, post-gap recovery with a new
-  witness, and exact summary post-witness duration;
+  pending that preserves history, real global-gap epoch restart, post-gap recovery with a new
+  same-current-scope joint witness, exact global-continuity duration, independent local
+  availability intervals, and attributed coverage segments;
+- version-3 writer/validator tests for separate ticker shape/currentness/application ledgers,
+  bounded 256-row regression diagnostics, coverage reason/scope/epoch fields, and continued strict
+  validation of immutable version-2 `attempt-001` evidence;
 - absence of replay, offline recomputation, private, maker, Candidate, Shadow, Position, and
   Outcome paths.
 
@@ -1077,8 +1191,8 @@ After separate Smoke authorization, run one exact Policy until either:
 - warm-up completes and at least one real
   `Policy identity × expiry_timestamp × option_type` aggregate scope contains at least one current
   catalog instrument, at least one full-formula known per-instrument evaluation occurs inside that
-  same causal aggregate evaluation, and the complete scope evaluates to known `NO_ANOMALY` or
-  `ANOMALY_ACTIVE`, after which a human may stop it; or
+  same settled full current-scope snapshot, and that snapshot's complete scope evaluates to known
+  `NO_ANOMALY` or `ANOMALY_ACTIVE`, after which a human may stop it; or
 - a human stops it earlier.
 
 A pre-warm-up or all-`UNKNOWN` stop is truthful but does not establish runtime capability. A
@@ -1092,8 +1206,10 @@ minimum-amount, target-depth, OTM, and Delta gates and produces known baseline v
 executable IV interval, and richness classification. Minimum/depth/OTM/Delta short-circuit
 `NO_ANOMALY` remains truthful but cannot by itself establish the full Radar formula path.
 `complete_aggregate_with_full_formula_evaluation_count` increments only when that full-formula
-instrument is inside the same Policy/scope/causal evaluation that is complete; separate observations
-cannot be combined into the establishment witness.
+instrument is inside the same Policy/scope settled full current snapshot that is complete.
+Still-current results for unchanged members may be reused, but stale/historical results, a
+different scope, and only the current boundary's affected subset cannot be combined into the
+establishment witness.
 
 Accepted summary invariants are:
 
@@ -1144,15 +1260,27 @@ The construction implementation must record:
 - option/combo catalog refresh and recovery outcomes;
 - core RPC/channel appearance and consumed-field shape validation, retaining only keys, types,
   and validation result rather than full market payloads;
-- the uninterrupted covered interval after the first joint full-formula complete-aggregate
-  witness.
+- separate ticker shape/currentness/application dispositions and bounded late-snapshot rows;
+- global continuity epochs, current coverage reason/scope/epoch, and bounded option-local
+  unavailable/recovery intervals;
+- the uninterrupted global-continuity interval after a same-current-scope joint full-formula
+  complete-aggregate witness.
 
-The human-approved stop condition owns the required post-witness interval. A session/index gap
-restarts warm-up, requires a new witness, and restarts that interval. These diagnostics never
-enter anomaly, episode, aggregate, atomic-availability, or later trading denominators. This
-revision defines the strict schema and requires direct writer/validator tests, but it neither
-approves a Policy nor a stop condition, opens the production gate, authorizes the soak, nor treats
-the reachability witness as sustained-operation acceptance.
+The sealed `operational-soak-attempt-001` remains permanently `NOT_MET` and may not be rewritten,
+migrated, replayed, recomputed, or retroactively accepted. Before any later Soak, the order is:
+
+1. direct focused tests, `make check`, and strict validation of the old evidence directory;
+2. a separately human-authorized heartbeat wire probe, which this construction does not run;
+3. human pre-freezing of the new global-continuity duration and explicit option-local
+   availability/current-coverage thresholds;
+4. a new independently authorized Soak using the previously approved business Policy or one
+   explicitly approved successor and a new empty evidence directory.
+
+The future human-approved stop condition owns all those thresholds. A global epoch restart
+requires a new same-snapshot witness; local availability and coverage remain separate acceptance
+facts rather than silently resetting or silently waiving global continuity. This revision defines
+the strict schema and direct writer/validator tests, but it does not approve a heartbeat probe,
+Policy, thresholds, production connection, or Soak and does not establish the production Radar.
 
 ## Evidence boundary
 

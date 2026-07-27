@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from itertools import pairwise
 from pathlib import Path
 
 from market_monitor import PriceLevel, TimeInterval
@@ -90,6 +91,9 @@ class CoverageSegment:
     start_monotonic_ms: int
     end_monotonic_ms: int
     state: CoverageState
+    reason: str = "RUNTIME_START"
+    affected_scopes: tuple[str, ...] = ("GLOBAL",)
+    global_continuity_epoch: int = 1
 
 
 @dataclass(frozen=True)
@@ -236,6 +240,23 @@ def project_run_summary(
     if not coverage_segments:
         raise EvidenceError("run summary requires at least one coverage segment")
     coverage = _coverage_object(tuple(coverage_segments))
+    diagnostics_version = operational_diagnostics.get("operational_diagnostics_schema_version")
+    coverage_rows = []
+    for segment in coverage_segments:
+        row: dict[str, object] = {
+            "start_monotonic_ms": segment.start_monotonic_ms,
+            "end_monotonic_ms": segment.end_monotonic_ms,
+            "state": segment.state.value,
+        }
+        if diagnostics_version == 3:
+            row.update(
+                {
+                    "reason": segment.reason,
+                    "affected_scopes": list(segment.affected_scopes),
+                    "global_continuity_epoch": segment.global_continuity_epoch,
+                }
+            )
+        coverage_rows.append(row)
     summary: dict[str, object] = {
         "object_kind": "RADAR_RUN_SUMMARY",
         "code_identity": code_identity,
@@ -244,14 +265,7 @@ def project_run_summary(
         "runtime_started_monotonic_ms": coverage_segments[0].start_monotonic_ms,
         "clean_stop_monotonic_ms": coverage_segments[-1].end_monotonic_ms,
         "operational_diagnostics": dict(operational_diagnostics),
-        "coverage_segments": [
-            {
-                "start_monotonic_ms": segment.start_monotonic_ms,
-                "end_monotonic_ms": segment.end_monotonic_ms,
-                "state": segment.state.value,
-            }
-            for segment in coverage_segments
-        ],
+        "coverage_segments": coverage_rows,
         "coverage": coverage,
         "band_suspended_duration_ms": band_suspended_duration_ms,
         "counts_by_scope": [dict(item) for item in counts_by_scope],
@@ -535,10 +549,16 @@ def validate_run_summary(value: Mapping[str, object]) -> None:
         raise EvidenceError("wrong summary object_kind")
     _validate_non_claims(value["non_claims"], SUMMARY_NON_CLAIMS, "summary")
     _validate_identity_fields(value)
+    diagnostics = _mapping(value["operational_diagnostics"], "operational_diagnostics")
+    diagnostics_version = diagnostics.get("operational_diagnostics_schema_version")
+    if diagnostics_version not in {2, 3}:
+        raise EvidenceError("operational diagnostics schema version must be 2 or 3")
     raw_segments = value["coverage_segments"]
     if not isinstance(raw_segments, list) or not raw_segments:
         raise EvidenceError("coverage_segments must be non-empty")
-    segments = tuple(_parse_segment(item) for item in raw_segments)
+    segments = tuple(
+        _parse_segment(item, diagnostics_version=diagnostics_version) for item in raw_segments
+    )
     expected = _coverage_object(segments)
     if value["coverage"] != expected:
         raise EvidenceError("coverage totals do not match exact segments")
@@ -547,10 +567,11 @@ def validate_run_summary(value: Mapping[str, object]) -> None:
     if value["clean_stop_monotonic_ms"] != segments[-1].end_monotonic_ms:
         raise EvidenceError("summary stop does not match coverage")
     _validate_operational_diagnostics(
-        value["operational_diagnostics"],
+        diagnostics,
         observation_interval_ms=expected["observation_interval_ms"],
         runtime_started_monotonic_ms=segments[0].start_monotonic_ms,
         clean_stop_monotonic_ms=segments[-1].end_monotonic_ms,
+        coverage_segments=segments,
     )
     _non_negative_integer(value["band_suspended_duration_ms"], "band_suspended_duration_ms")
     _validate_scope_counts(value["counts_by_scope"])
@@ -701,10 +722,13 @@ def _coverage_object(segments: tuple[CoverageSegment, ...]) -> dict[str, int]:
     }
 
 
-def _parse_segment(value: object) -> CoverageSegment:
+def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegment:
     if not isinstance(value, dict):
         raise EvidenceError("coverage segment must be an object")
-    _exact_keys(value, {"start_monotonic_ms", "end_monotonic_ms", "state"}, "coverage segment")
+    fields = {"start_monotonic_ms", "end_monotonic_ms", "state"}
+    if diagnostics_version == 3:
+        fields.update({"reason", "affected_scopes", "global_continuity_epoch"})
+    _exact_keys(value, fields, "coverage segment")
     try:
         state = CoverageState(value["state"])
     except (ValueError, TypeError) as exc:
@@ -715,7 +739,22 @@ def _parse_segment(value: object) -> CoverageSegment:
         raise EvidenceError("coverage start must be an integer")
     if isinstance(end, bool) or not isinstance(end, int):
         raise EvidenceError("coverage end must be an integer")
-    return CoverageSegment(start, end, state)
+    if diagnostics_version == 2:
+        return CoverageSegment(start, end, state)
+    reason = _required_string(value, "reason")
+    affected_scopes = _validate_affected_scopes(value["affected_scopes"])
+    epoch = _positive_integer(
+        value["global_continuity_epoch"],
+        "coverage segment global_continuity_epoch",
+    )
+    return CoverageSegment(
+        start,
+        end,
+        state,
+        reason=reason,
+        affected_scopes=affected_scopes,
+        global_continuity_epoch=epoch,
+    )
 
 
 def _validate_scope_counts(value: object) -> None:
@@ -817,26 +856,38 @@ def _validate_operational_diagnostics(
     observation_interval_ms: int,
     runtime_started_monotonic_ms: int,
     clean_stop_monotonic_ms: int,
+    coverage_segments: tuple[CoverageSegment, ...],
 ) -> None:
     diagnostics = _mapping(value, "operational_diagnostics")
+    version = diagnostics.get("operational_diagnostics_schema_version")
+    if version not in {2, 3}:
+        raise EvidenceError("operational diagnostics schema version must be 2 or 3")
+    fields = {
+        "operational_diagnostics_schema_version",
+        "runtime_limits",
+        "ingress",
+        "rpc_by_method",
+        "channel_by_class",
+        "subscriptions",
+        "heartbeat",
+        "recovery",
+        "source_shapes",
+        "witness",
+    }
+    if version == 3:
+        fields.update(
+            {
+                "global_continuity",
+                "ticker_application",
+                "ticker_currentness",
+                "option_local_availability",
+            }
+        )
     _exact_keys(
         diagnostics,
-        {
-            "operational_diagnostics_schema_version",
-            "runtime_limits",
-            "ingress",
-            "rpc_by_method",
-            "channel_by_class",
-            "subscriptions",
-            "heartbeat",
-            "recovery",
-            "source_shapes",
-            "witness",
-        },
+        fields,
         "operational_diagnostics",
     )
-    if diagnostics["operational_diagnostics_schema_version"] != 2:
-        raise EvidenceError("operational diagnostics schema version must be 2")
     _validate_runtime_limits(diagnostics["runtime_limits"])
     _validate_ingress_diagnostics(diagnostics["ingress"])
     _validate_rpc_diagnostics(diagnostics["rpc_by_method"])
@@ -913,26 +964,58 @@ def _validate_operational_diagnostics(
         "operational_diagnostics.recovery",
     )
     _validate_source_shapes(diagnostics["source_shapes"])
+    current_epoch = 1
+    if version == 3:
+        current_epoch = _validate_global_continuity(diagnostics["global_continuity"])
+        _validate_ticker_application(diagnostics["ticker_application"])
+        _validate_ticker_currentness(diagnostics["ticker_currentness"])
+        _validate_option_local_availability(
+            diagnostics["option_local_availability"],
+            runtime_started_monotonic_ms=runtime_started_monotonic_ms,
+            clean_stop_monotonic_ms=clean_stop_monotonic_ms,
+            current_epoch=current_epoch,
+        )
+        _validate_version_three_coverage(
+            coverage_segments,
+            current_epoch=current_epoch,
+        )
     witness = _mapping(diagnostics["witness"], "operational_diagnostics.witness")
-    _exact_keys(
-        witness,
-        {
-            "first_joint_witness_monotonic_ms",
-            "continuous_covered_after_witness_ms",
-        },
-        "operational_diagnostics.witness",
-    )
+    witness_fields = {
+        "first_joint_witness_monotonic_ms",
+        (
+            "continuous_covered_after_witness_ms"
+            if version == 2
+            else "continuous_global_continuity_after_witness_ms"
+        ),
+    }
+    if version == 3:
+        witness_fields.add("global_continuity_epoch")
+    _exact_keys(witness, witness_fields, "operational_diagnostics.witness")
+    if version == 3:
+        witness_epoch = _positive_integer(
+            witness["global_continuity_epoch"],
+            "witness.global_continuity_epoch",
+        )
+        if witness_epoch != current_epoch:
+            raise EvidenceError("witness continuity epoch does not match current epoch")
     first = witness["first_joint_witness_monotonic_ms"]
-    duration = witness["continuous_covered_after_witness_ms"]
+    duration = witness[
+        (
+            "continuous_covered_after_witness_ms"
+            if version == 2
+            else "continuous_global_continuity_after_witness_ms"
+        )
+    ]
     if (first is None) != (duration is None):
         raise EvidenceError("joint witness time and continuous duration must both be null or known")
     if first is not None and duration is not None:
-        ingress = _mapping(
-            diagnostics["ingress"],
-            "operational_diagnostics.ingress",
-        )
-        if ingress["ingress_gap_or_duplicate_count"] != 0 or ingress["overflow_count"] != 0:
-            raise EvidenceError("joint witness cannot cross an ingress gap or queue overflow")
+        if version == 2:
+            ingress = _mapping(
+                diagnostics["ingress"],
+                "operational_diagnostics.ingress",
+            )
+            if ingress["ingress_gap_or_duplicate_count"] != 0 or ingress["overflow_count"] != 0:
+                raise EvidenceError("joint witness cannot cross an ingress gap or queue overflow")
         first_ms = _non_negative_integer(first, "first_joint_witness_monotonic_ms")
         duration_ms = _non_negative_integer(duration, "continuous_covered_after_witness_ms")
         if not runtime_started_monotonic_ms <= first_ms <= clean_stop_monotonic_ms:
@@ -1160,6 +1243,293 @@ def _validate_source_shapes(value: object) -> None:
             raise EvidenceError("source-shape consumed fields must be unique and sorted")
     if tuple(sources) != CORE_SOURCE_NAMES:
         raise EvidenceError("operational source-shape rows are incomplete or unsorted")
+
+
+def _validate_global_continuity(value: object) -> int:
+    continuity = _mapping(value, "operational_diagnostics.global_continuity")
+    _exact_keys(
+        continuity,
+        {"current_epoch", "restart_count", "restart_count_by_reason"},
+        "operational_diagnostics.global_continuity",
+    )
+    current_epoch = _positive_integer(continuity["current_epoch"], "current_epoch")
+    restart_count = _non_negative_integer(continuity["restart_count"], "restart_count")
+    restart_by_reason = _mapping(
+        continuity["restart_count_by_reason"],
+        "restart_count_by_reason",
+    )
+    parsed_restart_count = 0
+    for reason, count in restart_by_reason.items():
+        if not isinstance(reason, str) or not reason:
+            raise EvidenceError("global continuity restart reason must be non-empty")
+        parsed_restart_count += _positive_integer(
+            count,
+            f"global continuity restart count {reason}",
+        )
+    if parsed_restart_count != restart_count:
+        raise EvidenceError("global continuity restart reason counts do not match total")
+    if current_epoch != restart_count + 1:
+        raise EvidenceError("global continuity epoch does not match restart count")
+    return current_epoch
+
+
+def _validate_ticker_application(value: object) -> None:
+    application = _mapping(value, "operational_diagnostics.ticker_application")
+    _exact_keys(
+        application,
+        {
+            "disposition_count",
+            "late_ignored_diagnostic_limit",
+            "omitted_late_ignored_diagnostic_count",
+            "late_ignored_diagnostics",
+        },
+        "operational_diagnostics.ticker_application",
+    )
+    _validate_named_non_negative_counts(
+        application["disposition_count"],
+        {
+            "APPLIED",
+            "LATE_IGNORED",
+            "AHEAD_IGNORED",
+            "STALE_GENERATION_IGNORED",
+            "SHAPE_REJECTED",
+        },
+        "ticker_application.disposition_count",
+    )
+    limit = application["late_ignored_diagnostic_limit"]
+    if limit != 256:
+        raise EvidenceError("late ticker diagnostic limit must be 256")
+    omitted = _non_negative_integer(
+        application["omitted_late_ignored_diagnostic_count"],
+        "omitted_late_ignored_diagnostic_count",
+    )
+    rows = _array(
+        application["late_ignored_diagnostics"],
+        "ticker_application.late_ignored_diagnostics",
+    )
+    if len(rows) > limit:
+        raise EvidenceError("late ticker diagnostics exceed bounded 256 rows")
+    for raw in rows:
+        row = _mapping(raw, "late ticker diagnostic")
+        _exact_keys(
+            row,
+            {
+                "instrument_name",
+                "generation",
+                "ingress_seq",
+                "previous_source_timestamp_ms",
+                "candidate_source_timestamp_ms",
+                "timestamp_delta_ms",
+                "received_monotonic_ms",
+                "disposition",
+            },
+            "late ticker diagnostic",
+        )
+        _required_string(row, "instrument_name")
+        _non_negative_integer(row["generation"], "late ticker generation")
+        _positive_integer(row["ingress_seq"], "late ticker ingress_seq")
+        previous = _non_negative_integer(
+            row["previous_source_timestamp_ms"],
+            "previous_source_timestamp_ms",
+        )
+        candidate = _non_negative_integer(
+            row["candidate_source_timestamp_ms"],
+            "candidate_source_timestamp_ms",
+        )
+        delta = row["timestamp_delta_ms"]
+        if isinstance(delta, bool) or not isinstance(delta, int) or delta >= 0:
+            raise EvidenceError("late ticker timestamp delta must be a negative integer")
+        if delta != candidate - previous:
+            raise EvidenceError("late ticker timestamp delta does not match timestamps")
+        _non_negative_integer(
+            row["received_monotonic_ms"],
+            "late ticker received_monotonic_ms",
+        )
+        if row["disposition"] != "LATE_IGNORED":
+            raise EvidenceError("late ticker diagnostic disposition must be LATE_IGNORED")
+    disposition_count = _mapping(
+        application["disposition_count"],
+        "ticker_application.disposition_count",
+    )
+    late_count = _non_negative_integer(
+        disposition_count["LATE_IGNORED"],
+        "ticker_application LATE_IGNORED count",
+    )
+    if late_count != len(rows) + omitted:
+        raise EvidenceError(
+            "late ticker retained and omitted diagnostics do not match LATE_IGNORED total"
+        )
+
+
+def _validate_ticker_currentness(value: object) -> None:
+    currentness = _mapping(value, "operational_diagnostics.ticker_currentness")
+    _exact_keys(
+        currentness,
+        {
+            "candidate_count_by_classification",
+            "accepted_transition_count_by_state",
+        },
+        "operational_diagnostics.ticker_currentness",
+    )
+    _validate_named_non_negative_counts(
+        currentness["candidate_count_by_classification"],
+        {
+            "CURRENT",
+            "SOURCE_STALE",
+            "TIMESTAMP_AHEAD",
+            "TRUSTED_TIME_UNKNOWN",
+        },
+        "ticker_currentness.candidate_count_by_classification",
+    )
+    _validate_named_non_negative_counts(
+        currentness["accepted_transition_count_by_state"],
+        {"MISSING", "CURRENT", "SOURCE_STALE"},
+        "ticker_currentness.accepted_transition_count_by_state",
+    )
+
+
+def _validate_option_local_availability(
+    value: object,
+    *,
+    runtime_started_monotonic_ms: int,
+    clean_stop_monotonic_ms: int,
+    current_epoch: int,
+) -> None:
+    availability = _mapping(value, "operational_diagnostics.option_local_availability")
+    _exact_keys(
+        availability,
+        {
+            "unavailable_count_by_reason",
+            "recovery_count_by_reason",
+            "retained_interval_limit",
+            "omitted_interval_count",
+            "intervals",
+        },
+        "operational_diagnostics.option_local_availability",
+    )
+    unavailable = _mapping(
+        availability["unavailable_count_by_reason"],
+        "option_local_availability.unavailable_count_by_reason",
+    )
+    recovered = _mapping(
+        availability["recovery_count_by_reason"],
+        "option_local_availability.recovery_count_by_reason",
+    )
+    parsed_counts: dict[str, dict[str, int]] = {
+        "unavailable": {},
+        "recovery": {},
+    }
+    for name, counts in (("unavailable", unavailable), ("recovery", recovered)):
+        for reason, count in counts.items():
+            if not isinstance(reason, str) or not reason:
+                raise EvidenceError(f"option-local {name} reason must be non-empty")
+            parsed_counts[name][reason] = _positive_integer(
+                count,
+                f"option-local {name} count {reason}",
+            )
+    unavailable_counts = parsed_counts["unavailable"]
+    recovery_counts = parsed_counts["recovery"]
+    for reason, count in recovery_counts.items():
+        if count > unavailable_counts.get(reason, 0):
+            raise EvidenceError("option-local recovery count exceeds unavailable count")
+    limit = availability["retained_interval_limit"]
+    if limit != 256:
+        raise EvidenceError("option-local retained interval limit must be 256")
+    omitted = _non_negative_integer(
+        availability["omitted_interval_count"],
+        "option-local omitted_interval_count",
+    )
+    rows = _array(availability["intervals"], "option_local_availability.intervals")
+    if len(rows) > limit:
+        raise EvidenceError("option-local intervals exceed bounded 256 rows")
+    retained_by_reason: Counter[str] = Counter()
+    recovered_by_reason: Counter[str] = Counter()
+    for raw in rows:
+        row = _mapping(raw, "option-local availability interval")
+        _exact_keys(
+            row,
+            {
+                "instrument_name",
+                "generation",
+                "reason",
+                "start_monotonic_ms",
+                "end_monotonic_ms",
+                "duration_ms",
+                "end_disposition",
+                "global_continuity_epoch",
+            },
+            "option-local availability interval",
+        )
+        _required_string(row, "instrument_name")
+        _non_negative_integer(row["generation"], "option-local ticker generation")
+        reason = _required_string(row, "reason")
+        start = _non_negative_integer(row["start_monotonic_ms"], "option-local interval start")
+        end = _non_negative_integer(row["end_monotonic_ms"], "option-local interval end")
+        duration = _non_negative_integer(row["duration_ms"], "option-local interval duration")
+        if not runtime_started_monotonic_ms <= start <= end <= clean_stop_monotonic_ms:
+            raise EvidenceError("option-local interval is outside runtime interval")
+        if duration != end - start:
+            raise EvidenceError("option-local interval duration does not match boundaries")
+        disposition = row["end_disposition"]
+        if disposition not in {"RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP"}:
+            raise EvidenceError("option-local interval end disposition is invalid")
+        epoch = _positive_integer(
+            row["global_continuity_epoch"],
+            "option-local interval continuity epoch",
+        )
+        if epoch > current_epoch:
+            raise EvidenceError("option-local interval continuity epoch is in the future")
+        retained_by_reason[reason] += 1
+        if disposition == "RECOVERED":
+            recovered_by_reason[reason] += 1
+    if sum(unavailable_counts.values()) != len(rows) + omitted:
+        raise EvidenceError(
+            "option-local retained and omitted counts do not match unavailable total"
+        )
+    if any(retained_by_reason[reason] > count for reason, count in unavailable_counts.items()):
+        raise EvidenceError("option-local retained reason count exceeds unavailable count")
+    if any(recovered_by_reason[reason] > count for reason, count in recovery_counts.items()):
+        raise EvidenceError("option-local retained recovery count exceeds recovery total")
+
+
+def _validate_version_three_coverage(
+    segments: tuple[CoverageSegment, ...],
+    *,
+    current_epoch: int,
+) -> None:
+    epochs = [segment.global_continuity_epoch for segment in segments]
+    if epochs[0] != 1 or epochs[-1] != current_epoch:
+        raise EvidenceError("coverage continuity epoch does not match global continuity")
+    if epochs != sorted(epochs):
+        raise EvidenceError("coverage continuity epoch moved backward")
+    if any(after - before > 1 for before, after in pairwise(epochs)):
+        raise EvidenceError("coverage continuity epoch skipped a restart boundary")
+
+
+def _validate_affected_scopes(value: object) -> tuple[str, ...]:
+    raw_scopes = _array(value, "coverage affected_scopes")
+    if not raw_scopes or len(raw_scopes) > 256:
+        raise EvidenceError("coverage affected scopes must contain 1 to 256 labels")
+    scopes: list[str] = []
+    scope_pattern = re.compile(r"SCOPE:[0-9]+:(?:call|put):[^:]+$")
+    for raw_scope in raw_scopes:
+        if not isinstance(raw_scope, str) or not raw_scope:
+            raise EvidenceError("coverage affected scope must be a non-empty string")
+        valid = (
+            raw_scope in {"GLOBAL", "OPTION_LOCAL"}
+            or (raw_scope.startswith("OPTION:") and len(raw_scope) > len("OPTION:"))
+            or scope_pattern.fullmatch(raw_scope) is not None
+        )
+        if not valid:
+            raise EvidenceError("coverage affected scope label is invalid")
+        scopes.append(raw_scope)
+    if scopes != sorted(set(scopes)):
+        raise EvidenceError("coverage affected scopes must be unique and sorted")
+    if "GLOBAL" in scopes and len(scopes) != 1:
+        raise EvidenceError("GLOBAL coverage affected scope must stand alone")
+    if "OPTION_LOCAL" in scopes and len(scopes) != 1:
+        raise EvidenceError("OPTION_LOCAL coverage affected scope must stand alone")
+    return tuple(scopes)
 
 
 def _validate_identity_fields(value: Mapping[str, object]) -> None:

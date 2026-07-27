@@ -358,8 +358,9 @@ def run_nonempty_scenario(
     summary = json.loads(summary_path.read_text())
     witness = summary["operational_diagnostics"]["witness"]
     assert witness == {
+        "global_continuity_epoch": 1,
         "first_joint_witness_monotonic_ms": final_ms + 2,
-        "continuous_covered_after_witness_ms": 98,
+        "continuous_global_continuity_after_witness_ms": 98,
     }
     return (
         tuple(

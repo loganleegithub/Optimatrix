@@ -147,22 +147,22 @@ def test_current_stage_authorizes_exactly_one_next_closure() -> None:
     assert "## Queued sequence — not authorized" in current_stage
 
 
-def test_short_vol_task_has_open_preconditions_and_independent_closed_live_gates() -> None:
+def test_short_vol_task_has_open_fact_semantics_closure_and_closed_live_gates() -> None:
     task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
     opening = "\n".join(task.splitlines()[:32])
 
     assert "**Status:** ACTIVE" in opening
     assert "**Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`" in opening
-    assert "**Current construction subgate:** `OPERATIONAL_SOAK_PRECONDITIONS`" in opening
-    assert "**Current subgate base HEAD:** `29c5701939eca203a497d50818f111572820be3d`" in opening
+    assert "**Current construction subgate:** `SHORT_VOL_RADAR_FACT_SEMANTICS_CLOSURE`" in opening
+    assert "**Current subgate base HEAD:** `c66f987f7fd7513626e69c37f7f2552991ebf9e4`" in opening
     assert "**REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`" in opening
-    assert "**OPERATIONAL_SOAK gate:** `CLOSED_UNTIL_EXPLICIT_HUMAN_COMMAND`" in opening
+    assert "**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_001_NOT_MET`" in opening
     assert (
         "Live commands:** REQUIRED only after the exact named Smoke or Soak gate opens" in opening
     )
 
 
-def test_soak_preconditions_freeze_candidate_policy_and_acceptance_boundary() -> None:
+def test_historical_soak_remains_not_met_and_future_live_gates_stay_closed() -> None:
     task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
 
     for invariant in (
@@ -171,7 +171,10 @@ def test_soak_preconditions_freeze_candidate_policy_and_acceptance_boundary() ->
         "/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001",
         "continuous_covered_after_witness_ms >= 3_600_000",
         "semantic comparison to the predecessor Smoke Policy proves that only `band_id` changed",
-        "prepared candidate successor Policy grants no live command or Soak authority",
+        "Attempt-001 is permanently `NOT_MET`",
+        "a heartbeat wire probe must receive its",
+        "human must freeze new global-continuity duration and explicit",
+        "The historical `3_600_000 ms` value is not",
     ):
         assert invariant in task
 
@@ -273,12 +276,18 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "`TIME_BOUNDARY_PENDING`",
         "`WATERMARK_PENDING`",
         "bootstrap `WARMUP`, not `CONTINUITY_GAP`",
-        "Normal `TIME_BOUNDARY_PENDING`/`WATERMARK_PENDING` rollover preserves the witness",
+        "complete snapshot",
+        "`LATE_IGNORED`",
+        "`global_continuity_epoch`",
+        "`current_market_truth_coverage`",
+        "`option_local_availability`",
+        "has_current_full_formula = true",
+        "`EvidenceWriter` receives only a settled",
         "`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent per-run",
         "`policy_schema_version = 3`",
         "`ticker_source_stale_deadline_ms`",
-        "`TICKER_TIMESTAMP_AHEAD`",
-        "`operational_diagnostics_schema_version = 2`",
+        "`AHEAD_IGNORED`",
+        "`operational_diagnostics_schema_version = 3`",
         "`KNOWN_INELIGIBLE`",
         "`UNKNOWN_AT_GAP`",
         "required combo order direction",

@@ -223,6 +223,90 @@ def operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
     }
 
 
+def current_operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
+    diagnostics = operational_diagnostics(observation_ms=observation_ms)
+    diagnostics["operational_diagnostics_schema_version"] = 3
+    diagnostics["global_continuity"] = {
+        "current_epoch": 1,
+        "restart_count": 0,
+        "restart_count_by_reason": {},
+    }
+    diagnostics["ticker_application"] = {
+        "disposition_count": {
+            "APPLIED": 0,
+            "LATE_IGNORED": 0,
+            "AHEAD_IGNORED": 0,
+            "STALE_GENERATION_IGNORED": 0,
+            "SHAPE_REJECTED": 0,
+        },
+        "late_ignored_diagnostic_limit": 256,
+        "omitted_late_ignored_diagnostic_count": 0,
+        "late_ignored_diagnostics": [],
+    }
+    diagnostics["ticker_currentness"] = {
+        "candidate_count_by_classification": {
+            "CURRENT": 0,
+            "SOURCE_STALE": 0,
+            "TIMESTAMP_AHEAD": 0,
+            "TRUSTED_TIME_UNKNOWN": 0,
+        },
+        "accepted_transition_count_by_state": {
+            "MISSING": 0,
+            "CURRENT": 0,
+            "SOURCE_STALE": 0,
+        },
+    }
+    diagnostics["option_local_availability"] = {
+        "unavailable_count_by_reason": {},
+        "recovery_count_by_reason": {},
+        "retained_interval_limit": 256,
+        "omitted_interval_count": 0,
+        "intervals": [],
+    }
+    diagnostics["witness"] = {
+        "global_continuity_epoch": 1,
+        "first_joint_witness_monotonic_ms": None,
+        "continuous_global_continuity_after_witness_ms": None,
+    }
+    return diagnostics
+
+
+def current_summary_object(
+    *,
+    segments: tuple[CoverageSegment, ...] = (
+        CoverageSegment(
+            0,
+            10,
+            CoverageState.UNKNOWN,
+            reason="RUNTIME_START",
+            affected_scopes=("GLOBAL",),
+            global_continuity_epoch=1,
+        ),
+        CoverageSegment(
+            10,
+            20,
+            CoverageState.KNOWN_COMPLETE,
+            reason="TICKER_APPLIED",
+            affected_scopes=("OPTION:SHORT",),
+            global_continuity_epoch=1,
+        ),
+    ),
+) -> dict[str, object]:
+    return project_run_summary(
+        code_identity="a" * 40,
+        runtime_identity="runtime",
+        policy_identity="sha256:" + "b" * 64,
+        coverage_segments=segments,
+        band_suspended_duration_ms=0,
+        counts_by_scope=[],
+        detector_unknown_transition_count_by_reason={"WARMUP": 1},
+        anomaly_end_count_by_reason={EpisodeEndReason.CLEAR: 0},
+        known_active_duration_ms_sum_by_end_reason={EpisodeEndReason.CLEAR: 0},
+        public_atomic_quote_state_transition_count={},
+        operational_diagnostics=current_operational_diagnostics(),
+    )
+
+
 def test_minimal_events_are_strict_unit_bearing_and_carry_non_claims() -> None:
     anomaly = project_anomaly_event(anomaly_evidence())
     atomic = project_atomic_event(atomic_evidence())
@@ -372,6 +456,48 @@ def test_coverage_segments_reject_overlap_gap_negative_and_mismatched_totals() -
         validate_run_summary(summary)
 
 
+def test_coverage_ledger_splits_same_state_on_global_continuity_restart() -> None:
+    ledger = CoverageLedger(0)
+    ledger.transition(
+        CoverageState.UNKNOWN,
+        10,
+        reason="INDEX_CONTINUITY_GAP",
+        affected_scopes=("GLOBAL",),
+        global_continuity_epoch=2,
+        force=True,
+    )
+
+    assert ledger.close(20) == (
+        CoverageSegment(
+            0,
+            10,
+            CoverageState.UNKNOWN,
+            reason="RUNTIME_START",
+            affected_scopes=("GLOBAL",),
+            global_continuity_epoch=1,
+        ),
+        CoverageSegment(
+            10,
+            20,
+            CoverageState.UNKNOWN,
+            reason="INDEX_CONTINUITY_GAP",
+            affected_scopes=("GLOBAL",),
+            global_continuity_epoch=2,
+        ),
+    )
+
+
+def test_schema_three_accepts_bounded_option_local_coverage_scope() -> None:
+    summary = current_summary_object()
+    coverage_segments = summary["coverage_segments"]
+    assert isinstance(coverage_segments, list)
+    first = coverage_segments[0]
+    assert isinstance(first, dict)
+    first["affected_scopes"] = ["OPTION_LOCAL"]
+
+    validate_run_summary(summary)
+
+
 def test_zero_and_unknown_denominators_serialize_as_null_semantics() -> None:
     assert ratio_or_none(0, 0) is None
     assert ratio_or_none(0, None) is None
@@ -405,7 +531,7 @@ def test_run_summary_cross_checks_episode_activation_and_end_totals() -> None:
         validate_run_summary(summary)
 
 
-def test_operational_diagnostics_are_strict_derived_and_payload_free() -> None:
+def test_version_two_operational_diagnostics_remain_strict_and_payload_free() -> None:
     summary = summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
@@ -426,6 +552,111 @@ def test_operational_diagnostics_are_strict_derived_and_payload_free() -> None:
     source_shapes[0]["payload"] = {"price": 100}
     with pytest.raises(EvidenceError, match="exact"):
         validate_run_summary(summary)
+
+
+def test_version_three_diagnostics_and_attributed_coverage_are_strict() -> None:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    assert diagnostics["operational_diagnostics_schema_version"] == 3
+    assert "price" not in json.dumps(diagnostics)
+    assert summary["coverage_segments"] == [
+        {
+            "start_monotonic_ms": 0,
+            "end_monotonic_ms": 10,
+            "state": "UNKNOWN",
+            "reason": "RUNTIME_START",
+            "affected_scopes": ["GLOBAL"],
+            "global_continuity_epoch": 1,
+        },
+        {
+            "start_monotonic_ms": 10,
+            "end_monotonic_ms": 20,
+            "state": "KNOWN_COMPLETE",
+            "reason": "TICKER_APPLIED",
+            "affected_scopes": ["OPTION:SHORT"],
+            "global_continuity_epoch": 1,
+        },
+    ]
+    validate_run_summary(summary)
+
+    invalid_scope = current_summary_object()
+    invalid_segments = invalid_scope["coverage_segments"]
+    assert isinstance(invalid_segments, list)
+    invalid_segment = invalid_segments[1]
+    assert isinstance(invalid_segment, dict)
+    invalid_segment["affected_scopes"] = ["UNBOUNDED"]
+    with pytest.raises(EvidenceError, match="affected scope"):
+        validate_run_summary(invalid_scope)
+
+    wrong_epoch = current_summary_object()
+    wrong_epoch_segments = wrong_epoch["coverage_segments"]
+    assert isinstance(wrong_epoch_segments, list)
+    wrong_epoch_segment = wrong_epoch_segments[1]
+    assert isinstance(wrong_epoch_segment, dict)
+    wrong_epoch_segment["global_continuity_epoch"] = 2
+    with pytest.raises(EvidenceError, match="continuity epoch"):
+        validate_run_summary(wrong_epoch)
+
+
+def test_version_three_late_diagnostics_are_bounded_and_payload_free() -> None:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    ticker_application = diagnostics["ticker_application"]
+    assert isinstance(ticker_application, dict)
+    row = {
+        "instrument_name": "SHORT",
+        "generation": 7,
+        "ingress_seq": 9,
+        "previous_source_timestamp_ms": 1_000,
+        "candidate_source_timestamp_ms": 999,
+        "timestamp_delta_ms": -1,
+        "received_monotonic_ms": 15,
+        "disposition": "LATE_IGNORED",
+    }
+    ticker_application["disposition_count"]["LATE_IGNORED"] = 1
+    ticker_application["late_ignored_diagnostics"] = [row]
+    validate_run_summary(summary)
+
+    row["payload"] = {"underlying_price": 100}
+    with pytest.raises(EvidenceError, match="exact"):
+        validate_run_summary(summary)
+
+    over_limit = current_summary_object()
+    over_limit_diagnostics = over_limit["operational_diagnostics"]
+    assert isinstance(over_limit_diagnostics, dict)
+    over_limit_application = over_limit_diagnostics["ticker_application"]
+    assert isinstance(over_limit_application, dict)
+    over_limit_disposition_count = over_limit_application["disposition_count"]
+    assert isinstance(over_limit_disposition_count, dict)
+    over_limit_disposition_count["LATE_IGNORED"] = 257
+    over_limit_application["late_ignored_diagnostics"] = [
+        {
+            "instrument_name": f"SHORT-{index}",
+            "generation": 1,
+            "ingress_seq": index + 1,
+            "previous_source_timestamp_ms": 1_000,
+            "candidate_source_timestamp_ms": 999,
+            "timestamp_delta_ms": -1,
+            "received_monotonic_ms": 15,
+            "disposition": "LATE_IGNORED",
+        }
+        for index in range(257)
+    ]
+    with pytest.raises(EvidenceError, match="256"):
+        validate_run_summary(over_limit)
+
+    unattributed = current_summary_object()
+    unattributed_diagnostics = unattributed["operational_diagnostics"]
+    assert isinstance(unattributed_diagnostics, dict)
+    unattributed_application = unattributed_diagnostics["ticker_application"]
+    assert isinstance(unattributed_application, dict)
+    unattributed_counts = unattributed_application["disposition_count"]
+    assert isinstance(unattributed_counts, dict)
+    unattributed_counts["LATE_IGNORED"] = 1
+    with pytest.raises(EvidenceError, match="do not match"):
+        validate_run_summary(unattributed)
 
 
 def test_operational_diagnostics_requires_exact_nine_runtime_limits() -> None:
@@ -460,7 +691,7 @@ def test_runtime_projects_exact_policy_runtime_limits(
 
     diagnostics = runtime.reducer._operational_diagnostics(0)
 
-    assert diagnostics["operational_diagnostics_schema_version"] == 2
+    assert diagnostics["operational_diagnostics_schema_version"] == 3
     assert diagnostics["runtime_limits"] == policy.runtime_limits.as_object()
     runtime_limits = diagnostics["runtime_limits"]
     assert isinstance(runtime_limits, dict)
@@ -468,13 +699,13 @@ def test_runtime_projects_exact_policy_runtime_limits(
     assert runtime_limits["ticker_source_stale_deadline_ms"] == 7_777
 
 
-def test_run_summary_rejects_legacy_operational_diagnostics_schema() -> None:
+def test_run_summary_rejects_unknown_operational_diagnostics_schema() -> None:
     summary = summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
     diagnostics["operational_diagnostics_schema_version"] = 1
 
-    with pytest.raises(EvidenceError, match="schema version must be 2"):
+    with pytest.raises(EvidenceError, match="schema version"):
         validate_run_summary(summary)
 
 

@@ -405,6 +405,7 @@ def test_minute_rollover_preserves_witness_through_recovery_and_summary(
 
     assert reducer.results[instrument.instrument_name].reason == "INDEX_TIME_BOUNDARY_PENDING"
     assert reducer._first_joint_witness_ms == 1_001
+    assert reducer._global_continuity_epoch == 1
     assert reducer.diagnostics.index_gap_count == 0
 
     reducer.clock = TrustedClock.from_response(
@@ -423,6 +424,7 @@ def test_minute_rollover_preserves_witness_through_recovery_and_summary(
 
     assert reducer.results[instrument.instrument_name].reason == "INDEX_WATERMARK_PENDING"
     assert reducer._first_joint_witness_ms == 1_001
+    assert reducer._global_continuity_epoch == 1
     assert reducer.diagnostics.index_gap_count == 0
 
     reducer._causal_seq = 4
@@ -436,14 +438,24 @@ def test_minute_rollover_preserves_witness_through_recovery_and_summary(
     )
     assert reducer.results[instrument.instrument_name].full_formula_evaluation
     assert reducer._first_joint_witness_ms == 1_001
+    assert reducer._global_continuity_epoch == 1
 
     summary = json.loads(reducer.clean_stop(22_000).read_text())
     validate_run_summary(summary)
     assert summary["coverage"]["coverage_partition_error_ms"] == 0
     assert summary["operational_diagnostics"]["witness"] == {
+        "global_continuity_epoch": 1,
         "first_joint_witness_monotonic_ms": 1_001,
-        "continuous_covered_after_witness_ms": 20_999,
+        "continuous_global_continuity_after_witness_ms": 20_999,
     }
+    assert summary["operational_diagnostics"]["global_continuity"] == {
+        "current_epoch": 1,
+        "restart_count": 0,
+        "restart_count_by_reason": {},
+    }
+    assert {segment["global_continuity_epoch"] for segment in summary["coverage_segments"]} == {1}
+    assert all(segment["reason"] for segment in summary["coverage_segments"])
+    assert all(segment["affected_scopes"] for segment in summary["coverage_segments"])
 
 
 def test_real_index_gap_requires_recovery_and_a_new_summary_witness(
@@ -468,6 +480,7 @@ def test_real_index_gap_requires_recovery_and_a_new_summary_witness(
         FactBoundary(1, 2, 2_000, 2),
     )
     assert reducer._first_joint_witness_ms is None
+    assert reducer._global_continuity_epoch == 2
     assert reducer.diagnostics.index_gap_count == 1
     assert reducer.platform.reason == "INDEX_CONTINUITY_GAP"
 
@@ -506,14 +519,131 @@ def test_real_index_gap_requires_recovery_and_a_new_summary_witness(
 
     assert reducer.results[instrument.instrument_name].full_formula_evaluation
     assert reducer._first_joint_witness_ms == 3_000
+    assert reducer._global_continuity_epoch == 2
     assert not reducer._index_gap_active
 
     summary = json.loads(reducer.clean_stop(4_000).read_text())
     validate_run_summary(summary)
     assert summary["operational_diagnostics"]["witness"] == {
+        "global_continuity_epoch": 2,
         "first_joint_witness_monotonic_ms": 3_000,
-        "continuous_covered_after_witness_ms": 1_000,
+        "continuous_global_continuity_after_witness_ms": 1_000,
     }
+    assert summary["operational_diagnostics"]["global_continuity"] == {
+        "current_epoch": 2,
+        "restart_count": 1,
+        "restart_count_by_reason": {"INDEX_CONTINUITY_GAP": 1},
+    }
+    coverage_epochs = [
+        segment["global_continuity_epoch"] for segment in summary["coverage_segments"]
+    ]
+    assert coverage_epochs[0] == 1
+    assert coverage_epochs[-1] == 2
+    assert coverage_epochs == sorted(coverage_epochs)
+
+
+def test_persistent_index_window_gap_restarts_global_continuity_once(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    instrument = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    configure_full_formula_scope(reducer, instrument)
+    reducer.index.start_continuous_coverage(0)
+    monkeypatch.setattr(
+        reducer.index,
+        "current_tail",
+        lambda *_args, **_kwargs: IndexTail(IndexTailStatus.WINDOW_GAP),
+    )
+
+    reducer._causal_seq = 1
+    assert reducer._apply_index(
+        {
+            "timestamp": 1_000_000,
+            "price": 100,
+            "index_name": "btc_usdc",
+        },
+        FactBoundary(1, 1, 1_001, 1),
+    )
+    assert reducer._global_continuity_epoch == 2
+    assert reducer.diagnostics.index_gap_count == 1
+    assert reducer._coverage._current_reason == "INDEX_WINDOW_GAP"
+    assert reducer._coverage._current_affected_scopes == (
+        f"SCOPE:{instrument.expiration_timestamp_ms}:call:{reducer.policy.tte_bands[0].band_id}",
+    )
+
+    reducer._causal_seq = 2
+    assert reducer._apply_index(
+        {
+            "timestamp": 1_000_001,
+            "price": 100,
+            "index_name": "btc_usdc",
+        },
+        FactBoundary(1, 2, 1_002, 2),
+    )
+    assert reducer._global_continuity_epoch == 2
+    assert reducer.diagnostics.index_gap_count == 1
+
+
+def test_joint_witness_uses_full_current_scope_for_coverage_and_formula(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    expiry = 1_000_000 + 60 * 60_000
+    full_formula = make_option("BTC_USDC-27SEP24-100010-C", expiry)
+    known_ineligible = make_option("BTC_USDC-27SEP24-100020-C", expiry)
+    configure_full_formula_scope(reducer, full_formula)
+    reducer.options[known_ineligible.instrument_name] = known_ineligible
+    reducer.catalog_options = dict(reducer.options)
+    reducer.trackers[known_ineligible.instrument_name] = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=reducer.policy.identity,
+        instrument_name=known_ineligible.instrument_name,
+    )
+    reducer.option_books[known_ineligible.instrument_name] = make_book(
+        known_ineligible.instrument_name,
+        None,
+    )
+    reducer.tickers[known_ineligible.instrument_name] = TickerState(
+        Decimal(100),
+        "index_price",
+        1_000_000,
+    )
+    reducer._causal_seq = 1
+    reducer.settle_fact(
+        boundary=FactBoundary(1, 1, 1_001, 1),
+        affected_instruments=tuple(reducer.options),
+        countable=True,
+    )
+
+    assert reducer.results[full_formula.instrument_name].full_formula_evaluation
+    assert reducer.results[known_ineligible.instrument_name].known_evaluation
+    assert not reducer.results[known_ineligible.instrument_name].full_formula_evaluation
+    assert reducer._coverage._current_state is CoverageState.KNOWN_COMPLETE
+    assert reducer._first_joint_witness_ms == 1_001
+    counter = next(iter(reducer._scope_counts.values()))
+    full_scope_count = counter.complete_aggregate_with_full_formula_evaluation_count
+
+    reducer._first_joint_witness_ms = None
+    reducer._causal_seq = 2
+    reducer.settle_fact(
+        boundary=FactBoundary(1, 2, 1_002, 2),
+        affected_instruments=(known_ineligible.instrument_name,),
+        countable=False,
+        observation_reason="UNCHANGED_MEMBER_FACT",
+    )
+
+    assert reducer._coverage._current_state is CoverageState.KNOWN_COMPLETE
+    assert reducer._first_joint_witness_ms == 1_002
+    assert counter.complete_aggregate_with_full_formula_evaluation_count == full_scope_count + 1
 
 
 def test_clock_refresh_failure_keeps_fresh_clock_until_real_stale_boundary(
@@ -770,93 +900,274 @@ def test_active_amount_loss_ends_episode_and_layer_two_in_same_boundary(
     assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_DETECTOR.value] == 1
 
 
-def test_ticker_regression_preserves_gap_reason_and_ends_episode_at_gap(
+def test_late_ticker_snapshot_is_shape_valid_and_has_no_truth_side_effects(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
-    exact, digest = policy_factory(activation_count=1)
+    exact, digest = policy_factory(
+        activation_count=1,
+        ticker_source_stale_deadline_ms=300_000,
+    )
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
-    seed_available_index(reducer)
     instrument = make_option(
         "BTC_USDC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
-    reducer.options = {instrument.instrument_name: instrument}
-    reducer.catalog_options = dict(reducer.options)
-    reducer.option_books[instrument.instrument_name] = make_book(
-        instrument.instrument_name,
-        "1",
-    )
-    reducer.tickers[instrument.instrument_name] = TickerState(
-        Decimal(100),
-        "index_price",
-        2,
-    )
-    activate_directly(reducer, instrument)
+    establish_joint_witness(reducer, instrument)
+    name = instrument.instrument_name
+    channel = ticker_channel(name)
+    acknowledge_channel(reducer, channel, generation=7)
+    reducer._ticker_generations[name] = 7
+    accepted = reducer.tickers[name]
+    episode_id = reducer.trackers[name].episode_id
+    assert episode_id is not None
+    result = reducer.results[name]
+    witness = reducer._first_joint_witness_ms
+    coverage_state = reducer._coverage._current_state
+    coverage_start = reducer._coverage._current_start_ms
+    anomaly_files = tuple(tmp_path.glob("short-vol-anomaly-*.json"))
 
-    assert not reducer._apply_ticker(
-        instrument.instrument_name,
+    assert (
+        reducer.reduce(
+            subscription_frame(
+                channel,
+                {
+                    "instrument_name": name,
+                    "timestamp": accepted.source_timestamp_ms - 1,
+                    "underlying_price": 99,
+                    "underlying_index": "index_price",
+                },
+                ingress_seq=1,
+                received_monotonic_ms=1_002,
+            ),
+            processed_monotonic_ms=1_002,
+        )
+        == ()
+    )
+
+    assert reducer.tickers[name] is accepted
+    assert reducer.results[name] is result
+    assert reducer.trackers[name].episode_id == episode_id
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 0
+    assert reducer._first_joint_witness_ms == witness
+    assert reducer._coverage._current_state is coverage_state
+    assert reducer._coverage._current_start_ms == coverage_start
+    assert tuple(tmp_path.glob("short-vol-anomaly-*.json")) == anomaly_files
+    assert not reducer._channels[channel].resync_requested
+    assert reducer.diagnostics.option_channel_resync_count == 0
+    diagnostics = reducer._operational_diagnostics(2)
+    source_shapes = diagnostics["source_shapes"]
+    assert isinstance(source_shapes, list)
+    source_row = next(
+        row for row in source_shapes if isinstance(row, dict) and row["source"] == "option_ticker"
+    )
+    assert source_row["valid_count"] == 1
+    assert source_row["invalid_count"] == 0
+    ticker_application = diagnostics["ticker_application"]
+    assert isinstance(ticker_application, dict)
+    disposition_count = ticker_application["disposition_count"]
+    assert isinstance(disposition_count, dict)
+    assert disposition_count["LATE_IGNORED"] == 1
+    assert ticker_application["late_ignored_diagnostics"] == [
         {
-            "instrument_name": instrument.instrument_name,
-            "timestamp": 1,
-            "underlying_price": 100,
-            "underlying_index": "index_price",
-        },
-        FactBoundary(1, 1, 1_001, 2),
-    )
+            "instrument_name": name,
+            "generation": 7,
+            "ingress_seq": 1,
+            "previous_source_timestamp_ms": accepted.source_timestamp_ms,
+            "candidate_source_timestamp_ms": accepted.source_timestamp_ms - 1,
+            "timestamp_delta_ms": -1,
+            "received_monotonic_ms": 1_002,
+            "disposition": "LATE_IGNORED",
+        }
+    ]
 
-    assert reducer.results[instrument.instrument_name].reason == "TICKER_CONTINUITY_GAP"
-    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
 
-
-def test_ticker_gap_quarantines_old_generation_until_resubscribe_ack(
+def test_equal_ticker_timestamp_applies_in_later_ingress_order(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
-    exact, digest = policy_factory(activation_count=1)
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
-    seed_available_index(reducer)
     name = "BTC_USDC-27SEP24-100010-C"
     instrument = make_option(name, 1_000_000 + 60 * 60_000)
-    reducer.options = {name: instrument}
-    reducer.catalog_options = dict(reducer.options)
-    reducer.option_books[name] = make_book(name, "1")
-    reducer.tickers[name] = TickerState(Decimal(100), "index_price", 2)
-    activate_directly(reducer, instrument)
+    establish_joint_witness(reducer, instrument)
     channel = ticker_channel(name)
-    acknowledge_channel(reducer, channel)
+    acknowledge_channel(reducer, channel, generation=3)
+    accepted_timestamp = reducer.tickers[name].source_timestamp_ms
 
-    assert not reducer._apply_ticker(
-        name,
-        {
-            "instrument_name": name,
-            "timestamp": 1,
-            "underlying_price": 100,
-            "underlying_index": "index_price",
-        },
-        FactBoundary(1, 1, 1_001, 2),
-    )
-    assert reducer.results[name].reason == "TICKER_CONTINUITY_GAP"
-    assert reducer._channels[channel].resync_requested
-
-    reducer._accept_subscription_frame(
+    reducer.reduce(
         subscription_frame(
             channel,
             {
                 "instrument_name": name,
-                "timestamp": 3,
-                "underlying_price": 100,
+                "timestamp": accepted_timestamp,
+                "underlying_price": 101,
                 "underlying_index": "index_price",
             },
-            ingress_seq=2,
+            ingress_seq=1,
             received_monotonic_ms=1_002,
-        )
+        ),
+        processed_monotonic_ms=1_002,
     )
 
-    assert name not in reducer.tickers
-    assert reducer.results[name].reason == "TICKER_CONTINUITY_GAP"
-    assert reducer.trackers[name].episode_id is None
-    assert not tuple(tmp_path.glob("short-vol-anomaly-*.json"))
+    assert reducer.tickers[name] == TickerState(
+        Decimal(101),
+        "index_price",
+        accepted_timestamp,
+    )
+    diagnostics = reducer._operational_diagnostics(2)
+    ticker_application = diagnostics["ticker_application"]
+    source_shapes = diagnostics["source_shapes"]
+    assert isinstance(ticker_application, dict)
+    assert isinstance(source_shapes, list)
+    disposition_count = ticker_application["disposition_count"]
+    assert isinstance(disposition_count, dict)
+    assert disposition_count["APPLIED"] == 1
+    source_row = next(
+        row for row in source_shapes if isinstance(row, dict) and row["source"] == "option_ticker"
+    )
+    assert source_row["valid_count"] == 1
+
+
+def test_older_ticker_is_late_ignored_even_when_candidate_timestamp_is_ahead(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    name = "BTC_USDC-27SEP24-100010-C"
+    establish_joint_witness(
+        reducer,
+        make_option(name, 1_000_000 + 60 * 60_000),
+    )
+    channel = ticker_channel(name)
+    acknowledge_channel(reducer, channel, generation=9)
+    reducer._ticker_generations[name] = 9
+    accepted = reducer.tickers[name]
+    reducer.clock = TrustedClock.from_response(
+        accepted.source_timestamp_ms - 100,
+        2_000,
+        2_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+
+    reducer.reduce(
+        subscription_frame(
+            channel,
+            {
+                "instrument_name": name,
+                "timestamp": accepted.source_timestamp_ms - 1,
+                "underlying_price": 99,
+                "underlying_index": "index_price",
+            },
+            ingress_seq=1,
+            received_monotonic_ms=2_000,
+        ),
+        processed_monotonic_ms=2_000,
+    )
+
+    assert reducer.tickers[name] is accepted
+    diagnostics = reducer._operational_diagnostics(1_000)
+    ticker_currentness = diagnostics["ticker_currentness"]
+    ticker_application = diagnostics["ticker_application"]
+    assert isinstance(ticker_currentness, dict)
+    assert isinstance(ticker_application, dict)
+    assert ticker_currentness["candidate_count_by_classification"] == {
+        "CURRENT": 0,
+        "SOURCE_STALE": 0,
+        "TIMESTAMP_AHEAD": 1,
+        "TRUSTED_TIME_UNKNOWN": 0,
+    }
+    assert ticker_application["disposition_count"] == {
+        "APPLIED": 0,
+        "LATE_IGNORED": 1,
+        "AHEAD_IGNORED": 0,
+        "STALE_GENERATION_IGNORED": 0,
+        "SHAPE_REJECTED": 0,
+    }
+
+
+def test_ticker_candidate_without_trusted_time_is_not_classified_current(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    name = "BTC_USDC-27SEP24-100010-C"
+    reducer.options[name] = make_option(name, 1_000_000 + 60 * 60_000)
+    acknowledge_channel(reducer, ticker_channel(name), generation=2)
+    reducer.clock = None
+
+    assert reducer._apply_ticker(
+        name,
+        {
+            "instrument_name": name,
+            "timestamp": 1_000_000,
+            "underlying_price": 100,
+            "underlying_index": "index_price",
+        },
+        FactBoundary(1, 1, 1_001, 1),
+    )
+
+    diagnostics = reducer._operational_diagnostics(1)
+    ticker_currentness = diagnostics["ticker_currentness"]
+    ticker_application = diagnostics["ticker_application"]
+    assert isinstance(ticker_currentness, dict)
+    assert isinstance(ticker_application, dict)
+    assert ticker_currentness["candidate_count_by_classification"] == {
+        "CURRENT": 0,
+        "SOURCE_STALE": 0,
+        "TIMESTAMP_AHEAD": 0,
+        "TRUSTED_TIME_UNKNOWN": 1,
+    }
+    assert ticker_application["disposition_count"]["APPLIED"] == 1
+    assert reducer._coverage._current_state is CoverageState.UNKNOWN
+    assert reducer._global_continuity_epoch == 1
+
+
+def test_latched_stale_generation_candidate_is_not_counted_as_timestamp_regression(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=1_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    name = "BTC_USDC-27SEP24-100010-C"
+    establish_joint_witness(
+        reducer,
+        make_option(name, 1_000_000 + 60 * 60_000),
+    )
+    channel = ticker_channel(name)
+    acknowledge_channel(reducer, channel, generation=5)
+    reducer._ticker_generations[name] = 5
+    accepted = reducer.tickers[name]
+
+    reducer.advance_time(2_001)
+    latch = reducer._ticker_currentness_latches[name]
+    reducer._channels[channel].generation = latch.generation
+    assert reducer.clock is not None
+    candidate_timestamp = reducer.clock.interval_at(2_002).upper_ms
+    assert candidate_timestamp > accepted.source_timestamp_ms
+
+    assert reducer._apply_ticker(
+        name,
+        {
+            "instrument_name": name,
+            "timestamp": candidate_timestamp,
+            "underlying_price": 101,
+            "underlying_index": "index_price",
+        },
+        FactBoundary(1, 1, 2_002, reducer.causal_seq),
+    )
+
+    assert reducer.tickers[name] is accepted
+    diagnostics = reducer._operational_diagnostics(1_002)
+    ticker_application = diagnostics["ticker_application"]
+    assert isinstance(ticker_application, dict)
+    disposition_count = ticker_application["disposition_count"]
+    assert isinstance(disposition_count, dict)
+    assert disposition_count["STALE_GENERATION_IGNORED"] == 1
+    assert disposition_count["LATE_IGNORED"] == 0
+    assert ticker_application["late_ignored_diagnostics"] == []
 
 
 def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_not_countable(
@@ -894,6 +1205,8 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
         affected_instruments=(name,),
         countable=True,
     )
+    assert reducer._first_joint_witness_ms == 1_000
+    assert reducer._global_continuity_epoch == 1
     episode_id = reducer.trackers[name].episode_id
     assert episode_id is not None
     reducer.atomic_states[episode_id] = PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE
@@ -905,6 +1218,9 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
     assert reducer.results[name].reason == "TICKER_SOURCE_STALE"
     assert reducer.trackers[name].episode_id is None
     assert reducer.trackers[name].detector_state is DetectorState.UNKNOWN
+    assert reducer._coverage._current_state is CoverageState.UNKNOWN
+    assert reducer._first_joint_witness_ms == 1_000
+    assert reducer._global_continuity_epoch == 1
     assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
     assert episode_id not in reducer.atomic_states
     assert reducer._atomic_transition_counts[PublicAtomicQuoteState.NOT_EVALUATED.value] == 1
@@ -987,6 +1303,42 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
     assert reducer.trackers[name].state.name == "ARMED"
     assert reducer.trackers[name].episode_id is None
     assert len(tuple(tmp_path.glob("short-vol-anomaly-*.json"))) == 1
+    assert reducer._first_joint_witness_ms == 1_000
+    assert reducer._global_continuity_epoch == 1
+
+    summary = json.loads(reducer.clean_stop(2_100).read_text())
+    validate_run_summary(summary)
+    assert summary["operational_diagnostics"]["witness"] == {
+        "global_continuity_epoch": 1,
+        "first_joint_witness_monotonic_ms": 1_000,
+        "continuous_global_continuity_after_witness_ms": 1_100,
+    }
+    assert summary["operational_diagnostics"]["option_local_availability"] == {
+        "unavailable_count_by_reason": {"TICKER_SOURCE_STALE": 1},
+        "recovery_count_by_reason": {"TICKER_SOURCE_STALE": 1},
+        "retained_interval_limit": 256,
+        "omitted_interval_count": 0,
+        "intervals": [
+            {
+                "instrument_name": name,
+                "generation": 1,
+                "reason": "TICKER_SOURCE_STALE",
+                "start_monotonic_ms": 2_000,
+                "end_monotonic_ms": 2_003,
+                "duration_ms": 3,
+                "end_disposition": "RECOVERED",
+                "global_continuity_epoch": 1,
+            }
+        ],
+    }
+    stale_coverage = next(
+        segment
+        for segment in summary["coverage_segments"]
+        if segment["reason"] == "TICKER_SOURCE_STALE"
+    )
+    assert stale_coverage["state"] == "UNKNOWN"
+    assert stale_coverage["affected_scopes"] == [f"OPTION:{name}"]
+    assert stale_coverage["global_continuity_epoch"] == 1
 
 
 def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
@@ -1371,239 +1723,96 @@ def test_option_channel_rpc_failure_is_scoped_to_exact_failed_channels(
     } == set(failed_channels)
 
 
-def test_ticker_timestamp_ahead_is_local_and_requests_one_resubscribe(
+def test_ahead_and_malformed_ticker_candidates_do_not_overwrite_or_resync(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
     exact, digest = policy_factory(
         activation_count=1,
-        ticker_source_stale_deadline_ms=1_000,
+        ticker_source_stale_deadline_ms=300_000,
     )
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
-    seed_flat_available_index(reducer)
-    first = make_option("BTC_USDC-27SEP24-100010-C", 1_000_000 + 60 * 60_000)
-    second = make_option("BTC_USDC-27SEP24-100020-C", 1_000_000 + 60 * 60_000)
-    reducer.options = {first.instrument_name: first, second.instrument_name: second}
-    reducer.catalog_options = dict(reducer.options)
-    reducer.option_books = {
-        first.instrument_name: make_book(first.instrument_name, "1"),
-        second.instrument_name: make_book(second.instrument_name, "1"),
-    }
-    reducer.tickers = {
-        first.instrument_name: TickerState(Decimal(100), "index_price", 1_000_001),
-        second.instrument_name: TickerState(Decimal(100), "index_price", 1_000_001),
-    }
-    reducer.trackers = {
-        first.instrument_name: EpisodeTracker(
-            runtime_identity="runtime",
-            policy_identity=reducer.policy.identity,
-            instrument_name=first.instrument_name,
-        ),
-        second.instrument_name: EpisodeTracker(
-            runtime_identity="runtime",
-            policy_identity=reducer.policy.identity,
-            instrument_name=second.instrument_name,
-        ),
-    }
-    first_channel = ticker_channel(first.instrument_name)
-    acknowledge_channel(reducer, first_channel)
-    reducer._causal_seq = 1
-    reducer.settle_fact(
-        boundary=FactBoundary(1, 0, 1_000, 1),
-        affected_instruments=tuple(reducer.options),
-        countable=True,
+    instrument = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
     )
-    second_episode = reducer.trackers[second.instrument_name].episode_id
-    assert second_episode is not None
-    second_tracker_state = reducer.trackers[second.instrument_name].state
-    second_atomic_state = reducer.atomic_states[second_episode]
-    assert reducer.clock is not None
-    trusted_upper = reducer.clock.interval_at(1_001).upper_ms
+    establish_joint_witness(reducer, instrument)
+    name = instrument.instrument_name
+    channel = ticker_channel(name)
+    acknowledge_channel(reducer, channel, generation=4)
+    reducer._ticker_generations[name] = 4
+    accepted = reducer.tickers[name]
+    result = reducer.results[name]
+    episode_id = reducer.trackers[name].episode_id
+    witness = reducer._first_joint_witness_ms
+    assert episode_id is not None
 
-    assert reducer._apply_ticker(
-        first.instrument_name,
-        {
-            "instrument_name": first.instrument_name,
-            "timestamp": trusted_upper,
-            "underlying_price": 100,
-            "underlying_index": "index_price",
-        },
-        FactBoundary(1, 0, 1_001, 2),
-    )
-    assert first.instrument_name not in reducer._ticker_currentness_latches
-    assert reducer.tickers[first.instrument_name].source_timestamp_ms == trusted_upper
-
-    ahead_timestamp = trusted_upper + 1
-    assert not reducer._apply_ticker(
-        first.instrument_name,
-        {
-            "instrument_name": first.instrument_name,
-            "timestamp": ahead_timestamp,
-            "underlying_price": 100,
-            "underlying_index": "index_price",
-        },
-        FactBoundary(1, 0, 1_001, 3),
-    )
-    reducer.settle_fact(
-        boundary=FactBoundary(1, 0, 1_002, 4),
-        affected_instruments=(first.instrument_name,),
-        countable=False,
-        observation_reason="HEARTBEAT_OR_UNRELATED_FACT",
-    )
-
-    assert reducer.results[first.instrument_name].reason == "TICKER_TIMESTAMP_AHEAD"
-    assert reducer.trackers[first.instrument_name].detector_state is DetectorState.UNKNOWN
-    assert reducer.trackers[second.instrument_name].episode_id == second_episode
-    assert reducer.trackers[second.instrument_name].state is second_tracker_state
-    assert reducer.trackers[second.instrument_name].detector_state is DetectorState.ANOMALY_ACTIVE
-    assert reducer.atomic_states[second_episode] is second_atomic_state
-    aggregate = next(iter(reducer.aggregate_results.values()))
-    assert aggregate.state is DetectorState.ANOMALY_ACTIVE
-    assert aggregate.coverage is not None and aggregate.coverage.name == "DEGRADED"
-    assert reducer._coverage._current_state is CoverageState.KNOWN_DEGRADED
-    assert reducer.tickers[first.instrument_name].source_timestamp_ms == trusted_upper
-    assert reducer.diagnostics.option_channel_resync_count == 1
     assert (
-        len(
-            tuple(
-                request
-                for request in reducer.pending_rpcs.values()
-                if request.purpose is RpcPurpose.UNSUBSCRIBE_CHANNELS
-            )
+        reducer.reduce(
+            subscription_frame(
+                channel,
+                {
+                    "instrument_name": name,
+                    "timestamp": accepted.source_timestamp_ms + 1_000_000,
+                    "underlying_price": 999,
+                    "underlying_index": "index_price",
+                },
+                ingress_seq=1,
+                received_monotonic_ms=1_002,
+            ),
+            processed_monotonic_ms=1_002,
         )
-        == 1
-    )
-    first_unsubscribe = next(
-        request
-        for request in reducer.pending_rpcs.values()
-        if request.purpose is RpcPurpose.UNSUBSCRIBE_CHANNELS
-    )
-    subscribe_commands = reducer.reduce(
-        InboundEnvelope(
-            {
-                "jsonrpc": "2.0",
-                "id": first_unsubscribe.request_id,
-                "result": first_unsubscribe.params["channels"],
-            },
-            session_epoch=1,
-            ingress_seq=1,
-            received_monotonic_ms=2_001,
-        ),
-        processed_monotonic_ms=2_001,
-    )
-    first_subscribe = next(
-        command
-        for command in subscribe_commands
-        if command.purpose is RpcPurpose.SUBSCRIBE_CHANNELS
-    )
-    reducer.reduce(
-        InboundEnvelope(
-            {
-                "jsonrpc": "2.0",
-                "id": first_subscribe.request_id,
-                "result": first_subscribe.params["channels"],
-            },
-            session_epoch=1,
-            ingress_seq=2,
-            received_monotonic_ms=2_002,
-        ),
-        processed_monotonic_ms=2_002,
-    )
-    equal_timestamp_commands = reducer.reduce(
-        subscription_frame(
-            first_channel,
-            {
-                "instrument_name": first.instrument_name,
-                "timestamp": ahead_timestamp,
-                "underlying_price": 100,
-                "underlying_index": "index_price",
-            },
-            ingress_seq=3,
-            received_monotonic_ms=2_003,
-        ),
-        processed_monotonic_ms=2_003,
-    )
-
-    assert reducer.results[first.instrument_name].reason == "TICKER_TIMESTAMP_AHEAD"
-    assert reducer.trackers[first.instrument_name].detector_state is DetectorState.UNKNOWN
-    assert reducer.diagnostics.option_channel_resync_count == 2
-    second_unsubscribe = next(
-        command
-        for command in equal_timestamp_commands
-        if command.purpose is RpcPurpose.UNSUBSCRIBE_CHANNELS
+        == ()
     )
     assert (
         reducer.reduce(
             subscription_frame(
-                first_channel,
+                channel,
                 {
-                    "instrument_name": first.instrument_name,
-                    "timestamp": ahead_timestamp + 1,
-                    "underlying_price": 100,
+                    "instrument_name": name,
+                    "timestamp": accepted.source_timestamp_ms + 1,
                     "underlying_index": "index_price",
                 },
-                ingress_seq=4,
-                received_monotonic_ms=2_004,
+                ingress_seq=2,
+                received_monotonic_ms=1_003,
             ),
-            processed_monotonic_ms=2_004,
+            processed_monotonic_ms=1_003,
         )
         == ()
     )
-    assert reducer.diagnostics.option_channel_resync_count == 2
 
-    subscribe_commands = reducer.reduce(
-        InboundEnvelope(
-            {
-                "jsonrpc": "2.0",
-                "id": second_unsubscribe.request_id,
-                "result": second_unsubscribe.params["channels"],
-            },
-            session_epoch=1,
-            ingress_seq=5,
-            received_monotonic_ms=2_005,
-        ),
-        processed_monotonic_ms=2_005,
+    assert reducer.tickers[name] is accepted
+    assert reducer.results[name] is result
+    assert reducer.trackers[name].episode_id == episode_id
+    assert reducer._first_joint_witness_ms == witness
+    assert name not in reducer._ticker_currentness_latches
+    assert not reducer._channels[channel].resync_requested
+    assert reducer.diagnostics.option_channel_resync_count == 0
+    diagnostics = reducer._operational_diagnostics(3)
+    source_shapes = diagnostics["source_shapes"]
+    assert isinstance(source_shapes, list)
+    source_row = next(
+        row for row in source_shapes if isinstance(row, dict) and row["source"] == "option_ticker"
     )
-    second_subscribe = next(
-        command
-        for command in subscribe_commands
-        if command.purpose is RpcPurpose.SUBSCRIBE_CHANNELS
-    )
-    reducer.reduce(
-        InboundEnvelope(
-            {
-                "jsonrpc": "2.0",
-                "id": second_subscribe.request_id,
-                "result": second_subscribe.params["channels"],
-            },
-            session_epoch=1,
-            ingress_seq=6,
-            received_monotonic_ms=2_006,
-        ),
-        processed_monotonic_ms=2_006,
-    )
-    assert reducer.clock is not None
-    recovered_timestamp = reducer.clock.interval_at(2_007).upper_ms
-    reducer.reduce(
-        subscription_frame(
-            first_channel,
-            {
-                "instrument_name": first.instrument_name,
-                "timestamp": recovered_timestamp,
-                "underlying_price": 100,
-                "underlying_index": "index_price",
-            },
-            ingress_seq=7,
-            received_monotonic_ms=2_007,
-        ),
-        processed_monotonic_ms=2_007,
-    )
-
-    assert reducer.results[first.instrument_name].known_evaluation
-    assert reducer.results[first.instrument_name].reason is None
-    assert not reducer.results[first.instrument_name].observation_eligible
-    assert reducer.trackers[first.instrument_name].state.name == "ARMED"
-    assert reducer.trackers[first.instrument_name].episode_id is None
+    assert source_row["valid_count"] == 1
+    assert source_row["invalid_count"] == 1
+    ticker_currentness = diagnostics["ticker_currentness"]
+    ticker_application = diagnostics["ticker_application"]
+    assert isinstance(ticker_currentness, dict)
+    assert isinstance(ticker_application, dict)
+    assert ticker_currentness["candidate_count_by_classification"] == {
+        "CURRENT": 0,
+        "SOURCE_STALE": 0,
+        "TIMESTAMP_AHEAD": 1,
+        "TRUSTED_TIME_UNKNOWN": 0,
+    }
+    assert ticker_application["disposition_count"] == {
+        "APPLIED": 0,
+        "LATE_IGNORED": 0,
+        "AHEAD_IGNORED": 1,
+        "STALE_GENERATION_IGNORED": 0,
+        "SHAPE_REJECTED": 1,
+    }
 
 
 def test_option_book_gap_quarantines_old_generation_snapshot(

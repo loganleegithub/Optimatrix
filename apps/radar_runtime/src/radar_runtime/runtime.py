@@ -206,6 +206,12 @@ class ScopeSnapshot:
     observation_reason: str | None
 
 
+@dataclass(frozen=True)
+class _CurrentScopeTruth:
+    aggregate: AggregateDetectorResult
+    has_current_full_formula: bool
+
+
 class ChannelState(StrEnum):
     UNSUBSCRIBED = "UNSUBSCRIBED"
     SUBSCRIBE_PENDING = "SUBSCRIBE_PENDING"
@@ -314,6 +320,16 @@ class RuntimeDiagnostics:
     source_valid_count: Counter[str] = field(default_factory=Counter)
     source_invalid_count: Counter[str] = field(default_factory=Counter)
     source_consumed_fields: dict[str, set[tuple[str, str]]] = field(default_factory=dict)
+    global_continuity_restart_count: Counter[str] = field(default_factory=Counter)
+    ticker_application_count: Counter[str] = field(default_factory=Counter)
+    ticker_candidate_currentness_count: Counter[str] = field(default_factory=Counter)
+    ticker_accepted_currentness_transition_count: Counter[str] = field(default_factory=Counter)
+    late_ticker_diagnostics: list[dict[str, object]] = field(default_factory=list)
+    omitted_late_ticker_diagnostic_count: int = 0
+    option_local_unavailable_count: Counter[str] = field(default_factory=Counter)
+    option_local_recovery_count: Counter[str] = field(default_factory=Counter)
+    option_local_intervals: list[dict[str, object]] = field(default_factory=list)
+    omitted_option_local_interval_count: int = 0
 
 
 @dataclass
@@ -339,6 +355,15 @@ class _TickerCurrentnessLatch:
     generation: int
     source_timestamp_ms: int
     reason: str
+
+
+@dataclass(frozen=True)
+class _OptionLocalUnavailable:
+    instrument_name: str
+    generation: int
+    reason: str
+    start_monotonic_ms: int
+    global_continuity_epoch: int
 
 
 class RadarReducer:
@@ -368,6 +393,8 @@ class RadarReducer:
         self._ticker_generations: dict[str, int] = {}
         self._ticker_currentness_latches: dict[str, _TickerCurrentnessLatch] = {}
         self._ticker_unavailable: dict[str, tuple[str, bool]] = {}
+        self._ticker_accepted_currentness: dict[str, str] = {}
+        self._option_local_unavailable: dict[str, _OptionLocalUnavailable] = {}
         self.trackers: dict[str, EpisodeTracker] = {}
         self.results: dict[str, EvaluationResult] = {}
         self.atomic_states: dict[str, PublicAtomicQuoteState] = {}
@@ -420,6 +447,7 @@ class RadarReducer:
         self._atomic_transition_counts: Counter[str] = Counter()
         self._band_suspended_duration_ms = 0
         self._band_suspended_started_ms: int | None = None
+        self._global_continuity_epoch = 1
         self._first_joint_witness_ms: int | None = None
         self._last_observation_identity: dict[str, tuple[object, ...]] = {}
         self._last_index_tail_identity: dict[str, tuple[object, ...]] = {}
@@ -476,6 +504,8 @@ class RadarReducer:
         self._ticker_generations.clear()
         self._ticker_currentness_latches.clear()
         self._ticker_unavailable.clear()
+        self._ticker_accepted_currentness.clear()
+        self._option_local_unavailable.clear()
         self.results.clear()
         self.atomic_states.clear()
         self.aggregate_results.clear()
@@ -550,11 +580,17 @@ class RadarReducer:
             lag_ms,
         )
         if lag_ms > self.policy.runtime_limits.notification_queue_lag_deadline_ms:
-            self._retire_current_epoch()
+            self._retire_current_epoch(
+                "QUEUE_LAG_DEADLINE",
+                monotonic_ms=envelope.received_monotonic_ms,
+            )
             raise PublicSessionError("inbound queue lag deadline exceeded")
         if envelope.ingress_seq != self._last_ingress_seq + 1:
             self.diagnostics.ingress_gap_or_duplicate_count += 1
-            self._retire_current_epoch()
+            self._retire_current_epoch(
+                "INGRESS_GAP_OR_DUPLICATE",
+                monotonic_ms=envelope.received_monotonic_ms,
+            )
             raise PublicSessionError("inbound frame ingress sequence is not continuous")
         self._last_ingress_seq = envelope.ingress_seq
         self._last_inbound_received_ms = max(
@@ -695,7 +731,10 @@ class RadarReducer:
         generation: int,
     ) -> None:
         if self._held_subscription_frame_count >= MAX_PENDING_INBOUND_FRAMES:
-            self._retire_current_epoch()
+            self._retire_current_epoch(
+                "QUEUE_OVERFLOW",
+                monotonic_ms=envelope.received_monotonic_ms,
+            )
             raise PublicSessionError("pre-ack inbound frame buffer overflow")
         self._held_subscription_frames.append(
             _HeldSubscriptionFrame(
@@ -1843,6 +1882,12 @@ class RadarReducer:
             if tracker is not None:
                 transition = tracker.membership_loss(causal_seq=self._causal_seq)
                 self._record_episode_end(transition.ended_episode, boundary.received_monotonic_ms)
+            self._close_option_local_unavailability(
+                name,
+                monotonic_ms=boundary.received_monotonic_ms,
+                end_disposition="REASON_CHANGED",
+            )
+            self._ticker_accepted_currentness.pop(name, None)
             self.options.pop(name, None)
             self.results.pop(name, None)
             self.tickers.pop(name, None)
@@ -1921,7 +1966,10 @@ class RadarReducer:
             if not self._index_gap_active:
                 self.diagnostics.index_gap_count += 1
                 self._index_gap_active = True
-            self._first_joint_witness_ms = None
+                self._restart_global_continuity(
+                    "INDEX_CONTINUITY_GAP",
+                    boundary.received_monotonic_ms,
+                )
             self.index.gap()
             self._index_coverage_generation = None
             self.platform.invalidate_fresh_index_coverage("INDEX_CONTINUITY_GAP")
@@ -1941,7 +1989,6 @@ class RadarReducer:
             return False
         trusted = self.clock.interval_at(boundary.received_monotonic_ms)
         self.index.seal_ready(trusted.lower_ms)
-        self._index_gap_active = False
         self.platform.note_fresh_index_coverage()
         self._settle_fact(
             boundary=boundary,
@@ -1959,6 +2006,156 @@ class RadarReducer:
         generation = slot.generation if slot is not None else 0
         self._ticker_generations[instrument_name] = generation
         return generation
+
+    def _record_ticker_application(
+        self,
+        disposition: str,
+        *,
+        instrument_name: str,
+        generation: int,
+        boundary: FactBoundary,
+        previous_source_timestamp_ms: int | None = None,
+        candidate_source_timestamp_ms: int | None = None,
+    ) -> None:
+        self.diagnostics.ticker_application_count[disposition] += 1
+        if (
+            disposition != "LATE_IGNORED"
+            or previous_source_timestamp_ms is None
+            or candidate_source_timestamp_ms is None
+            or candidate_source_timestamp_ms >= previous_source_timestamp_ms
+        ):
+            return
+        row = {
+            "instrument_name": instrument_name,
+            "generation": generation,
+            "ingress_seq": boundary.ingress_seq,
+            "previous_source_timestamp_ms": previous_source_timestamp_ms,
+            "candidate_source_timestamp_ms": candidate_source_timestamp_ms,
+            "timestamp_delta_ms": (candidate_source_timestamp_ms - previous_source_timestamp_ms),
+            "received_monotonic_ms": boundary.received_monotonic_ms,
+            "disposition": "LATE_IGNORED",
+        }
+        if len(self.diagnostics.late_ticker_diagnostics) < 256:
+            self.diagnostics.late_ticker_diagnostics.append(row)
+        else:
+            self.diagnostics.omitted_late_ticker_diagnostic_count += 1
+
+    def _classify_ticker_candidate(
+        self,
+        ticker: TickerState,
+        boundary: FactBoundary,
+    ) -> str:
+        if self.clock is None:
+            classification = "TRUSTED_TIME_UNKNOWN"
+        else:
+            try:
+                trusted = self.clock.interval_at(boundary.received_monotonic_ms)
+            except ContinuityGap:
+                classification = "TRUSTED_TIME_UNKNOWN"
+            else:
+                if ticker.source_timestamp_ms > trusted.upper_ms:
+                    classification = "TIMESTAMP_AHEAD"
+                elif (
+                    trusted.upper_ms
+                    > ticker.source_timestamp_ms
+                    + self.policy.runtime_limits.ticker_source_stale_deadline_ms
+                ):
+                    classification = "SOURCE_STALE"
+                else:
+                    classification = "CURRENT"
+        self.diagnostics.ticker_candidate_currentness_count[classification] += 1
+        return classification
+
+    def _start_option_local_unavailability(
+        self,
+        instrument_name: str,
+        *,
+        generation: int,
+        reason: str,
+        monotonic_ms: int,
+    ) -> None:
+        previous = self._option_local_unavailable.get(instrument_name)
+        if previous is not None and previous.generation == generation and previous.reason == reason:
+            return
+        if previous is not None:
+            self._close_option_local_unavailability(
+                instrument_name,
+                monotonic_ms=monotonic_ms,
+                end_disposition="REASON_CHANGED",
+            )
+        self._option_local_unavailable[instrument_name] = _OptionLocalUnavailable(
+            instrument_name=instrument_name,
+            generation=generation,
+            reason=reason,
+            start_monotonic_ms=monotonic_ms,
+            global_continuity_epoch=self._global_continuity_epoch,
+        )
+        self.diagnostics.option_local_unavailable_count[reason] += 1
+
+    def _close_option_local_unavailability(
+        self,
+        instrument_name: str,
+        *,
+        monotonic_ms: int,
+        end_disposition: str,
+    ) -> None:
+        unavailable = self._option_local_unavailable.pop(instrument_name, None)
+        if unavailable is None:
+            return
+        row = {
+            "instrument_name": unavailable.instrument_name,
+            "generation": unavailable.generation,
+            "reason": unavailable.reason,
+            "start_monotonic_ms": unavailable.start_monotonic_ms,
+            "end_monotonic_ms": monotonic_ms,
+            "duration_ms": max(0, monotonic_ms - unavailable.start_monotonic_ms),
+            "end_disposition": end_disposition,
+            "global_continuity_epoch": unavailable.global_continuity_epoch,
+        }
+        if len(self.diagnostics.option_local_intervals) < 256:
+            self.diagnostics.option_local_intervals.append(row)
+        else:
+            self.diagnostics.omitted_option_local_interval_count += 1
+        if end_disposition == "RECOVERED":
+            self.diagnostics.option_local_recovery_count[unavailable.reason] += 1
+
+    def _close_all_option_local_unavailable(
+        self,
+        monotonic_ms: int,
+        *,
+        end_disposition: str,
+    ) -> None:
+        for instrument_name in tuple(self._option_local_unavailable):
+            self._close_option_local_unavailability(
+                instrument_name,
+                monotonic_ms=monotonic_ms,
+                end_disposition=end_disposition,
+            )
+
+    def _transition_ticker_accepted_currentness(
+        self,
+        instrument_name: str,
+        *,
+        state: str,
+        reason: str,
+        boundary: FactBoundary,
+    ) -> None:
+        if self._ticker_accepted_currentness.get(instrument_name) != state:
+            self._ticker_accepted_currentness[instrument_name] = state
+            self.diagnostics.ticker_accepted_currentness_transition_count[state] += 1
+        if state == "CURRENT":
+            self._close_option_local_unavailability(
+                instrument_name,
+                monotonic_ms=boundary.received_monotonic_ms,
+                end_disposition="RECOVERED",
+            )
+            return
+        self._start_option_local_unavailability(
+            instrument_name,
+            generation=self._ticker_generation(instrument_name),
+            reason=reason,
+            monotonic_ms=boundary.received_monotonic_ms,
+        )
 
     def _request_ticker_resubscribe_once(
         self,
@@ -2003,21 +2200,38 @@ class RadarReducer:
         unavailable = self._ticker_unavailable.get(instrument_name)
         latch = self._ticker_currentness_latches.get(instrument_name)
         if latch is not None:
+            self._transition_ticker_accepted_currentness(
+                instrument_name,
+                state="SOURCE_STALE",
+                reason=latch.reason,
+                boundary=boundary,
+            )
             return None, latch.reason, True
         if unavailable is not None:
+            self._transition_ticker_accepted_currentness(
+                instrument_name,
+                state="MISSING",
+                reason=unavailable[0],
+                boundary=boundary,
+            )
             return None, unavailable[0], unavailable[1]
         ticker = self.tickers.get(instrument_name)
         if ticker is None:
+            self._transition_ticker_accepted_currentness(
+                instrument_name,
+                state="MISSING",
+                reason="FORWARD_TICKER_UNKNOWN",
+                boundary=boundary,
+            )
             return None, "FORWARD_TICKER_UNKNOWN", False
         if ticker.source_timestamp_ms > trusted.upper_ms:
-            self._latch_ticker_currentness(
+            self._transition_ticker_accepted_currentness(
                 instrument_name,
-                generation=self._ticker_generation(instrument_name),
-                source_timestamp_ms=ticker.source_timestamp_ms,
+                state="MISSING",
                 reason="TICKER_TIMESTAMP_AHEAD",
                 boundary=boundary,
             )
-            return None, "TICKER_TIMESTAMP_AHEAD", True
+            return None, "TICKER_TIMESTAMP_AHEAD", False
         if (
             trusted.upper_ms
             > ticker.source_timestamp_ms
@@ -2030,7 +2244,19 @@ class RadarReducer:
                 reason="TICKER_SOURCE_STALE",
                 boundary=boundary,
             )
+            self._transition_ticker_accepted_currentness(
+                instrument_name,
+                state="SOURCE_STALE",
+                reason="TICKER_SOURCE_STALE",
+                boundary=boundary,
+            )
             return None, "TICKER_SOURCE_STALE", True
+        self._transition_ticker_accepted_currentness(
+            instrument_name,
+            state="CURRENT",
+            reason="CURRENT",
+            boundary=boundary,
+        )
         return ticker, "FORWARD_TICKER_UNKNOWN", False
 
     def _apply_ticker(
@@ -2040,43 +2266,49 @@ class RadarReducer:
         boundary: FactBoundary,
     ) -> bool:
         if instrument_name not in self.options:
+            self._record_ticker_application(
+                "SHAPE_REJECTED",
+                instrument_name=instrument_name,
+                generation=0,
+                boundary=boundary,
+            )
             return False
+        slot = self._channels.get(ticker_channel(instrument_name))
+        generation = (
+            slot.generation
+            if slot is not None
+            else self._ticker_generations.get(instrument_name, 0)
+        )
         try:
             ticker = parse_ticker(payload, instrument_name)
         except ValueError:
-            self.tickers.pop(instrument_name, None)
-            self._ticker_generations.pop(instrument_name, None)
-            self._ticker_unavailable[instrument_name] = ("TICKER_INVALID", False)
-            self._settle_fact(
+            self._record_ticker_application(
+                "SHAPE_REJECTED",
+                instrument_name=instrument_name,
+                generation=generation,
                 boundary=boundary,
-                affected_instruments=(instrument_name,),
-                countable=False,
-                observation_reason="TICKER_INVALID",
             )
             return False
-        channel = ticker_channel(instrument_name)
-        slot = self._channels.get(channel)
-        generation = slot.generation if slot is not None else 0
-        if self.clock is not None:
-            try:
-                trusted = self.clock.interval_at(boundary.received_monotonic_ms)
-            except ContinuityGap:
-                trusted = None
-            if trusted is not None and ticker.source_timestamp_ms > trusted.upper_ms:
-                self._latch_ticker_currentness(
-                    instrument_name,
-                    generation=generation,
-                    source_timestamp_ms=ticker.source_timestamp_ms,
-                    reason="TICKER_TIMESTAMP_AHEAD",
-                    boundary=boundary,
-                )
-                self._settle_fact(
-                    boundary=boundary,
-                    affected_instruments=(instrument_name,),
-                    countable=False,
-                    observation_reason="TICKER_TIMESTAMP_AHEAD",
-                )
-                return False
+        candidate_currentness = self._classify_ticker_candidate(ticker, boundary)
+        previous = self.tickers.get(instrument_name)
+        if previous is not None and ticker.source_timestamp_ms < previous.source_timestamp_ms:
+            self._record_ticker_application(
+                "LATE_IGNORED",
+                instrument_name=instrument_name,
+                generation=generation,
+                boundary=boundary,
+                previous_source_timestamp_ms=previous.source_timestamp_ms,
+                candidate_source_timestamp_ms=ticker.source_timestamp_ms,
+            )
+            return True
+        if candidate_currentness == "TIMESTAMP_AHEAD":
+            self._record_ticker_application(
+                "AHEAD_IGNORED",
+                instrument_name=instrument_name,
+                generation=generation,
+                boundary=boundary,
+            )
+            return True
         latch = self._ticker_currentness_latches.get(instrument_name)
         if latch is not None:
             recovered = (
@@ -2084,53 +2316,29 @@ class RadarReducer:
                 and ticker.source_timestamp_ms > latch.source_timestamp_ms
             )
             if not recovered:
-                if generation != latch.generation:
-                    self._ticker_currentness_latches[instrument_name] = _TickerCurrentnessLatch(
-                        generation=generation,
-                        source_timestamp_ms=max(
-                            latch.source_timestamp_ms,
-                            ticker.source_timestamp_ms,
-                        ),
-                        reason=latch.reason,
-                    )
-                    self._request_ticker_resubscribe_once(instrument_name, boundary)
-                self._settle_fact(
+                self._record_ticker_application(
+                    "STALE_GENERATION_IGNORED",
+                    instrument_name=instrument_name,
+                    generation=generation,
                     boundary=boundary,
-                    affected_instruments=(instrument_name,),
-                    countable=False,
-                    observation_reason=latch.reason,
                 )
                 return True
             self._ticker_currentness_latches.pop(instrument_name, None)
-        previous = self.tickers.get(instrument_name)
-        if previous is not None and ticker.source_timestamp_ms < previous.source_timestamp_ms:
-            self.tickers.pop(instrument_name, None)
-            self._ticker_generations.pop(instrument_name, None)
-            self._ticker_unavailable[instrument_name] = (
-                "TICKER_CONTINUITY_GAP",
-                True,
-            )
-            self._settle_fact(
-                boundary=boundary,
-                affected_instruments=(instrument_name,),
-                countable=False,
-                observation_reason="TICKER_CONTINUITY_GAP",
-            )
-            self._plan_resubscribe(
-                ticker_channel(instrument_name),
-                boundary,
-                failure_scope=FailureScope.OPTION,
-            )
-            return False
         self.tickers[instrument_name] = ticker
         self._ticker_generations[instrument_name] = generation
         self._ticker_unavailable.pop(instrument_name, None)
+        self._record_ticker_application(
+            "APPLIED",
+            instrument_name=instrument_name,
+            generation=generation,
+            boundary=boundary,
+        )
         countable = previous is None or ticker.forward_usdc != previous.forward_usdc
         self._settle_fact(
             boundary=boundary,
             affected_instruments=(instrument_name,),
             countable=countable,
-            observation_reason=None,
+            observation_reason="TICKER_APPLIED",
         )
         return True
 
@@ -2498,8 +2706,27 @@ class RadarReducer:
             observation_reason=observation_reason,
         )
 
-    def _settle_clock_gap(self, boundary: FactBoundary) -> None:
+    def _restart_global_continuity(
+        self,
+        reason: str,
+        monotonic_ms: int,
+        *,
+        affected_scopes: tuple[str, ...] = ("GLOBAL",),
+    ) -> None:
+        self._global_continuity_epoch += 1
+        self.diagnostics.global_continuity_restart_count[reason] += 1
         self._first_joint_witness_ms = None
+        self._coverage.transition(
+            self._coverage._current_state,
+            monotonic_ms,
+            reason=reason,
+            affected_scopes=affected_scopes,
+            global_continuity_epoch=self._global_continuity_epoch,
+            force=True,
+        )
+
+    def _settle_clock_gap(self, boundary: FactBoundary) -> None:
+        self._restart_global_continuity("CLOCK_GAP", boundary.received_monotonic_ms)
         self.aggregate_results.clear()
         for name in self.trackers:
             self._commit_forced_unknown(
@@ -2508,7 +2735,12 @@ class RadarReducer:
                 boundary=boundary,
                 continuity_gap=True,
             )
-        self._transition_coverage(CoverageState.UNKNOWN, boundary.received_monotonic_ms)
+        self._transition_coverage(
+            CoverageState.UNKNOWN,
+            boundary.received_monotonic_ms,
+            reason="CLOCK_GAP",
+            affected_scopes=("GLOBAL",),
+        )
 
     def _invalidate_clock_index(self, boundary: FactBoundary, *, reason: str) -> None:
         self._settle_clock_gap(boundary)
@@ -2617,7 +2849,9 @@ class RadarReducer:
         if self._time_currentness_token(trusted) != self._last_time_currentness_token:
             names = tuple(sorted(self.options))
         prepared: list[ScopeCurrent] = []
-        global_gap = False
+        global_gap_reasons: set[str] = set()
+        global_gap_scope_labels: set[str] = set()
+        global_gap_reason: str | None = None
         global_resubscribe = False
         global_resubscribe_reason: str | None = None
         for name in names:
@@ -2642,7 +2876,13 @@ class RadarReducer:
                     IndexTailStatus.SOURCE_STALE,
                     IndexTailStatus.CONTINUITY_GAP,
                 }:
-                    global_gap = True
+                    global_gap_reasons.add(_index_tail_reason(tail.status))
+                    global_gap_scope_labels.add(
+                        "SCOPE:"
+                        f"{instrument.expiration_timestamp_ms}:"
+                        f"{instrument.option_type.value}:"
+                        f"{applicability.band.band_id}"
+                    )
                 if tail.status in {
                     IndexTailStatus.SOURCE_STALE,
                     IndexTailStatus.CONTINUITY_GAP,
@@ -2652,14 +2892,40 @@ class RadarReducer:
                         global_resubscribe_reason = "INDEX_CONTINUITY_GAP"
                     elif global_resubscribe_reason is None:
                         global_resubscribe_reason = "INDEX_SOURCE_STALE"
-        if global_gap:
-            self._first_joint_witness_ms = None
-            names = tuple(sorted(self.options))
-            prepared.clear()
-        if global_resubscribe:
+        if global_gap_reasons:
+            global_gap_reason = next(
+                reason
+                for reason in (
+                    "INDEX_CONTINUITY_GAP",
+                    "INDEX_SOURCE_STALE",
+                    "INDEX_WINDOW_GAP",
+                )
+                if reason in global_gap_reasons
+            )
+            gap_affected_scopes = (
+                ("GLOBAL",)
+                if global_gap_reason
+                in {
+                    "INDEX_CONTINUITY_GAP",
+                    "INDEX_SOURCE_STALE",
+                }
+                or not global_gap_scope_labels
+                or len(global_gap_scope_labels) > 256
+                else tuple(sorted(global_gap_scope_labels))
+            )
             if not self._index_gap_active:
                 self.diagnostics.index_gap_count += 1
                 self._index_gap_active = True
+                self._restart_global_continuity(
+                    global_gap_reason,
+                    boundary.received_monotonic_ms,
+                    affected_scopes=gap_affected_scopes,
+                )
+            names = tuple(sorted(self.options))
+            prepared.clear()
+        elif set(names) == set(self.options):
+            self._index_gap_active = False
+        if global_resubscribe:
             self.platform.invalidate_fresh_index_coverage(
                 global_resubscribe_reason or "INDEX_CONTINUITY_GAP"
             )
@@ -2936,7 +3202,8 @@ class RadarReducer:
             if not scope_results:
                 continue
             representative = scope_results[0][0]
-            aggregate = self._scope_aggregate(representative, snapshot.trusted_time)
+            scope_truth = self._current_scope_truth(representative, snapshot.trusted_time)
+            aggregate = scope_truth.aggregate
             for instrument, result in scope_results:
                 if result.transition.activated_episode_id is not None:
                     self._record_activation(
@@ -2952,7 +3219,7 @@ class RadarReducer:
                     scope_results[0][1].band_id or "",
                 )
                 counter.complete_aggregate_detector_evaluation_count += 1
-                if any(result.full_formula_evaluation for _, result in scope_results):
+                if scope_truth.has_current_full_formula:
                     counter.complete_aggregate_with_full_formula_evaluation_count += 1
                     if self._first_joint_witness_ms is None:
                         self._first_joint_witness_ms = boundary.received_monotonic_ms
@@ -2973,33 +3240,54 @@ class RadarReducer:
                 self._evaluate_atomic(tracker)
 
         self._sync_combo_subscriptions(boundary)
-        pending_reasons = {
-            "INDEX_TIME_BOUNDARY_PENDING",
-            "INDEX_WATERMARK_PENDING",
-        }
-        preserve_operational_witness = (
-            self.platform.usable
-            and self.option_catalog.complete
-            and any(item.current.reason in pending_reasons for item in prepared)
-            and all(
-                item.current.reason in pending_reasons
-                or item.current.known_evaluation
-                or item.current.disposition is CurrentDisposition.OUT_OF_BASELINE_SCOPE
-                for item in prepared
-            )
+        local_unavailable = tuple(
+            item
+            for item in prepared
+            if item.current.reason == "FORWARD_TICKER_UNKNOWN"
+            or (item.current.reason or "").startswith("TICKER_")
+            or item.current.reason == "OPTION_CHANNEL_FAILURE"
         )
+        if global_gap_reason is not None:
+            coverage_reason = global_gap_reason
+            coverage_scopes = (
+                ("GLOBAL",)
+                if global_gap_reason
+                in {
+                    "INDEX_CONTINUITY_GAP",
+                    "INDEX_SOURCE_STALE",
+                }
+                or not global_gap_scope_labels
+                or len(global_gap_scope_labels) > 256
+                else tuple(sorted(global_gap_scope_labels))
+            )
+        elif local_unavailable:
+            local_reasons = {
+                item.current.reason for item in local_unavailable if item.current.reason is not None
+            }
+            coverage_reason = (
+                next(iter(local_reasons))
+                if len(local_reasons) == 1
+                else "OPTION_LOCAL_AVAILABILITY"
+            )
+            coverage_scopes = self._option_local_coverage_scopes(
+                tuple(item.instrument.instrument_name for item in local_unavailable)
+            )
+        else:
+            coverage_reason = observation_reason or "CURRENT_TRUTH_RECOMPUTE"
+            coverage_scopes = self._coverage_affected_scopes(names)
         self._update_coverage(
             boundary.received_monotonic_ms,
-            preserve_operational_witness=preserve_operational_witness,
+            reason=coverage_reason,
+            affected_scopes=coverage_scopes,
         )
         if set(names) == set(self.options):
             self._last_time_currentness_token = self._time_currentness_token(trusted)
 
-    def _scope_aggregate(
+    def _current_scope_truth(
         self,
         instrument: OptionInstrument,
         trusted: TimeInterval,
-    ) -> AggregateDetectorResult:
+    ) -> _CurrentScopeTruth:
         applicability = classify_time_applicability(
             self.policy,
             expiration_timestamp_ms=instrument.expiration_timestamp_ms,
@@ -3007,10 +3295,13 @@ class RadarReducer:
             option_type=instrument.option_type,
         )
         if applicability.band is None:
-            return aggregate_detector(
-                (),
-                catalog_complete=self.option_catalog.complete,
-                has_applicable_scope=False,
+            return _CurrentScopeTruth(
+                aggregate=aggregate_detector(
+                    (),
+                    catalog_complete=self.option_catalog.complete,
+                    has_applicable_scope=False,
+                ),
+                has_current_full_formula=False,
             )
         instruments = tuple(
             candidate
@@ -3041,7 +3332,16 @@ class RadarReducer:
                 applicability.band.band_id,
             )
         ] = aggregate
-        return aggregate
+        has_current_full_formula = any(
+            (result := self.results.get(candidate.instrument_name)) is not None
+            and result.band_id == applicability.band.band_id
+            and result.full_formula_evaluation
+            for candidate in instruments
+        )
+        return _CurrentScopeTruth(
+            aggregate=aggregate,
+            has_current_full_formula=has_current_full_formula,
+        )
 
     def _record_activation(
         self,
@@ -3190,11 +3490,28 @@ class RadarReducer:
         state: CoverageState,
         monotonic_ms: int,
         *,
-        preserve_operational_witness: bool = False,
+        reason: str = "CURRENT_TRUTH_RECOMPUTE",
+        affected_scopes: tuple[str, ...] = ("GLOBAL",),
+        force: bool = False,
     ) -> None:
-        self._coverage.transition(state, monotonic_ms)
-        if state is not CoverageState.KNOWN_COMPLETE and not preserve_operational_witness:
-            self._first_joint_witness_ms = None
+        self._coverage.transition(
+            state,
+            monotonic_ms,
+            reason=reason,
+            affected_scopes=affected_scopes,
+            global_continuity_epoch=self._global_continuity_epoch,
+            force=force,
+        )
+
+    def _coverage_affected_scopes(self, names: tuple[str, ...]) -> tuple[str, ...]:
+        if not names or set(names) == set(self.options):
+            return ("GLOBAL",)
+        return self._option_local_coverage_scopes(names)
+
+    @staticmethod
+    def _option_local_coverage_scopes(names: tuple[str, ...]) -> tuple[str, ...]:
+        scopes = tuple(sorted(f"OPTION:{name}" for name in names))
+        return scopes if len(scopes) <= 256 else ("OPTION_LOCAL",)
 
     def _scope_counter(self, option_type: OptionType, band_id: str) -> ScopeCounts:
         key = (self.policy.identity, option_type, band_id)
@@ -3363,7 +3680,8 @@ class RadarReducer:
         self,
         monotonic_ms: int,
         *,
-        preserve_operational_witness: bool = False,
+        reason: str = "CURRENT_TRUTH_RECOMPUTE",
+        affected_scopes: tuple[str, ...] = ("GLOBAL",),
     ) -> None:
         self._update_band_suspension(monotonic_ms)
         if self.clock is None:
@@ -3375,7 +3693,8 @@ class RadarReducer:
             self._transition_coverage(
                 CoverageState.KNOWN_DEGRADED if positive else CoverageState.UNKNOWN,
                 monotonic_ms,
-                preserve_operational_witness=preserve_operational_witness,
+                reason=reason,
+                affected_scopes=affected_scopes,
             )
             return
         try:
@@ -3385,7 +3704,8 @@ class RadarReducer:
             self._transition_coverage(
                 CoverageState.UNKNOWN,
                 monotonic_ms,
-                preserve_operational_witness=preserve_operational_witness,
+                reason=reason,
+                affected_scopes=affected_scopes,
             )
             return
         self._refresh_current_aggregates(trusted)
@@ -3397,7 +3717,8 @@ class RadarReducer:
             self._transition_coverage(
                 CoverageState.KNOWN_DEGRADED if positive else CoverageState.UNKNOWN,
                 monotonic_ms,
-                preserve_operational_witness=preserve_operational_witness,
+                reason=reason,
+                affected_scopes=affected_scopes,
             )
             return
         scoped: list[OptionInstrument] = []
@@ -3420,7 +3741,8 @@ class RadarReducer:
             self._transition_coverage(
                 CoverageState.UNKNOWN if unresolved else CoverageState.NO_APPLICABLE_SCOPE,
                 monotonic_ms,
-                preserve_operational_witness=preserve_operational_witness,
+                reason=reason,
+                affected_scopes=affected_scopes,
             )
             return
         states = [self.trackers[item.instrument_name].detector_state for item in scoped]
@@ -3435,7 +3757,8 @@ class RadarReducer:
         self._transition_coverage(
             state,
             monotonic_ms,
-            preserve_operational_witness=preserve_operational_witness,
+            reason=reason,
+            affected_scopes=affected_scopes,
         )
 
     def _refresh_current_aggregates(self, trusted: TimeInterval) -> None:
@@ -3482,11 +3805,26 @@ class RadarReducer:
             )
             self._band_suspended_started_ms = None
 
-    def _retire_current_epoch(self) -> None:
+    def _retire_current_epoch(
+        self,
+        reason: str = "SESSION_GAP",
+        *,
+        monotonic_ms: int | None = None,
+    ) -> None:
         if self._session_epoch is None or self._session_epoch in self._retired_epochs:
             return
+        retired_ms = (
+            self._last_boundary_monotonic_ms
+            if monotonic_ms is None
+            else max(self._last_boundary_monotonic_ms, monotonic_ms)
+        )
+        self._last_boundary_monotonic_ms = retired_ms
         self.diagnostics.session_gap_count += 1
-        self._first_joint_witness_ms = None
+        self._restart_global_continuity(reason, retired_ms)
+        self._close_all_option_local_unavailable(
+            retired_ms,
+            end_disposition="REASON_CHANGED",
+        )
         self.aggregate_results.clear()
         self._causal_seq += 1
         boundary = self._current_fact_boundary()
@@ -3513,10 +3851,12 @@ class RadarReducer:
             slot.state = ChannelState.RETIRED
         self._drop_held_frames()
         self.pending_rpcs.clear()
-        self._update_band_suspension(self._last_boundary_monotonic_ms)
+        self._update_band_suspension(retired_ms)
         self._transition_coverage(
             CoverageState.UNKNOWN,
-            self._last_boundary_monotonic_ms,
+            retired_ms,
+            reason=reason,
+            affected_scopes=("GLOBAL",),
         )
 
     def _update_subscription_peaks(self) -> None:
@@ -3745,13 +4085,10 @@ class RadarReducer:
             monotonic_ms,
         )
         self._causal_seq += 1
-        witness_at_stop = self._first_joint_witness_ms
         for tracker in self.trackers.values():
             transition = tracker.stop(causal_seq=self._causal_seq)
             self._record_episode_end(transition.ended_episode, monotonic_ms)
         self._update_coverage(monotonic_ms)
-        if witness_at_stop is not None:
-            self._first_joint_witness_ms = witness_at_stop
         segments = self._coverage.close(monotonic_ms)
         observation_ms = segments[-1].end_monotonic_ms - segments[0].start_monotonic_ms
         summary = project_run_summary(
@@ -3824,8 +4161,31 @@ class RadarReducer:
             if self._first_joint_witness_ms is None
             else max(0, self._last_boundary_monotonic_ms - self._first_joint_witness_ms)
         )
+        option_local_intervals = list(self.diagnostics.option_local_intervals)
+        omitted_option_local_intervals = self.diagnostics.omitted_option_local_interval_count
+        for unavailable in sorted(
+            self._option_local_unavailable.values(),
+            key=lambda item: (item.start_monotonic_ms, item.instrument_name),
+        ):
+            row = {
+                "instrument_name": unavailable.instrument_name,
+                "generation": unavailable.generation,
+                "reason": unavailable.reason,
+                "start_monotonic_ms": unavailable.start_monotonic_ms,
+                "end_monotonic_ms": self._last_boundary_monotonic_ms,
+                "duration_ms": max(
+                    0,
+                    self._last_boundary_monotonic_ms - unavailable.start_monotonic_ms,
+                ),
+                "end_disposition": "CENSORED_AT_STOP",
+                "global_continuity_epoch": unavailable.global_continuity_epoch,
+            }
+            if len(option_local_intervals) < 256:
+                option_local_intervals.append(row)
+            else:
+                omitted_option_local_intervals += 1
         return {
-            "operational_diagnostics_schema_version": 2,
+            "operational_diagnostics_schema_version": 3,
             "runtime_limits": self.policy.runtime_limits.as_object(),
             "ingress": {
                 "received_envelope_count": max(
@@ -3898,9 +4258,62 @@ class RadarReducer:
                 ),
             },
             "source_shapes": source_rows,
+            "global_continuity": {
+                "current_epoch": self._global_continuity_epoch,
+                "restart_count": sum(self.diagnostics.global_continuity_restart_count.values()),
+                "restart_count_by_reason": dict(
+                    sorted(self.diagnostics.global_continuity_restart_count.items())
+                ),
+            },
+            "ticker_application": {
+                "disposition_count": {
+                    disposition: self.diagnostics.ticker_application_count[disposition]
+                    for disposition in (
+                        "APPLIED",
+                        "LATE_IGNORED",
+                        "AHEAD_IGNORED",
+                        "STALE_GENERATION_IGNORED",
+                        "SHAPE_REJECTED",
+                    )
+                },
+                "late_ignored_diagnostic_limit": 256,
+                "omitted_late_ignored_diagnostic_count": (
+                    self.diagnostics.omitted_late_ticker_diagnostic_count
+                ),
+                "late_ignored_diagnostics": list(self.diagnostics.late_ticker_diagnostics),
+            },
+            "ticker_currentness": {
+                "candidate_count_by_classification": {
+                    classification: (
+                        self.diagnostics.ticker_candidate_currentness_count[classification]
+                    )
+                    for classification in (
+                        "CURRENT",
+                        "SOURCE_STALE",
+                        "TIMESTAMP_AHEAD",
+                        "TRUSTED_TIME_UNKNOWN",
+                    )
+                },
+                "accepted_transition_count_by_state": {
+                    state: (self.diagnostics.ticker_accepted_currentness_transition_count[state])
+                    for state in ("MISSING", "CURRENT", "SOURCE_STALE")
+                },
+            },
+            "option_local_availability": {
+                "unavailable_count_by_reason": dict(
+                    sorted(self.diagnostics.option_local_unavailable_count.items())
+                ),
+                "recovery_count_by_reason": dict(
+                    sorted(self.diagnostics.option_local_recovery_count.items())
+                ),
+                "retained_interval_limit": 256,
+                "omitted_interval_count": omitted_option_local_intervals,
+                "intervals": option_local_intervals,
+            },
             "witness": {
+                "global_continuity_epoch": self._global_continuity_epoch,
                 "first_joint_witness_monotonic_ms": self._first_joint_witness_ms,
-                "continuous_covered_after_witness_ms": post_witness,
+                "continuous_global_continuity_after_witness_ms": post_witness,
             },
         }
 
@@ -3909,26 +4322,55 @@ class CoverageLedger:
     def __init__(self, started_monotonic_ms: int) -> None:
         self._current_state = CoverageState.UNKNOWN
         self._current_start_ms = started_monotonic_ms
+        self._current_reason = "RUNTIME_START"
+        self._current_affected_scopes: tuple[str, ...] = ("GLOBAL",)
+        self._current_global_continuity_epoch = 1
         self._segments: list[CoverageSegment] = []
 
-    def transition(self, state: CoverageState, monotonic_ms: int) -> None:
+    def transition(
+        self,
+        state: CoverageState,
+        monotonic_ms: int,
+        *,
+        reason: str = "CURRENT_TRUTH_RECOMPUTE",
+        affected_scopes: tuple[str, ...] = ("GLOBAL",),
+        global_continuity_epoch: int = 1,
+        force: bool = False,
+    ) -> None:
         if monotonic_ms < self._current_start_ms:
             raise RuntimeError("coverage monotonic time moved backward")
-        if state is self._current_state:
+        if state is self._current_state and not force:
             return
         if monotonic_ms > self._current_start_ms:
             self._segments.append(
-                CoverageSegment(self._current_start_ms, monotonic_ms, self._current_state)
+                CoverageSegment(
+                    self._current_start_ms,
+                    monotonic_ms,
+                    self._current_state,
+                    reason=self._current_reason,
+                    affected_scopes=self._current_affected_scopes,
+                    global_continuity_epoch=self._current_global_continuity_epoch,
+                )
             )
         self._current_start_ms = monotonic_ms
         self._current_state = state
+        self._current_reason = reason
+        self._current_affected_scopes = affected_scopes
+        self._current_global_continuity_epoch = global_continuity_epoch
 
     def close(self, stop_monotonic_ms: int) -> tuple[CoverageSegment, ...]:
         if stop_monotonic_ms < self._current_start_ms:
             raise RuntimeError("coverage stop precedes the current segment")
         if stop_monotonic_ms > self._current_start_ms or not self._segments:
             self._segments.append(
-                CoverageSegment(self._current_start_ms, stop_monotonic_ms, self._current_state)
+                CoverageSegment(
+                    self._current_start_ms,
+                    stop_monotonic_ms,
+                    self._current_state,
+                    reason=self._current_reason,
+                    affected_scopes=self._current_affected_scopes,
+                    global_continuity_epoch=self._current_global_continuity_epoch,
+                )
             )
         return tuple(self._segments)
 
@@ -4097,7 +4539,7 @@ class LiveRadarRuntime:
             for command in commands:
                 outbound.put_nowait(command)
         except asyncio.QueueFull as exc:
-            self.reducer._retire_current_epoch()
+            self.reducer._retire_current_epoch("QUEUE_OVERFLOW")
             raise PublicSessionError("outbound command queue overflow") from exc
 
     @staticmethod

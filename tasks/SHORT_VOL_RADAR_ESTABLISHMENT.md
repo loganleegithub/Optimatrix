@@ -14,14 +14,14 @@
 
 **Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`
 
-**Current construction subgate:** `OPERATIONAL_SOAK_PRECONDITIONS`
+**Current construction subgate:** `SHORT_VOL_RADAR_FACT_SEMANTICS_CLOSURE`
 `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_27`
 
-**Current subgate base HEAD:** `29c5701939eca203a497d50818f111572820be3d`
+**Current subgate base HEAD:** `c66f987f7fd7513626e69c37f7f2552991ebf9e4`
 
 **REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`
 
-**OPERATIONAL_SOAK gate:** `CLOSED_UNTIL_EXPLICIT_HUMAN_COMMAND`
+**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_001_NOT_MET`
 
 **Product/stage:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md) /
@@ -38,10 +38,16 @@
 
 The design DRAFT did not authorize construction. The explicit human command naming
 `SHORT_VOL_RADAR_ESTABLISHMENT` on 2026-07-25 opened the original construction gate. The explicit
-2026-07-27 command naming `OPERATIONAL_SOAK_PRECONDITIONS` and base
-`29c5701939eca203a497d50818f111572820be3d` separately authorizes only the bounded witness/gap
-truth repair, its direct tests, Smoke/Soak gate wording, a parameter-preserving candidate
-successor Policy, its acceptance checklist, commit, and push.
+2026-07-27 command naming `SHORT_VOL_RADAR_FACT_SEMANTICS_CLOSURE`, base
+`c66f987f7fd7513626e69c37f7f2552991ebf9e4`, and input identity
+`TICKER_SNAPSHOT_CURRENTNESS_REPAIR` separately authorizes only the bounded ticker fact-semantics,
+three-ledger, same-current-scope witness, diagnostic/evidence contract repair, direct tests,
+authority/artifact inspection, commit, and push.
+
+The prior `OPERATIONAL_SOAK` attempt at
+`/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001` is sealed
+`NOT_MET`. It is historical evidence only and may not be changed, replayed, recomputed, migrated,
+or retroactively accepted.
 
 The execution gates are independent:
 
@@ -50,16 +56,22 @@ The execution gates are independent:
 2. **`REACHABILITY_SMOKE` gate:** one explicit command authorizes only the one named Smoke run
    against its exact code, Policy, evidence directory, and stop boundary. A completed or accepted
    Smoke does not authorize Soak.
-3. **`OPERATIONAL_SOAK_PRECONDITIONS` construction subgate:** the current command authorizes the
-   exact bounded construction work above. It does not reopen Smoke or open Soak.
-4. **`OPERATIONAL_SOAK` gate:** remains closed. A later explicit command must independently name
-   the exact accepted code `HEAD`, Policy path/digest, new empty evidence directory, and stop
-   condition before one production-public Soak run.
+3. **`OPERATIONAL_SOAK_PRECONDITIONS` construction subgate:** completed at
+   `c66f987f7fd7513626e69c37f7f2552991ebf9e4`; it granted no continuing live authority.
+4. **Prior `OPERATIONAL_SOAK` gate:** consumed by `attempt-001`, whose acceptance is permanently
+   `NOT_MET`.
+5. **`SHORT_VOL_RADAR_FACT_SEMANTICS_CLOSURE` construction subgate:** the current command
+   authorizes only the exact bounded construction work above. It does not authorize any live
+   command.
+6. **Heartbeat wire probe gate:** closed until a separate explicit human command.
+7. **Next `OPERATIONAL_SOAK` gate:** closed until the heartbeat probe is separately authorized,
+   new global-continuity and local-availability thresholds are human-frozen, and a later command
+   independently names exact accepted code, Policy path/digest, new empty evidence directory, and
+   stop condition.
 
 Production-public connection, live artifact collection, private API, order, trade, merge,
 business acceptance, task archival, stage advancement, and any later research or execution
-authority remain unauthorized. The current delivery stops after committed and pushed
-preconditions plus a request for separate Soak authorization.
+authority remain unauthorized. Policy files and `CURRENT_STAGE` remain unchanged.
 
 ## Business closure
 
@@ -163,6 +175,85 @@ recomputation, Candidate, Position, Outcome, or performance claim.
 **Stage/authorization change:** `NONE` — `PUBLIC_SHADOW`, implemented capability `NONE`, and
 production Radar `NOT_ESTABLISHED` remain unchanged. This subgate does not authorize
 production-public connection, Smoke, Soak, private API, order, trade, or stage advancement.
+
+### `SHORT_VOL_RADAR_FACT_SEMANTICS_CLOSURE` subgate change declarations
+
+**Market/Decision input contract change:** `APPROVED` —
+`TICKER_SNAPSHOT_CURRENTNESS_REPAIR`. An option ticker is one complete snapshot without sequence
+continuity. Shape, candidate/accepted-fact currentness, and application disposition are separate.
+`ingress_seq` orders applications; a lower source timestamp is `LATE_IGNORED` and cannot overwrite
+newer truth, resubscribe, end an episode, change coverage, or reset a witness. Only a currently
+accepted ticker crossing its Policy TTL makes that option's forward unavailable.
+Candidates from that latched failed generation are separately `STALE_GENERATION_IGNORED`, never
+misreported as timestamp regressions.
+A candidate received without a trusted-time interval is `TRUSTED_TIME_UNKNOWN`, not falsely
+current; applying it in ingress order cannot recover clock-dependent detector truth.
+
+**Decision Policy change:** `NONE` — formula, target quantity, scope, TTE bands, Delta, baseline,
+activation/clear thresholds, persistence, and every Policy/runtime-limit field remain unchanged.
+No Policy file is created or edited.
+
+**Outcome/evaluation contract change:** `NONE` — no replay, offline recomputation, historical
+relabelling, future label, Candidate, Position, Outcome, PnL, comparator, or qualification.
+
+**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
+capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`. This construction
+authorizes no production-public connection, heartbeat wire probe, Smoke, Soak, private API, order,
+trade, or stage advancement.
+
+### Fact-semantics business closure
+
+**Given:** a ticker channel delivers shape-valid complete snapshots in one reduced
+`session_epoch/ingress_seq` order, and an already accepted newer ticker may be followed by an older
+source timestamp without implying a missing message.
+
+**When:** the reducer parses, classifies currentness, and applies or ignores that candidate.
+
+**Then:** an older snapshot is recorded as `LATE_IGNORED`; the existing newer accepted ticker,
+current detector/episode/Layer 2 state, current coverage, and global witness remain unchanged, and
+no option resubscription is emitted. A genuinely stale accepted ticker remains option-local
+`UNKNOWN` and recovers only through the existing fresh-generation rule.
+
+**Independent verification:** direct reducer/state/writer/validator tests plus `make check`,
+strict validation of the sealed version-2 `attempt-001`, authority-link inspection, and artifact
+inspection. Production-public evidence is prohibited for this construction.
+
+**Valid zero/no-hit/UNKNOWN result:** zero late snapshots is a valid diagnostic count. A malformed
+or ahead candidate is rejected without replacing a still-current accepted ticker. No accepted
+ticker or an accepted ticker beyond TTL remains truthful option-local `UNKNOWN`; it does not
+restart global continuity. A global continuity break clears the current-epoch witness and
+requires a new one.
+
+**Upstream prerequisite:** exact base
+`c66f987f7fd7513626e69c37f7f2552991ebf9e4` and the sealed `attempt-001` operational evidence
+showing ticker shape/application conflation and fragmented current coverage.
+
+#### Three independent ledgers
+
+1. `global_continuity_epoch` starts at `1` and restarts only for session retirement,
+   ingress gap/duplicate or overflow, trusted-clock gap, or real index
+   `WINDOW_GAP | SOURCE_STALE | CONTINUITY_GAP`.
+2. `current_market_truth_coverage` retains the four-state millisecond partition. Version-3
+   segments add the entry reason, sorted affected scope labels, and continuity epoch.
+3. `option_local_availability` records bounded ticker-local reason, affected instrument/
+   generation, start/end and recovery duration. Local availability may change current coverage
+   and end the affected episode under existing TTL rules, but never resets global continuity.
+
+#### Same-current-scope joint witness
+
+One settled full current `Policy identity × expiry_timestamp × option_type` snapshot owns both
+`detector_coverage` and `has_current_full_formula`. Unchanged current results may be reused, but
+the reducer may not combine full-scope coverage with only the affected subset's
+`full_formula_evaluation` or with historical counters. `EvidenceWriter` remains an edge sink and
+has no input to current-truth decisions.
+
+#### Bounded evidence and compatibility
+
+New summaries use `operational_diagnostics_schema_version = 3`, at most 256 late-regression rows,
+at most 256 option-local availability intervals, and attributed coverage rows. They persist no
+prices, Greeks, books, full ticker payloads, or reconstructable chain. The strict reader still
+validates version-2 summaries under their original schema; version 2 is not eligible for the new
+acceptance semantics and no migration/replay path exists.
 
 ## First-principles scope
 
@@ -322,21 +413,23 @@ Every index/ticker channel must deliver its own initial usable notification and 
 snapshot; reconnect invalidates all of them. Apart from status/time/catalog/new-member metadata
 bootstrap, no REST polling or alternate index/ticker interval may feed a detector observation.
 
-One option ticker remains current exactly while
+One option ticker notification is a complete snapshot, not a sequenced change. Its consumed shape,
+candidate currentness, and application disposition are recorded independently. A shape-valid
+snapshot older than the accepted current fact is `LATE_IGNORED`; equal timestamps use
+`ingress_seq` order. A malformed or ahead candidate is rejected without overwriting a
+still-current accepted fact. None of those rejected candidates requests resubscription, ends an
+episode, changes coverage, or resets global continuity.
+
+An accepted ticker remains current exactly while
 `ticker.source_timestamp_ms <= trusted_time.upper_ms <= ticker.source_timestamp_ms +
-ticker_source_stale_deadline_ms`; equality at either boundary is current. Crossing the upper
-cutoff is stale, while a source timestamp above `trusted_time.upper_ms` is ahead and fails closed.
-The first stale/ahead result latches that ticker subscription generation failed: clock refresh or
-a narrower time interval cannot revive it. Only a newly acknowledged generation with a strictly
-later ticker source timestamp may recover the option. Recovery with the same forward updates
-current truth but is not itself a countable activation/clear observation.
-Ticker failure is option-local and emits exactly one resubscription for the failed generation.
-When evaluation reaches the forward gate it produces `UNKNOWN`, ends an active episode
-`UNKNOWN_AT_GAP`, and stops Layer 2. A known amount/off-grid failure or insufficient target bid
-depth that terminates evaluation before that gate remains `KNOWN_INELIGIBLE`; ticker
-unavailability cannot overwrite it. Heartbeat, book, index, or metadata traffic cannot refresh
-the ticker. Here “same forward” means the same numeric forward: changing only between valid
-`underlying_index` labels is not countable either.
+ticker_source_stale_deadline_ms`; equality at either boundary is current. Only crossing the upper
+TTL cutoff latches the accepted ticker generation stale. Clock narrowing cannot revive it; only a
+newly acknowledged generation with a strictly later applied ticker may recover the option.
+Recovery with the same numeric forward updates current truth but is not itself countable.
+When evaluation reaches a truly unavailable forward gate, the affected option becomes `UNKNOWN`,
+an active episode ends `UNKNOWN_AT_GAP`, and Layer 2 stops. This local loss is recorded separately
+from global continuity. A known amount/off-grid failure or insufficient target bid depth before
+that gate remains `KNOWN_INELIGIBLE`.
 
 Option and combo catalog bootstrap is race-free: acknowledge and buffer the lifecycle stream,
 fetch the catalog snapshot, then reconcile buffered events in causal order before declaring the
@@ -732,7 +825,7 @@ UNKNOWN_AT_GAP | CENSORED_AT_STOP`, known-active duration by end reason, band-su
 atomic-state transitions, detector `UNKNOWN` transitions by reason, and Policy identity. These are
 reduced business-state transitions, never message counts. It contains no full market chain.
 
-It also requires strict `operational_diagnostics_schema_version = 2` with the exact
+It also requires strict `operational_diagnostics_schema_version = 3` with the exact
 `SHORT_VOL_RADAR` schema:
 
 - all nine frozen `runtime_limits`;
@@ -747,7 +840,10 @@ It also requires strict `operational_diagnostics_schema_version = 2` with the ex
   option-catalog refresh, and combo authoritative-refresh diagnostics;
 - core source shape rows containing only source, counts, final validation, and sorted consumed
   key/type pairs;
-- nullable first joint-witness time and continuous covered duration after that witness.
+- separate ticker application/currentness counts and bounded late-regression rows;
+- global continuity epoch/restart counts and bounded option-local unavailable/recovery intervals;
+- nullable first same-current-scope joint-witness time and continuous global-continuity duration
+  after that witness.
 
 These transport facts are counted once per reduced envelope and never enter business denominators.
 
@@ -768,6 +864,8 @@ diagnostic subset, not a fifth partition. The validator requires non-negative, n
 gap-free durations and
 `coverage_partition_error_ms = observation_interval_ms - (known_complete_ms +
 known_degraded_ms + unknown_ms + no_applicable_scope_ms) = 0`.
+Each version-3 segment also records its entry reason, sorted bounded affected scopes, and
+`global_continuity_epoch`; same-state activity does not create diagnostic market persistence.
 
 `radar_runtime` is the only writer. The current readers are the strict repository-owned schema
 validator and operator delivery report; no downstream business module consumes them in this
@@ -777,11 +875,11 @@ binds one Policy and runtime identity; mixed identities fail closed. Cross-Polic
 is `NOT_COMPARABLE` for forecast or trading claims, although named operational counts may be
 displayed side by side without causal inference.
 
-The exact Policy schema is now version 3 and the strict run summary requires diagnostics schema
-version 2. A version-2 Policy, a version-1 operational-diagnostics summary, and prior local
-Policy/summary shapes are `MIGRATION_REQUIRED` and not accepted. Missing
-`ticker_source_stale_deadline_ms` is never filled by a default. There is no accepted production
-artifact to migrate, and this task adds no migration or replay path.
+The Policy schema remains version 3 and unchanged. New strict run summaries require diagnostics
+schema version 3. The reader continues validating schema version 2 under its original exact shape
+only so sealed `attempt-001` remains immutable truthful evidence; version 2 is
+`MIGRATION_REQUIRED` for new global-continuity/local-availability acceptance and cannot be
+rewritten or upgraded. This task adds no migration or replay path.
 
 Each object has a simple strict repository-owned schema and Policy content identity. No separate
 source-document manifest, Git-object provenance graph, hit-only recomputation command, full-feed
@@ -927,14 +1025,21 @@ future exit liquidity, Outcome, PnL, qualification, promotion, or execution perm
     truth; blocked subscribe/unsubscribe work still permits timely heartbeat control; and a combo
     lifecycle burst produces exactly one trailing authoritative refresh.
 11. Currentness tests prove initial bootstrap warm-up is not a real index gap, normal minute
-    rollover enters pending without clearing history or the operational witness, a trusted
-    interval spanning a minute cannot select an old tail, a real gap clears the witness and
-    recovery establishes a new one with exact summary duration, window gaps are isolated by
-    per-band lookback without resubscription, `amount UNKNOWN -> VALID` yields known current and
-    `ARMED` with zero persistence count, known-absent protective wings are known negative, and the
-    main loop settles a final-window/Policy-gap boundary within the configured poll interval of at
-    most one second without a market update.
-12. Deterministic tests run the same interleaving sequence repeatedly and require identical
+    rollover enters pending without clearing history, a trusted interval spanning a minute cannot
+    select an old tail, a real global gap increments the continuity epoch and recovery establishes
+    a new same-scope witness with exact duration, window gaps are isolated by per-band lookback,
+    and `amount UNKNOWN -> VALID` yields known current and `ARMED` with zero persistence count.
+12. Ticker snapshot tests prove shape/currentness/application separation; equal-timestamp ingress
+    ordering; older `LATE_IGNORED` preserving the accepted ticker, episode, coverage, commands, and
+    witness; true TTL stale/recovery behavior; exact bounded diagnostic fields/counts; and no
+    application disposition contaminating source-shape validity.
+13. Scope tests prove `detector_coverage` and `has_current_full_formula` come from the same full
+    current aggregate snapshot, including an affected subset that has no formula while an
+    unchanged current member does, and reject historical/subset cross-combination.
+14. Evidence tests prove version-3 reason/scope/epoch coverage, global continuity, bounded
+    option-local availability, writer-edge independence, and continued strict validation of
+    sealed version-2 `attempt-001`.
+15. Deterministic tests run the same interleaving sequence repeatedly and require identical
     current results, episode states, coverage, emitted commands, and durable edges. Evidence
     storage `OSError` is fatal with zero reconnect.
 
@@ -957,7 +1062,7 @@ The process runs until:
 - warm-up completes and at least one real
   `Policy identity × expiry_timestamp × option_type` aggregate detector scope contains one or
   more reconciled catalog instruments, produces at least one full-formula known per-instrument
-  evaluation inside that same causal aggregate evaluation, and with
+  evaluation inside that same settled full current-scope snapshot, and with
   `detector_coverage = COMPLETE` produces `NO_ANOMALY` or `ANOMALY_ACTIVE`, after which a human may
   stop it; or
 - a human stops it earlier.
@@ -973,8 +1078,9 @@ minimum-amount, target-depth, OTM, and Delta gates and reaches known baseline vo
 executable IV interval, and richness classification. Short-circuit known ineligibility is still
 truthful `NO_ANOMALY`, but cannot alone establish the formula path.
 `complete_aggregate_with_full_formula_evaluation_count` counts only the joint witness where the
-same Policy/scope/causal aggregate is complete and contains that full-formula evaluation; separate
-times or scopes cannot be combined.
+same Policy/scope settled full current snapshot is complete and contains that full-formula
+evaluation. Still-current unchanged-member results may be reused; stale/historical results, only
+the affected subset, and different scopes cannot be combined.
 
 The accepted ledger contains only:
 
@@ -1008,10 +1114,11 @@ production Radar.
 ### OPERATIONAL_SOAK — contract approval required before any production run
 
 Production establishment additionally requires a human-approved continuous-operation acceptance
-plan. The plan must name the exact Policy path/digest, a new empty evidence directory, and its
-stop condition. This task does not infer approval from the smoke witness and does not run the
-soak. The contract fixes no universal duration; the candidate plan below proposes one exact
-validation-harness duration for a later authorization decision.
+plan. The prior separately authorized `operational-soak-attempt-001` completed with
+`acceptance = NOT_MET`; its version-2 evidence is sealed and remains the authoritative result.
+This fact-semantics construction does not infer new live authority and does not run a heartbeat
+probe or another Soak. A future plan must name exact code, Policy path/digest, a new empty evidence
+directory, and human-frozen global-continuity plus local-availability/current-coverage thresholds.
 
 The implemented strict diagnostic schema records, without persisting full market payloads:
 
@@ -1034,10 +1141,10 @@ future trading denominators. This task requires direct schema/writer tests, but 
 the Policy, stop condition, production connection, or soak, and it does not open the production
 observation gate.
 
-### Candidate successor Soak Policy and explicit acceptance checklist
+### Historical attempt-001 Policy and acceptance checklist
 
-The `OPERATIONAL_SOAK_PRECONDITIONS` construction subgate prepares, but does not authorize, this
-candidate successor:
+The `OPERATIONAL_SOAK_PRECONDITIONS` construction subgate prepared this historical Policy before
+the separately authorized attempt:
 
 ```text
 predecessor Policy digest =
@@ -1048,11 +1155,11 @@ candidate successor Policy path =
 candidate successor Policy digest =
   sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4
 
-reserved evidence directory =
+sealed evidence directory =
   /Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001
 ```
 
-The candidate successor keeps the predecessor's exact formula family, `0.1 BTC` target,
+That Policy kept the predecessor's exact formula family, `0.1 BTC` target,
 `(30, 4320]` minute scope, one-minute lookback with weight `1`, `0.01` annualized variance floor,
 call/put Delta range `[0, 1]`, activation/clear ratios `1.2/0.9`, activation/clear counts `2/2`,
 `1000 ms` separation, and all nine runtime limits. The only parsed field delta is
@@ -1060,7 +1167,7 @@ call/put Delta range `[0, 1]`, activation/clear ratios `1.2/0.9`, activation/cle
 identity without tuning business behavior. Both exact files must load through the production
 Policy loader, and their parsed JSON must be identical after normalizing only that band label.
 
-The proposed Soak stop condition is:
+The historical attempt-001 stop condition was:
 
 ```text
 SUCCESS:
@@ -1080,19 +1187,20 @@ witness, and restarts the full `3_600_000 ms` interval. The duration is an expli
 validation-harness stop boundary, not a product cadence, detector holding rule, or authorization
 to connect.
 
-Before a later Soak authorization request can be executed, all of these pre-run items must pass:
+Before attempt-001 was started, its historical pre-run checklist required:
 
 - the exact committed code `HEAD` is reviewed, clean, and equal to its pushed remote branch;
-- the candidate Policy exists at the exact path, its SHA-256 equals the exact digest above, and
+- the Policy exists at the exact path, its SHA-256 equals the exact digest above, and
   the production loader accepts that path/digest pair;
 - semantic comparison to the predecessor Smoke Policy proves that only `band_id` changed;
-- the reserved evidence directory exists and is empty immediately before startup;
-- the later human command repeats the exact code `HEAD`, Policy path/digest, evidence directory,
+- the now-sealed evidence directory is empty immediately before startup;
+- the human command repeats the exact code `HEAD`, Policy path/digest, evidence directory,
   and `3_600_000 ms` post-witness stop condition;
 - no private credential, private API, RFQ, combo creation, order, trade, or stage change is
   included or implied.
 
-The resulting clean-stop summary meets Soak acceptance only if every item below passes:
+The resulting clean-stop summary would have met the historical Soak acceptance only if every item
+below passed:
 
 - summary code and Policy identities equal the authorized exact `HEAD` and digest;
 - strict summary validation passes and `coverage_partition_error_ms = 0`;
@@ -1118,8 +1226,14 @@ The resulting clean-stop summary meets Soak acceptance only if every item below 
   persisted normal-market/no-anomaly rows.
 
 Green precondition tests, a prepared Policy, an empty directory, or prior Smoke evidence do not
-open the Soak gate. The production command remains prohibited until a new explicit human
-authorization names the final committed `HEAD` and every boundary above.
+open a new Soak gate. Attempt-001 did not pass this checklist.
+
+Attempt-001 is permanently `NOT_MET`: it cannot be reused, modified, migrated, recomputed,
+replayed, or accepted under version-3 semantics. Before a new Soak authorization request, focused
+tests, `make check`, and old-evidence validation must pass; a heartbeat wire probe must receive its
+own explicit authorization; and a human must freeze new global-continuity duration and explicit
+local availability/current coverage thresholds. The historical `3_600_000 ms` value is not
+silently carried into that future gate.
 
 ## Trader-readable acceptance gates
 

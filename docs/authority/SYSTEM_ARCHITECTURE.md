@@ -78,6 +78,14 @@ exchange-global sequence, so strict as-of means the latest individually continuo
 the process at one causal boundary, not a matching-engine-wide simultaneous snapshot. Each emitted
 event binds the latest boundary it consumed.
 
+An option `ticker.<instrument_name>.100ms` notification is a complete snapshot, not a sequenced
+change stream. Its `timestamp` is an as-of/currentness fact and is not a continuity token.
+`ingress_seq` establishes application order. A shape-valid snapshot older than the currently
+accepted ticker is `LATE_IGNORED`: it cannot overwrite the newer fact, request resubscription,
+change detector/episode truth, or restart any continuity epoch. Equal-timestamp snapshots remain
+ordered by `ingress_seq`. Shape validity, accepted-ticker currentness, and application disposition
+are separate facts and diagnostics.
+
 A relevant source change may update the current chain and evaluate the frozen detector. A time
 boundary is relevant only when it changes a declared discrete fact such as instrument membership,
 freshness class, or expiry/settlement eligibility. Continuous clock movement, a heartbeat, a
@@ -113,6 +121,26 @@ unavailable global input creates `UNKNOWN` only for its declared consumers.
 The runtime must replace or resynchronize affected state before using it again. Old quotes may not
 be carried through an unproved gap. Covered unaffected structures remain usable when their
 declared dependencies remain complete.
+
+Operational truth is kept in three independent ledgers:
+
+1. `global_continuity_epoch` restarts only for a retired session, non-contiguous/overflowed
+   ingress, a trusted-clock gap, or a real index continuity loss. Option-local unavailability and
+   current coverage changes never restart it.
+2. `current_market_truth_coverage` continues to partition every runtime millisecond into
+   `NO_APPLICABLE_SCOPE | KNOWN_COMPLETE | KNOWN_DEGRADED | UNKNOWN`. Its segments identify why
+   the state began, the affected global/aggregate/option scope, and the active continuity epoch.
+3. `option_local_availability` records the smallest affected option, its unavailable reason, and
+   bounded recovery timing. It can end or pause that option's current detector truth exactly as
+   the owning contract specifies, but it cannot erase unrelated current truth or global
+   continuity.
+
+One joint operational witness is derived from one settled full current
+`Policy identity × expiry_timestamp × option_type` scope snapshot. The same snapshot supplies both
+complete aggregate coverage and `has_current_full_formula`; a historical formula result or only
+the boundary's affected subset cannot be combined with a separately computed complete scope.
+`EvidenceWriter` persists only detector/atomic episode edges and the clean-stop summary and never
+participates in current-truth decisions.
 
 An initial start or unresolved gap may require causal warm-up for the Radar Policy. During that
 period the affected detector is `UNKNOWN`. Persisting a previous market stream is not required to
