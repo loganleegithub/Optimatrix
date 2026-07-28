@@ -1414,7 +1414,7 @@ UNKNOWN_AT_GAP | CENSORED_AT_STOP`, known-active duration by end reason, band-su
 atomic-state transitions, detector `UNKNOWN` transitions by reason, and Policy identity. These are
 reduced business-state transitions, never message counts. It contains no full market chain.
 
-It also requires strict `operational_diagnostics_schema_version = 3` with the exact
+New evidence requires strict `operational_diagnostics_schema_version = 4` with the exact
 `SHORT_VOL_RADAR` schema:
 
 - all nine frozen `runtime_limits`;
@@ -1422,6 +1422,8 @@ It also requires strict `operational_diagnostics_schema_version = 3` with the ex
   lag, overflow, send-control count, and connection-error-control count;
 - per-method scheduled/sent/terminal totals, exact pre-/post-send terminal provenance,
   rate-limit counts, and latency count/sum/max, plus separately conserved orphan-late wire count;
+- bounded close code, clean/abnormal disposition, exception class, and count rows conserved
+  exactly to connection-error controls, with no exception message or other unbounded detail;
 - received/processed counts and observation-duration-derived nullable rates for every fixed
   channel class;
 - current/peak subscribed instrument and channel counts;
@@ -1433,10 +1435,14 @@ It also requires strict `operational_diagnostics_schema_version = 3` with the ex
 - separate ticker application/currentness counts and bounded late-regression rows;
 - global continuity epoch/restart/recovery edges, complete current-epoch joint identity rows, and
   bounded option-local unavailable/recovery intervals;
+- coverage segments that separately freeze the reduced `trigger_cause` and the true bounded
+  `blocking_reason`, with exact affected scope and continuity epoch;
 - nullable first same-current-scope joint-witness time and continuous global-continuity duration
   after that witness.
 
 These transport facts are counted once per reduced envelope and never enter business denominators.
+Explicit read-only validators retain the sealed version-3 and version-2 exact schemas; older
+directories are never rewritten or relabelled as version 4.
 
 Coverage partitions the exact half-open interval
 `[runtime_started_monotonic_ms, clean_stop_monotonic_ms)` into one global state at every
