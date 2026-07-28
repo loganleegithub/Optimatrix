@@ -535,6 +535,7 @@ def epoch_two_summary(
                 "incident_id": 1,
                 "from_epoch": 1,
                 "to_epoch": 2,
+                "trigger_cause": "CLOCK_GAP",
                 "reason": "CLOCK_GAP",
                 "failure_domain": "CLOCK_INDEX",
                 "affected_scopes": ["GLOBAL"],
@@ -1197,6 +1198,7 @@ def test_sealed_operational_schema_retains_historical_queue_lag_restart_semantic
     continuity["restart_count_by_reason"] = {"QUEUE_LAG_DEADLINE": 1}
     restart = continuity["restart_edges"][0]
     assert isinstance(restart, dict)
+    restart.pop("trigger_cause")
     restart["reason"] = "QUEUE_LAG_DEADLINE"
     restart["failure_domain"] = "SESSION"
     coverage_segments = summary["coverage_segments"]
@@ -2601,6 +2603,7 @@ def test_schema_three_epoch_edges_must_match_restart_incidents_one_for_one() -> 
                 "incident_id": 1,
                 "from_epoch": 1,
                 "to_epoch": 2,
+                "trigger_cause": "TICKER_APPLIED",
                 "reason": "CLOCK_GAP",
                 "failure_domain": "CLOCK_INDEX",
                 "affected_scopes": ["GLOBAL"],
@@ -2828,6 +2831,7 @@ def test_schema_three_rejects_second_restart_before_incident_recovery() -> None:
                 "incident_id": 1,
                 "from_epoch": 1,
                 "to_epoch": 2,
+                "trigger_cause": "CLOCK_GAP",
                 "reason": "CLOCK_GAP",
                 "failure_domain": "CLOCK_INDEX",
                 "affected_scopes": ["GLOBAL"],
@@ -2842,6 +2846,7 @@ def test_schema_three_rejects_second_restart_before_incident_recovery() -> None:
                 "incident_id": 2,
                 "from_epoch": 2,
                 "to_epoch": 3,
+                "trigger_cause": "INDEX_CONTINUITY_GAP",
                 "reason": "INDEX_CONTINUITY_GAP",
                 "failure_domain": "CLOCK_INDEX",
                 "affected_scopes": ["GLOBAL"],
@@ -2905,6 +2910,7 @@ def test_schema_three_rejects_illegal_restart_cause_domain_scope_tuple() -> None
                 "incident_id": 1,
                 "from_epoch": 1,
                 "to_epoch": 2,
+                "trigger_cause": "TICKER_APPLIED",
                 "reason": "TICKER_APPLIED",
                 "failure_domain": "SESSION",
                 "affected_scopes": ["GLOBAL"],
@@ -2945,6 +2951,31 @@ def test_schema_three_accepts_exact_transport_session_restart_cause() -> None:
     restart["failure_domain"] = "SESSION"
 
     validate_run_summary(summary)
+
+
+def test_current_schema_restart_root_trigger_is_exactly_cross_bound() -> None:
+    summary = epoch_two_summary(recovery_ms=12)
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    restarted = segments[1]
+    assert isinstance(restarted, dict)
+    restarted["trigger_cause"] = "OPTION_BOOK_FACT"
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    continuity = diagnostics["global_continuity"]
+    assert isinstance(continuity, dict)
+    restart = continuity["restart_edges"][0]
+    assert isinstance(restart, dict)
+    restart["trigger_cause"] = "OPTION_BOOK_FACT"
+
+    validate_run_summary(summary)
+
+    forged = json.loads(json.dumps(summary))
+    forged["operational_diagnostics"]["global_continuity"]["restart_edges"][0]["trigger_cause"] = (
+        "TICKER_APPLIED"
+    )
+    with pytest.raises(EvidenceError, match="trigger"):
+        validate_run_summary(forged)
 
 
 def test_current_schema_rejects_queue_lag_as_global_continuity_restart() -> None:

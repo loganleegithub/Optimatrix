@@ -147,23 +147,55 @@ def test_current_stage_authorizes_exactly_one_next_closure() -> None:
     assert "## Queued sequence — not authorized" in current_stage
 
 
-def test_short_vol_task_has_open_post_soak_repair_and_closed_live_gates() -> None:
+def test_short_vol_task_has_open_soak_readiness_final_closure_and_closed_live_gates() -> None:
     task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
     opening = "\n".join(task.splitlines()[:60])
 
     assert "**Status:** ACTIVE" in opening
     assert "**Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`" in opening
-    assert (
-        "**Current construction subgate:** `POST_SOAK_BOUNDARY_AND_TRANSPORT_ATTRIBUTION_REPAIR`"
-    ) in opening
-    assert (
-        "**Current subgate implementation anchor:** `98fccaee002d0ab50f56aa10980db0dda68a0f96`"
-    ) in opening
+    assert ("**Current construction subgate:** `SOAK_READINESS_FINAL_CLOSURE`") in opening
+    assert ("**Current subgate base HEAD:** `ee5a00eefe06e293fca1e8ae3ee431a295f5a754`") in opening
     assert "**REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`" in opening
     assert "**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_003_NOT_MET`" in opening
     assert (
         "Live commands:** REQUIRED only after the exact named Smoke or Soak gate opens" in opening
     )
+
+
+def test_successor_soak_gate_keeps_three_ledgers_and_pending_budget_unapproved() -> None:
+    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
+    successor = task.split("### Successor `OPERATIONAL_SOAK`", maxsplit=1)[1].split(
+        "## First-principles scope",
+        maxsplit=1,
+    )[0]
+
+    for invariant in (
+        "Integrity ledger",
+        "Normal-boundary-pending ledger",
+        "Currentness-incident recovery ledger",
+        "`pending_budget_status = PROPOSED`",
+        "`duration(P) <= P_budget_ms`",
+        "`duration(K) / 3_600_000 >= 0.99`",
+    ):
+        assert invariant in successor
+    assert "D = 3_600_000 - duration(P)" not in successor
+    assert 1 / 3_600_000 < 0.99
+
+
+def test_successor_soak_local_recovery_does_not_rebind_global_witness() -> None:
+    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
+    successor = task.split("### Successor `OPERATIONAL_SOAK`", maxsplit=1)[1].split(
+        "## First-principles scope",
+        maxsplit=1,
+    )[0]
+
+    for invariant in (
+        "does not relabel the earlier global witness as post-recovery",
+        "explicitly rebind the previously approved Policy",
+        "heartbeat wire observation is conditional",
+    ):
+        assert invariant in successor
+    assert "strictly later exact joint witness" not in successor
 
 
 def test_historical_soak_remains_not_met_and_future_live_gates_stay_closed() -> None:

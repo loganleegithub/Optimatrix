@@ -2348,17 +2348,20 @@ def _validate_global_continuity(
     edge_reasons: Counter[str] = Counter()
     for expected_id, raw_edge in enumerate(raw_edges, start=1):
         edge = _mapping(raw_edge, "global continuity restart edge")
+        restart_edge_fields = {
+            "incident_id",
+            "from_epoch",
+            "to_epoch",
+            "reason",
+            "failure_domain",
+            "affected_scopes",
+            "boundary",
+        }
+        if diagnostics_version == 4:
+            restart_edge_fields.add("trigger_cause")
         _exact_keys(
             edge,
-            {
-                "incident_id",
-                "from_epoch",
-                "to_epoch",
-                "reason",
-                "failure_domain",
-                "affected_scopes",
-                "boundary",
-            },
+            restart_edge_fields,
             "global continuity restart edge",
         )
         if _positive_integer(edge["incident_id"], "continuity incident_id") != expected_id:
@@ -2367,6 +2370,14 @@ def _validate_global_continuity(
         to_epoch = _positive_integer(edge["to_epoch"], "continuity to_epoch")
         if from_epoch != expected_id or to_epoch != expected_id + 1:
             raise EvidenceError("global continuity restart edge does not advance exactly one epoch")
+        if diagnostics_version == 4:
+            trigger_cause = _required_string(edge, "trigger_cause")
+            try:
+                CausalCause(trigger_cause)
+            except ValueError as exc:
+                raise EvidenceError(
+                    "global continuity restart trigger is outside the causal cause whitelist"
+                ) from exc
         reason = _required_string(edge, "reason")
         restart_allowlist = (
             SEALED_GLOBAL_CONTINUITY_RESTART_ALLOWLIST
@@ -2971,15 +2982,24 @@ def _validate_version_three_coverage(
     for (before, after), restart in zip(epoch_edges, restart_edges, strict=True):
         boundary = _mapping(restart["boundary"], "global continuity restart boundary")
         restart_scopes = _validate_affected_scopes(restart["affected_scopes"])
+        restart_identity_matches = (
+            after.reason == restart["reason"]
+            if diagnostics_version == 3
+            else (
+                after.reason == restart["trigger_cause"]
+                and after.blocking_reason == restart["reason"]
+            )
+        )
         if (
             before.global_continuity_epoch != restart["from_epoch"]
             or after.global_continuity_epoch != restart["to_epoch"]
             or after.start_monotonic_ms != boundary["received_monotonic_ms"]
-            or (after.reason if diagnostics_version == 3 else after.blocking_reason)
-            != restart["reason"]
+            or not restart_identity_matches
             or after.affected_scopes != restart_scopes
         ):
-            raise EvidenceError("coverage epoch edge does not match its continuity restart edge")
+            raise EvidenceError(
+                "coverage epoch edge does not match its continuity restart trigger and effect"
+            )
 
 
 def _validate_affected_scopes(value: object) -> tuple[str, ...]:

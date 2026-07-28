@@ -1376,6 +1376,42 @@ def test_retired_heartbeat_remains_cross_ledger_conserved_after_reconnect(
     assert reducer.diagnostics.retired_epoch_frame_count == 1
 
 
+def test_retired_connection_error_drain_is_counted_with_bounded_attribution(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    reducer._retire_current_epoch(
+        CausalCause.RUNTIME_SESSION_FAILURE.value,
+        monotonic_ms=1_050,
+    )
+
+    drained = InboundEnvelope(
+        {
+            "jsonrpc": "2.0",
+            "method": "connection_error",
+            "params": {
+                "kind": "SESSION_FAILURE",
+                "reason": "TRANSPORT_READ_FAILURE",
+                "close_code": "NOT_AVAILABLE",
+                "close_disposition": "ABNORMAL",
+                "exception_class": "OSError",
+            },
+        },
+        session_epoch=1,
+        ingress_seq=1,
+        received_monotonic_ms=1_100,
+    )
+
+    assert reducer.reduce(drained, processed_monotonic_ms=1_100) == ()
+    assert reducer.diagnostics.connection_error_event_count == 1
+    assert dict(reducer.diagnostics.transport_terminal_attribution_count) == {
+        ("NOT_AVAILABLE", "ABNORMAL", "OSError"): 1
+    }
+    assert reducer.diagnostics.retired_epoch_frame_count == 1
+
+
 def test_session_epoch_cannot_be_reused_or_regressed(
     tmp_path: Path,
     policy_factory: PolicyFactory,

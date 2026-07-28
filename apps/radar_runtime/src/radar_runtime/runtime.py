@@ -797,6 +797,73 @@ class RadarReducer:
         )
         return self._take_commands()
 
+    @staticmethod
+    def _parse_connection_error_control(
+        envelope: InboundEnvelope,
+    ) -> tuple[str, str, str, str, str]:
+        params = envelope.get("params")
+        try:
+            connection_error = require_mapping(params, "connection_error.params")
+            if set(connection_error) != {
+                "kind",
+                "reason",
+                "close_code",
+                "close_disposition",
+                "exception_class",
+            }:
+                raise SourceDataError(
+                    "connection_error.params fields are not the exact bounded shape"
+                )
+            kind = require_str(
+                connection_error.get("kind"),
+                "connection_error.params.kind",
+            )
+            reason = require_str(
+                connection_error.get("reason"),
+                "connection_error.params.reason",
+            )
+            close_code = require_str(
+                connection_error.get("close_code"),
+                "connection_error.params.close_code",
+            )
+            close_disposition = require_str(
+                connection_error.get("close_disposition"),
+                "connection_error.params.close_disposition",
+            )
+            exception_class = require_str(
+                connection_error.get("exception_class"),
+                "connection_error.params.exception_class",
+            )
+        except SourceDataError as exc:
+            raise PublicProtocolIncompatibility(
+                "connection error control shape is incompatible"
+            ) from exc
+        expected_reasons = {
+            "SESSION_FAILURE": {
+                CausalCause.REMOTE_CONNECTION_CLOSED.value,
+                CausalCause.TRANSPORT_READ_FAILURE.value,
+            },
+            "PROTOCOL_INCOMPATIBILITY": {
+                CausalCause.PROTOCOL_INCOMPATIBILITY.value,
+            },
+        }
+        if reason not in expected_reasons.get(kind, set()):
+            raise PublicProtocolIncompatibility("connection error kind and reason are inconsistent")
+        if (
+            close_code not in TRANSPORT_CLOSE_CODE_ALLOWLIST
+            or close_disposition not in TRANSPORT_CLOSE_DISPOSITION_ALLOWLIST
+            or exception_class not in TRANSPORT_EXCEPTION_CLASS_ALLOWLIST
+        ):
+            raise PublicProtocolIncompatibility(
+                "connection error attribution is outside the bounded allowlist"
+            )
+        expected_disposition = "CLEAN" if close_code in {"1000", "1001"} else "ABNORMAL"
+        if close_disposition != expected_disposition:
+            raise PublicProtocolIncompatibility(
+                "connection close code and disposition are inconsistent"
+            )
+        return kind, reason, close_code, close_disposition, exception_class
+
     def reduce(
         self,
         envelope: InboundEnvelope,
@@ -828,10 +895,16 @@ class RadarReducer:
         self.diagnostics.channel_received_count[channel_class] += 1
         self.diagnostics.reduced_envelope_count += 1
         self.diagnostics.channel_processed_count[channel_class] += 1
+        connection_error_control: tuple[str, str, str, str, str] | None = None
         if envelope.control_event is not None:
             self.diagnostics.send_control_event_count += 1
         elif envelope.get("method") == "connection_error":
+            connection_error_control = self._parse_connection_error_control(envelope)
+            _, _, close_code, close_disposition, exception_class = connection_error_control
             self.diagnostics.connection_error_event_count += 1
+            self.diagnostics.transport_terminal_attribution_count[
+                (close_code, close_disposition, exception_class)
+            ] += 1
         if envelope.session_epoch == self._session_epoch:
             self._last_ingress_seq = envelope.ingress_seq
         if (
@@ -924,72 +997,10 @@ class RadarReducer:
                         "subscription routing shape is incompatible"
                     ) from exc
             elif method == "connection_error":
-                params = envelope.get("params")
-                try:
-                    connection_error = require_mapping(params, "connection_error.params")
-                    if set(connection_error) != {
-                        "kind",
-                        "reason",
-                        "close_code",
-                        "close_disposition",
-                        "exception_class",
-                    }:
-                        raise SourceDataError(
-                            "connection_error.params fields are not the exact bounded shape"
-                        )
-                    kind = require_str(
-                        connection_error.get("kind"),
-                        "connection_error.params.kind",
-                    )
-                    reason = require_str(
-                        connection_error.get("reason"),
-                        "connection_error.params.reason",
-                    )
-                    close_code = require_str(
-                        connection_error.get("close_code"),
-                        "connection_error.params.close_code",
-                    )
-                    close_disposition = require_str(
-                        connection_error.get("close_disposition"),
-                        "connection_error.params.close_disposition",
-                    )
-                    exception_class = require_str(
-                        connection_error.get("exception_class"),
-                        "connection_error.params.exception_class",
-                    )
-                except SourceDataError as exc:
-                    raise PublicProtocolIncompatibility(
-                        "connection error control shape is incompatible"
-                    ) from exc
-                expected_reasons = {
-                    "SESSION_FAILURE": {
-                        CausalCause.REMOTE_CONNECTION_CLOSED.value,
-                        CausalCause.TRANSPORT_READ_FAILURE.value,
-                    },
-                    "PROTOCOL_INCOMPATIBILITY": {
-                        CausalCause.PROTOCOL_INCOMPATIBILITY.value,
-                    },
-                }
-                if reason not in expected_reasons.get(kind, set()):
-                    raise PublicProtocolIncompatibility(
-                        "connection error kind and reason are inconsistent"
-                    )
-                if (
-                    close_code not in TRANSPORT_CLOSE_CODE_ALLOWLIST
-                    or close_disposition not in TRANSPORT_CLOSE_DISPOSITION_ALLOWLIST
-                    or exception_class not in TRANSPORT_EXCEPTION_CLASS_ALLOWLIST
-                ):
-                    raise PublicProtocolIncompatibility(
-                        "connection error attribution is outside the bounded allowlist"
-                    )
-                expected_disposition = "CLEAN" if close_code in {"1000", "1001"} else "ABNORMAL"
-                if close_disposition != expected_disposition:
-                    raise PublicProtocolIncompatibility(
-                        "connection close code and disposition are inconsistent"
-                    )
-                self.diagnostics.transport_terminal_attribution_count[
-                    (close_code, close_disposition, exception_class)
-                ] += 1
+                kind, reason, _, _, _ = cast(
+                    tuple[str, str, str, str, str],
+                    connection_error_control,
+                )
                 self._retire_current_epoch(reason)
                 if kind == "PROTOCOL_INCOMPATIBILITY":
                     raise PublicProtocolIncompatibility(
@@ -3777,6 +3788,7 @@ class RadarReducer:
                 "incident_id": incident.incident_id,
                 "from_epoch": incident.from_epoch,
                 "to_epoch": incident.to_epoch,
+                "trigger_cause": commit.cause.value,
                 "reason": restart_effect.cause.value,
                 "failure_domain": restart_effect.failure_domain.value,
                 "affected_scopes": list(restart_effect.affected_scopes),
@@ -3789,6 +3801,7 @@ class RadarReducer:
             self._coverage._current_state,
             commit=commit,
             causal_effect=restart_effect,
+            affected_scopes=restart_effect.affected_scopes,
             blocking_reason=restart_effect.cause.value,
             global_continuity_epoch=self._global_continuity_epoch,
             force=True,
@@ -4006,7 +4019,7 @@ class RadarReducer:
                 countable=(countable and not queue_lag_non_countable),
                 acceptance_eligible=(acceptance_eligible and not queue_lag_non_countable),
                 affected_scope_keys=affected_scope_keys,
-                force_full_currentness=queue_lag_non_countable,
+                force_full_currentness=queue_lag_transition_boundary,
             )
             self._fact_transaction_revision += 1
             if queue_lag_transition_boundary:
@@ -4062,7 +4075,6 @@ class RadarReducer:
             )
             self._update_coverage(
                 commit=transaction_commit,
-                causal_effect=queue_lag_effect or source_currentness_effect,
             )
             return
         try:
@@ -4612,7 +4624,6 @@ class RadarReducer:
         self._sync_combo_subscriptions(boundary)
         self._update_coverage(
             commit=transaction_commit,
-            causal_effect=global_gap_effect or queue_lag_effect or source_currentness_effect,
         )
         self._last_time_currentness_by_instrument = current_time_tokens
         self._last_time_currentness_token = tuple(current_time_tokens.items())
@@ -4837,6 +4848,7 @@ class RadarReducer:
         *,
         commit: CausalCommit,
         causal_effect: CausalEffect | None = None,
+        affected_scopes: tuple[str, ...] | None = None,
         blocking_reason: str,
         force: bool = False,
     ) -> None:
@@ -4844,6 +4856,7 @@ class RadarReducer:
             state,
             commit=commit,
             causal_effect=causal_effect,
+            affected_scopes=affected_scopes,
             blocking_reason=blocking_reason,
             global_continuity_epoch=self._global_continuity_epoch,
             force=force,
@@ -5121,7 +5134,6 @@ class RadarReducer:
         self,
         *,
         commit: CausalCommit,
-        causal_effect: CausalEffect | None = None,
     ) -> None:
         monotonic_ms = commit.boundary.received_monotonic_ms
         self._update_band_suspension(monotonic_ms)
@@ -5130,7 +5142,7 @@ class RadarReducer:
             self._transition_coverage(
                 CoverageState.UNKNOWN,
                 commit=commit,
-                causal_effect=causal_effect,
+                affected_scopes=("GLOBAL",),
                 blocking_reason=CoverageBlockingReason.QUEUE_LAG_CURRENTNESS.value,
             )
             return
@@ -5143,7 +5155,7 @@ class RadarReducer:
             self._transition_coverage(
                 CoverageState.KNOWN_DEGRADED if positive else CoverageState.UNKNOWN,
                 commit=commit,
-                causal_effect=causal_effect,
+                affected_scopes=("GLOBAL",),
                 blocking_reason=(
                     CoverageBlockingReason.ACTIVE_POSITIVE_SCOPE_INCOMPLETE.value
                     if positive
@@ -5162,7 +5174,7 @@ class RadarReducer:
             self._transition_coverage(
                 CoverageState.UNKNOWN,
                 commit=commit,
-                causal_effect=causal_effect,
+                affected_scopes=("GLOBAL",),
                 blocking_reason=CoverageBlockingReason.CLOCK_GAP.value,
             )
             return
@@ -5174,7 +5186,7 @@ class RadarReducer:
             self._transition_coverage(
                 CoverageState.KNOWN_DEGRADED if positive else CoverageState.UNKNOWN,
                 commit=commit,
-                causal_effect=causal_effect,
+                affected_scopes=("GLOBAL",),
                 blocking_reason=(
                     CoverageBlockingReason.ACTIVE_POSITIVE_SCOPE_INCOMPLETE.value
                     if positive
@@ -5187,6 +5199,7 @@ class RadarReducer:
             )
             return
         scoped_keys: set[tuple[int, OptionType, str]] = set()
+        unresolved_names: list[str] = []
         unresolved = False
         for instrument in self.options.values():
             applicability = classify_time_applicability(
@@ -5211,11 +5224,16 @@ class RadarReducer:
                 TimeApplicability.MONITOR_BOUNDARY,
             }:
                 unresolved = True
+                unresolved_names.append(instrument.instrument_name)
         if not scoped_keys:
             self._transition_coverage(
                 CoverageState.UNKNOWN if unresolved else CoverageState.NO_APPLICABLE_SCOPE,
                 commit=commit,
-                causal_effect=causal_effect,
+                affected_scopes=(
+                    self._option_local_coverage_scopes(tuple(unresolved_names))
+                    if unresolved_names
+                    else ("GLOBAL",)
+                ),
                 blocking_reason=(
                     CoverageBlockingReason.TIME_APPLICABILITY_UNRESOLVED.value
                     if unresolved
@@ -5242,25 +5260,33 @@ class RadarReducer:
             state = CoverageState.KNOWN_DEGRADED
         else:
             state = CoverageState.UNKNOWN
+        scope_blocking_reason, scope_blocker_scopes = self._current_scope_blocker(scoped_keys)
         blocking_reason = (
             CoverageBlockingReason.NONE.value
             if state is CoverageState.KNOWN_COMPLETE
             else (
                 CoverageBlockingReason.ACTIVE_POSITIVE_SCOPE_INCOMPLETE.value
                 if state is CoverageState.KNOWN_DEGRADED
-                else self._current_scope_blocking_reason(scoped_keys)
+                else (
+                    CoverageBlockingReason.TIME_APPLICABILITY_UNRESOLVED.value
+                    if unresolved
+                    else scope_blocking_reason
+                )
             )
         )
-        blocking_effect = (
-            causal_effect
-            if causal_effect is not None
-            and self._bounded_coverage_blocking_reason(causal_effect.cause.value) == blocking_reason
-            else None
+        affected_scopes = (
+            self._coverage_scope_labels(scoped_keys)
+            if state is CoverageState.KNOWN_COMPLETE
+            else (
+                self._option_local_coverage_scopes(tuple(unresolved_names))
+                if unresolved_names
+                else scope_blocker_scopes
+            )
         )
         self._transition_coverage(
             state,
             commit=commit,
-            causal_effect=blocking_effect,
+            affected_scopes=affected_scopes,
             blocking_reason=blocking_reason,
         )
 
@@ -5277,33 +5303,92 @@ class RadarReducer:
                 return CoverageBlockingReason.OPTION_BOOK_UNAVAILABLE.value
             return CoverageBlockingReason.CURRENT_SCOPE_INCOMPLETE.value
 
-    def _current_scope_blocking_reason(
+    @staticmethod
+    def _coverage_scope_labels(
+        scoped_keys: set[tuple[int, OptionType, str]],
+    ) -> tuple[str, ...]:
+        labels = tuple(
+            sorted(
+                f"SCOPE:{expiry}:{option_type.value}:{band_id}"
+                for expiry, option_type, band_id in scoped_keys
+            )
+        )
+        return labels if labels and len(labels) <= 256 else ("GLOBAL",)
+
+    def _current_scope_blocker(
         self,
         scoped_keys: set[tuple[int, OptionType, str]],
-    ) -> str:
-        reasons = sorted(
-            {
-                result.reason
-                for name, result in self.results.items()
-                if result.reason is not None
-                and not result.known_evaluation
-                and name in self.options
-                and any(
-                    (
-                        self.options[name].expiration_timestamp_ms,
-                        self.options[name].option_type,
-                        result.band_id,
-                    )
-                    == scope_key
-                    for scope_key in scoped_keys
-                )
-            }
+    ) -> tuple[str, tuple[str, ...]]:
+        candidates = tuple(
+            (name, result.reason, self._bounded_coverage_blocking_reason(result.reason))
+            for name, result in self.results.items()
+            if result.reason is not None
+            and not result.known_evaluation
+            and name in self.options
+            and (
+                self.options[name].expiration_timestamp_ms,
+                self.options[name].option_type,
+                result.band_id,
+            )
+            in scoped_keys
         )
-        for reason in reasons:
+        selected = CoverageBlockingReason.CURRENT_SCOPE_INCOMPLETE.value
+        for reason in sorted({reason for _, reason, _ in candidates}):
             bounded = self._bounded_coverage_blocking_reason(reason)
             if bounded != CoverageBlockingReason.CURRENT_SCOPE_INCOMPLETE.value:
-                return bounded
-        return CoverageBlockingReason.CURRENT_SCOPE_INCOMPLETE.value
+                selected = bounded
+                break
+        selected_names = tuple(
+            sorted(name for name, _, bounded in candidates if bounded == selected)
+        )
+        global_blockers = {
+            CoverageBlockingReason.CLOCK_GAP.value,
+            CoverageBlockingReason.SESSION_GAP.value,
+            CoverageBlockingReason.REMOTE_CONNECTION_CLOSED.value,
+            CoverageBlockingReason.TRANSPORT_READ_FAILURE.value,
+            CoverageBlockingReason.SESSION_LIVENESS_DEADLINE.value,
+            CoverageBlockingReason.SESSION_RPC_FAILURE.value,
+            CoverageBlockingReason.RUNTIME_SESSION_FAILURE.value,
+            CoverageBlockingReason.PROTOCOL_INCOMPATIBILITY.value,
+            CoverageBlockingReason.INGRESS_GAP_OR_DUPLICATE.value,
+            CoverageBlockingReason.QUEUE_OVERFLOW.value,
+            CoverageBlockingReason.PLATFORM_UNESTABLISHED.value,
+            CoverageBlockingReason.POST_STATUS_BOOTSTRAP_REQUIRED.value,
+            CoverageBlockingReason.PLATFORM_MAINTENANCE.value,
+            CoverageBlockingReason.PUBLIC_METHODS_DENIED.value,
+            CoverageBlockingReason.RELEVANT_PLATFORM_LOCK.value,
+            CoverageBlockingReason.OPTION_CATALOG_INCOMPLETE.value,
+            CoverageBlockingReason.INDEX_SOURCE_STALE.value,
+            CoverageBlockingReason.INDEX_CONTINUITY_GAP.value,
+            CoverageBlockingReason.QUEUE_LAG_CURRENTNESS.value,
+        }
+        if selected in global_blockers:
+            return selected, ("GLOBAL",)
+        if selected == CoverageBlockingReason.INDEX_WINDOW_GAP.value:
+            matching_scopes = {
+                (
+                    self.options[name].expiration_timestamp_ms,
+                    self.options[name].option_type,
+                    self.results[name].band_id,
+                )
+                for name in selected_names
+                if self.results[name].band_id is not None
+            }
+            return selected, self._coverage_scope_labels(
+                {
+                    (expiry, option_type, cast(str, band_id))
+                    for expiry, option_type, band_id in matching_scopes
+                }
+            )
+        option_local_blockers = {
+            CoverageBlockingReason.TICKER_SOURCE_STALE.value,
+            CoverageBlockingReason.TICKER_TIMESTAMP_AHEAD.value,
+            CoverageBlockingReason.OPTION_LIFECYCLE_UNAVAILABLE.value,
+            CoverageBlockingReason.OPTION_BOOK_UNAVAILABLE.value,
+        }
+        if selected in option_local_blockers and selected_names:
+            return selected, self._option_local_coverage_scopes(selected_names)
+        return selected, self._coverage_scope_labels(scoped_keys)
 
     def _update_band_suspension(self, monotonic_ms: int) -> None:
         suspended = any(
@@ -6129,6 +6214,7 @@ class CoverageLedger:
         *,
         commit: CausalCommit,
         causal_effect: CausalEffect | None = None,
+        affected_scopes: tuple[str, ...] | None = None,
         blocking_reason: str,
         global_continuity_epoch: int,
         force: bool = False,
@@ -6140,11 +6226,21 @@ class CoverageLedger:
             CoverageBlockingReason(blocking_reason)
         except ValueError as exc:
             raise ValueError("coverage blocking reason is outside the bounded allowlist") from exc
-        affected_scopes = (
-            causal_effect.affected_scopes if causal_effect is not None else commit.affected_scopes
+        resolved_affected_scopes = (
+            affected_scopes
+            if affected_scopes is not None
+            else (
+                causal_effect.affected_scopes
+                if causal_effect is not None
+                else commit.transaction_affected_scopes
+            )
         )
+        _validate_causal_scopes(resolved_affected_scopes)
         same_coverage_semantics = (
-            state is self._current_state and blocking_reason == self._current_blocking_reason
+            state is self._current_state
+            and blocking_reason == self._current_blocking_reason
+            and resolved_affected_scopes == self._current_affected_scopes
+            and global_continuity_epoch == self._current_global_continuity_epoch
         )
         if same_coverage_semantics and not force:
             return
@@ -6164,7 +6260,7 @@ class CoverageLedger:
         self._current_state = state
         self._current_trigger_cause = commit.cause.value
         self._current_blocking_reason = blocking_reason
-        self._current_affected_scopes = affected_scopes
+        self._current_affected_scopes = resolved_affected_scopes
         self._current_global_continuity_epoch = global_continuity_epoch
 
     def close(self, stop_monotonic_ms: int) -> tuple[CoverageSegment, ...]:

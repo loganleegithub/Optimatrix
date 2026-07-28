@@ -44,10 +44,15 @@
 
 **Prior subgate implementation anchor:** `64f2299a1324059934aefce4cc8ee4190813c681`
 
-**Current construction subgate:** `POST_SOAK_BOUNDARY_AND_TRANSPORT_ATTRIBUTION_REPAIR`
+**Prior construction subgate:** `POST_SOAK_BOUNDARY_AND_TRANSPORT_ATTRIBUTION_REPAIR`
 `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_28`
 
-**Current subgate implementation anchor:** `98fccaee002d0ab50f56aa10980db0dda68a0f96`
+**Prior subgate implementation anchor:** `ee5a00eefe06e293fca1e8ae3ee431a295f5a754`
+
+**Current construction subgate:** `SOAK_READINESS_FINAL_CLOSURE`
+`OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_28`
+
+**Current subgate base HEAD:** `ee5a00eefe06e293fca1e8ae3ee431a295f5a754`
 
 **REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`
 
@@ -126,6 +131,15 @@ and append-only local commits. It grants no Policy change, replay, offline recom
 production-public connection, new Soak, push, merge, private API, order, trade, or stage
 advancement.
 
+The subsequent explicit human command names exact clean base
+`ee5a00eefe06e293fca1e8ae3ee431a295f5a754` and opens only
+`SOAK_READINESS_FINAL_CLOSURE`: one append-only local commit for atomic retired/current
+connection-error accounting, edge-owned queue-lag rebuilds, current-truth coverage blocker scopes,
+the version-4 restart root trigger, and the successor gate accounting revision below. It requires
+offline red-to-green tests and read-only sealed validation. It explicitly grants no push,
+production-public connection, heartbeat probe, Soak, Policy mutation, merge, stage advancement,
+private API, order, or trade.
+
 The prior `OPERATIONAL_SOAK` attempt at
 `/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001` is sealed
 `NOT_MET`. It is historical evidence only and may not be changed, replayed, recomputed, migrated,
@@ -188,10 +202,14 @@ The execution gates are independent:
     exact base `98fccaee002d0ab50f56aa10980db0dda68a0f96`. It authorizes only the bounded
     offline repair, exact contract alignment, sealed-evidence validation, and append-only local
     commits below.
-15. **Next `OPERATIONAL_SOAK` gate:** closed until this repair is accepted and pushed, its remote
+15. **`SOAK_READINESS_FINAL_CLOSURE` construction subgate:** opened against exact base
+    `ee5a00eefe06e293fca1e8ae3ee431a295f5a754`. It authorizes only the bounded offline repair,
+    successor accounting revision, sealed-evidence validation, and one append-only local commit
+    below.
+16. **Next `OPERATIONAL_SOAK` gate:** closed until this repair is accepted and pushed, its remote
     exact HEAD is verified, and a later human command independently names exact accepted code,
-    a new Policy identity/path/digest, a new empty evidence directory, and a post-stop-only
-    stop/acceptance contract.
+    an explicitly bound approved Policy identity/path/digest, a new empty evidence directory, and
+    a post-stop-only stop/acceptance contract with a human-frozen pending budget.
 
 Production-public connection, live artifact collection, private API, order, trade, merge,
 business acceptance, task archival, stage advancement, and any later research or execution
@@ -860,14 +878,105 @@ write, supplement, migrate, recompute, or relabel any sealed object. In particul
 calculation, `CURRENT_STAGE`, production-public connectivity, private APIs, orders, and trades
 were outside this repair and remain unchanged.
 
-### Successor `OPERATIONAL_SOAK` — acceptance semantics frozen, live identity unbound
+### `SOAK_READINESS_FINAL_CLOSURE` — offline construction authorized
 
-The successor gate remains `CLOSED`. This section freezes only the post-stop accounting semantics;
+The exact base is `ee5a00eefe06e293fca1e8ae3ee431a295f5a754`. History remains append-only
+and this closure permits exactly one local commit.
+
+**Market/Decision input contract change:** `APPROVED` — make ordered queue lag an edge-owned
+currentness incident: enter and recovery rebuild all current scopes once; while the incident
+persists, each ordered fact settles only its causally affected immutable scope and remains
+non-countable.
+
+**Decision Policy change:** `NONE` — no Policy file, formula, target quantity, TTE band, Delta,
+lookback, threshold, persistence, clear/re-arm rule, or runtime-limit value changes.
+
+**Outcome/evaluation contract change:** `NONE` — no replay, offline recomputation, historical
+relabelling, future label, Candidate, Position, Outcome, comparator, or qualification.
+
+**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
+capability remains `NONE`, production Radar remains `NOT_ESTABLISHED`, and every live gate stays
+closed.
+
+#### Required repair
+
+1. A reduced `connection_error` is classified once against the bounded transport allowlists and
+   commits `ingress.connection_error_event_count` plus exactly one
+   `transport_terminal_attribution` row atomically before the retired-epoch business-effect
+   barrier. A current control may retire its epoch; a control drained after that retirement has
+   no second business effect, but neither ledger fact may disappear.
+2. Queue-lag entry and the first within-deadline recovery boundary each perform one full
+   current-scope rebuild. Consecutive delayed boundaries do not repeat whole-market work: they
+   settle only the boundary's frozen affected instrument/scope set, remain `UNKNOWN`, emit zero
+   observation, and preserve the existing global-continuity epoch and witness.
+3. Coverage derives the current blocker reason and blocker scopes from the complete committed
+   current truth, not from the latest causal effect alone. Its segment identity is exactly
+   `(state, blocking_reason, affected_scopes, global_continuity_epoch)`; any change in one member
+   closes the prior half-open row even when `state` and `blocking_reason` are unchanged.
+4. A version-4 continuity restart edge adds exact bounded `trigger_cause` for the root reduced
+   commit while retaining `reason` for the restart effect. Strict validation cross-binds both to
+   the coverage epoch edge. Sealed version-3 and version-2 restart and coverage shapes remain
+   byte-for-byte governed by their original readers and receive no new field.
+
+#### Required red counterexamples
+
+- a bounded `connection_error` already accepted by transport but drained after the epoch is
+  retired contributes one connection-error count and one matching attribution row;
+- multiple consecutive lagged market frames rebuild the full market only on incident entry, then
+  settle only each affected scope with zero observation;
+- `A stale -> B stale -> A recover` yields exact blocker scope transitions
+  `A -> (A, B) -> B`;
+- one-field forgery of a version-4 restart `trigger_cause` fails strict cross-ledger validation;
+- a witness established before a local incident remains honestly pre-incident while local
+  recovery is proved by its own ledger; it is never relabelled as a post-recovery witness;
+- a final hour consisting almost entirely of normal boundary pending cannot pass current coverage
+  by shrinking its denominator.
+
+#### Offline acceptance
+
+Run the focused red-to-green tests, `make check`, the complete malicious version-4 validator
+suite, strict read-only validation of sealed `operational-soak-attempt-001`,
+`operational-soak-attempt-002`, `operational-soak-attempt-003`, and
+`heartbeat-wire-probe-runtime-attempt-001`, and before/after summary plus path-bound ordered
+manifest hashes for all four directories. `git diff --check`, authority, Policy, artifact, and
+worktree audits must pass. No Policy or `CURRENT_STAGE` content may change.
+
+#### Offline acceptance result
+
+The six required counterexamples were observed red against the base and green after the bounded
+repair. The four owning focused files, the complete malicious version-4 evidence suite, and
+`make check` passed (`410 passed`). Each sealed directory passed only its owning read-only
+validator with object counts `224`, `231`, `753`, and `1`. Before and after validation, the exact
+`radar-run-summary.json / path-bound ordered manifest` SHA-256 pairs were unchanged:
+
+```text
+attempt-001:
+  4d9929f7b04b3b79a2aed2fc06abde23bbe0a8245f7dc51add977e7e30744747
+  ce09aa4380b1786a8c99aa96cfec03e3b4768dac4c3f2e3af7febe2f39f5a27d
+attempt-002:
+  7f33d4539119278313a481a3b34989d30a189c5cd9b18d84e6d7195b65ad5318
+  33dfc6184a0f842d5261ef4bf5227df667d1296b28f6dc5f8d5f3aae0707f506
+attempt-003:
+  425e7304ae3f102aefd2f3bedd23ea12767e597b05e17cc3b74988f4282dd30f
+  25f77930d041421a6bc5029848aec79ff4025dc1573cb037dc158064b40bd273
+heartbeat-wire-probe-runtime-attempt-001:
+  7ba1f137e2c66fd95f93d068a5e77a19a344b878ae3667f77b57772b858507ff
+  00b80e1182b241d81493ef3aec5e70133f629988276999298e4f50889e3d5f25
+```
+
+Validation wrote no sealed object. Policy files, `CURRENT_STAGE`, production connectivity,
+private APIs, orders, trades, replay, and offline market recomputation remained outside this
+closure and unchanged.
+
+### Successor `OPERATIONAL_SOAK` — accounting revised, live identity unbound
+
+The successor gate remains `CLOSED`. This section revises only the post-stop accounting semantics;
 it does not create a Policy, evidence directory, process, or live authority. A later human command
-must atomically bind an exact full pushed commit whose remote branch equals that commit, a new
-Policy path and exact-byte digest distinct from the attempt-003 identity, and a new absolute
-evidence directory proved empty immediately before startup. The production Policy loader must
-accept that exact path/digest pair. No field may be inherited implicitly from a prior attempt.
+must atomically bind an exact full pushed commit whose remote branch equals that commit, one exact
+Policy path and exact-byte digest, and a new absolute evidence directory proved empty immediately
+before startup. The human may explicitly rebind the previously approved Policy identity or bind
+an explicitly approved successor; nothing is inherited merely by omission. The production Policy
+loader must accept the named exact path/digest pair.
 
 Only an explicit human clean stop may end an authorized run. Acceptance is strictly
 `POST_STOP_ONLY`: after the human stop, the writer completes the directory, the current strict
@@ -890,40 +999,56 @@ minute closes are required for the Policy baseline, one leading partial minute a
 be unusable, and the Policy's own boundary-poll interval bounds observation of the final seal.
 There is no hard-coded three-hour run requirement.
 
-Acceptance uses three non-interchangeable ledgers:
+Acceptance uses three non-interchangeable ledgers and reports each result separately:
 
-1. **Integrity.** Strict current-schema validation passes; coverage partitions the complete
+1. **Integrity ledger.** Strict current-schema validation passes; coverage partitions the complete
    runtime interval with zero error; ingress `received == reduced`; application
    gap/duplicate and overflow are zero; source-shape, RPC pre-/post-send, orphan, channel,
    transport-terminal, and writer-directory conservation all reconcile. Ordered queue lag is not
    an integrity loss. Only queue overflow, application-sequence gap/duplicate, or a real socket
    loss may retire a session.
-2. **Normal boundary pending.** Let `P` be the wall-clock union inside `W` of coverage segments
+2. **Normal-boundary-pending ledger.** Let `P` be the wall-clock union inside `W` of coverage segments
    whose exact blocking reason is `INDEX_TIME_BOUNDARY_PENDING` or
    `INDEX_WATERMARK_PENDING`. These intervals are non-countable, never restart continuity, and
    must either recover, change into an explicitly recorded incident, or end exactly at the human
-   clean stop. They are reported separately and excluded from the current-coverage denominator;
-   they are never renamed as an incident or integrity loss.
-3. **Currentness incidents and recovery.** Every non-pending currentness incident preserves its
-   exact `trigger_cause`, true `blocking_reason`, affected scope, start, and recovery boundary.
-   Each incident intersecting `W` must recover to complete current truth and produce a strictly
-   later exact joint witness no later than its start plus `R`. An incident still open at clean
-   stop is `NOT_MET`. Multiple strictly recovered incidents and legitimate continuity epochs are
-   allowed; no single-epoch-throughout requirement remains.
+   clean stop. They are never renamed as an incident or integrity loss. Their independent budget
+   is deliberately not approved by this construction:
 
-Let `K` be the wall-clock union of `KNOWN_COMPLETE` coverage inside `W`, and let
-`D = 3_600_000 - duration(P)`. Require `D > 0` and exactly one coverage threshold:
+   ```text
+   pending_budget_status = PROPOSED
+   require duration(P) <= P_budget_ms only after a human freezes P_budget_ms
+   ```
+
+   The current declaration is exactly `pending_budget_status = PROPOSED`; the acceptance check
+   `duration(P) <= P_budget_ms` does not become operative until a later human command changes that
+   status to `FROZEN` with one exact value. Until then the live gate cannot open and no run can be
+   declared `MET` from this proposal.
+3. **Currentness-incident recovery ledger.** Every non-pending currentness incident preserves its
+   exact `trigger_cause`, true `blocking_reason`, affected scope, start, and recovery boundary.
+   Each incident intersecting `W` must recover to complete current truth no later than its start
+   plus `R`. An incident still open at clean stop is `NOT_MET`. Multiple strictly recovered
+   incidents and legitimate continuity epochs are allowed; no single-epoch-throughout requirement
+   remains. A global-continuity epoch restart still requires its later exact joint witness. A
+   queue-lag or option-local incident proves recovery through its own coverage/availability edge
+   and does not relabel the earlier global witness as post-recovery or require a new global
+   witness.
+
+Let `K` be the wall-clock union of `KNOWN_COMPLETE` coverage inside `W`. Normal pending remains
+visible in the full-window denominator; it cannot make a nearly unobserved hour look complete.
+The exact check is `duration(K) / 3_600_000 >= 0.99`:
 
 ```text
-normalized_current_coverage = duration(K) / D >= 0.99
+normalized_current_coverage = duration(K) / 3_600_000 >= 0.99
 ```
 
 The redundant complementary `KNOWN_COMPLETE_ms`/`total_non_complete_ms` pair and the separate
-fixed longest-non-complete threshold are deleted. At stop, the exact witness must be non-null,
-strictly follow the latest incident recovery, bind exact Policy/expiry/option-type/band/formula
-instrument/boundary identity, and bind one `counts_by_scope` row whose five reachability counts
-are each at least one. Every formula-required source must be observed at least once and `VALID`;
-only the contract's explicit combo/anomaly conditional sources may be `NOT_OBSERVED`.
+fixed longest-non-complete threshold are deleted. At stop, the exact current-epoch global witness
+must be non-null, follow the latest global-continuity recovery, bind exact
+Policy/expiry/option-type/band/formula-instrument/boundary identity, and bind one
+`counts_by_scope` row whose five reachability counts are each at least one. Its recorded boundary
+is never moved forward to impersonate a later local recovery. Every formula-required source must
+be observed at least once and `VALID`; only the contract's explicit combo/anomaly conditional
+sources may be `NOT_OBSERVED`.
 
 Option-local availability uses wall clock, not a sum across contracts. Let `G` be the union inside
 `W` of global/session/clock/index incident intervals, let `E = W \ (P union G)`, and let `U` be
@@ -940,25 +1065,32 @@ Overlapping contract intervals count once in `U`. There is no per-contract durat
 separate fixed per-interval 30-second gate; the Policy-derived recovery SLA owns incident
 timeliness.
 
-Heartbeat acceptance is conditional conservation, not a fabricated mandatory
-`test_request`. `public/set_heartbeat` must succeed and real heartbeat wire shape must be observed
-and valid. For `T = heartbeat.test_request_count`:
+The heartbeat wire observation is conditional conservation, not a fabricated mandatory
+`test_request`. `public/set_heartbeat` must succeed. For
+`H = source_shapes.heartbeat.observed_count` and `T = heartbeat.test_request_count`:
 
 ```text
-if T == 0:
+if H == 0:
+    heartbeat wire observation = NOT_OBSERVED
+    T == 0
     public/test is absent (or all of its exact counters are zero)
+if H > 0:
+    heartbeat wire shape is VALID
+    T is conserved to observed test_request controls
 if T > 0:
     public/test scheduled == sent == success == latency_observation_count == T
     and every public/test error/deadline/retired/censored/rate-limit count == 0
 ```
 
-In both cases, heartbeat diagnostics, source shape, RPC, latency, channel, and ingress ledgers
-must cross-conserve. A clean-stop censor is not an RPC error, but any still-pending heartbeat test
-at stop fails the conditional terminal equation above rather than disappearing.
+In every observed case, heartbeat diagnostics, source shape, RPC, latency, channel, and ingress
+ledgers must cross-conserve. Absence of a server `test_request` is not synthesized into success.
+A clean-stop censor is not an RPC error, but any still-pending observed heartbeat test at stop
+fails the conditional terminal equation above rather than disappearing.
 
 Opening this gate still requires a new explicit human command after code acceptance and push. The
-command must repeat the exact pushed HEAD and verified remote HEAD, new Policy absolute path and
-digest, new empty evidence directory, human-only clean-stop rule, and these post-stop formulas.
+command must repeat the exact pushed HEAD and verified remote HEAD, the explicitly bound Policy
+absolute path and digest, new empty evidence directory, human-only clean-stop rule, the frozen
+current/option-local thresholds, and a human-approved `P_budget_ms`.
 
 ## First-principles scope
 

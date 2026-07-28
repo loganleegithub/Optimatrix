@@ -741,6 +741,7 @@ def test_real_index_gap_requires_recovery_and_a_new_summary_witness(
                 "incident_id": 1,
                 "from_epoch": 1,
                 "to_epoch": 2,
+                "trigger_cause": "INDEX_CONTINUITY_GAP",
                 "reason": "INDEX_CONTINUITY_GAP",
                 "failure_domain": "CLOCK_INDEX",
                 "affected_scopes": ["GLOBAL"],
@@ -3620,6 +3621,218 @@ def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_resta
     assert incident["start_monotonic_ms"] == 1_100
     assert incident["end_monotonic_ms"] == 2_102
     assert incident["global_continuity_epoch"] == 1
+
+
+def test_sustained_queue_lag_rebuilds_only_enter_and_recovery_edges(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    first = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    second = make_option(
+        "BTC_USDC-27SEP24-100020-C",
+        1_000_000 + 120 * 60_000,
+    )
+    reducer.options = {
+        first.instrument_name: first,
+        second.instrument_name: second,
+    }
+    reducer.catalog_options = dict(reducer.options)
+    assert reducer.clock is not None
+    ticker_timestamp = reducer.clock.interval_at(1_001).upper_ms
+    for instrument in (first, second):
+        reducer.trackers[instrument.instrument_name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=reducer.policy.identity,
+            instrument_name=instrument.instrument_name,
+        )
+        reducer.option_books[instrument.instrument_name] = make_book(
+            instrument.instrument_name,
+            "1",
+        )
+        reducer.tickers[instrument.instrument_name] = TickerState(
+            Decimal(100),
+            "index_price",
+            ticker_timestamp,
+        )
+        acknowledge_channel(reducer, book_channel(instrument.instrument_name))
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 0, 1_001, 1),
+            CausalCause.INDEX_TICK,
+        ),
+        affected_instruments=(first.instrument_name, second.instrument_name),
+        countable=True,
+    )
+
+    settled_scopes: list[tuple[str, ...]] = []
+    current_scope_truth = reducer._current_scope_truth
+
+    def capture_scope(snapshot: ScopeSnapshot) -> object:
+        settled_scopes.append(tuple(item.instrument.instrument_name for item in snapshot.current))
+        return current_scope_truth(snapshot)
+
+    monkeypatch.setattr(reducer, "_current_scope_truth", capture_scope)
+    reducer.reduce(
+        subscription_frame(
+            book_channel(first.instrument_name),
+            {
+                "type": "change",
+                "timestamp": 2,
+                "instrument_name": first.instrument_name,
+                "change_id": 2,
+                "prev_change_id": 1,
+                "bids": [["new", "1.1", "0.1"]],
+                "asks": [],
+            },
+            ingress_seq=1,
+            received_monotonic_ms=1_100,
+        ),
+        processed_monotonic_ms=2_101,
+    )
+    assert {name for scope in settled_scopes for name in scope} == {
+        first.instrument_name,
+        second.instrument_name,
+    }
+
+    settled_scopes.clear()
+    count_before = sum(
+        scope.known_per_instrument_detector_evaluation_count
+        for scope in reducer._scope_counts.values()
+    )
+    reducer.reduce(
+        subscription_frame(
+            book_channel(second.instrument_name),
+            {
+                "type": "change",
+                "timestamp": 3,
+                "instrument_name": second.instrument_name,
+                "change_id": 2,
+                "prev_change_id": 1,
+                "bids": [["new", "1.1", "0.1"]],
+                "asks": [],
+            },
+            ingress_seq=2,
+            received_monotonic_ms=1_101,
+        ),
+        processed_monotonic_ms=2_102,
+    )
+
+    assert settled_scopes == [(second.instrument_name,)]
+    assert all(not result.observation_eligible for result in reducer.results.values())
+    assert (
+        sum(
+            scope.known_per_instrument_detector_evaluation_count
+            for scope in reducer._scope_counts.values()
+        )
+        == count_before
+    )
+
+
+def test_coverage_blocker_scopes_follow_current_truth_across_scope_transfer(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=1_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    expiry = 1_000_000 + 60 * 60_000
+    first = make_option("BTC_USDC-27SEP24-100010-C", expiry)
+    second = make_option("BTC_USDC-27SEP24-100020-C", expiry)
+    reducer.options = {
+        first.instrument_name: first,
+        second.instrument_name: second,
+    }
+    reducer.catalog_options = dict(reducer.options)
+    assert reducer.clock is not None
+    initial_timestamp = reducer.clock.interval_at(1_001).upper_ms
+    for instrument in (first, second):
+        reducer.trackers[instrument.instrument_name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=reducer.policy.identity,
+            instrument_name=instrument.instrument_name,
+        )
+        reducer.option_books[instrument.instrument_name] = make_book(
+            instrument.instrument_name,
+            "1",
+        )
+        reducer.tickers[instrument.instrument_name] = TickerState(
+            Decimal(100),
+            "index_price",
+            initial_timestamp,
+        )
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 0, 1_001, 1),
+            CausalCause.INDEX_TICK,
+        ),
+        affected_instruments=(first.instrument_name, second.instrument_name),
+        countable=True,
+    )
+
+    second_refresh_ms = 1_500
+    assert reducer._apply_ticker(
+        second.instrument_name,
+        {
+            "instrument_name": second.instrument_name,
+            "timestamp": reducer.clock.interval_at(second_refresh_ms).upper_ms,
+            "underlying_price": 100,
+            "underlying_index": "index_price",
+        },
+        FactBoundary(1, 0, second_refresh_ms, 2),
+    )
+
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 0, 2_002, 3),
+            CausalCause.OPTION_BOOK_FACT,
+            failure_domain=FailureScope.OPTION,
+            affected_scopes=(f"OPTION:{first.instrument_name}",),
+        ),
+        affected_instruments=(first.instrument_name,),
+        countable=False,
+    )
+    assert reducer._coverage._current_affected_scopes == (f"OPTION:{first.instrument_name}",)
+
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 0, 2_502, 4),
+            CausalCause.OPTION_BOOK_FACT,
+            failure_domain=FailureScope.OPTION,
+            affected_scopes=(f"OPTION:{second.instrument_name}",),
+        ),
+        affected_instruments=(second.instrument_name,),
+        countable=False,
+    )
+    assert reducer._coverage._current_affected_scopes == tuple(
+        sorted(
+            (
+                f"OPTION:{first.instrument_name}",
+                f"OPTION:{second.instrument_name}",
+            )
+        )
+    )
+
+    acknowledge_channel(reducer, ticker_channel(first.instrument_name), generation=1)
+    recovery_ms = 2_503
+    assert reducer._apply_ticker(
+        first.instrument_name,
+        {
+            "instrument_name": first.instrument_name,
+            "timestamp": reducer.clock.interval_at(recovery_ms).upper_ms,
+            "underlying_price": 100,
+            "underlying_index": "index_price",
+        },
+        FactBoundary(1, 0, recovery_ms, 5),
+    )
+    assert reducer._coverage._current_blocking_reason == "TICKER_SOURCE_STALE"
+    assert reducer._coverage._current_affected_scopes == (f"OPTION:{second.instrument_name}",)
 
 
 def test_clock_gap_is_a_concurrent_effect_of_original_market_fact_commit(

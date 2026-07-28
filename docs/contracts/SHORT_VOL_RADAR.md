@@ -349,15 +349,19 @@ unsubscribe command is emitted.
 Bootstrap and steady state use the same Policy-supplied receive-lag deadline and update the same
 queue diagnostics. A unique, consecutive application event whose receive-to-reduce lag exceeds
 that deadline is an ordered queue-currentness incident, not evidence of ingress loss or socket
-loss. The event is still reduced exactly once in order. From that delayed event's immutable
-receive boundary, detector, aggregate, atomic, witness eligibility, and coverage fail closed:
-coverage is `UNKNOWN` with `blocking_reason = QUEUE_LAG_CURRENTNESS`, and no observation can be
-counted. The incident recovers only at the first later consecutive application boundary whose lag
-is within the deadline, after every earlier accepted event has been reduced; that boundary
-rebuilds current results from committed facts before observation can resume. It does not retire
-the session, reconnect, increment `global_continuity_epoch`, or erase the existing witness.
-Queue overflow, an application-sequence gap/duplicate, or real socket/session loss remains a
-session gap. No operational deadline or cadence has an implementation default.
+loss. The event is still reduced exactly once in order. Entry is one reducer edge: that delayed
+event's immutable receive boundary rebuilds every current detector scope once, makes detector,
+aggregate, atomic, witness eligibility, and coverage fail closed, records
+`blocking_reason = QUEUE_LAG_CURRENTNESS`, and counts no observation. While lag remains above the
+deadline, each later consecutive event settles only its frozen causally affected scope against
+the already committed incident truth; it remains non-countable and may not repeat a full-market
+rebuild. The first later consecutive within-deadline application boundary is the recovery edge;
+after every earlier accepted event has been reduced, it rebuilds every current scope exactly once
+before observation can resume. The incident does not retire the session, reconnect, increment
+`global_continuity_epoch`, erase the existing witness, or rewrite that witness as if it occurred
+after local recovery. Queue overflow, an application-sequence gap/duplicate, or real
+socket/session loss remains a session gap. No operational deadline or cadence has an
+implementation default.
 
 ## Time and settlement boundary
 
@@ -1074,7 +1078,9 @@ these members:
   `NONE | PublicProtocolIncompatibility | PublicProtocolError | ConnectionClosedOK |
   ConnectionClosedError | OSError | SSLError | TimeoutError | EOFError |
   WebSocketException | OTHER`. No exception message, URL, payload, or other unbounded transport
-  detail is persisted. Row counts sum exactly to `ingress.connection_error_event_count`;
+  detail is persisted. Every reduced current or already-retired `connection_error` commits its
+  count and one bounded attribution row atomically before the retired-epoch business-effect
+  barrier; row counts sum exactly to `ingress.connection_error_event_count`;
 - `channel_by_class`: exactly one sorted row for each
   `PLATFORM | OPTION_LIFECYCLE | COMBO_LIFECYCLE | INDEX | OPTION_TICKER | OPTION_BOOK |
   COMBO_BOOK | HEARTBEAT | CONNECTION_CONTROL | INVALID`, with `received_count`,
@@ -1098,7 +1104,10 @@ these members:
   `current_epoch_joint_evaluation_count_by_scope`; each current-epoch row has exactly
   `policy_identity`, `expiration_timestamp_ms`, `option_type`, `tte_band_id`,
   `formula_instrument_name`, positive `count`, and nullable
-  `first_joint_evaluation_boundary`;
+  `first_joint_evaluation_boundary`. Every version-4 restart edge has exactly `incident_id`,
+  `from_epoch`, `to_epoch`, root `trigger_cause`, restart-effect `reason`, `failure_domain`,
+  `affected_scopes`, and `boundary`; version-3 restart edges retain their original shape without
+  `trigger_cause`;
 - `ticker_application`: `disposition_count` has exact counts for
   `APPLIED | LATE_IGNORED | AHEAD_IGNORED | STALE_GENERATION_IGNORED | SHAPE_REJECTED`, a fixed
   `late_ignored_diagnostic_limit = 256`, `omitted_late_ignored_diagnostic_count`, and at most 256
@@ -1259,8 +1268,13 @@ blocker.
 `OPTION_LOCAL`, `SCOPE:<expiry_timestamp_ms>:<call|put>:<band_id>`, or
 `OPTION:<instrument_name>`. `OPTION_LOCAL` is the aggregate representation when a proper
 option-local subset would otherwise require more than 256 instrument labels; it does not mean
-global continuity was lost. A same-state fact does not split a segment merely to log activity; an
-epoch restart always splits at its exact boundary even when the coverage state is unchanged.
+global continuity was lost. Incomplete coverage derives its blocker scopes from the complete
+committed current truth, never only from the newest causal effect. Segment identity is exactly
+`state + blocking_reason + affected_scopes + global_continuity_epoch`: a change in any member
+splits at that boundary; a fact that leaves all four unchanged does not split merely to log
+activity. Every version-4 epoch edge additionally cross-binds the coverage `trigger_cause` to the
+restart root and `blocking_reason` to the restart effect. An epoch restart always splits at its
+exact boundary even when the coverage state is unchanged.
 
 ### Writer, reader, and compatibility
 
@@ -1425,8 +1439,10 @@ acceptance and cannot by itself establish the production Radar.
 ### OPERATIONAL_SOAK — separately approved before production
 
 Production establishment also requires a human-approved continuous-operation plan naming the
-exact Policy path/digest, a new empty evidence directory, and its stop condition. No duration is
-fixed by this contract or inferred from a smoke witness.
+exact pushed code `HEAD`, exact Policy path/digest, a new empty evidence directory, and its stop
+condition. The human may explicitly rebind a previously approved Policy identity or approve a
+successor; omission never carries an identity forward. No run duration is fixed by this contract
+or inferred from a smoke witness.
 
 The Soak command must independently name the exact accepted code `HEAD`, Policy path/digest,
 evidence directory, and stop condition. A prior Smoke command or witness supplies none of this
@@ -1438,7 +1454,8 @@ The construction implementation must record:
   and received/processed counts plus observation-duration-derived rates by channel class;
 - subscribed instrument/channel counts, queue high-water, maximum receive-to-process lag, and
   overflow;
-- heartbeat request/response round trips;
+- conditionally observed heartbeat request/response round trips, without inventing a
+  `test_request` when the server emitted none;
 - reconnect, gap, resync, and clock-refresh success/failure;
 - option/combo catalog refresh and recovery outcomes;
 - core RPC/channel appearance and consumed-field shape validation, retaining only keys, types,
@@ -1454,16 +1471,27 @@ migrated, replayed, recomputed, or retroactively accepted. Before any later Soak
 
 1. direct focused tests, `make check`, and strict validation of the old evidence directory;
 2. a separately human-authorized heartbeat wire probe, which this construction does not run;
-3. human pre-freezing of the new global-continuity duration and explicit option-local
-   availability/current-coverage thresholds;
+3. human pre-freezing of the new global-continuity duration, explicit option-local
+   availability/current-coverage thresholds, and the normal-boundary-pending budget;
 4. a new independently authorized Soak using the previously approved business Policy or one
    explicitly approved successor and a new empty evidence directory.
 
-The future human-approved stop condition owns all those thresholds. A global epoch restart
-requires a new same-snapshot witness; local availability and coverage remain separate acceptance
-facts rather than silently resetting or silently waiving global continuity. This revision defines
-the strict schema and direct writer/validator tests, but it does not approve a heartbeat probe,
-Policy, thresholds, production connection, or Soak and does not establish the production Radar.
+Post-stop acceptance keeps three non-interchangeable results: integrity conservation,
+normal-boundary pending, and currentness-incident recovery. `P` is the wall-clock union of
+`INDEX_TIME_BOUNDARY_PENDING | INDEX_WATERMARK_PENDING` in the exact final hour. Its budget status
+is `PROPOSED`; it cannot become `FROZEN` without a later explicit human value. Pending remains in
+the current-coverage denominator, so the current threshold is calculated over the full hour and
+a nearly all-pending hour cannot pass by denominator shrinkage.
+
+A global epoch restart requires a new same-snapshot witness after global recovery. Queue-lag and
+option-local incidents instead prove their recovery in their own coverage/availability ledgers;
+they neither require a new global witness nor relabel the earlier witness as post-recovery.
+Heartbeat wire evidence is conditional: an absent server heartbeat/test request is
+`NOT_OBSERVED`, while every observed request, shape, RPC terminal, and latency must
+cross-conserve. The future human-approved stop condition owns all frozen thresholds. This
+revision defines the strict schema and direct writer/validator tests, but it does not approve a
+heartbeat probe, Policy, thresholds, production connection, or Soak and does not establish the
+production Radar.
 
 ## Evidence boundary
 
