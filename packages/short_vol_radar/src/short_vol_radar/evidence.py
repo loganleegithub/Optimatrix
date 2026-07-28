@@ -33,6 +33,8 @@ SUMMARY_NON_CLAIMS = (
     "NO_EDGE_OR_PROFITABILITY_CLAIM",
     "NO_FILL_OR_EXECUTION_PERMISSION",
 )
+OPTION_LOCAL_ACCEPTANCE_WINDOW_MS = 3_600_000
+OPTION_LOCAL_RETAINED_INTERVAL_LIMIT = 10_000
 CHANNEL_CLASSES = tuple(
     sorted(
         (
@@ -187,6 +189,12 @@ class CausalCause(StrEnum):
     COMBO_BOOK_CHANGED = "COMBO_BOOK_CHANGED"
     COMBO_BOOK_GAP = "COMBO_BOOK_GAP"
     SESSION_GAP = "SESSION_GAP"
+    REMOTE_CONNECTION_CLOSED = "REMOTE_CONNECTION_CLOSED"
+    TRANSPORT_READ_FAILURE = "TRANSPORT_READ_FAILURE"
+    SESSION_LIVENESS_DEADLINE = "SESSION_LIVENESS_DEADLINE"
+    SESSION_RPC_FAILURE = "SESSION_RPC_FAILURE"
+    RUNTIME_SESSION_FAILURE = "RUNTIME_SESSION_FAILURE"
+    PROTOCOL_INCOMPATIBILITY = "PROTOCOL_INCOMPATIBILITY"
     QUEUE_LAG_DEADLINE = "QUEUE_LAG_DEADLINE"
     INGRESS_GAP_OR_DUPLICATE = "INGRESS_GAP_OR_DUPLICATE"
     QUEUE_OVERFLOW = "QUEUE_OVERFLOW"
@@ -220,6 +228,12 @@ GLOBAL_CONTINUITY_RESTART_ALLOWLIST: Mapping[
     tuple[str, str],
 ] = {
     CausalCause.SESSION_GAP.value: ("SESSION", "GLOBAL"),
+    CausalCause.REMOTE_CONNECTION_CLOSED.value: ("SESSION", "GLOBAL"),
+    CausalCause.TRANSPORT_READ_FAILURE.value: ("SESSION", "GLOBAL"),
+    CausalCause.SESSION_LIVENESS_DEADLINE.value: ("SESSION", "GLOBAL"),
+    CausalCause.SESSION_RPC_FAILURE.value: ("SESSION", "GLOBAL"),
+    CausalCause.RUNTIME_SESSION_FAILURE.value: ("SESSION", "GLOBAL"),
+    CausalCause.PROTOCOL_INCOMPATIBILITY.value: ("SESSION", "GLOBAL"),
     CausalCause.QUEUE_LAG_DEADLINE.value: ("SESSION", "GLOBAL"),
     CausalCause.INGRESS_GAP_OR_DUPLICATE.value: ("SESSION", "GLOBAL"),
     CausalCause.QUEUE_OVERFLOW.value: ("SESSION", "GLOBAL"),
@@ -2475,7 +2489,11 @@ def _validate_option_local_availability(
             "unavailable_count_by_reason",
             "recovery_count_by_reason",
             "end_count_by_disposition",
+            "acceptance_window_ms",
             "retained_interval_limit",
+            "outside_window_interval_count",
+            "outside_window_latest_end_monotonic_ms",
+            "outside_window_interval_count_by_reason",
             "omitted_interval_count",
             "omitted_interval_count_by_reason",
             "intervals",
@@ -2522,16 +2540,24 @@ def _validate_option_local_availability(
         )
         for disposition in ("RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP")
     }
+    window_ms = availability["acceptance_window_ms"]
+    if window_ms != OPTION_LOCAL_ACCEPTANCE_WINDOW_MS:
+        raise EvidenceError("option-local acceptance window must be exactly 3600000 ms")
     limit = availability["retained_interval_limit"]
-    if limit != 256:
-        raise EvidenceError("option-local retained interval limit must be 256")
+    if limit != OPTION_LOCAL_RETAINED_INTERVAL_LIMIT:
+        raise EvidenceError("option-local retained interval limit must be exactly 10000")
+    acceptance_start_ms = clean_stop_monotonic_ms - window_ms
+    outside = _non_negative_integer(
+        availability["outside_window_interval_count"],
+        "option-local outside_window_interval_count",
+    )
     omitted = _non_negative_integer(
         availability["omitted_interval_count"],
         "option-local omitted_interval_count",
     )
     rows = _array(availability["intervals"], "option_local_availability.intervals")
     if len(rows) > limit:
-        raise EvidenceError("option-local intervals exceed bounded 256 rows")
+        raise EvidenceError("option-local intervals exceed bounded 10000 rows")
     retained_by_reason: Counter[str] = Counter()
     retained_by_reason_and_disposition: Counter[tuple[str, str]] = Counter()
     for raw in rows:
@@ -2562,6 +2588,10 @@ def _validate_option_local_availability(
             raise EvidenceError("option-local interval is outside runtime interval")
         if duration != end - start:
             raise EvidenceError("option-local interval duration does not match boundaries")
+        if end <= acceptance_start_ms:
+            raise EvidenceError(
+                "retained option-local interval does not intersect the final acceptance window"
+            )
         disposition = row["end_disposition"]
         if disposition not in {"RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP"}:
             raise EvidenceError("option-local interval end disposition is invalid")
@@ -2575,51 +2605,90 @@ def _validate_option_local_availability(
             raise EvidenceError("option-local interval continuity epoch is in the future")
         retained_by_reason[reason] += 1
         retained_by_reason_and_disposition[(reason, disposition)] += 1
-    raw_omitted_by_reason = _mapping(
-        availability["omitted_interval_count_by_reason"],
-        "option_local_availability.omitted_interval_count_by_reason",
-    )
-    omitted_by_reason_and_disposition: Counter[tuple[str, str]] = Counter()
-    for reason, raw_counts in raw_omitted_by_reason.items():
-        if not isinstance(reason, str) or not reason:
-            raise EvidenceError("option-local omitted reason must be non-empty")
-        if reason not in OPTION_LOCAL_REASONS:
-            raise EvidenceError("option-local reason whitelist rejected an omitted reason")
-        counts = _mapping(raw_counts, f"option-local omitted counts {reason}")
-        _validate_named_non_negative_counts(
-            counts,
-            {"RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP"},
-            f"option-local omitted counts {reason}",
-        )
-        for disposition in ("RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP"):
-            count = _non_negative_integer(
-                counts[disposition],
-                f"option-local omitted {reason} {disposition}",
+
+    def aggregate_counts(
+        raw_value: object,
+        *,
+        label: str,
+    ) -> Counter[tuple[str, str]]:
+        raw_by_reason = _mapping(raw_value, f"option_local_availability.{label}")
+        parsed: Counter[tuple[str, str]] = Counter()
+        for reason, raw_counts in raw_by_reason.items():
+            if not isinstance(reason, str) or not reason:
+                raise EvidenceError(f"option-local {label} reason must be non-empty")
+            if reason not in OPTION_LOCAL_REASONS:
+                raise EvidenceError(f"option-local reason whitelist rejected a {label} reason")
+            counts = _mapping(raw_counts, f"option-local {label} counts {reason}")
+            _validate_named_non_negative_counts(
+                counts,
+                {"RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP"},
+                f"option-local {label} counts {reason}",
             )
-            if count:
-                omitted_by_reason_and_disposition[(reason, disposition)] = count
+            for disposition in ("RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP"):
+                count = _non_negative_integer(
+                    counts[disposition],
+                    f"option-local {label} {reason} {disposition}",
+                )
+                if count:
+                    parsed[(reason, disposition)] = count
+        return parsed
+
+    outside_by_reason_and_disposition = aggregate_counts(
+        availability["outside_window_interval_count_by_reason"],
+        label="outside-window",
+    )
+    if sum(outside_by_reason_and_disposition.values()) != outside:
+        raise EvidenceError("option-local conservation does not reconcile outside-window intervals")
+    outside_latest_end = availability["outside_window_latest_end_monotonic_ms"]
+    if outside == 0:
+        if outside_latest_end is not None:
+            raise EvidenceError("empty outside-window ledger must have a null latest end")
+    else:
+        latest_end = _non_negative_integer(
+            outside_latest_end,
+            "option-local outside-window latest end",
+        )
+        if not runtime_started_monotonic_ms <= latest_end <= clean_stop_monotonic_ms:
+            raise EvidenceError("option-local outside-window latest end is outside runtime")
+        if latest_end > acceptance_start_ms:
+            raise EvidenceError(
+                "option-local outside-window latest end enters the final acceptance window"
+            )
+
+    omitted_by_reason_and_disposition = aggregate_counts(
+        availability["omitted_interval_count_by_reason"],
+        label="omitted",
+    )
     if sum(omitted_by_reason_and_disposition.values()) != omitted:
         raise EvidenceError("option-local conservation does not reconcile omitted intervals")
     total_starts = sum(unavailable_counts.values())
-    if total_starts != len(rows) + omitted or total_starts != sum(end_counts.values()):
+    if total_starts != len(rows) + outside + omitted or total_starts != sum(end_counts.values()):
         raise EvidenceError("option-local conservation does not reconcile starts and ends")
     for reason, start_count in unavailable_counts.items():
         retained_count = retained_by_reason[reason]
+        outside_count = sum(
+            outside_by_reason_and_disposition[(reason, disposition)]
+            for disposition in ("RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP")
+        )
         omitted_count = sum(
             omitted_by_reason_and_disposition[(reason, disposition)]
             for disposition in ("RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP")
         )
-        if start_count != retained_count + omitted_count:
+        if start_count != retained_count + outside_count + omitted_count:
             raise EvidenceError("option-local conservation does not reconcile reason totals")
     if set(retained_by_reason) - set(unavailable_counts):
         raise EvidenceError("option-local conservation has an orphan retained reason")
+    if {reason for reason, _ in outside_by_reason_and_disposition} - set(unavailable_counts):
+        raise EvidenceError("option-local conservation has an orphan outside-window reason")
     if {reason for reason, _ in omitted_by_reason_and_disposition} - set(unavailable_counts):
         raise EvidenceError("option-local conservation has an orphan omitted reason")
     for disposition, declared_count in end_counts.items():
         actual_count = sum(
             count
             for (reason, candidate), count in (
-                retained_by_reason_and_disposition + omitted_by_reason_and_disposition
+                retained_by_reason_and_disposition
+                + outside_by_reason_and_disposition
+                + omitted_by_reason_and_disposition
             ).items()
             if candidate == disposition
         )
@@ -2629,6 +2698,7 @@ def _validate_option_local_availability(
     for reason in all_reasons:
         actual_recovered = (
             retained_by_reason_and_disposition[(reason, "RECOVERED")]
+            + outside_by_reason_and_disposition[(reason, "RECOVERED")]
             + omitted_by_reason_and_disposition[(reason, "RECOVERED")]
         )
         if recovery_counts.get(reason, 0) != actual_recovered:
@@ -2648,6 +2718,16 @@ def _validate_version_three_coverage(
         raise EvidenceError("coverage continuity epoch moved backward")
     if any(after - before > 1 for before, after in pairwise(epochs)):
         raise EvidenceError("coverage continuity epoch skipped a restart boundary")
+    restart_reasons = frozenset(GLOBAL_CONTINUITY_RESTART_ALLOWLIST)
+    for index, segment in enumerate(segments):
+        if segment.reason not in restart_reasons:
+            continue
+        if index == 0 or (
+            segments[index - 1].global_continuity_epoch == segment.global_continuity_epoch
+        ):
+            raise EvidenceError(
+                "global continuity restart cause requires a matching coverage epoch edge"
+            )
     epoch_edges = tuple(
         (before, after)
         for before, after in pairwise(segments)

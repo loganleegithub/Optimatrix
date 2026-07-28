@@ -50,6 +50,12 @@ class SendFailureKind(StrEnum):
     ERROR = "ERROR"
 
 
+class ConnectionControlReason(StrEnum):
+    REMOTE_CONNECTION_CLOSED = "REMOTE_CONNECTION_CLOSED"
+    TRANSPORT_READ_FAILURE = "TRANSPORT_READ_FAILURE"
+    PROTOCOL_INCOMPATIBILITY = "PROTOCOL_INCOMPATIBILITY"
+
+
 @dataclass(frozen=True)
 class SendControlEvent:
     kind: SendControlKind
@@ -230,7 +236,6 @@ class DeribitPublicClient:
                     _decode_message(raw_message),
                     received_monotonic_ms=time.monotonic_ns() // 1_000_000,
                 )
-            raise PublicSessionError("production-public connection closed")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -239,8 +244,16 @@ class DeribitPublicClient:
                 if isinstance(exc, PublicProtocolError)
                 else PublicSessionError(f"production-public reader failed: {exc}")
             )
-            self._reader_error = error
-            self._enqueue_connection_error(error)
+            reason = (
+                ConnectionControlReason.PROTOCOL_INCOMPATIBILITY
+                if isinstance(error, PublicProtocolIncompatibility)
+                else ConnectionControlReason.TRANSPORT_READ_FAILURE
+            )
+        else:
+            error = PublicSessionError("production-public connection closed")
+            reason = ConnectionControlReason.REMOTE_CONNECTION_CLOSED
+        self._reader_error = error
+        self._enqueue_connection_error(error, reason=reason)
 
     def _enqueue_wire_message(
         self,
@@ -254,10 +267,15 @@ class DeribitPublicClient:
             received_monotonic_ms=received_monotonic_ms,
         )
 
-    def _enqueue_connection_error(self, error: PublicProtocolError) -> None:
+    def _enqueue_connection_error(
+        self,
+        error: PublicProtocolError,
+        *,
+        reason: ConnectionControlReason,
+    ) -> None:
         kind = (
             "PROTOCOL_INCOMPATIBILITY"
-            if isinstance(error, PublicProtocolIncompatibility)
+            if reason is ConnectionControlReason.PROTOCOL_INCOMPATIBILITY
             else "SESSION_FAILURE"
         )
         try:
@@ -265,7 +283,11 @@ class DeribitPublicClient:
                 {
                     "jsonrpc": "2.0",
                     "method": "connection_error",
-                    "params": {"error": str(error), "kind": kind},
+                    "params": {
+                        "error": str(error),
+                        "kind": kind,
+                        "reason": reason.value,
+                    },
                 },
                 received_monotonic_ms=time.monotonic_ns() // 1_000_000,
             )

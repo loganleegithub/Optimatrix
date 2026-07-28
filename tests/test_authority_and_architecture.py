@@ -147,20 +147,20 @@ def test_current_stage_authorizes_exactly_one_next_closure() -> None:
     assert "## Queued sequence — not authorized" in current_stage
 
 
-def test_short_vol_task_has_open_application_lifecycle_repair_and_closed_live_gates() -> None:
+def test_short_vol_task_has_open_final_window_repair_and_closed_live_gates() -> None:
     task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
     opening = "\n".join(task.splitlines()[:50])
 
     assert "**Status:** ACTIVE" in opening
     assert "**Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`" in opening
     assert (
-        "**Current construction subgate:** `APPLICATION_SEQUENCE_AND_LIFECYCLE_BARRIER_REPAIR`"
+        "**Current construction subgate:** `FINAL_WINDOW_EVIDENCE_AND_SESSION_CAUSE_REPAIR`"
     ) in opening
     assert (
-        "**Current subgate implementation anchor:** `2a2f6fb6954992ad593a2405f2f33f66b897544d`"
+        "**Current subgate implementation anchor:** `64f2299a1324059934aefce4cc8ee4190813c681`"
     ) in opening
     assert "**REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`" in opening
-    assert "**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_001_NOT_MET`" in opening
+    assert "**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_002_NOT_MET`" in opening
     assert (
         "Live commands:** REQUIRED only after the exact named Smoke or Soak gate opens" in opening
     )

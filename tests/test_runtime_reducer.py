@@ -1330,7 +1330,11 @@ def test_retired_heartbeat_remains_cross_ledger_conserved_after_reconnect(
                 {
                     "jsonrpc": "2.0",
                     "method": "connection_error",
-                    "params": {"kind": "SESSION_FAILURE", "error": "injected"},
+                    "params": {
+                        "kind": "SESSION_FAILURE",
+                        "reason": "TRANSPORT_READ_FAILURE",
+                        "error": "injected",
+                    },
                 },
                 session_epoch=1,
                 ingress_seq=1,
@@ -2023,7 +2027,11 @@ def test_application_sequence_gap_fails_closed_for_every_event_kind(
             {
                 "jsonrpc": "2.0",
                 "method": "connection_error",
-                "params": {"kind": "SESSION_FAILURE", "error": "injected"},
+                "params": {
+                    "kind": "SESSION_FAILURE",
+                    "reason": "TRANSPORT_READ_FAILURE",
+                    "error": "injected",
+                },
             },
             session_epoch=1,
             ingress_seq=2,
@@ -3143,6 +3151,147 @@ def test_operational_recovery_and_subscription_peaks_are_runtime_facts(
     assert reducer.diagnostics.session_gap_count == 1
     assert reducer.diagnostics.reconnect_count == 1
     assert reducer.diagnostics.peak_subscribed_channel_count == initial_channel_peak
+
+
+def test_option_local_ledger_keeps_the_complete_final_hour_not_the_first_rows(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=0)
+
+    for index in range(300):
+        instrument_name = f"OLD-{index}"
+        reducer._start_option_local_unavailability(
+            instrument_name,
+            generation=1,
+            reason="TICKER_SOURCE_STALE",
+            monotonic_ms=index * 2,
+        )
+        reducer._close_option_local_unavailability(
+            instrument_name,
+            monotonic_ms=index * 2 + 1,
+            end_disposition="RECOVERED",
+        )
+
+    clean_stop_ms = 4_000_000
+    for index in range(2):
+        instrument_name = f"TAIL-{index}"
+        reducer._start_option_local_unavailability(
+            instrument_name,
+            generation=1,
+            reason="TICKER_SOURCE_STALE",
+            monotonic_ms=clean_stop_ms - 1_000 + index * 10,
+        )
+        reducer._close_option_local_unavailability(
+            instrument_name,
+            monotonic_ms=clean_stop_ms - 999 + index * 10,
+            end_disposition="RECOVERED",
+        )
+
+    summary = json.loads(reducer.clean_stop(clean_stop_ms).read_text())
+    availability = summary["operational_diagnostics"]["option_local_availability"]
+
+    assert availability["acceptance_window_ms"] == 3_600_000
+    assert availability["retained_interval_limit"] == 10_000
+    assert availability["outside_window_interval_count"] == 300
+    assert availability["outside_window_latest_end_monotonic_ms"] == 599
+    assert availability["outside_window_interval_count_by_reason"] == {
+        "TICKER_SOURCE_STALE": {
+            "RECOVERED": 300,
+            "REASON_CHANGED": 0,
+            "CENSORED_AT_STOP": 0,
+        }
+    }
+    assert availability["omitted_interval_count"] == 0
+    assert [row["instrument_name"] for row in availability["intervals"]] == [
+        "TAIL-0",
+        "TAIL-1",
+    ]
+    validate_run_summary(summary)
+
+
+def test_option_local_final_window_row_bound_fails_closed_as_real_omission(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=0)
+
+    for index in range(10_001):
+        instrument_name = f"TAIL-{index}"
+        reducer._start_option_local_unavailability(
+            instrument_name,
+            generation=1,
+            reason="TICKER_SOURCE_STALE",
+            monotonic_ms=index * 2,
+        )
+        reducer._close_option_local_unavailability(
+            instrument_name,
+            monotonic_ms=index * 2 + 1,
+            end_disposition="RECOVERED",
+        )
+
+    summary = json.loads(reducer.clean_stop(30_000).read_text())
+    availability = summary["operational_diagnostics"]["option_local_availability"]
+
+    assert len(availability["intervals"]) == 10_000
+    assert availability["outside_window_interval_count"] == 0
+    assert availability["omitted_interval_count"] == 1
+    assert availability["omitted_interval_count_by_reason"] == {
+        "TICKER_SOURCE_STALE": {
+            "RECOVERED": 1,
+            "REASON_CHANGED": 0,
+            "CENSORED_AT_STOP": 0,
+        }
+    }
+    validate_run_summary(summary)
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_reason"),
+    (
+        (
+            {
+                "method": "connection_error",
+                "params": {
+                    "kind": "SESSION_FAILURE",
+                    "reason": "TRANSPORT_READ_FAILURE",
+                    "error": "reader stopped",
+                },
+            },
+            "TRANSPORT_READ_FAILURE",
+        ),
+        (None, "SESSION_LIVENESS_DEADLINE"),
+    ),
+)
+def test_session_retirement_preserves_the_owning_boundary_cause(
+    message: dict[str, object] | None,
+    expected_reason: str,
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+
+    with pytest.raises(PublicSessionError):
+        if message is None:
+            reducer.advance_time(1_001 + reducer.policy.runtime_limits.session_liveness_deadline_ms)
+        else:
+            reducer.reduce(
+                envelope(message, seq=1, received_ms=1_001),
+                processed_monotonic_ms=1_001,
+            )
+
+    reducer.prepare_reconnect("DUPLICATE_LATER_NOTICE")
+    continuity = reducer._operational_diagnostics(1)["global_continuity"]
+    assert isinstance(continuity, dict)
+    assert continuity["restart_count_by_reason"] == {expected_reason: 1}
+    restart_edges = continuity["restart_edges"]
+    assert isinstance(restart_edges, list)
+    restart = restart_edges[0]
+    assert isinstance(restart, dict)
+    assert restart["reason"] == expected_reason
 
 
 def test_retired_epoch_is_not_established_or_platform_current(

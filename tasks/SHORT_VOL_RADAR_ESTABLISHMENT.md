@@ -34,14 +34,19 @@
 
 **Prior subgate implementation anchor:** `a7e2cbfff52b0553ab3d2ab3bcb1d032a7f2406f`
 
-**Current construction subgate:** `APPLICATION_SEQUENCE_AND_LIFECYCLE_BARRIER_REPAIR`
+**Prior construction subgate:** `APPLICATION_SEQUENCE_AND_LIFECYCLE_BARRIER_REPAIR`
 `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_28`
 
-**Current subgate implementation anchor:** `2a2f6fb6954992ad593a2405f2f33f66b897544d`
+**Prior subgate implementation anchor:** `2a2f6fb6954992ad593a2405f2f33f66b897544d`
+
+**Current construction subgate:** `FINAL_WINDOW_EVIDENCE_AND_SESSION_CAUSE_REPAIR`
+`OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_28`
+
+**Current subgate implementation anchor:** `64f2299a1324059934aefce4cc8ee4190813c681`
 
 **REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`
 
-**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_001_NOT_MET`
+**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_002_NOT_MET`
 
 **Product/stage:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md) /
@@ -94,10 +99,26 @@ request the separately gated heartbeat wire probe; it does not itself authorize 
 production-public connection, heartbeat probe, Soak, Policy mutation, push, merge, stage
 advancement, private API, order, or trade.
 
+After the separately authorized heartbeat wire probe and `operational-soak-attempt-002`, strict
+version-3 validation passed but the frozen post-stop business gate was `NOT_MET`. The evidence
+showed two independent construction defects: bounded option-local diagnostics retained the first
+256 intervals rather than the complete interval set intersecting the final acceptance window, and
+session retirement collapsed known transport/liveness causes into generic `SESSION_GAP`.
+The subsequent explicit human command to perform the repair in order opens only
+`FINAL_WINDOW_EVIDENCE_AND_SESSION_CAUSE_REPAIR` against exact clean implementation anchor
+`64f2299a1324059934aefce4cc8ee4190813c681`: one append-only local TDD repair commit, exact
+diagnostic-contract alignment, offline orchestration verification, repeated validation, and
+sealed-directory hashing. It grants no production-public connection or new live run.
+
 The prior `OPERATIONAL_SOAK` attempt at
 `/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001` is sealed
 `NOT_MET`. It is historical evidence only and may not be changed, replayed, recomputed, migrated,
 or retroactively accepted.
+
+The later `OPERATIONAL_SOAK` attempt at
+`/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-002` is also sealed `NOT_MET`.
+Its strict-valid directory remains historical evidence only and may not be changed, replayed,
+recomputed, migrated, or retroactively accepted.
 
 The execution gates are independent:
 
@@ -125,11 +146,17 @@ The execution gates are independent:
    exact base `2a2f6fb6954992ad593a2405f2f33f66b897544d`. It authorizes only the bounded
    offline repair, contract alignment, repeated acceptance checks, and one append-only local
    commit below.
-10. **Heartbeat wire probe gate:** closed until a separate explicit human command.
-11. **Next `OPERATIONAL_SOAK` gate:** closed until the heartbeat probe is separately authorized,
-   new global-continuity and local-availability thresholds are human-frozen, and a later command
-   independently names exact accepted code, Policy path/digest, new empty evidence directory, and
-   stop condition.
+10. **`FINAL_WINDOW_EVIDENCE_AND_SESSION_CAUSE_REPAIR` construction subgate:** opened against
+    exact base `64f2299a1324059934aefce4cc8ee4190813c681`. It authorizes only the bounded
+    offline repair, contract alignment, repeated acceptance checks, and one append-only local
+    commit below.
+11. **Prior heartbeat wire probe gate:** consumed by its separately authorized narrow run.
+12. **Prior `OPERATIONAL_SOAK` gate:** consumed by `attempt-002`, whose acceptance is permanently
+    `NOT_MET`.
+13. **Next `OPERATIONAL_SOAK` gate:** closed until this repair is accepted and pushed, its remote
+    exact HEAD is verified, and a later human command independently names exact accepted code,
+    Policy path/digest, a new empty evidence directory, and a post-stop-only stop/acceptance
+    contract.
 
 Production-public connection, live artifact collection, private API, order, trade, merge,
 business acceptance, task archival, stage advancement, and any later research or execution
@@ -313,11 +340,12 @@ has no input to current-truth decisions.
 
 #### Bounded evidence and compatibility
 
-New summaries use `operational_diagnostics_schema_version = 3`, at most 256 late-regression rows,
-at most 256 option-local availability intervals, and attributed coverage rows. They persist no
-prices, Greeks, books, full ticker payloads, or reconstructable chain. The current writer and
-current strict reader accept only version 3. Version-2 summaries validate only through the
-explicit legacy entry point under their original schema; version 2 is not eligible for the new
+This historical subgate introduced `operational_diagnostics_schema_version = 3`, at most 256
+late-regression rows, and an initial first-256 option-local interval bound. The current
+`FINAL_WINDOW_EVIDENCE_AND_SESSION_CAUSE_REPAIR` supersedes only that option-local retention rule
+with the exact rolling final-window contract below. Summaries persist no prices, Greeks, books,
+full ticker payloads, or reconstructable chain. Version-2 summaries validate only through the
+explicit legacy entry point under their original schema; version 2 is not eligible for current
 acceptance semantics and no migration/replay path exists.
 
 ### `FACT_LIFECYCLE_CLOSURE` — construction authorized
@@ -648,6 +676,73 @@ sealed version-2 objects, sealed-directory hashing before and after, `git diff -
 authority/diff/worktree audit. The resulting exact local commit may be reported as ready for an
 independently authorized heartbeat wire probe. No production-public command, probe, Smoke, Soak,
 Policy change, push, merge, stage advancement, private API, order, or trade is permitted.
+
+### `FINAL_WINDOW_EVIDENCE_AND_SESSION_CAUSE_REPAIR` — construction authorized
+
+The exact base is `64f2299a1324059934aefce4cc8ee4190813c681`. History remains append-only.
+
+**Market/Decision input contract change:** `APPROVED` — make bounded option-local diagnostics
+lossless for the exact final one-hour post-stop acceptance window, while compacting only
+non-intersecting historical intervals into exact conservation totals; preserve each known
+session-retirement cause at the reducer-owned continuity edge instead of replacing it with
+generic `SESSION_GAP`.
+
+**Decision Policy change:** `NONE` — no Policy file, formula, quantity, TTE, Delta, baseline,
+activation/clear, persistence, or runtime-limit value changes. The one-hour evidence window is an
+operational post-stop audit horizon, not a detector or trading parameter.
+
+**Outcome/evaluation contract change:** `NONE` — no future label, replay, recomputation,
+historical relabelling, Candidate, Position, Outcome, comparator, qualification, order, or trade.
+
+**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
+capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`.
+
+#### Required repair
+
+1. Replace first-N option-local retention with one bounded rolling audit ledger. At clean stop it
+   retains every interval having positive intersection with the exact half-open interval
+   `[clean_stop_monotonic_ms - 3_600_000, clean_stop_monotonic_ms)`. Older or zero-intersection
+   intervals are summarized only into exact outside-window reason/disposition conservation
+   counts. `omitted_interval_count` is reserved for genuine within-window retention overflow and
+   therefore remains a full-run fail-closed acceptance signal.
+2. Keep the audit ledger bounded independently of run duration. Its fixed row bound is an
+   operational evidence limit, not a larger first-N workaround. Strict validation must prove the
+   configured audit window and row bound, positive intersection for every retained row, exact
+   start/end/recovery conservation across retained, outside-window, and omitted totals, and
+   clean-stop equality for censored rows.
+3. Classify session retirement at the owning boundary. Remote socket close, transport reader
+   failure, session liveness deadline, session-scoped RPC failure, queue lag/overflow,
+   ingress-sequence failure, platform guard, and otherwise unclassified runtime failure remain
+   finite exact causes. A later reconnect notice is idempotent and cannot rewrite the first
+   retirement cause.
+4. Add an orchestration test that injects sustained market ingress plus a real heartbeat
+   `test_request`, settles its `public/test` send receipt/response through the unified application
+   sequence, and seals a strict-valid summary. If this test is already green on the exact base,
+   it is characterization evidence and does not authorize speculative priority queues,
+   concurrent socket writers, cancellation preemption, or heartbeat-generated market
+   currentness.
+
+#### Required red counterexamples
+
+- more than 256 historical option-local intervals followed by final-window intervals must retain
+  the complete final-window set with zero omission and exact outside-window conservation;
+- a retained interval outside the final window, a final-window interval hidden as
+  outside-window, any inconsistent reason/disposition total, or a non-exact audit window/row
+  bound must fail strict validation;
+- a transport reader failure and a session liveness deadline must produce distinct exact
+  continuity restart causes; a duplicate later reconnect notice must not overwrite either;
+- sustained ingress plus heartbeat control must preserve consecutive application identity,
+  `received == reduced`, heartbeat/source/RPC conservation, and strict writer validation.
+
+#### Offline acceptance
+
+Run the focused red-to-green reducer/transport/orchestration/writer/validator set repeatedly,
+`make check`, the complete malicious version-3 validator suite, writer-generated current
+directory validation, explicit read-only legacy validation of all 224 sealed version-2 objects,
+read-only validation and hashing of sealed `attempt-002`, `git diff --check`, and final
+authority/diff/worktree audit. Produce one append-only local commit above the exact base. No
+production-public command, heartbeat probe, Smoke, Soak, Policy change, push, merge, stage
+advancement, private API, order, or trade is permitted.
 
 ## First-principles scope
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from market_monitor import (
     BookState,
@@ -72,6 +72,8 @@ from short_vol_radar.detector import (
 from short_vol_radar.evidence import (
     CHANNEL_CLASSES,
     CORE_SOURCE_NAMES,
+    OPTION_LOCAL_ACCEPTANCE_WINDOW_MS,
+    OPTION_LOCAL_RETAINED_INTERVAL_LIMIT,
     RPC_METHOD_ALLOWLIST,
     SOURCE_CONSUMED_FIELD_TYPES,
     AnomalyEvidence,
@@ -497,7 +499,12 @@ class RuntimeDiagnostics:
     option_local_unavailable_count: Counter[str] = field(default_factory=Counter)
     option_local_recovery_count: Counter[str] = field(default_factory=Counter)
     option_local_end_count: Counter[str] = field(default_factory=Counter)
-    option_local_intervals: list[dict[str, object]] = field(default_factory=list)
+    option_local_intervals: deque[dict[str, object]] = field(default_factory=deque)
+    option_local_outside_window_interval_count: int = 0
+    option_local_outside_window_latest_end_monotonic_ms: int | None = None
+    option_local_outside_window_interval_count_by_reason: Counter[tuple[str, str]] = field(
+        default_factory=Counter
+    )
     omitted_option_local_interval_count: int = 0
     omitted_option_local_interval_count_by_reason: Counter[tuple[str, str]] = field(
         default_factory=Counter
@@ -891,9 +898,35 @@ class RadarReducer:
                         "subscription routing shape is incompatible"
                     ) from exc
             elif method == "connection_error":
-                self._retire_current_epoch()
                 params = envelope.get("params")
-                kind = params.get("kind") if isinstance(params, dict) else None
+                try:
+                    connection_error = require_mapping(params, "connection_error.params")
+                    kind = require_str(
+                        connection_error.get("kind"),
+                        "connection_error.params.kind",
+                    )
+                    reason = require_str(
+                        connection_error.get("reason"),
+                        "connection_error.params.reason",
+                    )
+                except SourceDataError as exc:
+                    raise PublicProtocolIncompatibility(
+                        "connection error control shape is incompatible"
+                    ) from exc
+                expected_reasons = {
+                    "SESSION_FAILURE": {
+                        CausalCause.REMOTE_CONNECTION_CLOSED.value,
+                        CausalCause.TRANSPORT_READ_FAILURE.value,
+                    },
+                    "PROTOCOL_INCOMPATIBILITY": {
+                        CausalCause.PROTOCOL_INCOMPATIBILITY.value,
+                    },
+                }
+                if reason not in expected_reasons.get(kind, set()):
+                    raise PublicProtocolIncompatibility(
+                        "connection error kind and reason are inconsistent"
+                    )
+                self._retire_current_epoch(reason)
                 if kind == "PROTOCOL_INCOMPATIBILITY":
                     raise PublicProtocolIncompatibility(
                         "production-public protocol is incompatible"
@@ -1684,7 +1717,7 @@ class RadarReducer:
                 reason="CLOCK_GAP",
             )
         elif request.failure_scope is FailureScope.SESSION:
-            self._retire_current_epoch()
+            self._retire_current_epoch(CausalCause.SESSION_RPC_FAILURE.value)
             raise PublicSessionError(f"{request.purpose.value} request failed")
         elif request.failure_scope is FailureScope.FATAL_PROTOCOL:
             raise PublicProtocolIncompatibility(f"{request.purpose.value} request failed")
@@ -2746,7 +2779,8 @@ class RadarReducer:
             "end_disposition": end_disposition,
             "global_continuity_epoch": unavailable.global_continuity_epoch,
         }
-        if len(self.diagnostics.option_local_intervals) < 256:
+        self._compact_option_local_intervals(monotonic_ms)
+        if len(self.diagnostics.option_local_intervals) < OPTION_LOCAL_RETAINED_INTERVAL_LIMIT:
             self.diagnostics.option_local_intervals.append(row)
         else:
             self.diagnostics.omitted_option_local_interval_count += 1
@@ -2756,6 +2790,27 @@ class RadarReducer:
         self.diagnostics.option_local_end_count[end_disposition] += 1
         if end_disposition == "RECOVERED":
             self.diagnostics.option_local_recovery_count[unavailable.reason] += 1
+
+    def _compact_option_local_intervals(self, monotonic_ms: int) -> None:
+        acceptance_start_ms = monotonic_ms - OPTION_LOCAL_ACCEPTANCE_WINDOW_MS
+        intervals = self.diagnostics.option_local_intervals
+        while intervals:
+            next_end_monotonic_ms = cast(int, intervals[0]["end_monotonic_ms"])
+            if next_end_monotonic_ms > acceptance_start_ms:
+                break
+            row = intervals.popleft()
+            reason = str(row["reason"])
+            disposition = str(row["end_disposition"])
+            self.diagnostics.option_local_outside_window_interval_count += 1
+            self.diagnostics.option_local_outside_window_interval_count_by_reason[
+                (reason, disposition)
+            ] += 1
+            previous_latest = self.diagnostics.option_local_outside_window_latest_end_monotonic_ms
+            self.diagnostics.option_local_outside_window_latest_end_monotonic_ms = (
+                next_end_monotonic_ms
+                if previous_latest is None
+                else max(previous_latest, next_end_monotonic_ms)
+            )
 
     def _close_all_option_local_unavailable(
         self,
@@ -5152,7 +5207,7 @@ class RadarReducer:
                 self._last_boundary_monotonic_ms,
                 monotonic_ms,
             )
-            self._retire_current_epoch()
+            self._retire_current_epoch(CausalCause.SESSION_LIVENESS_DEADLINE.value)
             raise PublicSessionError("production-public session liveness deadline expired")
         self._last_boundary_monotonic_ms = max(
             self._last_boundary_monotonic_ms,
@@ -5279,8 +5334,28 @@ class RadarReducer:
         return self._take_commands()
 
     def prepare_reconnect(self, reason: str) -> None:
-        del reason
-        self._retire_current_epoch()
+        try:
+            cause = CausalCause(reason)
+        except ValueError:
+            cause = CausalCause.RUNTIME_SESSION_FAILURE
+        session_causes = {
+            CausalCause.SESSION_GAP,
+            CausalCause.REMOTE_CONNECTION_CLOSED,
+            CausalCause.TRANSPORT_READ_FAILURE,
+            CausalCause.SESSION_LIVENESS_DEADLINE,
+            CausalCause.SESSION_RPC_FAILURE,
+            CausalCause.RUNTIME_SESSION_FAILURE,
+            CausalCause.PROTOCOL_INCOMPATIBILITY,
+            CausalCause.QUEUE_LAG_DEADLINE,
+            CausalCause.INGRESS_GAP_OR_DUPLICATE,
+            CausalCause.QUEUE_OVERFLOW,
+            CausalCause.PLATFORM_MAINTENANCE,
+            CausalCause.PUBLIC_METHODS_DENIED,
+            CausalCause.RELEVANT_PLATFORM_LOCK,
+        }
+        if cause not in session_causes:
+            cause = CausalCause.RUNTIME_SESSION_FAILURE
+        self._retire_current_epoch(cause.value)
 
     def clean_stop(self, monotonic_ms: int) -> Path:
         self.begin_clean_stop()
@@ -5398,7 +5473,15 @@ class RadarReducer:
             if self._first_joint_witness_ms is None
             else max(0, self._last_boundary_monotonic_ms - self._first_joint_witness_ms)
         )
+        self._compact_option_local_intervals(self._last_boundary_monotonic_ms)
         option_local_intervals = list(self.diagnostics.option_local_intervals)
+        outside_option_local_intervals = self.diagnostics.option_local_outside_window_interval_count
+        outside_option_local_latest_end = (
+            self.diagnostics.option_local_outside_window_latest_end_monotonic_ms
+        )
+        outside_option_local_by_reason = Counter(
+            self.diagnostics.option_local_outside_window_interval_count_by_reason
+        )
         omitted_option_local_intervals = self.diagnostics.omitted_option_local_interval_count
         option_local_end_counts = Counter(self.diagnostics.option_local_end_count)
         omitted_option_local_by_reason = Counter(
@@ -5421,18 +5504,26 @@ class RadarReducer:
                 "end_disposition": "CENSORED_AT_STOP",
                 "global_continuity_epoch": unavailable.global_continuity_epoch,
             }
-            if len(option_local_intervals) < 256:
+            if len(option_local_intervals) < OPTION_LOCAL_RETAINED_INTERVAL_LIMIT:
                 option_local_intervals.append(row)
             else:
                 omitted_option_local_intervals += 1
                 omitted_option_local_by_reason[(unavailable.reason, "CENSORED_AT_STOP")] += 1
             option_local_end_counts["CENSORED_AT_STOP"] += 1
-        omitted_reason_rows: dict[str, dict[str, int]] = {}
-        for reason, _disposition in sorted(omitted_option_local_by_reason):
-            omitted_reason_rows[reason] = {
-                disposition: omitted_option_local_by_reason[(reason, disposition)]
-                for disposition in ("RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP")
-            }
+
+        def interval_count_rows(
+            counts: Counter[tuple[str, str]],
+        ) -> dict[str, dict[str, int]]:
+            rows: dict[str, dict[str, int]] = {}
+            for reason, _disposition in sorted(counts):
+                rows[reason] = {
+                    disposition: counts[(reason, disposition)]
+                    for disposition in ("RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP")
+                }
+            return rows
+
+        outside_reason_rows = interval_count_rows(outside_option_local_by_reason)
+        omitted_reason_rows = interval_count_rows(omitted_option_local_by_reason)
         witness_identity = self._first_joint_witness_identity
         return {
             "operational_diagnostics_schema_version": 3,
@@ -5643,7 +5734,11 @@ class RadarReducer:
                         "CENSORED_AT_STOP",
                     )
                 },
-                "retained_interval_limit": 256,
+                "acceptance_window_ms": OPTION_LOCAL_ACCEPTANCE_WINDOW_MS,
+                "retained_interval_limit": OPTION_LOCAL_RETAINED_INTERVAL_LIMIT,
+                "outside_window_interval_count": outside_option_local_intervals,
+                "outside_window_latest_end_monotonic_ms": outside_option_local_latest_end,
+                "outside_window_interval_count_by_reason": outside_reason_rows,
                 "omitted_interval_count": omitted_option_local_intervals,
                 "omitted_interval_count_by_reason": omitted_reason_rows,
                 "intervals": option_local_intervals,

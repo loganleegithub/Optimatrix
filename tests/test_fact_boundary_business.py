@@ -1546,7 +1546,11 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
             "REASON_CHANGED": 0,
             "CENSORED_AT_STOP": 0,
         },
-        "retained_interval_limit": 256,
+        "acceptance_window_ms": 3_600_000,
+        "retained_interval_limit": 10_000,
+        "outside_window_interval_count": 0,
+        "outside_window_latest_end_monotonic_ms": None,
+        "outside_window_interval_count_by_reason": {},
         "omitted_interval_count": 0,
         "omitted_interval_count_by_reason": {},
         "intervals": [

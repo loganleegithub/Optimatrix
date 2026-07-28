@@ -16,6 +16,7 @@ from market_monitor import (
     TimeInterval,
 )
 from radar_runtime.deribit_public import (
+    ConnectionControlReason,
     DeribitPublicClient,
     InboundEnvelope,
     PublicSessionError,
@@ -304,7 +305,11 @@ def current_operational_diagnostics(*, observation_ms: int = 20) -> dict[str, ob
             "REASON_CHANGED": 0,
             "CENSORED_AT_STOP": 0,
         },
-        "retained_interval_limit": 256,
+        "acceptance_window_ms": 3_600_000,
+        "retained_interval_limit": 10_000,
+        "outside_window_interval_count": 0,
+        "outside_window_latest_end_monotonic_ms": None,
+        "outside_window_interval_count_by_reason": {},
         "omitted_interval_count": 0,
         "omitted_interval_count_by_reason": {},
         "intervals": [],
@@ -1577,6 +1582,94 @@ def test_continuous_inbound_flow_cannot_starve_absolute_time_boundaries(
     assert timer_boundaries == [1_000]
 
 
+def test_sustained_ingress_heartbeat_round_trip_seals_one_conserved_directory(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        evidence_writer=EvidenceWriter(
+            tmp_path,
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    stop_event = asyncio.Event()
+
+    class IngressAndHeartbeatClient(DeribitPublicClient):
+        def __init__(self) -> None:
+            super().__init__(session_epoch=1, rpc_deadline_ms=30_000)
+            self.sent_methods: list[str] = []
+
+        async def send_request(
+            self,
+            *,
+            request_id: int,
+            method: str,
+            params: dict[str, object],
+            responding_to_test_request: bool = False,
+        ) -> None:
+            del params, responding_to_test_request
+            self.sent_methods.append(method)
+            self._enqueue_wire_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {"version": "test"} if method == "public/test" else "ok",
+                },
+                received_monotonic_ms=runtime_module._monotonic_ms(),
+            )
+            if method == "public/test":
+                stop_event.set()
+
+    client = IngressAndHeartbeatClient()
+    for _ in range(64):
+        client._enqueue_wire_message(
+            {
+                "jsonrpc": "2.0",
+                "method": "heartbeat",
+                "params": {"type": "heartbeat"},
+            },
+            received_monotonic_ms=runtime_module._monotonic_ms(),
+        )
+    client._enqueue_wire_message(
+        {
+            "jsonrpc": "2.0",
+            "method": "heartbeat",
+            "params": {"type": "test_request"},
+        },
+        received_monotonic_ms=runtime_module._monotonic_ms(),
+    )
+
+    summary_path = asyncio.run(runtime.run(client, stop_event))
+    summary = json.loads(summary_path.read_text())
+    validate_run_summary(summary)
+    diagnostics = summary["operational_diagnostics"]
+
+    assert client.sent_methods == ["public/set_heartbeat", "public/test"]
+    assert (
+        diagnostics["ingress"]["received_envelope_count"]
+        == diagnostics["ingress"]["reduced_envelope_count"]
+    )
+    assert diagnostics["ingress"]["ingress_gap_or_duplicate_count"] == 0
+    heartbeat = diagnostics["heartbeat"]
+    assert heartbeat["test_request_count"] == 1
+    assert heartbeat["public_test_success_count"] == 1
+    assert heartbeat["public_test_error_count"] == 0
+    assert heartbeat["latency_observation_count"] == 1
+    assert heartbeat["latency_ms_sum"] >= heartbeat["latency_ms_max"] >= 0
+    public_test = next(
+        row for row in diagnostics["rpc_by_method"] if row["method"] == "public/test"
+    )
+    assert public_test["scheduled_count"] == 1
+    assert public_test["sent_count"] == 1
+    assert public_test["success_count"] == 1
+
+
 @pytest.mark.parametrize("outcome", ("SUCCESS", "CANCELLED", "ERROR"))
 def test_sender_reports_transport_completion_without_mutating_reducer(
     outcome: str,
@@ -1739,7 +1832,10 @@ def test_failure_barrier_drains_every_already_accepted_application_event(
         {"jsonrpc": "2.0", "id": 999_999, "result": "orphan"},
         received_monotonic_ms=first_received_ms,
     )
-    client._enqueue_connection_error(PublicSessionError("injected connection failure"))
+    client._enqueue_connection_error(
+        PublicSessionError("injected connection failure"),
+        reason=ConnectionControlReason.TRANSPORT_READ_FAILURE,
+    )
     client._enqueue_wire_message(
         {
             "jsonrpc": "2.0",
@@ -2129,6 +2225,104 @@ def test_schema_three_ticker_rpc_and_option_local_ledgers_must_conserve() -> Non
         validate_run_summary(availability)
 
 
+def test_schema_three_option_local_ledger_binds_the_exact_final_hour() -> None:
+    summary = current_summary_object(
+        segments=(
+            CoverageSegment(
+                0,
+                4_000_000,
+                CoverageState.UNKNOWN,
+                reason="RUNTIME_START",
+                affected_scopes=("GLOBAL",),
+                global_continuity_epoch=1,
+            ),
+        )
+    )
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    ledger = diagnostics["option_local_availability"]
+    assert isinstance(ledger, dict)
+    ledger.update(
+        {
+            "acceptance_window_ms": 3_600_000,
+            "retained_interval_limit": 10_000,
+            "unavailable_count_by_reason": {"TICKER_SOURCE_STALE": 2},
+            "recovery_count_by_reason": {"TICKER_SOURCE_STALE": 2},
+            "end_count_by_disposition": {
+                "RECOVERED": 2,
+                "REASON_CHANGED": 0,
+                "CENSORED_AT_STOP": 0,
+            },
+            "outside_window_interval_count": 1,
+            "outside_window_latest_end_monotonic_ms": 200,
+            "outside_window_interval_count_by_reason": {
+                "TICKER_SOURCE_STALE": {
+                    "RECOVERED": 1,
+                    "REASON_CHANGED": 0,
+                    "CENSORED_AT_STOP": 0,
+                }
+            },
+            "omitted_interval_count": 0,
+            "omitted_interval_count_by_reason": {},
+            "intervals": [
+                {
+                    "instrument_name": "TAIL",
+                    "generation": 1,
+                    "reason": "TICKER_SOURCE_STALE",
+                    "start_monotonic_ms": 3_999_000,
+                    "end_monotonic_ms": 3_999_001,
+                    "duration_ms": 1,
+                    "end_disposition": "RECOVERED",
+                    "global_continuity_epoch": 1,
+                }
+            ],
+        }
+    )
+    validate_run_summary(summary)
+
+    wrong_window = json.loads(json.dumps(summary))
+    wrong_window["operational_diagnostics"]["option_local_availability"]["acceptance_window_ms"] = (
+        3_599_999
+    )
+    with pytest.raises(EvidenceError, match="acceptance window"):
+        validate_run_summary(wrong_window)
+
+    wrong_limit = json.loads(json.dumps(summary))
+    wrong_limit["operational_diagnostics"]["option_local_availability"][
+        "retained_interval_limit"
+    ] = 9_999
+    with pytest.raises(EvidenceError, match="retained interval limit"):
+        validate_run_summary(wrong_limit)
+
+    outside_enters_window = json.loads(json.dumps(summary))
+    outside_enters_window["operational_diagnostics"]["option_local_availability"][
+        "outside_window_latest_end_monotonic_ms"
+    ] = 400_001
+    with pytest.raises(EvidenceError, match=r"outside-window.*final acceptance window"):
+        validate_run_summary(outside_enters_window)
+
+    retained_before_window = json.loads(json.dumps(summary))
+    retained_interval = retained_before_window["operational_diagnostics"][
+        "option_local_availability"
+    ]["intervals"][0]
+    retained_interval.update(
+        {
+            "start_monotonic_ms": 100,
+            "end_monotonic_ms": 200,
+            "duration_ms": 100,
+        }
+    )
+    with pytest.raises(EvidenceError, match=r"retained.*final acceptance window"):
+        validate_run_summary(retained_before_window)
+
+    false_outside_count = json.loads(json.dumps(summary))
+    false_outside_count["operational_diagnostics"]["option_local_availability"][
+        "outside_window_interval_count_by_reason"
+    ]["TICKER_SOURCE_STALE"]["RECOVERED"] = 2
+    with pytest.raises(EvidenceError, match="outside-window intervals"):
+        validate_run_summary(false_outside_count)
+
+
 def test_schema_three_epoch_edges_must_match_restart_incidents_one_for_one() -> None:
     summary = current_summary_object()
     segments = summary["coverage_segments"]
@@ -2465,6 +2659,39 @@ def test_schema_three_rejects_illegal_restart_cause_domain_scope_tuple() -> None
     witness["global_continuity_epoch"] = 2
 
     with pytest.raises(EvidenceError, match=r"restart.*allowlist|cause.*domain.*scope"):
+        validate_run_summary(summary)
+
+
+def test_schema_three_accepts_exact_transport_session_restart_cause() -> None:
+    summary = epoch_two_summary(recovery_ms=12)
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    second = segments[1]
+    assert isinstance(second, dict)
+    second["reason"] = "TRANSPORT_READ_FAILURE"
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    continuity = diagnostics["global_continuity"]
+    assert isinstance(continuity, dict)
+    continuity["restart_count_by_reason"] = {"TRANSPORT_READ_FAILURE": 1}
+    restart = continuity["restart_edges"][0]
+    assert isinstance(restart, dict)
+    restart["reason"] = "TRANSPORT_READ_FAILURE"
+    restart["failure_domain"] = "SESSION"
+
+    validate_run_summary(summary)
+
+
+def test_schema_three_restart_cause_cannot_appear_without_an_epoch_edge() -> None:
+    summary = current_summary_object()
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    second = segments[1]
+    assert isinstance(second, dict)
+    second["reason"] = "TRANSPORT_READ_FAILURE"
+    second["affected_scopes"] = ["GLOBAL"]
+
+    with pytest.raises(EvidenceError, match=r"restart cause.*epoch edge"):
         validate_run_summary(summary)
 
 

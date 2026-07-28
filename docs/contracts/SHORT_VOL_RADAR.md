@@ -1073,13 +1073,21 @@ these members:
   `CURRENT | SOURCE_STALE | TIMESTAMP_AHEAD | TRUSTED_TIME_UNKNOWN`, separately from de-duplicated
   `accepted_transition_count_by_state` for `MISSING | CURRENT | SOURCE_STALE`;
 - `option_local_availability`: `unavailable_count_by_reason`, `recovery_count_by_reason`, fixed
-  `end_count_by_disposition`, fixed `retained_interval_limit = 256`,
-  `omitted_interval_count`, `omitted_interval_count_by_reason`, and at most 256 `intervals`
-  containing only `instrument_name`, ticker `generation`, `reason`, `start_monotonic_ms`,
+  `end_count_by_disposition`, fixed `acceptance_window_ms = 3_600_000`, fixed
+  `retained_interval_limit = 10_000`, exact `outside_window_interval_count`,
+  nullable `outside_window_latest_end_monotonic_ms`,
+  `outside_window_interval_count_by_reason`, `omitted_interval_count`,
+  `omitted_interval_count_by_reason`, and at most 10,000 `intervals` containing only
+  `instrument_name`, ticker `generation`, `reason`, `start_monotonic_ms`,
   `end_monotonic_ms`, `duration_ms`,
   `end_disposition = RECOVERED | REASON_CHANGED | CENSORED_AT_STOP`, and
-  `global_continuity_epoch`; every retained `CENSORED_AT_STOP.end_monotonic_ms` equals the clean
-  stop boundary exactly;
+  `global_continuity_epoch`. At clean stop, every interval ending after
+  `clean_stop_monotonic_ms - 3_600_000` is retained unless the fixed row bound was genuinely
+  exceeded; only intervals ending at or before that boundary enter the exact outside-window
+  conservation totals. `outside_window_latest_end_monotonic_ms` is null exactly when that count
+  is zero and otherwise cannot enter the final acceptance window. `omitted_interval_count` is
+  reserved for genuine retention overflow and never means ordinary historical compaction. Every
+  retained `CENSORED_AT_STOP.end_monotonic_ms` equals the clean stop boundary exactly;
 - `witness`: current `global_continuity_epoch`, nullable
   `first_joint_witness_monotonic_ms`, and nullable
   `continuous_global_continuity_after_witness_ms`, plus its exact scope, fact boundary, and formula
@@ -1155,6 +1163,21 @@ anomaly event and that anomaly's Policy/option-type/activation-band scope has a 
 availability loss remains explicit in its own ledger and does not reset global continuity.
 Diagnostics count source/application/currentness facts in their declared ledgers and never enter
 detector, episode, aggregate, atomic availability, or any trading denominator.
+
+The final-window option-local ledger is bounded by time and by a fixed row cap independently of
+total run duration. Post-stop acceptance inspects the exact half-open hour
+`[clean_stop_monotonic_ms - 3_600_000, clean_stop_monotonic_ms)` and requires
+`omitted_interval_count = 0`; outside-window aggregate counts preserve full-run conservation but
+do not masquerade as retained interval detail. This one-hour horizon is an operational evidence
+contract, not a Policy value, detector cadence, market-currentness deadline, or automatic stop
+condition.
+
+Session continuity restart causes are finite and boundary-owned. In addition to existing
+platform, queue, ingress, clock, and index causes, the session-global allowlist distinguishes
+`REMOTE_CONNECTION_CLOSED`, `TRANSPORT_READ_FAILURE`, `SESSION_LIVENESS_DEADLINE`,
+`SESSION_RPC_FAILURE`, `RUNTIME_SESSION_FAILURE`, and `PROTOCOL_INCOMPATIBILITY`. The first
+retirement of an epoch freezes that cause; a later reconnect notice is idempotent and cannot
+replace it with generic `SESSION_GAP`.
 
 Coverage is one exact half-open runtime interval
 `[runtime_started_monotonic_ms, clean_stop_monotonic_ms)`. At every monotonic millisecond it has
