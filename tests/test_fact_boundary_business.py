@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
@@ -3732,6 +3732,103 @@ def test_sustained_queue_lag_rebuilds_only_enter_and_recovery_edges(
             for scope in reducer._scope_counts.values()
         )
         == count_before
+    )
+
+
+def test_coverage_preserves_heterogeneous_blockers_and_pending_with_stale(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    expiry = 1_000_000 + 60 * 60_000
+    first = make_option("BTC_USDC-27SEP24-100010-C", expiry)
+    second = make_option("BTC_USDC-27SEP24-100020-C", expiry)
+    reducer.options = {
+        first.instrument_name: first,
+        second.instrument_name: second,
+    }
+    reducer.catalog_options = dict(reducer.options)
+    assert reducer.clock is not None
+    timestamp = reducer.clock.interval_at(1_001).upper_ms
+    for instrument in (first, second):
+        reducer.trackers[instrument.instrument_name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=reducer.policy.identity,
+            instrument_name=instrument.instrument_name,
+        )
+        reducer.option_books[instrument.instrument_name] = make_book(
+            instrument.instrument_name,
+            "1",
+        )
+        reducer.tickers[instrument.instrument_name] = TickerState(
+            Decimal(100),
+            "index_price",
+            timestamp,
+        )
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 0, 1_001, 1),
+            CausalCause.INDEX_TICK,
+        ),
+        affected_instruments=(first.instrument_name, second.instrument_name),
+        countable=True,
+    )
+    first_result = reducer.results[first.instrument_name]
+    second_result = reducer.results[second.instrument_name]
+    reducer.results[first.instrument_name] = replace(
+        first_result,
+        reason="OPTION_BOOK_GAP",
+        known_evaluation=False,
+        full_formula_evaluation=False,
+    )
+    reducer.results[second.instrument_name] = replace(
+        second_result,
+        reason="TICKER_SOURCE_STALE",
+        known_evaluation=False,
+        full_formula_evaluation=False,
+    )
+    reducer.aggregate_results.clear()
+    reducer._update_coverage(
+        commit=fact_commit(
+            FactBoundary(1, 0, 1_100, 2),
+            CausalCause.OPTION_BOOK_FACT,
+        )
+    )
+
+    assert tuple(
+        (group.blocking_reason, group.affected_scopes)
+        for group in reducer._coverage._current_blocking_groups
+    ) == (
+        ("OPTION_BOOK_UNAVAILABLE", (f"OPTION:{first.instrument_name}",)),
+        ("TICKER_SOURCE_STALE", (f"OPTION:{second.instrument_name}",)),
+    )
+    assert reducer._coverage._current_blocking_reason == "CURRENT_SCOPE_INCOMPLETE"
+
+    reducer.results[first.instrument_name] = replace(
+        first_result,
+        reason="INDEX_TIME_BOUNDARY_PENDING",
+        known_evaluation=False,
+        full_formula_evaluation=False,
+    )
+    reducer._update_coverage(
+        commit=fact_commit(
+            FactBoundary(1, 0, 1_200, 3),
+            CausalCause.TIME_BOUNDARY,
+        )
+    )
+    assert {group.blocking_reason for group in reducer._coverage._current_blocking_groups} == {
+        "INDEX_TIME_BOUNDARY_PENDING",
+        "TICKER_SOURCE_STALE",
+    }
+
+    summary = json.loads(reducer.clean_stop(1_300).read_text())
+    validate_run_summary(summary)
+    assert any(
+        {group["blocking_reason"] for group in segment["blocking_groups"]}
+        == {"INDEX_TIME_BOUNDARY_PENDING", "TICKER_SOURCE_STALE"}
+        for segment in summary["coverage_segments"]
     )
 
 

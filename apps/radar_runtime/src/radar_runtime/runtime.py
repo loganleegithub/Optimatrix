@@ -81,6 +81,7 @@ from short_vol_radar.evidence import (
     TRANSPORT_EXCEPTION_CLASS_ALLOWLIST,
     AnomalyEvidence,
     AtomicEvidence,
+    CoverageBlockingGroup,
     CoverageBlockingReason,
     CoverageSegment,
     CoverageState,
@@ -784,6 +785,18 @@ class RadarReducer:
         self._queue_lag_transition_application = None
         self._commands = []
         boundary = FactBoundary(session_epoch, 0, monotonic_ms, self._causal_seq)
+        if active_incident is not None:
+            self._transition_coverage(
+                CoverageState.UNKNOWN,
+                commit=CausalCommit(
+                    boundary=boundary,
+                    cause=CausalCause.BOOTSTRAP,
+                    failure_domain=FailureScope.SESSION,
+                    affected_scopes=("GLOBAL",),
+                ),
+                affected_scopes=("GLOBAL",),
+                blocking_reason=CoverageBlockingReason.PLATFORM_UNESTABLISHED.value,
+            )
         self._schedule(
             purpose=RpcPurpose.SET_HEARTBEAT,
             method="public/set_heartbeat",
@@ -3797,8 +3810,16 @@ class RadarReducer:
         )
         self._first_joint_witness_ms = None
         self._first_joint_witness_identity = None
+        restart_state = (
+            CoverageState.KNOWN_DEGRADED
+            if any(
+                tracker.detector_state is DetectorState.ANOMALY_ACTIVE
+                for tracker in self.trackers.values()
+            )
+            else CoverageState.UNKNOWN
+        )
         self._coverage.transition(
-            self._coverage._current_state,
+            restart_state,
             commit=commit,
             causal_effect=restart_effect,
             affected_scopes=restart_effect.affected_scopes,
@@ -4009,6 +4030,9 @@ class RadarReducer:
             commit.boundary.session_epoch,
             commit.boundary.ingress_seq,
         )
+        queue_lag_transition_rebuild = (
+            queue_lag_transition_boundary and self._queue_lag_transition_pending
+        )
         queue_lag_currentness_active = self._queue_lag_currentness_active
         queue_lag_non_countable = queue_lag_currentness_active or queue_lag_transition_boundary
         self._fact_transaction_active = True
@@ -4019,10 +4043,10 @@ class RadarReducer:
                 countable=(countable and not queue_lag_non_countable),
                 acceptance_eligible=(acceptance_eligible and not queue_lag_non_countable),
                 affected_scope_keys=affected_scope_keys,
-                force_full_currentness=queue_lag_transition_boundary,
+                force_full_currentness=queue_lag_transition_rebuild,
             )
             self._fact_transaction_revision += 1
-            if queue_lag_transition_boundary:
+            if queue_lag_transition_rebuild:
                 self._queue_lag_transition_pending = False
         finally:
             self._fact_transaction_active = False
@@ -4850,6 +4874,7 @@ class RadarReducer:
         causal_effect: CausalEffect | None = None,
         affected_scopes: tuple[str, ...] | None = None,
         blocking_reason: str,
+        blocking_groups: tuple[CoverageBlockingGroup, ...] | None = None,
         force: bool = False,
     ) -> None:
         self._coverage.transition(
@@ -4858,6 +4883,7 @@ class RadarReducer:
             causal_effect=causal_effect,
             affected_scopes=affected_scopes,
             blocking_reason=blocking_reason,
+            blocking_groups=blocking_groups,
             global_continuity_epoch=self._global_continuity_epoch,
             force=force,
         )
@@ -5152,19 +5178,16 @@ class RadarReducer:
                 tracker.detector_state is DetectorState.ANOMALY_ACTIVE
                 for tracker in self.trackers.values()
             )
+            blocking_reason = (
+                CoverageBlockingReason.CLOCK_GAP.value
+                if commit.cause is CausalCause.CLOCK_GAP
+                else CoverageBlockingReason.CLOCK_UNAVAILABLE.value
+            )
             self._transition_coverage(
                 CoverageState.KNOWN_DEGRADED if positive else CoverageState.UNKNOWN,
                 commit=commit,
                 affected_scopes=("GLOBAL",),
-                blocking_reason=(
-                    CoverageBlockingReason.ACTIVE_POSITIVE_SCOPE_INCOMPLETE.value
-                    if positive
-                    else (
-                        CoverageBlockingReason.CLOCK_GAP.value
-                        if commit.cause is CausalCause.CLOCK_GAP
-                        else CoverageBlockingReason.CLOCK_UNAVAILABLE.value
-                    )
-                ),
+                blocking_reason=blocking_reason,
             )
             return
         try:
@@ -5183,19 +5206,16 @@ class RadarReducer:
                 tracker.detector_state is DetectorState.ANOMALY_ACTIVE
                 for tracker in self.trackers.values()
             )
+            blocking_reason = (
+                self._bounded_coverage_blocking_reason(self.platform.reason)
+                if not self.platform.usable
+                else CoverageBlockingReason.OPTION_CATALOG_INCOMPLETE.value
+            )
             self._transition_coverage(
                 CoverageState.KNOWN_DEGRADED if positive else CoverageState.UNKNOWN,
                 commit=commit,
                 affected_scopes=("GLOBAL",),
-                blocking_reason=(
-                    CoverageBlockingReason.ACTIVE_POSITIVE_SCOPE_INCOMPLETE.value
-                    if positive
-                    else (
-                        self._bounded_coverage_blocking_reason(self.platform.reason)
-                        if not self.platform.usable
-                        else CoverageBlockingReason.OPTION_CATALOG_INCOMPLETE.value
-                    )
-                ),
+                blocking_reason=blocking_reason,
             )
             return
         scoped_keys: set[tuple[int, OptionType, str]] = set()
@@ -5260,34 +5280,36 @@ class RadarReducer:
             state = CoverageState.KNOWN_DEGRADED
         else:
             state = CoverageState.UNKNOWN
-        scope_blocking_reason, scope_blocker_scopes = self._current_scope_blocker(scoped_keys)
-        blocking_reason = (
-            CoverageBlockingReason.NONE.value
-            if state is CoverageState.KNOWN_COMPLETE
-            else (
-                CoverageBlockingReason.ACTIVE_POSITIVE_SCOPE_INCOMPLETE.value
-                if state is CoverageState.KNOWN_DEGRADED
-                else (
-                    CoverageBlockingReason.TIME_APPLICABILITY_UNRESOLVED.value
-                    if unresolved
-                    else scope_blocking_reason
+        blocking_groups = self._current_scope_blocking_groups(scoped_keys)
+        if unresolved_names:
+            blocking_groups = self._merge_coverage_blocking_groups(
+                blocking_groups,
+                (
+                    CoverageBlockingGroup(
+                        CoverageBlockingReason.TIME_APPLICABILITY_UNRESOLVED.value,
+                        self._option_local_coverage_scopes(tuple(unresolved_names)),
+                    ),
+                ),
+            )
+        if state is CoverageState.KNOWN_COMPLETE:
+            blocking_reason = CoverageBlockingReason.NONE.value
+            affected_scopes = self._coverage_scope_labels(scoped_keys)
+            blocking_groups = ()
+        else:
+            if not blocking_groups:
+                blocking_groups = (
+                    CoverageBlockingGroup(
+                        CoverageBlockingReason.CURRENT_SCOPE_INCOMPLETE.value,
+                        self._coverage_scope_labels(scoped_keys),
+                    ),
                 )
-            )
-        )
-        affected_scopes = (
-            self._coverage_scope_labels(scoped_keys)
-            if state is CoverageState.KNOWN_COMPLETE
-            else (
-                self._option_local_coverage_scopes(tuple(unresolved_names))
-                if unresolved_names
-                else scope_blocker_scopes
-            )
-        )
+            blocking_reason, affected_scopes = self._coverage_blocking_summary(blocking_groups)
         self._transition_coverage(
             state,
             commit=commit,
             affected_scopes=affected_scopes,
             blocking_reason=blocking_reason,
+            blocking_groups=blocking_groups,
         )
 
     @staticmethod
@@ -5315,12 +5337,38 @@ class RadarReducer:
         )
         return labels if labels and len(labels) <= 256 else ("GLOBAL",)
 
-    def _current_scope_blocker(
+    @staticmethod
+    def _summarize_scope_labels(scopes: set[str]) -> tuple[str, ...]:
+        return _summarize_coverage_scope_labels(scopes)
+
+    @classmethod
+    def _merge_coverage_blocking_groups(
+        cls,
+        *collections: tuple[CoverageBlockingGroup, ...],
+    ) -> tuple[CoverageBlockingGroup, ...]:
+        scopes_by_reason: dict[str, set[str]] = {}
+        for groups in collections:
+            for group in groups:
+                scopes_by_reason.setdefault(group.blocking_reason, set()).update(
+                    group.affected_scopes
+                )
+        return tuple(
+            CoverageBlockingGroup(reason, cls._summarize_scope_labels(scopes))
+            for reason, scopes in sorted(scopes_by_reason.items())
+        )
+
+    @staticmethod
+    def _coverage_blocking_summary(
+        groups: tuple[CoverageBlockingGroup, ...],
+    ) -> tuple[str, tuple[str, ...]]:
+        return _coverage_blocking_group_summary(groups)
+
+    def _current_scope_blocking_groups(
         self,
         scoped_keys: set[tuple[int, OptionType, str]],
-    ) -> tuple[str, tuple[str, ...]]:
+    ) -> tuple[CoverageBlockingGroup, ...]:
         candidates = tuple(
-            (name, result.reason, self._bounded_coverage_blocking_reason(result.reason))
+            (name, self._bounded_coverage_blocking_reason(result.reason))
             for name, result in self.results.items()
             if result.reason is not None
             and not result.known_evaluation
@@ -5331,15 +5379,6 @@ class RadarReducer:
                 result.band_id,
             )
             in scoped_keys
-        )
-        selected = CoverageBlockingReason.CURRENT_SCOPE_INCOMPLETE.value
-        for reason in sorted({reason for _, reason, _ in candidates}):
-            bounded = self._bounded_coverage_blocking_reason(reason)
-            if bounded != CoverageBlockingReason.CURRENT_SCOPE_INCOMPLETE.value:
-                selected = bounded
-                break
-        selected_names = tuple(
-            sorted(name for name, _, bounded in candidates if bounded == selected)
         )
         global_blockers = {
             CoverageBlockingReason.CLOCK_GAP.value,
@@ -5362,33 +5401,57 @@ class RadarReducer:
             CoverageBlockingReason.INDEX_CONTINUITY_GAP.value,
             CoverageBlockingReason.QUEUE_LAG_CURRENTNESS.value,
         }
-        if selected in global_blockers:
-            return selected, ("GLOBAL",)
-        if selected == CoverageBlockingReason.INDEX_WINDOW_GAP.value:
-            matching_scopes = {
-                (
-                    self.options[name].expiration_timestamp_ms,
-                    self.options[name].option_type,
-                    self.results[name].band_id,
-                )
-                for name in selected_names
-                if self.results[name].band_id is not None
-            }
-            return selected, self._coverage_scope_labels(
-                {
-                    (expiry, option_type, cast(str, band_id))
-                    for expiry, option_type, band_id in matching_scopes
-                }
-            )
         option_local_blockers = {
             CoverageBlockingReason.TICKER_SOURCE_STALE.value,
             CoverageBlockingReason.TICKER_TIMESTAMP_AHEAD.value,
             CoverageBlockingReason.OPTION_LIFECYCLE_UNAVAILABLE.value,
             CoverageBlockingReason.OPTION_BOOK_UNAVAILABLE.value,
         }
-        if selected in option_local_blockers and selected_names:
-            return selected, self._option_local_coverage_scopes(selected_names)
-        return selected, self._coverage_scope_labels(scoped_keys)
+        groups: list[CoverageBlockingGroup] = []
+        for reason in sorted({reason for _, reason in candidates}):
+            selected_names = tuple(
+                sorted(name for name, candidate_reason in candidates if candidate_reason == reason)
+            )
+            scopes: tuple[str, ...]
+            if reason in global_blockers:
+                scopes = ("GLOBAL",)
+            elif reason == CoverageBlockingReason.INDEX_WINDOW_GAP.value:
+                matching_scopes = {
+                    (
+                        self.options[name].expiration_timestamp_ms,
+                        self.options[name].option_type,
+                        self.results[name].band_id,
+                    )
+                    for name in selected_names
+                    if self.results[name].band_id is not None
+                }
+                scopes = self._coverage_scope_labels(
+                    {
+                        (expiry, option_type, cast(str, band_id))
+                        for expiry, option_type, band_id in matching_scopes
+                    }
+                )
+            elif reason in option_local_blockers and selected_names:
+                scopes = self._option_local_coverage_scopes(selected_names)
+            else:
+                matching_scopes = {
+                    (
+                        self.options[name].expiration_timestamp_ms,
+                        self.options[name].option_type,
+                        self.results[name].band_id,
+                    )
+                    for name in selected_names
+                    if self.results[name].band_id is not None
+                }
+                scopes = self._coverage_scope_labels(
+                    {
+                        (expiry, option_type, cast(str, band_id))
+                        for expiry, option_type, band_id in matching_scopes
+                    }
+                    or scoped_keys
+                )
+            groups.append(CoverageBlockingGroup(reason, scopes))
+        return tuple(groups)
 
     def _update_band_suspension(self, monotonic_ms: int) -> None:
         suspended = any(
@@ -5926,7 +5989,7 @@ class RadarReducer:
         omitted_reason_rows = interval_count_rows(omitted_option_local_by_reason)
         witness_identity = self._first_joint_witness_identity
         return {
-            "operational_diagnostics_schema_version": 4,
+            "operational_diagnostics_schema_version": 5,
             "runtime_limits": self.policy.runtime_limits.as_object(),
             "ingress": {
                 "received_envelope_count": max(
@@ -6205,6 +6268,12 @@ class CoverageLedger:
         self._current_trigger_cause = initial_commit.cause.value
         self._current_blocking_reason = CoverageBlockingReason.RUNTIME_START_PENDING.value
         self._current_affected_scopes = initial_commit.affected_scopes
+        self._current_blocking_groups: tuple[CoverageBlockingGroup, ...] = (
+            CoverageBlockingGroup(
+                CoverageBlockingReason.RUNTIME_START_PENDING.value,
+                initial_commit.affected_scopes,
+            ),
+        )
         self._current_global_continuity_epoch = 1
         self._segments: list[CoverageSegment] = []
 
@@ -6216,6 +6285,7 @@ class CoverageLedger:
         causal_effect: CausalEffect | None = None,
         affected_scopes: tuple[str, ...] | None = None,
         blocking_reason: str,
+        blocking_groups: tuple[CoverageBlockingGroup, ...] | None = None,
         global_continuity_epoch: int,
         force: bool = False,
     ) -> None:
@@ -6236,10 +6306,68 @@ class CoverageLedger:
             )
         )
         _validate_causal_scopes(resolved_affected_scopes)
+        resolved_blocking_groups = (
+            blocking_groups
+            if blocking_groups is not None
+            else (
+                ()
+                if state is CoverageState.KNOWN_COMPLETE
+                else (CoverageBlockingGroup(blocking_reason, resolved_affected_scopes),)
+            )
+        )
+        for group in resolved_blocking_groups:
+            try:
+                CoverageBlockingReason(group.blocking_reason)
+            except ValueError as exc:
+                raise ValueError(
+                    "coverage blocking group reason is outside the bounded allowlist"
+                ) from exc
+            _validate_causal_scopes(group.affected_scopes)
+        if len(resolved_blocking_groups) > 256:
+            raise ValueError("coverage blocking groups cannot exceed 256")
+        if tuple(
+            sorted(
+                resolved_blocking_groups,
+                key=lambda group: (group.blocking_reason, group.affected_scopes),
+            )
+        ) != resolved_blocking_groups or len(
+            {group.blocking_reason for group in resolved_blocking_groups}
+        ) != len(resolved_blocking_groups):
+            raise ValueError("coverage blocking groups must be sorted with unique reasons")
+        if state is CoverageState.KNOWN_COMPLETE:
+            if resolved_blocking_groups or blocking_reason != CoverageBlockingReason.NONE.value:
+                raise ValueError("KNOWN_COMPLETE coverage cannot have blocking groups")
+        elif not resolved_blocking_groups:
+            raise ValueError("incomplete coverage must have at least one blocking group")
+        else:
+            forbidden_group_reasons = {
+                CoverageBlockingReason.NONE.value,
+                CoverageBlockingReason.LEGACY_UNATTRIBUTED.value,
+                CoverageBlockingReason.ACTIVE_POSITIVE_SCOPE_INCOMPLETE.value,
+            }
+            if any(
+                group.blocking_reason in forbidden_group_reasons
+                for group in resolved_blocking_groups
+            ):
+                raise ValueError("coverage blocking group uses a synthetic or empty reason")
+            expected_reason, expected_scopes = _coverage_blocking_group_summary(
+                resolved_blocking_groups
+            )
+            if blocking_reason != expected_reason:
+                raise ValueError("coverage blocking_reason must summarize blocking groups")
+            if resolved_affected_scopes != expected_scopes:
+                raise ValueError("coverage affected_scopes must summarize blocking groups")
+            if state is CoverageState.NO_APPLICABLE_SCOPE and (
+                len(resolved_blocking_groups) != 1
+                or resolved_blocking_groups[0].blocking_reason
+                != CoverageBlockingReason.NO_APPLICABLE_SCOPE.value
+            ):
+                raise ValueError(
+                    "NO_APPLICABLE_SCOPE coverage must have one matching blocking group"
+                )
         same_coverage_semantics = (
             state is self._current_state
-            and blocking_reason == self._current_blocking_reason
-            and resolved_affected_scopes == self._current_affected_scopes
+            and resolved_blocking_groups == self._current_blocking_groups
             and global_continuity_epoch == self._current_global_continuity_epoch
         )
         if same_coverage_semantics and not force:
@@ -6254,6 +6382,7 @@ class CoverageLedger:
                     blocking_reason=self._current_blocking_reason,
                     affected_scopes=self._current_affected_scopes,
                     global_continuity_epoch=self._current_global_continuity_epoch,
+                    blocking_groups=self._current_blocking_groups,
                 )
             )
         self._current_start_ms = monotonic_ms
@@ -6261,6 +6390,7 @@ class CoverageLedger:
         self._current_trigger_cause = commit.cause.value
         self._current_blocking_reason = blocking_reason
         self._current_affected_scopes = resolved_affected_scopes
+        self._current_blocking_groups = resolved_blocking_groups
         self._current_global_continuity_epoch = global_continuity_epoch
 
     def close(self, stop_monotonic_ms: int) -> tuple[CoverageSegment, ...]:
@@ -6276,6 +6406,7 @@ class CoverageLedger:
                     blocking_reason=self._current_blocking_reason,
                     affected_scopes=self._current_affected_scopes,
                     global_continuity_epoch=self._current_global_continuity_epoch,
+                    blocking_groups=self._current_blocking_groups,
                 )
             )
         return tuple(self._segments)
@@ -6591,6 +6722,35 @@ def _merge_causal_scopes(*scope_groups: tuple[str, ...]) -> tuple[str, ...]:
     if "OPTION_LOCAL" in scopes or len(scopes) > 256:
         return ("OPTION_LOCAL",)
     return tuple(sorted(scopes))
+
+
+def _summarize_coverage_scope_labels(scopes: set[str]) -> tuple[str, ...]:
+    if "GLOBAL" in scopes:
+        return ("GLOBAL",)
+    if "OPTION_LOCAL" in scopes:
+        if all(scope == "OPTION_LOCAL" or scope.startswith("OPTION:") for scope in scopes):
+            return ("OPTION_LOCAL",)
+        return ("GLOBAL",)
+    ordered = tuple(sorted(scopes))
+    if len(ordered) <= 256:
+        return ordered
+    if all(scope.startswith("OPTION:") for scope in ordered):
+        return ("OPTION_LOCAL",)
+    return ("GLOBAL",)
+
+
+def _coverage_blocking_group_summary(
+    groups: tuple[CoverageBlockingGroup, ...],
+) -> tuple[str, tuple[str, ...]]:
+    reason = (
+        groups[0].blocking_reason
+        if len(groups) == 1
+        else CoverageBlockingReason.CURRENT_SCOPE_INCOMPLETE.value
+    )
+    scopes = _summarize_coverage_scope_labels(
+        {scope for group in groups for scope in group.affected_scopes}
+    )
+    return reason, scopes
 
 
 def _validate_causal_scopes(scopes: tuple[str, ...]) -> None:

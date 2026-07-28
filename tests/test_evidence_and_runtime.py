@@ -54,10 +54,12 @@ from short_vol_radar.evidence import (
     CORE_SOURCE_NAMES,
     AnomalyEvidence,
     AtomicEvidence,
+    CoverageBlockingGroup,
     CoverageSegment,
     CoverageState,
     EvidenceError,
     EvidenceWriter,
+    operational_soak_window_accounting,
     project_anomaly_event,
     project_atomic_event,
     project_run_summary,
@@ -69,6 +71,8 @@ from short_vol_radar.evidence import (
     validate_legacy_run_summary,
     validate_run_summary,
     validate_sealed_operational_run_summary,
+    validate_sealed_version_four_evidence_directory,
+    validate_sealed_version_four_run_summary,
 )
 from short_vol_radar.policy import OptionRule, load_policy_bytes
 
@@ -262,7 +266,7 @@ def operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
 
 def current_operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
     diagnostics = operational_diagnostics(observation_ms=observation_ms)
-    diagnostics["operational_diagnostics_schema_version"] = 4
+    diagnostics["operational_diagnostics_schema_version"] = 5
     ingress = diagnostics["ingress"]
     assert isinstance(ingress, dict)
     ingress["send_control_event_count"] = 0
@@ -391,6 +395,7 @@ def current_summary_object(
             global_continuity_epoch=1,
         ),
     ),
+    diagnostics: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return project_run_summary(
         code_identity="a" * 40,
@@ -403,7 +408,9 @@ def current_summary_object(
         anomaly_end_count_by_reason={EpisodeEndReason.CLEAR: 0},
         known_active_duration_ms_sum_by_end_reason={EpisodeEndReason.CLEAR: 0},
         public_atomic_quote_state_transition_count={},
-        operational_diagnostics=current_operational_diagnostics(),
+        operational_diagnostics=(
+            current_operational_diagnostics() if diagnostics is None else diagnostics
+        ),
     )
 
 
@@ -488,6 +495,12 @@ def epoch_two_summary(
             "trigger_cause": "RUNTIME_START",
             "blocking_reason": "RUNTIME_START_PENDING",
             "affected_scopes": ["GLOBAL"],
+            "blocking_groups": [
+                {
+                    "blocking_reason": "RUNTIME_START_PENDING",
+                    "affected_scopes": ["GLOBAL"],
+                }
+            ],
             "global_continuity_epoch": 1,
         },
         {
@@ -497,6 +510,12 @@ def epoch_two_summary(
             "trigger_cause": "CLOCK_GAP",
             "blocking_reason": "CLOCK_GAP",
             "affected_scopes": ["GLOBAL"],
+            "blocking_groups": [
+                {
+                    "blocking_reason": "CLOCK_GAP",
+                    "affected_scopes": ["GLOBAL"],
+                }
+            ],
             "global_continuity_epoch": 2,
         },
     ]
@@ -509,6 +528,7 @@ def epoch_two_summary(
                 "trigger_cause": "INDEX_TICK",
                 "blocking_reason": "NONE",
                 "affected_scopes": ["GLOBAL"],
+                "blocking_groups": [],
                 "global_continuity_epoch": 2,
             }
         )
@@ -571,6 +591,91 @@ def epoch_two_summary(
         attach_joint_witness(summary, first_ms=witness_ms, joint_count=1)
         witness["global_continuity_epoch"] = 2
     return summary
+
+
+def index_window_gap_scope_split_summary() -> dict[str, object]:
+    scope_a = "SCOPE:3600000:call:band-a"
+    scope_b = "SCOPE:7200000:call:band-b"
+    ledger = CoverageLedger(
+        0,
+        initial_commit=CausalCommit(
+            boundary=FactBoundary(1, 0, 0, 0),
+            cause=CausalCause.RUNTIME_START,
+            failure_domain=FailureScope.SESSION,
+            affected_scopes=("GLOBAL",),
+        ),
+    )
+    restart_commit = CausalCommit(
+        boundary=FactBoundary(1, 1, 10, 1),
+        cause=CausalCause.INDEX_TICK,
+        failure_domain=FailureScope.CLOCK_INDEX,
+        affected_scopes=(scope_a,),
+    )
+    ledger.transition(
+        CoverageState.UNKNOWN,
+        commit=restart_commit,
+        causal_effect=CausalEffect(
+            cause=CausalCause.INDEX_WINDOW_GAP,
+            failure_domain=FailureScope.CLOCK_INDEX,
+            affected_scopes=(scope_a,),
+        ),
+        blocking_reason="INDEX_WINDOW_GAP",
+        global_continuity_epoch=2,
+        force=True,
+    )
+    ledger.transition(
+        CoverageState.UNKNOWN,
+        commit=CausalCommit(
+            boundary=FactBoundary(1, 2, 15, 2),
+            cause=CausalCause.TIME_BOUNDARY,
+            failure_domain=FailureScope.CLOCK_INDEX,
+            affected_scopes=(scope_b,),
+        ),
+        affected_scopes=(scope_a, scope_b),
+        blocking_reason="INDEX_WINDOW_GAP",
+        global_continuity_epoch=2,
+    )
+    diagnostics = current_operational_diagnostics()
+    diagnostics["global_continuity"] = {
+        "current_epoch": 2,
+        "restart_count": 1,
+        "restart_count_by_reason": {"INDEX_WINDOW_GAP": 1},
+        "restart_edges": [
+            {
+                "incident_id": 1,
+                "from_epoch": 1,
+                "to_epoch": 2,
+                "trigger_cause": "INDEX_TICK",
+                "reason": "INDEX_WINDOW_GAP",
+                "failure_domain": "CLOCK_INDEX",
+                "affected_scopes": [scope_a],
+                "boundary": {
+                    "session_epoch": 1,
+                    "ingress_seq": 1,
+                    "received_monotonic_ms": 10,
+                    "causal_seq": 1,
+                },
+            }
+        ],
+        "recovery_edges": [],
+        "current_epoch_joint_evaluation_count_by_scope": [],
+    }
+    witness = diagnostics["witness"]
+    assert isinstance(witness, dict)
+    witness["global_continuity_epoch"] = 2
+    return project_run_summary(
+        code_identity="a" * 40,
+        runtime_identity="runtime",
+        policy_identity="sha256:" + "b" * 64,
+        coverage_segments=ledger.close(20),
+        band_suspended_duration_ms=0,
+        counts_by_scope=[],
+        detector_unknown_transition_count_by_reason={"WARMUP": 1},
+        anomaly_end_count_by_reason={EpisodeEndReason.CLEAR: 0},
+        known_active_duration_ms_sum_by_end_reason={EpisodeEndReason.CLEAR: 0},
+        public_atomic_quote_state_transition_count={},
+        operational_diagnostics=diagnostics,
+    )
 
 
 def cross_ledger_summary() -> dict[str, object]:
@@ -1138,7 +1243,270 @@ def test_coverage_ledger_preserves_trigger_cause_and_true_blocking_reason() -> N
         "trigger_cause": "OPTION_BOOK_FACT",
         "blocking_reason": "TICKER_SOURCE_STALE",
         "affected_scopes": ["OPTION:SHORT"],
+        "blocking_groups": [
+            {
+                "blocking_reason": "TICKER_SOURCE_STALE",
+                "affected_scopes": ["OPTION:SHORT"],
+            }
+        ],
         "global_continuity_epoch": 1,
+    }
+
+
+def heterogeneous_blocker_summary() -> dict[str, object]:
+    summary = current_summary_object()
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    first = segments[0]
+    assert isinstance(first, dict)
+    first["blocking_reason"] = "CURRENT_SCOPE_INCOMPLETE"
+    first["affected_scopes"] = ["OPTION:A", "OPTION:B"]
+    first["blocking_groups"] = [
+        {
+            "blocking_reason": "OPTION_BOOK_UNAVAILABLE",
+            "affected_scopes": ["OPTION:A"],
+        },
+        {
+            "blocking_reason": "TICKER_SOURCE_STALE",
+            "affected_scopes": ["OPTION:B"],
+        },
+    ]
+    return summary
+
+
+def test_coverage_ledger_splits_when_reason_to_scope_assignment_changes() -> None:
+    ledger = CoverageLedger(
+        0,
+        initial_commit=CausalCommit(
+            boundary=FactBoundary(1, 0, 0, 0),
+            cause=CausalCause.RUNTIME_START,
+            failure_domain=FailureScope.SESSION,
+            affected_scopes=("GLOBAL",),
+        ),
+    )
+    scopes = ("OPTION:A", "OPTION:B")
+    first_groups = (
+        CoverageBlockingGroup("OPTION_BOOK_UNAVAILABLE", ("OPTION:A",)),
+        CoverageBlockingGroup("TICKER_SOURCE_STALE", ("OPTION:B",)),
+    )
+    second_groups = (
+        CoverageBlockingGroup("OPTION_BOOK_UNAVAILABLE", ("OPTION:B",)),
+        CoverageBlockingGroup("TICKER_SOURCE_STALE", ("OPTION:A",)),
+    )
+    ledger.transition(
+        CoverageState.UNKNOWN,
+        commit=CausalCommit(
+            boundary=FactBoundary(1, 1, 10, 1),
+            cause=CausalCause.OPTION_BOOK_FACT,
+            failure_domain=FailureScope.OPTION,
+            affected_scopes=scopes,
+        ),
+        affected_scopes=scopes,
+        blocking_reason="CURRENT_SCOPE_INCOMPLETE",
+        blocking_groups=first_groups,
+        global_continuity_epoch=1,
+    )
+    ledger.transition(
+        CoverageState.UNKNOWN,
+        commit=CausalCommit(
+            boundary=FactBoundary(1, 2, 15, 2),
+            cause=CausalCause.TIME_BOUNDARY,
+            failure_domain=FailureScope.OPTION,
+            affected_scopes=scopes,
+        ),
+        affected_scopes=scopes,
+        blocking_reason="CURRENT_SCOPE_INCOMPLETE",
+        blocking_groups=second_groups,
+        global_continuity_epoch=1,
+    )
+
+    summary = current_summary_object(segments=ledger.close(20))
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    assert [segment["start_monotonic_ms"] for segment in segments] == [0, 10, 15]
+    assert segments[1]["blocking_groups"] != segments[2]["blocking_groups"]
+    validate_run_summary(summary)
+
+
+@pytest.mark.parametrize(
+    ("blocking_reason", "affected_scopes", "message"),
+    (
+        (
+            "CURRENT_SCOPE_INCOMPLETE",
+            ("OPTION:A",),
+            "blocking_reason must summarize",
+        ),
+        (
+            "OPTION_BOOK_UNAVAILABLE",
+            ("OPTION:B",),
+            "affected_scopes must summarize",
+        ),
+    ),
+)
+def test_coverage_ledger_rejects_inconsistent_group_summaries_immediately(
+    blocking_reason: str,
+    affected_scopes: tuple[str, ...],
+    message: str,
+) -> None:
+    ledger = CoverageLedger(
+        0,
+        initial_commit=CausalCommit(
+            boundary=FactBoundary(1, 0, 0, 0),
+            cause=CausalCause.RUNTIME_START,
+            failure_domain=FailureScope.SESSION,
+            affected_scopes=("GLOBAL",),
+        ),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        ledger.transition(
+            CoverageState.UNKNOWN,
+            commit=CausalCommit(
+                boundary=FactBoundary(1, 1, 10, 1),
+                cause=CausalCause.OPTION_BOOK_FACT,
+                failure_domain=FailureScope.OPTION,
+                affected_scopes=affected_scopes,
+            ),
+            affected_scopes=affected_scopes,
+            blocking_reason=blocking_reason,
+            blocking_groups=(CoverageBlockingGroup("OPTION_BOOK_UNAVAILABLE", ("OPTION:A",)),),
+            global_continuity_epoch=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("reverse", "sorted"),
+        ("duplicate_reason", "unique"),
+        ("wrong_scalar", "summarize blocking groups"),
+        ("wrong_summary_scopes", "summarize blocking groups"),
+        ("empty", "1 to 256"),
+        ("extra_field", "exact repository-owned schema"),
+        ("none_group", "synthetic or empty"),
+    ),
+)
+def test_schema_five_blocking_groups_are_strict(
+    mutation: str,
+    message: str,
+) -> None:
+    summary = heterogeneous_blocker_summary()
+    validate_run_summary(summary)
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    first = segments[0]
+    assert isinstance(first, dict)
+    groups = first["blocking_groups"]
+    assert isinstance(groups, list)
+    first_group = groups[0]
+    second_group = groups[1]
+    assert isinstance(first_group, dict)
+    assert isinstance(second_group, dict)
+    if mutation == "reverse":
+        groups.reverse()
+    elif mutation == "duplicate_reason":
+        second_group["blocking_reason"] = first_group["blocking_reason"]
+    elif mutation == "wrong_scalar":
+        first["blocking_reason"] = "OPTION_BOOK_UNAVAILABLE"
+    elif mutation == "wrong_summary_scopes":
+        first["affected_scopes"] = ["OPTION:A"]
+    elif mutation == "empty":
+        first["blocking_groups"] = []
+    elif mutation == "extra_field":
+        first_group["payload"] = {"bid": 1}
+    elif mutation == "none_group":
+        first["blocking_reason"] = "CURRENT_SCOPE_INCOMPLETE"
+        first["blocking_groups"] = [
+            {
+                "blocking_reason": "NONE",
+                "affected_scopes": ["OPTION:A"],
+            }
+        ]
+    else:
+        raise AssertionError("unhandled mutation")
+
+    with pytest.raises(EvidenceError, match=message):
+        validate_run_summary(summary)
+
+
+def test_operational_soak_accounting_consumes_groups_for_p_g_e_and_u() -> None:
+    summary = current_summary_object(
+        segments=(
+            CoverageSegment(
+                0,
+                100,
+                CoverageState.UNKNOWN,
+                reason="TIME_BOUNDARY",
+                blocking_reason="CURRENT_SCOPE_INCOMPLETE",
+                affected_scopes=("OPTION:A", "OPTION:B"),
+                global_continuity_epoch=1,
+                blocking_groups=(
+                    CoverageBlockingGroup(
+                        "INDEX_TIME_BOUNDARY_PENDING",
+                        ("OPTION:A",),
+                    ),
+                    CoverageBlockingGroup(
+                        "TICKER_SOURCE_STALE",
+                        ("OPTION:B",),
+                    ),
+                ),
+            ),
+            CoverageSegment(
+                100,
+                200,
+                CoverageState.UNKNOWN,
+                reason="CLOCK_FACT",
+                blocking_reason="CLOCK_UNAVAILABLE",
+                affected_scopes=("GLOBAL",),
+                global_continuity_epoch=1,
+            ),
+            CoverageSegment(
+                200,
+                3_600_000,
+                CoverageState.KNOWN_COMPLETE,
+                reason="TICKER_APPLIED",
+                blocking_reason="NONE",
+                affected_scopes=("OPTION:A", "OPTION:B"),
+                global_continuity_epoch=1,
+            ),
+        )
+    )
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    availability = diagnostics["option_local_availability"]
+    assert isinstance(availability, dict)
+    availability.update(
+        {
+            "unavailable_count_by_reason": {"TICKER_SOURCE_STALE": 1},
+            "recovery_count_by_reason": {"TICKER_SOURCE_STALE": 1},
+            "end_count_by_disposition": {
+                "RECOVERED": 1,
+                "REASON_CHANGED": 0,
+                "CENSORED_AT_STOP": 0,
+            },
+            "intervals": [
+                {
+                    "instrument_name": "B",
+                    "generation": 1,
+                    "reason": "TICKER_SOURCE_STALE",
+                    "start_monotonic_ms": 300,
+                    "end_monotonic_ms": 400,
+                    "duration_ms": 100,
+                    "end_disposition": "RECOVERED",
+                    "global_continuity_epoch": 1,
+                }
+            ],
+        }
+    )
+
+    assert operational_soak_window_accounting(summary) == {
+        "window_start_monotonic_ms": 0,
+        "window_end_monotonic_ms": 3_600_000,
+        "known_complete_ms": 3_599_800,
+        "normal_boundary_pending_ms": 100,
+        "global_currentness_incident_ms": 100,
+        "effective_option_local_denominator_ms": 3_599_800,
+        "option_local_unavailable_union_ms": 100,
     }
 
 
@@ -1153,9 +1521,10 @@ def test_explicit_sealed_operational_summary_path_does_not_weaken_current_schema
     for segment in coverage_segments:
         segment["reason"] = segment.pop("trigger_cause")
         segment.pop("blocking_reason")
+        segment.pop("blocking_groups")
 
     validate_sealed_operational_run_summary(summary)
-    with pytest.raises(EvidenceError, match="schema version 4"):
+    with pytest.raises(EvidenceError, match="schema version 5"):
         validate_run_summary(summary)
 
 
@@ -1180,6 +1549,7 @@ def test_sealed_compacted_option_local_schema_remains_exact() -> None:
     for segment in coverage_segments:
         segment["reason"] = segment.pop("trigger_cause")
         segment.pop("blocking_reason")
+        segment.pop("blocking_groups")
 
     validate_sealed_operational_run_summary(summary)
     availability["acceptance_window_ms"] = 3_600_000
@@ -1209,6 +1579,7 @@ def test_sealed_operational_schema_retains_historical_queue_lag_restart_semantic
     for segment in coverage_segments:
         segment["reason"] = segment.pop("trigger_cause")
         segment.pop("blocking_reason")
+        segment.pop("blocking_groups")
 
     validate_sealed_operational_run_summary(summary)
 
@@ -1253,6 +1624,12 @@ def test_schema_three_accepts_bounded_option_local_coverage_scope() -> None:
     first = coverage_segments[0]
     assert isinstance(first, dict)
     first["affected_scopes"] = ["OPTION_LOCAL"]
+    first["blocking_groups"] = [
+        {
+            "blocking_reason": "RUNTIME_START_PENDING",
+            "affected_scopes": ["OPTION_LOCAL"],
+        }
+    ]
 
     validate_run_summary(summary)
 
@@ -1313,11 +1690,11 @@ def test_version_two_operational_diagnostics_remain_strict_and_payload_free() ->
         evidence_module.validate_legacy_run_summary(summary)
 
 
-def test_version_four_diagnostics_and_attributed_coverage_are_strict() -> None:
+def test_version_five_diagnostics_and_attributed_coverage_are_strict() -> None:
     summary = current_summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
-    assert diagnostics["operational_diagnostics_schema_version"] == 4
+    assert diagnostics["operational_diagnostics_schema_version"] == 5
     assert "price" not in json.dumps(diagnostics)
     assert summary["coverage_segments"] == [
         {
@@ -1327,6 +1704,12 @@ def test_version_four_diagnostics_and_attributed_coverage_are_strict() -> None:
             "trigger_cause": "RUNTIME_START",
             "blocking_reason": "RUNTIME_START_PENDING",
             "affected_scopes": ["GLOBAL"],
+            "blocking_groups": [
+                {
+                    "blocking_reason": "RUNTIME_START_PENDING",
+                    "affected_scopes": ["GLOBAL"],
+                }
+            ],
             "global_continuity_epoch": 1,
         },
         {
@@ -1336,6 +1719,7 @@ def test_version_four_diagnostics_and_attributed_coverage_are_strict() -> None:
             "trigger_cause": "TICKER_APPLIED",
             "blocking_reason": "NONE",
             "affected_scopes": ["OPTION:SHORT"],
+            "blocking_groups": [],
             "global_continuity_epoch": 1,
         },
     ]
@@ -1358,6 +1742,61 @@ def test_version_four_diagnostics_and_attributed_coverage_are_strict() -> None:
     wrong_epoch_segment["global_continuity_epoch"] = 2
     with pytest.raises(EvidenceError, match="continuity epoch"):
         validate_run_summary(wrong_epoch)
+
+
+def test_current_schema_version_requires_an_integer_token() -> None:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["operational_diagnostics_schema_version"] = 5.0
+
+    with pytest.raises(EvidenceError, match="integer diagnostics schema version 5"):
+        validate_run_summary(summary)
+
+    writer_diagnostics = current_operational_diagnostics()
+    writer_diagnostics["operational_diagnostics_schema_version"] = 5.0
+    with pytest.raises(EvidenceError, match="integer diagnostics schema version 5"):
+        current_summary_object(diagnostics=writer_diagnostics)
+
+
+def test_explicit_sealed_version_four_summary_keeps_its_exact_shape() -> None:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["operational_diagnostics_schema_version"] = 4
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    for segment in segments:
+        segment.pop("blocking_groups")
+
+    validate_sealed_version_four_run_summary(summary)
+    with pytest.raises(EvidenceError, match="schema version 5"):
+        validate_run_summary(summary)
+
+    segments[0]["blocking_groups"] = []
+    with pytest.raises(EvidenceError, match="exact repository-owned schema"):
+        validate_sealed_version_four_run_summary(summary)
+
+
+def test_explicit_sealed_version_four_directory_route_is_isolated(
+    tmp_path: Path,
+) -> None:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["operational_diagnostics_schema_version"] = 4
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    for segment in segments:
+        segment.pop("blocking_groups")
+    (tmp_path / "radar-run-summary.json").write_text(
+        json.dumps(summary),
+        encoding="utf-8",
+    )
+
+    assert len(validate_sealed_version_four_evidence_directory(tmp_path)) == 1
+    with pytest.raises(EvidenceError, match="integer diagnostics schema version 5"):
+        validate_evidence_directory(tmp_path)
 
 
 def test_version_three_late_diagnostics_are_bounded_and_payload_free() -> None:
@@ -1481,7 +1920,7 @@ def test_runtime_projects_exact_policy_runtime_limits(
 
     diagnostics = runtime.reducer._operational_diagnostics(0)
 
-    assert diagnostics["operational_diagnostics_schema_version"] == 4
+    assert diagnostics["operational_diagnostics_schema_version"] == 5
     assert diagnostics["runtime_limits"] == policy.runtime_limits.as_object()
     runtime_limits = diagnostics["runtime_limits"]
     assert isinstance(runtime_limits, dict)
@@ -2242,7 +2681,7 @@ def test_unexpected_sender_cancellation_fails_closed(
         asyncio.run(runtime.run(WaitingClient(), asyncio.Event()))
 
 
-def test_current_writer_and_validator_are_schema_four_only_with_explicit_legacy_entry(
+def test_current_writer_and_validator_are_schema_five_only_with_explicit_legacy_entry(
     tmp_path: Path,
 ) -> None:
     legacy = legacy_summary_object()
@@ -2253,9 +2692,9 @@ def test_current_writer_and_validator_are_schema_four_only_with_explicit_legacy_
         policy_identity="sha256:" + "b" * 64,
     )
 
-    with pytest.raises(EvidenceError, match="version 4"):
+    with pytest.raises(EvidenceError, match="version 5"):
         validate_run_summary(legacy)
-    with pytest.raises(EvidenceError, match="version 4"):
+    with pytest.raises(EvidenceError, match="version 5"):
         writer.write_summary(legacy)
 
     validate_legacy_run_summary(legacy)
@@ -2263,7 +2702,7 @@ def test_current_writer_and_validator_are_schema_four_only_with_explicit_legacy_
         json.dumps(legacy),
         encoding="utf-8",
     )
-    with pytest.raises(EvidenceError, match="version 4"):
+    with pytest.raises(EvidenceError, match="version 5"):
         validate_evidence_directory(tmp_path)
     assert len(validate_legacy_evidence_directory(tmp_path)) == 1
 
@@ -2583,6 +3022,12 @@ def test_schema_three_epoch_edges_must_match_restart_incidents_one_for_one() -> 
     second["state"] = "UNKNOWN"
     second["blocking_reason"] = "INDEX_CONTINUITY_GAP"
     second["affected_scopes"] = ["GLOBAL"]
+    second["blocking_groups"] = [
+        {
+            "blocking_reason": "INDEX_CONTINUITY_GAP",
+            "affected_scopes": ["GLOBAL"],
+        }
+    ]
     second["global_continuity_epoch"] = 2
     summary["coverage"] = {
         "observation_interval_ms": 20,
@@ -2788,6 +3233,12 @@ def test_schema_three_rejects_second_restart_before_incident_recovery() -> None:
             "trigger_cause": "RUNTIME_START",
             "blocking_reason": "RUNTIME_START_PENDING",
             "affected_scopes": ["GLOBAL"],
+            "blocking_groups": [
+                {
+                    "blocking_reason": "RUNTIME_START_PENDING",
+                    "affected_scopes": ["GLOBAL"],
+                }
+            ],
             "global_continuity_epoch": 1,
         },
         {
@@ -2797,6 +3248,12 @@ def test_schema_three_rejects_second_restart_before_incident_recovery() -> None:
             "trigger_cause": "CLOCK_GAP",
             "blocking_reason": "CLOCK_GAP",
             "affected_scopes": ["GLOBAL"],
+            "blocking_groups": [
+                {
+                    "blocking_reason": "CLOCK_GAP",
+                    "affected_scopes": ["GLOBAL"],
+                }
+            ],
             "global_continuity_epoch": 2,
         },
         {
@@ -2806,6 +3263,12 @@ def test_schema_three_rejects_second_restart_before_incident_recovery() -> None:
             "trigger_cause": "INDEX_CONTINUITY_GAP",
             "blocking_reason": "INDEX_CONTINUITY_GAP",
             "affected_scopes": ["GLOBAL"],
+            "blocking_groups": [
+                {
+                    "blocking_reason": "INDEX_CONTINUITY_GAP",
+                    "affected_scopes": ["GLOBAL"],
+                }
+            ],
             "global_continuity_epoch": 3,
         },
     ]
@@ -2879,6 +3342,12 @@ def test_schema_three_rejects_illegal_restart_cause_domain_scope_tuple() -> None
             "trigger_cause": "RUNTIME_START",
             "blocking_reason": "RUNTIME_START_PENDING",
             "affected_scopes": ["GLOBAL"],
+            "blocking_groups": [
+                {
+                    "blocking_reason": "RUNTIME_START_PENDING",
+                    "affected_scopes": ["GLOBAL"],
+                }
+            ],
             "global_continuity_epoch": 1,
         },
         {
@@ -2888,6 +3357,12 @@ def test_schema_three_rejects_illegal_restart_cause_domain_scope_tuple() -> None
             "trigger_cause": "TICKER_APPLIED",
             "blocking_reason": "CURRENT_SCOPE_INCOMPLETE",
             "affected_scopes": ["GLOBAL"],
+            "blocking_groups": [
+                {
+                    "blocking_reason": "CURRENT_SCOPE_INCOMPLETE",
+                    "affected_scopes": ["GLOBAL"],
+                }
+            ],
             "global_continuity_epoch": 2,
         },
     ]
@@ -2940,6 +3415,12 @@ def test_schema_three_accepts_exact_transport_session_restart_cause() -> None:
     second = segments[1]
     assert isinstance(second, dict)
     second["blocking_reason"] = "TRANSPORT_READ_FAILURE"
+    second["blocking_groups"] = [
+        {
+            "blocking_reason": "TRANSPORT_READ_FAILURE",
+            "affected_scopes": ["GLOBAL"],
+        }
+    ]
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
     continuity = diagnostics["global_continuity"]
@@ -2978,6 +3459,64 @@ def test_current_schema_restart_root_trigger_is_exactly_cross_bound() -> None:
         validate_run_summary(forged)
 
 
+def test_schema_five_accepts_same_epoch_index_window_gap_scope_expansion() -> None:
+    summary = index_window_gap_scope_split_summary()
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    assert segments[1]["blocking_groups"] == [
+        {
+            "blocking_reason": "INDEX_WINDOW_GAP",
+            "affected_scopes": ["SCOPE:3600000:call:band-a"],
+        }
+    ]
+    assert segments[2]["blocking_groups"] == [
+        {
+            "blocking_reason": "INDEX_WINDOW_GAP",
+            "affected_scopes": [
+                "SCOPE:3600000:call:band-a",
+                "SCOPE:7200000:call:band-b",
+            ],
+        }
+    ]
+    validate_run_summary(summary)
+
+
+def test_same_epoch_index_window_gap_split_keeps_restart_scope_cross_binding() -> None:
+    summary = index_window_gap_scope_split_summary()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    continuity = diagnostics["global_continuity"]
+    assert isinstance(continuity, dict)
+    restart = continuity["restart_edges"][0]
+    assert isinstance(restart, dict)
+    restart["affected_scopes"] = ["SCOPE:7200000:call:band-b"]
+
+    with pytest.raises(EvidenceError, match=r"restart trigger and effect"):
+        validate_run_summary(summary)
+
+
+def test_index_window_gap_group_cannot_extend_beyond_recorded_recovery() -> None:
+    summary = index_window_gap_scope_split_summary()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    continuity = diagnostics["global_continuity"]
+    assert isinstance(continuity, dict)
+    continuity["recovery_edges"] = [
+        {
+            "incident_id": 1,
+            "boundary": {
+                "session_epoch": 1,
+                "ingress_seq": 3,
+                "received_monotonic_ms": 16,
+                "causal_seq": 3,
+            },
+        }
+    ]
+
+    with pytest.raises(EvidenceError, match=r"beyond incident recovery"):
+        validate_run_summary(summary)
+
+
 def test_current_schema_rejects_queue_lag_as_global_continuity_restart() -> None:
     summary = epoch_two_summary(recovery_ms=12)
     segments = summary["coverage_segments"]
@@ -2985,7 +3524,13 @@ def test_current_schema_rejects_queue_lag_as_global_continuity_restart() -> None
     blocked = segments[1]
     assert isinstance(blocked, dict)
     blocked["trigger_cause"] = "QUEUE_LAG_DEADLINE"
-    blocked["blocking_reason"] = "QUEUE_LAG_DEADLINE"
+    blocked["blocking_reason"] = "QUEUE_LAG_CURRENTNESS"
+    blocked["blocking_groups"] = [
+        {
+            "blocking_reason": "QUEUE_LAG_CURRENTNESS",
+            "affected_scopes": ["GLOBAL"],
+        }
+    ]
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
     continuity = diagnostics["global_continuity"]
@@ -3009,6 +3554,12 @@ def test_schema_three_restart_cause_cannot_appear_without_an_epoch_edge() -> Non
     second["state"] = "UNKNOWN"
     second["blocking_reason"] = "TRANSPORT_READ_FAILURE"
     second["affected_scopes"] = ["GLOBAL"]
+    second["blocking_groups"] = [
+        {
+            "blocking_reason": "TRANSPORT_READ_FAILURE",
+            "affected_scopes": ["GLOBAL"],
+        }
+    ]
     summary["coverage"] = {
         "observation_interval_ms": 20,
         "known_complete_ms": 0,
@@ -3018,7 +3569,7 @@ def test_schema_three_restart_cause_cannot_appear_without_an_epoch_edge() -> Non
         "coverage_partition_error_ms": 0,
     }
 
-    with pytest.raises(EvidenceError, match=r"restart cause.*epoch edge"):
+    with pytest.raises(EvidenceError, match=r"restart group.*epoch edge"):
         validate_run_summary(summary)
 
 

@@ -333,6 +333,44 @@ OPTION_LOCAL_REASONS = frozenset(
         "TICKER_TIMESTAMP_AHEAD",
     }
 )
+SOAK_PENDING_REASONS = frozenset(
+    {
+        CoverageBlockingReason.INDEX_TIME_BOUNDARY_PENDING.value,
+        CoverageBlockingReason.INDEX_WATERMARK_PENDING.value,
+    }
+)
+SOAK_GLOBAL_CURRENTNESS_REASONS = frozenset(
+    {
+        CoverageBlockingReason.CLOCK_UNAVAILABLE.value,
+        CoverageBlockingReason.CLOCK_GAP.value,
+        CoverageBlockingReason.SESSION_GAP.value,
+        CoverageBlockingReason.REMOTE_CONNECTION_CLOSED.value,
+        CoverageBlockingReason.TRANSPORT_READ_FAILURE.value,
+        CoverageBlockingReason.SESSION_LIVENESS_DEADLINE.value,
+        CoverageBlockingReason.SESSION_RPC_FAILURE.value,
+        CoverageBlockingReason.RUNTIME_SESSION_FAILURE.value,
+        CoverageBlockingReason.PROTOCOL_INCOMPATIBILITY.value,
+        CoverageBlockingReason.INGRESS_GAP_OR_DUPLICATE.value,
+        CoverageBlockingReason.QUEUE_OVERFLOW.value,
+        CoverageBlockingReason.PLATFORM_UNESTABLISHED.value,
+        CoverageBlockingReason.POST_STATUS_BOOTSTRAP_REQUIRED.value,
+        CoverageBlockingReason.PLATFORM_MAINTENANCE.value,
+        CoverageBlockingReason.PUBLIC_METHODS_DENIED.value,
+        CoverageBlockingReason.RELEVANT_PLATFORM_LOCK.value,
+        CoverageBlockingReason.OPTION_CATALOG_INCOMPLETE.value,
+        CoverageBlockingReason.INDEX_WARMUP.value,
+        CoverageBlockingReason.INDEX_WINDOW_GAP.value,
+        CoverageBlockingReason.INDEX_SOURCE_STALE.value,
+        CoverageBlockingReason.INDEX_CONTINUITY_GAP.value,
+        CoverageBlockingReason.QUEUE_LAG_CURRENTNESS.value,
+    }
+)
+
+
+@dataclass(frozen=True)
+class CoverageBlockingGroup:
+    blocking_reason: str
+    affected_scopes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -344,6 +382,15 @@ class CoverageSegment:
     blocking_reason: str
     affected_scopes: tuple[str, ...]
     global_continuity_epoch: int
+    blocking_groups: tuple[CoverageBlockingGroup, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.blocking_groups and self.state is not CoverageState.KNOWN_COMPLETE:
+            object.__setattr__(
+                self,
+                "blocking_groups",
+                (CoverageBlockingGroup(self.blocking_reason, self.affected_scopes),),
+            )
 
 
 @dataclass(frozen=True)
@@ -497,8 +544,10 @@ def project_run_summary(
         raise EvidenceError("run summary requires at least one coverage segment")
     coverage = _coverage_object(tuple(coverage_segments))
     diagnostics_version = operational_diagnostics.get("operational_diagnostics_schema_version")
-    if diagnostics_version != 4:
-        raise EvidenceError("current run-summary writer requires diagnostics schema version 4")
+    if type(diagnostics_version) is not int or diagnostics_version != 5:
+        raise EvidenceError(
+            "current run-summary writer requires integer diagnostics schema version 5"
+        )
     coverage_rows: list[dict[str, object]] = []
     for segment in coverage_segments:
         coverage_rows.append(
@@ -509,6 +558,13 @@ def project_run_summary(
                 "trigger_cause": segment.reason,
                 "blocking_reason": segment.blocking_reason,
                 "affected_scopes": list(segment.affected_scopes),
+                "blocking_groups": [
+                    {
+                        "blocking_reason": group.blocking_reason,
+                        "affected_scopes": list(group.affected_scopes),
+                    }
+                    for group in segment.blocking_groups
+                ],
                 "global_continuity_epoch": segment.global_continuity_epoch,
             }
         )
@@ -811,6 +867,11 @@ def validate_atomic_causal_invariant(
 
 
 def validate_run_summary(value: Mapping[str, object]) -> None:
+    _validate_run_summary(value, required_diagnostics_version=5)
+
+
+def validate_sealed_version_four_run_summary(value: Mapping[str, object]) -> None:
+    """Validate immutable version-4 evidence through the explicit sealed path."""
     _validate_run_summary(value, required_diagnostics_version=4)
 
 
@@ -857,10 +918,17 @@ def _validate_run_summary(
     _validate_identity_fields(value)
     diagnostics = _mapping(value["operational_diagnostics"], "operational_diagnostics")
     diagnostics_version = diagnostics.get("operational_diagnostics_schema_version")
-    if diagnostics_version != required_diagnostics_version:
+    current_version_invalid = required_diagnostics_version == 5 and (
+        type(diagnostics_version) is not int or diagnostics_version != 5
+    )
+    if current_version_invalid or diagnostics_version != required_diagnostics_version:
+        if required_diagnostics_version == 5:
+            raise EvidenceError(
+                "current run-summary validator requires integer diagnostics schema version 5"
+            )
         if required_diagnostics_version == 4:
             raise EvidenceError(
-                "current run-summary validator requires diagnostics schema version 4"
+                "sealed operational run-summary validator requires diagnostics schema version 4"
             )
         if required_diagnostics_version == 3:
             raise EvidenceError(
@@ -944,6 +1012,13 @@ def _validate_run_summary(
 
 
 def validate_evidence_directory(directory: Path) -> tuple[dict[str, object], ...]:
+    return _validate_evidence_directory(directory, diagnostics_version=5)
+
+
+def validate_sealed_version_four_evidence_directory(
+    directory: Path,
+) -> tuple[dict[str, object], ...]:
+    """Validate a sealed version-4 directory without rewriting or migrating it."""
     return _validate_evidence_directory(directory, diagnostics_version=4)
 
 
@@ -959,6 +1034,89 @@ def validate_legacy_evidence_directory(
 ) -> tuple[dict[str, object], ...]:
     """Validate a sealed version-2 directory without rewriting or migrating it."""
     return _validate_evidence_directory(directory, diagnostics_version=2)
+
+
+def operational_soak_window_accounting(
+    summary: Mapping[str, object],
+) -> dict[str, int]:
+    """Project the frozen final-hour K/P/G/E/U ledgers from strict version-5 evidence."""
+    validate_run_summary(summary)
+    clean_stop_ms = _non_negative_integer(
+        summary["clean_stop_monotonic_ms"],
+        "clean_stop_monotonic_ms",
+    )
+    runtime_start_ms = _non_negative_integer(
+        summary["runtime_started_monotonic_ms"],
+        "runtime_started_monotonic_ms",
+    )
+    window_start_ms = clean_stop_ms - OPTION_LOCAL_ACCEPTANCE_WINDOW_MS
+    if window_start_ms < 0 or runtime_start_ms > window_start_ms:
+        raise EvidenceError("operational Soak runtime must cover the complete final hour")
+    segments = tuple(
+        _parse_segment(item, diagnostics_version=5)
+        for item in _array(summary["coverage_segments"], "coverage_segments")
+    )
+    known_complete_ms = 0
+    pending_ms = 0
+    global_incident_ms = 0
+    effective_intervals: list[tuple[int, int]] = []
+    for segment in segments:
+        start = max(window_start_ms, segment.start_monotonic_ms)
+        end = min(clean_stop_ms, segment.end_monotonic_ms)
+        if end <= start:
+            continue
+        duration = end - start
+        reasons = {group.blocking_reason for group in segment.blocking_groups}
+        is_pending = bool(reasons & SOAK_PENDING_REASONS)
+        is_global_incident = bool(reasons & SOAK_GLOBAL_CURRENTNESS_REASONS)
+        if segment.state is CoverageState.KNOWN_COMPLETE:
+            known_complete_ms += duration
+        if is_pending:
+            pending_ms += duration
+        if is_global_incident:
+            global_incident_ms += duration
+        if not is_pending and not is_global_incident:
+            effective_intervals.append((start, end))
+
+    diagnostics = _mapping(summary["operational_diagnostics"], "operational_diagnostics")
+    availability = _mapping(
+        diagnostics["option_local_availability"],
+        "operational_diagnostics.option_local_availability",
+    )
+    if _non_negative_integer(
+        availability["omitted_interval_count"],
+        "option_local_availability.omitted_interval_count",
+    ):
+        raise EvidenceError("operational Soak accounting requires zero omitted local intervals")
+    unavailable_intersections: list[tuple[int, int]] = []
+    for raw_interval in _array(
+        availability["intervals"],
+        "option_local_availability.intervals",
+    ):
+        interval = _mapping(raw_interval, "option-local availability interval")
+        interval_start = _non_negative_integer(
+            interval["start_monotonic_ms"],
+            "option-local interval start",
+        )
+        interval_end = _non_negative_integer(
+            interval["end_monotonic_ms"],
+            "option-local interval end",
+        )
+        for effective_start, effective_end in effective_intervals:
+            start = max(interval_start, effective_start)
+            end = min(interval_end, effective_end)
+            if end > start:
+                unavailable_intersections.append((start, end))
+
+    return {
+        "window_start_monotonic_ms": window_start_ms,
+        "window_end_monotonic_ms": clean_stop_ms,
+        "known_complete_ms": known_complete_ms,
+        "normal_boundary_pending_ms": pending_ms,
+        "global_currentness_incident_ms": global_incident_ms,
+        "effective_option_local_denominator_ms": _interval_union_duration(effective_intervals),
+        "option_local_unavailable_union_ms": _interval_union_duration(unavailable_intersections),
+    }
 
 
 def _validate_evidence_directory(
@@ -1005,6 +1163,8 @@ def _validate_evidence_directory(
                 validate_legacy_run_summary(value)
             elif diagnostics_version == 3:
                 validate_sealed_operational_run_summary(value)
+            elif diagnostics_version == 4:
+                validate_sealed_version_four_run_summary(value)
             else:
                 validate_run_summary(value)
             summaries.append(value)
@@ -1119,6 +1279,21 @@ def _validate_evidence_directory(
     return tuple(objects)
 
 
+def _interval_union_duration(intervals: Sequence[tuple[int, int]]) -> int:
+    if not intervals:
+        return 0
+    ordered = sorted(intervals)
+    total = 0
+    current_start, current_end = ordered[0]
+    for start, end in ordered[1:]:
+        if start <= current_end:
+            current_end = max(current_end, end)
+            continue
+        total += current_end - current_start
+        current_start, current_end = start, end
+    return total + current_end - current_start
+
+
 def ratio_or_none(numerator: int, denominator: int | None) -> Decimal | None:
     if denominator in {None, 0}:
         return None
@@ -1163,7 +1338,7 @@ def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegmen
     fields = {"start_monotonic_ms", "end_monotonic_ms", "state"}
     if diagnostics_version == 3:
         fields.update({"reason", "affected_scopes", "global_continuity_epoch"})
-    elif diagnostics_version == 4:
+    elif diagnostics_version in {4, 5}:
         fields.update(
             {
                 "trigger_cause",
@@ -1172,6 +1347,8 @@ def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegmen
                 "global_continuity_epoch",
             }
         )
+        if diagnostics_version == 5:
+            fields.add("blocking_groups")
     _exact_keys(value, fields, "coverage segment")
     try:
         state = CoverageState(value["state"])
@@ -1211,7 +1388,7 @@ def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegmen
         CoverageBlockingReason(blocking_reason)
     except ValueError as exc:
         raise EvidenceError("coverage blocking_reason is outside the bounded allowlist") from exc
-    if diagnostics_version == 4:
+    if diagnostics_version >= 4:
         if state is CoverageState.KNOWN_COMPLETE:
             if blocking_reason != CoverageBlockingReason.NONE.value:
                 raise EvidenceError("KNOWN_COMPLETE coverage must have no blocking reason")
@@ -1223,6 +1400,34 @@ def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegmen
         ):
             raise EvidenceError(
                 "NO_APPLICABLE_SCOPE coverage must identify the matching blocking reason"
+            )
+    blocking_groups: tuple[CoverageBlockingGroup, ...] = ()
+    if diagnostics_version == 5:
+        blocking_groups = _parse_coverage_blocking_groups(
+            value["blocking_groups"],
+            state=state,
+        )
+        if state is CoverageState.KNOWN_COMPLETE:
+            if blocking_groups:
+                raise EvidenceError("KNOWN_COMPLETE coverage must have no blocking groups")
+        else:
+            expected_reason = (
+                blocking_groups[0].blocking_reason
+                if len(blocking_groups) == 1
+                else CoverageBlockingReason.CURRENT_SCOPE_INCOMPLETE.value
+            )
+            if blocking_reason != expected_reason:
+                raise EvidenceError("coverage blocking_reason does not summarize blocking groups")
+            expected_scopes = _summarize_blocking_group_scopes(blocking_groups)
+            if affected_scopes != expected_scopes:
+                raise EvidenceError("coverage affected_scopes do not summarize blocking groups")
+        if state is CoverageState.NO_APPLICABLE_SCOPE and (
+            len(blocking_groups) != 1
+            or blocking_groups[0].blocking_reason
+            != CoverageBlockingReason.NO_APPLICABLE_SCOPE.value
+        ):
+            raise EvidenceError(
+                "NO_APPLICABLE_SCOPE coverage must have one matching blocking group"
             )
     epoch = _positive_integer(
         value["global_continuity_epoch"],
@@ -1236,6 +1441,7 @@ def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegmen
         blocking_reason=blocking_reason,
         affected_scopes=affected_scopes,
         global_continuity_epoch=epoch,
+        blocking_groups=blocking_groups,
     )
 
 
@@ -1353,8 +1559,10 @@ def _validate_operational_diagnostics(
 ) -> None:
     diagnostics = _mapping(value, "operational_diagnostics")
     version = diagnostics.get("operational_diagnostics_schema_version")
-    if version not in {2, 3, 4}:
-        raise EvidenceError("operational diagnostics schema version must be 2, 3, or 4")
+    if version == 5 and type(version) is not int:
+        raise EvidenceError("current operational diagnostics schema version must be integer 5")
+    if version not in {2, 3, 4, 5}:
+        raise EvidenceError("operational diagnostics schema version must be 2, 3, 4, or 5")
     fields = {
         "operational_diagnostics_schema_version",
         "runtime_limits",
@@ -1377,7 +1585,7 @@ def _validate_operational_diagnostics(
                 "rpc_orphan_late_wire_count",
             }
         )
-    if version == 4:
+    if version >= 4:
         fields.add("transport_terminal_attribution")
     _exact_keys(
         diagnostics,
@@ -1517,9 +1725,10 @@ def _validate_operational_diagnostics(
             coverage_segments,
             current_epoch=current_epoch,
             restart_edges=restart_edges,
+            recovery_edges=recovery_edges,
             diagnostics_version=version,
         )
-    if version == 4:
+    if version >= 4:
         ingress = _mapping(
             diagnostics["ingress"],
             "operational_diagnostics.ingress",
@@ -2357,7 +2566,7 @@ def _validate_global_continuity(
             "affected_scopes",
             "boundary",
         }
-        if diagnostics_version == 4:
+        if diagnostics_version >= 4:
             restart_edge_fields.add("trigger_cause")
         _exact_keys(
             edge,
@@ -2370,7 +2579,7 @@ def _validate_global_continuity(
         to_epoch = _positive_integer(edge["to_epoch"], "continuity to_epoch")
         if from_epoch != expected_id or to_epoch != expected_id + 1:
             raise EvidenceError("global continuity restart edge does not advance exactly one epoch")
-        if diagnostics_version == 4:
+        if diagnostics_version >= 4:
             trigger_cause = _required_string(edge, "trigger_cause")
             try:
                 CausalCause(trigger_cause)
@@ -2946,6 +3155,7 @@ def _validate_version_three_coverage(
     *,
     current_epoch: int,
     restart_edges: tuple[Mapping[str, object], ...],
+    recovery_edges: Mapping[int, Mapping[str, object]],
     diagnostics_version: int,
 ) -> None:
     epochs = [segment.global_continuity_epoch for segment in segments]
@@ -2960,18 +3170,19 @@ def _validate_version_three_coverage(
         if diagnostics_version == 3
         else GLOBAL_CONTINUITY_RESTART_ALLOWLIST
     )
-    for index, segment in enumerate(segments):
-        attributed_restart_reason = (
-            segment.reason if diagnostics_version == 3 else segment.blocking_reason
-        )
-        if attributed_restart_reason not in restart_reasons:
-            continue
-        if index == 0 or (
-            segments[index - 1].global_continuity_epoch == segment.global_continuity_epoch
-        ):
-            raise EvidenceError(
-                "global continuity restart cause requires a matching coverage epoch edge"
+    if diagnostics_version <= 4:
+        for index, segment in enumerate(segments):
+            attributed_restart_reason = (
+                segment.reason if diagnostics_version == 3 else segment.blocking_reason
             )
+            if attributed_restart_reason not in restart_reasons:
+                continue
+            if index == 0 or (
+                segments[index - 1].global_continuity_epoch == segment.global_continuity_epoch
+            ):
+                raise EvidenceError(
+                    "global continuity restart cause requires a matching coverage epoch edge"
+                )
     epoch_edges = tuple(
         (before, after)
         for before, after in pairwise(segments)
@@ -2982,24 +3193,59 @@ def _validate_version_three_coverage(
     for (before, after), restart in zip(epoch_edges, restart_edges, strict=True):
         boundary = _mapping(restart["boundary"], "global continuity restart boundary")
         restart_scopes = _validate_affected_scopes(restart["affected_scopes"])
-        restart_identity_matches = (
-            after.reason == restart["reason"]
-            if diagnostics_version == 3
-            else (
+        if diagnostics_version == 3:
+            restart_identity_matches = after.reason == restart["reason"]
+        elif diagnostics_version == 4:
+            restart_identity_matches = (
                 after.reason == restart["trigger_cause"]
                 and after.blocking_reason == restart["reason"]
             )
-        )
+        else:
+            restart_identity_matches = after.reason == restart["trigger_cause"] and any(
+                group.blocking_reason == restart["reason"]
+                and group.affected_scopes == restart_scopes
+                for group in after.blocking_groups
+            )
         if (
             before.global_continuity_epoch != restart["from_epoch"]
             or after.global_continuity_epoch != restart["to_epoch"]
             or after.start_monotonic_ms != boundary["received_monotonic_ms"]
             or not restart_identity_matches
-            or after.affected_scopes != restart_scopes
+            or (diagnostics_version <= 4 and after.affected_scopes != restart_scopes)
         ):
             raise EvidenceError(
                 "coverage epoch edge does not match its continuity restart trigger and effect"
             )
+    if diagnostics_version != 5:
+        return
+    for index, segment in enumerate(segments):
+        restart_groups = tuple(
+            group for group in segment.blocking_groups if group.blocking_reason in restart_reasons
+        )
+        if not restart_groups:
+            continue
+        if index == 0 or segment.global_continuity_epoch == 1:
+            raise EvidenceError(
+                "global continuity restart group requires an earlier matching epoch edge"
+            )
+        incident_id = segment.global_continuity_epoch - 1
+        restart = restart_edges[incident_id - 1]
+        if any(group.blocking_reason != restart["reason"] for group in restart_groups):
+            raise EvidenceError(
+                "coverage restart group does not match the active continuity incident"
+            )
+        recovery = recovery_edges.get(incident_id)
+        if recovery is not None:
+            recovery_boundary = _mapping(
+                recovery["boundary"],
+                "global continuity recovery boundary",
+            )
+            recovery_ms = _non_negative_integer(
+                recovery_boundary["received_monotonic_ms"],
+                "global continuity recovery monotonic boundary",
+            )
+            if segment.end_monotonic_ms > recovery_ms:
+                raise EvidenceError("coverage restart group extends beyond incident recovery")
 
 
 def _validate_affected_scopes(value: object) -> tuple[str, ...]:
@@ -3026,6 +3272,72 @@ def _validate_affected_scopes(value: object) -> tuple[str, ...]:
     if "OPTION_LOCAL" in scopes and len(scopes) != 1:
         raise EvidenceError("OPTION_LOCAL coverage affected scope must stand alone")
     return tuple(scopes)
+
+
+def _parse_coverage_blocking_groups(
+    value: object,
+    *,
+    state: CoverageState,
+) -> tuple[CoverageBlockingGroup, ...]:
+    rows = _array(value, "coverage blocking_groups")
+    if state is CoverageState.KNOWN_COMPLETE:
+        if rows:
+            raise EvidenceError("KNOWN_COMPLETE coverage must have empty blocking_groups")
+        return ()
+    if not rows or len(rows) > 256:
+        raise EvidenceError("incomplete coverage must have 1 to 256 blocking groups")
+    groups: list[CoverageBlockingGroup] = []
+    forbidden = {
+        CoverageBlockingReason.NONE.value,
+        CoverageBlockingReason.LEGACY_UNATTRIBUTED.value,
+        CoverageBlockingReason.ACTIVE_POSITIVE_SCOPE_INCOMPLETE.value,
+    }
+    for raw_group in rows:
+        group = _mapping(raw_group, "coverage blocking group")
+        _exact_keys(
+            group,
+            {"blocking_reason", "affected_scopes"},
+            "coverage blocking group",
+        )
+        reason = _required_string(group, "blocking_reason")
+        try:
+            CoverageBlockingReason(reason)
+        except ValueError as exc:
+            raise EvidenceError(
+                "coverage blocking group reason is outside the bounded allowlist"
+            ) from exc
+        if reason in forbidden:
+            raise EvidenceError("coverage blocking group uses a synthetic or empty reason")
+        groups.append(
+            CoverageBlockingGroup(
+                blocking_reason=reason,
+                affected_scopes=_validate_affected_scopes(group["affected_scopes"]),
+            )
+        )
+    identities = [(group.blocking_reason, group.affected_scopes) for group in groups]
+    if identities != sorted(identities):
+        raise EvidenceError("coverage blocking groups must be sorted")
+    if len({group.blocking_reason for group in groups}) != len(groups):
+        raise EvidenceError("coverage blocking group reasons must be unique")
+    return tuple(groups)
+
+
+def _summarize_blocking_group_scopes(
+    groups: tuple[CoverageBlockingGroup, ...],
+) -> tuple[str, ...]:
+    scopes = {scope for group in groups for scope in group.affected_scopes}
+    if "GLOBAL" in scopes:
+        return ("GLOBAL",)
+    if "OPTION_LOCAL" in scopes:
+        if all(scope == "OPTION_LOCAL" or scope.startswith("OPTION:") for scope in scopes):
+            return ("OPTION_LOCAL",)
+        return ("GLOBAL",)
+    ordered = tuple(sorted(scopes))
+    if len(ordered) <= 256:
+        return ordered
+    if all(scope.startswith("OPTION:") for scope in ordered):
+        return ("OPTION_LOCAL",)
+    return ("GLOBAL",)
 
 
 def _validate_fact_boundary(value: object, field: str) -> Mapping[str, object]:

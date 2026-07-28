@@ -1079,6 +1079,94 @@ def test_index_ack_then_clock_failure_still_releases_held_tick_once_on_recovery(
     assert settled_causal[-1] > settled_causal[-2]
 
 
+def test_queue_lag_edge_rebuilds_once_when_clock_releases_two_held_index_ticks(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    reducer.pending_rpcs.clear()
+    index_channel = "deribit_price_index.btc_usdc"
+    reducer._plan_channel_change(
+        (index_channel,),
+        subscribe=True,
+        origin_boundary=reducer._current_fact_boundary(),
+        failure_scope=FailureScope.CLOCK_INDEX,
+    )
+    subscribe = only(tuple(reducer.pending_rpcs.values()), RpcPurpose.SUBSCRIBE_CHANNELS)
+    for seq, timestamp in ((1, 660_010), (3, 660_020)):
+        reducer.reduce(
+            envelope(
+                {
+                    "method": "subscription",
+                    "params": {
+                        "channel": index_channel,
+                        "data": {
+                            "timestamp": timestamp,
+                            "price": 100,
+                            "index_name": "btc_usdc",
+                        },
+                    },
+                },
+                seq=seq,
+                received_ms=1_000 + seq,
+            ),
+            processed_monotonic_ms=1_000 + seq,
+        )
+        if seq == 1:
+            reducer.reduce(
+                response(
+                    reducer,
+                    subscribe,
+                    exact_channels(subscribe),
+                    seq=2,
+                    received_ms=1_002,
+                ),
+                processed_monotonic_ms=1_002,
+            )
+    assert reducer._held_subscription_frame_count == 2
+
+    clock = reducer._schedule(
+        purpose=RpcPurpose.CLOCK_BOOTSTRAP,
+        method="public/get_time",
+        params={},
+        scope="CLOCK_INDEX",
+        generation=None,
+        origin_boundary=reducer._current_fact_boundary(),
+        failure_scope=FailureScope.CLOCK_INDEX,
+    )
+    transactions: list[tuple[CausalCause, bool, bool]] = []
+    settle_transaction = reducer._settle_fact_transaction
+
+    def capture_transaction(**kwargs: object) -> None:
+        commit = kwargs["commit"]
+        force_full_currentness = kwargs["force_full_currentness"]
+        countable = kwargs["countable"]
+        assert isinstance(commit, CausalCommit)
+        assert isinstance(force_full_currentness, bool)
+        assert isinstance(countable, bool)
+        transactions.append((commit.cause, force_full_currentness, countable))
+        settle_transaction(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(reducer, "_settle_fact_transaction", capture_transaction)
+    delayed_clock = response(
+        reducer,
+        clock,
+        660_000,
+        seq=4,
+        received_ms=1_004,
+    )
+    reducer.reduce(delayed_clock, processed_monotonic_ms=2_005)
+
+    assert transactions == [
+        (CausalCause.CLOCK_FACT, True, False),
+        (CausalCause.INDEX_TICK, False, False),
+        (CausalCause.INDEX_TICK, False, False),
+    ]
+    assert reducer._held_subscription_frame_count == 0
+
+
 def test_index_coverage_starts_at_trusted_upper_bound(
     tmp_path: Path,
     policy_factory: PolicyFactory,

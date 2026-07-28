@@ -26,6 +26,26 @@ Task kinds:
 - `EVIDENCE_ONLY`: runs an already accepted immutable implementation to collect the exact evidence
   required by the active task; code and Policy changes are forbidden.
 
+### Terminal business-goal delegation
+
+One explicit human terminal business goal may conditionally authorize a bounded sequence of
+authority amendment, implementation, evidence, and stage recording inside the same semantic
+closure. The owning authority and active task must record the delegation before its first runtime
+or remote action. The record freezes the permission boundary, allowed terminal state, change
+axes, acceptance predicates, forbidden capabilities, branch scope, and role separation.
+
+Exact technical identities are not separate product decisions. Before each remote or live action,
+the controller durably binds the exact commit/tree, verified remote ref, immutable Policy
+path/digest, new empty absolute evidence directory, deterministic result-independent stop
+predicate, and required checks. A candidate author cannot be its sole verifier; the independent
+verifier is read-only for that candidate and issues an exact-identity `PASS | FAIL` receipt. Code
+changes invalidate the receipt. Evidence is append-only, an unsuccessful retry uses a new empty
+directory, and old evidence is never retroactively authorized.
+
+Evidence does not create stage permission. It proves whether the predicates of a prior human
+conditional stage decision were met. A stage record may change only when the exact delegation and
+an independent pass receipt both say that all frozen predicates passed.
+
 ## Business closure contract
 
 Every task states:
@@ -118,16 +138,19 @@ independent public atomic-quote availability state, denominators, minimal events
 establishment acceptance. One process freezes one exact content-identified Policy before live
 evidence. Direct tests prove deterministic boundaries; production-public observation proves only
 the connectivity, coverage, usable evaluations, anomalies, and quotes that actually occurred.
-`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent, per-run human gates with separately
-named exact code, Policy, evidence, and stop boundaries. Authorization, completion, or acceptance
-of one never authorizes or accepts the other.
+`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent evidence gates with separately
+pre-bound exact code, Policy, evidence, and stop boundaries. A named terminal business-goal
+delegation may replace repeated per-run human commands, but authorization, completion, or
+acceptance of one never accepts the other.
 
-The service runs continuously until a human stops it or the process fails. Predetermined elapsed
-time neither accepts nor rejects a capability and may not trigger threshold changes. A covered
-production interval with at least one real instrument, one known per-instrument evaluation, and a
-known full baseline/IV/Delta/richness calculation inside a complete non-empty aggregate
-`NO_ANOMALY` evaluation can establish runtime reachability; a natural anomaly and atomic quote are
-separately `OBSERVED | NOT_OBSERVED`.
+The service runs continuously until a human or a pre-registered external goal supervisor stops it,
+or the process fails. A supervisor stop predicate is frozen before startup and cannot depend on
+whether the evidence currently appears likely to pass. Predetermined elapsed time may bound a
+validation run but neither accepts nor rejects a capability and may not trigger threshold changes.
+A covered production interval with at least one real instrument, one known per-instrument
+evaluation, and a known full baseline/IV/Delta/richness calculation inside a complete non-empty
+aggregate `NO_ANOMALY` evaluation can establish runtime reachability; a natural anomaly and atomic
+quote are separately `OBSERVED | NOT_OBSERVED`. The human emergency stop remains valid.
 
 Policy scope/parameter calibration is permitted only between runs through a human-approved
 successor identity and new forward interval. It cannot relabel earlier evidence. Without a
@@ -250,6 +273,8 @@ Implementation tasks:
 - Preserve unrelated human work and do not stage it.
 - Use one bounded branch and one Draft PR for the closure unless the user explicitly authorizes
   more.
+- A recorded terminal-goal delegation may authorize a non-force push of its bounded non-`main`
+  branch after an independent exact-commit pass receipt and must verify remote equality.
 - Record base/head, checks, evidence classes, zero activity, `UNKNOWN`s, non-claims, Git state, and
   remote state in the delivery report.
 - Green checks and a Draft PR do not accept authority, advance stage, merge, deploy, or grant

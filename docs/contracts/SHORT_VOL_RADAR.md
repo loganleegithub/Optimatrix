@@ -2,7 +2,7 @@
 
 **Status:** ACTIVE IMPLEMENTATION CONTRACT
 
-**Current implementation state:** IMPLEMENTATION IN PROGRESS — PRODUCTION OBSERVATION GATE CLOSED
+**Current implementation state:** TERMINAL PUBLIC-RADAR GOAL ACTIVE — LIVE PRECONDITIONS CLOSED
 
 **Owning closure:** `SHORT_VOL_RADAR_ESTABLISHMENT`
 
@@ -519,12 +519,14 @@ Operational limits are safety/calibration candidates, not scientifically optimal
 implementation has no fallback constants and tests at least two materially different Policy
 fixtures so code constants cannot masquerade as Policy.
 Construction establishes the schema and loader, not a preferred live parameter set. A later human
-production-observation command names and approves the exact external Policy path and digest.
+production-observation command, or an active bounded terminal-goal delegation, names and
+pre-binds the exact external Policy path and digest.
 
 The Policy format is UTF-8 JSON without a BOM, with one top-level object, duplicate keys rejected,
 and non-finite numbers rejected. Before any network subscription, startup reads its exact bytes
-once, computes `sha256:<hex>` over those bytes, and requires equality with the human-approved
-expected digest supplied to the command. JSON numeric tokens parse directly to `Decimal`. It then
+once, computes `sha256:<hex>` over those bytes, and requires equality with the human-approved or
+terminal-goal-pre-bound expected digest supplied to the command. JSON numeric tokens parse
+directly to `Decimal`. It then
 uses only the immutable parsed in-memory object; a missing/mismatched digest or a later file
 mutation cannot change the running Policy.
 
@@ -534,8 +536,9 @@ The process binds the verified exact-byte Policy digest before subscribing. Ever
 summary records that identity. Hot reload, in-run mutation, automatic training, automatic
 selection, and automatic deployment are rejected.
 
-After reviewing a forward interval, a human may approve a successor inside this same Policy
-schema. It may change target quantity, TTE bands/gaps and call/put inclusion,
+After reviewing a forward interval, a human or an active terminal-goal delegate may pre-bind a
+successor inside this same Policy schema when the delegation expressly permits Policy
+calibration. It may change target quantity, TTE bands/gaps and call/put inclusion,
 lookbacks/weights/floor, Delta boundaries, activation/clear ratios and counts, or separation. It
 receives a new identity, process, and forward interval. Earlier events keep their original meaning
 and are never backfilled or relabeled.
@@ -557,11 +560,11 @@ It has no strictly future realized-volatility label, settlement Outcome, executa
 or cohort comparator. It therefore cannot call one Policy a better forecast, edge, or strategy.
 Those claims require a later authorized forward evaluation contract.
 
-The first human-approved production-observation Policy may be intentionally broad for operational
-coverage/frequency/flicker discovery, while still satisfying every load invariant, including
-`activation_ratio > 1`. Each later Policy successor is reviewed and observed only on a new
-forward interval. Improving the estimator itself requires a later contract that first declares an
-exact horizon-matched future volatility or settlement label and comparator; it is not smuggled
+The first explicitly registered production-observation Policy may be intentionally broad for
+operational coverage/frequency/flicker discovery, while still satisfying every load invariant,
+including `activation_ratio > 1`. Each later Policy successor is reviewed and observed only on a
+new forward interval. Improving the estimator itself requires a later contract that first declares
+an exact horizon-matched future volatility or settlement label and comparator; it is not smuggled
 into Radar construction as automatic tuning or backtest infrastructure.
 
 ## Causal trailing-index-variance baseline
@@ -954,8 +957,9 @@ The first joint witness in the current `global_continuity_epoch` starts
 continue to be reported independently and do not reset that clock. An epoch restart clears the
 witness and requires a new same-snapshot joint witness. Human acceptance must separately freeze
 both the required global-continuity duration and the permitted local-availability/coverage
-thresholds before a later Soak; elapsed global continuity alone cannot silently waive poor local
-availability.
+thresholds before a later Soak. A terminal-goal delegation may instead freeze them in its durable
+run manifest when the active task already defines their exact derivation. Elapsed global
+continuity alone cannot silently waive poor local availability.
 
 ## Official atomic credit availability
 
@@ -1053,7 +1057,7 @@ are business-state transitions after reduced-state de-duplication, never message
 with a zero or unknown denominator are `null`.
 
 `operational_diagnostics` is a required strict object with
-`operational_diagnostics_schema_version = 4`. It is operational evidence only and has exactly
+`operational_diagnostics_schema_version = 5`. It is operational evidence only and has exactly
 these members:
 
 - `runtime_limits`: the exact nine frozen Policy `runtime_limits`;
@@ -1104,10 +1108,10 @@ these members:
   `current_epoch_joint_evaluation_count_by_scope`; each current-epoch row has exactly
   `policy_identity`, `expiration_timestamp_ms`, `option_type`, `tte_band_id`,
   `formula_instrument_name`, positive `count`, and nullable
-  `first_joint_evaluation_boundary`. Every version-4 restart edge has exactly `incident_id`,
+  `first_joint_evaluation_boundary`. Every current version-5 restart edge has exactly `incident_id`,
   `from_epoch`, `to_epoch`, root `trigger_cause`, restart-effect `reason`, `failure_domain`,
-  `affected_scopes`, and `boundary`; version-3 restart edges retain their original shape without
-  `trigger_cause`;
+  `affected_scopes`, and `boundary`; sealed version-4 restart edges retain that same exact shape,
+  while version-3 restart edges retain their original shape without `trigger_cause`;
 - `ticker_application`: `disposition_count` has exact counts for
   `APPLIED | LATE_IGNORED | AHEAD_IGNORED | STALE_GENERATION_IGNORED | SHAPE_REJECTED`, a fixed
   `late_ignored_diagnostic_limit = 256`, `omitted_late_ignored_diagnostic_count`, and at most 256
@@ -1256,24 +1260,31 @@ coverage_partition_error_ms =
 
 Any overlap, gap, negative duration, or nonzero error fails validation.
 
-Every version-4 `coverage_segments` row has exactly
+Every current version-5 `coverage_segments` row has exactly
 `start_monotonic_ms`, `end_monotonic_ms`, `state`, `trigger_cause`, `blocking_reason`,
-`affected_scopes`, and `global_continuity_epoch`. `trigger_cause` is the reduced fact whose
-transaction caused entry into that state. `blocking_reason` is the bounded prerequisite that
-actually prevents completeness; it may be a concurrent source-currentness effect and therefore
-need not equal `trigger_cause`. `KNOWN_COMPLETE` requires `blocking_reason = NONE`; every
-incomplete state requires a non-`NONE` blocker, and `NO_APPLICABLE_SCOPE` binds its matching
-blocker.
+`affected_scopes`, `global_continuity_epoch`, and `blocking_groups`. `blocking_groups` is a sorted
+array of 0–256 strict objects containing exactly `blocking_reason` and `affected_scopes`; group
+reasons are unique. `KNOWN_COMPLETE` requires an empty array and scalar
+`blocking_reason = NONE`. Every incomplete state requires one or more non-`NONE` groups, and
+`NO_APPLICABLE_SCOPE` requires one matching group. `NONE`, `LEGACY_UNATTRIBUTED`, and
+`ACTIVE_POSITIVE_SCOPE_INCOMPLETE` are forbidden as group reasons. `trigger_cause` is the reduced
+fact whose transaction caused entry into that state. Each group records one bounded prerequisite
+and the scopes where it actually prevents completeness; a concurrent source-currentness effect
+therefore need not equal `trigger_cause`. The scalar `blocking_reason` equals the sole group reason,
+or `CURRENT_SCOPE_INCOMPLETE` when multiple heterogeneous groups exist. The scalar
+`affected_scopes` is the exact bounded summary of all group scopes.
 `affected_scopes` is a sorted array of 1–256 labels whose bounded labels are exactly `GLOBAL`,
 `OPTION_LOCAL`, `SCOPE:<expiry_timestamp_ms>:<call|put>:<band_id>`, or
 `OPTION:<instrument_name>`. `OPTION_LOCAL` is the aggregate representation when a proper
 option-local subset would otherwise require more than 256 instrument labels; it does not mean
-global continuity was lost. Incomplete coverage derives its blocker scopes from the complete
+global continuity was lost. Incomplete coverage derives all blocker groups from the complete
 committed current truth, never only from the newest causal effect. Segment identity is exactly
-`state + blocking_reason + affected_scopes + global_continuity_epoch`: a change in any member
-splits at that boundary; a fact that leaves all four unchanged does not split merely to log
-activity. Every version-4 epoch edge additionally cross-binds the coverage `trigger_cause` to the
-restart root and `blocking_reason` to the restart effect. An epoch restart always splits at its
+`state + blocking_groups + global_continuity_epoch`: a change in any member splits at that
+boundary; a fact that leaves all three unchanged does not split merely to log activity. Every
+version-5 epoch edge additionally cross-binds the coverage `trigger_cause` to the restart root and
+one exact group to the restart effect and scopes. Later same-epoch segments may evolve other
+blockers or the active incident's affected scopes, but no restart group may appear without that
+earlier epoch edge or extend beyond its recorded recovery. An epoch restart always splits at its
 exact boundary even when the coverage state is unchanged.
 
 ### Writer, reader, and compatibility
@@ -1290,12 +1301,12 @@ reported side by side, with no causal or quality inference. A schema or reader c
 explicit task.
 
 The Policy schema remains exactly version 3 and is unchanged by this repair. New summaries use
-`operational_diagnostics_schema_version = 4` and the attributed coverage-segment shape above.
-Explicit read-only validators continue to validate sealed version-3 and version-2 summaries under
-their original exact schemas, so prior attempt directories remain truthful and immutable. Neither
-older version can be relabelled, supplemented, replayed, or recomputed as version 4. New writers
-emit only version 4. `SHORT_VOL_ANOMALY_EVENT` and `PUBLIC_ATOMIC_QUOTE_EVENT` semantics remain
-compatible and unchanged.
+`operational_diagnostics_schema_version = 5` and the grouped coverage-segment shape above.
+Explicit read-only validators continue to validate sealed version-4, version-3, and version-2
+summaries under their original exact schemas, so prior attempt directories remain truthful and
+immutable. No older version can be relabelled, supplemented, replayed, or recomputed as version 5.
+New writers emit only version 5. `SHORT_VOL_ANOMALY_EVENT` and `PUBLIC_ATOMIC_QUOTE_EVENT`
+semantics remain compatible and unchanged.
 
 Ordinary market facts, `NO_ANOMALY`, theoretical structures, unmatched combos, and full chain
 state are transient. The objects do not contain the full option chain and cannot reconstruct the
@@ -1323,7 +1334,7 @@ One `radar_runtime` process:
 6. subscribes to matching active official combo books only while relevant anomalies are active;
 7. reports Layer 2 independently and writes an atomic event when availability first appears;
 8. leaves normal market/no-anomaly state transient;
-9. writes one run summary when an operator stops it;
+9. writes one run summary when an operator or pre-registered external goal supervisor stops it;
 10. otherwise runs until operator stop or process failure, not a fixed business duration.
 
 A restart creates a new runtime identity and empty detector memory. Warm-state persistence and
@@ -1372,25 +1383,28 @@ Tests must cover:
   pending that preserves history, real global-gap epoch restart, post-gap recovery with a new
   same-current-scope joint witness, exact global-continuity duration, independent local
   availability intervals, and attributed coverage segments;
-- version-3 writer/validator tests for separate ticker shape/currentness/application ledgers,
-  bounded 256-row regression diagnostics, coverage reason/scope/epoch fields, and continued strict
-  validation of immutable version-2 `attempt-001` evidence;
+- version-5 writer/validator tests for separate ticker shape/currentness/application ledgers,
+  bounded regression diagnostics, grouped coverage reason-to-scope attribution, and explicit
+  read-only validation of immutable sealed version-4, version-3, and version-2 evidence;
 - absence of replay, offline recomputation, private, maker, Candidate, Shadow, Position, and
   Outcome paths.
 
 ### REACHABILITY_SMOKE
 
-`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent per-run production-public gates.
-Authorization, evidence, or acceptance for either one never authorizes or accepts the other.
+`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent production-public evidence gates.
+Authorization, evidence, or acceptance for either one never accepts the other. A named bounded
+terminal-goal delegation may conditionally authorize both gates as one product closure, but each
+must still pre-bind and independently satisfy its own exact run manifest.
 
-After separate Smoke authorization, run one exact Policy until either:
+After Smoke authorization or terminal-goal pre-binding, run one exact Policy until either:
 
 - warm-up completes and at least one real
   `Policy identity × expiry_timestamp × option_type` aggregate scope contains at least one current
   catalog instrument, at least one full-formula known per-instrument evaluation occurs inside that
   same settled full current-scope snapshot, and that snapshot's complete scope evaluates to known
-  `NO_ANOMALY` or `ANOMALY_ACTIVE`, after which a human may stop it; or
-- a human stops it earlier.
+  `NO_ANOMALY` or `ANOMALY_ACTIVE`, after which the pre-registered external supervisor may stop
+  according to its result-independent predicate; or
+- a human emergency stop or the pre-registered predicate stops it earlier.
 
 A pre-warm-up or all-`UNKNOWN` stop is truthful but does not establish runtime capability. A
 degraded positive witness is truthful evidence but does not by itself complete establishment.
@@ -1436,17 +1450,18 @@ zero forbidden downstream artifacts, and zero persisted normal market/no-anomaly
 This joint witness proves only real-wiring reachability. It is not a sustained-operation
 acceptance and cannot by itself establish the production Radar.
 
-### OPERATIONAL_SOAK — separately approved before production
+### OPERATIONAL_SOAK — separately pre-bound before production
 
-Production establishment also requires a human-approved continuous-operation plan naming the
-exact pushed code `HEAD`, exact Policy path/digest, a new empty evidence directory, and its stop
-condition. The human may explicitly rebind a previously approved Policy identity or approve a
-successor; omission never carries an identity forward. No run duration is fixed by this contract
-or inferred from a smoke witness.
+Production establishment also requires a continuous-operation manifest naming the exact pushed
+code `HEAD`, exact Policy path/digest, a new empty evidence directory, and its deterministic
+result-independent stop condition. A human or active terminal-goal delegate may explicitly
+rebind a previously approved Policy identity or bind an expressly permitted successor; omission
+never carries an identity forward. No run duration is fixed by this contract or inferred from a
+smoke witness.
 
-The Soak command must independently name the exact accepted code `HEAD`, Policy path/digest,
-evidence directory, and stop condition. A prior Smoke command or witness supplies none of this
-authority.
+The Soak run manifest must independently name the exact accepted code `HEAD`, verified equal
+remote `HEAD`, Policy path/digest, evidence directory, and stop condition. A prior Smoke command
+or witness supplies none of these bindings.
 
 The construction implementation must record:
 
@@ -1470,28 +1485,30 @@ The sealed `operational-soak-attempt-001` remains permanently `NOT_MET` and may 
 migrated, replayed, recomputed, or retroactively accepted. Before any later Soak, the order is:
 
 1. direct focused tests, `make check`, and strict validation of the old evidence directory;
-2. a separately human-authorized heartbeat wire probe, which this construction does not run;
-3. human pre-freezing of the new global-continuity duration, explicit option-local
-   availability/current-coverage thresholds, and the normal-boundary-pending budget;
-4. a new independently authorized Soak using the previously approved business Policy or one
-   explicitly approved successor and a new empty evidence directory.
+2. any heartbeat wire probe required by the active task, separately pre-bound under the current
+   authority;
+3. pre-freezing of the new global-continuity duration, explicit option-local
+   availability/current-coverage thresholds, and the normal-boundary-pending budget in the run
+   manifest;
+4. a new independently bound Soak using the previously approved business Policy or one expressly
+   permitted successor and a new empty evidence directory.
 
 Post-stop acceptance keeps three non-interchangeable results: integrity conservation,
 normal-boundary pending, and currentness-incident recovery. `P` is the wall-clock union of
-`INDEX_TIME_BOUNDARY_PENDING | INDEX_WATERMARK_PENDING` in the exact final hour. Its budget status
-is `PROPOSED`; it cannot become `FROZEN` without a later explicit human value. Pending remains in
-the current-coverage denominator, so the current threshold is calculated over the full hour and
-a nearly all-pending hour cannot pass by denominator shrinkage.
+`INDEX_TIME_BOUNDARY_PENDING | INDEX_WATERMARK_PENDING` in the exact final hour. Its budget must be
+frozen before startup by an explicit human value or an exact derivation already approved in the
+active task. Pending remains in the current-coverage denominator, so the current threshold is
+calculated over the full hour and a nearly all-pending hour cannot pass by denominator shrinkage.
 
 A global epoch restart requires a new same-snapshot witness after global recovery. Queue-lag and
 option-local incidents instead prove their recovery in their own coverage/availability ledgers;
 they neither require a new global witness nor relabel the earlier witness as post-recovery.
 Heartbeat wire evidence is conditional: an absent server heartbeat/test request is
 `NOT_OBSERVED`, while every observed request, shape, RPC terminal, and latency must
-cross-conserve. The future human-approved stop condition owns all frozen thresholds. This
-revision defines the strict schema and direct writer/validator tests, but it does not approve a
-heartbeat probe, Policy, thresholds, production connection, or Soak and does not establish the
-production Radar.
+cross-conserve. The pre-bound run manifest owns all frozen thresholds. A deterministic stop by the
+registered external supervisor is valid; elapsed time alone is never acceptance. Process failure,
+an incomplete directory, or a directory that was not empty at startup is `NOT_MET`. Historical
+attempts are never retroactively authorized.
 
 ## Evidence boundary
 

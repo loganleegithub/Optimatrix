@@ -40,9 +40,9 @@ edge. Component-leg prices cannot substitute for an official combo.
 
 Exact quantity, Delta/TTE bands, return lookbacks, trigger/clear ratios, and persistence live in a
 content-identified Policy file rather than code. One run cannot change its Policy. A
-human-approved successor inside the declared Policy schema uses a new identity and forward
-observation interval; current Radar evidence alone cannot prove better forecasting or
-profitability.
+human-approved or expressly terminal-goal-delegated successor inside the declared Policy schema
+uses a new identity and forward observation interval; current Radar evidence alone cannot prove
+better forecasting or profitability.
 
 ## Later position behavior
 
@@ -79,6 +79,8 @@ make sync
 make check
 ```
 
-The implementation task's construction gate is open. Running `python -m radar_runtime observe`
-still requires a separate explicit human production-observation command naming the exact Policy
-path and expected digest.
+The implementation task is operating under the bounded
+`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. Running `python -m radar_runtime observe` remains closed
+until the repaired exact commit has an independent pass receipt and a run manifest pre-binds the
+verified remote commit, immutable Policy path/digest, new empty evidence directory, and
+result-independent external stop predicate. Smoke and Soak remain independent evidence gates.

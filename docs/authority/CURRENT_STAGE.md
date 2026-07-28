@@ -24,10 +24,44 @@ entry, Position runtime, Outcome cohort, private/account data, orders, fills, ca
 qualification, Challenger automation, promotion, and execution remain unauthorized.
 
 Runtime construction and each production-public observation require their own explicit human
-command. `REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent per-run gates: authorization
-or evidence for either one never opens the other. The
-`OPERATIONAL_SOAK_PRECONDITIONS` construction gate is open for the active task; both
-production-public gates remain closed.
+command unless a named bounded terminal-goal delegation below replaces those repeated technical
+commands. `REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` remain independent evidence gates:
+authorization or evidence for either one never accepts the other.
+
+### Active terminal-goal delegation
+
+The human command on 2026-07-29 that names establishment of the online Radar as the terminal
+business goal conditionally approves
+`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` for the sole active
+`SHORT_VOL_RADAR_ESTABLISHMENT` closure against base
+`3b6864c97f21a4991c10b8105a30c6239afae247`.
+
+The delegation permits, in order:
+
+1. the bounded authority/task amendment that records this grant;
+2. the minimum independently reproducible H1/H2/H3 operational-accounting repair and direct tests;
+3. append-only commits on `codex/short-vol-radar-establishment`, followed by a non-force push only
+   after an independent exact-commit pass receipt;
+4. mechanical pre-binding of the verified remote `HEAD`, one already registered immutable Policy
+   path/digest, a new empty absolute evidence directory, and a result-independent deterministic
+   external clean-stop predicate;
+5. one production-public Smoke evidence gate and, only after its independent acceptance, one
+   production-public Soak evidence gate, with fresh directories for every retry;
+6. strict post-stop validation and, only after both independent gates pass, recording the
+   conditionally approved Radar establishment transition.
+
+The implementation author cannot be the sole verifier. The verifier must be read-only with
+respect to the candidate and bind its receipt to the exact commit, tree, remote ref, Policy
+digest, evidence directory, checks, and verdict. Any code change invalidates the receipt.
+An old or unauthorized run cannot be retroactively accepted; in particular
+`operational-soak-attempt-004` is ineligible. A failed or incomplete run is `NOT_MET` and a retry
+uses a new empty directory.
+
+This delegation does not change `PUBLIC_SHADOW`, the market or detector family, any immutable
+Policy, or an evidence acceptance threshold. It does not authorize `main` merge, history rewrite,
+remote deletion, persistent service deployment, private/account data, credentials, balances,
+capital, orders, fills, trades, execution, Policy auto-selection/tuning, or any queued closure.
+The human emergency stop remains effective at all times.
 
 ## Reset baseline and current construction truth
 
@@ -114,7 +148,7 @@ Implementation readiness requires:
 3. inspection confirming that no replay, second calculator, full-market persistence, private
    path, maker path, or later-stage object was added.
 
-Runtime establishment additionally requires two independently authorized and accepted
+Runtime establishment additionally requires two independently pre-bound and accepted
 production-public observations. `REACHABILITY_SMOKE` must complete warm-up and produce at least
 one known per-instrument evaluation inside one non-empty real
 `Policy identity × expiry_timestamp × option_type` aggregate, then produce a complete aggregate
@@ -126,10 +160,10 @@ does not alone establish the full Radar. Natural anomaly occurrence and official
 availability are separately reported `OBSERVED | NOT_OBSERVED`; neither is required for code
 acceptance and neither may be forced through in-place tuning.
 
-`OPERATIONAL_SOAK` must then satisfy its separately approved exact Policy, evidence-directory,
-and stop-condition checklist. A Smoke authorization, run, or accepted witness proves no sustained
-operation and grants no Soak authority. A Soak authorization likewise cannot retroactively supply
-or relabel the Smoke reachability witness.
+`OPERATIONAL_SOAK` must then satisfy its separately pre-bound exact Policy, evidence-directory,
+and stop-condition checklist. A Smoke run or accepted witness proves no sustained operation and
+cannot accept Soak. A Soak run likewise cannot retroactively supply or relabel the Smoke
+reachability witness.
 
 An all-`UNKNOWN` or pre-warm-up stop is truthful but does not establish runtime capability. Rates
 with a zero or unknown denominator remain `null`.

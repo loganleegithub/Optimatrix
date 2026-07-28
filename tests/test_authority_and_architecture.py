@@ -147,22 +147,22 @@ def test_current_stage_authorizes_exactly_one_next_closure() -> None:
     assert "## Queued sequence — not authorized" in current_stage
 
 
-def test_short_vol_task_has_open_soak_readiness_final_closure_and_closed_live_gates() -> None:
+def test_short_vol_task_records_terminal_delegation_and_conditional_live_gates() -> None:
     task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-    opening = "\n".join(task.splitlines()[:60])
+    opening = "\n".join(task.splitlines()[:70])
 
     assert "**Status:** ACTIVE" in opening
     assert "**Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`" in opening
-    assert ("**Current construction subgate:** `SOAK_READINESS_FINAL_CLOSURE`") in opening
-    assert ("**Current subgate base HEAD:** `ee5a00eefe06e293fca1e8ae3ee431a295f5a754`") in opening
-    assert "**REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`" in opening
-    assert "**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_003_NOT_MET`" in opening
     assert (
-        "Live commands:** REQUIRED only after the exact named Smoke or Soak gate opens" in opening
+        "**Terminal business-goal delegation:** `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`" in opening
     )
+    assert "**Current construction subgate:** `SOAK_READINESS_GROUPED_ACCOUNTING_REPAIR`" in opening
+    assert "**Current subgate base HEAD:** `3b6864c97f21a4991c10b8105a30c6239afae247`" in opening
+    assert "`CONDITIONALLY_AUTHORIZED_AFTER_OFFLINE_ACCEPTANCE_AND_EXACT_RUN_BINDING`" in opening
+    assert "`CONDITIONALLY_AUTHORIZED_AFTER_SMOKE_ACCEPTANCE_AND_EXACT_RUN_BINDING`" in opening
 
 
-def test_successor_soak_gate_keeps_three_ledgers_and_pending_budget_unapproved() -> None:
+def test_successor_soak_gate_keeps_three_ledgers_and_derives_pending_budget() -> None:
     task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
     successor = task.split("### Successor `OPERATIONAL_SOAK`", maxsplit=1)[1].split(
         "## First-principles scope",
@@ -173,9 +173,10 @@ def test_successor_soak_gate_keeps_three_ledgers_and_pending_budget_unapproved()
         "Integrity ledger",
         "Normal-boundary-pending ledger",
         "Currentness-incident recovery ledger",
-        "`pending_budget_status = PROPOSED`",
-        "`duration(P) <= P_budget_ms`",
-        "`duration(K) / 3_600_000 >= 0.99`",
+        "pending_budget_status = FROZEN_BY_DERIVATION",
+        "P_budget_ms = floor((1 - 0.99) * 3_600_000) = 36_000",
+        "require duration(P) <= 36_000",
+        "duration(K) / 3_600_000 >= 0.99",
     ):
         assert invariant in successor
     assert "D = 3_600_000 - duration(P)" not in successor
@@ -191,14 +192,14 @@ def test_successor_soak_local_recovery_does_not_rebind_global_witness() -> None:
 
     for invariant in (
         "does not relabel the earlier global witness as post-recovery",
-        "explicitly rebind the previously approved Policy",
+        "one registered exact Policy path/digest",
         "heartbeat wire observation is conditional",
     ):
         assert invariant in successor
     assert "strictly later exact joint witness" not in successor
 
 
-def test_historical_soak_remains_not_met_and_future_live_gates_stay_closed() -> None:
+def test_historical_soak_remains_not_met_without_governing_the_terminal_successor() -> None:
     task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
 
     for invariant in (
@@ -212,9 +213,11 @@ def test_historical_soak_remains_not_met_and_future_live_gates_stay_closed() -> 
         "continuous_covered_after_witness_ms >= 3_600_000",
         "semantic comparison to the predecessor Smoke Policy proves that only `band_id` changed",
         "Attempt-001 is permanently `NOT_MET`",
-        "a heartbeat wire probe must receive its",
-        "human must freeze new global-continuity duration and explicit",
-        "The historical `3_600_000 ms` value is not",
+        "heartbeat wire probe had to receive its",
+        "a human had to freeze new",
+        "historical `3_600_000 ms` value was not",
+        "They do not govern the current",
+        "`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`",
     ):
         assert invariant in task
 
@@ -261,11 +264,12 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "A covered `NO_ANOMALY` interval is valid reachability evidence",
         "human may approve a successor inside the same authorized Policy schema",
         "no replay, independent offline recomputation",
-        (
-            "Runtime construction and each production-public observation require their own "
-            "explicit human command"
-        ),
-        "`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent per-run gates",
+        "named bounded terminal-goal delegation",
+        "`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`",
+        "`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` remain independent evidence gates",
+        "does not authorize `main` merge",
+        "private/account data",
+        "orders, fills, trades",
     ):
         assert invariant in current_stage
 
@@ -282,16 +286,21 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         assert invariant in architecture
 
     assert "Do not require full replay" in delivery
-    assert "Predetermined elapsed time neither accepts nor rejects a capability" in delivery
+    assert (
+        "Predetermined elapsed time may bound a validation run but neither accepts nor rejects "
+        "a capability" in delivery
+    )
     assert "human-approved successor identity and new forward interval" in delivery
     assert "`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent" in delivery
+    assert "Terminal business-goal delegation" in delivery
+    assert "candidate author cannot be its sole verifier" in delivery
     assert "## Denominator integrity" in delivery
     assert "`UNKNOWN` is neither numeric zero nor economic `ABSTAIN`" in delivery
 
     for invariant in (
         (
-            "**Current implementation state:** IMPLEMENTATION IN PROGRESS — PRODUCTION "
-            "OBSERVATION GATE CLOSED"
+            "**Current implementation state:** TERMINAL PUBLIC-RADAR GOAL ACTIVE — LIVE "
+            "PRECONDITIONS CLOSED"
         ),
         "`POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE`",
         "`detector_state`",
@@ -302,7 +311,8 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "final 30 minutes",
         "does not become stale merely because no level changed",
         "target_base_quantity_btc",
-        "human may approve a successor inside this same Policy schema",
+        "human or an active terminal-goal delegate may pre-bind a successor inside this same "
+        "Policy schema",
         "`qty_tick_size`",
         "`data.timestamp`",
         "baseline_total_variance",
@@ -323,11 +333,14 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "`option_local_availability`",
         "has_current_full_formula = true",
         "`EvidenceWriter` receives only a settled",
-        "`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent per-run",
+        "`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent production-public evidence "
+        "gates",
         "`policy_schema_version = 3`",
         "`ticker_source_stale_deadline_ms`",
         "`AHEAD_IGNORED`",
-        "`operational_diagnostics_schema_version = 4`",
+        "`operational_diagnostics_schema_version = 5`",
+        "`blocking_groups`",
+        "sealed version-4, version-3, and version-2",
         "`KNOWN_INELIGIBLE`",
         "`UNKNOWN_AT_GAP`",
         "required combo order direction",
@@ -350,7 +363,7 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "planned holding duration",
         "`SHORT_VOL_RADAR_ESTABLISHMENT`",
         "future maker/order/fill",
-        "human-approved successor inside the declared Policy schema",
+        "expressly terminal-goal-delegated successor inside the declared Policy schema",
     ):
         assert invariant in readme
 
@@ -450,6 +463,10 @@ def test_repository_owned_contracts_use_semantic_not_ordinal_identities() -> Non
         text = path.read_text(encoding="utf-8")
         if path == ROOT / "apps/radar_runtime/src/radar_runtime/deribit_public.py":
             text = text.replace("/api/" + "v" + "2", "/api/external")
+        text = text.replace(
+            "/Users/logan/Optimatrix-smoke/policies/reachability-smoke-" + "v" + "2.json",
+            "/registered/external/reachability-smoke-policy.json",
+        )
         relative_path = path.relative_to(ROOT).as_posix()
         assert forbidden.search(relative_path) is None, f"ordinal identity remains in {path}"
         assert forbidden.search(text) is None, f"ordinal identity remains in {path}"

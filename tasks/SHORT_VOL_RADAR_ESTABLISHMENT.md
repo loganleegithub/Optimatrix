@@ -49,14 +49,22 @@
 
 **Prior subgate implementation anchor:** `ee5a00eefe06e293fca1e8ae3ee431a295f5a754`
 
-**Current construction subgate:** `SOAK_READINESS_FINAL_CLOSURE`
-`OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_28`
+**Prior construction subgate:** `SOAK_READINESS_FINAL_CLOSURE`
+`COMPLETED_AT_3b6864c97f21a4991c10b8105a30c6239afae247`
 
-**Current subgate base HEAD:** `ee5a00eefe06e293fca1e8ae3ee431a295f5a754`
+**Terminal business-goal delegation:** `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`
+`CONDITIONALLY_APPROVED_BY_EXPLICIT_HUMAN_GOAL_2026_07_29`
 
-**REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`
+**Current construction subgate:** `SOAK_READINESS_GROUPED_ACCOUNTING_REPAIR`
+`AUTHORIZED_INSIDE_TERMINAL_DELEGATION`
 
-**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_003_NOT_MET`
+**Current subgate base HEAD:** `3b6864c97f21a4991c10b8105a30c6239afae247`
+
+**REACHABILITY_SMOKE gate:**
+`CONDITIONALLY_AUTHORIZED_AFTER_OFFLINE_ACCEPTANCE_AND_EXACT_RUN_BINDING`
+
+**OPERATIONAL_SOAK gate:**
+`CONDITIONALLY_AUTHORIZED_AFTER_SMOKE_ACCEPTANCE_AND_EXACT_RUN_BINDING`
 
 **Product/stage:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md) /
@@ -140,6 +148,14 @@ offline red-to-green tests and read-only sealed validation. It explicitly grants
 production-public connection, heartbeat probe, Soak, Policy mutation, merge, stage advancement,
 private API, order, or trade.
 
+The explicit 2026-07-29 human direction makes establishment of the online Radar the terminal
+business goal and rejects repeated human approval of engineering bindings. It conditionally
+approves `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. The prior no-push/no-live rule above remains
+the historical boundary of the completed `SOAK_READINESS_FINAL_CLOSURE`; it does not close the
+new successor delegation. The delegation becomes executable only through the exact
+authority/contract amendment in this change, independent exact-candidate verification, and the
+pre-bound manifests below. It is not a general self-deployment or later-stage grant.
+
 The prior `OPERATIONAL_SOAK` attempt at
 `/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001` is sealed
 `NOT_MET`. It is historical evidence only and may not be changed, replayed, recomputed, migrated,
@@ -206,14 +222,91 @@ The execution gates are independent:
     `ee5a00eefe06e293fca1e8ae3ee431a295f5a754`. It authorizes only the bounded offline repair,
     successor accounting revision, sealed-evidence validation, and one append-only local commit
     below.
-16. **Next `OPERATIONAL_SOAK` gate:** closed until this repair is accepted and pushed, its remote
-    exact HEAD is verified, and a later human command independently names exact accepted code,
-    an explicitly bound approved Policy identity/path/digest, a new empty evidence directory, and
-    a post-stop-only stop/acceptance contract with a human-frozen pending budget.
+16. **Next `OPERATIONAL_SOAK` gate:** the former per-run human gate is superseded only by
+    `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. It remains conditionally closed until the version-5
+    repair is independently accepted and pushed, the remote exact `HEAD` is verified, Smoke is
+    independently accepted, and the Soak manifest binds the approved Policy, new empty evidence
+    directory, result-independent stop predicate, and frozen acceptance thresholds.
+17. **Terminal establishment envelope:** permits the bounded authority amendment; H1/H2/H3
+    version-5 repair; focused and complete offline checks; append-only local commits; independent
+    exact-commit verification; non-force push to `codex/short-vol-radar-establishment`; exact
+    remote equality verification; fresh production-public Smoke and Soak; pre-registered external
+    supervisor clean stop; strict evidence acceptance; and the final stage-record commit only
+    after both live gates pass.
 
-Production-public connection, live artifact collection, private API, order, trade, merge,
-business acceptance, task archival, stage advancement, and any later research or execution
-authority remain unauthorized. Policy files and `CURRENT_STAGE` remain unchanged.
+Private/account API, credentials, balances, capital, orders, fills, trades, execution, Policy
+mutation or auto-selection, history rewrite, remote deletion, `main` merge, persistent service
+deployment, task archival, and every later product closure remain unauthorized. The human
+emergency stop remains effective. `CURRENT_STAGE` may change only in the final stage-record
+commit after the independent frozen predicates pass.
+
+### `SOAK_READINESS_GROUPED_ACCOUNTING_REPAIR` — terminal-delegation successor
+
+The exact base is `3b6864c97f21a4991c10b8105a30c6239afae247`.
+
+**Market/Decision input contract change:** `APPROVED` —
+`SOAK_READINESS_GROUPED_ACCOUNTING_REPAIR`. Queue-lag application is owned once per transition
+envelope; legal same-epoch coverage splits validate; heterogeneous simultaneous current blockers
+remain losslessly attributable by bounded groups.
+
+**Decision Policy change:** `NONE` — no Policy bytes, formula, target quantity, scope, TTE, Delta,
+lookback, threshold, persistence, clear/re-arm rule, or runtime limit changes.
+
+**Outcome/evaluation contract change:** `NONE` — no future fact, replay, recomputation,
+historical relabelling, Candidate, Position, Outcome, PnL, comparator, or qualification.
+
+**Stage/authorization change:** `APPROVED` —
+`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` replaces repeated technical approvals only inside this
+closure. Permission remains `PUBLIC_SHADOW`; the conditionally approved terminal record is
+implemented capability `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`, Radar `ESTABLISHED`, and no activated
+successor closure. No evidence or green check can reach that record without the independent
+Smoke and Soak predicates below.
+
+#### Required version-5 repair
+
+1. One queue-lag transition envelope performs at most one full-currentness rebuild. Incident
+   entry and later recovery are distinct edges; other fact transactions from the same reduced
+   envelope settle only their frozen affected scopes and remain non-countable.
+2. A legal version-5 same-epoch coverage split, including a blocker scope changing from one scope
+   to multiple scopes without a continuity restart, validates. Only a real global-continuity
+   epoch edge must match a restart edge.
+3. The current writer emits diagnostics schema version 5. Every coverage segment contains sorted,
+   bounded
+   `blocking_groups = [{blocking_reason, affected_scopes}]`. A complete segment has an empty
+   `blocking_groups` array and scalar `blocking_reason = NONE`; an incomplete segment has one or
+   more non-`NONE` groups. The scalar `blocking_reason` remains a summary and is
+   `CURRENT_SCOPE_INCOMPLETE` whenever more than one heterogeneous group exists.
+4. Segment identity is `(state, blocking_groups, global_continuity_epoch)`; `trigger_cause`
+   remains independent. Soak `P`, global incident `G`, effective time `E`, and option-local union
+   `U` consume the groups rather than a lossy scalar.
+5. Version-4, version-3, and version-2 readers retain their sealed semantics and shapes. The new
+   writer emits only version 5. Historical evidence is read-only and never migrated.
+
+Direct counterexamples must cover the real multi-transaction envelope, same-epoch scope split,
+mixed option-local blockers, pending plus an incident, malicious version-5 group shapes, and
+unchanged strict acceptance of every registered sealed legacy directory.
+
+#### Terminal run bindings
+
+The immutable registered Policies are:
+
+```text
+REACHABILITY_SMOKE:
+  /Users/logan/Optimatrix-smoke/policies/reachability-smoke-v2.json
+  sha256:faeff9740a43df6de5c85268571592a5d47d90f9c146b2ba8b812d4e3525e50d
+OPERATIONAL_SOAK:
+  /Users/logan/Optimatrix-soak/policies/operational-soak-successor.json
+  sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4
+```
+
+Their bytes may not change. For each run, the controller must durably bind the repaired exact
+clean `HEAD`, matching verified remote branch `HEAD`, Policy path/digest, a new absolute evidence
+directory proved empty immediately before startup, and a deterministic external stop predicate
+that does not inspect pass/fail state. Smoke and Soak use separate manifests and directories.
+Process failure, non-empty startup, incomplete output, identity mismatch, or strict validation
+failure is `NOT_MET`. A retry receives a new empty directory. The unregistered
+`operational-soak-attempt-004` predates this grant and is permanently
+`NOT_ELIGIBLE_FOR_ACCEPTANCE`; the first eligible successor directory is `attempt-005` or later.
 
 ## Business closure
 
@@ -239,8 +332,8 @@ direction and positive normalized gross entry credit during that episode, it sep
 known anomaly into `UNKNOWN`.
 
 **Independent verification:** direct deterministic tests of the consumed formulas, state
-transitions, source continuity, result separation, and artifact projection, plus separately
-authorized `REACHABILITY_SMOKE` and human-approved `OPERATIONAL_SOAK` evidence. This task does not
+transitions, source continuity, result separation, and artifact projection, plus independently
+pre-bound and accepted `REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` evidence. This task does not
 implement replay, a second calculator, hit-only recomputation, or provenance verification.
 
 **Valid zero/no-hit/UNKNOWN result:**
@@ -481,10 +574,11 @@ bounded closure.
    outcomes distinguished from orphan late wire responses; and every option-local interval start
    has exactly one recovery, reason-change, or clean-stop censor edge after retained and omitted
    rows are accounted for.
-4. The current writer emits only `operational_diagnostics_schema_version = 3`. The normal current
-   validator accepts only version 3. Immutable version-2 evidence is reachable only through one
-   explicit read-only legacy validation entry point; it is never selected implicitly, rewritten,
-   migrated, or accepted under version-3 semantics.
+4. At that historical subgate, the then-current writer emitted only
+   `operational_diagnostics_schema_version = 3`, and the then-current validator accepted only
+   version 3. Immutable version-2 evidence was reachable only through one explicit read-only
+   legacy validation entry point; it was never selected implicitly, rewritten, migrated, or
+   accepted under version-3 semantics.
 5. Version-3 `reason` and scope labels are finite whitelists. Every continuity-epoch edge has
    exactly one matching incident/restart edge with the same causal attribution, and every such
    incident/restart edge has exactly one epoch edge. Missing, duplicate, orphaned, defaulted, or
@@ -861,9 +955,10 @@ stage advancement, private API, order, or trade.
 #### Offline acceptance result
 
 The bounded repair passed its focused reducer/index/lifecycle/transport/evidence red-to-green
-counterexamples and the complete repository check (`404 passed`). Current writer-generated
-anomaly plus later atomic directories pass strict version-4 validation. Read-only validation of
-the sealed historical directories passed under their exact owning entry points:
+counterexamples and the complete repository check (`404 passed`). At that historical repair,
+writer-generated anomaly plus later atomic directories passed strict version-4 validation.
+Read-only validation of the sealed historical directories passed under their exact owning entry
+points:
 
 | Directory | Exact validator | Objects | `radar-run-summary.json` SHA-256 | Path-bound ordered per-file manifest SHA-256 |
 |---|---:|---:|---|---|
@@ -968,21 +1063,21 @@ Validation wrote no sealed object. Policy files, `CURRENT_STAGE`, production con
 private APIs, orders, trades, replay, and offline market recomputation remained outside this
 closure and unchanged.
 
-### Successor `OPERATIONAL_SOAK` — accounting revised, live identity unbound
+### Successor `OPERATIONAL_SOAK` — conditionally authorized, exact run identity unbound
 
-The successor gate remains `CLOSED`. This section revises only the post-stop accounting semantics;
-it does not create a Policy, evidence directory, process, or live authority. A later human command
-must atomically bind an exact full pushed commit whose remote branch equals that commit, one exact
-Policy path and exact-byte digest, and a new absolute evidence directory proved empty immediately
-before startup. The human may explicitly rebind the previously approved Policy identity or bind
-an explicitly approved successor; nothing is inherited merely by omission. The production Policy
-loader must accept the named exact path/digest pair.
+The successor is conditionally authorized only inside
+`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. It cannot start until the repaired exact full commit
+has an independent pass receipt, the remote branch equals that commit, and a durable run manifest
+binds one registered exact Policy path/digest plus a new absolute evidence directory proved empty
+immediately before startup. Nothing is inherited merely by omission. The production Policy loader
+must accept the named exact path/digest pair.
 
-Only an explicit human clean stop may end an authorized run. Acceptance is strictly
-`POST_STOP_ONLY`: after the human stop, the writer completes the directory, the current strict
-validator passes, and then the frozen formulas below produce `MET | NOT_MET`. Process failure,
-automatic stopping, an incomplete directory, or an evidence directory that was not empty at
-startup is `NOT_MET`.
+A human emergency stop or the manifest's pre-registered external supervisor may cleanly stop the
+run. The supervisor predicate must be deterministic and independent of observed pass/fail state.
+Acceptance is strictly `POST_STOP_ONLY`: after clean stop, the writer completes the directory,
+the current strict validator passes, and the frozen formulas below produce `MET | NOT_MET`.
+Process failure, an incomplete directory, or an evidence directory that was not empty at startup
+is `NOT_MET`. Elapsed time alone is never acceptance.
 
 Let:
 
@@ -1010,19 +1105,19 @@ Acceptance uses three non-interchangeable ledgers and reports each result separa
 2. **Normal-boundary-pending ledger.** Let `P` be the wall-clock union inside `W` of coverage segments
    whose exact blocking reason is `INDEX_TIME_BOUNDARY_PENDING` or
    `INDEX_WATERMARK_PENDING`. These intervals are non-countable, never restart continuity, and
-   must either recover, change into an explicitly recorded incident, or end exactly at the human
-   clean stop. They are never renamed as an incident or integrity loss. Their independent budget
-   is deliberately not approved by this construction:
+   must either recover, change into an explicitly recorded incident, or end exactly at clean
+   stop. They are never renamed as an incident or integrity loss. The terminal delegation freezes
+   their independent budget by exact derivation from the already frozen one-hour 99% coverage
+   threshold:
 
    ```text
-   pending_budget_status = PROPOSED
-   require duration(P) <= P_budget_ms only after a human freezes P_budget_ms
+   pending_budget_status = FROZEN_BY_DERIVATION
+   P_budget_ms = floor((1 - 0.99) * 3_600_000) = 36_000
+   require duration(P) <= 36_000
    ```
 
-   The current declaration is exactly `pending_budget_status = PROPOSED`; the acceptance check
-   `duration(P) <= P_budget_ms` does not become operative until a later human command changes that
-   status to `FROZEN` with one exact value. Until then the live gate cannot open and no run can be
-   declared `MET` from this proposal.
+   This does not relax the coverage gate: `P` is a subset of non-complete time, and the existing
+   `duration(K) / 3_600_000 >= 0.99` already limits all non-complete time to at most 36,000 ms.
 3. **Currentness-incident recovery ledger.** Every non-pending currentness incident preserves its
    exact `trigger_cause`, true `blocking_reason`, affected scope, start, and recovery boundary.
    Each incident intersecting `W` must recover to complete current truth no later than its start
@@ -1087,10 +1182,11 @@ ledgers must cross-conserve. Absence of a server `test_request` is not synthesiz
 A clean-stop censor is not an RPC error, but any still-pending observed heartbeat test at stop
 fails the conditional terminal equation above rather than disappearing.
 
-Opening this gate still requires a new explicit human command after code acceptance and push. The
-command must repeat the exact pushed HEAD and verified remote HEAD, the explicitly bound Policy
-absolute path and digest, new empty evidence directory, human-only clean-stop rule, the frozen
-current/option-local thresholds, and a human-approved `P_budget_ms`.
+Opening this evidence run requires no repeated human technical command. After code acceptance and
+push, its durable manifest must repeat the exact pushed and verified remote `HEAD`, registered
+Policy absolute path/digest, new empty evidence directory, result-independent supervisor stop
+predicate, `normalized_current_coverage >= 0.99`, normalized option-local availability
+`>= 59 / 60`, Policy-derived `R`, and `P_budget_ms = 36_000`.
 
 ## First-principles scope
 
@@ -1165,14 +1261,16 @@ The construction tests use at least two different Policy fixtures so a fixed imp
 constant cannot masquerade as configuration.
 
 Construction establishes the schema, loader, and non-production fixtures; it does not select a
-permanent or secretly preferred live parameter set. The later production observation command must
-name and approve the exact external Policy path and content digest to observe.
+permanent or secretly preferred live parameter set. A production observation command or active
+bounded terminal-goal delegation must pre-bind the exact external Policy path and content digest
+to observe.
 
 The Policy is UTF-8 JSON without BOM: one top-level object, duplicate keys and non-finite numbers
 rejected, numeric tokens parsed directly to `Decimal`. Before any subscription, startup reads its
 exact bytes once, computes `sha256:<hex>` over those bytes, and compares it with the required
-human-approved expected digest from the command. Missing/mismatch fails closed. The runtime then
-uses only the immutable parsed in-memory Policy; later file mutation cannot alter the run.
+human-approved or terminal-goal-pre-bound expected digest from the command. Missing/mismatch fails
+closed. The runtime then uses only the immutable parsed in-memory Policy; later file mutation
+cannot alter the run.
 
 ### Frozen during one run, replaceable between runs
 
@@ -1180,8 +1278,9 @@ The Policy's verified exact-byte content digest is bound before a process starts
 every event and run summary. The process rejects hot reload and cannot mutate, approve, promote,
 or replace its own Policy.
 
-After an observation interval, a human may approve a successor inside the already authorized
-Policy schema. It may change target quantity, TTE bands/gaps and call/put inclusion,
+After an observation interval, a human or an active terminal-goal delegate may pre-bind a
+successor inside the already authorized Policy schema when that delegation expressly permits
+calibration. It may change target quantity, TTE bands/gaps and call/put inclusion,
 lookbacks/weights/floor, Delta boundaries, activation/clear ratios and counts, or separation. The
 successor receives a new content identity, a new runtime instance, and a new forward observation
 interval. Earlier events keep their original meaning and are never relabeled or backfilled.
@@ -1194,14 +1293,15 @@ Because this task has no future realized-volatility or trade Outcome labels, a s
 only on these results may improve operability, coverage, frequency, or flicker behavior. It may
 not be called a better forecast or a better trading strategy.
 
-The first human-approved observation Policy may deliberately use broad bands and low persistence
-to learn whether the public pipeline produces enough usable evaluations, provided every schema
-invariant still holds—especially `activation_ratio > 1`. That is operational calibration, not a
-profitable-threshold recommendation. After each frozen forward interval, a human may loosen or
-tighten a successor for coverage/frequency/flicker and observe it prospectively. Evolving the
-volatility estimator itself, or claiming improved prediction, waits for a later task that first
-declares a strictly future horizon-matched realized-volatility/settlement label and comparator;
-this Radar neither collects nor backtests that label.
+The first explicitly registered observation Policy may deliberately use broad bands and low
+persistence to learn whether the public pipeline produces enough usable evaluations, provided
+every schema invariant still holds—especially `activation_ratio > 1`. That is operational
+calibration, not a profitable-threshold recommendation. After each frozen forward interval, a
+human or expressly authorized terminal-goal delegate may pre-bind a successor for
+coverage/frequency/flicker and observe it prospectively. Evolving the volatility estimator itself,
+or claiming improved prediction, waits for a later task that first declares a strictly future
+horizon-matched realized-volatility/settlement label and comparator; this Radar neither collects
+nor backtests that label.
 
 ## Product and source contract
 
@@ -1670,7 +1770,7 @@ UNKNOWN_AT_GAP | CENSORED_AT_STOP`, known-active duration by end reason, band-su
 atomic-state transitions, detector `UNKNOWN` transitions by reason, and Policy identity. These are
 reduced business-state transitions, never message counts. It contains no full market chain.
 
-New evidence requires strict `operational_diagnostics_schema_version = 4` with the exact
+New evidence requires strict `operational_diagnostics_schema_version = 5` with the exact
 `SHORT_VOL_RADAR` schema:
 
 - all nine frozen `runtime_limits`;
@@ -1691,14 +1791,14 @@ New evidence requires strict `operational_diagnostics_schema_version = 4` with t
 - separate ticker application/currentness counts and bounded late-regression rows;
 - global continuity epoch/restart/recovery edges, complete current-epoch joint identity rows, and
   bounded option-local unavailable/recovery intervals;
-- coverage segments that separately freeze the reduced `trigger_cause` and the true bounded
-  `blocking_reason`, with exact affected scope and continuity epoch;
+- coverage segments that separately freeze the reduced `trigger_cause`, strict grouped
+  reason-to-scope blockers, their bounded scalar summaries, and continuity epoch;
 - nullable first same-current-scope joint-witness time and continuous global-continuity duration
   after that witness.
 
 These transport facts are counted once per reduced envelope and never enter business denominators.
-Explicit read-only validators retain the sealed version-3 and version-2 exact schemas; older
-directories are never rewritten or relabelled as version 4.
+Explicit read-only validators retain the sealed version-4, version-3, and version-2 exact schemas;
+older directories are never rewritten or relabelled as version 5.
 
 Coverage partitions the exact half-open interval
 `[runtime_started_monotonic_ms, clean_stop_monotonic_ms)` into one global state at every
@@ -1717,9 +1817,11 @@ diagnostic subset, not a fifth partition. The validator requires non-negative, n
 gap-free durations and
 `coverage_partition_error_ms = observation_interval_ms - (known_complete_ms +
 known_degraded_ms + unknown_ms + no_applicable_scope_ms) = 0`.
-Each current version-4 segment separately records `trigger_cause`, `blocking_reason`, sorted
-bounded affected scopes, and `global_continuity_epoch`; same-state activity does not create
-diagnostic market persistence. Sealed version-3 segments retain their original single `reason`.
+Each current version-5 segment separately records `trigger_cause`, scalar `blocking_reason`,
+sorted bounded `affected_scopes`, exact sorted `blocking_groups`, and
+`global_continuity_epoch`; same-state activity does not create diagnostic market persistence.
+Sealed version-4 segments retain their original scalar blocker shape, while sealed version-3
+segments retain their original single `reason`.
 
 `radar_runtime` is the only writer. The current readers are the strict repository-owned schema
 validator and operator delivery report; no downstream business module consumes them in this
@@ -1730,10 +1832,10 @@ is `NOT_COMPARABLE` for forecast or trading claims, although named operational c
 displayed side by side without causal inference.
 
 The Policy schema remains version 3 and unchanged. New strict run summaries require diagnostics
-schema version 4. Explicit read-only readers continue validating sealed diagnostics version 3 and
-version 2 under their original exact shapes so historical directories remain immutable truthful
-evidence; neither older version is eligible for current acceptance or may be rewritten or
-upgraded. This task adds no migration or replay path.
+schema version 5. Explicit read-only readers continue validating sealed diagnostics version 4,
+version 3, and version 2 under their original exact shapes so historical directories remain
+immutable truthful evidence; no older version is eligible for current acceptance or may be
+rewritten or upgraded. This task adds no migration or replay path.
 
 Each object has a simple strict repository-owned schema and Policy content identity. No separate
 source-document manifest, Git-object provenance graph, hit-only recomputation command, full-feed
@@ -1890,9 +1992,9 @@ future exit liquidity, Outcome, PnL, qualification, promotion, or execution perm
 13. Scope tests prove `detector_coverage` and `has_current_full_formula` come from the same full
     current aggregate snapshot, including an affected subset that has no formula while an
     unchanged current member does, and reject historical/subset cross-combination.
-14. Evidence tests prove version-3 reason/scope/epoch coverage, global continuity, bounded
-    option-local availability, writer-edge independence, and continued strict validation of
-    sealed version-2 `attempt-001`.
+14. Evidence tests prove current version-5 grouped reason-to-scope coverage, global continuity,
+    bounded option-local availability, writer-edge independence, and explicit strict read-only
+    validation of sealed version-4, version-3, and version-2 evidence.
 15. Deterministic tests run the same interleaving sequence repeatedly and require identical
     current results, episode states, coverage, emitted commands, and durable edges. Evidence
     storage `OSError` is fatal with zero reconnect.
@@ -1911,15 +2013,15 @@ or provenance command.
 
 ### REACHABILITY_SMOKE
 
-The process runs until:
+The process runs until the pre-registered result-independent external stop predicate fires or a
+human emergency stop intervenes. The manifest's duration must be sufficient for the following
+witness to be possible, but the predicate may not inspect whether it has occurred:
 
 - warm-up completes and at least one real
   `Policy identity × expiry_timestamp × option_type` aggregate detector scope contains one or
   more reconciled catalog instruments, produces at least one full-formula known per-instrument
   evaluation inside that same settled full current-scope snapshot, and with
-  `detector_coverage = COMPLETE` produces `NO_ANOMALY` or `ANOMALY_ACTIVE`, after which a human may
-  stop it; or
-- a human stops it earlier.
+  `detector_coverage = COMPLETE` produces `NO_ANOMALY` or `ANOMALY_ACTIVE`.
 
 A pre-warm-up or all-`UNKNOWN` stop is truthful but does not complete live validation. A degraded
 positive witness is truthful evidence but does not by itself establish the full Radar. A complete
@@ -1965,14 +2067,15 @@ This witness proves only that the full formula and complete aggregate are reacha
 real public wiring. It is not a sustained-operation acceptance and cannot by itself establish the
 production Radar.
 
-### OPERATIONAL_SOAK — contract approval required before any production run
+### Historical original OPERATIONAL_SOAK — attempt-001 contract
 
-Production establishment additionally requires a human-approved continuous-operation acceptance
-plan. The prior separately authorized `operational-soak-attempt-001` completed with
-`acceptance = NOT_MET`; its version-2 evidence is sealed and remains the authoritative result.
-This fact-semantics construction does not infer new live authority and does not run a heartbeat
-probe or another Soak. A future plan must name exact code, Policy path/digest, a new empty evidence
-directory, and human-frozen global-continuity plus local-availability/current-coverage thresholds.
+At that historical gate, production establishment additionally required a human-approved
+continuous-operation acceptance plan. The separately authorized `operational-soak-attempt-001`
+completed with `acceptance = NOT_MET`; its version-2 evidence is sealed and remains the
+authoritative result for that attempt. The then-active fact-semantics construction inferred no new
+live authority and ran no heartbeat probe or successor Soak. Its future-plan requirement was exact
+code, Policy path/digest, a new empty evidence directory, and human-frozen global-continuity plus
+local-availability/current-coverage thresholds.
 
 The implemented strict diagnostic schema records, without persisting full market payloads:
 
@@ -1988,12 +2091,11 @@ The implemented strict diagnostic schema records, without persisting full market
 - the uninterrupted covered interval after the first
   `complete_aggregate_with_full_formula_evaluation` witness.
 
-The human-approved stop condition determines the required post-witness stable interval. Any
-session/index gap restarts warm-up, requires a new joint witness, and restarts that interval.
-These operational diagnostics never enter anomaly, episode, aggregate, atomic-availability, or
-future trading denominators. This task requires direct schema/writer tests, but it does not approve
-the Policy, stop condition, production connection, or soak, and it does not open the production
-observation gate.
+The historical human-approved stop condition determined the required post-witness stable interval.
+Any session/index gap restarted warm-up, required a new joint witness, and restarted that interval.
+Those operational diagnostics never entered anomaly, episode, aggregate, atomic-availability, or
+future trading denominators. That historical construction required direct schema/writer tests but
+approved neither its Policy, stop condition, production connection, nor successor Soak.
 
 ### Historical attempt-001 Policy and acceptance checklist
 
@@ -2083,11 +2185,15 @@ Green precondition tests, a prepared Policy, an empty directory, or prior Smoke 
 open a new Soak gate. Attempt-001 did not pass this checklist.
 
 Attempt-001 is permanently `NOT_MET`: it cannot be reused, modified, migrated, recomputed,
-replayed, or accepted under version-3 semantics. Before a new Soak authorization request, focused
-tests, `make check`, and old-evidence validation must pass; a heartbeat wire probe must receive its
-own explicit authorization; and a human must freeze new global-continuity duration and explicit
-local availability/current coverage thresholds. The historical `3_600_000 ms` value is not
-silently carried into that future gate.
+replayed, or accepted under version-3 semantics. At that historical point, before a new Soak
+authorization request, focused tests, `make check`, and old-evidence validation had to pass; a
+heartbeat wire probe had to receive its own explicit authorization; and a human had to freeze new
+global-continuity duration and explicit local availability/current coverage thresholds. The
+historical `3_600_000 ms` value was not silently carried into that future gate.
+
+Those requirements record the former attempt-001 gate. They do not govern the current
+conditionally authorized successor under `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`, whose exact
+bindings and frozen accounting contract appear earlier in this task.
 
 ## Trader-readable acceptance gates
 
@@ -2143,6 +2249,7 @@ covered zero-anomaly result is valid only when the joint full-formula witness al
 Production establishment additionally requires the separately approved and implemented
 `OPERATIONAL_SOAK` contract above.
 
-Business acceptance still requires an explicit human decision. Until then this task remains
-incomplete, production Radar remains `NOT_ESTABLISHED`, no later closure is authorized, and the
-prepared candidate successor Policy grants no live command or Soak authority.
+Business acceptance is the conditional human decision already recorded by
+`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. The task remains incomplete and production Radar
+remains `NOT_ESTABLISHED` until an independent verifier accepts both exact Smoke and exact Soak
+evidence. Only then may the controller record Radar `ESTABLISHED`; no later closure is activated.

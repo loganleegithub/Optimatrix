@@ -244,6 +244,16 @@ Humans own this Constitution, data and market scope, allowed strategy and model 
 qualification criteria, capital and account limits, credentials, emergency stop, and every stage
 transition. They do not manually choose individual machine decisions or trades.
 
+A human may own and conditionally approve one stage transition by naming a bounded terminal
+business goal. That delegation must freeze the market, data, strategy/model class, permitted
+terminal stage, acceptance predicates, and forbidden capabilities. Exact commits, paths, digests,
+new empty evidence directories, test commands, and deterministic clean-stop facts may then be
+bound durably by an engineering controller before use. The candidate author may not be its sole
+verifier: an independent read-only verifier must bind a pass receipt to the exact candidate.
+Executing a bounded-branch push, production-public evidence run, or stage record strictly inside
+such a delegation implements the human decision; it is not self-approval. Anything outside the
+delegation still requires a new explicit human decision.
+
 ### Future execution gateway
 
 Private execution is a separate security and authorization boundary. No strategy decision can
