@@ -39,14 +39,19 @@
 
 **Prior subgate implementation anchor:** `2a2f6fb6954992ad593a2405f2f33f66b897544d`
 
-**Current construction subgate:** `FINAL_WINDOW_EVIDENCE_AND_SESSION_CAUSE_REPAIR`
+**Prior construction subgate:** `FINAL_WINDOW_EVIDENCE_AND_SESSION_CAUSE_REPAIR`
 `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_28`
 
-**Current subgate implementation anchor:** `64f2299a1324059934aefce4cc8ee4190813c681`
+**Prior subgate implementation anchor:** `64f2299a1324059934aefce4cc8ee4190813c681`
+
+**Current construction subgate:** `POST_SOAK_BOUNDARY_AND_TRANSPORT_ATTRIBUTION_REPAIR`
+`OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_28`
+
+**Current subgate implementation anchor:** `98fccaee002d0ab50f56aa10980db0dda68a0f96`
 
 **REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`
 
-**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_002_NOT_MET`
+**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_003_NOT_MET`
 
 **Product/stage:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md) /
@@ -110,6 +115,17 @@ The subsequent explicit human command to perform the repair in order opens only
 diagnostic-contract alignment, offline orchestration verification, repeated validation, and
 sealed-directory hashing. It grants no production-public connection or new live run.
 
+The separately authorized `operational-soak-attempt-003` ran against exact pushed code
+`98fccaee002d0ab50f56aa10980db0dda68a0f96` and completed by explicit human clean stop. Its
+strict version-3 directory passed validation, but its frozen post-stop business gate was
+`NOT_MET`. The subsequent explicit human construction command opens only
+`POST_SOAK_BOUNDARY_AND_TRANSPORT_ATTRIBUTION_REPAIR` against that exact clean implementation
+anchor: bounded index-boundary settlement, BTC product filtering, lifecycle scope reuse,
+transport attribution, coverage attribution, direct TDD, contract alignment, offline validation,
+and append-only local commits. It grants no Policy change, replay, offline recomputation,
+production-public connection, new Soak, push, merge, private API, order, trade, or stage
+advancement.
+
 The prior `OPERATIONAL_SOAK` attempt at
 `/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001` is sealed
 `NOT_MET`. It is historical evidence only and may not be changed, replayed, recomputed, migrated,
@@ -119,6 +135,19 @@ The later `OPERATIONAL_SOAK` attempt at
 `/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-002` is also sealed `NOT_MET`.
 Its strict-valid directory remains historical evidence only and may not be changed, replayed,
 recomputed, migrated, or retroactively accepted.
+
+The latest `OPERATIONAL_SOAK` attempt at
+`/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-003` is permanently sealed
+`NOT_MET`. Its 753 strict-valid objects remain historical evidence only and may not be modified,
+supplemented, replayed, recomputed, migrated, or retroactively accepted. Its immutable audit
+identities are:
+
+```text
+radar-run-summary.json sha256 =
+  425e7304ae3f102aefd2f3bedd23ea12767e597b05e17cc3b74988f4282dd30f
+path-bound ordered per-file manifest sha256 =
+  25f77930d041421a6bc5029848aec79ff4025dc1573cb037dc158064b40bd273
+```
 
 The execution gates are independent:
 
@@ -146,17 +175,23 @@ The execution gates are independent:
    exact base `2a2f6fb6954992ad593a2405f2f33f66b897544d`. It authorizes only the bounded
    offline repair, contract alignment, repeated acceptance checks, and one append-only local
    commit below.
-10. **`FINAL_WINDOW_EVIDENCE_AND_SESSION_CAUSE_REPAIR` construction subgate:** opened against
+10. **Prior `FINAL_WINDOW_EVIDENCE_AND_SESSION_CAUSE_REPAIR` construction subgate:** opened against
     exact base `64f2299a1324059934aefce4cc8ee4190813c681`. It authorizes only the bounded
     offline repair, contract alignment, repeated acceptance checks, and one append-only local
     commit below.
 11. **Prior heartbeat wire probe gate:** consumed by its separately authorized narrow run.
 12. **Prior `OPERATIONAL_SOAK` gate:** consumed by `attempt-002`, whose acceptance is permanently
     `NOT_MET`.
-13. **Next `OPERATIONAL_SOAK` gate:** closed until this repair is accepted and pushed, its remote
+13. **Latest `OPERATIONAL_SOAK` gate:** consumed by `attempt-003`, whose acceptance is permanently
+    `NOT_MET`.
+14. **`POST_SOAK_BOUNDARY_AND_TRANSPORT_ATTRIBUTION_REPAIR` construction subgate:** opened against
+    exact base `98fccaee002d0ab50f56aa10980db0dda68a0f96`. It authorizes only the bounded
+    offline repair, exact contract alignment, sealed-evidence validation, and append-only local
+    commits below.
+15. **Next `OPERATIONAL_SOAK` gate:** closed until this repair is accepted and pushed, its remote
     exact HEAD is verified, and a later human command independently names exact accepted code,
-    Policy path/digest, a new empty evidence directory, and a post-stop-only stop/acceptance
-    contract.
+    a new Policy identity/path/digest, a new empty evidence directory, and a post-stop-only
+    stop/acceptance contract.
 
 Production-public connection, live artifact collection, private API, order, trade, merge,
 business acceptance, task archival, stage advancement, and any later research or execution
@@ -743,6 +778,67 @@ read-only validation and hashing of sealed `attempt-002`, `git diff --check`, an
 authority/diff/worktree audit. Produce one append-only local commit above the exact base. No
 production-public command, heartbeat probe, Smoke, Soak, Policy change, push, merge, stage
 advancement, private API, order, or trade is permitted.
+
+### `POST_SOAK_BOUNDARY_AND_TRANSPORT_ATTRIBUTION_REPAIR` — construction authorized
+
+The exact base is `98fccaee002d0ab50f56aa10980db0dda68a0f96`. History remains append-only.
+
+**Market/Decision input contract change:** `APPROVED` — settle a ready index-minute boundary
+before any market fact queries the current tail; reject non-BTC lifecycle business effects before
+catalog mutation or metadata scheduling; recompute only the affected BTC instrument/scope while
+reusing other immutable current results; and distinguish the transport trigger from the current
+fact that blocks coverage.
+
+**Decision Policy change:** `NONE` — no Policy file, formula, target quantity, TTE band, Delta,
+lookback, threshold, persistence, clear/re-arm rule, or runtime-limit value changes.
+
+**Outcome/evaluation contract change:** `NONE` — no replay, offline recomputation, historical
+relabelling, future label, Candidate, Position, Outcome, comparator, or qualification.
+
+**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
+capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`.
+
+#### Required repair
+
+1. Every fact transaction that can advance trusted time first seals every index minute whose
+   trusted-time and accepted-index watermark conditions are ready at that same boundary. Reading
+   the tail before this common step may not collapse a ready-but-unsealed minute into
+   `WINDOW_GAP`, restart continuity, or erase a witness.
+2. `instrument.state.option.USDC` remains a protocol-shape source, but an instrument outside the
+   provable `BTC_USDC-*` target namespace has zero catalog, current-truth, coverage, witness,
+   subscription, or metadata-RPC side effects.
+3. A relevant BTC lifecycle burst freezes the affected instrument and aggregate scopes once,
+   evaluates only those members, and reuses still-current immutable results for every unaffected
+   member. A Deribit 08:00 expiry burst must stay bounded by affected instruments/scopes rather
+   than trigger full-universe recomputation.
+4. Version-3 transport evidence adds only bounded allowlisted remote-close code, clean/abnormal
+   close classification, and exception class. Coverage records both the boundary's
+   `trigger_cause` and the actual current-state `blocking_reason`; neither field may contain raw
+   exception text, host details, or another unbounded value.
+
+#### Required red counterexamples
+
+- a non-index fact advances trusted time beyond a minute already crossed by the accepted index
+  watermark, and the minute seals before the current tail is queried without `WINDOW_GAP` or an
+  epoch restart;
+- XRP/ETH lifecycle rows pass protocol shape accounting but cannot mutate BTC catalogs, coverage,
+  witnesses, subscriptions, or metadata commands;
+- a BTC lifecycle update and a production-shaped 08:00 expiry burst evaluate only affected
+  instruments/scopes while unchanged immutable results remain identity-stable;
+- remote clean close, abnormal close, and bounded exception classes project exact transport
+  diagnostics, while unknown close codes/classes and raw exception strings fail closed;
+- one fact whose trigger differs from the current blocking dependency preserves both exact values
+  in coverage and strict validation rejects a forged pair.
+
+#### Offline acceptance
+
+Run focused red-to-green reducer/index/lifecycle/transport/evidence tests, `make check`, the
+complete malicious version-3 validator suite, strict read-only validation of `attempt-001`,
+`attempt-002`, `attempt-003`, and the sealed heartbeat-probe directory, and before/after hashes
+for every sealed directory. `git diff --check`, authority, Policy, artifact, and worktree audits
+must remain clean. This subgate authorizes no queue-lag semantic change until the separate owning
+contract revision is committed; it authorizes no live command, Policy mutation, push, merge,
+stage advancement, private API, order, or trade.
 
 ## First-principles scope
 

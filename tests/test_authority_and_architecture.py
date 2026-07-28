@@ -147,20 +147,20 @@ def test_current_stage_authorizes_exactly_one_next_closure() -> None:
     assert "## Queued sequence — not authorized" in current_stage
 
 
-def test_short_vol_task_has_open_final_window_repair_and_closed_live_gates() -> None:
+def test_short_vol_task_has_open_post_soak_repair_and_closed_live_gates() -> None:
     task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-    opening = "\n".join(task.splitlines()[:50])
+    opening = "\n".join(task.splitlines()[:60])
 
     assert "**Status:** ACTIVE" in opening
     assert "**Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`" in opening
     assert (
-        "**Current construction subgate:** `FINAL_WINDOW_EVIDENCE_AND_SESSION_CAUSE_REPAIR`"
+        "**Current construction subgate:** `POST_SOAK_BOUNDARY_AND_TRANSPORT_ATTRIBUTION_REPAIR`"
     ) in opening
     assert (
-        "**Current subgate implementation anchor:** `64f2299a1324059934aefce4cc8ee4190813c681`"
+        "**Current subgate implementation anchor:** `98fccaee002d0ab50f56aa10980db0dda68a0f96`"
     ) in opening
     assert "**REACHABILITY_SMOKE gate:** `CLOSED_AFTER_PRIOR_SINGLE_RUN_AUTHORIZATION`" in opening
-    assert "**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_002_NOT_MET`" in opening
+    assert "**OPERATIONAL_SOAK gate:** `CLOSED_AFTER_ATTEMPT_003_NOT_MET`" in opening
     assert (
         "Live commands:** REQUIRED only after the exact named Smoke or Soak gate opens" in opening
     )
@@ -173,6 +173,10 @@ def test_historical_soak_remains_not_met_and_future_live_gates_stay_closed() -> 
         "/Users/logan/Optimatrix-soak/policies/operational-soak-successor.json",
         "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4",
         "/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001",
+        "/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-003",
+        "425e7304ae3f102aefd2f3bedd23ea12767e597b05e17cc3b74988f4282dd30f",
+        "25f77930d041421a6bc5029848aec79ff4025dc1573cb037dc158064b40bd273",
+        "attempt-003`, whose acceptance is permanently",
         "continuous_covered_after_witness_ms >= 3_600_000",
         "semantic comparison to the predecessor Smoke Policy proves that only `band_id` changed",
         "Attempt-001 is permanently `NOT_MET`",
