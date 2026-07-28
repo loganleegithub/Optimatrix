@@ -1055,9 +1055,13 @@ completion/failure and wire responses re-enter the same queue. Only real socket 
 session liveness. Heartbeat `test_request` control may enqueue guarded `public/test` work while
 catalog RPC work is blocked, but neither it nor its response recursively mutates economic state.
 Bootstrap and steady state share the same Policy
-`notification_queue_lag_deadline_ms` and maximum-lag diagnostic. Queue overflow is a session gap.
-Reconnect and clean stop use explicit producer-stop/drain barriers before failure propagation or
-summary projection.
+`notification_queue_lag_deadline_ms` and maximum-lag diagnostic. A unique consecutive event over
+that lag deadline is a currentness incident, not ingress or socket loss: it is reduced exactly
+once, makes coverage and all current detector consumers `UNKNOWN`, forbids observations, and
+recovers only after a later consecutive within-deadline event proves the accepted queue caught up.
+It does not retire the session or restart global continuity. Queue overflow, sequence
+gap/duplicate, or real socket/session loss remains a session gap. Reconnect and clean stop use
+explicit producer-stop/drain barriers before failure propagation or summary projection.
 
 Each `PendingRpc` freezes request purpose, method/params, session epoch, scope, channel generation
 where applicable, origin `FactBoundary`, Policy-derived send deadline, and failure scope. Only

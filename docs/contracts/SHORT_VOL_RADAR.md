@@ -347,8 +347,17 @@ side effects. Membership/coverage changes occur at the originating fact boundary
 unsubscribe command is emitted.
 
 Bootstrap and steady state use the same Policy-supplied receive-lag deadline and update the same
-queue diagnostics. Queue overflow is a session gap. No operational deadline or cadence has an
-implementation default.
+queue diagnostics. A unique, consecutive application event whose receive-to-reduce lag exceeds
+that deadline is an ordered queue-currentness incident, not evidence of ingress loss or socket
+loss. The event is still reduced exactly once in order. From that delayed event's immutable
+receive boundary, detector, aggregate, atomic, witness eligibility, and coverage fail closed:
+coverage is `UNKNOWN` with `blocking_reason = QUEUE_LAG_CURRENTNESS`, and no observation can be
+counted. The incident recovers only at the first later consecutive application boundary whose lag
+is within the deadline, after every earlier accepted event has been reduced; that boundary
+rebuilds current results from committed facts before observation can resume. It does not retire
+the session, reconnect, increment `global_continuity_epoch`, or erase the existing witness.
+Queue overflow, an application-sequence gap/duplicate, or real socket/session loss remains a
+session gap. No operational deadline or cadence has an implementation default.
 
 ## Time and settlement boundary
 
@@ -900,7 +909,8 @@ The runtime keeps three ledgers whose units and reset rules are not interchangea
    for each retired session, ingress gap/duplicate or queue overflow, trusted-clock gap, or real
    index continuity loss (`WINDOW_GAP | SOURCE_STALE | CONTINUITY_GAP`). Bootstrap
    `WARMUP`, normal `TIME_BOUNDARY_PENDING | WATERMARK_PENDING`, option ticker/book/catalog
-   unavailability, aggregate coverage changes, and episode transitions never increment it. One
+   unavailability, ordered queue lag, aggregate coverage changes, and episode transitions never
+   increment it. One
    root `ContinuityIncident` can increment it at most once before an explicit recovery edge;
    cause, failure domain, and affected scopes use the exact repository allowlist.
 2. `current_market_truth_coverage` remains the exact global time partition
@@ -1201,7 +1211,8 @@ contract, not a Policy value, detector cadence, market-currentness deadline, or 
 condition.
 
 Session continuity restart causes are finite and boundary-owned. In addition to existing
-platform, queue, ingress, clock, and index causes, the session-global allowlist distinguishes
+platform, queue-overflow, application-sequence, clock, and index causes, the session-global
+allowlist distinguishes
 `REMOTE_CONNECTION_CLOSED`, `TRANSPORT_READ_FAILURE`, `SESSION_LIVENESS_DEADLINE`,
 `SESSION_RPC_FAILURE`, `RUNTIME_SESSION_FAILURE`, and `PROTOCOL_INCOMPATIBILITY`. The first
 retirement of an epoch freezes that cause; a later reconnect notice is idempotent and cannot
