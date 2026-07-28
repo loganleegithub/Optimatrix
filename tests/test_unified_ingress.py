@@ -18,6 +18,7 @@ class IncomingConnection:
     def __init__(self, messages: list[str]) -> None:
         self._messages = iter(messages)
         self.sent: list[str] = []
+        self.close_code = 1000
 
     def __aiter__(self) -> IncomingConnection:
         return self
@@ -76,6 +77,9 @@ def test_reader_enqueues_every_inbound_frame_once_in_one_continuous_sequence() -
     connection_error = frames[-1].get("params")
     assert isinstance(connection_error, dict)
     assert connection_error["reason"] == "REMOTE_CONNECTION_CLOSED"
+    assert connection_error["close_code"] == "1000"
+    assert connection_error["close_disposition"] == "CLEAN"
+    assert connection_error["exception_class"] == "NONE"
 
 
 def test_reader_preserves_fatal_protocol_failure_identity_in_ingress() -> None:
@@ -93,6 +97,9 @@ def test_reader_preserves_fatal_protocol_failure_identity_in_ingress() -> None:
     assert isinstance(params, dict)
     assert params["kind"] == "PROTOCOL_INCOMPATIBILITY"
     assert params["reason"] == "PROTOCOL_INCOMPATIBILITY"
+    assert params["close_code"] == "NOT_AVAILABLE"
+    assert params["close_disposition"] == "ABNORMAL"
+    assert params["exception_class"] == "PublicProtocolIncompatibility"
 
 
 def test_reader_preserves_transport_read_failure_identity_in_ingress() -> None:
@@ -114,6 +121,35 @@ def test_reader_preserves_transport_read_failure_identity_in_ingress() -> None:
     assert isinstance(params, dict)
     assert params["kind"] == "SESSION_FAILURE"
     assert params["reason"] == "TRANSPORT_READ_FAILURE"
+    assert params["close_code"] == "NOT_AVAILABLE"
+    assert params["close_disposition"] == "ABNORMAL"
+    assert params["exception_class"] == "OSError"
+
+
+def test_reader_bounds_unrecognized_transport_attribution() -> None:
+    class UnrecognizedClose(RuntimeError):
+        code = 4_442
+
+    class FailedIncomingConnection(IncomingConnection):
+        async def __anext__(self) -> str:
+            raise UnrecognizedClose("unbounded implementation detail")
+
+    async def scenario() -> InboundEnvelope:
+        client = DeribitPublicClient(session_epoch=7, rpc_deadline_ms=30_000)
+        connection = FailedIncomingConnection([])
+        client._connection = connection  # type: ignore[assignment]
+
+        await client._reader()
+        return client.drain_envelopes()[-1]
+
+    frame = asyncio.run(scenario())
+    params = frame.get("params")
+
+    assert isinstance(params, dict)
+    assert params["close_code"] == "OTHER"
+    assert params["close_disposition"] == "ABNORMAL"
+    assert params["exception_class"] == "OTHER"
+    assert "unbounded implementation detail" not in json.dumps(frame)
 
 
 def test_client_sends_without_response_future_or_client_subscription_generation() -> None:

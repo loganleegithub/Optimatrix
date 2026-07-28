@@ -295,7 +295,7 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "`policy_schema_version = 3`",
         "`ticker_source_stale_deadline_ms`",
         "`AHEAD_IGNORED`",
-        "`operational_diagnostics_schema_version = 3`",
+        "`operational_diagnostics_schema_version = 4`",
         "`KNOWN_INELIGIBLE`",
         "`UNKNOWN_AT_GAP`",
         "required combo order direction",

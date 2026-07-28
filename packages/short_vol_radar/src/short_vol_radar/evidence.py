@@ -35,6 +35,42 @@ SUMMARY_NON_CLAIMS = (
 )
 OPTION_LOCAL_ACCEPTANCE_WINDOW_MS = 3_600_000
 OPTION_LOCAL_RETAINED_INTERVAL_LIMIT = 10_000
+TRANSPORT_CLOSE_CODE_ALLOWLIST = frozenset(
+    {
+        "1000",
+        "1001",
+        "1002",
+        "1003",
+        "1006",
+        "1007",
+        "1008",
+        "1009",
+        "1010",
+        "1011",
+        "1012",
+        "1013",
+        "1014",
+        "1015",
+        "NOT_AVAILABLE",
+        "OTHER",
+    }
+)
+TRANSPORT_CLOSE_DISPOSITION_ALLOWLIST = frozenset({"CLEAN", "ABNORMAL"})
+TRANSPORT_EXCEPTION_CLASS_ALLOWLIST = frozenset(
+    {
+        "NONE",
+        "PublicProtocolIncompatibility",
+        "PublicProtocolError",
+        "ConnectionClosedOK",
+        "ConnectionClosedError",
+        "OSError",
+        "SSLError",
+        "TimeoutError",
+        "EOFError",
+        "WebSocketException",
+        "OTHER",
+    }
+)
 CHANNEL_CLASSES = tuple(
     sorted(
         (
@@ -146,6 +182,45 @@ class CoverageState(StrEnum):
     KNOWN_COMPLETE = "KNOWN_COMPLETE"
     KNOWN_DEGRADED = "KNOWN_DEGRADED"
     UNKNOWN = "UNKNOWN"
+
+
+class CoverageBlockingReason(StrEnum):
+    NONE = "NONE"
+    LEGACY_UNATTRIBUTED = "LEGACY_UNATTRIBUTED"
+    RUNTIME_START_PENDING = "RUNTIME_START_PENDING"
+    CLOCK_UNAVAILABLE = "CLOCK_UNAVAILABLE"
+    CLOCK_GAP = "CLOCK_GAP"
+    SESSION_GAP = "SESSION_GAP"
+    REMOTE_CONNECTION_CLOSED = "REMOTE_CONNECTION_CLOSED"
+    TRANSPORT_READ_FAILURE = "TRANSPORT_READ_FAILURE"
+    SESSION_LIVENESS_DEADLINE = "SESSION_LIVENESS_DEADLINE"
+    SESSION_RPC_FAILURE = "SESSION_RPC_FAILURE"
+    RUNTIME_SESSION_FAILURE = "RUNTIME_SESSION_FAILURE"
+    PROTOCOL_INCOMPATIBILITY = "PROTOCOL_INCOMPATIBILITY"
+    INGRESS_GAP_OR_DUPLICATE = "INGRESS_GAP_OR_DUPLICATE"
+    QUEUE_OVERFLOW = "QUEUE_OVERFLOW"
+    PLATFORM_UNESTABLISHED = "PLATFORM_UNESTABLISHED"
+    POST_STATUS_BOOTSTRAP_REQUIRED = "POST_STATUS_BOOTSTRAP_REQUIRED"
+    PLATFORM_MAINTENANCE = "PLATFORM_MAINTENANCE"
+    PUBLIC_METHODS_DENIED = "PUBLIC_METHODS_DENIED"
+    RELEVANT_PLATFORM_LOCK = "RELEVANT_PLATFORM_LOCK"
+    OPTION_CATALOG_INCOMPLETE = "OPTION_CATALOG_INCOMPLETE"
+    NO_APPLICABLE_SCOPE = "NO_APPLICABLE_SCOPE"
+    TIME_APPLICABILITY_UNRESOLVED = "TIME_APPLICABILITY_UNRESOLVED"
+    INDEX_WARMUP = "INDEX_WARMUP"
+    INDEX_TIME_BOUNDARY_PENDING = "INDEX_TIME_BOUNDARY_PENDING"
+    INDEX_WATERMARK_PENDING = "INDEX_WATERMARK_PENDING"
+    INDEX_WINDOW_GAP = "INDEX_WINDOW_GAP"
+    INDEX_SOURCE_STALE = "INDEX_SOURCE_STALE"
+    INDEX_CONTINUITY_GAP = "INDEX_CONTINUITY_GAP"
+    TICKER_SOURCE_STALE = "TICKER_SOURCE_STALE"
+    TICKER_TIMESTAMP_AHEAD = "TICKER_TIMESTAMP_AHEAD"
+    OPTION_LIFECYCLE_UNAVAILABLE = "OPTION_LIFECYCLE_UNAVAILABLE"
+    OPTION_BOOK_UNAVAILABLE = "OPTION_BOOK_UNAVAILABLE"
+    CURRENT_SCOPE_INCOMPLETE = "CURRENT_SCOPE_INCOMPLETE"
+    ACTIVE_POSITIVE_SCOPE_INCOMPLETE = "ACTIVE_POSITIVE_SCOPE_INCOMPLETE"
+    QUEUE_LAG_DEADLINE = "QUEUE_LAG_DEADLINE"
+    QUEUE_LAG_CURRENTNESS = "QUEUE_LAG_CURRENTNESS"
 
 
 class CausalCause(StrEnum):
@@ -261,6 +336,7 @@ class CoverageSegment:
     end_monotonic_ms: int
     state: CoverageState
     reason: str
+    blocking_reason: str
     affected_scopes: tuple[str, ...]
     global_continuity_epoch: int
 
@@ -416,8 +492,8 @@ def project_run_summary(
         raise EvidenceError("run summary requires at least one coverage segment")
     coverage = _coverage_object(tuple(coverage_segments))
     diagnostics_version = operational_diagnostics.get("operational_diagnostics_schema_version")
-    if diagnostics_version != 3:
-        raise EvidenceError("current run-summary writer requires diagnostics schema version 3")
+    if diagnostics_version != 4:
+        raise EvidenceError("current run-summary writer requires diagnostics schema version 4")
     coverage_rows: list[dict[str, object]] = []
     for segment in coverage_segments:
         coverage_rows.append(
@@ -425,7 +501,8 @@ def project_run_summary(
                 "start_monotonic_ms": segment.start_monotonic_ms,
                 "end_monotonic_ms": segment.end_monotonic_ms,
                 "state": segment.state.value,
-                "reason": segment.reason,
+                "trigger_cause": segment.reason,
+                "blocking_reason": segment.blocking_reason,
                 "affected_scopes": list(segment.affected_scopes),
                 "global_continuity_epoch": segment.global_continuity_epoch,
             }
@@ -729,6 +806,11 @@ def validate_atomic_causal_invariant(
 
 
 def validate_run_summary(value: Mapping[str, object]) -> None:
+    _validate_run_summary(value, required_diagnostics_version=4)
+
+
+def validate_sealed_operational_run_summary(value: Mapping[str, object]) -> None:
+    """Validate immutable version-3 evidence through the explicit sealed path."""
     _validate_run_summary(value, required_diagnostics_version=3)
 
 
@@ -771,9 +853,13 @@ def _validate_run_summary(
     diagnostics = _mapping(value["operational_diagnostics"], "operational_diagnostics")
     diagnostics_version = diagnostics.get("operational_diagnostics_schema_version")
     if diagnostics_version != required_diagnostics_version:
+        if required_diagnostics_version == 4:
+            raise EvidenceError(
+                "current run-summary validator requires diagnostics schema version 4"
+            )
         if required_diagnostics_version == 3:
             raise EvidenceError(
-                "current run-summary validator requires diagnostics schema version 3"
+                "sealed operational run-summary validator requires diagnostics schema version 3"
             )
         raise EvidenceError("legacy run-summary validator requires diagnostics schema version 2")
     raw_segments = value["coverage_segments"]
@@ -853,20 +939,27 @@ def _validate_run_summary(
 
 
 def validate_evidence_directory(directory: Path) -> tuple[dict[str, object], ...]:
-    return _validate_evidence_directory(directory, legacy_schema=False)
+    return _validate_evidence_directory(directory, diagnostics_version=4)
+
+
+def validate_sealed_operational_evidence_directory(
+    directory: Path,
+) -> tuple[dict[str, object], ...]:
+    """Validate a sealed version-3 directory without rewriting or migrating it."""
+    return _validate_evidence_directory(directory, diagnostics_version=3)
 
 
 def validate_legacy_evidence_directory(
     directory: Path,
 ) -> tuple[dict[str, object], ...]:
     """Validate a sealed version-2 directory without rewriting or migrating it."""
-    return _validate_evidence_directory(directory, legacy_schema=True)
+    return _validate_evidence_directory(directory, diagnostics_version=2)
 
 
 def _validate_evidence_directory(
     directory: Path,
     *,
-    legacy_schema: bool,
+    diagnostics_version: int,
 ) -> tuple[dict[str, object], ...]:
     objects: list[dict[str, object]] = []
     identities: set[tuple[object, object, object]] = set()
@@ -903,8 +996,10 @@ def _validate_evidence_directory(
             atomic_identities.add(atomic_identity)
             atomic_events.append(value)
         elif kind == "RADAR_RUN_SUMMARY":
-            if legacy_schema:
+            if diagnostics_version == 2:
                 validate_legacy_run_summary(value)
+            elif diagnostics_version == 3:
+                validate_sealed_operational_run_summary(value)
             else:
                 validate_run_summary(value)
             summaries.append(value)
@@ -995,14 +1090,14 @@ def _validate_evidence_directory(
                     _required_string(anomaly, "activation_band_id"),
                 )
             ] += 1
-        if legacy_schema:
+        if diagnostics_version == 2:
             if sum(declared_by_scope.values()) != len(anomalies_by_episode):
                 raise EvidenceError("summary episode count does not match anomaly evidence")
         elif declared_by_scope != actual_by_scope:
             raise EvidenceError(
                 "summary scope episode counts do not match anomaly option_type and band"
             )
-        if not legacy_schema:
+        if diagnostics_version >= 3:
             for atomic in atomic_events:
                 anomaly = anomalies_by_episode[_required_string(atomic, "episode_identity")]
                 instrument = _mapping(anomaly["instrument"], "anomaly instrument")
@@ -1063,6 +1158,15 @@ def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegmen
     fields = {"start_monotonic_ms", "end_monotonic_ms", "state"}
     if diagnostics_version == 3:
         fields.update({"reason", "affected_scopes", "global_continuity_epoch"})
+    elif diagnostics_version == 4:
+        fields.update(
+            {
+                "trigger_cause",
+                "blocking_reason",
+                "affected_scopes",
+                "global_continuity_epoch",
+            }
+        )
     _exact_keys(value, fields, "coverage segment")
     try:
         state = CoverageState(value["state"])
@@ -1080,15 +1184,41 @@ def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegmen
             end,
             state,
             reason=CausalCause.RUNTIME_START.value,
+            blocking_reason=CoverageBlockingReason.LEGACY_UNATTRIBUTED.value,
             affected_scopes=("GLOBAL",),
             global_continuity_epoch=1,
         )
-    reason = _required_string(value, "reason")
+    reason = _required_string(
+        value,
+        "reason" if diagnostics_version == 3 else "trigger_cause",
+    )
     try:
         CausalCause(reason)
     except ValueError as exc:
         raise EvidenceError("coverage reason is outside the causal cause whitelist") from exc
     affected_scopes = _validate_affected_scopes(value["affected_scopes"])
+    blocking_reason = (
+        CoverageBlockingReason.LEGACY_UNATTRIBUTED.value
+        if diagnostics_version == 3
+        else _required_string(value, "blocking_reason")
+    )
+    try:
+        CoverageBlockingReason(blocking_reason)
+    except ValueError as exc:
+        raise EvidenceError("coverage blocking_reason is outside the bounded allowlist") from exc
+    if diagnostics_version == 4:
+        if state is CoverageState.KNOWN_COMPLETE:
+            if blocking_reason != CoverageBlockingReason.NONE.value:
+                raise EvidenceError("KNOWN_COMPLETE coverage must have no blocking reason")
+        elif blocking_reason == CoverageBlockingReason.NONE.value:
+            raise EvidenceError("incomplete coverage must identify its blocking reason")
+        if (
+            state is CoverageState.NO_APPLICABLE_SCOPE
+            and blocking_reason != CoverageBlockingReason.NO_APPLICABLE_SCOPE.value
+        ):
+            raise EvidenceError(
+                "NO_APPLICABLE_SCOPE coverage must identify the matching blocking reason"
+            )
     epoch = _positive_integer(
         value["global_continuity_epoch"],
         "coverage segment global_continuity_epoch",
@@ -1098,6 +1228,7 @@ def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegmen
         end,
         state,
         reason=reason,
+        blocking_reason=blocking_reason,
         affected_scopes=affected_scopes,
         global_continuity_epoch=epoch,
     )
@@ -1217,8 +1348,8 @@ def _validate_operational_diagnostics(
 ) -> None:
     diagnostics = _mapping(value, "operational_diagnostics")
     version = diagnostics.get("operational_diagnostics_schema_version")
-    if version not in {2, 3}:
-        raise EvidenceError("operational diagnostics schema version must be 2 or 3")
+    if version not in {2, 3, 4}:
+        raise EvidenceError("operational diagnostics schema version must be 2, 3, or 4")
     fields = {
         "operational_diagnostics_schema_version",
         "runtime_limits",
@@ -1231,7 +1362,7 @@ def _validate_operational_diagnostics(
         "source_shapes",
         "witness",
     }
-    if version == 3:
+    if version >= 3:
         fields.update(
             {
                 "global_continuity",
@@ -1241,6 +1372,8 @@ def _validate_operational_diagnostics(
                 "rpc_orphan_late_wire_count",
             }
         )
+    if version == 4:
+        fields.add("transport_terminal_attribution")
     _exact_keys(
         diagnostics,
         fields,
@@ -1252,7 +1385,7 @@ def _validate_operational_diagnostics(
         diagnostics_version=version,
     )
     _validate_rpc_diagnostics(diagnostics["rpc_by_method"], diagnostics_version=version)
-    if version == 3:
+    if version >= 3:
         _non_negative_integer(
             diagnostics["rpc_orphan_late_wire_count"],
             "rpc_orphan_late_wire_count",
@@ -1337,7 +1470,7 @@ def _validate_operational_diagnostics(
         tuple[str, int, str, str, str],
         tuple[int, Mapping[str, object] | None],
     ] = {}
-    if version == 3:
+    if version >= 3:
         _validate_cross_ledger_conservation(
             diagnostics,
             source_shape_counts=source_shape_counts,
@@ -1377,6 +1510,19 @@ def _validate_operational_diagnostics(
             coverage_segments,
             current_epoch=current_epoch,
             restart_edges=restart_edges,
+            diagnostics_version=version,
+        )
+    if version == 4:
+        ingress = _mapping(
+            diagnostics["ingress"],
+            "operational_diagnostics.ingress",
+        )
+        _validate_transport_terminal_attribution(
+            diagnostics["transport_terminal_attribution"],
+            connection_error_event_count=_non_negative_integer(
+                ingress["connection_error_event_count"],
+                "ingress.connection_error_event_count",
+            ),
         )
     witness = _mapping(diagnostics["witness"], "operational_diagnostics.witness")
     witness_fields = {
@@ -1387,7 +1533,7 @@ def _validate_operational_diagnostics(
             else "continuous_global_continuity_after_witness_ms"
         ),
     }
-    if version == 3:
+    if version >= 3:
         witness_fields.update(
             {
                 "global_continuity_epoch",
@@ -1397,7 +1543,7 @@ def _validate_operational_diagnostics(
             }
         )
     _exact_keys(witness, witness_fields, "operational_diagnostics.witness")
-    if version == 3:
+    if version >= 3:
         witness_epoch = _positive_integer(
             witness["global_continuity_epoch"],
             "witness.global_continuity_epoch",
@@ -1414,7 +1560,7 @@ def _validate_operational_diagnostics(
     ]
     if (first is None) != (duration is None):
         raise EvidenceError("joint witness time and continuous duration must both be null or known")
-    if version == 3:
+    if version >= 3:
         identities = (
             witness["scope"],
             witness["boundary"],
@@ -1438,7 +1584,7 @@ def _validate_operational_diagnostics(
             raise EvidenceError("joint witness time must be within the runtime interval")
         if duration_ms != clean_stop_monotonic_ms - first_ms:
             raise EvidenceError("joint witness continuous duration must equal stop minus first")
-        if version == 3:
+        if version >= 3:
             current_epoch_start = next(
                 segment.start_monotonic_ms
                 for segment in coverage_segments
@@ -1587,7 +1733,7 @@ def _validate_ingress_diagnostics(
         "max_receive_to_reduce_lag_ms",
         "overflow_count",
     }
-    if diagnostics_version == 3:
+    if diagnostics_version >= 3:
         fields.update(
             {
                 "send_control_event_count",
@@ -1640,7 +1786,7 @@ def _validate_rpc_diagnostics(value: object, *, diagnostics_version: int) -> Non
                 "latency_ms_sum",
                 "latency_ms_max",
             }
-            if diagnostics_version == 3
+            if diagnostics_version >= 3
             else {
                 "method",
                 "request_count",
@@ -1655,7 +1801,7 @@ def _validate_rpc_diagnostics(value: object, *, diagnostics_version: int) -> Non
         )
         _exact_keys(row, fields, "operational_diagnostics RPC row")
         method = _required_string(row, "method")
-        if diagnostics_version == 3 and method not in RPC_METHOD_ALLOWLIST:
+        if diagnostics_version >= 3 and method not in RPC_METHOD_ALLOWLIST:
             raise EvidenceError("operational RPC method is outside the exact allowlist")
         if diagnostics_version == 2 and not method.startswith("public/"):
             raise EvidenceError("operational RPC method is not public")
@@ -1671,7 +1817,7 @@ def _validate_rpc_diagnostics(value: object, *, diagnostics_version: int) -> Non
         if rate_limits > errors:
             raise EvidenceError("RPC rate-limit count exceeds errors")
 
-        if diagnostics_version == 3:
+        if diagnostics_version >= 3:
             scheduled_count = _non_negative_integer(
                 row["scheduled_count"],
                 "scheduled_count",
@@ -2085,6 +2231,56 @@ def _validate_cross_ledger_conservation(
     ):
         raise EvidenceError(
             "cross-ledger heartbeat/public-test source conservation does not reconcile"
+        )
+
+
+def _validate_transport_terminal_attribution(
+    value: object,
+    *,
+    connection_error_event_count: int,
+) -> None:
+    rows = _array(value, "operational_diagnostics.transport_terminal_attribution")
+    identities: set[tuple[str, str, str]] = set()
+    total = 0
+    maximum_rows = (
+        len(TRANSPORT_CLOSE_CODE_ALLOWLIST)
+        * len(TRANSPORT_CLOSE_DISPOSITION_ALLOWLIST)
+        * len(TRANSPORT_EXCEPTION_CLASS_ALLOWLIST)
+    )
+    if len(rows) > maximum_rows:
+        raise EvidenceError("transport terminal attribution exceeds its bounded row space")
+    for raw in rows:
+        row = _mapping(raw, "transport terminal attribution row")
+        _exact_keys(
+            row,
+            {
+                "close_code",
+                "close_disposition",
+                "exception_class",
+                "count",
+            },
+            "transport terminal attribution row",
+        )
+        close_code = _required_string(row, "close_code")
+        close_disposition = _required_string(row, "close_disposition")
+        exception_class = _required_string(row, "exception_class")
+        if close_code not in TRANSPORT_CLOSE_CODE_ALLOWLIST:
+            raise EvidenceError("transport close code is outside the bounded allowlist")
+        if close_disposition not in TRANSPORT_CLOSE_DISPOSITION_ALLOWLIST:
+            raise EvidenceError("transport close disposition is outside the bounded allowlist")
+        if exception_class not in TRANSPORT_EXCEPTION_CLASS_ALLOWLIST:
+            raise EvidenceError("transport exception class is outside the bounded allowlist")
+        expected_disposition = "CLEAN" if close_code in {"1000", "1001"} else "ABNORMAL"
+        if close_disposition != expected_disposition:
+            raise EvidenceError("transport close disposition conflicts with its close code")
+        identity = (close_code, close_disposition, exception_class)
+        if identity in identities:
+            raise EvidenceError("transport terminal attribution rows must be unique")
+        identities.add(identity)
+        total += _positive_integer(row["count"], "transport terminal attribution count")
+    if total != connection_error_event_count:
+        raise EvidenceError(
+            "transport terminal attribution does not reconcile connection error controls"
         )
 
 
@@ -2710,6 +2906,7 @@ def _validate_version_three_coverage(
     *,
     current_epoch: int,
     restart_edges: tuple[Mapping[str, object], ...],
+    diagnostics_version: int,
 ) -> None:
     epochs = [segment.global_continuity_epoch for segment in segments]
     if epochs[0] != 1 or epochs[-1] != current_epoch:
@@ -2720,7 +2917,10 @@ def _validate_version_three_coverage(
         raise EvidenceError("coverage continuity epoch skipped a restart boundary")
     restart_reasons = frozenset(GLOBAL_CONTINUITY_RESTART_ALLOWLIST)
     for index, segment in enumerate(segments):
-        if segment.reason not in restart_reasons:
+        attributed_restart_reason = (
+            segment.reason if diagnostics_version == 3 else segment.blocking_reason
+        )
+        if attributed_restart_reason not in restart_reasons:
             continue
         if index == 0 or (
             segments[index - 1].global_continuity_epoch == segment.global_continuity_epoch
@@ -2742,7 +2942,8 @@ def _validate_version_three_coverage(
             before.global_continuity_epoch != restart["from_epoch"]
             or after.global_continuity_epoch != restart["to_epoch"]
             or after.start_monotonic_ms != boundary["received_monotonic_ms"]
-            or after.reason != restart["reason"]
+            or (after.reason if diagnostics_version == 3 else after.blocking_reason)
+            != restart["reason"]
             or after.affected_scopes != restart_scopes
         ):
             raise EvidenceError("coverage epoch edge does not match its continuity restart edge")

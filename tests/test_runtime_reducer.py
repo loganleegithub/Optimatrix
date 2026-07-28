@@ -319,7 +319,10 @@ def test_pre_ack_frames_do_not_change_truth_and_reconcile_once_after_ack(
             "method": "subscription",
             "params": {
                 "channel": channel,
-                "data": {"instrument_name": "CLOSED", "state": "closed"},
+                "data": {
+                    "instrument_name": "BTC_USDC-08AUG26-100000-C",
+                    "state": "closed",
+                },
             },
         },
         seq=seq,
@@ -336,7 +339,10 @@ def test_pre_ack_frames_do_not_change_truth_and_reconcile_once_after_ack(
 
     assert reducer.channel_state(channel) is ChannelState.ACKNOWLEDGED
     assert reducer.option_catalog.buffered_events == [
-        {"instrument_name": "CLOSED", "state": "closed"}
+        {
+            "instrument_name": "BTC_USDC-08AUG26-100000-C",
+            "state": "closed",
+        }
     ]
     assert reducer.diagnostics.reduced_envelope_count == 5
     assert reducer.diagnostics.send_control_event_count == 2
@@ -1333,7 +1339,9 @@ def test_retired_heartbeat_remains_cross_ledger_conserved_after_reconnect(
                     "params": {
                         "kind": "SESSION_FAILURE",
                         "reason": "TRANSPORT_READ_FAILURE",
-                        "error": "injected",
+                        "close_code": "NOT_AVAILABLE",
+                        "close_disposition": "ABNORMAL",
+                        "exception_class": "OSError",
                     },
                 },
                 session_epoch=1,
@@ -2030,7 +2038,9 @@ def test_application_sequence_gap_fails_closed_for_every_event_kind(
                 "params": {
                     "kind": "SESSION_FAILURE",
                     "reason": "TRANSPORT_READ_FAILURE",
-                    "error": "injected",
+                    "close_code": "NOT_AVAILABLE",
+                    "close_disposition": "ABNORMAL",
+                    "exception_class": "OSError",
                 },
             },
             session_epoch=1,
@@ -2309,7 +2319,7 @@ def test_clean_stop_censors_scheduled_and_sent_without_collapsing_boundaries(
     assert reducer.diagnostics.rpc_censored_count["public/get_time"] == 1
 
 
-def test_invalid_option_lifecycle_enters_catalog_recovery_not_session_failure(
+def test_unsupported_target_option_lifecycle_enters_catalog_recovery_not_session_failure(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
@@ -2322,7 +2332,10 @@ def test_invalid_option_lifecycle_enters_catalog_recovery_not_session_failure(
                 "method": "subscription",
                 "params": {
                     "channel": "instrument.state.option.USDC",
-                    "data": {"instrument_name": "BROKEN"},
+                    "data": {
+                        "instrument_name": "BTC_USDC-08AUG26-100000-C",
+                        "state": "future_protocol_state",
+                    },
                 },
             },
             seq=seq,
@@ -2477,41 +2490,85 @@ def test_same_name_metadata_response_replaces_current_option_object(
     assert reducer.options[name] == reducer.catalog_options[name]
 
 
-def test_valid_irrelevant_usdc_option_metadata_does_not_poison_btc_catalog(
+@pytest.mark.parametrize(
+    ("name", "state"),
+    [
+        ("ETH_USDC-08AUG26-3000-C", "open"),
+        ("XRP_USDC-08AUG26-1-C", "future_protocol_state"),
+    ],
+)
+def test_non_btc_usdc_lifecycle_is_shape_only_and_has_no_business_side_effect(
     tmp_path: Path,
     policy_factory: PolicyFactory,
-    option_payload_factory: OptionPayloadFactory,
+    name: str,
+    state: str,
 ) -> None:
     reducer = make_reducer(tmp_path, policy_factory)
     seq = complete_empty_option_bootstrap(reducer)
-    name = "ETH_USDC-TEST-3000-C"
-    metadata = only(
-        reducer.reduce(
-            envelope(
-                {
-                    "method": "subscription",
-                    "params": {
-                        "channel": "instrument.state.option.USDC",
-                        "data": {"instrument_name": name, "state": "open"},
-                    },
+    catalog_before = (
+        dict(reducer.catalog_options),
+        dict(reducer.options),
+        reducer.option_catalog.complete,
+        reducer.option_catalog.source_complete,
+        dict(reducer._option_lifecycle_revision),
+        dict(reducer._option_lifecycle_state),
+        dict(reducer._option_metadata_pending),
+        dict(reducer._option_lifecycle_unavailable),
+    )
+    coverage_before = (
+        reducer._coverage._current_state,
+        reducer._coverage._current_start_ms,
+        reducer._coverage._current_trigger_cause,
+        reducer._coverage._current_blocking_reason,
+        tuple(reducer._coverage._segments),
+    )
+    witness_before = (
+        reducer._first_joint_witness_ms,
+        reducer._first_joint_witness_identity,
+        dict(reducer._current_epoch_joint_evaluation_counts),
+    )
+    pending_before = dict(reducer.pending_rpcs)
+
+    commands = reducer.reduce(
+        envelope(
+            {
+                "method": "subscription",
+                "params": {
+                    "channel": "instrument.state.option.USDC",
+                    "data": {"instrument_name": name, "state": state},
                 },
-                seq=seq,
-            ),
-            processed_monotonic_ms=1_000 + seq,
+            },
+            seq=seq,
         ),
-        RpcPurpose.OPTION_METADATA,
-    )
-    payload = option_payload_factory(name=name, strike=3_000)
-    payload["base_currency"] = "ETH"
-    payload["price_index"] = "eth_usdc"
-
-    reducer.reduce(
-        response(reducer, metadata, payload, seq=seq + 1),
-        processed_monotonic_ms=1_001 + seq,
+        processed_monotonic_ms=1_000 + seq,
     )
 
-    assert name not in reducer.catalog_options
-    assert reducer.option_catalog.complete
+    assert not any(command.purpose is RpcPurpose.OPTION_METADATA for command in commands)
+    assert dict(reducer.pending_rpcs) == pending_before
+    assert (
+        dict(reducer.catalog_options),
+        dict(reducer.options),
+        reducer.option_catalog.complete,
+        reducer.option_catalog.source_complete,
+        dict(reducer._option_lifecycle_revision),
+        dict(reducer._option_lifecycle_state),
+        dict(reducer._option_metadata_pending),
+        dict(reducer._option_lifecycle_unavailable),
+    ) == catalog_before
+    assert (
+        reducer._coverage._current_state,
+        reducer._coverage._current_start_ms,
+        reducer._coverage._current_trigger_cause,
+        reducer._coverage._current_blocking_reason,
+        tuple(reducer._coverage._segments),
+    ) == coverage_before
+    assert (
+        reducer._first_joint_witness_ms,
+        reducer._first_joint_witness_identity,
+        dict(reducer._current_epoch_joint_evaluation_counts),
+    ) == witness_before
+    assert reducer.diagnostics.source_observed_count["option_lifecycle"] >= 1
+    assert reducer.diagnostics.source_valid_count["option_lifecycle"] >= 1
 
 
 def test_temporary_option_lifecycle_state_retains_member_as_local_unknown(
@@ -3257,7 +3314,9 @@ def test_option_local_final_window_row_bound_fails_closed_as_real_omission(
                 "params": {
                     "kind": "SESSION_FAILURE",
                     "reason": "TRANSPORT_READ_FAILURE",
-                    "error": "reader stopped",
+                    "close_code": "NOT_AVAILABLE",
+                    "close_disposition": "ABNORMAL",
+                    "exception_class": "OSError",
                 },
             },
             "TRANSPORT_READ_FAILURE",

@@ -153,6 +153,12 @@ lifecycle subscription, buffer its events, fetch the bootstrap catalog, then rec
 events in causal order before declaring catalog completeness. Until reconciliation finishes,
 negative aggregate or no-combo claims are `UNKNOWN`.
 
+Every `instrument.state.option.USDC` notification first passes the shared protocol-shape check for
+a non-empty `instrument_name` and `state`. The reducer then proves that the target identity starts
+with `BTC_USDC-` before any catalog, membership, current-result, coverage, witness, or RPC side
+effect. Shape-valid ETH, XRP, and other USDC option lifecycle facts remain counted protocol facts
+only; they never schedule metadata or enter the BTC-USDC business catalog.
+
 Combo lifecycle notifications only mark the current combo-catalog generation dirty. While one
 authoritative `public/get_combos` refresh is pending, any burst is coalesced. Its response commits
 only if its epoch/generation/origin boundary is current; if dirty, the reducer emits exactly one
@@ -354,6 +360,12 @@ MONITOR_BOUNDARY | OUT_OF_MONITOR_SCOPE`. `ADJACENT_BAND_BOUNDARY` and `MONITOR_
 remain unresolved for coverage; a known Policy gap or final window is known absent scope.
 Membership changes split coverage at one causal/monotonic boundary before any subscribe or
 unsubscribe await.
+
+Every accepted market-fact transaction obtains trusted time and seals every index minute ready at
+that same boundary before reading any index tail or classifying current detector truth. This order
+also applies when the trusted-time watermark crosses a minute on a ticker, book, lifecycle,
+catalog, combo, or other non-index fact. A ready-but-unsealed minute is pending work in the same
+transaction, never evidence of `WINDOW_GAP`, and cannot restart global continuity.
 
 For each `public/get_time` request, record local monotonic send/receive instants and the returned
 integer server millisecond. At receipt, its 1 ms quantization and request round trip establish
@@ -917,6 +929,12 @@ boundary's affected subset or from historical counters. `EvidenceWriter` receive
 episode edge or clean-stop projection; write success, file presence, and historical event content
 never decide current scope truth.
 
+An accepted BTC lifecycle boundary freezes its pre-mutation expiry/type scope, applies membership,
+and recomputes only that affected immutable scope plus any independently time-changed scope.
+Unrelated immutable current results are reused rather than rebuilt. A same-boundary expiry burst,
+including the Deribit 08:00 UTC concentration, therefore scales with affected scopes without
+changing unrelated detector, aggregate, coverage, witness, or atomic truth.
+
 The first joint witness in the current `global_continuity_epoch` starts
 `continuous_global_continuity_after_witness_ms`. Current coverage and option-local availability
 continue to be reported independently and do not reset that clock. An epoch restart clears the
@@ -1021,7 +1039,7 @@ are business-state transitions after reduced-state de-duplication, never message
 with a zero or unknown denominator are `null`.
 
 `operational_diagnostics` is a required strict object with
-`operational_diagnostics_schema_version = 3`. It is operational evidence only and has exactly
+`operational_diagnostics_schema_version = 4`. It is operational evidence only and has exactly
 these members:
 
 - `runtime_limits`: the exact nine frozen Policy `runtime_limits`;
@@ -1038,6 +1056,15 @@ these members:
   `post_send_censored_count`, followed by `rate_limit_count`, `latency_observation_count`,
   `latency_ms_sum`, and `latency_ms_max`; unmatched or already terminal wire responses are
   excluded from method outcomes and counted only in top-level `rpc_orphan_late_wire_count`;
+- `transport_terminal_attribution`: sorted unique rows containing exactly `close_code`,
+  `close_disposition`, `exception_class`, and positive `count`. Close code is bounded to
+  `1000 | 1001 | 1002 | 1003 | 1006 | 1007 | 1008 | 1009 | 1010 | 1011 | 1012 | 1013 |
+  1014 | 1015 | NOT_AVAILABLE | OTHER`; disposition is `CLEAN` only for `1000 | 1001` and
+  otherwise `ABNORMAL`; exception class is bounded to
+  `NONE | PublicProtocolIncompatibility | PublicProtocolError | ConnectionClosedOK |
+  ConnectionClosedError | OSError | SSLError | TimeoutError | EOFError |
+  WebSocketException | OTHER`. No exception message, URL, payload, or other unbounded transport
+  detail is persisted. Row counts sum exactly to `ingress.connection_error_event_count`;
 - `channel_by_class`: exactly one sorted row for each
   `PLATFORM | OPTION_LIFECYCLE | COMBO_LIFECYCLE | INDEX | OPTION_TICKER | OPTION_BOOK |
   COMBO_BOOK | HEARTBEAT | CONNECTION_CONTROL | INVALID`, with `received_count`,
@@ -1153,9 +1180,10 @@ public/get_time, public/set_heartbeat, public/subscribe, public/unsubscribe:
 ```
 
 The two channel rates use the run observation interval in seconds; either rate is `null` when that
-denominator is zero or unknown. Ingress, channel classes, send/connection controls, RPC response
-latency, orphan wire responses, heartbeat/public-test facts, and source shapes cross-conserve
-exactly. Atomic evidence is directory-valid only when its code/runtime/Policy/episode identity,
+denominator is zero or unknown. Ingress, channel classes, send/connection controls, transport
+terminal attribution, RPC response latency, orphan wire responses, heartbeat/public-test facts,
+and source shapes cross-conserve exactly. Atomic evidence is directory-valid only when its
+code/runtime/Policy/episode identity,
 target, short leg, detector causal identity, and later quote causal order cross-bind to the owning
 anomaly event and that anomaly's Policy/option-type/activation-band scope has a positive
 `PUBLIC_ATOMIC_QUOTE_AVAILABLE` transition in `counts_by_scope`. Only a
@@ -1208,9 +1236,14 @@ coverage_partition_error_ms =
 
 Any overlap, gap, negative duration, or nonzero error fails validation.
 
-Every version-3 `coverage_segments` row has exactly
-`start_monotonic_ms`, `end_monotonic_ms`, `state`, `reason`, `affected_scopes`, and
-`global_continuity_epoch`. `reason` is the reduced fact that caused entry into that state.
+Every version-4 `coverage_segments` row has exactly
+`start_monotonic_ms`, `end_monotonic_ms`, `state`, `trigger_cause`, `blocking_reason`,
+`affected_scopes`, and `global_continuity_epoch`. `trigger_cause` is the reduced fact whose
+transaction caused entry into that state. `blocking_reason` is the bounded prerequisite that
+actually prevents completeness; it may be a concurrent source-currentness effect and therefore
+need not equal `trigger_cause`. `KNOWN_COMPLETE` requires `blocking_reason = NONE`; every
+incomplete state requires a non-`NONE` blocker, and `NO_APPLICABLE_SCOPE` binds its matching
+blocker.
 `affected_scopes` is a sorted array of 1–256 labels whose bounded labels are exactly `GLOBAL`,
 `OPTION_LOCAL`, `SCOPE:<expiry_timestamp_ms>:<call|put>:<band_id>`, or
 `OPTION:<instrument_name>`. `OPTION_LOCAL` is the aggregate representation when a proper
@@ -1232,12 +1265,11 @@ reported side by side, with no causal or quality inference. A schema or reader c
 explicit task.
 
 The Policy schema remains exactly version 3 and is unchanged by this repair. New summaries use
-`operational_diagnostics_schema_version = 3` and the attributed coverage-segment shape above.
-The strict reader continues to validate version-2 summaries under their original schema so the
-sealed `operational-soak-attempt-001` remains truthful, immutable `NOT_MET` evidence. Version 2 is
-`MIGRATION_REQUIRED` for any new global-continuity/local-availability acceptance and can never be
-relabelled as version 3; there is no migration, replay, or offline recomputation tool. New writers
-emit only version 3. `SHORT_VOL_ANOMALY_EVENT` and `PUBLIC_ATOMIC_QUOTE_EVENT` semantics remain
+`operational_diagnostics_schema_version = 4` and the attributed coverage-segment shape above.
+Explicit read-only validators continue to validate sealed version-3 and version-2 summaries under
+their original exact schemas, so prior attempt directories remain truthful and immutable. Neither
+older version can be relabelled, supplemented, replayed, or recomputed as version 4. New writers
+emit only version 4. `SHORT_VOL_ANOMALY_EVENT` and `PUBLIC_ATOMIC_QUOTE_EVENT` semantics remain
 compatible and unchanged.
 
 Ordinary market facts, `NO_ANOMALY`, theoretical structures, unmatched combos, and full chain

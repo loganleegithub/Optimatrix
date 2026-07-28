@@ -9,6 +9,10 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
+from short_vol_radar.evidence import (
+    TRANSPORT_CLOSE_CODE_ALLOWLIST,
+    TRANSPORT_EXCEPTION_CLASS_ALLOWLIST,
+)
 from websockets.asyncio.client import ClientConnection, connect
 
 PRODUCTION_PUBLIC_ENDPOINT = "wss://www.deribit.com/ws/api/v2"
@@ -249,11 +253,20 @@ class DeribitPublicClient:
                 if isinstance(error, PublicProtocolIncompatibility)
                 else ConnectionControlReason.TRANSPORT_READ_FAILURE
             )
+            close_code = _bounded_close_code(_exception_close_code(exc))
+            exception_class = _bounded_exception_class(exc)
         else:
             error = PublicSessionError("production-public connection closed")
             reason = ConnectionControlReason.REMOTE_CONNECTION_CLOSED
+            close_code = _bounded_close_code(getattr(self._connection, "close_code", None))
+            exception_class = "NONE"
         self._reader_error = error
-        self._enqueue_connection_error(error, reason=reason)
+        self._enqueue_connection_error(
+            error,
+            reason=reason,
+            close_code=close_code,
+            exception_class=exception_class,
+        )
 
     def _enqueue_wire_message(
         self,
@@ -272,6 +285,8 @@ class DeribitPublicClient:
         error: PublicProtocolError,
         *,
         reason: ConnectionControlReason,
+        close_code: str | None = None,
+        exception_class: str | None = None,
     ) -> None:
         kind = (
             "PROTOCOL_INCOMPATIBILITY"
@@ -279,14 +294,25 @@ class DeribitPublicClient:
             else "SESSION_FAILURE"
         )
         try:
+            bounded_close_code = _bounded_close_code(None) if close_code is None else close_code
+            bounded_exception_class = (
+                _bounded_exception_class(error) if exception_class is None else exception_class
+            )
+            if bounded_close_code not in TRANSPORT_CLOSE_CODE_ALLOWLIST:
+                raise ValueError("transport close code is outside the bounded allowlist")
+            if bounded_exception_class not in TRANSPORT_EXCEPTION_CLASS_ALLOWLIST:
+                raise ValueError("transport exception class is outside the bounded allowlist")
+            close_disposition = "CLEAN" if bounded_close_code in {"1000", "1001"} else "ABNORMAL"
             self._enqueue_application_event(
                 {
                     "jsonrpc": "2.0",
                     "method": "connection_error",
                     "params": {
-                        "error": str(error),
                         "kind": kind,
                         "reason": reason.value,
+                        "close_code": bounded_close_code,
+                        "close_disposition": close_disposition,
+                        "exception_class": bounded_exception_class,
                     },
                 },
                 received_monotonic_ms=time.monotonic_ns() // 1_000_000,
@@ -320,6 +346,37 @@ class DeribitPublicClient:
             self.queue_high_water_frames,
             self._inbound.qsize(),
         )
+
+
+def _exception_close_code(exc: Exception) -> object:
+    received = getattr(exc, "rcvd", None)
+    if received is not None:
+        code = getattr(received, "code", None)
+        if code is not None:
+            return code
+    return getattr(exc, "code", None)
+
+
+def _bounded_close_code(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return "NOT_AVAILABLE"
+    serialized = str(value)
+    return serialized if serialized in TRANSPORT_CLOSE_CODE_ALLOWLIST else "OTHER"
+
+
+def _bounded_exception_class(exc: Exception) -> str:
+    name = type(exc).__name__
+    if name in TRANSPORT_EXCEPTION_CLASS_ALLOWLIST:
+        return name
+    if isinstance(exc, PublicProtocolIncompatibility):
+        return "PublicProtocolIncompatibility"
+    if isinstance(exc, PublicProtocolError):
+        return "PublicProtocolError"
+    if isinstance(exc, TimeoutError):
+        return "TimeoutError"
+    if isinstance(exc, OSError):
+        return "OSError"
+    return "OTHER"
 
 
 def _decode_message(raw_message: str | bytes) -> dict[str, object]:

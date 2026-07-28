@@ -397,6 +397,73 @@ def test_index_regression_commits_platform_detector_aggregate_and_coverage_atomi
     assert reducer.atomic_states == {}
 
 
+def test_non_index_boundary_seals_ready_index_minute_before_tail_classification(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(activation_count=1)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    reducer.clock = TrustedClock.from_response(
+        1_019_998,
+        1_000,
+        1_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer.index.start_continuous_coverage(600_000)
+    for causal_seq, timestamp in enumerate(
+        (600_001, 660_000, 720_000, 780_000, 840_000, 900_000, 960_001),
+        start=1,
+    ):
+        reducer.index.accept_tick(
+            source_timestamp_ms=timestamp,
+            price=100,
+            causal_seq=causal_seq,
+        )
+        reducer.index.seal_ready(timestamp)
+    reducer.index.accept_tick(
+        source_timestamp_ms=1_020_000,
+        price=100,
+        causal_seq=8,
+    )
+    instrument = make_option(
+        "BTC_USDC-08AUG26-100000-C",
+        1_020_000 + 60 * 60_000,
+    )
+    configure_full_formula_scope(
+        reducer,
+        instrument,
+        ticker_source_timestamp_ms=1_019_999,
+    )
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 1, 1_000, 1),
+            CausalCause.INDEX_TICK,
+        ),
+        affected_instruments=(instrument.instrument_name,),
+        countable=True,
+    )
+    assert reducer.results[instrument.instrument_name].known_evaluation
+    epoch_before = reducer._global_continuity_epoch
+
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 2, 1_003, 2),
+            CausalCause.OPTION_BOOK_FACT,
+            failure_domain=FailureScope.OPTION,
+            affected_scopes=(f"OPTION:{instrument.instrument_name}",),
+        ),
+        affected_instruments=(instrument.instrument_name,),
+        countable=False,
+    )
+
+    assert reducer.index.sealed[-1].minute_start_ms == 960_000
+    assert reducer.results[instrument.instrument_name].known_evaluation
+    assert reducer.results[instrument.instrument_name].reason != "INDEX_WINDOW_GAP"
+    assert reducer.diagnostics.index_gap_count == 0
+    assert reducer._global_continuity_epoch == epoch_before
+    assert reducer._active_continuity_incident is None
+
+
 def test_bootstrap_warmup_does_not_report_or_recover_a_real_index_gap(
     tmp_path: Path,
     policy_factory: PolicyFactory,
@@ -561,7 +628,8 @@ def test_minute_rollover_preserves_witness_through_recovery_and_summary(
         ],
     }
     assert {segment["global_continuity_epoch"] for segment in summary["coverage_segments"]} == {1}
-    assert all(segment["reason"] for segment in summary["coverage_segments"])
+    assert all(segment["trigger_cause"] for segment in summary["coverage_segments"])
+    assert all(segment["blocking_reason"] for segment in summary["coverage_segments"])
     assert all(segment["affected_scopes"] for segment in summary["coverage_segments"])
 
 
@@ -750,7 +818,7 @@ def test_persistent_index_window_gap_restarts_global_continuity_once(
     )
     assert reducer._global_continuity_epoch == 2
     assert reducer.diagnostics.index_gap_count == 1
-    assert reducer._coverage._current_reason == "INDEX_WINDOW_GAP"
+    assert reducer._coverage._current_blocking_reason == "INDEX_WINDOW_GAP"
     assert reducer._coverage._current_affected_scopes == (
         f"SCOPE:{instrument.expiration_timestamp_ms}:call:{reducer.policy.tte_bands[0].band_id}",
     )
@@ -1569,7 +1637,7 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
     stale_coverage = next(
         segment
         for segment in summary["coverage_segments"]
-        if segment["reason"] == "TICKER_SOURCE_STALE"
+        if segment["blocking_reason"] == "TICKER_SOURCE_STALE"
     )
     assert stale_coverage["state"] == "UNKNOWN"
     assert stale_coverage["affected_scopes"] == [f"OPTION:{name}"]
@@ -2448,9 +2516,9 @@ def test_one_option_subscribe_failure_is_local_to_that_instrument(
     first_episode = activate_directly(reducer, first)
     second_episode = activate_directly(reducer, second)
     assert reducer.clock is not None
-    reducer._last_time_currentness_token = reducer._time_currentness_token(
-        reducer.clock.interval_at(1_001)
-    )
+    trusted = reducer.clock.interval_at(1_001)
+    reducer._last_time_currentness_by_instrument = reducer._time_currentness_by_instrument(trusted)
+    reducer._last_time_currentness_token = reducer._time_currentness_token(trusted)
     reducer._plan_channel_change(
         ("book.FIRST.100ms",),
         subscribe=True,
@@ -2919,6 +2987,12 @@ def test_market_boundary_settles_ttl_crossing_in_an_unrelated_full_scope(
 
     assert reducer._settled_ticker_currentness[second.instrument_name].state.value == "SOURCE_STALE"
     assert reducer.results[second.instrument_name].reason == "TICKER_SOURCE_STALE"
+    assert reducer._coverage._current_trigger_cause == "OPTION_BOOK_CHANGED"
+    assert reducer._coverage._current_blocking_reason == "TICKER_SOURCE_STALE"
+    assert reducer._coverage._current_affected_scopes == (
+        "OPTION:FIRST",
+        "OPTION:SECOND",
+    )
 
 
 def test_scope_snapshot_contains_only_every_current_member_of_one_scope(
@@ -3008,8 +3082,8 @@ def test_option_lifecycle_unknown_recomputes_aggregate_from_one_full_scope_snaps
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_flat_available_index(reducer)
     expiry = 1_000_000 + 60 * 60_000
-    first = make_option("FIRST", expiry)
-    second = make_option("SECOND", expiry)
+    first = make_option("BTC_USDC-08AUG26-100000-C", expiry)
+    second = make_option("BTC_USDC-08AUG26-101000-C", expiry)
     configure_full_formula_scope(reducer, first)
     reducer.options[second.instrument_name] = second
     reducer.catalog_options[second.instrument_name] = second
@@ -3049,12 +3123,167 @@ def test_option_lifecycle_unknown_recomputes_aggregate_from_one_full_scope_snaps
 
     assert len(captured) == 1
     assert tuple(item.instrument.instrument_name for item in captured[0].current) == (
-        "FIRST",
-        "SECOND",
+        "BTC_USDC-08AUG26-100000-C",
+        "BTC_USDC-08AUG26-101000-C",
     )
     assert reducer.results[first.instrument_name].reason == "OPTION_LIFECYCLE_HALTED"
     aggregate = next(iter(reducer.aggregate_results.values()))
     assert aggregate.coverage is DetectorCoverage.UNKNOWN
+
+
+def test_final_btc_lifecycle_reuses_unaffected_immutable_current_results(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    expiry = 1_000_000 + 60 * 60_000
+    target = make_option("BTC_USDC-08AUG26-100000-C", expiry)
+    peer = make_option("BTC_USDC-08AUG26-101000-C", expiry)
+    other_expiry = make_option("BTC_USDC-09AUG26-100000-C", expiry + 60 * 60_000)
+    other_type = OptionInstrument(
+        "BTC_USDC-08AUG26-100000-P",
+        expiry,
+        Decimal("100"),
+        OptionType.PUT,
+        target.amount,
+    )
+    instruments = (target, peer, other_expiry, other_type)
+    reducer.options = {item.instrument_name: item for item in instruments}
+    reducer.catalog_options = dict(reducer.options)
+    for item in instruments:
+        reducer.trackers[item.instrument_name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=reducer.policy.identity,
+            instrument_name=item.instrument_name,
+        )
+        reducer.option_books[item.instrument_name] = make_book(item.instrument_name, None)
+        reducer.tickers[item.instrument_name] = TickerState(
+            Decimal(100),
+            "index_price",
+            1_000_000,
+        )
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 1, 1_001, 1),
+            CausalCause.TIME_BOUNDARY,
+        ),
+        affected_instruments=tuple(reducer.options),
+        countable=False,
+    )
+    unaffected_before = {
+        item.instrument_name: reducer.results[item.instrument_name]
+        for item in (other_expiry, other_type)
+    }
+    evaluated_names: list[str] = []
+    calculate = runtime_module.calculate_current_evaluation
+
+    def capture_calculation(**kwargs: object) -> CurrentEvaluation:
+        instrument = cast(OptionInstrument, kwargs["instrument"])
+        evaluated_names.append(instrument.instrument_name)
+        return calculate(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runtime_module, "calculate_current_evaluation", capture_calculation)
+
+    reducer._apply_option_lifecycle(
+        {"instrument_name": target.instrument_name, "state": "inactive"},
+        FactBoundary(1, 2, 1_002, 2),
+    )
+
+    assert set(evaluated_names) == {peer.instrument_name}
+    assert target.instrument_name not in reducer.options
+    for name, result in unaffected_before.items():
+        assert reducer.results[name] is result
+
+
+def test_deribit_0800_expiry_burst_never_recomputes_other_scopes(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    expiry_0800_ms = 8 * 60 * 60_000
+    expiring_calls = tuple(
+        make_option(
+            f"BTC_USDC-08AUG26-{100_000 + index}-C",
+            expiry_0800_ms,
+        )
+        for index in range(32)
+    )
+    protected_puts = tuple(
+        OptionInstrument(
+            f"BTC_USDC-08AUG26-{100_000 + index}-P",
+            expiry_0800_ms,
+            Decimal(100_000 + index),
+            OptionType.PUT,
+            expiring_calls[0].amount,
+        )
+        for index in range(16)
+    )
+    protected_next_expiry = tuple(
+        make_option(
+            f"BTC_USDC-09AUG26-{100_000 + index}-C",
+            expiry_0800_ms + 60 * 60_000,
+        )
+        for index in range(16)
+    )
+    instruments = (*expiring_calls, *protected_puts, *protected_next_expiry)
+    reducer.options = {item.instrument_name: item for item in instruments}
+    reducer.catalog_options = dict(reducer.options)
+    for item in instruments:
+        reducer.trackers[item.instrument_name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=reducer.policy.identity,
+            instrument_name=item.instrument_name,
+        )
+        reducer.option_books[item.instrument_name] = make_book(item.instrument_name, None)
+        reducer.tickers[item.instrument_name] = TickerState(
+            Decimal(100),
+            "index_price",
+            1_000_000,
+        )
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 1, 1_001, 1),
+            CausalCause.TIME_BOUNDARY,
+        ),
+        affected_instruments=tuple(reducer.options),
+        countable=False,
+    )
+    protected = (*protected_puts, *protected_next_expiry)
+    protected_results = {
+        item.instrument_name: reducer.results[item.instrument_name] for item in protected
+    }
+    evaluated_names: list[str] = []
+    calculate = runtime_module.calculate_current_evaluation
+
+    def capture_calculation(**kwargs: object) -> CurrentEvaluation:
+        instrument = cast(OptionInstrument, kwargs["instrument"])
+        evaluated_names.append(instrument.instrument_name)
+        return calculate(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runtime_module, "calculate_current_evaluation", capture_calculation)
+
+    for causal_seq, instrument in enumerate(expiring_calls, start=2):
+        reducer._apply_option_lifecycle(
+            {"instrument_name": instrument.instrument_name, "state": "inactive"},
+            FactBoundary(1, causal_seq, 1_000 + causal_seq, causal_seq),
+        )
+
+    protected_names = set(protected_results)
+    assert not protected_names.intersection(evaluated_names)
+    assert not set(expiring.instrument_name for expiring in expiring_calls).intersection(
+        reducer.options
+    )
+    for name, result in protected_results.items():
+        assert reducer.results[name] is result
+    assert not any(
+        key[:2] == (expiry_0800_ms, OptionType.CALL) for key in reducer.aggregate_results
+    )
 
 
 def test_late_ticker_after_ttl_settles_the_accepted_ticker_to_unknown(
