@@ -219,7 +219,6 @@ class CoverageBlockingReason(StrEnum):
     OPTION_BOOK_UNAVAILABLE = "OPTION_BOOK_UNAVAILABLE"
     CURRENT_SCOPE_INCOMPLETE = "CURRENT_SCOPE_INCOMPLETE"
     ACTIVE_POSITIVE_SCOPE_INCOMPLETE = "ACTIVE_POSITIVE_SCOPE_INCOMPLETE"
-    QUEUE_LAG_DEADLINE = "QUEUE_LAG_DEADLINE"
     QUEUE_LAG_CURRENTNESS = "QUEUE_LAG_CURRENTNESS"
 
 
@@ -309,7 +308,6 @@ GLOBAL_CONTINUITY_RESTART_ALLOWLIST: Mapping[
     CausalCause.SESSION_RPC_FAILURE.value: ("SESSION", "GLOBAL"),
     CausalCause.RUNTIME_SESSION_FAILURE.value: ("SESSION", "GLOBAL"),
     CausalCause.PROTOCOL_INCOMPATIBILITY.value: ("SESSION", "GLOBAL"),
-    CausalCause.QUEUE_LAG_DEADLINE.value: ("SESSION", "GLOBAL"),
     CausalCause.INGRESS_GAP_OR_DUPLICATE.value: ("SESSION", "GLOBAL"),
     CausalCause.QUEUE_OVERFLOW.value: ("SESSION", "GLOBAL"),
     CausalCause.PLATFORM_MAINTENANCE.value: ("SESSION", "GLOBAL"),
@@ -319,6 +317,13 @@ GLOBAL_CONTINUITY_RESTART_ALLOWLIST: Mapping[
     CausalCause.INDEX_CONTINUITY_GAP.value: ("CLOCK_INDEX", "GLOBAL"),
     CausalCause.INDEX_SOURCE_STALE.value: ("CLOCK_INDEX", "GLOBAL"),
     CausalCause.INDEX_WINDOW_GAP.value: ("CLOCK_INDEX", "SCOPE"),
+}
+SEALED_GLOBAL_CONTINUITY_RESTART_ALLOWLIST: Mapping[
+    str,
+    tuple[str, str],
+] = {
+    **GLOBAL_CONTINUITY_RESTART_ALLOWLIST,
+    CausalCause.QUEUE_LAG_DEADLINE.value: ("SESSION", "GLOBAL"),
 }
 OPTION_LOCAL_REASONS = frozenset(
     {
@@ -1484,6 +1489,7 @@ def _validate_operational_diagnostics(
             diagnostics["global_continuity"],
             runtime_started_monotonic_ms=runtime_started_monotonic_ms,
             clean_stop_monotonic_ms=clean_stop_monotonic_ms,
+            diagnostics_version=version,
         )
         ticker_application = _validate_ticker_application(diagnostics["ticker_application"])
         ticker_currentness = _validate_ticker_currentness(diagnostics["ticker_currentness"])
@@ -2289,6 +2295,7 @@ def _validate_global_continuity(
     *,
     runtime_started_monotonic_ms: int,
     clean_stop_monotonic_ms: int,
+    diagnostics_version: int,
 ) -> tuple[
     int,
     tuple[Mapping[str, object], ...],
@@ -2360,7 +2367,12 @@ def _validate_global_continuity(
         if from_epoch != expected_id or to_epoch != expected_id + 1:
             raise EvidenceError("global continuity restart edge does not advance exactly one epoch")
         reason = _required_string(edge, "reason")
-        allowed = GLOBAL_CONTINUITY_RESTART_ALLOWLIST.get(reason)
+        restart_allowlist = (
+            SEALED_GLOBAL_CONTINUITY_RESTART_ALLOWLIST
+            if diagnostics_version == 3
+            else GLOBAL_CONTINUITY_RESTART_ALLOWLIST
+        )
+        allowed = restart_allowlist.get(reason)
         if allowed is None:
             raise EvidenceError(
                 "global continuity restart cause-domain-scope tuple is outside the allowlist"
@@ -2915,7 +2927,11 @@ def _validate_version_three_coverage(
         raise EvidenceError("coverage continuity epoch moved backward")
     if any(after - before > 1 for before, after in pairwise(epochs)):
         raise EvidenceError("coverage continuity epoch skipped a restart boundary")
-    restart_reasons = frozenset(GLOBAL_CONTINUITY_RESTART_ALLOWLIST)
+    restart_reasons = frozenset(
+        SEALED_GLOBAL_CONTINUITY_RESTART_ALLOWLIST
+        if diagnostics_version == 3
+        else GLOBAL_CONTINUITY_RESTART_ALLOWLIST
+    )
     for index, segment in enumerate(segments):
         attributed_restart_reason = (
             segment.reason if diagnostics_version == 3 else segment.blocking_reason

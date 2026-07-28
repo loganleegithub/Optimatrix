@@ -678,6 +678,10 @@ class RadarReducer:
         self._next_option_catalog_recovery_ms: int | None = None
         self._next_combo_catalog_recovery_ms: int | None = None
         self._fact_transaction_active = False
+        self._fact_transaction_revision = 0
+        self._queue_lag_currentness_active = False
+        self._queue_lag_transition_pending = False
+        self._queue_lag_transition_application: tuple[int, int] | None = None
         self._clean_stop_barrier_open = False
 
     def begin_session(
@@ -775,6 +779,9 @@ class RadarReducer:
         )
         self._next_option_catalog_recovery_ms = None
         self._next_combo_catalog_recovery_ms = None
+        self._queue_lag_currentness_active = False
+        self._queue_lag_transition_pending = False
+        self._queue_lag_transition_application = None
         self._commands = []
         boundary = FactBoundary(session_epoch, 0, monotonic_ms, self._causal_seq)
         self._schedule(
@@ -849,6 +856,7 @@ class RadarReducer:
                 self.diagnostics.late_response_count += 1
                 self.diagnostics.rpc_orphan_late_wire_count += 1
             return ()
+        self._queue_lag_transition_application = None
         lag_ms = processed_monotonic_ms - envelope.received_monotonic_ms
         if lag_ms < 0:
             raise PublicProtocolError("inbound frame receive time is in the future")
@@ -856,12 +864,16 @@ class RadarReducer:
             self.diagnostics.max_receive_to_reduce_lag_ms,
             lag_ms,
         )
-        if lag_ms > self.policy.runtime_limits.notification_queue_lag_deadline_ms:
-            self._retire_current_epoch(
-                "QUEUE_LAG_DEADLINE",
-                monotonic_ms=envelope.received_monotonic_ms,
+        lagged = lag_ms > self.policy.runtime_limits.notification_queue_lag_deadline_ms
+        if lagged != self._queue_lag_currentness_active:
+            self._queue_lag_currentness_active = lagged
+            self._queue_lag_transition_pending = True
+            self._queue_lag_transition_application = (
+                envelope.session_epoch,
+                envelope.ingress_seq,
             )
-            raise PublicSessionError("inbound queue lag deadline exceeded")
+        transaction_revision = self._fact_transaction_revision
+        causal_seq = self._causal_seq
         if envelope.control_event is not None:
             self._last_boundary_monotonic_ms = max(
                 self._last_boundary_monotonic_ms,
@@ -870,6 +882,11 @@ class RadarReducer:
             self._apply_send_control(
                 envelope.control_event,
                 boundary=self._current_boundary(envelope),
+            )
+            self._settle_pending_queue_lag_transition(
+                envelope,
+                transaction_revision=transaction_revision,
+                causal_seq=causal_seq,
             )
             return self._take_commands()
         if envelope.get("method") != "connection_error":
@@ -981,6 +998,11 @@ class RadarReducer:
                 raise PublicSessionError("production-public connection closed")
             else:
                 raise PublicProtocolError("unexpected inbound JSON-RPC frame")
+        self._settle_pending_queue_lag_transition(
+            envelope,
+            transaction_revision=transaction_revision,
+            causal_seq=causal_seq,
+        )
         return self._take_commands()
 
     def channel_state(self, channel: str) -> ChannelState:
@@ -1305,6 +1327,44 @@ class RadarReducer:
             self._last_boundary_monotonic_ms,
             self._causal_seq,
         )
+
+    def _settle_pending_queue_lag_transition(
+        self,
+        envelope: InboundEnvelope,
+        *,
+        transaction_revision: int,
+        causal_seq: int,
+    ) -> None:
+        if not self._queue_lag_transition_pending:
+            self._queue_lag_transition_application = None
+            return
+        if self._fact_transaction_revision != transaction_revision:
+            self._queue_lag_transition_pending = False
+            self._queue_lag_transition_application = None
+            return
+        if self._causal_seq == causal_seq:
+            self._causal_seq += 1
+        boundary = FactBoundary(
+            envelope.session_epoch,
+            envelope.ingress_seq,
+            self._last_boundary_monotonic_ms,
+            self._causal_seq,
+        )
+        try:
+            self._settle_fact(
+                commit=CausalCommit(
+                    boundary=boundary,
+                    cause=CausalCause.QUEUE_LAG_DEADLINE,
+                    failure_domain=FailureScope.SESSION,
+                    affected_scopes=("GLOBAL",),
+                ),
+                affected_instruments=tuple(self.options),
+                countable=False,
+                acceptance_eligible=False,
+            )
+        finally:
+            self._queue_lag_transition_pending = False
+            self._queue_lag_transition_application = None
 
     def _apply_response(
         self,
@@ -3932,15 +3992,25 @@ class RadarReducer:
     ) -> None:
         if self._fact_transaction_active:
             raise RuntimeError("fact lifecycle transaction is not reentrant")
+        queue_lag_transition_boundary = self._queue_lag_transition_application == (
+            commit.boundary.session_epoch,
+            commit.boundary.ingress_seq,
+        )
+        queue_lag_currentness_active = self._queue_lag_currentness_active
+        queue_lag_non_countable = queue_lag_currentness_active or queue_lag_transition_boundary
         self._fact_transaction_active = True
         try:
             self._settle_fact_transaction(
                 commit=commit,
                 affected_instruments=affected_instruments,
-                countable=countable,
-                acceptance_eligible=acceptance_eligible,
+                countable=(countable and not queue_lag_non_countable),
+                acceptance_eligible=(acceptance_eligible and not queue_lag_non_countable),
                 affected_scope_keys=affected_scope_keys,
+                force_full_currentness=queue_lag_non_countable,
             )
+            self._fact_transaction_revision += 1
+            if queue_lag_transition_boundary:
+                self._queue_lag_transition_pending = False
         finally:
             self._fact_transaction_active = False
 
@@ -3952,6 +4022,7 @@ class RadarReducer:
         countable: bool,
         acceptance_eligible: bool,
         affected_scope_keys: tuple[tuple[int, OptionType], ...],
+        force_full_currentness: bool,
     ) -> None:
         boundary = commit.boundary
         newly_stale = self.settle_source_currentness(boundary)
@@ -3967,14 +4038,31 @@ class RadarReducer:
             if newly_stale
             else None
         )
+        queue_lag_effect = (
+            CausalEffect(
+                cause=CausalCause.QUEUE_LAG_DEADLINE,
+                failure_domain=FailureScope.SESSION,
+                affected_scopes=("GLOBAL",),
+            )
+            if self._queue_lag_currentness_active
+            else None
+        )
+        concurrent_effects = tuple(
+            effect
+            for effect in (
+                source_currentness_effect,
+                queue_lag_effect,
+            )
+            if effect is not None
+        )
         if self.clock is None:
             transaction_commit = self._freeze_fact_commit(
                 commit,
-                ((source_currentness_effect,) if source_currentness_effect is not None else ()),
+                concurrent_effects,
             )
             self._update_coverage(
                 commit=transaction_commit,
-                causal_effect=source_currentness_effect,
+                causal_effect=queue_lag_effect or source_currentness_effect,
             )
             return
         try:
@@ -3982,7 +4070,7 @@ class RadarReducer:
         except ContinuityGap:
             transaction_commit = self._freeze_fact_commit(
                 commit,
-                ((source_currentness_effect,) if source_currentness_effect is not None else ()),
+                concurrent_effects,
             )
             self._invalidate_clock_index(
                 boundary,
@@ -4015,6 +4103,14 @@ class RadarReducer:
             )
             for name in (*directly_affected_names, *time_changed_names)
         )
+        if force_full_currentness:
+            frozen_scope_keys.update(
+                (
+                    instrument.expiration_timestamp_ms,
+                    instrument.option_type,
+                )
+                for instrument in self.options.values()
+            )
         names = tuple(
             sorted(
                 name
@@ -4111,14 +4207,7 @@ class RadarReducer:
             )
             transaction_commit = self._freeze_fact_commit(
                 commit,
-                tuple(
-                    effect
-                    for effect in (
-                        source_currentness_effect,
-                        global_gap_effect,
-                    )
-                    if effect is not None
-                ),
+                (*concurrent_effects, global_gap_effect),
             )
             if not self._index_gap_active:
                 self.diagnostics.index_gap_count += 1
@@ -4139,7 +4228,7 @@ class RadarReducer:
         else:
             transaction_commit = self._freeze_fact_commit(
                 commit,
-                ((source_currentness_effect,) if source_currentness_effect is not None else ()),
+                concurrent_effects,
             )
             if set(names) == set(self.options):
                 self._index_gap_active = False
@@ -4190,7 +4279,16 @@ class RadarReducer:
                 else None
             )
             band_id = applicability.band.band_id if applicability.band is not None else None
-            if name in self._option_lifecycle_unavailable:
+            if self._queue_lag_currentness_active:
+                current = CurrentEvaluation(
+                    disposition=CurrentDisposition.UNKNOWN,
+                    reason=CoverageBlockingReason.QUEUE_LAG_CURRENTNESS.value,
+                    known_evaluation=False,
+                    full_formula_evaluation=False,
+                    band_id=band_id,
+                    continuity_gap=True,
+                )
+            elif name in self._option_lifecycle_unavailable:
                 current = CurrentEvaluation(
                     disposition=CurrentDisposition.UNKNOWN,
                     reason=self._option_lifecycle_unavailable[name],
@@ -4514,7 +4612,7 @@ class RadarReducer:
         self._sync_combo_subscriptions(boundary)
         self._update_coverage(
             commit=transaction_commit,
-            causal_effect=global_gap_effect or source_currentness_effect,
+            causal_effect=global_gap_effect or queue_lag_effect or source_currentness_effect,
         )
         self._last_time_currentness_by_instrument = current_time_tokens
         self._last_time_currentness_token = tuple(current_time_tokens.items())
@@ -5027,6 +5125,15 @@ class RadarReducer:
     ) -> None:
         monotonic_ms = commit.boundary.received_monotonic_ms
         self._update_band_suspension(monotonic_ms)
+        if self._queue_lag_currentness_active:
+            self.aggregate_results.clear()
+            self._transition_coverage(
+                CoverageState.UNKNOWN,
+                commit=commit,
+                causal_effect=causal_effect,
+                blocking_reason=CoverageBlockingReason.QUEUE_LAG_CURRENTNESS.value,
+            )
+            return
         if self.clock is None:
             self.aggregate_results.clear()
             positive = any(
@@ -5159,6 +5266,8 @@ class RadarReducer:
 
     @staticmethod
     def _bounded_coverage_blocking_reason(reason: str) -> str:
+        if reason == CausalCause.QUEUE_LAG_DEADLINE.value:
+            return CoverageBlockingReason.QUEUE_LAG_CURRENTNESS.value
         try:
             return CoverageBlockingReason(reason).value
         except ValueError:
@@ -5222,6 +5331,9 @@ class RadarReducer:
             if monotonic_ms is None
             else max(self._last_boundary_monotonic_ms, monotonic_ms)
         )
+        self._queue_lag_currentness_active = False
+        self._queue_lag_transition_pending = False
+        self._queue_lag_transition_application = None
         self._last_boundary_monotonic_ms = retired_ms
         self.diagnostics.session_gap_count += 1
         boundary = FactBoundary(
@@ -5540,6 +5652,8 @@ class RadarReducer:
             cause = CausalCause(reason)
         except ValueError:
             cause = CausalCause.RUNTIME_SESSION_FAILURE
+        if cause is CausalCause.QUEUE_LAG_DEADLINE:
+            raise ValueError("ordered queue lag is a currentness incident, not a reconnect cause")
         session_causes = {
             CausalCause.SESSION_GAP,
             CausalCause.REMOTE_CONNECTION_CLOSED,
@@ -5548,7 +5662,6 @@ class RadarReducer:
             CausalCause.SESSION_RPC_FAILURE,
             CausalCause.RUNTIME_SESSION_FAILURE,
             CausalCause.PROTOCOL_INCOMPATIBILITY,
-            CausalCause.QUEUE_LAG_DEADLINE,
             CausalCause.INGRESS_GAP_OR_DUPLICATE,
             CausalCause.QUEUE_OVERFLOW,
             CausalCause.PLATFORM_MAINTENANCE,

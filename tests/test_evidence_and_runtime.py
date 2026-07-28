@@ -1158,6 +1158,31 @@ def test_explicit_sealed_operational_summary_path_does_not_weaken_current_schema
         validate_run_summary(summary)
 
 
+def test_sealed_operational_schema_retains_historical_queue_lag_restart_semantics() -> None:
+    summary = epoch_two_summary(recovery_ms=12)
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["operational_diagnostics_schema_version"] = 3
+    diagnostics.pop("transport_terminal_attribution")
+    continuity = diagnostics["global_continuity"]
+    assert isinstance(continuity, dict)
+    continuity["restart_count_by_reason"] = {"QUEUE_LAG_DEADLINE": 1}
+    restart = continuity["restart_edges"][0]
+    assert isinstance(restart, dict)
+    restart["reason"] = "QUEUE_LAG_DEADLINE"
+    restart["failure_domain"] = "SESSION"
+    coverage_segments = summary["coverage_segments"]
+    assert isinstance(coverage_segments, list)
+    blocked = coverage_segments[1]
+    assert isinstance(blocked, dict)
+    blocked["trigger_cause"] = "QUEUE_LAG_DEADLINE"
+    for segment in coverage_segments:
+        segment["reason"] = segment.pop("trigger_cause")
+        segment.pop("blocking_reason")
+
+    validate_sealed_operational_run_summary(summary)
+
+
 @pytest.mark.parametrize(
     ("state", "blocking_reason"),
     (
@@ -2892,6 +2917,28 @@ def test_schema_three_accepts_exact_transport_session_restart_cause() -> None:
     restart["failure_domain"] = "SESSION"
 
     validate_run_summary(summary)
+
+
+def test_current_schema_rejects_queue_lag_as_global_continuity_restart() -> None:
+    summary = epoch_two_summary(recovery_ms=12)
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    blocked = segments[1]
+    assert isinstance(blocked, dict)
+    blocked["trigger_cause"] = "QUEUE_LAG_DEADLINE"
+    blocked["blocking_reason"] = "QUEUE_LAG_DEADLINE"
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    continuity = diagnostics["global_continuity"]
+    assert isinstance(continuity, dict)
+    continuity["restart_count_by_reason"] = {"QUEUE_LAG_DEADLINE": 1}
+    restart = continuity["restart_edges"][0]
+    assert isinstance(restart, dict)
+    restart["reason"] = "QUEUE_LAG_DEADLINE"
+    restart["failure_domain"] = "SESSION"
+
+    with pytest.raises(EvidenceError, match="allowlist"):
+        validate_run_summary(summary)
 
 
 def test_schema_three_restart_cause_cannot_appear_without_an_epoch_edge() -> None:

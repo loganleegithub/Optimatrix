@@ -3541,6 +3541,87 @@ def test_fact_transaction_preserves_trigger_and_concurrent_source_stale_attribut
     assert reducer.results[second.instrument_name].reason == "TICKER_SOURCE_STALE"
 
 
+def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_restart(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    instrument = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    establish_joint_witness(reducer, instrument)
+    result = reducer.results[instrument.instrument_name]
+    counter = reducer._scope_counter(
+        instrument.option_type,
+        result.band_id or "",
+    )
+    count_before = counter.known_per_instrument_detector_evaluation_count
+    witness_before = reducer._first_joint_witness_ms
+    acknowledge_channel(reducer, book_channel(instrument.instrument_name))
+    reducer._update_subscription_peaks()
+
+    delayed = subscription_frame(
+        book_channel(instrument.instrument_name),
+        {
+            "type": "change",
+            "timestamp": 2,
+            "instrument_name": instrument.instrument_name,
+            "change_id": 2,
+            "prev_change_id": 1,
+            "bids": [],
+            "asks": [],
+        },
+        ingress_seq=1,
+        received_monotonic_ms=1_100,
+    )
+    reducer.reduce(delayed, processed_monotonic_ms=2_101)
+
+    current = reducer.results[instrument.instrument_name]
+    assert not current.known_evaluation
+    assert current.reason == "QUEUE_LAG_CURRENTNESS"
+    assert not current.observation_eligible
+    assert counter.known_per_instrument_detector_evaluation_count == count_before
+    assert reducer._coverage._current_trigger_cause == "OPTION_BOOK_FACT"
+    assert reducer._coverage._current_blocking_reason == "QUEUE_LAG_CURRENTNESS"
+    assert reducer._coverage._current_affected_scopes == ("GLOBAL",)
+    assert reducer._global_continuity_epoch == 1
+    assert reducer._first_joint_witness_ms == witness_before
+    assert reducer.diagnostics.session_gap_count == 0
+
+    catch_up = InboundEnvelope(
+        {
+            "jsonrpc": "2.0",
+            "method": "heartbeat",
+            "params": {"type": "heartbeat"},
+        },
+        session_epoch=1,
+        ingress_seq=2,
+        received_monotonic_ms=2_102,
+    )
+    reducer.reduce(catch_up, processed_monotonic_ms=2_102)
+
+    recovered = reducer.results[instrument.instrument_name]
+    assert recovered.known_evaluation
+    assert not recovered.observation_eligible
+    assert counter.known_per_instrument_detector_evaluation_count == count_before
+    assert reducer._coverage._current_blocking_reason == "NONE"
+    assert reducer._global_continuity_epoch == 1
+    assert reducer._first_joint_witness_ms == witness_before
+
+    summary = json.loads(reducer.clean_stop(2_200).read_text())
+    validate_run_summary(summary)
+    incident = next(
+        segment
+        for segment in summary["coverage_segments"]
+        if segment["blocking_reason"] == "QUEUE_LAG_CURRENTNESS"
+    )
+    assert incident["start_monotonic_ms"] == 1_100
+    assert incident["end_monotonic_ms"] == 2_102
+    assert incident["global_continuity_epoch"] == 1
+
+
 def test_clock_gap_is_a_concurrent_effect_of_original_market_fact_commit(
     tmp_path: Path,
     policy_factory: PolicyFactory,

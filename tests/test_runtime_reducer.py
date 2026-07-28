@@ -27,7 +27,7 @@ from radar_runtime.runtime import (
     RpcPurpose,
 )
 from short_vol_radar.detector import DetectorState, EpisodeTracker
-from short_vol_radar.evidence import EvidenceWriter, validate_run_summary
+from short_vol_radar.evidence import CoverageState, EvidenceWriter, validate_run_summary
 from short_vol_radar.policy import load_policy_bytes
 
 _next_application_seq_by_epoch: dict[int, int] = {}
@@ -1477,7 +1477,7 @@ def test_heartbeat_control_is_live_while_channel_rpc_is_pending(
 
 
 @pytest.mark.parametrize("during_bootstrap", [True, False])
-def test_one_receive_lag_gate_retires_bootstrap_and_normal_frames(
+def test_ordered_receive_lag_enters_currentness_without_retiring_session(
     tmp_path: Path,
     policy_factory: PolicyFactory,
     during_bootstrap: bool,
@@ -1501,15 +1501,47 @@ def test_one_receive_lag_gate_retires_bootstrap_and_normal_frames(
             received_ms=1_000 + seq + 1,
         )
 
-    with pytest.raises(PublicSessionError, match="queue lag"):
-        reducer.reduce(
-            delayed,
-            processed_monotonic_ms=delayed.received_monotonic_ms + 1_001,
-        )
+    reducer.reduce(
+        delayed,
+        processed_monotonic_ms=delayed.received_monotonic_ms + 1_001,
+    )
 
     assert reducer.diagnostics.max_receive_to_reduce_lag_ms == 1_001
-    assert reducer.diagnostics.session_gap_count == 1
-    assert reducer.diagnostics.global_continuity_restart_count == {"QUEUE_LAG_DEADLINE": 1}
+    assert reducer.diagnostics.session_gap_count == 0
+    assert reducer.diagnostics.global_continuity_restart_count == {}
+    assert reducer._global_continuity_epoch == 1
+    assert reducer._session_epoch not in reducer._retired_epochs
+    assert reducer._queue_lag_currentness_active
+    assert reducer._coverage._current_state is CoverageState.UNKNOWN
+    assert reducer._coverage._current_blocking_reason == "QUEUE_LAG_CURRENTNESS"
+
+    recovered = envelope(
+        {"method": "heartbeat", "params": {"type": "heartbeat"}},
+        seq=99,
+        received_ms=delayed.received_monotonic_ms + 1_002,
+    )
+    reducer.reduce(
+        recovered,
+        processed_monotonic_ms=recovered.received_monotonic_ms,
+    )
+
+    assert not reducer._queue_lag_currentness_active
+    assert reducer._coverage._current_blocking_reason != "QUEUE_LAG_CURRENTNESS"
+    assert reducer.diagnostics.session_gap_count == 0
+
+
+def test_queue_lag_is_not_a_reconnect_cause(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+
+    with pytest.raises(ValueError, match="currentness"):
+        reducer.prepare_reconnect("QUEUE_LAG_DEADLINE")
+
+    assert reducer.diagnostics.session_gap_count == 0
+    assert reducer._session_epoch not in reducer._retired_epochs
 
 
 def test_negative_platform_guard_cannot_be_overwritten_in_same_epoch(
