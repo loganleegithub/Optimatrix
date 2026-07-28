@@ -811,7 +811,7 @@ capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`.
    evaluates only those members, and reuses still-current immutable results for every unaffected
    member. A Deribit 08:00 expiry burst must stay bounded by affected instruments/scopes rather
    than trigger full-universe recomputation.
-4. Version-3 transport evidence adds only bounded allowlisted remote-close code, clean/abnormal
+4. Version-4 transport evidence adds only bounded allowlisted remote-close code, clean/abnormal
    close classification, and exception class. Coverage records both the boundary's
    `trigger_cause` and the actual current-state `blocking_reason`; neither field may contain raw
    exception text, host details, or another unbounded value.
@@ -839,6 +839,126 @@ for every sealed directory. `git diff --check`, authority, Policy, artifact, and
 must remain clean. This subgate authorizes no queue-lag semantic change until the separate owning
 contract revision is committed; it authorizes no live command, Policy mutation, push, merge,
 stage advancement, private API, order, or trade.
+
+#### Offline acceptance result
+
+The bounded repair passed its focused reducer/index/lifecycle/transport/evidence red-to-green
+counterexamples and the complete repository check (`404 passed`). Current writer-generated
+anomaly plus later atomic directories pass strict version-4 validation. Read-only validation of
+the sealed historical directories passed under their exact owning entry points:
+
+| Directory | Exact validator | Objects | `radar-run-summary.json` SHA-256 | Path-bound ordered per-file manifest SHA-256 |
+|---|---:|---:|---|---|
+| `operational-soak-attempt-001` | sealed diagnostics version 2 | 224 | `4d9929f7b04b3b79a2aed2fc06abde23bbe0a8245f7dc51add977e7e30744747` | `ce09aa4380b1786a8c99aa96cfec03e3b4768dac4c3f2e3af7febe2f39f5a27d` |
+| `operational-soak-attempt-002` | sealed diagnostics version 3 | 231 | `7f33d4539119278313a481a3b34989d30a189c5cd9b18d84e6d7195b65ad5318` | `33dfc6184a0f842d5261ef4bf5227df667d1296b28f6dc5f8d5f3aae0707f506` |
+| `operational-soak-attempt-003` | sealed diagnostics version 3 | 753 | `425e7304ae3f102aefd2f3bedd23ea12767e597b05e17cc3b74988f4282dd30f` | `25f77930d041421a6bc5029848aec79ff4025dc1573cb037dc158064b40bd273` |
+| `heartbeat-wire-probe-runtime-attempt-001` | sealed diagnostics version 3 | 1 | `7ba1f137e2c66fd95f93d068a5e77a19a344b878ae3667f77b57772b858507ff` | `00b80e1182b241d81493ef3aec5e70133f629988276999298e4f50889e3d5f25` |
+
+The same four manifest identities were measured before and after validation. Validation did not
+write, supplement, migrate, recompute, or relabel any sealed object. In particular,
+`attempt-003` remains permanently `NOT_MET`. Policy files, strategy parameters, replay/offline
+calculation, `CURRENT_STAGE`, production-public connectivity, private APIs, orders, and trades
+were outside this repair and remain unchanged.
+
+### Successor `OPERATIONAL_SOAK` — acceptance semantics frozen, live identity unbound
+
+The successor gate remains `CLOSED`. This section freezes only the post-stop accounting semantics;
+it does not create a Policy, evidence directory, process, or live authority. A later human command
+must atomically bind an exact full pushed commit whose remote branch equals that commit, a new
+Policy path and exact-byte digest distinct from the attempt-003 identity, and a new absolute
+evidence directory proved empty immediately before startup. The production Policy loader must
+accept that exact path/digest pair. No field may be inherited implicitly from a prior attempt.
+
+Only an explicit human clean stop may end an authorized run. Acceptance is strictly
+`POST_STOP_ONLY`: after the human stop, the writer completes the directory, the current strict
+validator passes, and then the frozen formulas below produce `MET | NOT_MET`. Process failure,
+automatic stopping, an incomplete directory, or an evidence directory that was not empty at
+startup is `NOT_MET`.
+
+Let:
+
+```text
+S = clean_stop_monotonic_ms
+A = S - 3_600_000
+W = [A, S)
+L = Policy.largest_lookback_minutes
+R = (L + 2) * 60_000 + Policy.runtime_limits.time_boundary_poll_interval_ms
+```
+
+The runtime must start at or before `A`. `R` is the incident-recovery SLA: `L + 1` complete
+minute closes are required for the Policy baseline, one leading partial minute after recovery may
+be unusable, and the Policy's own boundary-poll interval bounds observation of the final seal.
+There is no hard-coded three-hour run requirement.
+
+Acceptance uses three non-interchangeable ledgers:
+
+1. **Integrity.** Strict current-schema validation passes; coverage partitions the complete
+   runtime interval with zero error; ingress `received == reduced`; application
+   gap/duplicate and overflow are zero; source-shape, RPC pre-/post-send, orphan, channel,
+   transport-terminal, and writer-directory conservation all reconcile. Ordered queue lag is not
+   an integrity loss. Only queue overflow, application-sequence gap/duplicate, or a real socket
+   loss may retire a session.
+2. **Normal boundary pending.** Let `P` be the wall-clock union inside `W` of coverage segments
+   whose exact blocking reason is `INDEX_TIME_BOUNDARY_PENDING` or
+   `INDEX_WATERMARK_PENDING`. These intervals are non-countable, never restart continuity, and
+   must either recover, change into an explicitly recorded incident, or end exactly at the human
+   clean stop. They are reported separately and excluded from the current-coverage denominator;
+   they are never renamed as an incident or integrity loss.
+3. **Currentness incidents and recovery.** Every non-pending currentness incident preserves its
+   exact `trigger_cause`, true `blocking_reason`, affected scope, start, and recovery boundary.
+   Each incident intersecting `W` must recover to complete current truth and produce a strictly
+   later exact joint witness no later than its start plus `R`. An incident still open at clean
+   stop is `NOT_MET`. Multiple strictly recovered incidents and legitimate continuity epochs are
+   allowed; no single-epoch-throughout requirement remains.
+
+Let `K` be the wall-clock union of `KNOWN_COMPLETE` coverage inside `W`, and let
+`D = 3_600_000 - duration(P)`. Require `D > 0` and exactly one coverage threshold:
+
+```text
+normalized_current_coverage = duration(K) / D >= 0.99
+```
+
+The redundant complementary `KNOWN_COMPLETE_ms`/`total_non_complete_ms` pair and the separate
+fixed longest-non-complete threshold are deleted. At stop, the exact witness must be non-null,
+strictly follow the latest incident recovery, bind exact Policy/expiry/option-type/band/formula
+instrument/boundary identity, and bind one `counts_by_scope` row whose five reachability counts
+are each at least one. Every formula-required source must be observed at least once and `VALID`;
+only the contract's explicit combo/anomaly conditional sources may be `NOT_OBSERVED`.
+
+Option-local availability uses wall clock, not a sum across contracts. Let `G` be the union inside
+`W` of global/session/clock/index incident intervals, let `E = W \ (P union G)`, and let `U` be
+the union across all instruments and all exact option-local reasons of each interval intersected
+with `E`. Require `duration(E) > 0`, full-run `omitted_interval_count = 0`, no interval open at
+clean stop, and one normalized threshold:
+
+```text
+normalized_option_local_availability =
+    1 - duration(U) / duration(E) >= 59 / 60
+```
+
+Overlapping contract intervals count once in `U`. There is no per-contract duration sum and no
+separate fixed per-interval 30-second gate; the Policy-derived recovery SLA owns incident
+timeliness.
+
+Heartbeat acceptance is conditional conservation, not a fabricated mandatory
+`test_request`. `public/set_heartbeat` must succeed and real heartbeat wire shape must be observed
+and valid. For `T = heartbeat.test_request_count`:
+
+```text
+if T == 0:
+    public/test is absent (or all of its exact counters are zero)
+if T > 0:
+    public/test scheduled == sent == success == latency_observation_count == T
+    and every public/test error/deadline/retired/censored/rate-limit count == 0
+```
+
+In both cases, heartbeat diagnostics, source shape, RPC, latency, channel, and ingress ledgers
+must cross-conserve. A clean-stop censor is not an RPC error, but any still-pending heartbeat test
+at stop fails the conditional terminal equation above rather than disappearing.
+
+Opening this gate still requires a new explicit human command after code acceptance and push. The
+command must repeat the exact pushed HEAD and verified remote HEAD, new Policy absolute path and
+digest, new empty evidence directory, human-only clean-stop rule, and these post-stop formulas.
 
 ## First-principles scope
 
@@ -1465,8 +1585,9 @@ diagnostic subset, not a fifth partition. The validator requires non-negative, n
 gap-free durations and
 `coverage_partition_error_ms = observation_interval_ms - (known_complete_ms +
 known_degraded_ms + unknown_ms + no_applicable_scope_ms) = 0`.
-Each version-3 segment also records its entry reason, sorted bounded affected scopes, and
-`global_continuity_epoch`; same-state activity does not create diagnostic market persistence.
+Each current version-4 segment separately records `trigger_cause`, `blocking_reason`, sorted
+bounded affected scopes, and `global_continuity_epoch`; same-state activity does not create
+diagnostic market persistence. Sealed version-3 segments retain their original single `reason`.
 
 `radar_runtime` is the only writer. The current readers are the strict repository-owned schema
 validator and operator delivery report; no downstream business module consumes them in this
@@ -1477,10 +1598,10 @@ is `NOT_COMPARABLE` for forecast or trading claims, although named operational c
 displayed side by side without causal inference.
 
 The Policy schema remains version 3 and unchanged. New strict run summaries require diagnostics
-schema version 3. The reader continues validating schema version 2 under its original exact shape
-only so sealed `attempt-001` remains immutable truthful evidence; version 2 is
-`MIGRATION_REQUIRED` for new global-continuity/local-availability acceptance and cannot be
-rewritten or upgraded. This task adds no migration or replay path.
+schema version 4. Explicit read-only readers continue validating sealed diagnostics version 3 and
+version 2 under their original exact shapes so historical directories remain immutable truthful
+evidence; neither older version is eligible for current acceptance or may be rewritten or
+upgraded. This task adds no migration or replay path.
 
 Each object has a simple strict repository-owned schema and Policy content identity. No separate
 source-document manifest, Git-object provenance graph, hit-only recomputation command, full-feed
