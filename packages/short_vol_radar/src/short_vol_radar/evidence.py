@@ -1511,6 +1511,7 @@ def _validate_operational_diagnostics(
             runtime_started_monotonic_ms=runtime_started_monotonic_ms,
             clean_stop_monotonic_ms=clean_stop_monotonic_ms,
             current_epoch=current_epoch,
+            diagnostics_version=version,
         )
         _validate_version_three_coverage(
             coverage_segments,
@@ -2689,23 +2690,29 @@ def _validate_option_local_availability(
     runtime_started_monotonic_ms: int,
     clean_stop_monotonic_ms: int,
     current_epoch: int,
+    diagnostics_version: int,
 ) -> None:
     availability = _mapping(value, "operational_diagnostics.option_local_availability")
+    compacted_fields = {
+        "unavailable_count_by_reason",
+        "recovery_count_by_reason",
+        "end_count_by_disposition",
+        "retained_interval_limit",
+        "omitted_interval_count",
+        "omitted_interval_count_by_reason",
+        "intervals",
+    }
+    final_window_fields = {
+        *compacted_fields,
+        "acceptance_window_ms",
+        "outside_window_interval_count",
+        "outside_window_latest_end_monotonic_ms",
+        "outside_window_interval_count_by_reason",
+    }
+    sealed_compacted = diagnostics_version == 3 and set(availability) == compacted_fields
     _exact_keys(
         availability,
-        {
-            "unavailable_count_by_reason",
-            "recovery_count_by_reason",
-            "end_count_by_disposition",
-            "acceptance_window_ms",
-            "retained_interval_limit",
-            "outside_window_interval_count",
-            "outside_window_latest_end_monotonic_ms",
-            "outside_window_interval_count_by_reason",
-            "omitted_interval_count",
-            "omitted_interval_count_by_reason",
-            "intervals",
-        },
+        compacted_fields if sealed_compacted else final_window_fields,
         "operational_diagnostics.option_local_availability",
     )
     unavailable = _mapping(
@@ -2748,24 +2755,30 @@ def _validate_option_local_availability(
         )
         for disposition in ("RECOVERED", "REASON_CHANGED", "CENSORED_AT_STOP")
     }
-    window_ms = availability["acceptance_window_ms"]
-    if window_ms != OPTION_LOCAL_ACCEPTANCE_WINDOW_MS:
-        raise EvidenceError("option-local acceptance window must be exactly 3600000 ms")
     limit = availability["retained_interval_limit"]
-    if limit != OPTION_LOCAL_RETAINED_INTERVAL_LIMIT:
-        raise EvidenceError("option-local retained interval limit must be exactly 10000")
-    acceptance_start_ms = clean_stop_monotonic_ms - window_ms
-    outside = _non_negative_integer(
-        availability["outside_window_interval_count"],
-        "option-local outside_window_interval_count",
-    )
+    expected_limit = 256 if sealed_compacted else OPTION_LOCAL_RETAINED_INTERVAL_LIMIT
+    if limit != expected_limit:
+        raise EvidenceError(
+            f"option-local retained interval limit must be exactly {expected_limit}"
+        )
+    acceptance_start_ms: int | None = None
+    outside = 0
+    if not sealed_compacted:
+        window_ms = availability["acceptance_window_ms"]
+        if window_ms != OPTION_LOCAL_ACCEPTANCE_WINDOW_MS:
+            raise EvidenceError("option-local acceptance window must be exactly 3600000 ms")
+        acceptance_start_ms = clean_stop_monotonic_ms - window_ms
+        outside = _non_negative_integer(
+            availability["outside_window_interval_count"],
+            "option-local outside_window_interval_count",
+        )
     omitted = _non_negative_integer(
         availability["omitted_interval_count"],
         "option-local omitted_interval_count",
     )
     rows = _array(availability["intervals"], "option_local_availability.intervals")
     if len(rows) > limit:
-        raise EvidenceError("option-local intervals exceed bounded 10000 rows")
+        raise EvidenceError(f"option-local intervals exceed bounded {expected_limit} rows")
     retained_by_reason: Counter[str] = Counter()
     retained_by_reason_and_disposition: Counter[tuple[str, str]] = Counter()
     for raw in rows:
@@ -2796,7 +2809,7 @@ def _validate_option_local_availability(
             raise EvidenceError("option-local interval is outside runtime interval")
         if duration != end - start:
             raise EvidenceError("option-local interval duration does not match boundaries")
-        if end <= acceptance_start_ms:
+        if acceptance_start_ms is not None and end <= acceptance_start_ms:
             raise EvidenceError(
                 "retained option-local interval does not intersect the final acceptance window"
             )
@@ -2841,27 +2854,31 @@ def _validate_option_local_availability(
                     parsed[(reason, disposition)] = count
         return parsed
 
-    outside_by_reason_and_disposition = aggregate_counts(
-        availability["outside_window_interval_count_by_reason"],
-        label="outside-window",
-    )
-    if sum(outside_by_reason_and_disposition.values()) != outside:
-        raise EvidenceError("option-local conservation does not reconcile outside-window intervals")
-    outside_latest_end = availability["outside_window_latest_end_monotonic_ms"]
-    if outside == 0:
-        if outside_latest_end is not None:
-            raise EvidenceError("empty outside-window ledger must have a null latest end")
-    else:
-        latest_end = _non_negative_integer(
-            outside_latest_end,
-            "option-local outside-window latest end",
+    outside_by_reason_and_disposition: Counter[tuple[str, str]] = Counter()
+    if not sealed_compacted:
+        outside_by_reason_and_disposition = aggregate_counts(
+            availability["outside_window_interval_count_by_reason"],
+            label="outside-window",
         )
-        if not runtime_started_monotonic_ms <= latest_end <= clean_stop_monotonic_ms:
-            raise EvidenceError("option-local outside-window latest end is outside runtime")
-        if latest_end > acceptance_start_ms:
+        if sum(outside_by_reason_and_disposition.values()) != outside:
             raise EvidenceError(
-                "option-local outside-window latest end enters the final acceptance window"
+                "option-local conservation does not reconcile outside-window intervals"
             )
+        outside_latest_end = availability["outside_window_latest_end_monotonic_ms"]
+        if outside == 0:
+            if outside_latest_end is not None:
+                raise EvidenceError("empty outside-window ledger must have a null latest end")
+        else:
+            latest_end = _non_negative_integer(
+                outside_latest_end,
+                "option-local outside-window latest end",
+            )
+            if not runtime_started_monotonic_ms <= latest_end <= clean_stop_monotonic_ms:
+                raise EvidenceError("option-local outside-window latest end is outside runtime")
+            if acceptance_start_ms is None or latest_end > acceptance_start_ms:
+                raise EvidenceError(
+                    "option-local outside-window latest end enters the final acceptance window"
+                )
 
     omitted_by_reason_and_disposition = aggregate_counts(
         availability["omitted_interval_count_by_reason"],

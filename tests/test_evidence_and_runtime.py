@@ -1158,6 +1158,34 @@ def test_explicit_sealed_operational_summary_path_does_not_weaken_current_schema
         validate_run_summary(summary)
 
 
+def test_sealed_compacted_option_local_schema_remains_exact() -> None:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["operational_diagnostics_schema_version"] = 3
+    diagnostics.pop("transport_terminal_attribution")
+    availability = diagnostics["option_local_availability"]
+    assert isinstance(availability, dict)
+    availability["retained_interval_limit"] = 256
+    for field in (
+        "acceptance_window_ms",
+        "outside_window_interval_count",
+        "outside_window_latest_end_monotonic_ms",
+        "outside_window_interval_count_by_reason",
+    ):
+        availability.pop(field)
+    coverage_segments = summary["coverage_segments"]
+    assert isinstance(coverage_segments, list)
+    for segment in coverage_segments:
+        segment["reason"] = segment.pop("trigger_cause")
+        segment.pop("blocking_reason")
+
+    validate_sealed_operational_run_summary(summary)
+    availability["acceptance_window_ms"] = 3_600_000
+    with pytest.raises(EvidenceError, match="exact repository-owned schema"):
+        validate_sealed_operational_run_summary(summary)
+
+
 def test_sealed_operational_schema_retains_historical_queue_lag_restart_semantics() -> None:
     summary = epoch_two_summary(recovery_ms=12)
     diagnostics = summary["operational_diagnostics"]
