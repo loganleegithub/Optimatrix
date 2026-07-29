@@ -3,6 +3,10 @@
 **Status:** CLOSED_BY_ACCEPTED_FINAL_STAGE_RECORD — retained on this non-`main` branch because
 task archival remains unauthorized
 
+**Historical-body interpretation:** every authorization, requirement, `may`, `must`, and command
+below records a consumed construction or evidence gate; none grants a new live run or other
+current authority. Current permission comes only from `CURRENT_STAGE`.
+
 **Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`
 
 **Production Short Vol Radar:** `ESTABLISHED`
@@ -233,26 +237,25 @@ Items 1–15 are sealed history; they did not impose repeated approval on the fi
     `ee5a00eefe06e293fca1e8ae3ee431a295f5a754`. It authorizes only the bounded offline repair,
     successor accounting revision, sealed-evidence validation, and one append-only local commit
     below.
-16. **Final exact-candidate sequence:** `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` pre-authorized
-    this bounded version-6 candidate to proceed from independent offline acceptance and exact
-    candidate commit to a pre-push independent exact-commit pass receipt binding the intended
-    bounded remote ref. Only then may the controller non-force push. After the non-force push it
-    must prove the verified remote ref value equals the exact candidate commit and complete the
-    post-push verified remote equality and run binding before one fresh Smoke. Only after
-    independent Smoke acceptance may it bind and run one fresh Soak. No repeated technical
-    approval is required between those steps.
-17. **Terminal establishment envelope:** permits this authority amendment; the bounded
+16. **Final exact-candidate sequence:** `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` allowed this
+    bounded version-6 candidate to proceed from independent offline acceptance and exact candidate
+    commit to a pre-push independent exact-commit pass receipt binding the intended bounded remote
+    ref. The controller then non-force pushed, proved the verified remote ref value equalled the
+    exact candidate commit, completed the post-push verified remote equality and run binding, and
+    ran one fresh Smoke. After independent Smoke acceptance it bound and ran one fresh Soak. No
+    repeated technical approval was required between those consumed steps.
+17. **Terminal establishment envelope:** permitted this authority amendment; the bounded
     index-publication rearchitecture; focused and complete offline checks; append-only local
     commits; independent exact-commit verification; non-force push to
     `codex/short-vol-radar-establishment`; exact remote equality verification; fresh
     production-public Smoke and Soak; pre-registered external supervisor clean stop; strict
-    evidence acceptance; and the final stage-record commit only after both live gates pass.
+    evidence acceptance; and the final stage-record commit after both live gates passed.
 
 Private/account API, credentials, balances, capital, orders, fills, trades, execution, Policy
 mutation or auto-selection, history rewrite, remote deletion, `main` merge, persistent service
 deployment, task archival, and every later product closure remain unauthorized. The human
-emergency stop remains effective. `CURRENT_STAGE` may change only in the final stage-record
-commit after the independent frozen predicates pass.
+emergency stop remains effective. The sole permitted `CURRENT_STAGE` change in this consumed
+envelope was the final stage-record commit after the independent frozen predicates passed.
 
 ### Historical `SOAK_READINESS_GROUPED_ACCOUNTING_REPAIR` — completed predecessor
 
@@ -530,8 +533,8 @@ attempt-006:
 ```
 
 Neither directory may be supplemented, migrated, replayed, recomputed, relabelled, or accepted
-retroactively. A future eligible run must use a new empty directory and the then-current exact
-writer and validator.
+retroactively. Any future eligible run would require separate then-current authority, a new empty
+directory, and the then-current exact writer and validator.
 
 ## Business closure
 
@@ -1293,24 +1296,24 @@ Validation wrote no sealed object. Policy files, `CURRENT_STAGE`, production con
 private APIs, orders, trades, replay, and offline market recomputation remained outside this
 closure and unchanged.
 
-### Successor `OPERATIONAL_SOAK` — conditionally authorized, exact run identity unbound
+### Successor `OPERATIONAL_SOAK` — historical accepted contract; gate consumed
 
-The successor is conditionally authorized only inside
-`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. It cannot start until the repaired exact full commit
-has an independent pass receipt, the remote branch equals that commit, and a durable run manifest
-binds one registered exact Policy path/digest plus a new absolute evidence directory proved empty
-immediately before startup. Nothing is inherited merely by omission. The production Policy loader
-must accept the named exact path/digest pair.
+The successor's consumed authorization existed only inside
+`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. It could not start until the repaired exact full commit
+had an independent pass receipt, the remote branch equalled that commit, and a durable run
+manifest bound one registered exact Policy path/digest plus a new absolute evidence directory
+proved empty immediately before startup. Nothing was inherited merely by omission. The production
+Policy loader had to accept the named exact path/digest pair.
 
-A human emergency stop or the manifest's pre-registered external supervisor may cleanly stop the
-run. The supervisor predicate must be deterministic and independent of observed pass/fail state.
-Acceptance is strictly `POST_STOP_ONLY`: after clean stop, the writer completes the directory,
-the current strict validator passes, and the frozen formulas below produce `MET | NOT_MET`.
-The current version-6 directory validator accepts only regular non-symlink `.json` entries and
-requires exactly one summary named `radar-run-summary.json`; an empty, event-only, differently
-named, or mixed-entry directory is incomplete and fails.
-Process failure, an incomplete directory, or an evidence directory that was not empty at startup
-is `NOT_MET`. Elapsed time alone is never acceptance.
+A human emergency stop or the manifest's pre-registered external supervisor could cleanly stop
+the run. The supervisor predicate had to be deterministic and independent of observed pass/fail
+state. Acceptance was strictly `POST_STOP_ONLY`: after clean stop, the writer completed the
+directory, the strict validator passed, and the frozen formulas below produced `MET | NOT_MET`.
+The version-6 directory validator accepted only regular non-symlink `.json` entries and required
+exactly one summary named `radar-run-summary.json`; an empty, event-only, differently named, or
+mixed-entry directory was incomplete and failed. Process failure, an incomplete directory, or an
+evidence directory that was not empty at startup was `NOT_MET`. Elapsed time alone was never
+acceptance.
 
 Let:
 
@@ -1322,12 +1325,12 @@ L = Policy.largest_lookback_minutes
 R = (L + 2) * 60_000 + Policy.runtime_limits.time_boundary_poll_interval_ms
 ```
 
-The runtime must start at or before `A`. `R` is the incident-recovery SLA: `L + 1` complete
-minute closes are required for the Policy baseline, one leading partial minute after recovery may
-be unusable, and the Policy's own boundary-poll interval bounds observation of the final seal.
-There is no hard-coded three-hour run requirement.
+The runtime had to start at or before `A`. `R` was the incident-recovery SLA: `L + 1` complete
+minute closes were required for the Policy baseline, one leading partial minute after recovery
+could be unusable, and the Policy's own boundary-poll interval bounded observation of the final
+seal. There was no hard-coded three-hour run requirement.
 
-Acceptance uses three non-interchangeable ledgers and reports each result separately:
+The frozen acceptance used three non-interchangeable ledgers and reported each result separately:
 
 1. **Integrity ledger.** Strict current-schema validation passes; coverage partitions the complete
    runtime interval with zero error; ingress `received == reduced`; application
@@ -1411,11 +1414,12 @@ ledgers must cross-conserve. Absence of a server `test_request` is not synthesiz
 A clean-stop censor is not an RPC error, but any still-pending observed heartbeat test at stop
 fails the conditional terminal equation above rather than disappearing.
 
-Opening this evidence run requires no repeated human technical command. After code acceptance and
-push, its durable manifest must repeat the exact pushed and verified remote `HEAD`, registered
+Opening this evidence run required no repeated human technical command. After code acceptance and
+push, its durable manifest repeated the exact pushed and pre-run verified remote `HEAD`, registered
 Policy absolute path/digest, new empty evidence directory, result-independent supervisor stop
 predicate, `normalized_current_coverage >= 0.99`, normalized option-local availability
-`>= 59 / 60`, Policy-derived `R`, and the diagnostic-only publication ledger contract.
+`>= 59 / 60`, Policy-derived `R`, and the diagnostic-only publication ledger contract. This
+paragraph records the consumed attempt-007 gate and grants no new run authority.
 
 ## First-principles scope
 
@@ -2104,20 +2108,20 @@ One continuously running `radar_runtime` process:
 A restart creates a new runtime identity and empty detector memory. No warm-state persistence or
 cross-process episode de-duplication is implemented.
 
-## Validation harness
+## Consumed validation harness
 
-The smallest proportional harness is:
+The smallest proportional harness used was:
 
 1. direct pure/state-sequence tests;
 2. integration tests with public source fixtures;
-3. one exact-candidate `REACHABILITY_SMOKE` conditionally pre-authorized by
+3. one exact-candidate `REACHABILITY_SMOKE` executed under the consumed
    `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` after offline acceptance and exact run binding;
-4. one exact-candidate `OPERATIONAL_SOAK` conditionally pre-authorized by the same delegation only
-   after independent Smoke acceptance and a new exact run binding;
+4. one exact-candidate `OPERATIONAL_SOAK` executed under the consumed delegation only after
+   independent Smoke acceptance and a new exact run binding;
 5. ordinary schema validation of any event actually emitted.
 
-No replay, second calculation path, independent recomputation, provenance CLI, market archive,
-Outcome collector, or qualification run is required.
+The harness required no replay, second calculation path, independent recomputation, provenance
+CLI, market archive, Outcome collector, or qualification run, and grants no later run authority.
 
 ## Evidence boundary
 
@@ -2246,24 +2250,23 @@ future exit liquidity, Outcome, PnL, qualification, promotion, or execution perm
     current results, episode states, coverage, emitted commands, and durable edges. Evidence
     storage `OSError` is fatal with zero reconnect.
 
-### Required commands after the construction gate
+### Historical commands consumed by the accepted construction and live gates
 
-- checkout the bounded branch, then `make sync`;
+- checkout of the bounded branch followed by `make sync`;
 - focused tests for the four owning modules;
 - `make check`;
-- after offline acceptance and exact-candidate binding, within the pre-authorized Smoke/Soak
-  sequence:
+- after offline acceptance and exact-candidate binding, the consumed Smoke/Soak sequence invoked:
   `.venv/bin/python -m radar_runtime observe --policy <exact-policy-path> --expected-policy-digest <sha256:hex> --evidence-dir <new-empty-evidence-dir>`.
 
-The live command rejects a missing/invalid/mismatched Policy digest, dirty Git worktree, or
-non-empty evidence directory. Evidence stays outside the Git worktree. There is no recomputation
-or provenance command.
+The guarded live command rejects a missing/invalid/mismatched Policy digest, dirty Git worktree,
+or non-empty evidence directory. Evidence stays outside the Git worktree. There is no
+recomputation or provenance command. This closed task authorizes no new invocation.
 
-### REACHABILITY_SMOKE
+### Historical accepted `REACHABILITY_SMOKE` contract — gate consumed
 
-The process runs until the pre-registered result-independent external stop predicate fires or a
-human emergency stop intervenes. The manifest's duration must be sufficient for the following
-witness to be possible, but the predicate may not inspect whether it has occurred:
+The process ran until the pre-registered result-independent external stop predicate fired or a
+human emergency stop intervened. The manifest's duration had to be sufficient for the following
+witness to be possible, but the predicate could not inspect whether it had occurred:
 
 - warm-up completes and at least one real
   `Policy identity × expiry_timestamp × option_type` aggregate detector scope contains one or
@@ -2490,14 +2493,14 @@ or stage advancement.
 
 ## Definition of done
 
-The implementation is ready only when direct tests and `make check` pass. `REACHABILITY_SMOKE`
-requires every accepted smoke invariant, including
+The implementation was ready only when direct tests and `make check` passed. `REACHABILITY_SMOKE`
+required every accepted smoke invariant, including
 `complete_aggregate_with_full_formula_evaluation_count >= 1` and a balanced coverage partition; a
-covered zero-anomaly result is valid only when the joint full-formula witness also exists.
-Production establishment additionally requires the current version-6 `OPERATIONAL_SOAK` contract
-pre-authorized inside `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`.
+covered zero-anomaly result was valid only when the joint full-formula witness also existed.
+Production establishment additionally required the version-6 `OPERATIONAL_SOAK` contract consumed
+inside `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`.
 
-Business acceptance is the conditional human decision already recorded by
+Business acceptance was the conditional human decision recorded by
 `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. Independent verifiers accepted both exact Smoke and exact
 Soak evidence. The controller therefore closed this task and recorded
 `PRODUCTION_PUBLIC_SHORT_VOL_RADAR` as `ESTABLISHED` while keeping `PUBLIC_SHADOW`; no later closure

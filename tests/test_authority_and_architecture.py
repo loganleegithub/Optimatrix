@@ -156,6 +156,9 @@ def test_short_vol_task_records_consumed_delegation_and_accepted_live_gates() ->
 
     assert "**Status:** CLOSED_BY_ACCEPTED_FINAL_STAGE_RECORD" in opening
     assert "task archival remains unauthorized" in opening
+    assert "**Historical-body interpretation:**" in opening
+    assert "none grants a new live run or other" in opening
+    assert "**Live commands:** named Smoke and Soak gates consumed" in opening
     assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in opening
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in opening
     assert "**Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`" in opening
@@ -182,8 +185,24 @@ def test_short_vol_task_records_consumed_delegation_and_accepted_live_gates() ->
         "Current subgate exact base HEAD",
         "current terminal envelope",
         "task remains incomplete",
+        "conditionally authorized",
+        "conditionally pre-authorized",
+        "within the pre-authorized Smoke/Soak sequence",
+        "Opening this evidence run requires",
+        "Only then may the controller",
+        "Only after independent Smoke acceptance may",
+        "`CURRENT_STAGE` may change only",
+        "Production establishment additionally requires",
+        "Business acceptance is the conditional",
     ):
         assert stale_current_state not in task
+    for consumed_boundary in (
+        "No further run authority is inherited",
+        "grants no new run authority",
+        "authorizes no new invocation",
+        "Any future eligible run would require separate then-current authority",
+    ):
+        assert consumed_boundary in task
 
 
 def test_successor_soak_keeps_publication_diagnostic_outside_coverage_denominators() -> None:
@@ -582,7 +601,7 @@ def test_current_task_uses_current_schema_and_explicit_sealed_readers() -> None:
     assert "sealed version-5, version-4, version-3, and version-2" in current_evidence
     assert "Each current version-6 segment" in current_evidence
     assert "schema version 5" not in current_evidence
-    assert "No repeated technical approval is required between those steps." in task_flat
+    assert "No repeated technical approval was required between those consumed steps." in task_flat
     assert "persistent service deployment" in task_flat
     assert "remain unauthorized" in task_flat
     assert "regular non-symlink `.json` entries" in task_flat
@@ -623,8 +642,8 @@ def test_delegation_separates_prepush_receipt_from_postpush_remote_equality() ->
     for invariant in (
         "pre-push independent exact-commit pass receipt",
         "intended bounded remote ref",
-        "After the non-force push",
-        "verified remote ref value equals the exact candidate commit",
+        "The controller then non-force pushed",
+        "verified remote ref value equalled the exact candidate commit",
         "post-push verified remote equality and run binding",
     ):
         assert invariant in authority
