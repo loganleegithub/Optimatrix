@@ -169,12 +169,21 @@ def test_short_vol_task_records_consumed_delegation_and_accepted_live_gates() ->
     )
     assert "`COMPLETED_AT_7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`" in opening
     assert (
-        "**Current subgate exact base HEAD:** `d6e506b343c6fc5570243ba01def46d6a047428e`" in opening
+        "**Final subgate exact base HEAD:** `d6e506b343c6fc5570243ba01def46d6a047428e`" in opening
     )
     assert "**Accepted candidate tree:** `684a2acc4dba33c045b11aa0b4b278d22d7aec3e`" in opening
     assert opening.count("`MET_BY_INDEPENDENT_POST_STOP_ACCEPTANCE`") == 2
     assert "e56e470908022da36b0ae8d7cc65bd041ee479a1fc69aa029039c31d646c48f8" in opening
     assert "4e9defb35d12bc6318ff77139c1d8196db155fcfcaa5efe067b44df0c2caced9" in opening
+    for stale_current_state in (
+        "current delegation",
+        "current version-6 candidate",
+        "current conditionally authorized successor",
+        "Current subgate exact base HEAD",
+        "current terminal envelope",
+        "task remains incomplete",
+    ):
+        assert stale_current_state not in task
 
 
 def test_successor_soak_keeps_publication_diagnostic_outside_coverage_denominators() -> None:
@@ -235,7 +244,7 @@ def test_historical_soak_remains_not_met_without_governing_the_terminal_successo
         "heartbeat wire probe had to receive its",
         "a human had to freeze new",
         "historical `3_600_000 ms` value was not",
-        "They do not govern the current",
+        "They did not govern the now-consumed",
         "`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`",
     ):
         assert invariant in task
@@ -665,7 +674,7 @@ def test_external_run_manifest_and_deadline_supervisor_are_exact_and_bounded() -
     ):
         assert key in manifest
     for invariant in (
-        "created and durably flushed before the production-public child starts",
+        "was created and durably flushed before the production-public child started",
         "exactly one `SIGINT`",
         "waits for the writer",
         "`SIGSTOP`",

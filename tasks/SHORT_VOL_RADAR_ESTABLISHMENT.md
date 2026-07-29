@@ -62,7 +62,7 @@ task archival remains unauthorized
 **Final construction subgate:** `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`
 `COMPLETED_AT_7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`
 
-**Current subgate exact base HEAD:** `d6e506b343c6fc5570243ba01def46d6a047428e`
+**Final subgate exact base HEAD:** `d6e506b343c6fc5570243ba01def46d6a047428e`
 
 **Accepted candidate tree:** `684a2acc4dba33c045b11aa0b4b278d22d7aec3e`
 
@@ -189,7 +189,7 @@ path-bound ordered per-file manifest sha256 =
   25f77930d041421a6bc5029848aec79ff4025dc1573cb037dc158064b40bd273
 ```
 
-The following inventory records consumed historical grants and the current terminal envelope.
+The following inventory records consumed historical grants and the consumed terminal envelope.
 Items 1–15 are sealed history; they did not impose repeated approval on the final construction:
 
 1. **Original construction gate:** authorizes implementation of the active task contract and no
@@ -301,9 +301,9 @@ The completed predecessor's direct counterexamples covered the real multi-transa
 same-epoch scope split, mixed option-local blockers, pending plus an incident, malicious version-5
 group shapes, and unchanged strict acceptance of every then-registered sealed legacy directory.
 
-### Registered terminal run bindings for the current delegation
+### Historical terminal run bindings consumed by the delegation
 
-The immutable registered Policies are:
+The immutable registered Policies were:
 
 ```text
 REACHABILITY_SMOKE:
@@ -314,24 +314,27 @@ OPERATIONAL_SOAK:
   sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4
 ```
 
-Their bytes may not change. For each run, the controller must durably bind the repaired exact
-clean `HEAD`, matching verified remote branch `HEAD`, Policy path/digest, a new absolute evidence
-directory proved empty immediately before startup, and a deterministic external stop predicate
-that does not inspect pass/fail state. Smoke and Soak use separate manifests and directories.
-Process failure, non-empty startup, incomplete output, identity mismatch, or strict validation
-failure is `NOT_MET`. A retry receives a new empty directory. The unregistered
+Their bytes remain immutable evidence bindings. For each accepted run, the controller durably
+bound the repaired exact clean `HEAD`, matching pre-run verified remote branch `HEAD`, Policy
+path/digest, a new absolute evidence directory proved empty immediately before startup, and a
+deterministic external stop predicate that did not inspect pass/fail state. Smoke and Soak used
+separate manifests and directories. Under the frozen gate, process failure, non-empty startup,
+incomplete output, identity mismatch, or strict validation failure was `NOT_MET`, and a retry
+would have required a new empty directory. The unregistered
 `operational-soak-attempt-004` predates this grant and is permanently
 `NOT_ELIGIBLE_FOR_ACCEPTANCE`. Attempts 005 and 006 are sealed version-5 `NOT_MET` evidence; the
-current version-6 candidate must use a later new empty directory.
+accepted version-6 candidate used fresh `reachability-smoke-attempt-006` and
+`operational-soak-attempt-007` directories. No further run authority is inherited from these
+consumed bindings.
 
 #### External run manifest
 
-Each Smoke or Soak attempt owns one task-local external manifest. This is a durable run-binding
-record, not a runtime feature, generic orchestration framework, new product artifact, or substitute
-for the evidence directory. Its absolute path is outside both the Git worktree and the evidence
-directory. It is created and durably flushed before the production-public child starts, is never
-rewritten after startup, and is retained with its SHA-256 in the delivery record. A retry always
-uses a new manifest and new empty evidence directory.
+Each accepted Smoke or Soak attempt owned one task-local external manifest. This was a durable
+run-binding record, not a runtime feature, generic orchestration framework, new product artifact,
+or substitute for the evidence directory. Its absolute path was outside both the Git worktree and
+the evidence directory. It was created and durably flushed before the production-public child
+started, was never rewritten after startup, and is retained with its SHA-256 in the delivery
+record. A retry would have required a new manifest and new empty evidence directory.
 
 The manifest is UTF-8 JSON with the following exact top-level shape. Angle-bracket
 values below are schema placeholders; a runnable manifest contains concrete values and no
@@ -2436,9 +2439,9 @@ heartbeat wire probe had to receive its own explicit authorization; and a human 
 global-continuity duration and explicit local availability/current coverage thresholds. The
 historical `3_600_000 ms` value was not silently carried into that future gate.
 
-Those requirements record the former attempt-001 gate. They do not govern the current
-conditionally authorized successor under `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`, whose exact
-bindings and frozen accounting contract appear earlier in this task.
+Those requirements record the former attempt-001 gate. They did not govern the now-consumed
+terminal successor under `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`, whose exact bindings and frozen
+accounting contract appear earlier in this task.
 
 ## Trader-readable acceptance gates
 
