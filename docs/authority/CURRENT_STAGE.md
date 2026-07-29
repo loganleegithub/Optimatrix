@@ -79,6 +79,14 @@ capability.
 There is no active product-capability closure and therefore no current root blocker to record.
 This does not activate or authorize any queued closure.
 
+The active
+[`RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION`](../../tasks/RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION.md)
+task is an implementation-maintenance and requalification closure, not a product-capability
+closure. Its Phase B Smoke and Soak are both `NOT_RUN`.
+`7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0` remains the sole accepted candidate; no consolidated
+candidate may replace this accepted record before its independent exact-candidate verification,
+fresh independently accepted Smoke and Soak, and final stage-record gate.
+
 ## Implemented capability boundary
 
 `PRODUCTION_PUBLIC_SHORT_VOL_RADAR` implements only:
