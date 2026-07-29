@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from copy import deepcopy
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -64,6 +65,7 @@ from short_vol_radar.evidence import (
     project_atomic_event,
     project_run_summary,
     ratio_or_none,
+    sealed_version_five_operational_soak_window_accounting,
     validate_anomaly_event,
     validate_atomic_event,
     validate_evidence_directory,
@@ -71,6 +73,8 @@ from short_vol_radar.evidence import (
     validate_legacy_run_summary,
     validate_run_summary,
     validate_sealed_operational_run_summary,
+    validate_sealed_version_five_evidence_directory,
+    validate_sealed_version_five_run_summary,
     validate_sealed_version_four_evidence_directory,
     validate_sealed_version_four_run_summary,
 )
@@ -266,7 +270,7 @@ def operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
 
 def current_operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
     diagnostics = operational_diagnostics(observation_ms=observation_ms)
-    diagnostics["operational_diagnostics_schema_version"] = 5
+    diagnostics["operational_diagnostics_schema_version"] = 6
     ingress = diagnostics["ingress"]
     assert isinstance(ingress, dict)
     ingress["send_control_event_count"] = 0
@@ -321,6 +325,48 @@ def current_operational_diagnostics(*, observation_ms: int = 20) -> dict[str, ob
         "outside_window_interval_count_by_reason": {},
         "omitted_interval_count": 0,
         "omitted_interval_count_by_reason": {},
+        "intervals": [],
+    }
+    diagnostics["index_baseline_publication"] = {
+        "start_count_by_phase": {
+            "TIME_BOUNDARY_PENDING": 0,
+            "WATERMARK_PENDING": 0,
+        },
+        "end_count_by_disposition": {
+            "PUBLISHED": 0,
+            "PHASE_CHANGED": 0,
+            "CURRENTNESS_LOST": 0,
+            "CENSORED_AT_STOP": 0,
+        },
+        "acceptance_window_ms": 3_600_000,
+        "retained_interval_limit": 10_000,
+        "outside_window_interval_count": 0,
+        "outside_window_latest_end_monotonic_ms": None,
+        "outside_window_interval_count_by_phase_and_disposition": {
+            phase: {
+                disposition: 0
+                for disposition in (
+                    "PUBLISHED",
+                    "PHASE_CHANGED",
+                    "CURRENTNESS_LOST",
+                    "CENSORED_AT_STOP",
+                )
+            }
+            for phase in ("TIME_BOUNDARY_PENDING", "WATERMARK_PENDING")
+        },
+        "omitted_interval_count": 0,
+        "omitted_interval_count_by_phase_and_disposition": {
+            phase: {
+                disposition: 0
+                for disposition in (
+                    "PUBLISHED",
+                    "PHASE_CHANGED",
+                    "CURRENTNESS_LOST",
+                    "CENSORED_AT_STOP",
+                )
+            }
+            for phase in ("TIME_BOUNDARY_PENDING", "WATERMARK_PENDING")
+        },
         "intervals": [],
     }
     diagnostics["witness"] = {
@@ -412,6 +458,76 @@ def current_summary_object(
             current_operational_diagnostics() if diagnostics is None else diagnostics
         ),
     )
+
+
+def sealed_version_five_summary_object(
+    *,
+    segments: tuple[CoverageSegment, ...] = (
+        CoverageSegment(
+            0,
+            10,
+            CoverageState.UNKNOWN,
+            reason="RUNTIME_START",
+            blocking_reason="RUNTIME_START_PENDING",
+            affected_scopes=("GLOBAL",),
+            global_continuity_epoch=1,
+        ),
+        CoverageSegment(
+            10,
+            20,
+            CoverageState.KNOWN_COMPLETE,
+            reason="TICKER_APPLIED",
+            blocking_reason="NONE",
+            affected_scopes=("OPTION:SHORT",),
+            global_continuity_epoch=1,
+        ),
+    ),
+) -> dict[str, object]:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["operational_diagnostics_schema_version"] = 5
+    diagnostics.pop("index_baseline_publication")
+    summary["runtime_started_monotonic_ms"] = segments[0].start_monotonic_ms
+    summary["clean_stop_monotonic_ms"] = segments[-1].end_monotonic_ms
+    summary["coverage_segments"] = [
+        {
+            "start_monotonic_ms": segment.start_monotonic_ms,
+            "end_monotonic_ms": segment.end_monotonic_ms,
+            "state": segment.state.value,
+            "trigger_cause": segment.reason,
+            "blocking_reason": segment.blocking_reason,
+            "affected_scopes": list(segment.affected_scopes),
+            "blocking_groups": [
+                {
+                    "blocking_reason": group.blocking_reason,
+                    "affected_scopes": list(group.affected_scopes),
+                }
+                for group in segment.blocking_groups
+            ],
+            "global_continuity_epoch": segment.global_continuity_epoch,
+        }
+        for segment in segments
+    ]
+    durations = {
+        state: sum(
+            segment.end_monotonic_ms - segment.start_monotonic_ms
+            for segment in segments
+            if segment.state is state
+        )
+        for state in CoverageState
+    }
+    observation_ms = segments[-1].end_monotonic_ms - segments[0].start_monotonic_ms
+    summary["coverage"] = {
+        "observation_interval_ms": observation_ms,
+        "known_complete_ms": durations[CoverageState.KNOWN_COMPLETE],
+        "known_degraded_ms": durations[CoverageState.KNOWN_DEGRADED],
+        "unknown_ms": durations[CoverageState.UNKNOWN],
+        "no_applicable_scope_ms": durations[CoverageState.NO_APPLICABLE_SCOPE],
+        "coverage_partition_error_ms": observation_ms - sum(durations.values()),
+    }
+    validate_sealed_version_five_run_summary(summary)
+    return summary
 
 
 def attach_joint_witness(
@@ -1060,6 +1176,43 @@ def test_evidence_directory_rejects_duplicate_json_keys(tmp_path: Path) -> None:
         validate_evidence_directory(tmp_path)
 
 
+def test_current_evidence_directory_requires_one_canonical_run_summary(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(EvidenceError, match=r"exactly one.*run summary"):
+        validate_evidence_directory(tmp_path)
+
+    anomaly = project_anomaly_event(anomaly_evidence())
+    (tmp_path / "anomaly.json").write_text(json.dumps(anomaly), encoding="utf-8")
+    with pytest.raises(EvidenceError, match=r"exactly one.*run summary"):
+        validate_evidence_directory(tmp_path)
+
+    (tmp_path / "anomaly.json").unlink()
+    (tmp_path / "summary.json").write_text(
+        json.dumps(current_summary_object()),
+        encoding="utf-8",
+    )
+    with pytest.raises(EvidenceError, match=r"radar-run-summary\.json"):
+        validate_evidence_directory(tmp_path)
+
+
+def test_current_evidence_directory_rejects_non_json_or_non_file_entries(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "radar-run-summary.json").write_text(
+        json.dumps(current_summary_object()),
+        encoding="utf-8",
+    )
+    (tmp_path / "operator-note.txt").write_text("not evidence", encoding="utf-8")
+    with pytest.raises(EvidenceError, match="unexpected evidence directory entry"):
+        validate_evidence_directory(tmp_path)
+
+    (tmp_path / "operator-note.txt").unlink()
+    (tmp_path / "nested").mkdir()
+    with pytest.raises(EvidenceError, match="unexpected evidence directory entry"):
+        validate_evidence_directory(tmp_path)
+
+
 def test_evidence_directory_cross_checks_summary_episode_count(tmp_path: Path) -> None:
     scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
     scope.applicable_instrument_count = 1
@@ -1097,7 +1250,7 @@ def test_evidence_directory_attributes_anomaly_count_to_exact_option_type_and_ba
         reason.value: 0 for reason in EpisodeEndReason
     }
     (tmp_path / "anomaly.json").write_text(json.dumps(anomaly), encoding="utf-8")
-    (tmp_path / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    (tmp_path / "radar-run-summary.json").write_text(json.dumps(summary), encoding="utf-8")
 
     with pytest.raises(EvidenceError, match=r"scope|option_type|band"):
         validate_evidence_directory(tmp_path)
@@ -1386,7 +1539,7 @@ def test_coverage_ledger_rejects_inconsistent_group_summaries_immediately(
         ("none_group", "synthetic or empty"),
     ),
 )
-def test_schema_five_blocking_groups_are_strict(
+def test_schema_six_blocking_groups_are_strict(
     mutation: str,
     message: str,
 ) -> None:
@@ -1429,8 +1582,8 @@ def test_schema_five_blocking_groups_are_strict(
         validate_run_summary(summary)
 
 
-def test_operational_soak_accounting_consumes_groups_for_p_g_e_and_u() -> None:
-    summary = current_summary_object(
+def test_sealed_version_five_soak_accounting_keeps_legacy_p_g_e_u() -> None:
+    summary = sealed_version_five_summary_object(
         segments=(
             CoverageSegment(
                 0,
@@ -1490,8 +1643,8 @@ def test_operational_soak_accounting_consumes_groups_for_p_g_e_and_u() -> None:
                     "generation": 1,
                     "reason": "TICKER_SOURCE_STALE",
                     "start_monotonic_ms": 300,
-                    "end_monotonic_ms": 400,
-                    "duration_ms": 100,
+                    "end_monotonic_ms": 450,
+                    "duration_ms": 150,
                     "end_disposition": "RECOVERED",
                     "global_continuity_epoch": 1,
                 }
@@ -1499,14 +1652,14 @@ def test_operational_soak_accounting_consumes_groups_for_p_g_e_and_u() -> None:
         }
     )
 
-    assert operational_soak_window_accounting(summary) == {
+    assert sealed_version_five_operational_soak_window_accounting(summary) == {
         "window_start_monotonic_ms": 0,
         "window_end_monotonic_ms": 3_600_000,
         "known_complete_ms": 3_599_800,
         "normal_boundary_pending_ms": 100,
         "global_currentness_incident_ms": 100,
         "effective_option_local_denominator_ms": 3_599_800,
-        "option_local_unavailable_union_ms": 100,
+        "option_local_unavailable_union_ms": 150,
     }
 
 
@@ -1516,6 +1669,7 @@ def test_explicit_sealed_operational_summary_path_does_not_weaken_current_schema
     assert isinstance(diagnostics, dict)
     diagnostics["operational_diagnostics_schema_version"] = 3
     diagnostics.pop("transport_terminal_attribution")
+    diagnostics.pop("index_baseline_publication")
     coverage_segments = summary["coverage_segments"]
     assert isinstance(coverage_segments, list)
     for segment in coverage_segments:
@@ -1524,7 +1678,7 @@ def test_explicit_sealed_operational_summary_path_does_not_weaken_current_schema
         segment.pop("blocking_groups")
 
     validate_sealed_operational_run_summary(summary)
-    with pytest.raises(EvidenceError, match="schema version 5"):
+    with pytest.raises(EvidenceError, match="diagnostics schema 6"):
         validate_run_summary(summary)
 
 
@@ -1534,6 +1688,7 @@ def test_sealed_compacted_option_local_schema_remains_exact() -> None:
     assert isinstance(diagnostics, dict)
     diagnostics["operational_diagnostics_schema_version"] = 3
     diagnostics.pop("transport_terminal_attribution")
+    diagnostics.pop("index_baseline_publication")
     availability = diagnostics["option_local_availability"]
     assert isinstance(availability, dict)
     availability["retained_interval_limit"] = 256
@@ -1563,6 +1718,7 @@ def test_sealed_operational_schema_retains_historical_queue_lag_restart_semantic
     assert isinstance(diagnostics, dict)
     diagnostics["operational_diagnostics_schema_version"] = 3
     diagnostics.pop("transport_terminal_attribution")
+    diagnostics.pop("index_baseline_publication")
     continuity = diagnostics["global_continuity"]
     assert isinstance(continuity, dict)
     continuity["restart_count_by_reason"] = {"QUEUE_LAG_DEADLINE": 1}
@@ -1690,11 +1846,11 @@ def test_version_two_operational_diagnostics_remain_strict_and_payload_free() ->
         evidence_module.validate_legacy_run_summary(summary)
 
 
-def test_version_five_diagnostics_and_attributed_coverage_are_strict() -> None:
+def test_version_six_diagnostics_and_attributed_coverage_are_strict() -> None:
     summary = current_summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
-    assert diagnostics["operational_diagnostics_schema_version"] == 5
+    assert diagnostics["operational_diagnostics_schema_version"] == 6
     assert "price" not in json.dumps(diagnostics)
     assert summary["coverage_segments"] == [
         {
@@ -1748,14 +1904,14 @@ def test_current_schema_version_requires_an_integer_token() -> None:
     summary = current_summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
-    diagnostics["operational_diagnostics_schema_version"] = 5.0
+    diagnostics["operational_diagnostics_schema_version"] = 6.0
 
-    with pytest.raises(EvidenceError, match="integer diagnostics schema version 5"):
+    with pytest.raises(EvidenceError, match="integer diagnostics schema 6"):
         validate_run_summary(summary)
 
     writer_diagnostics = current_operational_diagnostics()
-    writer_diagnostics["operational_diagnostics_schema_version"] = 5.0
-    with pytest.raises(EvidenceError, match="integer diagnostics schema version 5"):
+    writer_diagnostics["operational_diagnostics_schema_version"] = 6.0
+    with pytest.raises(EvidenceError, match="integer diagnostics schema 6"):
         current_summary_object(diagnostics=writer_diagnostics)
 
 
@@ -1764,13 +1920,14 @@ def test_explicit_sealed_version_four_summary_keeps_its_exact_shape() -> None:
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
     diagnostics["operational_diagnostics_schema_version"] = 4
+    diagnostics.pop("index_baseline_publication")
     segments = summary["coverage_segments"]
     assert isinstance(segments, list)
     for segment in segments:
         segment.pop("blocking_groups")
 
     validate_sealed_version_four_run_summary(summary)
-    with pytest.raises(EvidenceError, match="schema version 5"):
+    with pytest.raises(EvidenceError, match="diagnostics schema 6"):
         validate_run_summary(summary)
 
     segments[0]["blocking_groups"] = []
@@ -1785,6 +1942,7 @@ def test_explicit_sealed_version_four_directory_route_is_isolated(
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
     diagnostics["operational_diagnostics_schema_version"] = 4
+    diagnostics.pop("index_baseline_publication")
     segments = summary["coverage_segments"]
     assert isinstance(segments, list)
     for segment in segments:
@@ -1795,7 +1953,7 @@ def test_explicit_sealed_version_four_directory_route_is_isolated(
     )
 
     assert len(validate_sealed_version_four_evidence_directory(tmp_path)) == 1
-    with pytest.raises(EvidenceError, match="integer diagnostics schema version 5"):
+    with pytest.raises(EvidenceError, match="integer diagnostics schema 6"):
         validate_evidence_directory(tmp_path)
 
 
@@ -1920,7 +2078,7 @@ def test_runtime_projects_exact_policy_runtime_limits(
 
     diagnostics = runtime.reducer._operational_diagnostics(0)
 
-    assert diagnostics["operational_diagnostics_schema_version"] == 5
+    assert diagnostics["operational_diagnostics_schema_version"] == 6
     assert diagnostics["runtime_limits"] == policy.runtime_limits.as_object()
     runtime_limits = diagnostics["runtime_limits"]
     assert isinstance(runtime_limits, dict)
@@ -1934,7 +2092,7 @@ def test_run_summary_rejects_unknown_operational_diagnostics_schema() -> None:
     assert isinstance(diagnostics, dict)
     diagnostics["operational_diagnostics_schema_version"] = 1
 
-    with pytest.raises(EvidenceError, match="schema version"):
+    with pytest.raises(EvidenceError, match="schema"):
         validate_run_summary(summary)
 
 
@@ -2187,6 +2345,63 @@ def test_evidence_oserror_is_fatal_without_reconnect(
         )
 
     assert connection_enters == 1
+
+
+def test_observe_does_not_rewrite_summary_after_post_stop_transport_close_failure(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    policy = load_policy_bytes(exact, digest)
+    stop_event = asyncio.Event()
+    summary_path = tmp_path / "radar-run-summary.json"
+    run_count = 0
+
+    class CloseFailingClient:
+        def __init__(self, *, session_epoch: int, rpc_deadline_ms: int) -> None:
+            assert session_epoch == 1
+            assert rpc_deadline_ms == policy.runtime_limits.rpc_deadline_ms
+
+        async def __aenter__(self) -> CloseFailingClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            raise OSError("injected post-stop socket close failure")
+
+    async def complete_clean_stop(
+        _runtime: LiveRadarRuntime,
+        _client: object,
+        event: asyncio.Event,
+    ) -> Path:
+        nonlocal run_count
+        run_count += 1
+        event.set()
+        summary_path.write_text("{}\n", encoding="utf-8")
+        return summary_path
+
+    async def reject_second_clean_stop(
+        _runtime: LiveRadarRuntime,
+        _client: object | None = None,
+    ) -> Path:
+        raise AssertionError("committed summary was rewritten after transport close")
+
+    monkeypatch.setattr(runtime_module, "DeribitPublicClient", CloseFailingClient)
+    monkeypatch.setattr(LiveRadarRuntime, "run", complete_clean_stop)
+    monkeypatch.setattr(LiveRadarRuntime, "_clean_stop", reject_second_clean_stop)
+
+    assert (
+        asyncio.run(
+            runtime_module.observe(
+                policy=policy,
+                code_identity="a" * 40,
+                evidence_directory=tmp_path,
+                stop_event=stop_event,
+            )
+        )
+        == summary_path
+    )
+    assert run_count == 1
 
 
 def test_continuous_inbound_flow_cannot_starve_absolute_time_boundaries(
@@ -2681,7 +2896,7 @@ def test_unexpected_sender_cancellation_fails_closed(
         asyncio.run(runtime.run(WaitingClient(), asyncio.Event()))
 
 
-def test_current_writer_and_validator_are_schema_five_only_with_explicit_legacy_entry(
+def test_current_writer_and_validator_are_schema_six_only_with_explicit_legacy_entry(
     tmp_path: Path,
 ) -> None:
     legacy = legacy_summary_object()
@@ -2692,9 +2907,9 @@ def test_current_writer_and_validator_are_schema_five_only_with_explicit_legacy_
         policy_identity="sha256:" + "b" * 64,
     )
 
-    with pytest.raises(EvidenceError, match="version 5"):
+    with pytest.raises(EvidenceError, match="diagnostics schema 6"):
         validate_run_summary(legacy)
-    with pytest.raises(EvidenceError, match="version 5"):
+    with pytest.raises(EvidenceError, match="diagnostics schema 6"):
         writer.write_summary(legacy)
 
     validate_legacy_run_summary(legacy)
@@ -2702,7 +2917,7 @@ def test_current_writer_and_validator_are_schema_five_only_with_explicit_legacy_
         json.dumps(legacy),
         encoding="utf-8",
     )
-    with pytest.raises(EvidenceError, match="version 5"):
+    with pytest.raises(EvidenceError, match="diagnostics schema 6"):
         validate_evidence_directory(tmp_path)
     assert len(validate_legacy_evidence_directory(tmp_path)) == 1
 
@@ -3459,7 +3674,7 @@ def test_current_schema_restart_root_trigger_is_exactly_cross_bound() -> None:
         validate_run_summary(forged)
 
 
-def test_schema_five_accepts_same_epoch_index_window_gap_scope_expansion() -> None:
+def test_schema_six_accepts_same_epoch_index_window_gap_scope_expansion() -> None:
     summary = index_window_gap_scope_split_summary()
     segments = summary["coverage_segments"]
     assert isinstance(segments, list)
@@ -3569,7 +3784,82 @@ def test_schema_three_restart_cause_cannot_appear_without_an_epoch_edge() -> Non
         "coverage_partition_error_ms": 0,
     }
 
-    with pytest.raises(EvidenceError, match=r"restart group.*epoch edge"):
+    with pytest.raises(EvidenceError, match=r"currentness blocker.*epoch edge"):
+        validate_run_summary(summary)
+
+
+def terminal_restart_summary() -> dict[str, object]:
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    continuity = diagnostics["global_continuity"]
+    assert isinstance(continuity, dict)
+    continuity.update(
+        {
+            "current_epoch": 2,
+            "restart_count": 1,
+            "restart_count_by_reason": {"INDEX_SOURCE_STALE": 1},
+            "restart_edges": [
+                {
+                    "incident_id": 1,
+                    "from_epoch": 1,
+                    "to_epoch": 2,
+                    "trigger_cause": "CLEAN_STOP",
+                    "reason": "INDEX_SOURCE_STALE",
+                    "failure_domain": "CLOCK_INDEX",
+                    "affected_scopes": ["GLOBAL"],
+                    "boundary": {
+                        "session_epoch": 1,
+                        "ingress_seq": 3,
+                        "received_monotonic_ms": 20,
+                        "causal_seq": 3,
+                    },
+                }
+            ],
+            "recovery_edges": [],
+            "current_epoch_joint_evaluation_count_by_scope": [],
+        }
+    )
+    witness = diagnostics["witness"]
+    assert isinstance(witness, dict)
+    witness["global_continuity_epoch"] = 2
+    _set_retained_publication_rows(
+        summary,
+        [
+            _publication_row(
+                start_ms=12,
+                end_ms=20,
+                disposition="CURRENTNESS_LOST",
+                currentness_loss_reason="INDEX_SOURCE_STALE",
+            )
+        ],
+    )
+    return summary
+
+
+def test_terminal_restart_at_clean_stop_needs_no_zero_duration_coverage_segment() -> None:
+    validate_run_summary(terminal_restart_summary())
+
+
+def test_terminal_restart_without_coverage_cannot_claim_recovery() -> None:
+    summary = terminal_restart_summary()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    continuity = diagnostics["global_continuity"]
+    assert isinstance(continuity, dict)
+    continuity["recovery_edges"] = [
+        {
+            "incident_id": 1,
+            "boundary": {
+                "session_epoch": 1,
+                "ingress_seq": 4,
+                "received_monotonic_ms": 20,
+                "causal_seq": 4,
+            },
+        }
+    ]
+
+    with pytest.raises(EvidenceError, match="coverage continuity epoch"):
         validate_run_summary(summary)
 
 
@@ -3752,7 +4042,7 @@ def test_atomic_event_requires_available_transition_in_owning_summary_scope(
     }
     (tmp_path / "anomaly.json").write_text(json.dumps(anomaly), encoding="utf-8")
     (tmp_path / "atomic.json").write_text(json.dumps(atomic), encoding="utf-8")
-    (tmp_path / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    (tmp_path / "radar-run-summary.json").write_text(json.dumps(summary), encoding="utf-8")
 
     with pytest.raises(EvidenceError, match=r"atomic|AVAILABLE|scope"):
         validate_evidence_directory(tmp_path)
@@ -3778,7 +4068,7 @@ def test_atomic_causal_invariant_allows_later_quote_only_when_detector_is_same_b
         )
 
 
-def test_writer_directory_accepts_anomaly_then_later_normalized_atomic_boundary(
+def test_complete_writer_directory_accepts_anomaly_then_later_normalized_atomic_boundary(
     tmp_path: Path,
 ) -> None:
     writer = EvidenceWriter(
@@ -3798,5 +4088,683 @@ def test_writer_directory_accepts_anomaly_then_later_normalized_atomic_boundary(
 
     writer.write_anomaly(anomaly)
     writer.write_atomic(later_atomic)
+    scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
+    scope.applicable_instrument_count = 1
+    scope.distinct_anomaly_episode_count = 1
+    scope.anomaly_activation_transition_count = 1
+    scope.anomaly_end_count_by_reason[EpisodeEndReason.CENSORED_AT_STOP.value] = 1
+    scope.known_active_duration_ms_sum_by_end_reason[EpisodeEndReason.CENSORED_AT_STOP.value] = 0
+    scope.public_atomic_quote_state_transition_count[
+        PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE.value
+    ] = 1
+    summary = current_summary_object()
+    summary["counts_by_scope"] = [scope.as_object()]
+    summary["anomaly_end_count_by_reason"] = {
+        reason.value: int(reason is EpisodeEndReason.CENSORED_AT_STOP)
+        for reason in EpisodeEndReason
+    }
+    summary["known_active_duration_ms_sum_by_end_reason"] = {
+        reason.value: 0 for reason in EpisodeEndReason
+    }
+    summary["public_atomic_quote_state_transition_count"] = {
+        PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE.value: 1
+    }
+    writer.write_summary(summary)
 
-    assert len(validate_evidence_directory(tmp_path)) == 2
+    assert len(validate_evidence_directory(tmp_path)) == 3
+
+
+def _current_publication_accounting_summary() -> dict[str, object]:
+    summary = current_summary_object(
+        segments=(
+            CoverageSegment(
+                0,
+                3_600_000,
+                CoverageState.KNOWN_COMPLETE,
+                reason="TICKER_APPLIED",
+                blocking_reason="NONE",
+                affected_scopes=("OPTION:SHORT",),
+                global_continuity_epoch=1,
+            ),
+        )
+    )
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    diagnostics["index_baseline_publication"] = {
+        "start_count_by_phase": {"TIME_BOUNDARY_PENDING": 1, "WATERMARK_PENDING": 0},
+        "end_count_by_disposition": {
+            "PUBLISHED": 1,
+            "PHASE_CHANGED": 0,
+            "CURRENTNESS_LOST": 0,
+            "CENSORED_AT_STOP": 0,
+        },
+        "acceptance_window_ms": 3_600_000,
+        "retained_interval_limit": 10_000,
+        "outside_window_interval_count": 0,
+        "outside_window_latest_end_monotonic_ms": None,
+        "outside_window_interval_count_by_phase_and_disposition": {
+            "TIME_BOUNDARY_PENDING": {
+                "PUBLISHED": 0,
+                "PHASE_CHANGED": 0,
+                "CURRENTNESS_LOST": 0,
+                "CENSORED_AT_STOP": 0,
+            },
+            "WATERMARK_PENDING": {
+                "PUBLISHED": 0,
+                "PHASE_CHANGED": 0,
+                "CURRENTNESS_LOST": 0,
+                "CENSORED_AT_STOP": 0,
+            },
+        },
+        "omitted_interval_count": 0,
+        "omitted_interval_count_by_phase_and_disposition": {
+            "TIME_BOUNDARY_PENDING": {
+                "PUBLISHED": 0,
+                "PHASE_CHANGED": 0,
+                "CURRENTNESS_LOST": 0,
+                "CENSORED_AT_STOP": 0,
+            },
+            "WATERMARK_PENDING": {
+                "PUBLISHED": 0,
+                "PHASE_CHANGED": 0,
+                "CURRENTNESS_LOST": 0,
+                "CENSORED_AT_STOP": 0,
+            },
+        },
+        "intervals": [
+            {
+                "phase": "TIME_BOUNDARY_PENDING",
+                "published_tail_last_minute_start_ms": 3_000_000,
+                "target_successor_minute_start_ms": 3_060_000,
+                "start_monotonic_ms": 100,
+                "end_monotonic_ms": 50_100,
+                "duration_ms": 50_000,
+                "end_disposition": "PUBLISHED",
+                "global_continuity_epoch": 1,
+                "currentness_loss": None,
+            }
+        ],
+    }
+    availability = diagnostics["option_local_availability"]
+    assert isinstance(availability, dict)
+    availability["omitted_interval_count"] = 0
+    availability["intervals"] = []
+    return summary
+
+
+def test_current_publication_pending_overlaps_known_complete_without_reducing_effective_interval() -> (
+    None
+):
+    result = operational_soak_window_accounting(_current_publication_accounting_summary())
+    assert result["known_complete_ms"] == 3_600_000
+    assert result["publication_pending_ms"] == 50_000
+    assert result["global_currentness_incident_ms"] == 0
+    assert result["effective_interval_ms"] == 3_600_000
+
+
+def test_current_publication_pending_does_not_obey_sealed_partition_or_36_second_cap() -> None:
+    result = operational_soak_window_accounting(_current_publication_accounting_summary())
+    assert result["publication_pending_ms"] == 50_000
+    assert result["publication_pending_ms"] > 36_000
+    assert result["effective_interval_ms"] == 3_600_000
+    assert result["known_complete_ms"] + result["global_currentness_incident_ms"] == 3_600_000
+
+
+def test_current_omitted_publication_interval_rejects_soak_accounting() -> None:
+    summary = _current_publication_accounting_summary()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    publication = diagnostics["index_baseline_publication"]
+    assert isinstance(publication, dict)
+    publication["omitted_interval_count"] = 1
+    publication["omitted_interval_count_by_phase_and_disposition"]["TIME_BOUNDARY_PENDING"][
+        "PUBLISHED"
+    ] = 1
+    with pytest.raises(EvidenceError):
+        operational_soak_window_accounting(summary)
+
+
+def test_sealed_version_five_accounting_is_legacy_only_and_current_rejects_fixture() -> None:
+    summary = sealed_version_five_summary_object(
+        segments=(
+            CoverageSegment(
+                0,
+                3_600_000,
+                CoverageState.KNOWN_COMPLETE,
+                reason="TICKER_APPLIED",
+                blocking_reason="NONE",
+                affected_scopes=("OPTION:SHORT",),
+                global_continuity_epoch=1,
+            ),
+        )
+    )
+    assert sealed_version_five_operational_soak_window_accounting(summary)
+    with pytest.raises(EvidenceError):
+        operational_soak_window_accounting(summary)
+
+
+def test_sealed_version_five_directory_has_an_explicit_read_only_route(
+    tmp_path: Path,
+) -> None:
+    summary = sealed_version_five_summary_object()
+    (tmp_path / "run-summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+    assert validate_sealed_version_five_evidence_directory(tmp_path) == (summary,)
+    with pytest.raises(EvidenceError, match="diagnostics schema 6"):
+        validate_evidence_directory(tmp_path)
+
+
+def _publication_row(
+    *,
+    phase: str = "TIME_BOUNDARY_PENDING",
+    published_minute_ms: int = 3_000_000,
+    start_ms: int = 100,
+    end_ms: int = 200,
+    disposition: str = "PUBLISHED",
+    epoch: int = 1,
+    currentness_loss_reason: str | None = None,
+) -> dict[str, object]:
+    return {
+        "phase": phase,
+        "published_tail_last_minute_start_ms": published_minute_ms,
+        "target_successor_minute_start_ms": published_minute_ms + 60_000,
+        "start_monotonic_ms": start_ms,
+        "end_monotonic_ms": end_ms,
+        "duration_ms": end_ms - start_ms,
+        "end_disposition": disposition,
+        "global_continuity_epoch": epoch,
+        "currentness_loss": (
+            None
+            if currentness_loss_reason is None
+            else {
+                "reason": currentness_loss_reason,
+                "boundary": {
+                    "session_epoch": 1,
+                    "ingress_seq": 3,
+                    "received_monotonic_ms": end_ms,
+                    "causal_seq": 3,
+                },
+            }
+        ),
+    }
+
+
+def _set_retained_publication_rows(
+    summary: dict[str, object],
+    rows: list[dict[str, object]],
+) -> None:
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    publication = diagnostics["index_baseline_publication"]
+    assert isinstance(publication, dict)
+    starts = {
+        "TIME_BOUNDARY_PENDING": 0,
+        "WATERMARK_PENDING": 0,
+    }
+    ends = {
+        "PUBLISHED": 0,
+        "PHASE_CHANGED": 0,
+        "CURRENTNESS_LOST": 0,
+        "CENSORED_AT_STOP": 0,
+    }
+    for row in rows:
+        phase = row["phase"]
+        disposition = row["end_disposition"]
+        assert isinstance(phase, str)
+        assert isinstance(disposition, str)
+        starts[phase] += 1
+        ends[disposition] += 1
+    publication["start_count_by_phase"] = starts
+    publication["end_count_by_disposition"] = ends
+    publication["outside_window_interval_count"] = 0
+    publication["outside_window_latest_end_monotonic_ms"] = None
+    publication["omitted_interval_count"] = 0
+    for matrix_name in (
+        "outside_window_interval_count_by_phase_and_disposition",
+        "omitted_interval_count_by_phase_and_disposition",
+    ):
+        matrix = publication[matrix_name]
+        assert isinstance(matrix, dict)
+        for dispositions in matrix.values():
+            assert isinstance(dispositions, dict)
+            for disposition in dispositions:
+                dispositions[disposition] = 0
+    publication["intervals"] = rows
+
+
+def _empty_publication_summary(*, clean_stop_ms: int = 3_600_000) -> dict[str, object]:
+    summary = current_summary_object(
+        segments=(
+            CoverageSegment(
+                0,
+                clean_stop_ms,
+                CoverageState.KNOWN_COMPLETE,
+                reason="TICKER_APPLIED",
+                blocking_reason="NONE",
+                affected_scopes=("OPTION:SHORT",),
+                global_continuity_epoch=1,
+            ),
+        )
+    )
+    _set_retained_publication_rows(summary, [])
+    return summary
+
+
+def test_current_publication_chain_allows_same_epoch_multi_minute_advance() -> None:
+    summary = _empty_publication_summary()
+    _set_retained_publication_rows(
+        summary,
+        [
+            _publication_row(start_ms=100, end_ms=200),
+            _publication_row(
+                published_minute_ms=3_180_000,
+                start_ms=200,
+                end_ms=300,
+            ),
+        ],
+    )
+
+    validate_run_summary(summary)
+
+
+def test_currentness_loss_is_its_own_transition_inside_an_active_incident() -> None:
+    summary = index_window_gap_scope_split_summary()
+    segments = summary["coverage_segments"]
+    assert isinstance(segments, list)
+    final_segment = segments[-1]
+    assert isinstance(final_segment, dict)
+    final_segment.update(
+        {
+            "trigger_cause": "TIME_BOUNDARY",
+            "blocking_reason": "INDEX_SOURCE_STALE",
+            "affected_scopes": ["GLOBAL"],
+            "blocking_groups": [
+                {
+                    "blocking_reason": "INDEX_SOURCE_STALE",
+                    "affected_scopes": ["GLOBAL"],
+                }
+            ],
+        }
+    )
+    _set_retained_publication_rows(
+        summary,
+        [
+            _publication_row(
+                start_ms=12,
+                end_ms=15,
+                disposition="CURRENTNESS_LOST",
+                epoch=2,
+                currentness_loss_reason="INDEX_SOURCE_STALE",
+            )
+        ],
+    )
+
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    continuity = diagnostics["global_continuity"]
+    assert isinstance(continuity, dict)
+    assert len(continuity["restart_edges"]) == 1
+    validate_run_summary(summary)
+
+
+@pytest.mark.parametrize(
+    ("currentness_loss", "message"),
+    [
+        (None, "requires exact cause"),
+        (
+            {
+                "reason": "TICKER_SOURCE_STALE",
+                "boundary": {
+                    "session_epoch": 1,
+                    "ingress_seq": 3,
+                    "received_monotonic_ms": 15,
+                    "causal_seq": 3,
+                },
+            },
+            "invalidating reason",
+        ),
+    ],
+)
+def test_currentness_loss_rejects_missing_or_non_global_invalidation(
+    currentness_loss: object,
+    message: str,
+) -> None:
+    summary = _empty_publication_summary()
+    row = _publication_row(
+        start_ms=12,
+        end_ms=15,
+        disposition="CURRENTNESS_LOST",
+        currentness_loss_reason="INDEX_SOURCE_STALE",
+    )
+    row["currentness_loss"] = currentness_loss
+    _set_retained_publication_rows(summary, [row])
+
+    with pytest.raises(EvidenceError, match=message):
+        validate_run_summary(summary)
+
+
+def test_currentness_loss_rejects_a_boundary_that_does_not_end_its_row() -> None:
+    summary = _empty_publication_summary()
+    row = _publication_row(
+        start_ms=12,
+        end_ms=15,
+        disposition="CURRENTNESS_LOST",
+        currentness_loss_reason="INDEX_SOURCE_STALE",
+    )
+    loss = row["currentness_loss"]
+    assert isinstance(loss, dict)
+    boundary = loss["boundary"]
+    assert isinstance(boundary, dict)
+    boundary["received_monotonic_ms"] = 16
+    _set_retained_publication_rows(summary, [row])
+
+    with pytest.raises(EvidenceError, match="boundary does not match interval end"):
+        validate_run_summary(summary)
+
+
+def test_non_currentness_disposition_rejects_currentness_loss_attribution() -> None:
+    summary = _empty_publication_summary()
+    row = _publication_row(
+        start_ms=12,
+        end_ms=15,
+        disposition="PUBLISHED",
+        currentness_loss_reason="INDEX_SOURCE_STALE",
+    )
+    _set_retained_publication_rows(summary, [row])
+
+    with pytest.raises(EvidenceError, match="cannot carry currentness loss"):
+        validate_run_summary(summary)
+
+
+def test_currentness_loss_rejects_a_conflicting_exact_restart_edge() -> None:
+    summary = index_window_gap_scope_split_summary()
+    row = _publication_row(
+        start_ms=5,
+        end_ms=10,
+        disposition="CURRENTNESS_LOST",
+        epoch=1,
+        currentness_loss_reason="CLOCK_GAP",
+    )
+    loss = row["currentness_loss"]
+    assert isinstance(loss, dict)
+    loss["boundary"] = {
+        "session_epoch": 1,
+        "ingress_seq": 1,
+        "received_monotonic_ms": 10,
+        "causal_seq": 1,
+    }
+    _set_retained_publication_rows(
+        summary,
+        [row],
+    )
+
+    with pytest.raises(EvidenceError, match="conflicts with its restart edge"):
+        validate_run_summary(summary)
+
+
+def test_same_millisecond_different_fact_is_not_misbound_to_a_restart() -> None:
+    summary = index_window_gap_scope_split_summary()
+    row = _publication_row(
+        start_ms=5,
+        end_ms=10,
+        disposition="CURRENTNESS_LOST",
+        epoch=1,
+        currentness_loss_reason="INDEX_WINDOW_GAP",
+    )
+    loss = row["currentness_loss"]
+    assert isinstance(loss, dict)
+    loss["boundary"] = {
+        "session_epoch": 1,
+        "ingress_seq": 2,
+        "received_monotonic_ms": 10,
+        "causal_seq": 2,
+    }
+    _set_retained_publication_rows(summary, [row])
+
+    with pytest.raises(EvidenceError, match="lacks an owning restart or active incident"):
+        validate_run_summary(summary)
+
+
+def test_orphan_currentness_loss_at_clean_stop_is_rejected() -> None:
+    summary = _empty_publication_summary(clean_stop_ms=20)
+    _set_retained_publication_rows(
+        summary,
+        [
+            _publication_row(
+                start_ms=12,
+                end_ms=20,
+                disposition="CURRENTNESS_LOST",
+                currentness_loss_reason="SESSION_GAP",
+            )
+        ],
+    )
+
+    with pytest.raises(EvidenceError, match="lacks an owning restart or active incident"):
+        validate_run_summary(summary)
+
+
+def test_active_incident_owns_currentness_loss_at_clean_stop() -> None:
+    summary = index_window_gap_scope_split_summary()
+    _set_retained_publication_rows(
+        summary,
+        [
+            _publication_row(
+                start_ms=12,
+                end_ms=20,
+                disposition="CURRENTNESS_LOST",
+                epoch=2,
+                currentness_loss_reason="SESSION_GAP",
+            )
+        ],
+    )
+
+    validate_run_summary(summary)
+
+
+def test_recovered_incident_cannot_own_a_later_currentness_loss() -> None:
+    summary = epoch_two_summary(recovery_ms=12)
+    _set_retained_publication_rows(
+        summary,
+        [
+            _publication_row(
+                start_ms=13,
+                end_ms=15,
+                disposition="CURRENTNESS_LOST",
+                epoch=2,
+                currentness_loss_reason="INDEX_SOURCE_STALE",
+            )
+        ],
+    )
+
+    with pytest.raises(EvidenceError, match="lacks an owning restart or active incident"):
+        validate_run_summary(summary)
+
+
+@pytest.mark.parametrize("next_published_minute_ms", [3_000_000, 2_940_000])
+def test_current_publication_chain_rejects_same_epoch_repeat_or_rollback(
+    next_published_minute_ms: int,
+) -> None:
+    summary = _empty_publication_summary()
+    _set_retained_publication_rows(
+        summary,
+        [
+            _publication_row(start_ms=100, end_ms=200),
+            _publication_row(
+                published_minute_ms=next_published_minute_ms,
+                start_ms=300,
+                end_ms=400,
+            ),
+        ],
+    )
+
+    with pytest.raises(EvidenceError, match="strictly advance"):
+        validate_run_summary(summary)
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        (
+            [
+                _publication_row(start_ms=200, end_ms=300),
+                _publication_row(
+                    published_minute_ms=3_060_000,
+                    start_ms=100,
+                    end_ms=150,
+                ),
+            ],
+            "not sorted",
+        ),
+        (
+            [
+                _publication_row(start_ms=100, end_ms=300),
+                _publication_row(
+                    published_minute_ms=3_060_000,
+                    start_ms=200,
+                    end_ms=400,
+                ),
+            ],
+            "overlap",
+        ),
+        (
+            [
+                _publication_row(
+                    phase="WATERMARK_PENDING",
+                    disposition="PHASE_CHANGED",
+                )
+            ],
+            "PHASE_CHANGED requires TIME",
+        ),
+        (
+            [
+                _publication_row(
+                    end_ms=3_599_999,
+                    disposition="CENSORED_AT_STOP",
+                )
+            ],
+            "end exactly at clean stop",
+        ),
+    ],
+)
+def test_current_publication_ledger_rejects_order_phase_and_stop_forgeries(
+    rows: list[dict[str, object]],
+    message: str,
+) -> None:
+    summary = _empty_publication_summary()
+    _set_retained_publication_rows(summary, deepcopy(rows))
+
+    with pytest.raises(EvidenceError, match=message):
+        validate_run_summary(summary)
+
+
+def test_current_coverage_rejects_legacy_index_pending_blockers() -> None:
+    with pytest.raises(EvidenceError, match="cannot use index publication pending blockers"):
+        current_summary_object(
+            segments=(
+                CoverageSegment(
+                    0,
+                    100,
+                    CoverageState.UNKNOWN,
+                    reason="TIME_BOUNDARY",
+                    blocking_reason="INDEX_TIME_BOUNDARY_PENDING",
+                    affected_scopes=("OPTION:SHORT",),
+                    global_continuity_epoch=1,
+                ),
+            )
+        )
+
+
+def _set_compressed_publication_count(
+    summary: dict[str, object],
+    *,
+    bucket: str,
+    phase: str,
+    disposition: str,
+) -> None:
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    publication = diagnostics["index_baseline_publication"]
+    assert isinstance(publication, dict)
+    count_name = f"{bucket}_interval_count"
+    matrix_name = f"{bucket}_interval_count_by_phase_and_disposition"
+    publication[count_name] = 1
+    if bucket == "outside_window":
+        publication["outside_window_latest_end_monotonic_ms"] = 3_000_000
+    matrix = publication[matrix_name]
+    assert isinstance(matrix, dict)
+    phase_counts = matrix[phase]
+    assert isinstance(phase_counts, dict)
+    phase_counts[disposition] = 1
+    starts = publication["start_count_by_phase"]
+    ends = publication["end_count_by_disposition"]
+    assert isinstance(starts, dict)
+    assert isinstance(ends, dict)
+    starts[phase] = 1
+    ends[disposition] = 1
+
+
+@pytest.mark.parametrize("bucket", ["outside_window", "omitted"])
+@pytest.mark.parametrize(
+    ("phase", "disposition", "message"),
+    [
+        (
+            "TIME_BOUNDARY_PENDING",
+            "CENSORED_AT_STOP",
+            "compressed publication ledger cannot contain CENSORED_AT_STOP",
+        ),
+        (
+            "WATERMARK_PENDING",
+            "PHASE_CHANGED",
+            "WATERMARK_PENDING cannot end with PHASE_CHANGED",
+        ),
+    ],
+)
+def test_current_compressed_publication_matrices_reject_impossible_cells(
+    bucket: str,
+    phase: str,
+    disposition: str,
+    message: str,
+) -> None:
+    summary = _empty_publication_summary(clean_stop_ms=7_200_000)
+    _set_compressed_publication_count(
+        summary,
+        bucket=bucket,
+        phase=phase,
+        disposition=disposition,
+    )
+
+    with pytest.raises(EvidenceError, match=message):
+        validate_run_summary(summary)
+
+
+def test_current_publication_ledger_rejects_more_than_one_stop_censor() -> None:
+    summary = _empty_publication_summary(clean_stop_ms=7_200_000)
+    _set_retained_publication_rows(
+        summary,
+        [
+            _publication_row(
+                start_ms=7_100_000,
+                end_ms=7_200_000,
+                disposition="CENSORED_AT_STOP",
+            )
+        ],
+    )
+    _set_compressed_publication_count(
+        summary,
+        bucket="outside_window",
+        phase="TIME_BOUNDARY_PENDING",
+        disposition="CENSORED_AT_STOP",
+    )
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    publication = diagnostics["index_baseline_publication"]
+    assert isinstance(publication, dict)
+    starts = publication["start_count_by_phase"]
+    ends = publication["end_count_by_disposition"]
+    assert isinstance(starts, dict)
+    assert isinstance(ends, dict)
+    starts["TIME_BOUNDARY_PENDING"] = 2
+    ends["CENSORED_AT_STOP"] = 2
+
+    with pytest.raises(EvidenceError, match="at most one CENSORED_AT_STOP"):
+        validate_run_summary(summary)

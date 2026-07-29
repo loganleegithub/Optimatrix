@@ -72,6 +72,15 @@ Start with [`AGENTS.md`](AGENTS.md). The
 
 There is no compatibility package or alias for the removed pipeline.
 
+The current bounded construction separates per-band immutable index-baseline availability from
+generation-global successor publication. Normal time/watermark publication pending keeps an
+already proven `N + 1` close tuple available and does not pause detector episodes, Layer 2, known
+coverage, or persistence. Real window, source-stale, and continuity failures remain fail-closed.
+Publication currentness invalidates exactly once independently from continuity-incident restart
+de-duplication, so a stronger clock/session/index loss cannot leave a pending row or tuple alive.
+Current run summaries use diagnostics schema version 6; sealed versions 5 through 2 remain
+read-only and are never migrated.
+
 ## Local verification
 
 ```bash

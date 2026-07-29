@@ -2,7 +2,8 @@
 
 **Status:** ACTIVE IMPLEMENTATION CONTRACT
 
-**Current implementation state:** TERMINAL PUBLIC-RADAR GOAL ACTIVE — LIVE PRECONDITIONS CLOSED
+**Current implementation state:** TERMINAL PUBLIC-RADAR GOAL ACTIVE — EXACT-CANDIDATE OFFLINE
+ACCEPTANCE REQUIRED BEFORE PRE-AUTHORIZED SMOKE
 
 **Owning closure:** `SHORT_VOL_RADAR_ESTABLISHMENT`
 
@@ -585,63 +586,104 @@ A timestamp regression or a tick assigned to an already sealed minute is an inde
 sealed closes are never rewritten, rolling returns are invalidated, and warm-up restarts from new
 continuous coverage.
 
-Index currentness is a structured per-band query. `IndexTailStatus` is exactly:
+Index baseline truth has two orthogonal axes. Per-return-count availability is exactly:
 
 ```text
 AVAILABLE
 WARMUP
-TIME_BOUNDARY_PENDING
-WATERMARK_PENDING
 WINDOW_GAP
 SOURCE_STALE
 CONTINUITY_GAP
 ```
 
-The query receives the band's requested lookback, trusted-time interval, and the frozen
-`index_source_stale_deadline_ms`. It never destroys stored closes merely because a query is
-unavailable. Its classifications are:
+Generation-global publication phase is exactly:
 
-- `TIME_BOUNDARY_PENDING`: trusted-time lower and upper bounds imply different current UTC
-  minutes, so no one tail minute is valid for the whole interval;
-- `WATERMARK_PENDING`: trusted time implies one current minute, but the accepted index timestamp
-  watermark has not yet crossed the expected tail's end;
-- `WARMUP`: continuous coverage has not yet existed long enough to supply this band's requested
-  `lookback + 1` closes;
-- `WINDOW_GAP`: the watermark proves the requested tail should be complete, but at least one
-  minute inside this band's requested window is absent or nonconsecutive;
-- `SOURCE_STALE`: the trusted lower bound is beyond the last accepted index source timestamp by
-  more than the Policy's source-stale deadline;
-- `CONTINUITY_GAP`: timestamp regression, a late tick for a sealed minute, retired epoch/
-  generation, or explicit index-channel continuity failure has invalidated source continuity;
-- `AVAILABLE`: none of the above applies, the requested closes are internally consecutive, and
-  the last close is exactly the minute before the one trusted current minute.
+```text
+CURRENT
+TIME_BOUNDARY_PENDING
+WATERMARK_PENDING
+```
 
-A fresh reducer that has not yet started its first acknowledged index generation reports
-bootstrap `WARMUP`, not `CONTINUITY_GAP`. Bootstrap warm-up cannot increment `index_gap_count`,
-invalidate platform index coverage, or request an index resubscription. `CONTINUITY_GAP` begins
-only after an actual continuity-breaking fact.
+A newly started generation with no proven history is bootstrap `WARMUP`, not `CONTINUITY_GAP`.
 
-A 60-return band therefore needs 61 consecutive covered closes. A missing older minute can make
-only a longer-lookback band `WINDOW_GAP`; a shorter band whose entire requested tail is
-consecutive remains `AVAILABLE`. `WINDOW_GAP` never causes an index resubscription. Normal minute
-rollover first becomes `TIME_BOUNDARY_PENDING` and/or `WATERMARK_PENDING`; it never clears
-historical closes or the operational witness start.
+The legacy `IndexTailStatus` pending enum names remain reserved for sealed version-5 evidence, but
+current runtime coverage never uses them as blockers. For one accepted index generation and global
+continuity epoch, the publication tracker is inactive until trusted clock, accepted watermark, and
+at least one immutable published close exist. Thereafter it observes only the immediate successor:
+`published = tail.last_start`, `target = published + 60_000`, and
+`target_end = target + 60_000`.
 
-The status truth table is normative:
+```text
+proven_end_ms = floor(min(trusted_time.lower_ms, accepted_watermark_ms) / 60_000) * 60_000
+expected_latest_close_start_ms = proven_end_ms - 60_000
+```
 
-| `IndexTailStatus` | Current detector truth | Episode | Layer 2 | Coverage | Known-active duration | Index resubscribe |
-|---|---|---|---|---|---|---|
-| `AVAILABLE` | calculate current result | normal tracker transition; resume an index-tail-pending identity | current classification if active, otherwise `NOT_EVALUATED` | derive from all current scopes | running while active | no |
-| `WARMUP` | `UNKNOWN/INDEX_WARMUP` | active episode ends `UNKNOWN_DETECTOR`; no episode stays `UNKNOWN` | `NOT_EVALUATED` | `KNOWN_DEGRADED` only with another known active witness, otherwise `UNKNOWN` | stop at last trusted active boundary | no |
-| `TIME_BOUNDARY_PENDING` | `UNKNOWN/INDEX_TIME_BOUNDARY_PENDING` | preserve identity in `INDEX_TAIL_PENDING`; reset incomplete counts | `NOT_EVALUATED` | `KNOWN_DEGRADED` only with another known active witness, otherwise `UNKNOWN` | paused | no |
-| `WATERMARK_PENDING` | `UNKNOWN/INDEX_WATERMARK_PENDING` | preserve identity in `INDEX_TAIL_PENDING`; reset incomplete counts | `NOT_EVALUATED` | `KNOWN_DEGRADED` only with another known active witness, otherwise `UNKNOWN` | paused | no |
-| `WINDOW_GAP` | `UNKNOWN/INDEX_WINDOW_GAP` only for bands whose requested window contains the gap | affected active episodes end `UNKNOWN_AT_GAP` | `NOT_EVALUATED` for affected episodes | settle from unaffected scopes; otherwise `UNKNOWN` | stop at last trusted active boundary | no |
-| `SOURCE_STALE` | `UNKNOWN/INDEX_SOURCE_STALE` for every index consumer | every affected active episode ends `UNKNOWN_AT_GAP` | `NOT_EVALUATED` | `UNKNOWN` unless another independent known active witness exists | stop at last trusted active boundary | yes, affected index channel |
-| `CONTINUITY_GAP` | `UNKNOWN/INDEX_CONTINUITY_GAP` for every index consumer | every affected active episode ends `UNKNOWN_AT_GAP`; history restarts | `NOT_EVALUATED` | `UNKNOWN` | stop at last trusted active boundary | yes, affected index channel |
+Expected time is not an actual close. Actual publication changes only after one exact continuous
+suffix ending at `expected_latest_close_start_ms` passes generation, global-continuity epoch,
+coverage-start, 60-second alignment, and terminal-minute checks. The frozen published object owns
+its generation, epoch, complete immutable `MinuteClose` tuple, published end and last start, first
+publish `FactBoundary`, and proof lower/watermark audit values. Proof audit values do not change
+later and do not enter economic observation identity.
 
-Pending statuses are non-countable time/currentness facts. A timer may enter or leave them and
-recompute current truth, but cannot activate, clear, or reset persistence except for the explicit
-pending reset in the table.
+Each band independently projects an exact `N + 1` close tuple from the same sealed generation
+history for `N` returns. The tuple must end at the actual published last minute, exclude every
+close after the proven cutoff, and be 60-second consecutive. `coverage_start > earliest_required`
+is `WARMUP`; once proof and coverage require a minute, any missing, misaligned, or nonconsecutive
+close is `WINDOW_GAP`. A shorter band may be `AVAILABLE` while a longer band is `WARMUP` or
+`WINDOW_GAP`.
+
+Publication phase is relative to the immediate successor:
+
+- `CURRENT`: no pending row;
+- `TIME_BOUNDARY_PENDING`: `trusted.lower < target_end <= trusted.upper`;
+- `WATERMARK_PENDING`: `trusted.lower >= target_end` and accepted watermark `< target_end`;
+- phase is a same-tail/same-target latch after it starts. A later clock refresh may tighten
+  `trusted.upper` back below `target_end`, but it cannot erase the already observed
+  `TIME_BOUNDARY_PENDING` interval; that phase remains until the successor is jointly proven,
+  changes to `WATERMARK_PENDING`, currentness is lost, or the run stops;
+- if trusted lower and watermark both prove the successor in one boundary, publish immediately
+  without a zero-duration pending row;
+- `PHASE_CHANGED` is only same-tail/same-target/same-epoch
+  `TIME_BOUNDARY_PENDING -> WATERMARK_PENDING`;
+- if a different full `FactBoundary` in the same integer monotonic millisecond immediately
+  publishes, invalidates, or clean-stops the zero-duration watermark phase, the ledger atomically
+  folds that terminal disposition into the preceding positive-duration time row, cancels the
+  watermark start, and cancels the intermediate `PHASE_CHANGED` end. It never emits a zero-duration
+  row or leaves an orphan phase chain;
+- a successor seal ends a pending row as `PUBLISHED`; if the newly published tail's next successor
+  is already pending in the same boundary, close the old row first and open the new row;
+- trusted lower never moves backward, so one target cannot move from watermark pending to time
+  pending. A later target may begin a new time-pending row.
+
+Normal publication pending keeps the previously published exact tuple available. It does not
+resubscribe, restart continuity, make detector truth unknown, pause or end an episode, stop Layer
+2, pause known-active duration, increment persistence, or reset persistence. Phase, timers,
+watermark target, and proof audit metadata are excluded from detector observation identity. A
+published tuple identity may change once when the immutable consumed closes change. Generation
+and global-continuity epoch own and prove the tuple but are publication provenance, not economic
+de-duplication identity. The new tuple identity is observed at most once only when the owning
+boundary was already countable; a clock/time-only publish is current truth only, and a later
+unchanged fact cannot backfill an observation. Multiple simultaneously proven minutes publish only
+the latest exact window and do not replay intermediate observations.
+
+Availability behavior is normative:
+
+| Availability | Detector / episode / Layer 2 / coverage | Resubscribe and continuity |
+|---|---|---|
+| `AVAILABLE` | calculate from the exact `N + 1` published tuple; normal pending leaves all current truth unchanged | no |
+| `WARMUP` | affected detector `UNKNOWN/INDEX_WARMUP`; an active episode ends `UNKNOWN_DETECTOR`; Layer 2 stops; only that query is unavailable | no resubscribe and no gap count |
+| `WINDOW_GAP` | only bands whose exact requested window contains the gap become `UNKNOWN/INDEX_WINDOW_GAP`; affected active episodes end `UNKNOWN_AT_GAP` | restart `global_continuity_epoch`; do not resubscribe; publication rows cannot cross the epoch and are rebound only from proven sealed history |
+| `SOURCE_STALE` | every index consumer becomes `UNKNOWN/INDEX_SOURCE_STALE`; active episodes end `UNKNOWN_AT_GAP`; reusable publication is lost | restart owning continuity if no incident is active; always resubscribe the index channel |
+| `CONTINUITY_GAP` | every index consumer becomes `UNKNOWN/INDEX_CONTINUITY_GAP`; clear sealed history and restart warm-up | restart owning continuity if no incident is active; always resubscribe the index channel |
+
+Timestamp regression, a late tick targeting a sealed minute, or explicit index-channel continuity
+failure is `CONTINUITY_GAP`. A retired epoch/generation establishes continuity loss at retirement;
+subsequent retired frames have zero business effect. `WINDOW_GAP` is only a proven missing or
+nonconsecutive requested minute and never resubscribes. Publication invalidation is independent
+from continuity-incident de-duplication: every session/clock/index invalidating fact closes an
+active pending row exactly once and invalidates the published tuple, even when an earlier
+`WINDOW_GAP` already owns the sole epoch restart. That later fact changes the current blocker but
+does not fabricate a second restart before recovery.
 
 ### Baseline projection
 
@@ -777,7 +819,7 @@ does not explain. The ratio is a detector input, not an edge estimate.
 Each `Policy identity × instrument_name` scope has one small activation/clear tracker.
 An observed episode identity is
 `runtime identity × Policy identity × instrument_name × activation_causal_seq`; TTE band is an
-activation attribute, not identity:
+activation attribute, not identity. The current tracker states are:
 
 ```text
 UNKNOWN
@@ -787,9 +829,10 @@ ACTIVE    this instrument has passed activation
 CLEARING  this instrument's clear persistence is pending
 BAND_SUSPENDED
           trusted time straddles a Policy boundary while market-source continuity remains known
-INDEX_TAIL_PENDING
-          minute/timestamp watermark rollover is pending while index-source continuity remains known
 ```
+
+Sealed diagnostics version 5 may contain the legacy tracker state `INDEX_TAIL_PENDING`. The
+current runtime never enters it; generation-global publication pending is diagnostic only.
 
 ```text
 activation observation: iv_richness_ratio >= activation_ratio
@@ -830,15 +873,20 @@ aggregate.
 
 `CurrentEvaluation` is separate from `observation_eligibility/reason`. Trusted-time revision can
 change TTE/current classification, but it is not a countable persistence observation. Hard
-`UNKNOWN`, known ineligibility, membership loss, scope exit, and the two declared pending
-suspensions apply even when `countable = false`. Only a richness evaluation with
-`countable = true` calls the persistence observation transition.
+`UNKNOWN`, known ineligibility, membership loss, and scope exit apply even when `countable =
+false`. Normal index publication pending is not a suspension or detector state. Only a richness
+evaluation with `countable = true` and a new consumed-fact identity calls the persistence
+observation transition.
 
 Observation identity contains only facts the formula consumes: target-quantity bid levels,
-forward, the current per-band baseline, and discrete TTE/index-currentness classification.
-Duplicates, ask-only changes, depth beyond the target, heartbeats, metadata-only changes, and
-unchanged reduced economic state do not activate, clear, or reset persistence and do not create
-observations or episodes.
+forward, the exact immutable published `MinuteClose` tuple used by the band, and discrete TTE
+classification. Publication phase, timer, target successor, trusted-lower proof audit, and
+watermark proof audit are excluded. Index generation and global-continuity epoch own and prove the
+published tuple but are provenance, not detector de-duplication facts; the baseline component of
+identity is only the exact selected immutable `MinuteClose` tuple. Identity change alone never
+resets persistence. Duplicates, ask-only changes, depth beyond the target, heartbeats,
+metadata-only changes, and unchanged reduced economic state do not activate, clear, or reset
+persistence and do not create observations or episodes.
 
 A trusted-time interval that straddles a boundary cannot select either parameter set. If the next
 adjacent band also has an `option_rules` entry for this instrument's option type, detector output
@@ -858,11 +906,10 @@ same-option-type band requires fresh activation. A distinct episode is attribute
 which it activated; per-band evaluation counts use the band active at each known evaluation. No
 suspended interval is counted as known-active time.
 
-`INDEX_TAIL_PENDING` follows the `IndexTailStatus` table. It is not a second anomaly state:
-detector current truth is `UNKNOWN`, the episode identity is retained only while continuity is
-known, incomplete activation/clear counts reset, Layer 2 is `NOT_EVALUATED`, and known-active
-duration pauses. `AVAILABLE` resumes the same active identity; `WARMUP`, `WINDOW_GAP`,
-`SOURCE_STALE`, or `CONTINUITY_GAP` ends or leaves it unavailable exactly as the table specifies.
+`INDEX_TAIL_PENDING` remains a sealed-version legacy tracker enum only. Current normal index
+publication pending never enters that tracker state and never resets activation or clear counts.
+`WARMUP`, `WINDOW_GAP`, `SOURCE_STALE`, and `CONTINUITY_GAP` remain fail-closed exactly as the
+availability table specifies.
 
 A detector-dependent gap changes only the affected instrument to `UNKNOWN`, invalidates its
 option/combo quotes, cancels pending observations, and never infers what happened inside the gap.
@@ -1057,7 +1104,7 @@ are business-state transitions after reduced-state de-duplication, never message
 with a zero or unknown denominator are `null`.
 
 `operational_diagnostics` is a required strict object with
-`operational_diagnostics_schema_version = 5`. It is operational evidence only and has exactly
+`operational_diagnostics_schema_version = 6`. It is operational evidence only and has exactly
 these members:
 
 - `runtime_limits`: the exact nine frozen Policy `runtime_limits`;
@@ -1108,7 +1155,7 @@ these members:
   `current_epoch_joint_evaluation_count_by_scope`; each current-epoch row has exactly
   `policy_identity`, `expiration_timestamp_ms`, `option_type`, `tte_band_id`,
   `formula_instrument_name`, positive `count`, and nullable
-  `first_joint_evaluation_boundary`. Every current version-5 restart edge has exactly `incident_id`,
+  `first_joint_evaluation_boundary`. Every current version-6 restart edge has exactly `incident_id`,
   `from_epoch`, `to_epoch`, root `trigger_cause`, restart-effect `reason`, `failure_domain`,
   `affected_scopes`, and `boundary`; sealed version-4 restart edges retain that same exact shape,
   while version-3 restart edges retain their original shape without `trigger_cause`;
@@ -1122,6 +1169,25 @@ these members:
 - `ticker_currentness`: `candidate_count_by_classification` has exact counts for
   `CURRENT | SOURCE_STALE | TIMESTAMP_AHEAD | TRUSTED_TIME_UNKNOWN`, separately from de-duplicated
   `accepted_transition_count_by_state` for `MISSING | CURRENT | SOURCE_STALE`;
+- `index_baseline_publication`: exact `start_count_by_phase`, `end_count_by_disposition`,
+  `acceptance_window_ms = 3_600_000`, `retained_interval_limit = 10_000`,
+  `outside_window_interval_count`, nullable `outside_window_latest_end_monotonic_ms`, exact fixed
+  `outside_window_interval_count_by_phase_and_disposition`, `omitted_interval_count`, exact fixed
+  `omitted_interval_count_by_phase_and_disposition`, and bounded `intervals`. Each retained row has
+  exactly `phase`, `published_tail_last_minute_start_ms`,
+  `target_successor_minute_start_ms`, `start_monotonic_ms`, `end_monotonic_ms`, `duration_ms`,
+  `end_disposition`, `global_continuity_epoch`, and nullable `currentness_loss`. Minute identities
+  are 60-second aligned, target equals published plus 60 seconds, and rows are positive half-open
+  sorted nonoverlapping intervals. Only `CURRENTNESS_LOST` has non-null
+  `{reason, boundary}` with one allowlisted session/clock/index invalidating reason, a full exact
+  `FactBoundary`, and `boundary.received_monotonic_ms = end_monotonic_ms`; every other disposition
+  requires null. The row is the owning publication-currentness transition. If one exact full
+  boundary also owns a restart edge, its reason and `from_epoch` must agree; a different fact in
+  the same integer monotonic millisecond is not cross-bound. `PHASE_CHANGED` is only
+  time-to-watermark for the same identity, `PUBLISHED` owns a successor seal, and
+  `CENSORED_AT_STOP` ends exactly at clean stop. Rows ending at or before the final-hour start are
+  compressed before the independent 10,000-row detail cap; only true final-hour overflow is
+  omitted, and any omission makes Soak `NOT_MET`;
 - `option_local_availability`: `unavailable_count_by_reason`, `recovery_count_by_reason`, fixed
   `end_count_by_disposition`, fixed `acceptance_window_ms = 3_600_000`, fixed
   `retained_interval_limit = 10_000`, exact `outside_window_interval_count`,
@@ -1260,7 +1326,7 @@ coverage_partition_error_ms =
 
 Any overlap, gap, negative duration, or nonzero error fails validation.
 
-Every current version-5 `coverage_segments` row has exactly
+Every current version-6 `coverage_segments` row has exactly
 `start_monotonic_ms`, `end_monotonic_ms`, `state`, `trigger_cause`, `blocking_reason`,
 `affected_scopes`, `global_continuity_epoch`, and `blocking_groups`. `blocking_groups` is a sorted
 array of 0–256 strict objects containing exactly `blocking_reason` and `affected_scopes`; group
@@ -1281,11 +1347,15 @@ global continuity was lost. Incomplete coverage derives all blocker groups from 
 committed current truth, never only from the newest causal effect. Segment identity is exactly
 `state + blocking_groups + global_continuity_epoch`: a change in any member splits at that
 boundary; a fact that leaves all three unchanged does not split merely to log activity. Every
-version-5 epoch edge additionally cross-binds the coverage `trigger_cause` to the restart root and
-one exact group to the restart effect and scopes. Later same-epoch segments may evolve other
-blockers or the active incident's affected scopes, but no restart group may appear without that
-earlier epoch edge or extend beyond its recorded recovery. An epoch restart always splits at its
-exact boundary even when the coverage state is unchanged.
+version-6 epoch edge additionally cross-binds the coverage `trigger_cause` to the restart root and
+one exact group to the restart effect and scopes. Before that incident recovers, later same-epoch
+segments may replace or combine its blocker with another real session/clock/index currentness
+blocker without a second epoch edge. No such global blocker may appear in epoch 1 or extend beyond
+the owning incident's recorded recovery. An epoch restart always splits at its exact boundary even
+when the coverage state is unchanged. The sole exception is one final, unrecovered restart whose
+exact boundary equals clean stop: it is a real terminal point event but owns no positive-duration
+coverage segment, so the final partition legitimately remains in its `from_epoch`; no zero-length
+segment is fabricated.
 
 ### Writer, reader, and compatibility
 
@@ -1301,11 +1371,14 @@ reported side by side, with no causal or quality inference. A schema or reader c
 explicit task.
 
 The Policy schema remains exactly version 3 and is unchanged by this repair. New summaries use
-`operational_diagnostics_schema_version = 5` and the grouped coverage-segment shape above.
-Explicit read-only validators continue to validate sealed version-4, version-3, and version-2
-summaries under their original exact schemas, so prior attempt directories remain truthful and
-immutable. No older version can be relabelled, supplemented, replayed, or recomputed as version 5.
-New writers emit only version 5. `SHORT_VOL_ANOMALY_EVENT` and `PUBLIC_ATOMIC_QUOTE_EVENT`
+integer `operational_diagnostics_schema_version = 6` and the grouped coverage-segment shape above.
+The current-schema writer and validator path accept only version 6. Explicit read-only validators
+continue to validate sealed version-5, version-4, version-3, and version-2 summaries under their
+own original exact schemas. Sealed version-5 operational Soak accounting retains its historical
+pending-in-coverage formula; current version-6 accounting treats publication `P` as diagnostic,
+keeps `K` independent, defines `G` from real currentness incidents, `E = W \ G`, and intersects
+option-local `U` with `E`. No older version can be relabelled, supplemented, replayed, recomputed,
+or emitted by the current writer. `SHORT_VOL_ANOMALY_EVENT` and `PUBLIC_ATOMIC_QUOTE_EVENT`
 semantics remain compatible and unchanged.
 
 Ordinary market facts, `NO_ANOMALY`, theoretical structures, unmatched combos, and full chain
@@ -1383,9 +1456,10 @@ Tests must cover:
   pending that preserves history, real global-gap epoch restart, post-gap recovery with a new
   same-current-scope joint witness, exact global-continuity duration, independent local
   availability intervals, and attributed coverage segments;
-- version-5 writer/validator tests for separate ticker shape/currentness/application ledgers,
-  bounded regression diagnostics, grouped coverage reason-to-scope attribution, and explicit
-  read-only validation of immutable sealed version-4, version-3, and version-2 evidence;
+- current version-6 writer/validator tests for separate ticker
+  shape/currentness/application/publication ledgers, bounded regression diagnostics, and grouped
+  coverage reason-to-scope attribution, plus explicit read-only validation of immutable sealed
+  version-5, version-4, version-3, and version-2 evidence;
 - absence of replay, offline recomputation, private, maker, Candidate, Shadow, Position, and
   Outcome paths.
 
@@ -1487,18 +1561,17 @@ migrated, replayed, recomputed, or retroactively accepted. Before any later Soak
 1. direct focused tests, `make check`, and strict validation of the old evidence directory;
 2. any heartbeat wire probe required by the active task, separately pre-bound under the current
    authority;
-3. pre-freezing of the new global-continuity duration, explicit option-local
-   availability/current-coverage thresholds, and the normal-boundary-pending budget in the run
-   manifest;
+3. pre-freezing of the new global-continuity duration and explicit option-local and
+   current-coverage thresholds in the run manifest; publication pending has no acceptance budget;
 4. a new independently bound Soak using the previously approved business Policy or one expressly
    permitted successor and a new empty evidence directory.
 
-Post-stop acceptance keeps three non-interchangeable results: integrity conservation,
-normal-boundary pending, and currentness-incident recovery. `P` is the wall-clock union of
-`INDEX_TIME_BOUNDARY_PENDING | INDEX_WATERMARK_PENDING` in the exact final hour. Its budget must be
-frozen before startup by an explicit human value or an exact derivation already approved in the
-active task. Pending remains in the current-coverage denominator, so the current threshold is
-calculated over the full hour and a nearly all-pending hour cannot pass by denominator shrinkage.
+Post-stop acceptance keeps independent integrity, publication, coverage, and currentness
+results. `P` is the wall-clock union of version-6 index publication pending rows in the exact final
+hour. It is diagnostic only, may overlap `KNOWN_COMPLETE` or an unrelated local blocker, has no
+budget, and is not subtracted from `K` or `E`. Current coverage is still calculated over the full
+hour and must satisfy the frozen 99% threshold. Real global/session/clock/index incident union is
+`G`; effective option-local denominator is `E = W \ G`.
 
 A global epoch restart requires a new same-snapshot witness after global recovery. Queue-lag and
 option-local incidents instead prove their recovery in their own coverage/availability ledgers;
@@ -1507,8 +1580,10 @@ Heartbeat wire evidence is conditional: an absent server heartbeat/test request 
 `NOT_OBSERVED`, while every observed request, shape, RPC terminal, and latency must
 cross-conserve. The pre-bound run manifest owns all frozen thresholds. A deterministic stop by the
 registered external supervisor is valid; elapsed time alone is never acceptance. Process failure,
-an incomplete directory, or a directory that was not empty at startup is `NOT_MET`. Historical
-attempts are never retroactively authorized.
+an incomplete directory, or a directory that was not empty at startup is `NOT_MET`. The current
+version-6 strict directory reader accepts only regular non-symlink `.json` entries and requires
+exactly one canonical `radar-run-summary.json`; sealed readers keep their historical behavior.
+Historical attempts are never retroactively authorized.
 
 ## Evidence boundary
 

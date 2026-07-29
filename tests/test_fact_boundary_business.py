@@ -11,10 +11,14 @@ import pytest
 import radar_runtime.runtime as runtime_module
 from conftest import PolicyFactory, encode_policy, policy_document
 from market_monitor import (
+    BaselinePublicationPhase,
     ContinuityGap,
     ContinuousOrderBook,
-    IndexTail,
-    IndexTailStatus,
+    IndexAvailabilityState,
+    IndexBaselineState,
+    IndexPublicationBoundary,
+    MinuteClose,
+    PublishedIndexTail,
     TimeInterval,
     TrustedClock,
 )
@@ -50,8 +54,11 @@ from short_vol_radar.detector import (
     DetectorState,
     EpisodeEndReason,
     EpisodeTracker,
+    TrackerState,
 )
 from short_vol_radar.evidence import (
+    INDEX_BASELINE_PUBLICATION_ACCEPTANCE_WINDOW_MS,
+    INDEX_BASELINE_PUBLICATION_RETAINED_INTERVAL_LIMIT,
     CoverageState,
     EvidenceWriter,
     validate_evidence_directory,
@@ -306,6 +313,43 @@ def activate_directly(
     return transition.activated_episode_id
 
 
+def test_legacy_index_pending_suspension_resets_partial_detector_persistence(
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(activation_count=2, separation_ms=0)
+    rule = load_policy_bytes(exact, digest).tte_bands[0].option_rules[OptionType.CALL]
+    tracker = EpisodeTracker(
+        runtime_identity="runtime",
+        policy_identity=digest,
+        instrument_name="SHORT",
+    )
+    first = tracker.observe(
+        DetectorObservation(
+            causal_seq=1,
+            trusted_time=TimeInterval(1_000, 1_000),
+            band_id="band",
+            richness=DecimalInterval(Decimal("1.3"), Decimal("1.3")),
+        ),
+        rule,
+    )
+    assert first.activated_episode_id is None
+
+    tracker.suspend_for_index_tail()
+    tracker.resume_after_index_tail()
+    second = tracker.observe(
+        DetectorObservation(
+            causal_seq=2,
+            trusted_time=TimeInterval(2_000, 2_000),
+            band_id="band",
+            richness=DecimalInterval(Decimal("1.3"), Decimal("1.3")),
+        ),
+        rule,
+    )
+
+    assert second.activated_episode_id is None
+    assert tracker.state is TrackerState.ARMED
+
+
 def test_one_global_index_gap_makes_every_instrument_unknown_in_same_fact_boundary(
     tmp_path: Path,
     policy_factory: PolicyFactory,
@@ -539,7 +583,11 @@ def test_minute_rollover_preserves_witness_through_recovery_and_summary(
         countable=False,
     )
 
-    assert reducer.results[instrument.instrument_name].reason == "INDEX_TIME_BOUNDARY_PENDING"
+    pending_result = reducer.results[instrument.instrument_name]
+    assert pending_result.reason is None
+    assert pending_result.known_evaluation
+    assert pending_result.full_formula_evaluation
+    assert reducer.index.publication_phase.value == "TIME_BOUNDARY_PENDING"
     assert reducer._first_joint_witness_ms == 1_001
     assert reducer._global_continuity_epoch == 1
     assert reducer.diagnostics.index_gap_count == 0
@@ -560,7 +608,11 @@ def test_minute_rollover_preserves_witness_through_recovery_and_summary(
         countable=False,
     )
 
-    assert reducer.results[instrument.instrument_name].reason == "INDEX_WATERMARK_PENDING"
+    watermark_result = reducer.results[instrument.instrument_name]
+    assert watermark_result.reason is None
+    assert watermark_result.known_evaluation
+    assert watermark_result.full_formula_evaluation
+    assert reducer.index.publication_phase.value == "WATERMARK_PENDING"
     assert reducer._first_joint_witness_ms == 1_001
     assert reducer._global_continuity_epoch == 1
     assert reducer.diagnostics.index_gap_count == 0
@@ -581,6 +633,31 @@ def test_minute_rollover_preserves_witness_through_recovery_and_summary(
     summary = json.loads(reducer.clean_stop(22_000).read_text())
     validate_run_summary(summary)
     assert summary["coverage"]["coverage_partition_error_ms"] == 0
+    publication = summary["operational_diagnostics"]["index_baseline_publication"]
+    assert publication["intervals"] == [
+        {
+            "phase": "TIME_BOUNDARY_PENDING",
+            "published_tail_last_minute_start_ms": 900_000,
+            "target_successor_minute_start_ms": 960_000,
+            "start_monotonic_ms": 20_999,
+            "end_monotonic_ms": 21_000,
+            "duration_ms": 1,
+            "end_disposition": "PHASE_CHANGED",
+            "global_continuity_epoch": 1,
+            "currentness_loss": None,
+        },
+        {
+            "phase": "WATERMARK_PENDING",
+            "published_tail_last_minute_start_ms": 900_000,
+            "target_successor_minute_start_ms": 960_000,
+            "start_monotonic_ms": 21_000,
+            "end_monotonic_ms": 21_001,
+            "duration_ms": 1,
+            "end_disposition": "PUBLISHED",
+            "global_continuity_epoch": 1,
+            "currentness_loss": None,
+        },
+    ]
     witness_band = reducer.results[instrument.instrument_name].band_id
     assert summary["operational_diagnostics"]["witness"] == {
         "global_continuity_epoch": 1,
@@ -617,7 +694,7 @@ def test_minute_rollover_preserves_witness_through_recovery_and_summary(
                 "option_type": "call",
                 "tte_band_id": witness_band,
                 "formula_instrument_name": instrument.instrument_name,
-                "count": 2,
+                "count": 4,
                 "first_joint_evaluation_boundary": {
                     "session_epoch": 1,
                     "ingress_seq": 1,
@@ -631,6 +708,249 @@ def test_minute_rollover_preserves_witness_through_recovery_and_summary(
     assert all(segment["trigger_cause"] for segment in summary["coverage_segments"])
     assert all(segment["blocking_reason"] for segment in summary["coverage_segments"])
     assert all(segment["affected_scopes"] for segment in summary["coverage_segments"])
+
+
+def test_clean_stop_at_time_to_watermark_boundary_censors_the_open_phase(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    instrument = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    establish_joint_witness(reducer, instrument)
+    reducer.clock = TrustedClock.from_response(
+        1_019_999,
+        20_999,
+        20_999,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer._causal_seq = 2
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 2, 20_999, 2),
+            CausalCause.TIME_BOUNDARY,
+        ),
+        affected_instruments=(instrument.instrument_name,),
+        countable=False,
+    )
+    assert reducer.index.publication_phase is BaselinePublicationPhase.TIME_BOUNDARY_PENDING
+
+    reducer.clock = TrustedClock.from_response(
+        1_020_000,
+        21_000,
+        21_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    summary = json.loads(reducer.clean_stop(21_000).read_text())
+    validate_run_summary(summary)
+    publication = summary["operational_diagnostics"]["index_baseline_publication"]
+    assert publication["intervals"][-1] == {
+        "phase": "TIME_BOUNDARY_PENDING",
+        "published_tail_last_minute_start_ms": 900_000,
+        "target_successor_minute_start_ms": 960_000,
+        "start_monotonic_ms": 20_999,
+        "end_monotonic_ms": 21_000,
+        "duration_ms": 1,
+        "end_disposition": "CENSORED_AT_STOP",
+        "global_continuity_epoch": 1,
+        "currentness_loss": None,
+    }
+
+
+def setup_same_millisecond_watermark_phase(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> tuple[RadarReducer, OptionInstrument]:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    instrument = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    establish_joint_witness(reducer, instrument)
+    reducer.clock = TrustedClock.from_response(
+        1_019_999,
+        20_999,
+        20_999,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer._causal_seq = 2
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 2, 20_999, 2),
+            CausalCause.TIME_BOUNDARY,
+        ),
+        affected_instruments=(instrument.instrument_name,),
+        countable=False,
+    )
+    reducer.clock = TrustedClock.from_response(
+        1_020_000,
+        21_000,
+        21_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer._causal_seq = 3
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 3, 21_000, 3),
+            CausalCause.TIME_BOUNDARY,
+        ),
+        affected_instruments=(instrument.instrument_name,),
+        countable=False,
+    )
+    assert reducer.index.publication_phase is BaselinePublicationPhase.WATERMARK_PENDING
+    return reducer, instrument
+
+
+@pytest.mark.parametrize(
+    ("terminal", "expected_disposition"),
+    (
+        ("published", "PUBLISHED"),
+        ("session_loss", "CURRENTNESS_LOST"),
+        ("clean_stop", "CENSORED_AT_STOP"),
+    ),
+)
+def test_zero_duration_watermark_phase_folds_into_preceding_time_interval(
+    terminal: str,
+    expected_disposition: str,
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer, _ = setup_same_millisecond_watermark_phase(tmp_path, policy_factory)
+
+    if terminal == "published":
+        reducer._causal_seq = 4
+        assert reducer._apply_index(
+            {
+                "timestamp": 1_020_000,
+                "price": 100,
+                "index_name": "btc_usdc",
+            },
+            FactBoundary(1, 4, 21_000, 4),
+        )
+        summary_path = reducer.clean_stop(21_001)
+    elif terminal == "session_loss":
+        reducer._retire_current_epoch(monotonic_ms=21_000)
+        summary_path = reducer.clean_stop(21_001)
+    else:
+        summary_path = reducer.clean_stop(21_000)
+
+    summary = json.loads(summary_path.read_text())
+    validate_run_summary(summary)
+    publication = summary["operational_diagnostics"]["index_baseline_publication"]
+    assert publication["start_count_by_phase"] == {
+        "TIME_BOUNDARY_PENDING": 1,
+        "WATERMARK_PENDING": 0,
+    }
+    assert publication["end_count_by_disposition"]["PHASE_CHANGED"] == 0
+    assert publication["end_count_by_disposition"][expected_disposition] == 1
+    assert len(publication["intervals"]) == 1
+    row = publication["intervals"][0]
+    assert row["phase"] == "TIME_BOUNDARY_PENDING"
+    assert row["end_disposition"] == expected_disposition
+    if terminal == "session_loss":
+        assert row["currentness_loss"]["reason"] == "SESSION_GAP"
+    else:
+        assert row["currentness_loss"] is None
+
+
+def test_terminal_source_stale_restart_needs_no_zero_duration_coverage_segment(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    instrument = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    establish_joint_witness(reducer, instrument)
+    reducer.clock = TrustedClock.from_response(
+        1_019_999,
+        20_999,
+        20_999,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer._causal_seq = 2
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 2, 20_999, 2),
+            CausalCause.TIME_BOUNDARY,
+        ),
+        affected_instruments=(instrument.instrument_name,),
+        countable=False,
+    )
+    assert reducer.index.publication_phase is BaselinePublicationPhase.TIME_BOUNDARY_PENDING
+
+    reducer.clock = TrustedClock.from_response(
+        1_050_001,
+        21_000,
+        21_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    summary = json.loads(reducer.clean_stop(21_000).read_text())
+    validate_run_summary(summary)
+
+    continuity = summary["operational_diagnostics"]["global_continuity"]
+    assert continuity["current_epoch"] == 2
+    assert continuity["recovery_edges"] == []
+    assert continuity["restart_edges"][-1]["boundary"]["received_monotonic_ms"] == 21_000
+    assert summary["coverage_segments"][-1]["global_continuity_epoch"] == 1
+    publication = summary["operational_diagnostics"]["index_baseline_publication"]
+    assert publication["intervals"][-1]["end_disposition"] == "CURRENTNESS_LOST"
+    assert publication["intervals"][-1]["currentness_loss"] == {
+        "reason": "INDEX_SOURCE_STALE",
+        "boundary": continuity["restart_edges"][-1]["boundary"],
+    }
+
+
+def test_clean_stop_records_a_successor_proven_at_the_stop_boundary_as_published(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    instrument = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    establish_joint_witness(reducer, instrument)
+    reducer.clock = TrustedClock.from_response(
+        1_019_999,
+        20_999,
+        20_999,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer._causal_seq = 2
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 2, 20_999, 2),
+            CausalCause.TIME_BOUNDARY,
+        ),
+        affected_instruments=(instrument.instrument_name,),
+        countable=False,
+    )
+    reducer.index.accept_tick(
+        source_timestamp_ms=1_020_000,
+        price=100,
+        causal_seq=3,
+    )
+    reducer.clock = TrustedClock.from_response(
+        1_020_000,
+        21_000,
+        21_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+
+    summary = json.loads(reducer.clean_stop(21_000).read_text())
+    validate_run_summary(summary)
+    publication = summary["operational_diagnostics"]["index_baseline_publication"]
+    assert publication["intervals"][-1]["end_disposition"] == "PUBLISHED"
+    assert publication["intervals"][-1]["end_monotonic_ms"] == 21_000
+    assert publication["end_count_by_disposition"]["CENSORED_AT_STOP"] == 0
 
 
 def test_real_index_gap_requires_recovery_and_a_new_summary_witness(
@@ -805,7 +1125,11 @@ def test_persistent_index_window_gap_restarts_global_continuity_once(
     monkeypatch.setattr(
         reducer.index,
         "current_tail",
-        lambda *_args, **_kwargs: IndexTail(IndexTailStatus.WINDOW_GAP),
+        lambda *_args, **_kwargs: IndexBaselineState(
+            availability=IndexAvailabilityState.WINDOW_GAP,
+            publication_phase=BaselinePublicationPhase.CURRENT,
+            reason="INDEX_WINDOW_GAP",
+        ),
     )
 
     reducer._causal_seq = 1
@@ -819,6 +1143,8 @@ def test_persistent_index_window_gap_restarts_global_continuity_once(
     )
     assert reducer._global_continuity_epoch == 2
     assert reducer.diagnostics.index_gap_count == 1
+    assert reducer.diagnostics.index_resubscribe_count == 0
+    assert not reducer._index_resubscribe_pending
     assert reducer._coverage._current_blocking_reason == "INDEX_WINDOW_GAP"
     assert reducer._coverage._current_affected_scopes == (
         f"SCOPE:{instrument.expiration_timestamp_ms}:call:{reducer.policy.tte_bands[0].band_id}",
@@ -835,6 +1161,531 @@ def test_persistent_index_window_gap_restarts_global_continuity_once(
     )
     assert reducer._global_continuity_epoch == 2
     assert reducer.diagnostics.index_gap_count == 1
+
+
+def test_countable_index_tuple_is_observed_once_without_noncountable_backfill_or_catchup_replay(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(
+        activation_count=10,
+        separation_ms=0,
+        ticker_source_stale_deadline_ms=300_000,
+    )
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    instrument = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    configure_full_formula_scope(reducer, instrument)
+    name = instrument.instrument_name
+    tracker = reducer.trackers[name]
+
+    reducer._causal_seq = 1
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 1, 1_001, 1), CausalCause.INDEX_TICK),
+        affected_instruments=(name,),
+        countable=True,
+    )
+    assert reducer.results[name].observation_eligible
+    assert tracker._activation_count == 1
+
+    reducer.index.accept_tick(source_timestamp_ms=1_020_000, price=100, causal_seq=2)
+    reducer.clock = TrustedClock.from_response(
+        1_020_001,
+        2_000,
+        2_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer._causal_seq = 2
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 2, 2_000, 2), CausalCause.TIME_BOUNDARY),
+        affected_instruments=(name,),
+        countable=False,
+    )
+    assert not reducer.results[name].observation_eligible
+    assert tracker._activation_count == 1
+    noncountable_identity = reducer._last_observation_identity[name]
+
+    reducer._causal_seq = 3
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 3, 2_001, 3), CausalCause.INDEX_TICK),
+        affected_instruments=(name,),
+        countable=True,
+    )
+    assert not reducer.results[name].observation_eligible
+    assert reducer._last_observation_identity[name] == noncountable_identity
+    assert tracker._activation_count == 1
+
+    for causal_seq, timestamp in enumerate(
+        (1_080_000, 1_140_000, 1_200_000),
+        start=4,
+    ):
+        reducer.index.accept_tick(
+            source_timestamp_ms=timestamp,
+            price=100,
+            causal_seq=causal_seq,
+        )
+    reducer.clock = TrustedClock.from_response(
+        1_200_001,
+        3_000,
+        3_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer._causal_seq = 7
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 4, 3_000, 7), CausalCause.INDEX_TICK),
+        affected_instruments=(name,),
+        countable=True,
+    )
+    assert reducer.results[name].observation_eligible
+    assert tracker._activation_count == 2
+
+    reducer._causal_seq = 8
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 5, 3_001, 8), CausalCause.INDEX_TICK),
+        affected_instruments=(name,),
+        countable=True,
+    )
+    assert not reducer.results[name].observation_eligible
+    assert tracker._activation_count == 2
+
+
+def setup_active_window_gap_publication(
+    tmp_path: Path,
+) -> tuple[RadarReducer, OptionInstrument, OptionInstrument]:
+    document = policy_document(activation_count=10, ticker_source_stale_deadline_ms=300_000)
+    bands = cast(list[dict[str, object]], document["tte_bands"])
+    bands[0]["lookbacks_minutes"] = [2]
+    bands[0]["lookback_weights"] = [1]
+    exact, digest = encode_policy(document)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    reducer.index.start_continuous_coverage(600_000)
+    for causal_seq, timestamp in enumerate(
+        (600_001, 720_000, 780_000, 840_000, 900_000, 960_000),
+        start=1,
+    ):
+        reducer.index.accept_tick(
+            source_timestamp_ms=timestamp,
+            price=100,
+            causal_seq=causal_seq,
+        )
+        reducer.index.seal_ready(timestamp)
+
+    short = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    long = make_option(
+        "BTC_USDC-27SEP24-100020-C",
+        1_000_000 + 600 * 60_000,
+    )
+    reducer.options = {short.instrument_name: short, long.instrument_name: long}
+    reducer.catalog_options = dict(reducer.options)
+    for instrument in (short, long):
+        reducer.trackers[instrument.instrument_name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=reducer.policy.identity,
+            instrument_name=instrument.instrument_name,
+        )
+        reducer.option_books[instrument.instrument_name] = make_book(
+            instrument.instrument_name,
+            "1",
+        )
+        reducer.tickers[instrument.instrument_name] = TickerState(
+            Decimal(100),
+            "index_price",
+            1_000_000,
+        )
+
+    reducer._causal_seq = 1
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 1, 1_001, 1), CausalCause.INDEX_TICK),
+        affected_instruments=(short.instrument_name, long.instrument_name),
+        countable=True,
+    )
+
+    assert reducer.results[short.instrument_name].reason != "INDEX_WINDOW_GAP"
+    assert reducer.results[long.instrument_name].reason == "INDEX_WINDOW_GAP"
+    assert reducer._global_continuity_epoch == 2
+    assert reducer.diagnostics.index_gap_count == 1
+    assert reducer.diagnostics.index_resubscribe_count == 0
+    assert not reducer._index_resubscribe_pending
+    assert reducer.results[short.instrument_name].observation_eligible
+    assert reducer.trackers[short.instrument_name]._activation_count == 1
+
+    reducer._causal_seq = 2
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 2, 1_002, 2), CausalCause.INDEX_TICK),
+        affected_instruments=(short.instrument_name, long.instrument_name),
+        countable=True,
+    )
+    assert reducer.results[short.instrument_name].reason != "INDEX_WINDOW_GAP"
+    assert reducer.results[long.instrument_name].reason == "INDEX_WINDOW_GAP"
+    assert reducer._global_continuity_epoch == 2
+    assert reducer.diagnostics.index_gap_count == 1
+    assert reducer.diagnostics.index_resubscribe_count == 0
+    assert not reducer.results[short.instrument_name].observation_eligible
+    assert reducer.trackers[short.instrument_name]._activation_count == 1
+
+    reducer.clock = TrustedClock.from_response(
+        1_019_000,
+        2_000,
+        4_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer._causal_seq = 3
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 3, 4_000, 3), CausalCause.TIME_BOUNDARY),
+        affected_instruments=(short.instrument_name, long.instrument_name),
+        countable=False,
+    )
+    active = reducer._active_index_publication_interval
+    assert active is not None
+    assert active.phase is BaselinePublicationPhase.TIME_BOUNDARY_PENDING
+    assert active.published_tail_last_minute_start_ms == 900_000
+    return reducer, short, long
+
+
+def test_window_gap_is_scoped_restarts_epoch_once_and_never_resubscribes(
+    tmp_path: Path,
+) -> None:
+    reducer, short, long = setup_active_window_gap_publication(tmp_path)
+
+    reducer.index.accept_tick(
+        source_timestamp_ms=1_020_000,
+        price=100,
+        causal_seq=4,
+    )
+    reducer.clock = TrustedClock.from_response(
+        1_020_001,
+        5_000,
+        5_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer._causal_seq = 4
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 4, 5_000, 4), CausalCause.INDEX_TICK),
+        affected_instruments=(short.instrument_name, long.instrument_name),
+        countable=True,
+    )
+
+    tail = reducer.index.published_tail
+    assert tail is not None
+    assert tail.published_tail_last_minute_start_ms == 960_000
+    assert reducer._global_continuity_epoch == 2
+    assert reducer.diagnostics.index_gap_count == 1
+    assert reducer.diagnostics.index_resubscribe_count == 0
+    assert reducer.results[short.instrument_name].reason != "INDEX_WINDOW_GAP"
+    assert reducer.results[long.instrument_name].reason == "INDEX_WINDOW_GAP"
+    assert reducer.diagnostics.index_publication_intervals[-1]["end_disposition"] == "PUBLISHED"
+
+
+@pytest.mark.parametrize(
+    ("trigger", "expected_reason"),
+    (
+        ("source_stale", "INDEX_SOURCE_STALE"),
+        ("index_regression", "INDEX_CONTINUITY_GAP"),
+        ("clock_gap", "CLOCK_GAP"),
+        ("session_gap", "SESSION_GAP"),
+    ),
+)
+def test_stronger_currentness_loss_closes_publication_inside_active_window_gap_incident(
+    trigger: str,
+    expected_reason: str,
+    tmp_path: Path,
+) -> None:
+    reducer, short, long = setup_active_window_gap_publication(tmp_path)
+
+    if trigger == "source_stale":
+        reducer.clock = TrustedClock.from_response(
+            1_050_001,
+            5_001,
+            5_001,
+            stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+        )
+        reducer._causal_seq = 4
+        reducer.settle_fact(
+            commit=fact_commit(
+                FactBoundary(1, 4, 5_001, 4),
+                CausalCause.TIME_BOUNDARY,
+            ),
+            affected_instruments=(short.instrument_name, long.instrument_name),
+            countable=False,
+        )
+    elif trigger == "index_regression":
+        reducer._causal_seq = 4
+        assert not reducer._apply_index(
+            {
+                "index_name": "btc_usdc",
+                "timestamp": 959_999,
+                "price": 100,
+            },
+            FactBoundary(1, 4, 5_001, 4),
+        )
+    elif trigger == "clock_gap":
+        reducer._causal_seq = 4
+        reducer._invalidate_clock_index(
+            FactBoundary(1, 4, 5_001, 4),
+            reason=CausalCause.CLOCK_GAP.value,
+        )
+    else:
+        reducer._retire_current_epoch(monotonic_ms=5_001)
+
+    assert reducer._active_index_publication_interval is None
+    closed = reducer.diagnostics.index_publication_intervals[-1]
+    assert closed["end_disposition"] == "CURRENTNESS_LOST"
+    assert closed["currentness_loss"] == {
+        "reason": expected_reason,
+        "boundary": {
+            "session_epoch": 1,
+            "ingress_seq": 4 if trigger != "session_gap" else 0,
+            "received_monotonic_ms": 5_001,
+            "causal_seq": 4 if trigger != "session_gap" else 3,
+        },
+    }
+    assert reducer.index.published_tail is None
+    assert reducer._global_continuity_epoch == 2
+    assert reducer.diagnostics.index_gap_count == 1
+    assert sum(reducer.diagnostics.global_continuity_restart_count.values()) == 1
+    if trigger in {"source_stale", "index_regression", "clock_gap"}:
+        assert reducer._index_resubscribe_pending
+    else:
+        reducer.begin_session(session_epoch=2, monotonic_ms=5_002)
+        assert reducer.diagnostics.index_publication_intervals[-1] == closed
+        assert (
+            reducer.diagnostics.index_publication_start_count_by_phase[
+                BaselinePublicationPhase.TIME_BOUNDARY_PENDING.value
+            ]
+            == 1
+        )
+        assert (
+            reducer.diagnostics.index_publication_end_count_by_disposition["CURRENTNESS_LOST"] == 1
+        )
+    reducer.clean_stop(5_003)
+    validate_evidence_directory(tmp_path)
+
+
+def test_index_publication_overflow_rolls_out_of_the_acceptance_window(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    reducer._causal_seq = 1
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 1, 1_001, 1), CausalCause.INDEX_TICK),
+        affected_instruments=(),
+        countable=True,
+    )
+    tail = reducer.index.published_tail
+    assert tail is not None
+
+    limit = INDEX_BASELINE_PUBLICATION_RETAINED_INTERVAL_LIMIT
+    last_end_ms = 0
+    for ordinal in range(limit + 1):
+        start_ms = 10_000 + ordinal * 2
+        last_end_ms = start_ms + 1
+        reducer._start_index_publication_interval(
+            phase=BaselinePublicationPhase.TIME_BOUNDARY_PENDING,
+            tail=tail,
+            monotonic_ms=start_ms,
+        )
+        reducer._close_index_publication_interval(
+            monotonic_ms=last_end_ms,
+            end_disposition="PUBLISHED",
+        )
+
+    assert len(reducer.diagnostics.index_publication_intervals) == limit
+    assert reducer.diagnostics.omitted_index_publication_interval_count == 1
+
+    reducer._compact_index_publication_intervals(
+        last_end_ms + INDEX_BASELINE_PUBLICATION_ACCEPTANCE_WINDOW_MS
+    )
+    assert not reducer.diagnostics.index_publication_intervals
+    assert reducer.diagnostics.omitted_index_publication_interval_count == 0
+    assert reducer.diagnostics.index_publication_outside_window_interval_count == limit + 1
+    publication = cast(
+        dict[str, object],
+        reducer._operational_diagnostics(last_end_ms)["index_baseline_publication"],
+    )
+    assert set(publication) == {
+        "start_count_by_phase",
+        "end_count_by_disposition",
+        "acceptance_window_ms",
+        "retained_interval_limit",
+        "outside_window_interval_count",
+        "outside_window_latest_end_monotonic_ms",
+        "outside_window_interval_count_by_phase_and_disposition",
+        "omitted_interval_count",
+        "omitted_interval_count_by_phase_and_disposition",
+        "intervals",
+    }
+    assert publication["outside_window_interval_count"] == limit + 1
+    assert publication["omitted_interval_count"] == 0
+    assert publication["intervals"] == []
+
+
+def shifted_publication_tail(
+    tail: PublishedIndexTail,
+    *,
+    minute_start_ms: int,
+    sequence: int,
+    monotonic_ms: int,
+) -> PublishedIndexTail:
+    return replace(
+        tail,
+        closes=(MinuteClose(minute_start_ms, Decimal(100), sequence),),
+        published_end_ms=minute_start_ms + 60_000,
+        published_tail_last_minute_start_ms=minute_start_ms,
+        first_publish_boundary=IndexPublicationBoundary(
+            session_epoch=1,
+            ingress_seq=sequence,
+            received_monotonic_ms=monotonic_ms,
+            causal_seq=sequence,
+        ),
+        proof_lower_ms=minute_start_ms + 60_000,
+        proof_watermark_ms=minute_start_ms + 60_000,
+    )
+
+
+def test_full_publication_ledger_retains_active_clean_stop_censor_for_strict_validation(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    reducer._causal_seq = 1
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 1, 1_001, 1), CausalCause.INDEX_TICK),
+        affected_instruments=(),
+        countable=True,
+    )
+    base_tail = reducer.index.published_tail
+    assert base_tail is not None
+
+    limit = INDEX_BASELINE_PUBLICATION_RETAINED_INTERVAL_LIMIT
+    for ordinal in range(limit):
+        start_ms = 1_100 + ordinal * 2
+        tail = shifted_publication_tail(
+            base_tail,
+            minute_start_ms=ordinal * 60_000,
+            sequence=ordinal + 1,
+            monotonic_ms=start_ms,
+        )
+        reducer._start_index_publication_interval(
+            phase=BaselinePublicationPhase.TIME_BOUNDARY_PENDING,
+            tail=tail,
+            monotonic_ms=start_ms,
+        )
+        reducer._close_index_publication_interval(
+            monotonic_ms=start_ms + 1,
+            end_disposition="PUBLISHED",
+        )
+
+    active_start_ms = 1_100 + limit * 2
+    active_tail = shifted_publication_tail(
+        base_tail,
+        minute_start_ms=limit * 60_000,
+        sequence=limit + 1,
+        monotonic_ms=active_start_ms,
+    )
+    reducer.index._published_tail = active_tail
+    reducer.index._publication_phase = BaselinePublicationPhase.TIME_BOUNDARY_PENDING
+    reducer._start_index_publication_interval(
+        phase=BaselinePublicationPhase.TIME_BOUNDARY_PENDING,
+        tail=active_tail,
+        monotonic_ms=active_start_ms,
+    )
+
+    summary = json.loads(reducer.clean_stop(active_start_ms + 1).read_text())
+    validate_run_summary(summary)
+    publication = summary["operational_diagnostics"]["index_baseline_publication"]
+    assert publication["omitted_interval_count"] == 1
+    assert (
+        publication["omitted_interval_count_by_phase_and_disposition"]["TIME_BOUNDARY_PENDING"][
+            "PUBLISHED"
+        ]
+        == 1
+    )
+    assert publication["end_count_by_disposition"]["CENSORED_AT_STOP"] == 1
+    assert publication["intervals"][-1]["end_disposition"] == "CENSORED_AT_STOP"
+
+
+def test_retention_boundary_keeps_time_to_watermark_chain_for_strict_validation(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    reducer._causal_seq = 1
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 1, 1_001, 1), CausalCause.INDEX_TICK),
+        affected_instruments=(),
+        countable=True,
+    )
+    base_tail = reducer.index.published_tail
+    assert base_tail is not None
+
+    limit = INDEX_BASELINE_PUBLICATION_RETAINED_INTERVAL_LIMIT
+    for ordinal in range(limit - 1):
+        start_ms = 1_100 + ordinal * 2
+        tail = shifted_publication_tail(
+            base_tail,
+            minute_start_ms=ordinal * 60_000,
+            sequence=ordinal + 1,
+            monotonic_ms=start_ms,
+        )
+        reducer._start_index_publication_interval(
+            phase=BaselinePublicationPhase.TIME_BOUNDARY_PENDING,
+            tail=tail,
+            monotonic_ms=start_ms,
+        )
+        reducer._close_index_publication_interval(
+            monotonic_ms=start_ms + 1,
+            end_disposition="PUBLISHED",
+        )
+
+    phase_start_ms = 1_100 + (limit - 1) * 2
+    phase_tail = shifted_publication_tail(
+        base_tail,
+        minute_start_ms=(limit - 1) * 60_000,
+        sequence=limit,
+        monotonic_ms=phase_start_ms,
+    )
+    reducer._start_index_publication_interval(
+        phase=BaselinePublicationPhase.TIME_BOUNDARY_PENDING,
+        tail=phase_tail,
+        monotonic_ms=phase_start_ms,
+    )
+    reducer._close_index_publication_interval(
+        monotonic_ms=phase_start_ms + 1,
+        end_disposition="PHASE_CHANGED",
+    )
+    reducer._start_index_publication_interval(
+        phase=BaselinePublicationPhase.WATERMARK_PENDING,
+        tail=phase_tail,
+        monotonic_ms=phase_start_ms + 1,
+    )
+    reducer._close_index_publication_interval(
+        monotonic_ms=phase_start_ms + 2,
+        end_disposition="PUBLISHED",
+    )
+
+    summary = json.loads(reducer.clean_stop(phase_start_ms + 3).read_text())
+    validate_run_summary(summary)
+    publication = summary["operational_diagnostics"]["index_baseline_publication"]
+    assert publication["omitted_interval_count"] == 1
+    assert publication["intervals"][-2]["end_disposition"] == "PHASE_CHANGED"
+    assert publication["intervals"][-1]["phase"] == "WATERMARK_PENDING"
+    assert (
+        publication["intervals"][-1]["start_monotonic_ms"]
+        == publication["intervals"][-2]["end_monotonic_ms"]
+    )
 
 
 def test_joint_witness_uses_full_current_scope_for_coverage_and_formula(
@@ -2281,39 +3132,41 @@ def test_combo_book_gap_quarantines_old_generation_atomic_quote(
     assert not tuple(tmp_path.glob("public-atomic-quote-*.json"))
 
 
-def test_index_tail_pending_preserves_episode_but_disables_layer_two_current(
+def test_index_publication_pending_preserves_episode_layer_two_and_known_coverage(
     tmp_path: Path,
     policy_factory: PolicyFactory,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    exact, digest = policy_factory(activation_count=1)
+    exact, digest = policy_factory(activation_count=1, ticker_source_stale_deadline_ms=300_000)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
         "BTC_USDC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
-    reducer.options = {instrument.instrument_name: instrument}
-    reducer.catalog_options = dict(reducer.options)
-    reducer.option_books[instrument.instrument_name] = make_book(
-        instrument.instrument_name,
-        "1",
+    establish_joint_witness(reducer, instrument)
+    episode_id = reducer.trackers[instrument.instrument_name].episode_id
+    assert episode_id is not None
+    reducer.combo_catalog.complete = True
+    reducer.combo_catalog.source_complete = True
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 1, 1_002, 2),
+            CausalCause.COMBO_CATALOG,
+            failure_domain=FailureScope.COMBO_LAYER,
+        ),
+        affected_instruments=(instrument.instrument_name,),
+        countable=False,
     )
-    reducer.tickers[instrument.instrument_name] = TickerState(
-        Decimal(100),
-        "index_price",
-        1_000_001,
-    )
-    episode_id = activate_directly(reducer, instrument)
-    reducer.atomic_states[episode_id] = PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE
-    monkeypatch.setattr(
-        reducer.index,
-        "current_tail",
-        lambda *_args, **_kwargs: IndexTail(IndexTailStatus.TIME_BOUNDARY_PENDING),
+    assert reducer.atomic_states[episode_id] is PublicAtomicQuoteState.NO_ACTIVE_COMBO
+    reducer.clock = TrustedClock.from_response(
+        1_019_999,
+        1_500,
+        1_500,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
     )
 
     reducer.settle_fact(
         commit=fact_commit(
-            FactBoundary(1, 1, 1_001, 2),
+            FactBoundary(1, 2, 1_500, 2),
             CausalCause.TIME_BOUNDARY,
         ),
         affected_instruments=(instrument.instrument_name,),
@@ -2321,8 +3174,12 @@ def test_index_tail_pending_preserves_episode_but_disables_layer_two_current(
     )
 
     assert reducer.trackers[instrument.instrument_name].episode_id == episode_id
-    assert reducer.trackers[instrument.instrument_name].state.name == "INDEX_TAIL_PENDING"
-    assert reducer.atomic_states[episode_id] is PublicAtomicQuoteState.NOT_EVALUATED
+    assert reducer.trackers[instrument.instrument_name].state.name == "ACTIVE"
+    assert reducer.atomic_states[episode_id] is PublicAtomicQuoteState.NO_ACTIVE_COMBO
+    assert reducer.results[instrument.instrument_name].known_evaluation
+    assert reducer.results[instrument.instrument_name].reason is None
+    assert reducer._coverage._current_state is CoverageState.KNOWN_COMPLETE
+    assert reducer.index.publication_phase.value == "TIME_BOUNDARY_PENDING"
 
 
 def test_combo_subscribe_failure_only_makes_layer_two_unknown(
@@ -2638,38 +3495,27 @@ def test_noncountable_known_current_advances_active_duration_without_persistence
     assert reducer._known_active_duration_ms[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 500
 
 
-def test_index_tail_pending_interval_is_excluded_from_known_active_duration(
+def test_index_publication_pending_remains_known_active_duration(
     tmp_path: Path,
     policy_factory: PolicyFactory,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    exact, digest = policy_factory(activation_count=1)
+    exact, digest = policy_factory(activation_count=1, ticker_source_stale_deadline_ms=300_000)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
-    seed_available_index(reducer)
     instrument = make_option(
         "BTC_USDC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
-    reducer.options = {instrument.instrument_name: instrument}
-    reducer.catalog_options = dict(reducer.options)
-    reducer.option_books[instrument.instrument_name] = make_book(
-        instrument.instrument_name,
-        "1",
-    )
-    reducer.tickers[instrument.instrument_name] = TickerState(
-        Decimal(100),
-        "index_price",
-        1_000_001,
-    )
-    episode_id = activate_directly(reducer, instrument)
+    establish_joint_witness(reducer, instrument)
+    episode_id = reducer.trackers[instrument.instrument_name].episode_id
+    assert episode_id is not None
     reducer._episode_started_ms[episode_id] = 1_000
     reducer._episode_last_trusted_ms[episode_id] = 1_000
     reducer._episode_option_type[episode_id] = OptionType.CALL
-    original_current_tail = reducer.index.current_tail
-    monkeypatch.setattr(
-        reducer.index,
-        "current_tail",
-        lambda *_args, **_kwargs: IndexTail(IndexTailStatus.TIME_BOUNDARY_PENDING),
+    reducer.clock = TrustedClock.from_response(
+        1_019_999,
+        1_500,
+        1_500,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
     )
 
     reducer.settle_fact(
@@ -2680,7 +3526,8 @@ def test_index_tail_pending_interval_is_excluded_from_known_active_duration(
         affected_instruments=(instrument.instrument_name,),
         countable=False,
     )
-    monkeypatch.setattr(reducer.index, "current_tail", original_current_tail)
+    assert reducer.index.publication_phase.value == "TIME_BOUNDARY_PENDING"
+    assert reducer.trackers[instrument.instrument_name].state.name == "ACTIVE"
     reducer.settle_fact(
         commit=fact_commit(
             FactBoundary(1, 2, 2_000, 3),
@@ -2693,7 +3540,7 @@ def test_index_tail_pending_interval_is_excluded_from_known_active_duration(
     transition = reducer.trackers[instrument.instrument_name].stop(causal_seq=4)
     reducer._record_episode_end(transition.ended_episode, 2_500)
 
-    assert reducer._known_active_duration_ms[EpisodeEndReason.CENSORED_AT_STOP.value] == 1_000
+    assert reducer._known_active_duration_ms[EpisodeEndReason.CENSORED_AT_STOP.value] == 1_500
 
 
 def test_causal_commit_is_explicit_frozen_and_whitelisted() -> None:
@@ -2773,6 +3620,37 @@ def test_one_continuity_incident_restarts_once_then_recovery_allows_one_new_rest
     assert later_incident != incident
     assert reducer._global_continuity_epoch == 3
     assert sum(reducer.diagnostics.global_continuity_restart_count.values()) == 2
+
+
+def test_invalid_incident_reference_cannot_partially_invalidate_publication(
+    tmp_path: Path,
+) -> None:
+    reducer, _, _ = setup_active_window_gap_publication(tmp_path)
+    incident = reducer._active_continuity_incident
+    assert incident is not None
+    active_publication = reducer._active_index_publication_interval
+    published_tail = reducer.index.published_tail
+    assert active_publication is not None
+    assert published_tail is not None
+    reducer._recover_continuity_incident(
+        incident,
+        boundary=FactBoundary(1, 4, 5_000, 4),
+    )
+
+    with pytest.raises(ValueError, match="incident is not active"):
+        reducer._restart_global_continuity(
+            CausalCommit(
+                boundary=FactBoundary(1, 5, 5_001, 5),
+                cause=CausalCause.INDEX_CONTINUITY_GAP,
+                failure_domain=FailureScope.CLOCK_INDEX,
+                affected_scopes=("GLOBAL",),
+            ),
+            incident=incident,
+        )
+
+    assert reducer._active_index_publication_interval == active_publication
+    assert reducer.index.published_tail == published_tail
+    assert not reducer.diagnostics.index_publication_intervals
 
 
 def test_clock_incident_stays_open_through_clock_rebootstrap_until_index_recovery(
@@ -3735,7 +4613,7 @@ def test_sustained_queue_lag_rebuilds_only_enter_and_recovery_edges(
     )
 
 
-def test_coverage_preserves_heterogeneous_blockers_and_pending_with_stale(
+def test_coverage_preserves_heterogeneous_nonpublication_blockers(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
@@ -3806,28 +4684,11 @@ def test_coverage_preserves_heterogeneous_blockers_and_pending_with_stale(
     )
     assert reducer._coverage._current_blocking_reason == "CURRENT_SCOPE_INCOMPLETE"
 
-    reducer.results[first.instrument_name] = replace(
-        first_result,
-        reason="INDEX_TIME_BOUNDARY_PENDING",
-        known_evaluation=False,
-        full_formula_evaluation=False,
-    )
-    reducer._update_coverage(
-        commit=fact_commit(
-            FactBoundary(1, 0, 1_200, 3),
-            CausalCause.TIME_BOUNDARY,
-        )
-    )
-    assert {group.blocking_reason for group in reducer._coverage._current_blocking_groups} == {
-        "INDEX_TIME_BOUNDARY_PENDING",
-        "TICKER_SOURCE_STALE",
-    }
-
     summary = json.loads(reducer.clean_stop(1_300).read_text())
     validate_run_summary(summary)
     assert any(
         {group["blocking_reason"] for group in segment["blocking_groups"]}
-        == {"INDEX_TIME_BOUNDARY_PENDING", "TICKER_SOURCE_STALE"}
+        == {"OPTION_BOOK_UNAVAILABLE", "TICKER_SOURCE_STALE"}
         for segment in summary["coverage_segments"]
     )
 

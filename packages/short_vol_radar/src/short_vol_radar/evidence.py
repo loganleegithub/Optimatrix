@@ -35,6 +35,18 @@ SUMMARY_NON_CLAIMS = (
 )
 OPTION_LOCAL_ACCEPTANCE_WINDOW_MS = 3_600_000
 OPTION_LOCAL_RETAINED_INTERVAL_LIMIT = 10_000
+INDEX_BASELINE_PUBLICATION_ACCEPTANCE_WINDOW_MS = 3_600_000
+INDEX_BASELINE_PUBLICATION_RETAINED_INTERVAL_LIMIT = 10_000
+INDEX_BASELINE_PUBLICATION_PHASES = (
+    "TIME_BOUNDARY_PENDING",
+    "WATERMARK_PENDING",
+)
+INDEX_BASELINE_PUBLICATION_END_DISPOSITIONS = (
+    "PUBLISHED",
+    "PHASE_CHANGED",
+    "CURRENTNESS_LOST",
+    "CENSORED_AT_STOP",
+)
 TRANSPORT_CLOSE_CODE_ALLOWLIST = frozenset(
     {
         "1000",
@@ -318,6 +330,9 @@ GLOBAL_CONTINUITY_RESTART_ALLOWLIST: Mapping[
     CausalCause.INDEX_SOURCE_STALE.value: ("CLOCK_INDEX", "GLOBAL"),
     CausalCause.INDEX_WINDOW_GAP.value: ("CLOCK_INDEX", "SCOPE"),
 }
+INDEX_BASELINE_INVALIDATING_REASONS = frozenset(GLOBAL_CONTINUITY_RESTART_ALLOWLIST)
+
+
 SEALED_GLOBAL_CONTINUITY_RESTART_ALLOWLIST: Mapping[
     str,
     tuple[str, str],
@@ -544,10 +559,8 @@ def project_run_summary(
         raise EvidenceError("run summary requires at least one coverage segment")
     coverage = _coverage_object(tuple(coverage_segments))
     diagnostics_version = operational_diagnostics.get("operational_diagnostics_schema_version")
-    if type(diagnostics_version) is not int or diagnostics_version != 5:
-        raise EvidenceError(
-            "current run-summary writer requires integer diagnostics schema version 5"
-        )
+    if type(diagnostics_version) is not int or diagnostics_version != 6:
+        raise EvidenceError("current run-summary writer requires integer diagnostics schema 6")
     coverage_rows: list[dict[str, object]] = []
     for segment in coverage_segments:
         coverage_rows.append(
@@ -867,6 +880,11 @@ def validate_atomic_causal_invariant(
 
 
 def validate_run_summary(value: Mapping[str, object]) -> None:
+    _validate_run_summary(value, required_diagnostics_version=6)
+
+
+def validate_sealed_version_five_run_summary(value: Mapping[str, object]) -> None:
+    """Validate immutable sealed diagnostics schema 5 evidence through the explicit sealed path."""
     _validate_run_summary(value, required_diagnostics_version=5)
 
 
@@ -918,14 +936,16 @@ def _validate_run_summary(
     _validate_identity_fields(value)
     diagnostics = _mapping(value["operational_diagnostics"], "operational_diagnostics")
     diagnostics_version = diagnostics.get("operational_diagnostics_schema_version")
-    current_version_invalid = required_diagnostics_version == 5 and (
-        type(diagnostics_version) is not int or diagnostics_version != 5
+    current_version_invalid = required_diagnostics_version == 6 and (
+        type(diagnostics_version) is not int or diagnostics_version != 6
     )
     if current_version_invalid or diagnostics_version != required_diagnostics_version:
-        if required_diagnostics_version == 5:
+        if required_diagnostics_version == 6:
             raise EvidenceError(
-                "current run-summary validator requires integer diagnostics schema version 5"
+                "current run-summary validator requires integer diagnostics schema 6"
             )
+        if required_diagnostics_version == 5:
+            raise EvidenceError("sealed run-summary validator requires diagnostics schema 5")
         if required_diagnostics_version == 4:
             raise EvidenceError(
                 "sealed operational run-summary validator requires diagnostics schema version 4"
@@ -1012,6 +1032,13 @@ def _validate_run_summary(
 
 
 def validate_evidence_directory(directory: Path) -> tuple[dict[str, object], ...]:
+    return _validate_evidence_directory(directory, diagnostics_version=6)
+
+
+def validate_sealed_version_five_evidence_directory(
+    directory: Path,
+) -> tuple[dict[str, object], ...]:
+    """Validate a sealed diagnostics schema 5 directory without rewriting or migrating it."""
     return _validate_evidence_directory(directory, diagnostics_version=5)
 
 
@@ -1036,11 +1063,33 @@ def validate_legacy_evidence_directory(
     return _validate_evidence_directory(directory, diagnostics_version=2)
 
 
+def sealed_version_five_operational_soak_window_accounting(
+    summary: Mapping[str, object],
+) -> dict[str, int]:
+    """Frozen sealed diagnostics schema 5 accounting entry point."""
+    validate_sealed_version_five_run_summary(summary)
+    return _operational_soak_window_accounting(
+        summary,
+        diagnostics_version=5,
+    )
+
+
 def operational_soak_window_accounting(
     summary: Mapping[str, object],
 ) -> dict[str, int]:
-    """Project the frozen final-hour K/P/G/E/U ledgers from strict version-5 evidence."""
+    """Current diagnostics schema accounting entry point only."""
     validate_run_summary(summary)
+    return _operational_soak_window_accounting(
+        summary,
+        diagnostics_version=6,
+    )
+
+
+def _operational_soak_window_accounting(
+    summary: Mapping[str, object],
+    *,
+    diagnostics_version: int,
+) -> dict[str, int]:
     clean_stop_ms = _non_negative_integer(
         summary["clean_stop_monotonic_ms"],
         "clean_stop_monotonic_ms",
@@ -1049,73 +1098,135 @@ def operational_soak_window_accounting(
         summary["runtime_started_monotonic_ms"],
         "runtime_started_monotonic_ms",
     )
-    window_start_ms = clean_stop_ms - OPTION_LOCAL_ACCEPTANCE_WINDOW_MS
+    window_start_ms = clean_stop_ms - INDEX_BASELINE_PUBLICATION_ACCEPTANCE_WINDOW_MS
     if window_start_ms < 0 or runtime_start_ms > window_start_ms:
         raise EvidenceError("operational Soak runtime must cover the complete final hour")
+
     segments = tuple(
-        _parse_segment(item, diagnostics_version=5)
+        _parse_segment(item, diagnostics_version=diagnostics_version)
         for item in _array(summary["coverage_segments"], "coverage_segments")
     )
-    known_complete_ms = 0
-    pending_ms = 0
-    global_incident_ms = 0
-    effective_intervals: list[tuple[int, int]] = []
+
+    k_ms = 0
+    g_ms = 0
+    e_intervals: list[tuple[int, int]] = []
+
     for segment in segments:
         start = max(window_start_ms, segment.start_monotonic_ms)
         end = min(clean_stop_ms, segment.end_monotonic_ms)
         if end <= start:
             continue
-        duration = end - start
         reasons = {group.blocking_reason for group in segment.blocking_groups}
-        is_pending = bool(reasons & SOAK_PENDING_REASONS)
+        is_pending = diagnostics_version == 5 and bool(reasons & SOAK_PENDING_REASONS)
         is_global_incident = bool(reasons & SOAK_GLOBAL_CURRENTNESS_REASONS)
         if segment.state is CoverageState.KNOWN_COMPLETE:
-            known_complete_ms += duration
-        if is_pending:
-            pending_ms += duration
+            k_ms += end - start
         if is_global_incident:
-            global_incident_ms += duration
+            g_ms += end - start
         if not is_pending and not is_global_incident:
-            effective_intervals.append((start, end))
+            e_intervals.append((start, end))
 
     diagnostics = _mapping(summary["operational_diagnostics"], "operational_diagnostics")
+
+    p_ms = 0
+    if diagnostics_version == 6:
+        publication = _mapping(
+            diagnostics["index_baseline_publication"],
+            "operational_diagnostics.index_baseline_publication",
+        )
+        if (
+            _non_negative_integer(
+                publication["omitted_interval_count"],
+                "index_baseline_publication.omitted_interval_count",
+            )
+            > 0
+        ):
+            raise EvidenceError("omitted publication intervals make Soak NOT_MET")
+        for raw in _array(publication["intervals"], "index_baseline_publication.intervals"):
+            interval = _mapping(raw, "index publication interval")
+            if interval["phase"] not in {
+                "TIME_BOUNDARY_PENDING",
+                "WATERMARK_PENDING",
+            }:
+                continue
+            start = max(
+                window_start_ms,
+                _non_negative_integer(
+                    interval["start_monotonic_ms"],
+                    "publication start",
+                ),
+            )
+            end = min(
+                clean_stop_ms,
+                _non_negative_integer(
+                    interval["end_monotonic_ms"],
+                    "publication end",
+                ),
+            )
+            if end > start:
+                p_ms += end - start
+    else:
+        p_ms = sum(
+            max(
+                0,
+                min(clean_stop_ms, segment.end_monotonic_ms)
+                - max(window_start_ms, segment.start_monotonic_ms),
+            )
+            for segment in segments
+            if {group.blocking_reason for group in segment.blocking_groups} & SOAK_PENDING_REASONS
+        )
+
     availability = _mapping(
         diagnostics["option_local_availability"],
         "operational_diagnostics.option_local_availability",
     )
-    if _non_negative_integer(
-        availability["omitted_interval_count"],
-        "option_local_availability.omitted_interval_count",
+    if (
+        _non_negative_integer(
+            availability["omitted_interval_count"],
+            "option_local_availability.omitted_interval_count",
+        )
+        > 0
     ):
-        raise EvidenceError("operational Soak accounting requires zero omitted local intervals")
-    unavailable_intersections: list[tuple[int, int]] = []
-    for raw_interval in _array(
-        availability["intervals"],
-        "option_local_availability.intervals",
-    ):
-        interval = _mapping(raw_interval, "option-local availability interval")
+        raise EvidenceError("omitted option-local intervals make Soak NOT_MET")
+
+    unavailable: list[tuple[int, int]] = []
+    for raw in _array(availability["intervals"], "option-local intervals"):
+        item = _mapping(raw, "option-local interval")
         interval_start = _non_negative_integer(
-            interval["start_monotonic_ms"],
-            "option-local interval start",
+            item["start_monotonic_ms"],
+            "option-local start",
         )
         interval_end = _non_negative_integer(
-            interval["end_monotonic_ms"],
-            "option-local interval end",
+            item["end_monotonic_ms"],
+            "option-local end",
         )
-        for effective_start, effective_end in effective_intervals:
+        for effective_start, effective_end in e_intervals:
             start = max(interval_start, effective_start)
             end = min(interval_end, effective_end)
             if end > start:
-                unavailable_intersections.append((start, end))
+                unavailable.append((start, end))
 
+    e_ms = _interval_union_duration(e_intervals)
+    u_ms = _interval_union_duration(unavailable)
+
+    if diagnostics_version == 5:
+        return {
+            "window_start_monotonic_ms": window_start_ms,
+            "window_end_monotonic_ms": clean_stop_ms,
+            "known_complete_ms": k_ms,
+            "normal_boundary_pending_ms": p_ms,
+            "global_currentness_incident_ms": g_ms,
+            "effective_option_local_denominator_ms": e_ms,
+            "option_local_unavailable_union_ms": u_ms,
+        }
     return {
         "window_start_monotonic_ms": window_start_ms,
         "window_end_monotonic_ms": clean_stop_ms,
-        "known_complete_ms": known_complete_ms,
-        "normal_boundary_pending_ms": pending_ms,
-        "global_currentness_incident_ms": global_incident_ms,
-        "effective_option_local_denominator_ms": _interval_union_duration(effective_intervals),
-        "option_local_unavailable_union_ms": _interval_union_duration(unavailable_intersections),
+        "known_complete_ms": k_ms,
+        "publication_pending_ms": p_ms,
+        "global_currentness_incident_ms": g_ms,
+        "effective_interval_ms": e_ms,
+        "option_local_unavailable_ms": u_ms,
     }
 
 
@@ -1130,7 +1241,17 @@ def _validate_evidence_directory(
     atomic_events: list[dict[str, object]] = []
     atomic_identities: set[tuple[str, str]] = set()
     summaries: list[dict[str, object]] = []
-    for path in sorted(directory.glob("*.json")):
+    summary_paths: list[Path] = []
+    if diagnostics_version == 6:
+        try:
+            paths = sorted(directory.iterdir())
+        except OSError as exc:
+            raise EvidenceError(f"invalid evidence directory: {directory}") from exc
+        if any(path.suffix != ".json" or not path.is_file() or path.is_symlink() for path in paths):
+            raise EvidenceError("unexpected evidence directory entry")
+    else:
+        paths = sorted(directory.glob("*.json"))
+    for path in paths:
         try:
             value = json.loads(
                 path.read_text(encoding="utf-8"),
@@ -1165,9 +1286,14 @@ def _validate_evidence_directory(
                 validate_sealed_operational_run_summary(value)
             elif diagnostics_version == 4:
                 validate_sealed_version_four_run_summary(value)
-            else:
+            elif diagnostics_version == 5:
+                validate_sealed_version_five_run_summary(value)
+            elif diagnostics_version == 6:
                 validate_run_summary(value)
+            else:
+                raise EvidenceError("unsupported evidence diagnostics version")
             summaries.append(value)
+            summary_paths.append(path)
         else:
             raise EvidenceError(f"unknown evidence object_kind in {path}")
         identities.add(
@@ -1180,8 +1306,12 @@ def _validate_evidence_directory(
         objects.append(value)
     if len(identities) > 1:
         raise EvidenceError("evidence directory mixes code, runtime, or Policy identities")
+    if diagnostics_version == 6 and len(summaries) != 1:
+        raise EvidenceError("current evidence directory requires exactly one run summary")
     if len(summaries) > 1:
         raise EvidenceError("evidence directory contains more than one run summary")
+    if diagnostics_version == 6 and summary_paths[0].name != "radar-run-summary.json":
+        raise EvidenceError("current run summary must be named radar-run-summary.json")
     for atomic in atomic_events:
         episode_identity = _required_string(atomic, "episode_identity")
         anomaly = anomalies_by_episode.get(episode_identity)
@@ -1338,7 +1468,7 @@ def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegmen
     fields = {"start_monotonic_ms", "end_monotonic_ms", "state"}
     if diagnostics_version == 3:
         fields.update({"reason", "affected_scopes", "global_continuity_epoch"})
-    elif diagnostics_version in {4, 5}:
+    elif diagnostics_version in {4, 5, 6}:
         fields.update(
             {
                 "trigger_cause",
@@ -1347,7 +1477,7 @@ def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegmen
                 "global_continuity_epoch",
             }
         )
-        if diagnostics_version == 5:
+        if diagnostics_version in {5, 6}:
             fields.add("blocking_groups")
     _exact_keys(value, fields, "coverage segment")
     try:
@@ -1402,7 +1532,7 @@ def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegmen
                 "NO_APPLICABLE_SCOPE coverage must identify the matching blocking reason"
             )
     blocking_groups: tuple[CoverageBlockingGroup, ...] = ()
-    if diagnostics_version == 5:
+    if diagnostics_version in {5, 6}:
         blocking_groups = _parse_coverage_blocking_groups(
             value["blocking_groups"],
             state=state,
@@ -1429,6 +1559,14 @@ def _parse_segment(value: object, *, diagnostics_version: int) -> CoverageSegmen
             raise EvidenceError(
                 "NO_APPLICABLE_SCOPE coverage must have one matching blocking group"
             )
+        if diagnostics_version == 6:
+            pending_reasons = SOAK_PENDING_REASONS
+            if blocking_reason in pending_reasons or any(
+                group.blocking_reason in pending_reasons for group in blocking_groups
+            ):
+                raise EvidenceError(
+                    "version-6 coverage cannot use index publication pending blockers"
+                )
     epoch = _positive_integer(
         value["global_continuity_epoch"],
         "coverage segment global_continuity_epoch",
@@ -1559,10 +1697,10 @@ def _validate_operational_diagnostics(
 ) -> None:
     diagnostics = _mapping(value, "operational_diagnostics")
     version = diagnostics.get("operational_diagnostics_schema_version")
-    if version == 5 and type(version) is not int:
-        raise EvidenceError("current operational diagnostics schema version must be integer 5")
-    if version not in {2, 3, 4, 5}:
-        raise EvidenceError("operational diagnostics schema version must be 2, 3, 4, or 5")
+    if version in {5, 6} and type(version) is not int:
+        raise EvidenceError("operational diagnostics schema 5 or 6 must be an integer")
+    if version not in {2, 3, 4, 5, 6}:
+        raise EvidenceError("operational diagnostics schema version must be 2, 3, 4, 5, or 6")
     fields = {
         "operational_diagnostics_schema_version",
         "runtime_limits",
@@ -1587,6 +1725,8 @@ def _validate_operational_diagnostics(
         )
     if version >= 4:
         fields.add("transport_terminal_attribution")
+    if version == 6:
+        fields.add("index_baseline_publication")
     _exact_keys(
         diagnostics,
         fields,
@@ -1727,7 +1867,17 @@ def _validate_operational_diagnostics(
             restart_edges=restart_edges,
             recovery_edges=recovery_edges,
             diagnostics_version=version,
+            clean_stop_monotonic_ms=clean_stop_monotonic_ms,
         )
+        if version == 6:
+            _validate_index_baseline_publication(
+                diagnostics["index_baseline_publication"],
+                runtime_started_monotonic_ms=runtime_started_monotonic_ms,
+                clean_stop_monotonic_ms=clean_stop_monotonic_ms,
+                coverage_segments=coverage_segments,
+                restart_edges=restart_edges,
+                recovery_edges=recovery_edges,
+            )
     if version >= 4:
         ingress = _mapping(
             diagnostics["ingress"],
@@ -3150,6 +3300,354 @@ def _validate_option_local_availability(
             raise EvidenceError("option-local conservation does not reconcile recoveries")
 
 
+def _validate_index_baseline_publication(
+    value: object,
+    *,
+    runtime_started_monotonic_ms: int,
+    clean_stop_monotonic_ms: int,
+    coverage_segments: tuple[CoverageSegment, ...],
+    restart_edges: tuple[Mapping[str, object], ...],
+    recovery_edges: Mapping[int, Mapping[str, object]],
+) -> None:
+    publication = _mapping(
+        value,
+        "operational_diagnostics.index_baseline_publication",
+    )
+    _exact_keys(
+        publication,
+        {
+            "start_count_by_phase",
+            "end_count_by_disposition",
+            "acceptance_window_ms",
+            "retained_interval_limit",
+            "outside_window_interval_count",
+            "outside_window_latest_end_monotonic_ms",
+            "outside_window_interval_count_by_phase_and_disposition",
+            "omitted_interval_count",
+            "omitted_interval_count_by_phase_and_disposition",
+            "intervals",
+        },
+        "operational_diagnostics.index_baseline_publication",
+    )
+    if publication["acceptance_window_ms"] != INDEX_BASELINE_PUBLICATION_ACCEPTANCE_WINDOW_MS:
+        raise EvidenceError("index publication acceptance window must be exactly 3600000 ms")
+    if publication["retained_interval_limit"] != INDEX_BASELINE_PUBLICATION_RETAINED_INTERVAL_LIMIT:
+        raise EvidenceError("index publication retained interval limit must be exactly 10000")
+    acceptance_start_ms = clean_stop_monotonic_ms - INDEX_BASELINE_PUBLICATION_ACCEPTANCE_WINDOW_MS
+
+    starts_raw = _mapping(
+        publication["start_count_by_phase"],
+        "index_baseline_publication.start_count_by_phase",
+    )
+    _validate_named_non_negative_counts(
+        starts_raw,
+        set(INDEX_BASELINE_PUBLICATION_PHASES),
+        "index_baseline_publication.start_count_by_phase",
+    )
+    starts = {
+        phase: _non_negative_integer(starts_raw[phase], f"index publication start {phase}")
+        for phase in INDEX_BASELINE_PUBLICATION_PHASES
+    }
+    ends_raw = _mapping(
+        publication["end_count_by_disposition"],
+        "index_baseline_publication.end_count_by_disposition",
+    )
+    _validate_named_non_negative_counts(
+        ends_raw,
+        set(INDEX_BASELINE_PUBLICATION_END_DISPOSITIONS),
+        "index_baseline_publication.end_count_by_disposition",
+    )
+    ends = {
+        disposition: _non_negative_integer(
+            ends_raw[disposition],
+            f"index publication end {disposition}",
+        )
+        for disposition in INDEX_BASELINE_PUBLICATION_END_DISPOSITIONS
+    }
+    if ends["CENSORED_AT_STOP"] > 1:
+        raise EvidenceError("index publication ledger permits at most one CENSORED_AT_STOP")
+
+    def parse_matrix(raw_value: object, label: str) -> Counter[tuple[str, str]]:
+        raw = _mapping(raw_value, f"index_baseline_publication.{label}")
+        _exact_keys(raw, set(INDEX_BASELINE_PUBLICATION_PHASES), label)
+        result: Counter[tuple[str, str]] = Counter()
+        for phase in INDEX_BASELINE_PUBLICATION_PHASES:
+            dispositions = _mapping(raw[phase], f"{label}.{phase}")
+            _validate_named_non_negative_counts(
+                dispositions,
+                set(INDEX_BASELINE_PUBLICATION_END_DISPOSITIONS),
+                f"{label}.{phase}",
+            )
+            for disposition in INDEX_BASELINE_PUBLICATION_END_DISPOSITIONS:
+                count = _non_negative_integer(
+                    dispositions[disposition],
+                    f"{label}.{phase}.{disposition}",
+                )
+                if count:
+                    result[(phase, disposition)] = count
+        return result
+
+    outside = _non_negative_integer(
+        publication["outside_window_interval_count"],
+        "index publication outside_window_interval_count",
+    )
+    omitted = _non_negative_integer(
+        publication["omitted_interval_count"],
+        "index publication omitted_interval_count",
+    )
+    outside_matrix = parse_matrix(
+        publication["outside_window_interval_count_by_phase_and_disposition"],
+        "outside_window_interval_count_by_phase_and_disposition",
+    )
+    omitted_matrix = parse_matrix(
+        publication["omitted_interval_count_by_phase_and_disposition"],
+        "omitted_interval_count_by_phase_and_disposition",
+    )
+    if sum(outside_matrix.values()) != outside:
+        raise EvidenceError("index publication outside-window counters do not conserve")
+    if sum(omitted_matrix.values()) != omitted:
+        raise EvidenceError("index publication omitted counters do not conserve")
+    compressed = outside_matrix + omitted_matrix
+    if any(compressed[(phase, "CENSORED_AT_STOP")] for phase in INDEX_BASELINE_PUBLICATION_PHASES):
+        raise EvidenceError("compressed publication ledger cannot contain CENSORED_AT_STOP")
+    if compressed[("WATERMARK_PENDING", "PHASE_CHANGED")]:
+        raise EvidenceError("index publication WATERMARK_PENDING cannot end with PHASE_CHANGED")
+    outside_latest = publication["outside_window_latest_end_monotonic_ms"]
+    if outside == 0:
+        if outside_latest is not None:
+            raise EvidenceError("empty index publication outside ledger requires null latest end")
+    else:
+        latest = _non_negative_integer(
+            outside_latest,
+            "index publication outside-window latest end",
+        )
+        if not runtime_started_monotonic_ms <= latest <= acceptance_start_ms:
+            raise EvidenceError("index publication outside-window latest end enters the final hour")
+
+    raw_rows = _array(publication["intervals"], "index_baseline_publication.intervals")
+    if len(raw_rows) > INDEX_BASELINE_PUBLICATION_RETAINED_INTERVAL_LIMIT:
+        raise EvidenceError("index publication intervals exceed bounded 10000 rows")
+    rows: list[Mapping[str, object]] = []
+    retained: Counter[tuple[str, str]] = Counter()
+    previous_start: int | None = None
+    previous_end: int | None = None
+    for raw_row in raw_rows:
+        row = _mapping(raw_row, "index baseline publication interval")
+        _exact_keys(
+            row,
+            {
+                "phase",
+                "published_tail_last_minute_start_ms",
+                "target_successor_minute_start_ms",
+                "start_monotonic_ms",
+                "end_monotonic_ms",
+                "duration_ms",
+                "end_disposition",
+                "global_continuity_epoch",
+                "currentness_loss",
+            },
+            "index baseline publication interval",
+        )
+        phase = _required_string(row, "phase")
+        if phase not in INDEX_BASELINE_PUBLICATION_PHASES:
+            raise EvidenceError("index publication phase is invalid")
+        disposition = _required_string(row, "end_disposition")
+        if disposition not in INDEX_BASELINE_PUBLICATION_END_DISPOSITIONS:
+            raise EvidenceError("index publication end disposition is invalid")
+        published = _non_negative_integer(
+            row["published_tail_last_minute_start_ms"],
+            "index publication published tail minute",
+        )
+        target = _non_negative_integer(
+            row["target_successor_minute_start_ms"],
+            "index publication successor minute",
+        )
+        if published % 60_000 or target % 60_000:
+            raise EvidenceError("index publication minutes must be 60-second aligned")
+        if target != published + 60_000:
+            raise EvidenceError(
+                "index publication successor must immediately follow published tail"
+            )
+        start = _non_negative_integer(
+            row["start_monotonic_ms"],
+            "index publication interval start",
+        )
+        end = _non_negative_integer(
+            row["end_monotonic_ms"],
+            "index publication interval end",
+        )
+        duration = _non_negative_integer(
+            row["duration_ms"],
+            "index publication interval duration",
+        )
+        if not runtime_started_monotonic_ms <= start < end <= clean_stop_monotonic_ms:
+            raise EvidenceError("index publication interval is outside runtime or zero-duration")
+        if duration != end - start:
+            raise EvidenceError("index publication interval duration does not match boundaries")
+        if end <= acceptance_start_ms:
+            raise EvidenceError("retained index publication interval does not enter final hour")
+        if previous_start is not None and start < previous_start:
+            raise EvidenceError("index publication intervals are not sorted")
+        if previous_end is not None and start < previous_end:
+            raise EvidenceError("index publication intervals overlap")
+        previous_start = start
+        previous_end = end
+        epoch = _positive_integer(
+            row["global_continuity_epoch"],
+            "index publication continuity epoch",
+        )
+        overlapping_epochs = {
+            segment.global_continuity_epoch
+            for segment in coverage_segments
+            if min(end, segment.end_monotonic_ms) > max(start, segment.start_monotonic_ms)
+        }
+        if overlapping_epochs != {epoch}:
+            raise EvidenceError("index publication interval crosses a continuity epoch")
+        if disposition == "CENSORED_AT_STOP" and end != clean_stop_monotonic_ms:
+            raise EvidenceError("index publication censor must end exactly at clean stop")
+        currentness_loss = row["currentness_loss"]
+        if disposition == "CURRENTNESS_LOST":
+            if currentness_loss is None:
+                raise EvidenceError(
+                    "index publication CURRENTNESS_LOST requires exact cause attribution"
+                )
+            loss = _mapping(
+                currentness_loss,
+                "index publication currentness loss",
+            )
+            _exact_keys(
+                loss,
+                {"reason", "boundary"},
+                "index publication currentness loss",
+            )
+            reason = _required_string(loss, "reason")
+            if reason not in INDEX_BASELINE_INVALIDATING_REASONS:
+                raise EvidenceError(
+                    "index publication currentness loss has an invalidating reason outside "
+                    "the allowlist"
+                )
+            boundary = _validate_fact_boundary(
+                loss["boundary"],
+                "index publication currentness loss boundary",
+            )
+            if boundary["received_monotonic_ms"] != end:
+                raise EvidenceError(
+                    "index publication currentness loss boundary does not match interval end"
+                )
+            exact_boundary_restarts = [
+                edge
+                for edge in restart_edges
+                if _mapping(edge["boundary"], "restart boundary") == boundary
+            ]
+            if exact_boundary_restarts:
+                if (
+                    len(exact_boundary_restarts) != 1
+                    or exact_boundary_restarts[0]["from_epoch"] != epoch
+                    or exact_boundary_restarts[0]["reason"] != reason
+                ):
+                    raise EvidenceError(
+                        "index publication currentness loss conflicts with its restart edge"
+                    )
+            else:
+                active_incident = False
+                if epoch > 1 and epoch - 2 < len(restart_edges):
+                    incident_restart = restart_edges[epoch - 2]
+                    incident_boundary = _mapping(
+                        incident_restart["boundary"],
+                        "active incident restart boundary",
+                    )
+                    recovery = recovery_edges.get(epoch - 1)
+                    recovery_boundary = (
+                        None
+                        if recovery is None
+                        else _mapping(
+                            recovery["boundary"],
+                            "active incident recovery boundary",
+                        )
+                    )
+                    active_incident = (
+                        incident_restart["to_epoch"] == epoch
+                        and _fact_boundary_order(incident_boundary) < _fact_boundary_order(boundary)
+                        and (
+                            recovery_boundary is None
+                            or _fact_boundary_order(recovery_boundary)
+                            > _fact_boundary_order(boundary)
+                        )
+                    )
+                if not active_incident:
+                    raise EvidenceError(
+                        "index publication currentness loss lacks an owning restart or "
+                        "active incident"
+                    )
+        elif currentness_loss is not None:
+            raise EvidenceError(
+                "non-currentness publication disposition cannot carry currentness loss"
+            )
+        retained[(phase, disposition)] += 1
+        rows.append(row)
+
+    for index, row in enumerate(rows):
+        disposition = str(row["end_disposition"])
+        phase = str(row["phase"])
+        end = _non_negative_integer(
+            row["end_monotonic_ms"],
+            "index publication interval end",
+        )
+        epoch = _positive_integer(
+            row["global_continuity_epoch"],
+            "index publication continuity epoch",
+        )
+        following = rows[index + 1] if index + 1 < len(rows) else None
+        if disposition == "PHASE_CHANGED":
+            if phase != "TIME_BOUNDARY_PENDING" or following is None:
+                raise EvidenceError("PHASE_CHANGED requires TIME to WATERMARK transition")
+            if (
+                following["phase"] != "WATERMARK_PENDING"
+                or following["start_monotonic_ms"] != end
+                or following["published_tail_last_minute_start_ms"]
+                != row["published_tail_last_minute_start_ms"]
+                or following["target_successor_minute_start_ms"]
+                != row["target_successor_minute_start_ms"]
+                or following["global_continuity_epoch"] != epoch
+            ):
+                raise EvidenceError("index publication PHASE_CHANGED chain is invalid")
+        if disposition == "PUBLISHED" and following is not None:
+            following_epoch = _positive_integer(
+                following["global_continuity_epoch"],
+                "following index publication continuity epoch",
+            )
+            if following_epoch == epoch:
+                published = _non_negative_integer(
+                    row["published_tail_last_minute_start_ms"],
+                    "index publication published tail minute",
+                )
+                following_published = _non_negative_integer(
+                    following["published_tail_last_minute_start_ms"],
+                    "following index publication published tail minute",
+                )
+                if following_published <= published:
+                    raise EvidenceError("same-epoch published tail must strictly advance")
+    all_counts = retained + outside_matrix + omitted_matrix
+    for phase in INDEX_BASELINE_PUBLICATION_PHASES:
+        actual = sum(
+            all_counts[(phase, disposition)]
+            for disposition in INDEX_BASELINE_PUBLICATION_END_DISPOSITIONS
+        )
+        if starts[phase] != actual:
+            raise EvidenceError("index publication phase start counters do not conserve")
+    for disposition in INDEX_BASELINE_PUBLICATION_END_DISPOSITIONS:
+        actual = sum(
+            all_counts[(phase, disposition)] for phase in INDEX_BASELINE_PUBLICATION_PHASES
+        )
+        if ends[disposition] != actual:
+            raise EvidenceError("index publication end disposition counters do not conserve")
+    total_starts = sum(starts.values())
+    total_ends = sum(ends.values())
+    expected_total = len(rows) + outside + omitted
+    if total_starts != total_ends or total_starts != expected_total:
+        raise EvidenceError("index publication interval identity does not conserve")
+
+
 def _validate_version_three_coverage(
     segments: tuple[CoverageSegment, ...],
     *,
@@ -3157,9 +3655,28 @@ def _validate_version_three_coverage(
     restart_edges: tuple[Mapping[str, object], ...],
     recovery_edges: Mapping[int, Mapping[str, object]],
     diagnostics_version: int,
+    clean_stop_monotonic_ms: int,
 ) -> None:
     epochs = [segment.global_continuity_epoch for segment in segments]
-    if epochs[0] != 1 or epochs[-1] != current_epoch:
+    terminal_restart = (
+        restart_edges[-1]
+        if diagnostics_version == 6
+        and restart_edges
+        and _mapping(
+            restart_edges[-1]["boundary"],
+            "terminal global continuity restart boundary",
+        )["received_monotonic_ms"]
+        == clean_stop_monotonic_ms
+        and restart_edges[-1]["from_epoch"] == epochs[-1]
+        and restart_edges[-1]["to_epoch"] == current_epoch
+        and restart_edges[-1]["incident_id"] not in recovery_edges
+        else None
+    )
+    represented_restart_edges = (
+        restart_edges[:-1] if terminal_restart is not None else restart_edges
+    )
+    expected_final_epoch = current_epoch - 1 if terminal_restart is not None else current_epoch
+    if epochs[0] != 1 or epochs[-1] != expected_final_epoch:
         raise EvidenceError("coverage continuity epoch does not match global continuity")
     if epochs != sorted(epochs):
         raise EvidenceError("coverage continuity epoch moved backward")
@@ -3188,9 +3705,13 @@ def _validate_version_three_coverage(
         for before, after in pairwise(segments)
         if after.global_continuity_epoch != before.global_continuity_epoch
     )
-    if len(epoch_edges) != len(restart_edges):
+    if len(epoch_edges) != len(represented_restart_edges):
         raise EvidenceError("coverage epoch edges and continuity restart edges are not one-to-one")
-    for (before, after), restart in zip(epoch_edges, restart_edges, strict=True):
+    for (before, after), restart in zip(
+        epoch_edges,
+        represented_restart_edges,
+        strict=True,
+    ):
         boundary = _mapping(restart["boundary"], "global continuity restart boundary")
         restart_scopes = _validate_affected_scopes(restart["affected_scopes"])
         if diagnostics_version == 3:
@@ -3216,24 +3737,19 @@ def _validate_version_three_coverage(
             raise EvidenceError(
                 "coverage epoch edge does not match its continuity restart trigger and effect"
             )
-    if diagnostics_version != 5:
+    if diagnostics_version < 5:
         return
     for index, segment in enumerate(segments):
-        restart_groups = tuple(
+        invalidating_groups = tuple(
             group for group in segment.blocking_groups if group.blocking_reason in restart_reasons
         )
-        if not restart_groups:
+        if not invalidating_groups:
             continue
         if index == 0 or segment.global_continuity_epoch == 1:
             raise EvidenceError(
-                "global continuity restart group requires an earlier matching epoch edge"
+                "global currentness blocker requires an earlier matching epoch edge"
             )
         incident_id = segment.global_continuity_epoch - 1
-        restart = restart_edges[incident_id - 1]
-        if any(group.blocking_reason != restart["reason"] for group in restart_groups):
-            raise EvidenceError(
-                "coverage restart group does not match the active continuity incident"
-            )
         recovery = recovery_edges.get(incident_id)
         if recovery is not None:
             recovery_boundary = _mapping(
@@ -3245,7 +3761,7 @@ def _validate_version_three_coverage(
                 "global continuity recovery monotonic boundary",
             )
             if segment.end_monotonic_ms > recovery_ms:
-                raise EvidenceError("coverage restart group extends beyond incident recovery")
+                raise EvidenceError("global currentness blocker extends beyond incident recovery")
 
 
 def _validate_affected_scopes(value: object) -> tuple[str, ...]:

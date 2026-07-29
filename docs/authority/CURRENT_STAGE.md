@@ -30,32 +30,49 @@ authorization or evidence for either one never accepts the other.
 
 ### Active terminal-goal delegation
 
-The human command on 2026-07-29 that names establishment of the online Radar as the terminal
-business goal conditionally approves
-`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` for the sole active
-`SHORT_VOL_RADAR_ESTABLISHMENT` closure against base
-`3b6864c97f21a4991c10b8105a30c6239afae247`.
+#### Original terminal-goal grant — completed and sealed
 
-The delegation permits, in order:
+The human command on 2026-07-29 that named establishment of the online Radar as the terminal
+business goal conditionally approved `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` for the sole active
+`SHORT_VOL_RADAR_ESTABLISHMENT` closure. The original grant began against base
+`3b6864c97f21a4991c10b8105a30c6239afae247`; its H1/H2/H3 operational-accounting repair is
+completed and sealed at `d6e506b343c6fc5570243ba01def46d6a047428e`. That repair is historical,
+not a second current construction.
+
+#### Current delegated sequence
+
+The delegation, as amended by the active task, currently permits only this ordered sequence:
 
 1. the bounded authority/task amendment that records this grant;
-2. the minimum independently reproducible H1/H2/H3 operational-accounting repair and direct tests;
-3. append-only commits on `codex/short-vol-radar-establishment`, followed by a non-force push only
-   after an independent exact-commit pass receipt;
-4. mechanical pre-binding of the verified remote `HEAD`, one already registered immutable Policy
-   path/digest, a new empty absolute evidence directory, and a result-independent deterministic
+2. the current `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE` against exact base
+   `d6e506b343c6fc5570243ba01def46d6a047428e`, its direct tests, and complete offline checks;
+3. one append-only exact candidate commit on `codex/short-vol-radar-establishment`;
+4. a pre-push independent exact-commit pass receipt that binds the candidate commit/tree, checks,
+   verdict, and intended bounded remote ref;
+5. after the non-force push, resolving that remote ref again and proving the verified remote ref
+   value equals the exact candidate commit, followed by post-push verified remote equality and run
+   binding;
+6. mechanical pre-binding of one already registered immutable Policy path/digest, a new empty
+   absolute evidence directory, exact execution facts, and a result-independent deterministic
    external clean-stop predicate;
-5. one production-public Smoke evidence gate and, only after its independent acceptance, one
-   production-public Soak evidence gate, with fresh directories for every retry;
-6. strict post-stop validation and, only after both independent gates pass, recording the
+7. one production-public Smoke evidence gate and, only after its independent acceptance, one
+   production-public Soak evidence gate, with a new manifest and fresh directory for every retry;
+8. strict post-stop validation and, only after both independent gates pass, recording the
    conditionally approved Radar establishment transition.
 
+The current step 2 Stage/authorization axis is `APPROVED` only because this bounded delegation
+replaces repeated technical approvals for its authority patch, offline implementation, independent
+verification, and conditional Smoke -> Soak -> final stage-record sequence. It does not establish
+the Radar early: `PUBLIC_SHADOW`, implemented capability `NONE`, and `NOT_ESTABLISHED` remain exact.
+
 The implementation author cannot be the sole verifier. The verifier must be read-only with
-respect to the candidate and bind its receipt to the exact commit, tree, remote ref, Policy
-digest, evidence directory, checks, and verdict. Any code change invalidates the receipt.
-An old or unauthorized run cannot be retroactively accepted; in particular
-`operational-soak-attempt-004` is ineligible. A failed or incomplete run is `NOT_MET` and a retry
-uses a new empty directory.
+respect to the candidate. Before push, its receipt binds the exact commit, tree, intended bounded
+remote ref, checks, and verdict; it does not claim post-push equality. After push, the controller
+must independently resolve the remote ref value, require exact equality with that commit, and bind
+the verified value, Policy digest, manifest, evidence directory, and checks before live use. Any
+code change invalidates the receipt and all later bindings. An old or unauthorized run cannot be
+retroactively accepted; in particular `operational-soak-attempt-004` is ineligible. A failed or
+incomplete run is `NOT_MET` and a retry uses a new manifest and new empty directory.
 
 This delegation does not change `PUBLIC_SHADOW`, the market or detector family, any immutable
 Policy, or an evidence acceptance threshold. It does not authorize `main` merge, history rewrite,

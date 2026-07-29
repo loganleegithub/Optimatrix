@@ -34,13 +34,16 @@ closure. The owning authority and active task must record the delegation before 
 or remote action. The record freezes the permission boundary, allowed terminal state, change
 axes, acceptance predicates, forbidden capabilities, branch scope, and role separation.
 
-Exact technical identities are not separate product decisions. Before each remote or live action,
-the controller durably binds the exact commit/tree, verified remote ref, immutable Policy
-path/digest, new empty absolute evidence directory, deterministic result-independent stop
-predicate, and required checks. A candidate author cannot be its sole verifier; the independent
-verifier is read-only for that candidate and issues an exact-identity `PASS | FAIL` receipt. Code
-changes invalidate the receipt. Evidence is append-only, an unsuccessful retry uses a new empty
-directory, and old evidence is never retroactively authorized.
+Exact technical identities are not separate product decisions. Before a non-force push, the
+controller binds the candidate commit/tree, required checks, and intended bounded remote ref. A
+candidate author cannot be its sole verifier; the independent verifier is read-only for that
+candidate and issues a pre-push independent exact-commit pass receipt with `PASS | FAIL`. After the
+push, the controller resolves the remote ref again and requires that the verified remote ref value
+equals the exact commit in the receipt. Only the post-push binding may add the verified remote
+value, immutable Policy path/digest, new empty absolute evidence directory, deterministic
+result-independent stop predicate, exact execution facts, and live required checks. Code changes
+invalidate the receipt and every later binding. Evidence is append-only, an unsuccessful retry
+uses a new manifest and new empty directory, and old evidence is never retroactively authorized.
 
 Evidence does not create stage permission. It proves whether the predicates of a prior human
 conditional stage decision were met. A stage record may change only when the exact delegation and
@@ -180,6 +183,24 @@ proof.
 
 Serializers use null/undefined for a rate whose denominator is zero or unknown. They never replace
 an undefined rate with `0`.
+
+## Index publication evidence compatibility
+
+The current Radar writer and current validators emit and accept only integer operational
+diagnostics schema version 6. Version 6 keeps grouped coverage and continuity cross-checks and adds
+one exact bounded `index_baseline_publication` pending ledger. Normal publication pending is not a
+coverage blocker and has no acceptance budget; it is diagnostic and may overlap known-complete
+coverage or unrelated local unavailability. Its retained `CURRENTNESS_LOST` row is the independent
+owning transition for exact invalidating reason and full fact boundary; active-incident
+de-duplication cannot suppress that closure or require a second restart. Current Soak accounting
+keeps `K` over the full final hour, `G` as real currentness incidents, `E = W \ G`, and
+option-local `U` intersected with `E`.
+
+Sealed diagnostics versions 5, 4, 3, and 2 remain immutable under explicit read-only readers.
+Version-5 operational Soak accounting retains its historical `K/P/G/E/U` formula and cannot be
+selected by the current reader. No historical object is migrated, replayed, recomputed, or
+retroactively accepted. `operational-soak-attempt-005` and `operational-soak-attempt-006` remain
+permanently sealed version-5 `NOT_MET` evidence.
 
 ## Denominator integrity
 

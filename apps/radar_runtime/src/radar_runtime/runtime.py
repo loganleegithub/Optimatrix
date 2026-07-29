@@ -14,12 +14,17 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from market_monitor import (
+    BaselinePublicationPhase,
     BookState,
     ContinuityGap,
     ContinuousOrderBook,
+    IndexAvailabilityState,
     IndexMinuteReducer,
+    IndexPublicationBoundary,
+    IndexPublicationUpdate,
     IndexTailStatus,
     PriceLevel,
+    PublishedIndexTail,
     TimeInterval,
     TrustedClock,
 )
@@ -72,6 +77,11 @@ from short_vol_radar.detector import (
 from short_vol_radar.evidence import (
     CHANNEL_CLASSES,
     CORE_SOURCE_NAMES,
+    INDEX_BASELINE_INVALIDATING_REASONS,
+    INDEX_BASELINE_PUBLICATION_ACCEPTANCE_WINDOW_MS,
+    INDEX_BASELINE_PUBLICATION_END_DISPOSITIONS,
+    INDEX_BASELINE_PUBLICATION_PHASES,
+    INDEX_BASELINE_PUBLICATION_RETAINED_INTERVAL_LIMIT,
     OPTION_LOCAL_ACCEPTANCE_WINDOW_MS,
     OPTION_LOCAL_RETAINED_INTERVAL_LIMIT,
     RPC_METHOD_ALLOWLIST,
@@ -514,6 +524,19 @@ class RuntimeDiagnostics:
     omitted_option_local_interval_count_by_reason: Counter[tuple[str, str]] = field(
         default_factory=Counter
     )
+    index_publication_start_count_by_phase: Counter[str] = field(default_factory=Counter)
+    index_publication_end_count_by_disposition: Counter[str] = field(default_factory=Counter)
+    index_publication_intervals: deque[dict[str, object]] = field(default_factory=deque)
+    index_publication_outside_window_interval_count: int = 0
+    index_publication_outside_window_latest_end_monotonic_ms: int | None = None
+    index_publication_outside_window_count_by_phase_disposition: Counter[tuple[str, str]] = field(
+        default_factory=Counter
+    )
+    omitted_index_publication_interval_count: int = 0
+    omitted_index_publication_count_by_phase_disposition: Counter[tuple[str, str]] = field(
+        default_factory=Counter
+    )
+    index_publication_omitted_intervals: deque[tuple[int, str, str]] = field(default_factory=deque)
     transport_terminal_attribution_count: Counter[tuple[str, str, str]] = field(
         default_factory=Counter
     )
@@ -549,6 +572,16 @@ class _OptionLocalUnavailable:
     instrument_name: str
     generation: int
     reason: str
+    start_monotonic_ms: int
+    global_continuity_epoch: int
+
+
+@dataclass(frozen=True)
+class _IndexBaselinePublicationInterval:
+    phase: BaselinePublicationPhase
+    generation: int
+    published_tail_last_minute_start_ms: int
+    target_successor_minute_start_ms: int
     start_monotonic_ms: int
     global_continuity_epoch: int
 
@@ -675,6 +708,7 @@ class RadarReducer:
         self._index_resubscribe_pending = False
         self._index_coverage_generation: int | None = None
         self._index_gap_active = False
+        self._active_index_publication_interval: _IndexBaselinePublicationInterval | None = None
         self._next_clock_refresh_ms: int | None = None
         self._next_option_catalog_recovery_ms: int | None = None
         self._next_combo_catalog_recovery_ms: int | None = None
@@ -775,6 +809,7 @@ class RadarReducer:
         self._index_resubscribe_pending = False
         self._index_coverage_generation = None
         self._index_gap_active = False
+        self._active_index_publication_interval = None
         self._next_clock_refresh_ms = (
             monotonic_ms + self.policy.runtime_limits.clock_refresh_interval_ms
         )
@@ -1636,7 +1671,10 @@ class RadarReducer:
             )
             if release_index_generation is not None:
                 trusted = self.clock.interval_at(boundary.received_monotonic_ms)
-                self.index.start_continuous_coverage(trusted.upper_ms)
+                self.index.start_continuous_coverage(
+                    trusted.upper_ms,
+                    generation=release_index_generation,
+                )
                 self._index_coverage_generation = release_index_generation
                 self._index_resubscribe_pending = False
             if request.purpose is RpcPurpose.CLOCK_REFRESH:
@@ -2032,7 +2070,10 @@ class RadarReducer:
                 continue
             if channel == INDEX_CHANNEL and self.clock is not None:
                 trusted = self.clock.interval_at(boundary.received_monotonic_ms)
-                self.index.start_continuous_coverage(trusted.upper_ms)
+                self.index.start_continuous_coverage(
+                    trusted.upper_ms,
+                    generation=slot.generation,
+                )
                 self._index_coverage_generation = slot.generation
                 self._index_resubscribe_pending = False
             if channel != INDEX_CHANNEL or self.clock is not None:
@@ -2775,6 +2816,10 @@ class RadarReducer:
                 failure_domain=FailureScope.CLOCK_INDEX,
                 affected_scopes=("GLOBAL",),
             )
+            self._invalidate_index_publication_currentness(
+                boundary=boundary,
+                reason=CausalCause.INDEX_CONTINUITY_GAP.value,
+            )
             if not self._index_gap_active:
                 self.diagnostics.index_gap_count += 1
                 self._index_gap_active = True
@@ -2804,8 +2849,6 @@ class RadarReducer:
                 countable=False,
             )
             return False
-        trusted = self.clock.interval_at(boundary.received_monotonic_ms)
-        self.index.seal_ready(trusted.lower_ms)
         self.platform.note_fresh_index_coverage()
         self._settle_fact(
             commit=CausalCommit(
@@ -2978,6 +3021,290 @@ class RadarReducer:
                 monotonic_ms=monotonic_ms,
                 end_disposition=end_disposition,
             )
+
+    def _start_index_publication_interval(
+        self,
+        *,
+        phase: BaselinePublicationPhase,
+        tail: PublishedIndexTail,
+        monotonic_ms: int,
+    ) -> None:
+        if phase is BaselinePublicationPhase.CURRENT:
+            raise ValueError("CURRENT publication phase has no interval")
+        if self._active_index_publication_interval is not None:
+            raise RuntimeError("index publication interval is already active")
+        target = tail.published_tail_last_minute_start_ms + 60_000
+        self._active_index_publication_interval = _IndexBaselinePublicationInterval(
+            phase=phase,
+            generation=tail.generation,
+            published_tail_last_minute_start_ms=tail.published_tail_last_minute_start_ms,
+            target_successor_minute_start_ms=target,
+            start_monotonic_ms=monotonic_ms,
+            global_continuity_epoch=tail.global_continuity_epoch,
+        )
+        self.diagnostics.index_publication_start_count_by_phase[phase.value] += 1
+
+    def _close_index_publication_interval(
+        self,
+        *,
+        monotonic_ms: int,
+        end_disposition: str,
+        currentness_loss_reason: str | None = None,
+        currentness_loss_boundary: FactBoundary | None = None,
+    ) -> None:
+        active = self._active_index_publication_interval
+        if active is None:
+            return
+        if end_disposition not in INDEX_BASELINE_PUBLICATION_END_DISPOSITIONS:
+            raise ValueError("index publication end disposition is invalid")
+        if end_disposition == "CURRENTNESS_LOST":
+            if (
+                currentness_loss_reason not in INDEX_BASELINE_INVALIDATING_REASONS
+                or currentness_loss_boundary is None
+                or currentness_loss_boundary.received_monotonic_ms != monotonic_ms
+            ):
+                raise ValueError(
+                    "CURRENTNESS_LOST requires one exact invalidating cause and boundary"
+                )
+        elif currentness_loss_reason is not None or currentness_loss_boundary is not None:
+            raise ValueError(
+                "non-currentness publication disposition cannot carry currentness loss"
+            )
+        currentness_loss = (
+            None
+            if currentness_loss_reason is None or currentness_loss_boundary is None
+            else {
+                "reason": currentness_loss_reason,
+                "boundary": _fact_boundary_object(currentness_loss_boundary),
+            }
+        )
+        if monotonic_ms < active.start_monotonic_ms:
+            raise RuntimeError("index publication interval moved backward")
+        if monotonic_ms == active.start_monotonic_ms:
+            self.diagnostics.index_publication_start_count_by_phase[active.phase.value] -= 1
+            retained = self.diagnostics.index_publication_intervals
+            if active.phase is BaselinePublicationPhase.WATERMARK_PENDING and retained:
+                preceding = retained[-1]
+                preceding_is_same_phase_chain = (
+                    preceding["phase"] == BaselinePublicationPhase.TIME_BOUNDARY_PENDING.value
+                    and preceding["end_disposition"] == "PHASE_CHANGED"
+                    and preceding["end_monotonic_ms"] == monotonic_ms
+                    and preceding["published_tail_last_minute_start_ms"]
+                    == active.published_tail_last_minute_start_ms
+                    and preceding["target_successor_minute_start_ms"]
+                    == active.target_successor_minute_start_ms
+                    and preceding["global_continuity_epoch"] == active.global_continuity_epoch
+                )
+                if preceding_is_same_phase_chain:
+                    if end_disposition == "PHASE_CHANGED":
+                        raise RuntimeError("zero-duration WATERMARK_PENDING cannot change phase")
+                    preceding["end_disposition"] = end_disposition
+                    preceding["currentness_loss"] = currentness_loss
+                    self.diagnostics.index_publication_end_count_by_disposition[
+                        "PHASE_CHANGED"
+                    ] -= 1
+                    self.diagnostics.index_publication_end_count_by_disposition[
+                        end_disposition
+                    ] += 1
+            self._active_index_publication_interval = None
+            return
+        row: dict[str, object] = {
+            "phase": active.phase.value,
+            "published_tail_last_minute_start_ms": (active.published_tail_last_minute_start_ms),
+            "target_successor_minute_start_ms": active.target_successor_minute_start_ms,
+            "start_monotonic_ms": active.start_monotonic_ms,
+            "end_monotonic_ms": monotonic_ms,
+            "duration_ms": monotonic_ms - active.start_monotonic_ms,
+            "end_disposition": end_disposition,
+            "global_continuity_epoch": active.global_continuity_epoch,
+            "currentness_loss": currentness_loss,
+        }
+        self._compact_index_publication_intervals(monotonic_ms)
+        retained = self.diagnostics.index_publication_intervals
+        retained.append(row)
+        if len(retained) > INDEX_BASELINE_PUBLICATION_RETAINED_INTERVAL_LIMIT:
+            omitted_row = retained.popleft()
+            omitted_end_ms = cast(int, omitted_row["end_monotonic_ms"])
+            omitted_phase = str(omitted_row["phase"])
+            omitted_disposition = str(omitted_row["end_disposition"])
+            self.diagnostics.omitted_index_publication_interval_count += 1
+            self.diagnostics.omitted_index_publication_count_by_phase_disposition[
+                (omitted_phase, omitted_disposition)
+            ] += 1
+            self.diagnostics.index_publication_omitted_intervals.append(
+                (omitted_end_ms, omitted_phase, omitted_disposition)
+            )
+        self.diagnostics.index_publication_end_count_by_disposition[end_disposition] += 1
+        self._active_index_publication_interval = None
+
+    def _invalidate_index_publication_currentness(
+        self,
+        *,
+        boundary: FactBoundary,
+        reason: str,
+    ) -> None:
+        if reason not in INDEX_BASELINE_INVALIDATING_REASONS:
+            raise ValueError("index publication invalidation reason is outside the allowlist")
+        self._close_index_publication_interval(
+            monotonic_ms=boundary.received_monotonic_ms,
+            end_disposition="CURRENTNESS_LOST",
+            currentness_loss_reason=reason,
+            currentness_loss_boundary=boundary,
+        )
+        self.index.invalidate_publication()
+
+    def _record_index_publication_outside_window(
+        self,
+        *,
+        end_monotonic_ms: int,
+        phase: str,
+        disposition: str,
+    ) -> None:
+        self.diagnostics.index_publication_outside_window_interval_count += 1
+        self.diagnostics.index_publication_outside_window_count_by_phase_disposition[
+            (phase, disposition)
+        ] += 1
+        previous = self.diagnostics.index_publication_outside_window_latest_end_monotonic_ms
+        self.diagnostics.index_publication_outside_window_latest_end_monotonic_ms = (
+            end_monotonic_ms if previous is None else max(previous, end_monotonic_ms)
+        )
+
+    def _compact_index_publication_intervals(self, monotonic_ms: int) -> None:
+        acceptance_start_ms = monotonic_ms - INDEX_BASELINE_PUBLICATION_ACCEPTANCE_WINDOW_MS
+        intervals = self.diagnostics.index_publication_intervals
+        while intervals:
+            end_ms = cast(int, intervals[0]["end_monotonic_ms"])
+            if end_ms > acceptance_start_ms:
+                break
+            row = intervals.popleft()
+            phase = str(row["phase"])
+            disposition = str(row["end_disposition"])
+            self._record_index_publication_outside_window(
+                end_monotonic_ms=end_ms,
+                phase=phase,
+                disposition=disposition,
+            )
+        omitted = self.diagnostics.index_publication_omitted_intervals
+        while omitted and omitted[0][0] <= acceptance_start_ms:
+            end_ms, phase, disposition = omitted.popleft()
+            self.diagnostics.omitted_index_publication_interval_count -= 1
+            key = (phase, disposition)
+            self.diagnostics.omitted_index_publication_count_by_phase_disposition[key] -= 1
+            self._record_index_publication_outside_window(
+                end_monotonic_ms=end_ms,
+                phase=phase,
+                disposition=disposition,
+            )
+
+    def _apply_index_publication_update(
+        self,
+        update: IndexPublicationUpdate,
+        *,
+        boundary: FactBoundary,
+        allow_start: bool,
+    ) -> None:
+        active = self._active_index_publication_interval
+        tail = update.published_tail
+        if update.currentness_lost_reason is not None:
+            if update.published_advanced:
+                raise RuntimeError("publication cannot advance while currentness is lost")
+            self._invalidate_index_publication_currentness(
+                boundary=boundary,
+                reason=update.currentness_lost_reason,
+            )
+            return
+        if update.published_advanced:
+            if active is not None:
+                self._close_index_publication_interval(
+                    monotonic_ms=boundary.received_monotonic_ms,
+                    end_disposition="PUBLISHED",
+                )
+            if (
+                allow_start
+                and tail is not None
+                and update.phase is not BaselinePublicationPhase.CURRENT
+            ):
+                self._start_index_publication_interval(
+                    phase=update.phase,
+                    tail=tail,
+                    monotonic_ms=boundary.received_monotonic_ms,
+                )
+            return
+        if active is not None:
+            if tail is None:
+                return
+            same_identity = (
+                active.generation == tail.generation
+                and active.global_continuity_epoch == tail.global_continuity_epoch
+                and active.published_tail_last_minute_start_ms
+                == tail.published_tail_last_minute_start_ms
+                and active.target_successor_minute_start_ms
+                == tail.published_tail_last_minute_start_ms + 60_000
+            )
+            if not same_identity:
+                raise RuntimeError("index publication interval crossed tail or epoch identity")
+            if update.phase is active.phase:
+                return
+            if (
+                active.phase is BaselinePublicationPhase.TIME_BOUNDARY_PENDING
+                and update.phase is BaselinePublicationPhase.WATERMARK_PENDING
+            ):
+                if not allow_start:
+                    return
+                self._close_index_publication_interval(
+                    monotonic_ms=boundary.received_monotonic_ms,
+                    end_disposition="PHASE_CHANGED",
+                )
+                self._start_index_publication_interval(
+                    phase=update.phase,
+                    tail=tail,
+                    monotonic_ms=boundary.received_monotonic_ms,
+                )
+                return
+            if update.phase is BaselinePublicationPhase.CURRENT:
+                raise RuntimeError("pending publication ended without publishing its successor")
+            raise RuntimeError("illegal index publication phase transition")
+        if (
+            allow_start
+            and tail is not None
+            and update.phase is not BaselinePublicationPhase.CURRENT
+        ):
+            self._start_index_publication_interval(
+                phase=update.phase,
+                tail=tail,
+                monotonic_ms=boundary.received_monotonic_ms,
+            )
+
+    def _publish_index_baseline(
+        self,
+        *,
+        trusted: TimeInterval,
+        boundary: FactBoundary,
+        allow_start: bool,
+        apply_ledger: bool = True,
+    ) -> IndexPublicationUpdate | None:
+        generation = self._index_coverage_generation or self.index.generation
+        if generation is None:
+            return None
+        update = self.index.publish_ready(
+            trusted_time=trusted,
+            source_stale_deadline_ms=(self.policy.runtime_limits.index_source_stale_deadline_ms),
+            generation=generation,
+            global_continuity_epoch=self._global_continuity_epoch,
+            boundary=IndexPublicationBoundary(
+                session_epoch=boundary.session_epoch,
+                ingress_seq=boundary.ingress_seq,
+                received_monotonic_ms=boundary.received_monotonic_ms,
+                causal_seq=boundary.causal_seq,
+            ),
+        )
+        if apply_ledger:
+            self._apply_index_publication_update(
+                update,
+                boundary=boundary,
+                allow_start=allow_start,
+            )
+        return update
 
     def _transition_ticker_accepted_currentness(
         self,
@@ -3777,6 +4104,11 @@ class RadarReducer:
                 or incident.incident_id != self._active_continuity_incident.incident_id
             ):
                 raise ValueError("continuity incident is not active")
+        self._invalidate_index_publication_currentness(
+            boundary=commit.boundary,
+            reason=restart_effect.cause.value,
+        )
+        if incident is not None:
             return incident
         if self._active_continuity_incident is not None:
             return self._active_continuity_incident
@@ -4116,6 +4448,12 @@ class RadarReducer:
             return
 
         self.index.seal_ready(trusted.lower_ms)
+        publication_update = self._publish_index_baseline(
+            trusted=trusted,
+            boundary=boundary,
+            allow_start=commit.cause is not CausalCause.CLEAN_STOP,
+            apply_ledger=False,
+        )
 
         directly_affected_names = tuple(
             sorted(
@@ -4177,6 +4515,18 @@ class RadarReducer:
         global_gap_effect: CausalEffect | None = None
         global_resubscribe = False
         global_resubscribe_reason: str | None = None
+        publication_epoch_restarted = False
+        if (
+            publication_update is not None
+            and publication_update.currentness_lost_reason is not None
+        ):
+            global_gap_reasons.add(publication_update.currentness_lost_reason)
+            if publication_update.currentness_lost_reason in {
+                "INDEX_SOURCE_STALE",
+                "INDEX_CONTINUITY_GAP",
+            }:
+                global_resubscribe = True
+                global_resubscribe_reason = publication_update.currentness_lost_reason
         for name in names:
             instrument = self.options[name]
             applicability = classify_time_applicability(
@@ -4194,24 +4544,24 @@ class RadarReducer:
                         self.policy.runtime_limits.index_source_stale_deadline_ms
                     ),
                 )
-                if tail.status in {
-                    IndexTailStatus.WINDOW_GAP,
-                    IndexTailStatus.SOURCE_STALE,
-                    IndexTailStatus.CONTINUITY_GAP,
+                if tail.availability in {
+                    IndexAvailabilityState.WINDOW_GAP,
+                    IndexAvailabilityState.SOURCE_STALE,
+                    IndexAvailabilityState.CONTINUITY_GAP,
                 }:
-                    global_gap_reasons.add(_index_tail_reason(tail.status))
+                    global_gap_reasons.add(tail.reason or "INDEX_CONTINUITY_GAP")
                     global_gap_scope_labels.add(
                         "SCOPE:"
                         f"{instrument.expiration_timestamp_ms}:"
                         f"{instrument.option_type.value}:"
                         f"{applicability.band.band_id}"
                     )
-                if tail.status in {
-                    IndexTailStatus.SOURCE_STALE,
-                    IndexTailStatus.CONTINUITY_GAP,
+                if tail.availability in {
+                    IndexAvailabilityState.SOURCE_STALE,
+                    IndexAvailabilityState.CONTINUITY_GAP,
                 }:
                     global_resubscribe = True
-                    if tail.status is IndexTailStatus.CONTINUITY_GAP:
+                    if tail.availability is IndexAvailabilityState.CONTINUITY_GAP:
                         global_resubscribe_reason = "INDEX_CONTINUITY_GAP"
                     elif global_resubscribe_reason is None:
                         global_resubscribe_reason = "INDEX_SOURCE_STALE"
@@ -4249,6 +4599,7 @@ class RadarReducer:
                 self.diagnostics.index_gap_count += 1
                 self._index_gap_active = True
                 active = self._active_continuity_incident
+                epoch_before_restart = self._global_continuity_epoch
                 self._restart_global_continuity(
                     transaction_commit,
                     effect=global_gap_effect,
@@ -4259,13 +4610,32 @@ class RadarReducer:
                         else None
                     ),
                 )
+                publication_epoch_restarted = self._global_continuity_epoch != epoch_before_restart
             names = tuple(sorted(self.options))
             prepared.clear()
+            if publication_epoch_restarted:
+                self._publish_index_baseline(
+                    trusted=trusted,
+                    boundary=boundary,
+                    allow_start=commit.cause is not CausalCause.CLEAN_STOP,
+                )
+            elif publication_update is not None:
+                self._apply_index_publication_update(
+                    publication_update,
+                    boundary=boundary,
+                    allow_start=commit.cause is not CausalCause.CLEAN_STOP,
+                )
         else:
             transaction_commit = self._freeze_fact_commit(
                 commit,
                 concurrent_effects,
             )
+            if publication_update is not None:
+                self._apply_index_publication_update(
+                    publication_update,
+                    boundary=boundary,
+                    allow_start=commit.cause is not CausalCause.CLEAN_STOP,
+                )
             if set(names) == set(self.options):
                 self._index_gap_active = False
                 active = self._active_continuity_incident
@@ -4351,8 +4721,10 @@ class RadarReducer:
             else:
                 current_ticker, ticker_reason, ticker_continuity_gap = self._current_ticker(name)
                 baseline_reason = (
-                    _index_tail_reason(tail.status)
-                    if tail is not None and tail.status is not IndexTailStatus.AVAILABLE
+                    tail.reason
+                    if tail is not None
+                    and tail.availability is not IndexAvailabilityState.AVAILABLE
+                    and tail.reason is not None
                     else "INDEX_WARMUP"
                 )
                 current = calculate_current_evaluation(
@@ -4364,7 +4736,8 @@ class RadarReducer:
                     ticker=current_ticker,
                     causal_closes=(
                         tail.prices
-                        if tail is not None and tail.status is IndexTailStatus.AVAILABLE
+                        if tail is not None
+                        and tail.availability is IndexAvailabilityState.AVAILABLE
                         else None
                     ),
                     baseline_unavailable_reason=baseline_reason,
@@ -4372,9 +4745,14 @@ class RadarReducer:
                     ticker_continuity_gap=ticker_continuity_gap,
                 )
             baseline_identity = (
-                (tail.status.value, tuple(tail.closes))
-                if tail is not None
-                else (applicability.classification.value,)
+                tail.economic_identity
+                if tail is not None and tail.economic_identity is not None
+                else (
+                    "INDEX_BASELINE_UNAVAILABLE",
+                    tail.availability.value
+                    if tail is not None
+                    else applicability.classification.value,
+                )
             )
             identity = detector_observation_identity(
                 policy=self.policy,
@@ -4437,15 +4815,7 @@ class RadarReducer:
                 eligible = item.observation_eligible
                 tracker = self.trackers[instrument.instrument_name]
                 previous_result = self.results.get(instrument.instrument_name)
-                previous_tail = self._last_index_tail_identity.get(instrument.instrument_name)
                 current_tail = item.index_tail_identity
-                rolled_available_minute = (
-                    previous_tail is not None
-                    and current_tail is not None
-                    and previous_tail[0] == IndexTailStatus.AVAILABLE.value
-                    and current_tail[0] == IndexTailStatus.AVAILABLE.value
-                    and previous_tail != current_tail
-                )
                 if (
                     previous_result is not None
                     and previous_result.band_id is not None
@@ -4458,11 +4828,6 @@ class RadarReducer:
                     }
                 ):
                     tracker.suspend_for_band_boundary()
-                elif rolled_available_minute and tracker.state not in {
-                    TrackerState.BAND_SUSPENDED,
-                    TrackerState.INDEX_TAIL_PENDING,
-                }:
-                    tracker.suspend_for_index_tail()
                 transition = apply_current_evaluation(
                     tracker=tracker,
                     current=current,
@@ -5732,7 +6097,6 @@ class RadarReducer:
                     ),
                 )
             else:
-                self.index.seal_ready(trusted.lower_ms)
                 self._sync_membership(boundary)
                 token = self._time_currentness_token(trusted)
                 self._settle_fact(
@@ -5850,6 +6214,10 @@ class RadarReducer:
             self._record_episode_end(transition.ended_episode, monotonic_ms)
         self._close_all_option_local_unavailable(
             monotonic_ms,
+            end_disposition="CENSORED_AT_STOP",
+        )
+        self._close_index_publication_interval(
+            monotonic_ms=monotonic_ms,
             end_disposition="CENSORED_AT_STOP",
         )
         if self._early_rpc_responses:
@@ -5987,9 +6355,29 @@ class RadarReducer:
 
         outside_reason_rows = interval_count_rows(outside_option_local_by_reason)
         omitted_reason_rows = interval_count_rows(omitted_option_local_by_reason)
+        self._compact_index_publication_intervals(self._last_boundary_monotonic_ms)
+
+        def publication_count_rows(
+            counts: Counter[tuple[str, str]],
+        ) -> dict[str, dict[str, int]]:
+            return {
+                phase: {
+                    disposition: counts[(phase, disposition)]
+                    for disposition in INDEX_BASELINE_PUBLICATION_END_DISPOSITIONS
+                }
+                for phase in INDEX_BASELINE_PUBLICATION_PHASES
+            }
+
+        publication_intervals = list(self.diagnostics.index_publication_intervals)
+        publication_outside_rows = publication_count_rows(
+            self.diagnostics.index_publication_outside_window_count_by_phase_disposition
+        )
+        publication_omitted_rows = publication_count_rows(
+            self.diagnostics.omitted_index_publication_count_by_phase_disposition
+        )
         witness_identity = self._first_joint_witness_identity
         return {
-            "operational_diagnostics_schema_version": 5,
+            "operational_diagnostics_schema_version": 6,
             "runtime_limits": self.policy.runtime_limits.as_object(),
             "ingress": {
                 "received_envelope_count": max(
@@ -6219,6 +6607,34 @@ class RadarReducer:
                 "omitted_interval_count": omitted_option_local_intervals,
                 "omitted_interval_count_by_reason": omitted_reason_rows,
                 "intervals": option_local_intervals,
+            },
+            "index_baseline_publication": {
+                "start_count_by_phase": {
+                    phase: self.diagnostics.index_publication_start_count_by_phase[phase]
+                    for phase in INDEX_BASELINE_PUBLICATION_PHASES
+                },
+                "end_count_by_disposition": {
+                    disposition: (
+                        self.diagnostics.index_publication_end_count_by_disposition[disposition]
+                    )
+                    for disposition in INDEX_BASELINE_PUBLICATION_END_DISPOSITIONS
+                },
+                "acceptance_window_ms": (INDEX_BASELINE_PUBLICATION_ACCEPTANCE_WINDOW_MS),
+                "retained_interval_limit": (INDEX_BASELINE_PUBLICATION_RETAINED_INTERVAL_LIMIT),
+                "outside_window_interval_count": (
+                    self.diagnostics.index_publication_outside_window_interval_count
+                ),
+                "outside_window_latest_end_monotonic_ms": (
+                    self.diagnostics.index_publication_outside_window_latest_end_monotonic_ms
+                ),
+                "outside_window_interval_count_by_phase_and_disposition": (
+                    publication_outside_rows
+                ),
+                "omitted_interval_count": (
+                    self.diagnostics.omitted_index_publication_interval_count
+                ),
+                "omitted_interval_count_by_phase_and_disposition": (publication_omitted_rows),
+                "intervals": publication_intervals,
             },
             "witness": {
                 "global_continuity_epoch": self._global_continuity_epoch,
@@ -7125,13 +7541,25 @@ async def observe(
     reconnect_attempt = 0
     session_epoch = 0
     while not event.is_set():
+        completed_summary_path: Path | None = None
         try:
             session_epoch += 1
-            async with DeribitPublicClient(
-                session_epoch=session_epoch,
-                rpc_deadline_ms=policy.runtime_limits.rpc_deadline_ms,
-            ) as client:
-                return await runtime.run(client, event)
+            try:
+                async with DeribitPublicClient(
+                    session_epoch=session_epoch,
+                    rpc_deadline_ms=policy.runtime_limits.rpc_deadline_ms,
+                ) as client:
+                    completed_summary_path = await runtime.run(client, event)
+                return completed_summary_path
+            except (
+                ConnectionError,
+                OSError,
+                PublicSessionError,
+                WebSocketException,
+            ):
+                if completed_summary_path is not None and event.is_set():
+                    return completed_summary_path
+                raise
         except PublicProtocolIncompatibility:
             runtime.prepare_reconnect("PROTOCOL_INCOMPATIBILITY")
             raise

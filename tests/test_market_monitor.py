@@ -13,7 +13,13 @@ from market_monitor.deribit import (
     ticker_channel,
     validate_subscription_ack,
 )
-from market_monitor.index import IndexMinuteReducer, IndexTailStatus
+from market_monitor.index import (
+    IndexMinuteReducer,
+    IndexPublicationBoundary,
+    IndexTail,
+    IndexTailStatus,
+    MinuteClose,
+)
 from market_monitor.types import SourceDataError
 
 
@@ -197,6 +203,13 @@ def test_index_tail_rollover_pending_preserves_history_and_requires_exact_alignm
         )
         reducer.seal_ready(timestamp)
 
+    reducer.publish_ready(
+        trusted_time=TimeInterval(61 * minute_ms + 1, 61 * minute_ms + 2),
+        source_stale_deadline_ms=90_000,
+        generation=1,
+        global_continuity_epoch=1,
+        boundary=IndexPublicationBoundary(1, 1, 1, 1),
+    )
     current = reducer.current_tail(
         60,
         trusted_time=TimeInterval(61 * minute_ms + 1, 61 * minute_ms + 2),
@@ -206,6 +219,13 @@ def test_index_tail_rollover_pending_preserves_history_and_requires_exact_alignm
     assert current.prices is not None
     assert len(current.prices) == 61
 
+    reducer.publish_ready(
+        trusted_time=TimeInterval(62 * minute_ms - 1, 62 * minute_ms + 1),
+        source_stale_deadline_ms=90_000,
+        generation=1,
+        global_continuity_epoch=1,
+        boundary=IndexPublicationBoundary(1, 2, 2, 2),
+    )
     across_boundary = reducer.current_tail(
         60,
         trusted_time=TimeInterval(62 * minute_ms - 1, 62 * minute_ms + 1),
@@ -214,6 +234,13 @@ def test_index_tail_rollover_pending_preserves_history_and_requires_exact_alignm
     assert across_boundary.status is IndexTailStatus.TIME_BOUNDARY_PENDING
     assert reducer.sealed == current.closes
 
+    reducer.publish_ready(
+        trusted_time=TimeInterval(62 * minute_ms + 1, 62 * minute_ms + 2),
+        source_stale_deadline_ms=90_000,
+        generation=1,
+        global_continuity_epoch=1,
+        boundary=IndexPublicationBoundary(1, 3, 3, 3),
+    )
     rollover = reducer.current_tail(
         60,
         trusted_time=TimeInterval(62 * minute_ms + 1, 62 * minute_ms + 2),
@@ -238,6 +265,13 @@ def test_index_window_gap_isolated_by_requested_lookback_without_resubscription(
         reducer.seal_ready(timestamp)
 
     trusted = TimeInterval(480_001, 480_002)
+    reducer.publish_ready(
+        trusted_time=trusted,
+        source_stale_deadline_ms=90_000,
+        generation=1,
+        global_continuity_epoch=1,
+        boundary=IndexPublicationBoundary(1, 1, 1, 1),
+    )
     short = reducer.current_tail(
         2,
         trusted_time=trusted,
@@ -298,6 +332,18 @@ def test_index_tail_treats_unstarted_bootstrap_as_warmup_not_continuity_gap() ->
         source_stale_deadline_ms=90_000,
     )
     assert real_gap.status is IndexTailStatus.CONTINUITY_GAP
+
+
+def test_legacy_index_tail_remains_an_independent_fail_closed_value() -> None:
+    closes = (MinuteClose(0, Decimal(100), 1),)
+    pending = IndexTail(IndexTailStatus.TIME_BOUNDARY_PENDING, closes)
+    available = IndexTail(IndexTailStatus.AVAILABLE, closes)
+
+    assert type(pending) is IndexTail
+    assert pending.status is IndexTailStatus.TIME_BOUNDARY_PENDING
+    assert pending.closes == closes
+    assert pending.prices is None
+    assert available.prices == (Decimal(100),)
 
 
 def test_exact_channels_bounded_subscriptions_and_acknowledgements() -> None:

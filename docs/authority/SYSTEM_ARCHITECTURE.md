@@ -152,7 +152,7 @@ The runtime must replace or resynchronize affected state before using it again. 
 be carried through an unproved gap. Covered unaffected structures remain usable when their
 declared dependencies remain complete.
 
-Operational truth is kept in three independent ledgers:
+Operational truth is kept in four independent ledgers:
 
 1. `global_continuity_epoch` restarts only for a retired session, non-contiguous/overflowed
    ingress, a trusted-clock gap, or a real index continuity loss. Option-local unavailability and
@@ -165,6 +165,10 @@ Operational truth is kept in three independent ledgers:
    bounded recovery timing. It can end or pause that option's current detector truth exactly as
    the owning contract specifies, but it cannot erase unrelated current truth or global
    continuity.
+4. `index_baseline_publication` records generation-global successor pending independently from
+   coverage. Its `CURRENTNESS_LOST` transition owns the exact invalidating reason and full
+   `FactBoundary`; closing and invalidating publication is never conditional on whether an active
+   continuity incident is allowed to create another epoch edge.
 
 One joint operational witness is derived from one settled full current
 `Policy identity × expiry_timestamp × option_type` scope snapshot. Its current-epoch durable row
@@ -175,9 +179,31 @@ boundary's affected subset cannot be combined with a separately computed complet
 `EvidenceWriter` persists only detector/atomic episode edges and the clean-stop summary and never
 participates in current-truth decisions.
 
-An initial start or unresolved gap may require causal warm-up for the Radar Policy. During that
-period the affected detector is `UNKNOWN`. Persisting a previous market stream is not required to
-avoid that result; any future warm-state restoration needs its own explicit contract and proof.
+Index baseline availability and publication are separate. For each Policy return count, the
+Monitor projects an exact `N + 1` immutable `MinuteClose` window ending at the latest minute jointly
+proven by trusted-time lower bound and accepted source watermark. Per-band availability is
+`AVAILABLE | WARMUP | WINDOW_GAP | SOURCE_STALE | CONTINUITY_GAP`; a shorter band may remain
+available while a longer band is warming or contains an older window gap. Independently, one
+tracker per acknowledged index generation and global-continuity epoch records only the immediate
+successor publication phase `CURRENT | TIME_BOUNDARY_PENDING | WATERMARK_PENDING` after the first
+immutable close exists. Normal pending does not invalidate the published tuple, resubscribe,
+pause an episode, stop Layer 2, or alter persistence.
+
+The reducer first seals minutes only after both proof boundaries, then atomically publishes the
+latest exact continuous suffix. Expected minute time never impersonates an actual close; no
+provisional current-minute close, clock-only seal, simple trailing list slice, intermediate-minute
+observation replay, or cross-gap/epoch carry is permitted. `WINDOW_GAP` retains its scoped global
+continuity restart without index resubscription. `SOURCE_STALE` and `CONTINUITY_GAP` invalidate all
+index consumers and resubscribe. Publication-currentness invalidation is an independent,
+exactly-once reducer transition. Incident de-duplication can suppress only a duplicate epoch edge
+and restart count: a later session, clock, source-stale, or continuity loss inside an already
+active incident still closes the current publication row and removes the reusable tuple.
+
+An initial start or unresolved gap may require causal warm-up for a particular Radar Policy
+return count. During that period only the affected detector query is `UNKNOWN`; generation-global
+publication may already be observable from a shorter immutable history. Persisting a previous
+market stream is not required to avoid that result; any future warm-state restoration needs its
+own explicit contract and proof.
 
 ## Module ownership
 

@@ -55,10 +55,13 @@
 **Terminal business-goal delegation:** `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`
 `CONDITIONALLY_APPROVED_BY_EXPLICIT_HUMAN_GOAL_2026_07_29`
 
-**Current construction subgate:** `SOAK_READINESS_GROUPED_ACCOUNTING_REPAIR`
+**Prior construction subgate:** `SOAK_READINESS_GROUPED_ACCOUNTING_REPAIR`
+`COMPLETED_AT_d6e506b343c6fc5570243ba01def46d6a047428e`
+
+**Current construction subgate:** `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`
 `AUTHORIZED_INSIDE_TERMINAL_DELEGATION`
 
-**Current subgate base HEAD:** `3b6864c97f21a4991c10b8105a30c6239afae247`
+**Current subgate exact base HEAD:** `d6e506b343c6fc5570243ba01def46d6a047428e`
 
 **REACHABILITY_SMOKE gate:**
 `CONDITIONALLY_AUTHORIZED_AFTER_OFFLINE_ACCEPTANCE_AND_EXACT_RUN_BINDING`
@@ -77,7 +80,7 @@
 
 **Target branch/PR:** `codex/short-vol-radar-establishment`; Draft PR to `main`
 
-## Human execution gates
+## Historical execution grants and current terminal delegation
 
 The design DRAFT did not authorize construction. The explicit human command naming
 `SHORT_VOL_RADAR_ESTABLISHMENT` on 2026-07-25 opened the original construction gate. The explicit
@@ -179,7 +182,8 @@ path-bound ordered per-file manifest sha256 =
   25f77930d041421a6bc5029848aec79ff4025dc1573cb037dc158064b40bd273
 ```
 
-The execution gates are independent:
+The following inventory records consumed historical grants and the current terminal envelope.
+Items 1–15 are sealed history; they do not impose repeated approval on the current construction:
 
 1. **Original construction gate:** authorizes implementation of the active task contract and no
    production-public connection.
@@ -222,17 +226,20 @@ The execution gates are independent:
     `ee5a00eefe06e293fca1e8ae3ee431a295f5a754`. It authorizes only the bounded offline repair,
     successor accounting revision, sealed-evidence validation, and one append-only local commit
     below.
-16. **Next `OPERATIONAL_SOAK` gate:** the former per-run human gate is superseded only by
-    `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. It remains conditionally closed until the version-5
-    repair is independently accepted and pushed, the remote exact `HEAD` is verified, Smoke is
-    independently accepted, and the Soak manifest binds the approved Policy, new empty evidence
-    directory, result-independent stop predicate, and frozen acceptance thresholds.
-17. **Terminal establishment envelope:** permits the bounded authority amendment; H1/H2/H3
-    version-5 repair; focused and complete offline checks; append-only local commits; independent
-    exact-commit verification; non-force push to `codex/short-vol-radar-establishment`; exact
-    remote equality verification; fresh production-public Smoke and Soak; pre-registered external
-    supervisor clean stop; strict evidence acceptance; and the final stage-record commit only
-    after both live gates pass.
+16. **Current exact-candidate sequence:** `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` pre-authorizes
+    this bounded version-6 candidate to proceed from independent offline acceptance and exact
+    candidate commit to a pre-push independent exact-commit pass receipt binding the intended
+    bounded remote ref. Only then may the controller non-force push. After the non-force push it
+    must prove the verified remote ref value equals the exact candidate commit and complete the
+    post-push verified remote equality and run binding before one fresh Smoke. Only after
+    independent Smoke acceptance may it bind and run one fresh Soak. No repeated technical
+    approval is required between those steps.
+17. **Terminal establishment envelope:** permits this authority amendment; the bounded
+    index-publication rearchitecture; focused and complete offline checks; append-only local
+    commits; independent exact-commit verification; non-force push to
+    `codex/short-vol-radar-establishment`; exact remote equality verification; fresh
+    production-public Smoke and Soak; pre-registered external supervisor clean stop; strict
+    evidence acceptance; and the final stage-record commit only after both live gates pass.
 
 Private/account API, credentials, balances, capital, orders, fills, trades, execution, Policy
 mutation or auto-selection, history rewrite, remote deletion, `main` merge, persistent service
@@ -240,7 +247,7 @@ deployment, task archival, and every later product closure remain unauthorized. 
 emergency stop remains effective. `CURRENT_STAGE` may change only in the final stage-record
 commit after the independent frozen predicates pass.
 
-### `SOAK_READINESS_GROUPED_ACCOUNTING_REPAIR` — terminal-delegation successor
+### Historical `SOAK_READINESS_GROUPED_ACCOUNTING_REPAIR` — completed predecessor
 
 The exact base is `3b6864c97f21a4991c10b8105a30c6239afae247`.
 
@@ -262,7 +269,7 @@ implemented capability `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`, Radar `ESTABLISHED`,
 successor closure. No evidence or green check can reach that record without the independent
 Smoke and Soak predicates below.
 
-#### Required version-5 repair
+#### Sealed version-5 repair
 
 1. One queue-lag transition envelope performs at most one full-currentness rebuild. Incident
    entry and later recovery are distinct edges; other fact transactions from the same reduced
@@ -270,7 +277,7 @@ Smoke and Soak predicates below.
 2. A legal version-5 same-epoch coverage split, including a blocker scope changing from one scope
    to multiple scopes without a continuity restart, validates. Only a real global-continuity
    epoch edge must match a restart edge.
-3. The current writer emits diagnostics schema version 5. Every coverage segment contains sorted,
+3. That writer emitted diagnostics schema version 5. Every coverage segment contained sorted,
    bounded
    `blocking_groups = [{blocking_reason, affected_scopes}]`. A complete segment has an empty
    `blocking_groups` array and scalar `blocking_reason = NONE`; an incomplete segment has one or
@@ -279,14 +286,15 @@ Smoke and Soak predicates below.
 4. Segment identity is `(state, blocking_groups, global_continuity_epoch)`; `trigger_cause`
    remains independent. Soak `P`, global incident `G`, effective time `E`, and option-local union
    `U` consume the groups rather than a lossy scalar.
-5. Version-4, version-3, and version-2 readers retain their sealed semantics and shapes. The new
-   writer emits only version 5. Historical evidence is read-only and never migrated.
+5. Version-4, version-3, and version-2 readers retained their sealed semantics and shapes. That
+   writer emitted only version 5. All resulting version-5 evidence is now historical, read-only,
+   and never migrated.
 
-Direct counterexamples must cover the real multi-transaction envelope, same-epoch scope split,
-mixed option-local blockers, pending plus an incident, malicious version-5 group shapes, and
-unchanged strict acceptance of every registered sealed legacy directory.
+The completed predecessor's direct counterexamples covered the real multi-transaction envelope,
+same-epoch scope split, mixed option-local blockers, pending plus an incident, malicious version-5
+group shapes, and unchanged strict acceptance of every then-registered sealed legacy directory.
 
-#### Terminal run bindings
+### Registered terminal run bindings for the current delegation
 
 The immutable registered Policies are:
 
@@ -306,7 +314,212 @@ that does not inspect pass/fail state. Smoke and Soak use separate manifests and
 Process failure, non-empty startup, incomplete output, identity mismatch, or strict validation
 failure is `NOT_MET`. A retry receives a new empty directory. The unregistered
 `operational-soak-attempt-004` predates this grant and is permanently
-`NOT_ELIGIBLE_FOR_ACCEPTANCE`; the first eligible successor directory is `attempt-005` or later.
+`NOT_ELIGIBLE_FOR_ACCEPTANCE`. Attempts 005 and 006 are sealed version-5 `NOT_MET` evidence; the
+current version-6 candidate must use a later new empty directory.
+
+#### External run manifest
+
+Each Smoke or Soak attempt owns one task-local external manifest. This is a durable run-binding
+record, not a runtime feature, generic orchestration framework, new product artifact, or substitute
+for the evidence directory. Its absolute path is outside both the Git worktree and the evidence
+directory. It is created and durably flushed before the production-public child starts, is never
+rewritten after startup, and is retained with its SHA-256 in the delivery record. A retry always
+uses a new manifest and new empty evidence directory.
+
+The manifest is UTF-8 JSON with the following exact top-level shape. Angle-bracket
+values below are schema placeholders; a runnable manifest contains concrete values and no
+placeholder:
+
+```json
+{
+  "external_run_manifest_schema": "OPTIMATRIX_PUBLIC_RADAR_EXTERNAL_RUN_MANIFEST",
+  "external_run_manifest_schema_version": 1,
+  "gate": "<REACHABILITY_SMOKE|OPERATIONAL_SOAK>",
+  "code": {
+    "commit": "<40-lowercase-hex>",
+    "tree": "<40-lowercase-hex>",
+    "branch": "codex/short-vol-radar-establishment",
+    "intended_remote_ref": "refs/heads/codex/short-vol-radar-establishment",
+    "verified_remote_ref": "refs/heads/codex/short-vol-radar-establishment",
+    "verified_remote_commit": "<same-40-lowercase-hex-as-commit>"
+  },
+  "policy": {
+    "policy_path": "<absolute-path>",
+    "policy_digest": "sha256:<64-lowercase-hex>"
+  },
+  "evidence": {
+    "evidence_directory": "<new-absolute-path>",
+    "startup_empty_proof": {
+      "checked_immediately_before_start": true,
+      "entry_count": 0,
+      "checked_at_utc": "<RFC3339-UTC>"
+    }
+  },
+  "execution": {
+    "argv": [
+      ".venv/bin/python",
+      "-m",
+      "radar_runtime",
+      "observe",
+      "--policy",
+      "<same-policy-path>",
+      "--expected-policy-digest",
+      "sha256:<same-policy-digest>",
+      "--evidence-dir",
+      "<same-evidence-directory>"
+    ],
+    "cwd": "<absolute-exact-clean-worktree>"
+  },
+  "stop": {
+    "kind": "MONOTONIC_DEADLINE",
+    "duration_ms": "<positive-integer>",
+    "supervisor_started_monotonic_ms": "<non-negative-integer>",
+    "deadline_monotonic_ms": "<start-plus-duration>",
+    "result_independent": true,
+    "signal": "SIGINT",
+    "signal_count": 1,
+    "emergency_stop": {
+      "enabled": true,
+      "signal": "SIGINT"
+    }
+  },
+  "required_checks": {
+    "focused_tests": "<exact-command-and-PASS-identity>",
+    "make_check": "<exact-command-and-PASS-identity>",
+    "independent_exact_commit_receipt": "<absolute-path-and-sha256>"
+  },
+  "thresholds": "<exact-gate-specific-object>"
+}
+```
+
+Every shown object has exactly the shown keys; a missing or unknown key makes the binding invalid.
+In a runnable manifest, commit/ref/path/digest/check identities are JSON strings, `gate` is exactly
+one listed gate, `duration_ms`, `supervisor_started_monotonic_ms`, and
+`deadline_monotonic_ms` are JSON integers, `result_independent` and empty-proof flags are JSON
+booleans, and `thresholds` is the exact object for the selected gate.
+
+The code binding is valid only after the pre-push independent exact-commit pass receipt and the
+post-push remote query proves `verified_remote_commit == commit` at `verified_remote_ref`. `cwd`
+must be that exact clean checkout. `argv` is an argument array, not a shell string, and must repeat
+the same Policy and evidence values. The startup-empty check occurs immediately before child
+creation.
+
+For Smoke, `thresholds` freezes the existing reachability ledger invariants below. For Soak, it
+freezes `acceptance_window_ms = 3_600_000`, `normalized_current_coverage >= 0.99`,
+`normalized_option_local_availability >= 59 / 60`, the exact Policy-derived value and derivation of
+`R`, zero publication and option-local omission, and the diagnostic-only publication contract.
+These are copies of the owning acceptance rules, not new thresholds.
+
+The external controller starts a monotonic-deadline supervisor before starting the child, writes
+`supervisor_started_monotonic_ms`, computes
+`deadline_monotonic_ms = supervisor_started_monotonic_ms + duration_ms`, flushes the complete
+manifest, and then starts the exact `argv`. The supervisor must not inspect a witness, counter,
+threshold, or provisional verdict. At the frozen deadline—or when relaying a human emergency stop
+that preempts and cancels that deadline—it sends exactly one `SIGINT` to the child and waits for the
+writer to finish the directory and exit. It never uses `SIGSTOP`, `SIGCONT`, `SIGKILL`, `kill -9`,
+or a second stop signal. A child that does not complete the writer remains incomplete and cannot be
+accepted.
+
+Smoke and Soak durations are selected before startup from their existing operational
+preconditions. Smoke duration must make warm-up and a full-formula complete-scope witness possible;
+Soak must start at or before the beginning of its exact final-hour window. Neither duration nor
+deadline is a business-pass trigger, and neither may be changed because live evidence looks likely
+to pass or fail.
+
+### `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE` — terminal-delegation successor
+
+The exact clean base is `d6e506b343c6fc5570243ba01def46d6a047428e`. This bounded successor
+construction remains inside the sole active `SHORT_VOL_RADAR_ESTABLISHMENT` task. It creates no
+second task and inherits only the existing `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` sequence:
+authority patch, independently reproducible offline repair, exact-commit verification, then the
+already independent Smoke, Soak, and final stage-record gates. Permission remains `PUBLIC_SHADOW`,
+implemented runtime capability remains `NONE`, and Production Short Vol Radar remains
+`NOT_ESTABLISHED` until those later gates independently pass.
+
+**Market/Decision input contract change:** `APPROVED` — replace the conflated index-tail pending
+model with generation-global immutable index publication plus per-return-count baseline
+availability. A normal successor publication phase is diagnostic and may overlap known Radar
+coverage; only the exact existing clock/session/index currentness failures remain fail-closed.
+
+**Decision Policy change:** `NONE` — no Policy byte, digest, formula, target quantity, TTE or Delta
+scope, lookback, weight, floor, activation/clear threshold, persistence, separation, or runtime
+limit changes. Publication phase is not a detector observation and cannot reset incomplete
+activation or clear persistence.
+
+**Outcome/evaluation contract change:** `NONE` — no future label, replay, recomputation, historical
+reclassification, Candidate, Position, Outcome, PnL, comparator, qualification, order, or trade.
+
+**Stage/authorization change:** `APPROVED` — the terminal delegation replaces repeated technical
+approval only for this bounded construction and the existing conditional Smoke -> Soak -> final
+stage-record sequence. It does not establish the Radar early, change `PUBLIC_SHADOW`, authorize
+`main` merge, or grant private/account, capital, execution, deployment, or later-closure authority.
+
+#### Owning state contract
+
+1. Index publication is generation-global. After one immutable published close is established for
+   the current acknowledged index generation and continuity epoch, the runtime may observe the
+   immediate successor as `TIME_BOUNDARY_PENDING` or `WATERMARK_PENDING`. `CURRENT` has no ledger
+   row. Once pending starts it is latched to that exact tail/target: a clock refresh that only
+   tightens `trusted.upper` below the target cannot erase the interval. It ends only by successor
+   proof/publication, the legal time-to-watermark phase change, currentness loss, or clean stop.
+   Publication phase never changes per-band availability.
+2. Baseline availability is queried independently for each configured return count and is exactly
+   `AVAILABLE | WARMUP | WINDOW_GAP | SOURCE_STALE | CONTINUITY_GAP`. `N` returns require an exact
+   60-second-aligned `N + 1` close tuple ending at the proven expected minute. A short window may be
+   `AVAILABLE` while a longer window is `WARMUP` or `WINDOW_GAP`.
+3. `proven_end_ms = floor(min(trusted_time.lower_ms, accepted_index_watermark_ms) / 60000) * 60000`
+   yields only `expected_latest_close_start_ms = proven_end_ms - 60000`. Expected time never
+   impersonates an actual close. Actual publication changes only after the exact generation,
+   coverage-start, continuity, and terminal-alignment checks pass.
+4. A reusable published tuple remains available during normal publication pending. Pending does
+   not make detector truth `UNKNOWN`, pause an episode or Layer 2, enter economic observation
+   identity, increment persistence, or reset persistence. A newly published consumed-fact identity
+   is observed at most once and only on an already countable economic boundary; a clock/time-only
+   publication update is current truth only, and no later unchanged fact backfills an observation.
+5. `WINDOW_GAP` retains the existing global-continuity restart without index resubscription.
+   `SOURCE_STALE` and `CONTINUITY_GAP` affect all index consumers and resubscribe. Timestamp
+   regression and a late tick targeting a sealed minute are `INDEX_CONTINUITY_GAP`. Retired
+   generation frames have zero business effect. Publication invalidation is an independent,
+   exactly-once state transition: session, clock, source-stale, and continuity loss always close
+   the active pending row and invalidate its tuple, while an already active incident suppresses
+   only a duplicate restart edge/count. No published tuple or publication interval crosses a
+   global-continuity epoch boundary.
+6. The current writer emits integer diagnostics schema version 6 and a bounded
+   `index_baseline_publication` pending ledger. Every retained row has nullable
+   `currentness_loss`; only `CURRENTNESS_LOST` owns an exact allowlisted reason plus full
+   `FactBoundary`. It must bind either an exact-boundary new restart or a strictly earlier,
+   unrecovered incident ending in the row's epoch; a different fact in the same monotonic
+   millisecond is never cross-bound. A zero-duration watermark successor at that same millisecond
+   is folded into the preceding positive-duration time row's final disposition, cancelling both
+   the watermark start and intermediate `PHASE_CHANGED` end; no orphan chain or zero-duration row
+   is emitted. Current coverage rejects pending blockers; sealed version-5, version-4, version-3,
+   and version-2 evidence remains read-only under explicit owning readers and is never migrated or
+   recomputed.
+
+#### Sealed successor evidence correction
+
+`operational-soak-attempt-005` and `operational-soak-attempt-006` are immutable sealed diagnostics
+version-5 evidence and permanently `NOT_MET` under their frozen acceptance contract. Their strict
+validation success does not authorize reinterpretation under version 6:
+
+```text
+attempt-005:
+  radar-run-summary.json sha256 =
+    7270ade324ebcb5c362b279737fab22be2c7745639b238cea0b31bac5d729a52
+  objects = 194
+  final-hour K = 3542104 ms
+  legacy pending P = 57896 ms
+attempt-006:
+  radar-run-summary.json sha256 =
+    4f80b34a1000ca22cc61f04d9f327a310e3f10d86f5514599ebfbd9ad15753bf
+  objects = 225
+  final-hour K = 3536979 ms
+  legacy pending P = 63021 ms
+```
+
+Neither directory may be supplemented, migrated, replayed, recomputed, relabelled, or accepted
+retroactively. A future eligible run must use a new empty directory and the then-current exact
+writer and validator.
 
 ## Business closure
 
@@ -1076,6 +1289,9 @@ A human emergency stop or the manifest's pre-registered external supervisor may 
 run. The supervisor predicate must be deterministic and independent of observed pass/fail state.
 Acceptance is strictly `POST_STOP_ONLY`: after clean stop, the writer completes the directory,
 the current strict validator passes, and the frozen formulas below produce `MET | NOT_MET`.
+The current version-6 directory validator accepts only regular non-symlink `.json` entries and
+requires exactly one summary named `radar-run-summary.json`; an empty, event-only, differently
+named, or mixed-entry directory is incomplete and fails.
 Process failure, an incomplete directory, or an evidence directory that was not empty at startup
 is `NOT_MET`. Elapsed time alone is never acceptance.
 
@@ -1102,22 +1318,18 @@ Acceptance uses three non-interchangeable ledgers and reports each result separa
    transport-terminal, and writer-directory conservation all reconcile. Ordered queue lag is not
    an integrity loss. Only queue overflow, application-sequence gap/duplicate, or a real socket
    loss may retire a session.
-2. **Normal-boundary-pending ledger.** Let `P` be the wall-clock union inside `W` of coverage segments
-   whose exact blocking reason is `INDEX_TIME_BOUNDARY_PENDING` or
-   `INDEX_WATERMARK_PENDING`. These intervals are non-countable, never restart continuity, and
-   must either recover, change into an explicitly recorded incident, or end exactly at clean
-   stop. They are never renamed as an incident or integrity loss. The terminal delegation freezes
-   their independent budget by exact derivation from the already frozen one-hour 99% coverage
-   threshold:
-
-   ```text
-   pending_budget_status = FROZEN_BY_DERIVATION
-   P_budget_ms = floor((1 - 0.99) * 3_600_000) = 36_000
-   require duration(P) <= 36_000
-   ```
-
-   This does not relax the coverage gate: `P` is a subset of non-complete time, and the existing
-   `duration(K) / 3_600_000 >= 0.99` already limits all non-complete time to at most 36,000 ms.
+2. **Index-baseline-publication ledger.** Let `P` be the wall-clock union inside `W` of
+   generation-global `TIME_BOUNDARY_PENDING | WATERMARK_PENDING` publication rows. `P` is a
+   separate diagnostic and may overlap `KNOWN_COMPLETE` coverage or an unrelated option-local
+   blocker. It is not deducted from `K` or `E`, has no acceptance budget, and need not partition
+   the hour with coverage incidents. Every row is half-open, bounded, epoch-bound, and ends only as
+   `PUBLISHED | PHASE_CHANGED | CURRENTNESS_LOST | CENSORED_AT_STOP`; zero-duration rows are
+   forbidden. `PHASE_CHANGED` is only same-tail/same-target `TIME_BOUNDARY_PENDING ->
+   WATERMARK_PENDING`. A successor seal ends `PUBLISHED`. `CURRENTNESS_LOST` independently owns
+   the exact invalidating reason and full `FactBoundary`; continuity incident de-duplication never
+   prevents this closure and never requires a fabricated second restart. One unrecovered restart
+   exactly at clean stop is a terminal point event without a zero-duration coverage segment and
+   therefore remains an open incident for acceptance.
 3. **Currentness-incident recovery ledger.** Every non-pending currentness incident preserves its
    exact `trigger_cause`, true `blocking_reason`, affected scope, start, and recovery boundary.
    Each incident intersecting `W` must recover to complete current truth no later than its start
@@ -1146,7 +1358,7 @@ be observed at least once and `VALID`; only the contract's explicit combo/anomal
 sources may be `NOT_OBSERVED`.
 
 Option-local availability uses wall clock, not a sum across contracts. Let `G` be the union inside
-`W` of global/session/clock/index incident intervals, let `E = W \ (P union G)`, and let `U` be
+`W` of global/session/clock/index incident intervals, let `E = W \ G`, and let `U` be
 the union across all instruments and all exact option-local reasons of each interval intersected
 with `E`. Require `duration(E) > 0`, full-run `omitted_interval_count = 0`, no interval open at
 clean stop, and one normalized threshold:
@@ -1186,7 +1398,7 @@ Opening this evidence run requires no repeated human technical command. After co
 push, its durable manifest must repeat the exact pushed and verified remote `HEAD`, registered
 Policy absolute path/digest, new empty evidence directory, result-independent supervisor stop
 predicate, `normalized_current_coverage >= 0.99`, normalized option-local availability
-`>= 59 / 60`, Policy-derived `R`, and `P_budget_ms = 36_000`.
+`>= 59 / 60`, Policy-derived `R`, and the diagnostic-only publication ledger contract.
 
 ## First-principles scope
 
@@ -1500,22 +1712,28 @@ timestamp watermark at/after minute end. The close is the last causal tick in th
 near-boundary tick is required. A timestamp regression or late tick for a sealed minute is a gap:
 never rewrite the close, invalidate rolling returns, and restart warm-up.
 
-The baseline API is a per-band structured `IndexTailStatus` query with exactly
-`AVAILABLE | WARMUP | TIME_BOUNDARY_PENDING | WATERMARK_PENDING | WINDOW_GAP | SOURCE_STALE |
-CONTINUITY_GAP`. It proves both internal continuity for the requested lookback and exact alignment
-to the minute immediately before the one trusted current minute. A trusted interval spanning a
-minute boundary is `TIME_BOUNDARY_PENDING`; a trusted single current minute whose source watermark
-has not crossed the expected tail end is `WATERMARK_PENDING`. Normal rollover never clears
-history. Sixty returns require 61 consecutive covered closes.
+The current baseline API separates generation-global publication phase from per-band
+availability. Publication phase is exactly
+`CURRENT | TIME_BOUNDARY_PENDING | WATERMARK_PENDING`. Availability for one requested return count
+is exactly `AVAILABLE | WARMUP | WINDOW_GAP | SOURCE_STALE | CONTINUITY_GAP`; 60 returns require
+an exact tuple of 61 consecutive covered closes. The actual published tail changes only after
+trusted lower bound, accepted watermark, generation, global-continuity epoch, coverage start, and
+terminal alignment prove the immutable successor close.
 
-`WINDOW_GAP` is isolated by requested band: an older missing minute can invalidate a longer
-lookback while a shorter consecutive tail remains `AVAILABLE`, and it never resubscribes the index.
-`SOURCE_STALE` and `CONTINUITY_GAP` invalidate all index consumers and require affected index
-resubscription. Pending statuses preserve episode identity in `INDEX_TAIL_PENDING`, pause known
-duration, stop Layer 2, reset incomplete persistence, and are never countable observations.
-`WARMUP` ends an active episode `UNKNOWN_DETECTOR`; gap statuses end it `UNKNOWN_AT_GAP`. The
-normative truth table is the one in `SHORT_VOL_RADAR`; implementation and direct tests may not
-override it with string-priority conditions.
+Pending phase is a target-scoped latch, not a fresh point classification on every clock refresh.
+After `TIME_BOUNDARY_PENDING` starts, tightening only the trusted upper bound back below the target
+does not retract the existing interval; the same target remains pending until publication, the
+legal time-to-watermark transition, currentness loss, or clean stop.
+
+Normal publication pending preserves the previously published tuple as `AVAILABLE`; it never
+enters the sealed-version legacy `INDEX_TAIL_PENDING` tracker state, makes detector truth
+`UNKNOWN`, pauses known duration or Layer 2, resets persistence, or resubscribes. `WINDOW_GAP` is
+isolated by requested band: an older missing minute can invalidate a longer lookback while a
+shorter consecutive tuple remains `AVAILABLE`; it restarts global continuity without
+resubscribing. `SOURCE_STALE` and `CONTINUITY_GAP` invalidate all index consumers and require
+affected index resubscription. `WARMUP` ends an active episode `UNKNOWN_DETECTOR`; actual gap
+statuses end it `UNKNOWN_AT_GAP`. The normative truth table is the one in `SHORT_VOL_RADAR`;
+implementation and direct tests may not override it with string-priority conditions.
 
 ## Configured trailing-variance baseline
 
@@ -1597,9 +1815,10 @@ ACTIVE    this instrument passed activation
 CLEARING  this instrument's clear persistence is pending
 BAND_SUSPENDED
           trusted time straddles a Policy boundary while market-source continuity stays known
-INDEX_TAIL_PENDING
-          normal minute rollover is unresolved while index continuity and stored history stay known
 ```
+
+`INDEX_TAIL_PENDING` is a sealed diagnostics version-5 tracker value only. Current normal
+publication pending never enters the tracker state machine.
 
 Activation observations use
 `iv_richness_ratio >= activation_ratio`, clear observations use
@@ -1622,10 +1841,12 @@ activation/clear calls persistence observation, and only when
 `observation_eligibility.countable = true`.
 
 Clock revision participates in current classification but is not itself a countable persistence
-observation. Observation identity contains only target-quantity bid levels, forward, current
-baseline, and discrete TTE/currentness classification. Ask-only changes, depth beyond the target,
-repeated messages, heartbeats, metadata-only changes, and unchanged reduced state do not activate,
-clear, or reset persistence.
+observation. Observation identity contains only facts consumed by the formula: target-quantity bid
+levels, forward, the exact selected immutable `MinuteClose` tuple, and discrete TTE
+classification. Index generation and global-continuity epoch own and prove publication but are
+provenance, not detector de-duplication facts. Publication phase, successor target, clock/watermark
+proof audit, ask-only changes, depth beyond the target, repeated messages, heartbeats,
+metadata-only changes, and unchanged reduced state do not activate, clear, or reset persistence.
 
 While trusted time straddles a boundary whose adjacent band has a rule for this instrument's
 option type, detector output is temporarily `UNKNOWN/TIME_BAND_BOUNDARY`; an active episode becomes
@@ -1770,7 +1991,7 @@ UNKNOWN_AT_GAP | CENSORED_AT_STOP`, known-active duration by end reason, band-su
 atomic-state transitions, detector `UNKNOWN` transitions by reason, and Policy identity. These are
 reduced business-state transitions, never message counts. It contains no full market chain.
 
-New evidence requires strict `operational_diagnostics_schema_version = 5` with the exact
+New evidence requires strict `operational_diagnostics_schema_version = 6` with the exact
 `SHORT_VOL_RADAR` schema:
 
 - all nine frozen `runtime_limits`;
@@ -1791,14 +2012,16 @@ New evidence requires strict `operational_diagnostics_schema_version = 5` with t
 - separate ticker application/currentness counts and bounded late-regression rows;
 - global continuity epoch/restart/recovery edges, complete current-epoch joint identity rows, and
   bounded option-local unavailable/recovery intervals;
+- the independently bounded generation-global `index_baseline_publication` ledger, whose pending
+  intervals are diagnostic and never coverage blockers;
 - coverage segments that separately freeze the reduced `trigger_cause`, strict grouped
   reason-to-scope blockers, their bounded scalar summaries, and continuity epoch;
 - nullable first same-current-scope joint-witness time and continuous global-continuity duration
   after that witness.
 
 These transport facts are counted once per reduced envelope and never enter business denominators.
-Explicit read-only validators retain the sealed version-4, version-3, and version-2 exact schemas;
-older directories are never rewritten or relabelled as version 5.
+Explicit read-only validators retain the sealed version-5, version-4, version-3, and version-2
+exact schemas; older directories are never rewritten or relabelled as version 6.
 
 Coverage partitions the exact half-open interval
 `[runtime_started_monotonic_ms, clean_stop_monotonic_ms)` into one global state at every
@@ -1817,7 +2040,7 @@ diagnostic subset, not a fifth partition. The validator requires non-negative, n
 gap-free durations and
 `coverage_partition_error_ms = observation_interval_ms - (known_complete_ms +
 known_degraded_ms + unknown_ms + no_applicable_scope_ms) = 0`.
-Each current version-5 segment separately records `trigger_cause`, scalar `blocking_reason`,
+Each current version-6 segment separately records `trigger_cause`, scalar `blocking_reason`,
 sorted bounded `affected_scopes`, exact sorted `blocking_groups`, and
 `global_continuity_epoch`; same-state activity does not create diagnostic market persistence.
 Sealed version-4 segments retain their original scalar blocker shape, while sealed version-3
@@ -1832,9 +2055,9 @@ is `NOT_COMPARABLE` for forecast or trading claims, although named operational c
 displayed side by side without causal inference.
 
 The Policy schema remains version 3 and unchanged. New strict run summaries require diagnostics
-schema version 5. Explicit read-only readers continue validating sealed diagnostics version 4,
-version 3, and version 2 under their original exact shapes so historical directories remain
-immutable truthful evidence; no older version is eligible for current acceptance or may be
+schema version 6. Explicit read-only readers continue validating sealed diagnostics version 5,
+version 4, version 3, and version 2 under their original exact shapes so historical directories
+remain immutable truthful evidence; no older version is eligible for current acceptance or may be
 rewritten or upgraded. This task adds no migration or replay path.
 
 Each object has a simple strict repository-owned schema and Policy content identity. No separate
@@ -1870,9 +2093,10 @@ The smallest proportional harness is:
 
 1. direct pure/state-sequence tests;
 2. integration tests with public source fixtures;
-3. one separately authorized `REACHABILITY_SMOKE` using one exact Policy;
-4. one separately approved `OPERATIONAL_SOAK` after its diagnostic contract and stop condition are
-   accepted by a human;
+3. one exact-candidate `REACHABILITY_SMOKE` conditionally pre-authorized by
+   `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` after offline acceptance and exact run binding;
+4. one exact-candidate `OPERATIONAL_SOAK` conditionally pre-authorized by the same delegation only
+   after independent Smoke acceptance and a new exact run binding;
 5. ordinary schema validation of any event actually emitted.
 
 No replay, second calculation path, independent recomputation, provenance CLI, market archive,
@@ -1981,10 +2205,14 @@ future exit liquidity, Outcome, PnL, qualification, promotion, or execution perm
     truth; blocked subscribe/unsubscribe work still permits timely heartbeat control; and a combo
     lifecycle burst produces exactly one trailing authoritative refresh.
 11. Currentness tests prove initial bootstrap warm-up is not a real index gap, normal minute
-    rollover enters pending without clearing history, a trusted interval spanning a minute cannot
-    select an old tail, a real global gap increments the continuity epoch and recovery establishes
-    a new same-scope witness with exact duration, window gaps are isolated by per-band lookback,
-    and `amount UNKNOWN -> VALID` yields known current and `ARMED` with zero persistence count.
+    publication pending preserves the exact selected tuple and current tracker state, immediate
+    successor publication has no zero-duration pending row, a real global gap increments the
+    continuity epoch and recovery establishes a new same-scope witness with exact duration, window
+    gaps are isolated by per-band lookback, every stronger session/clock/index invalidation inside
+    an active scoped gap closes publication without a second restart, terminal loss creates no
+    fictitious zero-duration coverage, same-millisecond publish/loss/stop folds a zero-duration
+    watermark successor without an orphan phase chain, and `amount UNKNOWN -> VALID` yields known
+    current and `ARMED` with zero persistence count.
 12. Ticker snapshot tests prove shape/currentness/application separation; equal-timestamp ingress
     ordering; older `LATE_IGNORED` preserving the accepted ticker, episode, coverage, commands, and
     witness; true TTL stale/recovery behavior; exact bounded diagnostic fields/counts; and no
@@ -1992,9 +2220,11 @@ future exit liquidity, Outcome, PnL, qualification, promotion, or execution perm
 13. Scope tests prove `detector_coverage` and `has_current_full_formula` come from the same full
     current aggregate snapshot, including an affected subset that has no formula while an
     unchanged current member does, and reject historical/subset cross-combination.
-14. Evidence tests prove current version-5 grouped reason-to-scope coverage, global continuity,
-    bounded option-local availability, writer-edge independence, and explicit strict read-only
-    validation of sealed version-4, version-3, and version-2 evidence.
+14. Evidence tests prove current version-6 grouped reason-to-scope coverage, global continuity,
+    bounded publication and option-local availability, exact publication-currentness reason and
+    full-boundary attribution without same-millisecond false binding, writer-edge independence,
+    and explicit strict read-only validation of sealed version-5, version-4, version-3, and
+    version-2 evidence.
 15. Deterministic tests run the same interleaving sequence repeatedly and require identical
     current results, episode states, coverage, emitted commands, and durable edges. Evidence
     storage `OSError` is fatal with zero reconnect.
@@ -2004,7 +2234,8 @@ future exit liquidity, Outcome, PnL, qualification, promotion, or execution perm
 - checkout the bounded branch, then `make sync`;
 - focused tests for the four owning modules;
 - `make check`;
-- after the separate production observation gate:
+- after offline acceptance and exact-candidate binding, within the pre-authorized Smoke/Soak
+  sequence:
   `.venv/bin/python -m radar_runtime observe --policy <exact-policy-path> --expected-policy-digest <sha256:hex> --evidence-dir <new-empty-evidence-dir>`.
 
 The live command rejects a missing/invalid/mismatched Policy digest, dirty Git worktree, or
@@ -2246,8 +2477,8 @@ The implementation is ready only when direct tests and `make check` pass. `REACH
 requires every accepted smoke invariant, including
 `complete_aggregate_with_full_formula_evaluation_count >= 1` and a balanced coverage partition; a
 covered zero-anomaly result is valid only when the joint full-formula witness also exists.
-Production establishment additionally requires the separately approved and implemented
-`OPERATIONAL_SOAK` contract above.
+Production establishment additionally requires the current version-6 `OPERATIONAL_SOAK` contract
+pre-authorized inside `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`.
 
 Business acceptance is the conditional human decision already recorded by
 `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. The task remains incomplete and production Radar
