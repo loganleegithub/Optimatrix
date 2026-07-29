@@ -4,11 +4,11 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Implemented runtime capability:** `NONE` — implementation under review; no accepted observation
+**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`
 
-**Production Short Vol Radar:** `NOT_ESTABLISHED`
+**Production Short Vol Radar:** `ESTABLISHED`
 
-**Sole authorized next product-capability closure:** `SHORT_VOL_RADAR_ESTABLISHMENT`
+**Sole authorized next product-capability closure:** `NONE — no successor closure activated`
 
 ## Authority
 
@@ -17,75 +17,58 @@ This document grants permission under
 architecture, detector parameters, or evidence mechanics. Code presence, green tests, old
 receipts, run duration, or roadmap order grant no stage.
 
-The current boundary authorizes one implementation task inside the existing modular monolith:
-establish the production-public Short Vol Radar defined by
+The current boundary authorizes the guarded production-public Short Vol Radar defined by
 [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md). Candidate, Shadow admission, executed
 entry, Position runtime, Outcome cohort, private/account data, orders, fills, capital,
-qualification, Challenger automation, promotion, and execution remain unauthorized.
+qualification, Challenger automation, promotion, and execution remain unauthorized. A bounded
+public observation is not authorization for persistent service deployment.
 
-Runtime construction and each production-public observation require their own explicit human
-command unless a named bounded terminal-goal delegation below replaces those repeated technical
-commands. `REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` remain independent evidence gates:
-authorization or evidence for either one never accepts the other.
+### Accepted establishment record
 
-### Active terminal-goal delegation
+The bounded `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` completed without activating a successor
+closure. The accepted runtime and both independent live gates bind:
 
-#### Original terminal-goal grant — completed and sealed
+- candidate commit `7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`;
+- candidate tree `684a2acc4dba33c045b11aa0b4b278d22d7aec3e`;
+- both live manifests' pre-run verified remote ref
+  `refs/heads/codex/short-vol-radar-establishment` resolved to that exact candidate commit;
+- `REACHABILITY_SMOKE`: `MET`, independently accepted by
+  `/Users/logan/Optimatrix-smoke/receipts/reachability-smoke-attempt-006-independent-acceptance.json`,
+  SHA-256 `e56e470908022da36b0ae8d7cc65bd041ee479a1fc69aa029039c31d646c48f8`,
+  manifest SHA-256 `447e3f0d75e5fa0a2b24ab612a1be47a66df7b7a4f960ca867efe5610cd9b54c`,
+  evidence directory
+  `/Users/logan/Optimatrix-smoke/evidence/reachability-smoke-attempt-006`, and summary SHA-256
+  `39707edb16dd7a594f044f6bfdbdb48131bef08fd0d09475d5c02b6fbdd7e638`;
+  the independent directory-binding receipt is
+  `/Users/logan/Optimatrix-smoke/receipts/reachability-smoke-attempt-006-evidence-directory-binding.json`,
+  SHA-256 `053c1922b54d9ee902770a7bff3a3ecbc876fc29603872ba6981bcc34cec70f9`,
+  and binds the 54-entry absolute-path-bound ordered evidence manifest SHA-256
+  `e73d8e5bdb7930acd51b59526f4a9246d60960930cfabe2d6daf392e05e4821a`;
+- `OPERATIONAL_SOAK`: `MET`, independently accepted by
+  `/Users/logan/Optimatrix-soak/receipts/operational-soak-attempt-007-independent-acceptance.json`,
+  SHA-256 `4e9defb35d12bc6318ff77139c1d8196db155fcfcaa5efe067b44df0c2caced9`,
+  manifest SHA-256 `f734cf8f161a6ad26430d949d4ec6bfc560a1882ecd04552eb68d5a4245d01bd`,
+  evidence directory
+  `/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-007`, summary SHA-256
+  `be0800f51d04f39977dd3b0288413058f4954aaffb1cea62f6675f94000c7200`, and
+  absolute-path-bound ordered evidence manifest SHA-256
+  `c49ed5cf33de728437343681d82d35ab0cfc63228e306240433306752d064b3b`.
 
-The human command on 2026-07-29 that named establishment of the online Radar as the terminal
-business goal conditionally approved `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` for the sole active
-`SHORT_VOL_RADAR_ESTABLISHMENT` closure. The original grant began against base
-`3b6864c97f21a4991c10b8105a30c6239afae247`; its H1/H2/H3 operational-accounting repair is
-completed and sealed at `d6e506b343c6fc5570243ba01def46d6a047428e`. That repair is historical,
-not a second current construction.
+Smoke establishes reachability only. Soak establishes only its pre-registered bounded operating
+window and thresholds. The accepted evidence does not prove indefinite uptime, persistent
+deployment, forecast quality, edge, profitability, fill or trade quality, execution authority, or
+private/account capability. Natural anomaly and official atomic-combo occurrence remain reported
+facts rather than acceptance shortcuts.
 
-#### Current delegated sequence
+Historical failed attempts and predecessor repairs remain sealed, non-governing evidence. They
+are not migrated, recalculated, relabelled, or accepted by this transition.
 
-The delegation, as amended by the active task, currently permits only this ordered sequence:
-
-1. the bounded authority/task amendment that records this grant;
-2. the current `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE` against exact base
-   `d6e506b343c6fc5570243ba01def46d6a047428e`, its direct tests, and complete offline checks;
-3. one append-only exact candidate commit on `codex/short-vol-radar-establishment`;
-4. a pre-push independent exact-commit pass receipt that binds the candidate commit/tree, checks,
-   verdict, and intended bounded remote ref;
-5. after the non-force push, resolving that remote ref again and proving the verified remote ref
-   value equals the exact candidate commit, followed by post-push verified remote equality and run
-   binding;
-6. mechanical pre-binding of one already registered immutable Policy path/digest, a new empty
-   absolute evidence directory, exact execution facts, and a result-independent deterministic
-   external clean-stop predicate;
-7. one production-public Smoke evidence gate and, only after its independent acceptance, one
-   production-public Soak evidence gate, with a new manifest and fresh directory for every retry;
-8. strict post-stop validation and, only after both independent gates pass, recording the
-   conditionally approved Radar establishment transition.
-
-The current step 2 Stage/authorization axis is `APPROVED` only because this bounded delegation
-replaces repeated technical approvals for its authority patch, offline implementation, independent
-verification, and conditional Smoke -> Soak -> final stage-record sequence. It does not establish
-the Radar early: `PUBLIC_SHADOW`, implemented capability `NONE`, and `NOT_ESTABLISHED` remain exact.
-
-The implementation author cannot be the sole verifier. The verifier must be read-only with
-respect to the candidate. Before push, its receipt binds the exact commit, tree, intended bounded
-remote ref, checks, and verdict; it does not claim post-push equality. After push, the controller
-must independently resolve the remote ref value, require exact equality with that commit, and bind
-the verified value, Policy digest, manifest, evidence directory, and checks before live use. Any
-code change invalidates the receipt and all later bindings. An old or unauthorized run cannot be
-retroactively accepted; in particular `operational-soak-attempt-004` is ineligible. A failed or
-incomplete run is `NOT_MET` and a retry uses a new manifest and new empty directory.
-
-This delegation does not change `PUBLIC_SHADOW`, the market or detector family, any immutable
-Policy, or an evidence acceptance threshold. It does not authorize `main` merge, history rewrite,
-remote deletion, persistent service deployment, private/account data, credentials, balances,
-capital, orders, fills, trades, execution, Policy auto-selection/tuning, or any queued closure.
-The human emergency stop remains effective at all times.
-
-## Reset baseline and current construction truth
+## Reset baseline and implemented truth
 
 The legacy bounded collector, replay path, fixed-horizon Decision logic, elapsed-time Shadow and
 Outcome logic, receipts, and bundles have been physically removed. No compatibility layer remains.
-The current construction branch adds only the guarded production-public Radar path; code presence
-does not establish a runtime capability or open the production-observation gate.
+The implemented capability adds only the guarded production-public Radar path. It does not add a
+bounded market-capture job, replay closure, Decision, Shadow position, or Outcome engine.
 
 Known-at inputs, explicit missingness and continuity, strictly future facts, and visible-quote
 economics remain product invariants in authority. They are not claims of an implemented runtime
@@ -93,22 +76,12 @@ capability.
 
 ## Root blocker
 
-The product has not yet established this continuous production-public path:
+There is no active product-capability closure and therefore no current root blocker to record.
+This does not activate or authorize any queued closure.
 
-```text
-live BTC-USDC 0–3DTE state
-→ exact content-identified Short Vol detector
-→ independent anomaly state
-→ independent official atomic-combo quote state while anomalous
-```
+## Implemented capability boundary
 
-This blocker is runtime reachability, not proof that a rare natural anomaly or combo happens
-during one observation. Until the path can produce at least one usable detector evaluation,
-Candidate and Outcome work has no established Radar input.
-
-## Authorized closure
-
-`SHORT_VOL_RADAR_ESTABLISHMENT` may implement only:
+`PRODUCTION_PUBLIC_SHORT_VOL_RADAR` implements only:
 
 - one continuous public WebSocket-fed, bounded in-memory BTC-USDC option-chain monitor;
 - actual timestamp-based `0 < TTE <= 72 hours` membership, trusted Deribit time, and an explicit
@@ -148,50 +121,33 @@ lookbacks/weights/floor, Delta boundaries, or activation/clear persistence. The 
 a new identity, process, and forward interval. Earlier events keep their original Policy meaning.
 The runtime cannot train, select, approve, promote, or deploy a successor.
 
-The current closure can compare operational coverage, `UNKNOWN` reasons, anomaly frequency,
-clear/re-arm flicker, and official combo availability across forward intervals. Because it has no
-strictly future realized-volatility or trade Outcome label, it cannot claim that a successor is a
-better volatility forecast or trading strategy. Formula, source-family, structure-family, or
-evaluation-claim changes require a separately authorized task.
+Forward observations inside this capability boundary may compare operational coverage, `UNKNOWN`
+reasons, anomaly frequency, clear/re-arm flicker, and official combo availability across
+intervals. Because the capability has no strictly future realized-volatility or trade Outcome
+label, it cannot claim that a successor is a better volatility forecast or trading strategy.
+Formula, source-family, structure-family, or evaluation-claim changes require a separately
+authorized task.
 
-## Acceptance boundary
+## Accepted evidence boundary
 
-Implementation readiness requires:
+The exact candidate passed direct deterministic tests, focused tests, `make check`, bounded-scope
+inspection, and the two independently pre-bound production-public observations recorded above.
+Smoke proved a non-vacuous known full-formula detector evaluation and complete aggregate.
+Soak independently satisfied its exact Policy, evidence-directory, result-independent clean-stop,
+currentness-recovery, conservation, coverage, availability, and omission predicates.
 
-1. direct deterministic tests covering source namespaces and filters, continuity, quiet books,
-   causal feature windows, configurable boundaries, detector episodes, gap termination/resync, the
-   detector/combo separation, official combo direction and target depth, and minimal artifacts;
-2. focused tests and `make check`;
-3. inspection confirming that no replay, second calculator, full-market persistence, private
-   path, maker path, or later-stage object was added.
+The two gates remain semantically independent: Smoke is not sustained-operation evidence, and
+Soak cannot supply or relabel the Smoke reachability witness. An all-`UNKNOWN`, pre-warm-up, zero
+or unknown denominator remains truthful missingness rather than success. Rates with a zero or
+unknown denominator remain `null`.
 
-Runtime establishment additionally requires two independently pre-bound and accepted
-production-public observations. `REACHABILITY_SMOKE` must complete warm-up and produce at least
-one known per-instrument evaluation inside one non-empty real
-`Policy identity × expiry_timestamp × option_type` aggregate, then produce a complete aggregate
-`NO_ANOMALY` or `ANOMALY_ACTIVE` result. At least one instrument must also pass all preliminary
-eligibility gates and reach a known baseline/IV/Delta/richness calculation; short-circuit
-ineligibility alone cannot establish the Radar. Empty scope cannot pass vacuously. A covered
-`NO_ANOMALY` interval is valid reachability evidence. A degraded positive witness is truthful but
-does not alone establish the full Radar. Natural anomaly occurrence and official atomic-quote
-availability are separately reported `OBSERVED | NOT_OBSERVED`; neither is required for code
-acceptance and neither may be forced through in-place tuning.
-
-`OPERATIONAL_SOAK` must then satisfy its separately pre-bound exact Policy, evidence-directory,
-and stop-condition checklist. A Smoke run or accepted witness proves no sustained operation and
-cannot accept Soak. A Soak run likewise cannot retroactively supply or relabel the Smoke
-reachability witness.
-
-An all-`UNKNOWN` or pre-warm-up stop is truthful but does not establish runtime capability. Rates
-with a zero or unknown denominator remain `null`.
-
-This closure requires no replay, independent offline recomputation, provenance command,
-full-market archive, Candidate, Shadow Entry, Position action, mature Outcome, profitability, or
-fill evidence.
+The accepted establishment requires no replay, independent offline recomputation, provenance
+command, full-market archive, Candidate, Shadow Entry, Position action, mature Outcome,
+profitability, or fill evidence.
 
 ## Queued sequence — not authorized
 
-After Radar establishment is explicitly accepted and this document is advanced:
+The following sequence remains queued even after Radar establishment:
 
 1. **Underwriting, Shadow admission, and Position contract:** freeze
    `CANDIDATE | WATCH | ABSTAIN`, `HOLD | CLOSE | UNKNOWN`, hard-close priority, atomic

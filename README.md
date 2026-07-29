@@ -6,12 +6,15 @@ production-public Shadow only: no private API, account, margin, order, fill, or 
 
 ## Current truth
 
-This branch contains the implementation-under-review for one production-public Radar runtime and
-its guarded `observe` command. It still contains no bounded market-capture job, saved-data scanner,
-replay closure, fixed holding-period Decision, Shadow position, or Outcome engine.
+The implemented capability is `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`: one guarded
+production-public Radar runtime and its `observe` command. It contains no bounded market-capture
+job, saved-data scanner, replay closure, fixed holding-period Decision, Shadow position, or
+Outcome engine.
 
-The production Short Vol Radar is `NOT_ESTABLISHED`. The sole authorized next product-capability
-closure is `SHORT_VOL_RADAR_ESTABLISHMENT`; code and tests alone do not establish it.
+The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
+Soak evidence. No successor product-capability closure is active. Establishment means the bounded
+public runtime met its frozen reachability and operating predicates; it does not mean the Radar is
+persistently deployed, always running, indefinitely stable, profitable, or authorized to trade.
 
 ## Intended first business flow
 
@@ -72,7 +75,7 @@ Start with [`AGENTS.md`](AGENTS.md). The
 
 There is no compatibility package or alias for the removed pipeline.
 
-The current bounded construction separates per-band immutable index-baseline availability from
+The current bounded runtime separates per-band immutable index-baseline availability from
 generation-global successor publication. Normal time/watermark publication pending keeps an
 already proven `N + 1` close tuple available and does not pause detector episodes, Layer 2, known
 coverage, or persistence. Real window, source-stale, and continuity failures remain fail-closed.
@@ -88,8 +91,9 @@ make sync
 make check
 ```
 
-The implementation task is operating under the bounded
-`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. Running `python -m radar_runtime observe` remains closed
-until the repaired exact commit has an independent pass receipt and a run manifest pre-binds the
-verified remote commit, immutable Policy path/digest, new empty evidence directory, and
-result-independent external stop predicate. Smoke and Soak remain independent evidence gates.
+The guarded `python -m radar_runtime observe` command is the public-only runtime entry point under
+`PUBLIC_SHADOW`. Each bounded observation still uses one immutable Policy identity and a fresh
+evidence directory and preserves clean-stop and strict-validation behavior. The accepted Smoke and
+Soak establish only their exact pre-bound observation windows; they do not authorize persistent
+service deployment, private/account access, orders, fills, capital, execution, or any queued
+product closure.

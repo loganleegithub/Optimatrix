@@ -239,8 +239,8 @@ admit Shadow Entry, represent a maker order or fill, manage a position, or produ
 
 Separately authorized future code will own Underwriting, Shadow admission, immutable
 post-admission Position actions, strictly future close-opportunity facts, and
-actual-versus-counterfactual Outcome semantics. No current package implements this boundary, and
-it is not a consumer during `SHORT_VOL_RADAR_ESTABLISHMENT`.
+actual-versus-counterfactual Outcome semantics. No current package implements or consumes this
+boundary.
 
 ### `radar_runtime`
 

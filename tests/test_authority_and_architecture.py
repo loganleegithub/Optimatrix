@@ -136,35 +136,45 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert declaration in template
 
 
-def test_current_stage_authorizes_exactly_one_next_closure() -> None:
+def test_current_stage_records_established_radar_without_activating_successor() -> None:
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
 
     marker = "**Sole authorized next product-capability closure:**"
     assert current_stage.count(marker) == 1
-    assert f"{marker} `SHORT_VOL_RADAR_ESTABLISHMENT`" in current_stage
-    assert "**Implemented runtime capability:** `NONE`" in current_stage
-    assert "**Production Short Vol Radar:** `NOT_ESTABLISHED`" in current_stage
+    assert f"{marker} `NONE — no successor closure activated`" in current_stage
+    assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current_stage
+    assert (
+        "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current_stage
+    )
+    assert "**Production Short Vol Radar:** `ESTABLISHED`" in current_stage
     assert "## Queued sequence — not authorized" in current_stage
 
 
-def test_short_vol_task_records_terminal_delegation_and_conditional_live_gates() -> None:
+def test_short_vol_task_records_consumed_delegation_and_accepted_live_gates() -> None:
     task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-    opening = "\n".join(task.splitlines()[:70])
+    opening = "\n".join(task.splitlines()[:90])
 
-    assert "**Status:** ACTIVE" in opening
+    assert "**Status:** CLOSED_BY_ACCEPTED_FINAL_STAGE_RECORD" in opening
+    assert "task archival remains unauthorized" in opening
+    assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in opening
+    assert "**Production Short Vol Radar:** `ESTABLISHED`" in opening
     assert "**Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`" in opening
     assert (
         "**Terminal business-goal delegation:** `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`" in opening
     )
+    assert "`CONSUMED_BY_ACCEPTED_FINAL_STAGE_RECORD_2026_07_29`" in opening
     assert (
         "**Current construction subgate:** "
         "`ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`" in opening
     )
+    assert "`COMPLETED_AT_7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`" in opening
     assert (
         "**Current subgate exact base HEAD:** `d6e506b343c6fc5570243ba01def46d6a047428e`" in opening
     )
-    assert "`CONDITIONALLY_AUTHORIZED_AFTER_OFFLINE_ACCEPTANCE_AND_EXACT_RUN_BINDING`" in opening
-    assert "`CONDITIONALLY_AUTHORIZED_AFTER_SMOKE_ACCEPTANCE_AND_EXACT_RUN_BINDING`" in opening
+    assert "**Accepted candidate tree:** `684a2acc4dba33c045b11aa0b4b278d22d7aec3e`" in opening
+    assert opening.count("`MET_BY_INDEPENDENT_POST_STOP_ACCEPTANCE`") == 2
+    assert "e56e470908022da36b0ae8d7cc65bd041ee479a1fc69aa029039c31d646c48f8" in opening
+    assert "4e9defb35d12bc6318ff77139c1d8196db155fcfcaa5efe067b44df0c2caced9" in opening
 
 
 def test_successor_soak_keeps_publication_diagnostic_outside_coverage_denominators() -> None:
@@ -270,15 +280,14 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
 
     for invariant in (
         "Root blocker",
-        "A covered `NO_ANOMALY` interval is valid reachability evidence",
         "human may approve a successor inside the same authorized Policy schema",
         "no replay, independent offline recomputation",
-        "named bounded terminal-goal delegation",
         "`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`",
-        "`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` remain independent evidence gates",
-        "does not authorize `main` merge",
+        "The two gates remain semantically independent",
+        "does not prove indefinite uptime",
+        "not authorization for persistent service deployment",
         "private/account data",
-        "orders, fills, trades",
+        "orders, fills, capital",
     ):
         assert invariant in current_stage
 
@@ -307,10 +316,8 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
     assert "`UNKNOWN` is neither numeric zero nor economic `ABSTAIN`" in delivery
 
     for invariant in (
-        (
-            "**Current implementation state:** TERMINAL PUBLIC-RADAR GOAL ACTIVE — EXACT-CANDIDATE "
-            "OFFLINE ACCEPTANCE REQUIRED BEFORE PRE-AUTHORIZED SMOKE"
-        ),
+        "**Current implementation state:** `ESTABLISHED`",
+        "**Owning implemented capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`",
         "`POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE`",
         "`detector_state`",
         "`public_atomic_quote_state`",
@@ -371,9 +378,9 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
     for invariant in (
         "Ordinary no-anomaly updates",
         "planned holding duration",
-        "`SHORT_VOL_RADAR_ESTABLISHMENT`",
+        "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`",
+        "No successor product-capability closure is active",
         "future maker/order/fill",
-        "expressly terminal-goal-delegated successor inside the declared Policy schema",
     ):
         assert invariant in readme
 
@@ -571,16 +578,23 @@ def test_current_task_uses_current_schema_and_explicit_sealed_readers() -> None:
     assert "sealed readers keep their historical behavior" in " ".join(radar.split())
 
 
-def test_active_delegation_seals_the_original_repair_and_orders_the_current_successor() -> None:
+def test_stage_record_binds_both_independent_live_gates() -> None:
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     current_stage_flat = " ".join(current_stage.split())
 
     for invariant in (
-        "Original terminal-goal grant — completed and sealed",
-        "`3b6864c97f21a4991c10b8105a30c6239afae247`",
-        "H1/H2/H3 operational-accounting repair is completed and sealed",
-        "2. the current `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`",
-        "exact base `d6e506b343c6fc5570243ba01def46d6a047428e`",
+        "candidate commit `7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`",
+        "candidate tree `684a2acc4dba33c045b11aa0b4b278d22d7aec3e`",
+        "both live manifests' pre-run verified remote ref",
+        "`REACHABILITY_SMOKE`: `MET`",
+        "e56e470908022da36b0ae8d7cc65bd041ee479a1fc69aa029039c31d646c48f8",
+        "053c1922b54d9ee902770a7bff3a3ecbc876fc29603872ba6981bcc34cec70f9",
+        "e73d8e5bdb7930acd51b59526f4a9246d60960930cfabe2d6daf392e05e4821a",
+        "`OPERATIONAL_SOAK`: `MET`",
+        "4e9defb35d12bc6318ff77139c1d8196db155fcfcaa5efe067b44df0c2caced9",
+        "c49ed5cf33de728437343681d82d35ab0cfc63228e306240433306752d064b3b",
+        "does not prove indefinite uptime",
+        "no successor closure",
     ):
         assert invariant in current_stage_flat
 
@@ -592,10 +606,12 @@ def test_delegation_separates_prepush_receipt_from_postpush_remote_equality() ->
     authority = " ".join((current_stage + "\n" + task).split())
     delivery_flat = " ".join(delivery.split())
 
+    assert "both live manifests' pre-run verified remote ref" in authority
+    assert "resolved to that exact candidate commit" in authority
     for invariant in (
         "pre-push independent exact-commit pass receipt",
         "intended bounded remote ref",
-        "after the non-force push",
+        "After the non-force push",
         "verified remote ref value equals the exact candidate commit",
         "post-push verified remote equality and run binding",
     ):

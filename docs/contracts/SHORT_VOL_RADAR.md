@@ -2,10 +2,10 @@
 
 **Status:** ACTIVE IMPLEMENTATION CONTRACT
 
-**Current implementation state:** TERMINAL PUBLIC-RADAR GOAL ACTIVE — EXACT-CANDIDATE OFFLINE
-ACCEPTANCE REQUIRED BEFORE PRE-AUTHORIZED SMOKE
+**Current implementation state:** `ESTABLISHED` — exact bounded production-public runtime
+capability accepted
 
-**Owning closure:** `SHORT_VOL_RADAR_ESTABLISHMENT`
+**Owning implemented capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`
 
 ## Purpose
 

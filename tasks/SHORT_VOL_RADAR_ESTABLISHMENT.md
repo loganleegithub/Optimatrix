@@ -1,16 +1,17 @@
 # Task — SHORT_VOL_RADAR_ESTABLISHMENT
 
-**Status:** ACTIVE
+**Status:** CLOSED_BY_ACCEPTED_FINAL_STAGE_RECORD — retained on this non-`main` branch because
+task archival remains unauthorized
 
-**Implemented runtime capability:** `NONE`
+**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`
 
-**Production Short Vol Radar:** `NOT_ESTABLISHED`
+**Production Short Vol Radar:** `ESTABLISHED`
 
 **Task kind:** `IMPLEMENTATION`
 
-**Runtime implementation:** REQUIRED
+**Runtime implementation:** `ACCEPTED_AT_7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`
 
-**Live commands:** REQUIRED only after the exact named Smoke or Soak gate opens
+**Live commands:** named Smoke and Soak gates consumed; no continuing live authority is inherited
 
 **Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`
 
@@ -53,21 +54,27 @@
 `COMPLETED_AT_3b6864c97f21a4991c10b8105a30c6239afae247`
 
 **Terminal business-goal delegation:** `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`
-`CONDITIONALLY_APPROVED_BY_EXPLICIT_HUMAN_GOAL_2026_07_29`
+`CONSUMED_BY_ACCEPTED_FINAL_STAGE_RECORD_2026_07_29`
 
 **Prior construction subgate:** `SOAK_READINESS_GROUPED_ACCOUNTING_REPAIR`
 `COMPLETED_AT_d6e506b343c6fc5570243ba01def46d6a047428e`
 
 **Current construction subgate:** `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`
-`AUTHORIZED_INSIDE_TERMINAL_DELEGATION`
+`COMPLETED_AT_7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`
 
 **Current subgate exact base HEAD:** `d6e506b343c6fc5570243ba01def46d6a047428e`
 
+**Accepted candidate tree:** `684a2acc4dba33c045b11aa0b4b278d22d7aec3e`
+
 **REACHABILITY_SMOKE gate:**
-`CONDITIONALLY_AUTHORIZED_AFTER_OFFLINE_ACCEPTANCE_AND_EXACT_RUN_BINDING`
+`MET_BY_INDEPENDENT_POST_STOP_ACCEPTANCE`
+(`/Users/logan/Optimatrix-smoke/receipts/reachability-smoke-attempt-006-independent-acceptance.json`,
+SHA-256 `e56e470908022da36b0ae8d7cc65bd041ee479a1fc69aa029039c31d646c48f8`)
 
 **OPERATIONAL_SOAK gate:**
-`CONDITIONALLY_AUTHORIZED_AFTER_SMOKE_ACCEPTANCE_AND_EXACT_RUN_BINDING`
+`MET_BY_INDEPENDENT_POST_STOP_ACCEPTANCE`
+(`/Users/logan/Optimatrix-soak/receipts/operational-soak-attempt-007-independent-acceptance.json`,
+SHA-256 `4e9defb35d12bc6318ff77139c1d8196db155fcfcaa5efe067b44df0c2caced9`)
 
 **Product/stage:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md) /
