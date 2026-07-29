@@ -67,7 +67,6 @@ class CurrentDisposition(StrEnum):
     KNOWN_INELIGIBLE = "KNOWN_INELIGIBLE"
     UNKNOWN = "UNKNOWN"
     BAND_SUSPENDED = "BAND_SUSPENDED"
-    INDEX_TAIL_PENDING = "INDEX_TAIL_PENDING"
     OUT_OF_BASELINE_SCOPE = "OUT_OF_BASELINE_SCOPE"
 
 
@@ -351,10 +350,6 @@ def calculate_current_evaluation(
         )
     except (NumericalUnknown, BaselineUnavailable) as exc:
         reason = str(exc) or type(exc).__name__
-        index_tail_pending = reason in {
-            "INDEX_TIME_BOUNDARY_PENDING",
-            "INDEX_WATERMARK_PENDING",
-        }
         currentness_gap = reason in {
             "INDEX_BASELINE_STALE",
             "INDEX_BASELINE_GAP",
@@ -363,11 +358,7 @@ def calculate_current_evaluation(
             "INDEX_CONTINUITY_GAP",
         }
         return current(
-            (
-                CurrentDisposition.INDEX_TAIL_PENDING
-                if index_tail_pending
-                else CurrentDisposition.UNKNOWN
-            ),
+            CurrentDisposition.UNKNOWN,
             reason,
             known=False,
             full_formula=False,
@@ -418,8 +409,6 @@ def apply_current_evaluation(
 ) -> TrackerTransition:
     if current.disposition is CurrentDisposition.BAND_SUSPENDED:
         return tracker.suspend_for_band_boundary()
-    if current.disposition is CurrentDisposition.INDEX_TAIL_PENDING:
-        return tracker.suspend_for_index_tail()
     if current.disposition is CurrentDisposition.OUT_OF_BASELINE_SCOPE:
         return tracker.out_of_baseline_scope(causal_seq=causal_seq)
 

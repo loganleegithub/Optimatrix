@@ -313,7 +313,7 @@ def activate_directly(
     return transition.activated_episode_id
 
 
-def test_legacy_index_pending_suspension_resets_partial_detector_persistence(
+def test_band_boundary_suspension_resets_partial_detector_persistence(
     policy_factory: PolicyFactory,
 ) -> None:
     exact, digest = policy_factory(activation_count=2, separation_ms=0)
@@ -334,8 +334,8 @@ def test_legacy_index_pending_suspension_resets_partial_detector_persistence(
     )
     assert first.activated_episode_id is None
 
-    tracker.suspend_for_index_tail()
-    tracker.resume_after_index_tail()
+    tracker.suspend_for_band_boundary()
+    tracker.resume_after_band_boundary()
     second = tracker.observe(
         DetectorObservation(
             causal_seq=2,
@@ -3556,6 +3556,11 @@ def test_causal_commit_is_explicit_frozen_and_whitelisted() -> None:
     assert commit.cause is CausalCause.TICKER_APPLIED
     assert commit.failure_domain is FailureScope.OPTION
     assert commit.affected_scopes == ("OPTION:SHORT",)
+    assert not hasattr(commit, "source_currentness_causes")
+    assert not hasattr(RadarReducer, "_coverage_affected_scopes")
+    assert hasattr(RadarReducer, "_option_local_coverage_scopes")
+    assert not hasattr(runtime_module, "_current_for_index_tail")
+    assert not hasattr(runtime_module, "_index_tail_reason")
     with pytest.raises(FrozenInstanceError):
         commit.affected_scopes = ("GLOBAL",)  # type: ignore[misc]
     with pytest.raises((TypeError, ValueError), match="cause"):

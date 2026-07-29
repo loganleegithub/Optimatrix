@@ -22,7 +22,6 @@ from market_monitor import (
     IndexMinuteReducer,
     IndexPublicationBoundary,
     IndexPublicationUpdate,
-    IndexTailStatus,
     PriceLevel,
     PublishedIndexTail,
     TimeInterval,
@@ -382,14 +381,6 @@ class CausalCommit:
         return _merge_causal_scopes(
             self.affected_scopes,
             *(effect.affected_scopes for effect in self.concurrent_effects),
-        )
-
-    @property
-    def source_currentness_causes(self) -> tuple[CausalCause, ...]:
-        return tuple(
-            effect.cause
-            for effect in self.concurrent_effects
-            if effect.cause is CausalCause.TICKER_SOURCE_STALE
         )
 
 
@@ -4821,11 +4812,7 @@ class RadarReducer:
                     and previous_result.band_id is not None
                     and current.band_id is not None
                     and previous_result.band_id != current.band_id
-                    and tracker.state
-                    not in {
-                        TrackerState.BAND_SUSPENDED,
-                        TrackerState.INDEX_TAIL_PENDING,
-                    }
+                    and tracker.state is not TrackerState.BAND_SUSPENDED
                 ):
                     tracker.suspend_for_band_boundary()
                 transition = apply_current_evaluation(
@@ -4873,10 +4860,7 @@ class RadarReducer:
                 )
                 if tracker.episode_id is not None:
                     episode_id = tracker.episode_id
-                    if tracker.state in {
-                        TrackerState.BAND_SUSPENDED,
-                        TrackerState.INDEX_TAIL_PENDING,
-                    }:
+                    if tracker.state is TrackerState.BAND_SUSPENDED:
                         self._episode_pause_started_ms.setdefault(
                             episode_id,
                             boundary.received_monotonic_ms,
@@ -5252,11 +5236,6 @@ class RadarReducer:
             global_continuity_epoch=self._global_continuity_epoch,
             force=force,
         )
-
-    def _coverage_affected_scopes(self, names: tuple[str, ...]) -> tuple[str, ...]:
-        if not names or set(names) == set(self.options):
-            return ("GLOBAL",)
-        return self._option_local_coverage_scopes(names)
 
     @staticmethod
     def _option_local_coverage_scopes(names: tuple[str, ...]) -> tuple[str, ...]:
@@ -7471,50 +7450,6 @@ def _is_valid_irrelevant_combo_metadata(
         and product["counter_currency"] == "USDC"
         and product["instrument_type"] == "linear"
     )
-
-
-def _current_for_index_tail(
-    status: IndexTailStatus,
-    band_id: str | None,
-) -> CurrentEvaluation:
-    reason = _index_tail_reason(status)
-    if status is IndexTailStatus.AVAILABLE:
-        raise ValueError("available index tail requires detector calculation")
-    if status in {
-        IndexTailStatus.TIME_BOUNDARY_PENDING,
-        IndexTailStatus.WATERMARK_PENDING,
-    }:
-        disposition = CurrentDisposition.INDEX_TAIL_PENDING
-        continuity_gap = False
-    else:
-        disposition = CurrentDisposition.UNKNOWN
-        continuity_gap = status in {
-            IndexTailStatus.WINDOW_GAP,
-            IndexTailStatus.SOURCE_STALE,
-            IndexTailStatus.CONTINUITY_GAP,
-        }
-    return CurrentEvaluation(
-        disposition=disposition,
-        reason=reason,
-        known_evaluation=False,
-        full_formula_evaluation=False,
-        band_id=band_id,
-        continuity_gap=continuity_gap,
-    )
-
-
-def _index_tail_reason(status: IndexTailStatus) -> str:
-    reasons = {
-        IndexTailStatus.WARMUP: "INDEX_WARMUP",
-        IndexTailStatus.TIME_BOUNDARY_PENDING: "INDEX_TIME_BOUNDARY_PENDING",
-        IndexTailStatus.WATERMARK_PENDING: "INDEX_WATERMARK_PENDING",
-        IndexTailStatus.WINDOW_GAP: "INDEX_WINDOW_GAP",
-        IndexTailStatus.SOURCE_STALE: "INDEX_SOURCE_STALE",
-        IndexTailStatus.CONTINUITY_GAP: "INDEX_CONTINUITY_GAP",
-    }
-    if status is IndexTailStatus.AVAILABLE:
-        raise ValueError("available index tail requires detector calculation")
-    return reasons[status]
 
 
 async def observe(

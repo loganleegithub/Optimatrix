@@ -21,7 +21,6 @@ class TrackerState(StrEnum):
     ACTIVE = "ACTIVE"
     CLEARING = "CLEARING"
     BAND_SUSPENDED = "BAND_SUSPENDED"
-    INDEX_TAIL_PENDING = "INDEX_TAIL_PENDING"
 
 
 class DetectorCoverage(StrEnum):
@@ -117,10 +116,7 @@ class EpisodeTracker:
         previous_state = self.state
         if self.state is TrackerState.UNKNOWN:
             self.state = TrackerState.ARMED
-        elif self.state in {
-            TrackerState.BAND_SUSPENDED,
-            TrackerState.INDEX_TAIL_PENDING,
-        }:
+        elif self.state is TrackerState.BAND_SUSPENDED:
             self.state = TrackerState.ACTIVE if self.episode_id is not None else TrackerState.ARMED
         if self.state is TrackerState.ARMED:
             if signal is ObservationSignal.ACTIVATE:
@@ -214,27 +210,10 @@ class EpisodeTracker:
         self._reset_counts()
         return TrackerTransition(state_changed=self.state is not previous_state)
 
-    def suspend_for_index_tail(self) -> TrackerTransition:
-        previous_state = self.state
-        self.state = TrackerState.INDEX_TAIL_PENDING
-        self._reset_counts()
-        return TrackerTransition(state_changed=self.state is not previous_state)
-
-    def resume_after_index_tail(self) -> TrackerTransition:
-        previous_state = self.state
-        self.state = TrackerState.ACTIVE if self.episode_id is not None else TrackerState.ARMED
-        self._reset_counts()
-        return TrackerTransition(state_changed=self.state is not previous_state)
-
     def establish_known_current(self) -> TrackerTransition:
         previous_state = self.state
-        if self.episode_id is None and self.state in {
-            TrackerState.UNKNOWN,
-            TrackerState.INDEX_TAIL_PENDING,
-        }:
+        if self.episode_id is None and self.state is TrackerState.UNKNOWN:
             self.state = TrackerState.ARMED
-        elif self.episode_id is not None and self.state is TrackerState.INDEX_TAIL_PENDING:
-            self.state = TrackerState.ACTIVE
         return TrackerTransition(state_changed=self.state is not previous_state)
 
     def out_of_baseline_scope(self, *, causal_seq: int) -> TrackerTransition:
