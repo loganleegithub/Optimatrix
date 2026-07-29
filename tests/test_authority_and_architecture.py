@@ -164,7 +164,7 @@ def test_short_vol_task_records_consumed_delegation_and_accepted_live_gates() ->
     )
     assert "`CONSUMED_BY_ACCEPTED_FINAL_STAGE_RECORD_2026_07_29`" in opening
     assert (
-        "**Current construction subgate:** "
+        "**Final construction subgate:** "
         "`ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`" in opening
     )
     assert "`COMPLETED_AT_7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`" in opening
@@ -494,7 +494,7 @@ def test_repository_owned_contracts_use_semantic_not_ordinal_identities() -> Non
             assert '"version":' not in text, f"owned version field remains in {path}"
 
 
-def test_index_publication_successor_is_registered_authority_first() -> None:
+def test_index_publication_successor_records_historical_authority_and_final_acceptance() -> None:
     task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
     opening = "\n".join(task.splitlines()[:75])
     assert "`ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`" in opening
@@ -508,9 +508,12 @@ def test_index_publication_successor_is_registered_authority_first() -> None:
         "**Decision Policy change:** `NONE`",
         "**Outcome/evaluation contract change:** `NONE`",
         "**Stage/authorization change:** `APPROVED`",
-        "Permission remains `PUBLIC_SHADOW`",
-        "implemented runtime capability remains `NONE`",
-        "`NOT_ESTABLISHED`",
+        "At construction time, permission",
+        "implemented runtime capability was `NONE`",
+        "Radar was `NOT_ESTABLISHED`",
+        "Both gates subsequently passed independent",
+        "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR` and `ESTABLISHED`",
+        "activates no successor closure",
         "operational-soak-attempt-005",
         "operational-soak-attempt-006",
         "7270ade324ebcb5c362b279737fab22be2c7745639b238cea0b31bac5d729a52",

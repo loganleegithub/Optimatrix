@@ -59,7 +59,7 @@ task archival remains unauthorized
 **Prior construction subgate:** `SOAK_READINESS_GROUPED_ACCOUNTING_REPAIR`
 `COMPLETED_AT_d6e506b343c6fc5570243ba01def46d6a047428e`
 
-**Current construction subgate:** `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`
+**Final construction subgate:** `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`
 `COMPLETED_AT_7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`
 
 **Current subgate exact base HEAD:** `d6e506b343c6fc5570243ba01def46d6a047428e`
@@ -87,7 +87,7 @@ SHA-256 `4e9defb35d12bc6318ff77139c1d8196db155fcfcaa5efe067b44df0c2caced9`)
 
 **Target branch/PR:** `codex/short-vol-radar-establishment`; Draft PR to `main`
 
-## Historical execution grants and current terminal delegation
+## Historical execution grants and consumed terminal delegation
 
 The design DRAFT did not authorize construction. The explicit human command naming
 `SHORT_VOL_RADAR_ESTABLISHMENT` on 2026-07-25 opened the original construction gate. The explicit
@@ -190,7 +190,7 @@ path-bound ordered per-file manifest sha256 =
 ```
 
 The following inventory records consumed historical grants and the current terminal envelope.
-Items 1–15 are sealed history; they do not impose repeated approval on the current construction:
+Items 1–15 are sealed history; they did not impose repeated approval on the final construction:
 
 1. **Original construction gate:** authorizes implementation of the active task contract and no
    production-public connection.
@@ -233,7 +233,7 @@ Items 1–15 are sealed history; they do not impose repeated approval on the cur
     `ee5a00eefe06e293fca1e8ae3ee431a295f5a754`. It authorizes only the bounded offline repair,
     successor accounting revision, sealed-evidence validation, and one append-only local commit
     below.
-16. **Current exact-candidate sequence:** `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` pre-authorizes
+16. **Final exact-candidate sequence:** `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` pre-authorized
     this bounded version-6 candidate to proceed from independent offline acceptance and exact
     candidate commit to a pre-push independent exact-commit pass receipt binding the intended
     bounded remote ref. Only then may the controller non-force push. After the non-force push it
@@ -433,15 +433,17 @@ Soak must start at or before the beginning of its exact final-hour window. Neith
 deadline is a business-pass trigger, and neither may be changed because live evidence looks likely
 to pass or fail.
 
-### `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE` — terminal-delegation successor
+### `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE` — completed terminal-delegation successor
 
-The exact clean base is `d6e506b343c6fc5570243ba01def46d6a047428e`. This bounded successor
-construction remains inside the sole active `SHORT_VOL_RADAR_ESTABLISHMENT` task. It creates no
-second task and inherits only the existing `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` sequence:
-authority patch, independently reproducible offline repair, exact-commit verification, then the
-already independent Smoke, Soak, and final stage-record gates. Permission remains `PUBLIC_SHADOW`,
-implemented runtime capability remains `NONE`, and Production Short Vol Radar remains
-`NOT_ESTABLISHED` until those later gates independently pass.
+The exact clean base was `d6e506b343c6fc5570243ba01def46d6a047428e`. This bounded successor
+construction completed inside the then-sole active `SHORT_VOL_RADAR_ESTABLISHMENT` task. It
+created no second task and followed only the existing `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`
+sequence: authority patch, independently reproducible offline repair, exact-commit verification,
+then the independent Smoke, Soak, and final stage-record gates. At construction time, permission
+remained `PUBLIC_SHADOW`, implemented runtime capability was `NONE`, and Production Short Vol
+Radar was `NOT_ESTABLISHED` pending those later gates. Both gates subsequently passed independent
+post-stop acceptance; the final stage record now keeps `PUBLIC_SHADOW`, records
+`PRODUCTION_PUBLIC_SHORT_VOL_RADAR` and `ESTABLISHED`, and activates no successor closure.
 
 **Market/Decision input contract change:** `APPROVED` — replace the conflated index-tail pending
 model with generation-global immutable index publication plus per-return-count baseline
@@ -627,8 +629,8 @@ threshold, scope, formula, source, quantity, persistence, or deadline changes.
 **Outcome/evaluation contract change:** `NONE` — no new future fact, denominator, label, replay,
 recomputation, Candidate, Position, Outcome, or performance claim.
 
-**Stage/authorization change:** `NONE` — `PUBLIC_SHADOW`, implemented capability `NONE`, and
-production Radar `NOT_ESTABLISHED` remain unchanged. This subgate does not authorize
+**Stage/authorization change:** `NONE` — at that subgate, `PUBLIC_SHADOW`, implemented capability
+`NONE`, and production Radar `NOT_ESTABLISHED` remained unchanged. The subgate authorized no
 production-public connection, Smoke, Soak, private API, order, trade, or stage advancement.
 
 ### `SHORT_VOL_RADAR_FACT_SEMANTICS_CLOSURE` subgate change declarations
@@ -652,10 +654,10 @@ No Policy file is created or edited.
 **Outcome/evaluation contract change:** `NONE` — no replay, offline recomputation, historical
 relabelling, future label, Candidate, Position, Outcome, PnL, comparator, or qualification.
 
-**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
-capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`. This construction
-authorizes no production-public connection, heartbeat wire probe, Smoke, Soak, private API, order,
-trade, or stage advancement.
+**Stage/authorization change:** `NONE` — at that construction step, permission remained
+`PUBLIC_SHADOW`, implemented capability remained `NONE`, and production Radar remained
+`NOT_ESTABLISHED`. It authorized no production-public connection, heartbeat wire probe, Smoke,
+Soak, private API, order, trade, or stage advancement.
 
 ### Fact-semantics business closure
 
@@ -716,8 +718,8 @@ acceptance semantics and no migration/replay path exists.
 
 ### `FACT_LIFECYCLE_CLOSURE` — construction authorized
 
-The explicit subsequent human `开工` command opens only this bounded successor construction
-against the exact implementation anchor above. The current four-axis state is:
+The explicit subsequent human `开工` command opened only this bounded successor construction
+against the exact implementation anchor above. The four-axis state at that time was:
 
 **Market/Decision input contract change:** `APPROVED` — `FACT_LIFECYCLE_CLOSURE`.
 
@@ -727,8 +729,9 @@ every Policy path/digest remain unchanged.
 **Outcome/evaluation contract change:** `NONE` — no new future fact, replay, recomputation,
 historical relabelling, Outcome, comparator, or qualification is authorized.
 
-**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
-capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`.
+**Stage/authorization change:** `NONE` — at that construction step, permission remained
+`PUBLIC_SHADOW`, implemented capability remained `NONE`, and production Radar remained
+`NOT_ESTABLISHED`.
 
 #### Business closure
 
@@ -915,8 +918,9 @@ baseline, activation/clear, persistence, or runtime-limit value changes.
 **Outcome/evaluation contract change:** `NONE` — no future label, replay, recomputation,
 historical relabelling, Candidate, Position, Outcome, comparator, qualification, order, or trade.
 
-**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
-capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`.
+**Stage/authorization change:** `NONE` — at that construction step, permission remained
+`PUBLIC_SHADOW`, implemented capability remained `NONE`, and production Radar remained
+`NOT_ESTABLISHED`.
 
 #### Required repair
 
@@ -979,8 +983,9 @@ activation/clear, persistence, or runtime-limit value changes.
 **Outcome/evaluation contract change:** `NONE` — no future label, replay, recomputation,
 historical relabelling, Candidate, Position, Outcome, comparator, qualification, order, or trade.
 
-**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
-capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`.
+**Stage/authorization change:** `NONE` — at that construction step, permission remained
+`PUBLIC_SHADOW`, implemented capability remained `NONE`, and production Radar remained
+`NOT_ESTABLISHED`.
 
 #### Required repair
 
@@ -1061,8 +1066,9 @@ operational post-stop audit horizon, not a detector or trading parameter.
 **Outcome/evaluation contract change:** `NONE` — no future label, replay, recomputation,
 historical relabelling, Candidate, Position, Outcome, comparator, qualification, order, or trade.
 
-**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
-capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`.
+**Stage/authorization change:** `NONE` — at that construction step, permission remained
+`PUBLIC_SHADOW`, implemented capability remained `NONE`, and production Radar remained
+`NOT_ESTABLISHED`.
 
 #### Required repair
 
@@ -1127,8 +1133,9 @@ lookback, threshold, persistence, clear/re-arm rule, or runtime-limit value chan
 **Outcome/evaluation contract change:** `NONE` — no replay, offline recomputation, historical
 relabelling, future label, Candidate, Position, Outcome, comparator, or qualification.
 
-**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
-capability remains `NONE`, and production Radar remains `NOT_ESTABLISHED`.
+**Stage/authorization change:** `NONE` — at that construction step, permission remained
+`PUBLIC_SHADOW`, implemented capability remained `NONE`, and production Radar remained
+`NOT_ESTABLISHED`.
 
 #### Required repair
 
@@ -1209,9 +1216,9 @@ lookback, threshold, persistence, clear/re-arm rule, or runtime-limit value chan
 **Outcome/evaluation contract change:** `NONE` — no replay, offline recomputation, historical
 relabelling, future label, Candidate, Position, Outcome, comparator, or qualification.
 
-**Stage/authorization change:** `NONE` — permission remains `PUBLIC_SHADOW`, implemented
-capability remains `NONE`, production Radar remains `NOT_ESTABLISHED`, and every live gate stays
-closed.
+**Stage/authorization change:** `NONE` — at that construction step, permission remained
+`PUBLIC_SHADOW`, implemented capability remained `NONE`, production Radar remained
+`NOT_ESTABLISHED`, and every live gate stayed closed.
 
 #### Required repair
 
@@ -2488,6 +2495,7 @@ Production establishment additionally requires the current version-6 `OPERATIONA
 pre-authorized inside `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`.
 
 Business acceptance is the conditional human decision already recorded by
-`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. The task remains incomplete and production Radar
-remains `NOT_ESTABLISHED` until an independent verifier accepts both exact Smoke and exact Soak
-evidence. Only then may the controller record Radar `ESTABLISHED`; no later closure is activated.
+`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`. Independent verifiers accepted both exact Smoke and exact
+Soak evidence. The controller therefore closed this task and recorded
+`PRODUCTION_PUBLIC_SHORT_VOL_RADAR` as `ESTABLISHED` while keeping `PUBLIC_SHADOW`; no later closure
+is activated.
