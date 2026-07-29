@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import json
 import re
 from pathlib import Path
 
@@ -151,261 +150,25 @@ def test_current_stage_records_established_radar_without_activating_successor() 
     assert "## Queued sequence — not authorized" in current_stage
 
 
-def test_active_radar_consolidation_task_preserves_accepted_stage_and_projection() -> None:
+def test_completed_radar_consolidation_leaves_no_active_task_or_successor() -> None:
     old_task = ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md"
     task_path = ROOT / "tasks/RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION.md"
 
-    assert task_path.exists()
     assert not old_task.exists()
-
-    task = task_path.read_text(encoding="utf-8")
-    opening = "\n".join(task.splitlines()[:24])
-    assert "**Status:** ACTIVE IMPLEMENTATION" in opening
-    assert "**Task kind:** `IMPLEMENTATION`" in opening
-    assert "**Base commit:** `7ddb971436158d70094ea1070aa6f8ce5faaf0fd`" in opening
-    assert "**Target branch:** `codex/radar-repository-consolidation`" in opening
-    for declaration in (
-        "**Market/Decision input contract change:** `NONE`",
-        "**Decision Policy change:** `NONE`",
-        "**Outcome/evaluation contract change:** `NONE`",
-        "**Stage/authorization change:** `NONE`",
-        "**Repository-internal Python API compatibility:** `REMOVE_EXACT_LEGACY_SURFACE`",
-    ):
-        assert declaration in task
-    assert "**Direct behavior:** `REQUIRED`" in task
-    assert "**Fresh REACHABILITY_SMOKE requalification:** `REQUIRED — NOT_RUN`" in task
-    assert "**Fresh OPERATIONAL_SOAK requalification:** `REQUIRED — NOT_RUN`" in task
-    assert "must remain `ACTIVE` until the final gate" in task
-    for frozen_gate_binding in (
-        "`300_000 ms`",
-        "`3_900_000 ms`",
-        "`duration(K) / 3_600_000 >= 0.99`",
-        "`1 - duration(U) / duration(E) >= 59 / 60`",
-        "`R = 181_000 ms`",
-        "reachability-smoke-radar-consolidation-001",
-        "operational-soak-radar-consolidation-001",
-        "faeff9740a43df6de5c85268571592a5d47d90f9c146b2ba8b812d4e3525e50d",
-        "2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4",
-    ):
-        assert frozen_gate_binding in task
+    assert not task_path.exists()
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
 
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    assert "`7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0` remains the sole accepted candidate" in (
+    assert "There is no active product-capability or implementation-maintenance closure" in (
         current_stage
     )
+    assert "`NONE — no successor closure activated`" in current_stage
 
     radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
     assert "`IndexTailStatus` and `IndexBaselineState.status` remain current production" in radar
     assert "`INDEX_TAIL_PENDING` was a repository-internal Python-only compatibility name" in radar
     assert "never serialized by the current or sealed evidence writers" in radar
     assert "`INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING`" in radar
-
-
-def test_active_consolidation_manifest_has_exact_keys_and_gate_objects() -> None:
-    task = (ROOT / "tasks/RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION.md").read_text(
-        encoding="utf-8"
-    )
-    manifest_section = task.split("The two exact-key templates below", maxsplit=1)[1].split(
-        "The exact gate bindings are:",
-        maxsplit=1,
-    )[0]
-    blocks = re.findall(r"```json\n(.*?)\n```", manifest_section, flags=re.DOTALL)
-    assert len(blocks) == 2
-
-    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
-        value: dict[str, object] = {}
-        for key, item in pairs:
-            assert key not in value, f"duplicate JSON key: {key}"
-            value[key] = item
-        return value
-
-    parsed = [json.loads(block, object_pairs_hook=reject_duplicate_keys) for block in blocks]
-    manifests = {value["gate"]: value for value in parsed}
-
-    smoke_policy_path = (
-        "/Users/logan/Optimatrix-smoke/policies/reachability-smoke-" + "v" + "2.json"
-    )
-    smoke_policy_digest = "sha256:faeff9740a43df6de5c85268571592a5d47d90f9c146b2ba8b812d4e3525e50d"
-    smoke_evidence = (
-        "/Users/logan/Optimatrix-smoke/evidence/reachability-smoke-radar-consolidation-001"
-    )
-    soak_policy_path = "/Users/logan/Optimatrix-soak/policies/operational-soak-successor.json"
-    soak_policy_digest = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
-    soak_evidence = "/Users/logan/Optimatrix-soak/evidence/operational-soak-radar-consolidation-001"
-    smoke_thresholds = {
-        "applicable_instrument_count": {
-            "operator": "GREATER_THAN_OR_EQUAL",
-            "value": 1,
-        },
-        "complete_aggregate_detector_evaluation_count": {
-            "operator": "GREATER_THAN_OR_EQUAL",
-            "value": 1,
-        },
-        "complete_aggregate_with_full_formula_evaluation_count": {
-            "operator": "GREATER_THAN_OR_EQUAL",
-            "value": 1,
-        },
-        "coverage_partition_error_ms": {"operator": "EQUALS", "value": 0},
-        "forbidden_runtime_artifacts": {
-            "orders_or_trades": 0,
-            "persisted_normal_or_no_anomaly_rows": 0,
-            "private_api_calls": 0,
-        },
-        "grouping": ["policy_identity", "option_type", "tte_band"],
-        "known_full_detector_formula_evaluation_count": {
-            "operator": "GREATER_THAN_OR_EQUAL",
-            "value": 1,
-        },
-        "known_per_instrument_detector_evaluation_count": {
-            "operator": "GREATER_THAN_OR_EQUAL",
-            "value": 1,
-        },
-        "required_report_fields": [
-            "known_full_formula_rate_given_known_per_instrument",
-            "complete_aggregate_with_full_formula_rate_given_complete_aggregate",
-            "detector_unknown_transition_count_by_reason",
-            "distinct_anomaly_episode_count",
-            "anomaly_activation_transition_count",
-            "anomaly_end_count_by_reason",
-            "known_active_duration_ms_sum_by_end_reason",
-            "public_atomic_quote_state_transition_count",
-        ],
-    }
-    soak_thresholds = {
-        "acceptance_window_ms": 3_600_000,
-        "incident_recovery_sla": {
-            "formula": ("(largest_lookback_minutes + 2) * 60000 + time_boundary_poll_interval_ms"),
-            "largest_lookback_minutes": 1,
-            "time_boundary_poll_interval_ms": 1_000,
-            "value_ms": 181_000,
-        },
-        "index_baseline_publication": {
-            "acceptance_budget_ms": None,
-            "diagnostic_only": True,
-            "omitted_interval_count": 0,
-        },
-        "normalized_current_coverage": {
-            "denominator": 3_600_000,
-            "numerator": "duration(K)",
-            "operator": "GREATER_THAN_OR_EQUAL",
-            "value": "0.99",
-        },
-        "normalized_option_local_availability": {
-            "formula": "1 - duration(U) / duration(E)",
-            "operator": "GREATER_THAN_OR_EQUAL",
-            "value": "59/60",
-        },
-        "option_local_omitted_interval_count": 0,
-        "post_stop_required": [
-            "strict current-schema evidence-directory validation",
-            "latest continuity incident recovered",
-            "current-epoch witness is non-null and later than latest recovery",
-            "witness binds one identical scope whose five reachability counts are each at least one",
-            "gate-specific frozen accounting and thresholds",
-        ],
-    }
-
-    def expected_manifest(
-        *,
-        gate: str,
-        policy_path: str,
-        policy_digest: str,
-        evidence_directory: str,
-        duration_ms: int,
-        thresholds: dict[str, object],
-    ) -> dict[str, object]:
-        return {
-            "external_run_manifest_schema": "OPTIMATRIX_PUBLIC_RADAR_EXTERNAL_RUN_MANIFEST",
-            "external_run_manifest_schema_version": 1,
-            "gate": gate,
-            "code": {
-                "commit": "<40-lowercase-hex>",
-                "tree": "<40-lowercase-hex>",
-                "branch": "codex/radar-repository-consolidation",
-                "intended_remote_ref": ("refs/heads/codex/radar-repository-consolidation"),
-                "verified_remote_ref": ("refs/heads/codex/radar-repository-consolidation"),
-                "verified_remote_commit": "<same-40-lowercase-hex-as-commit>",
-            },
-            "policy": {
-                "policy_path": policy_path,
-                "policy_digest": policy_digest,
-            },
-            "evidence": {
-                "evidence_directory": evidence_directory,
-                "startup_empty_proof": {
-                    "checked_at_utc": "<RFC3339-UTC>",
-                    "checked_immediately_before_start": True,
-                    "entry_count": 0,
-                },
-            },
-            "execution": {
-                "argv": [
-                    ".venv/bin/python",
-                    "-m",
-                    "radar_runtime",
-                    "observe",
-                    "--policy",
-                    policy_path,
-                    "--expected-policy-digest",
-                    policy_digest,
-                    "--evidence-dir",
-                    evidence_directory,
-                ],
-                "cwd": "<absolute-exact-clean-worktree>",
-            },
-            "stop": {
-                "deadline_monotonic_ms": duration_ms,
-                "duration_ms": duration_ms,
-                "emergency_stop": {"enabled": True, "signal": "SIGINT"},
-                "kind": "MONOTONIC_DEADLINE",
-                "result_independent": True,
-                "signal": "SIGINT",
-                "signal_count": 1,
-                "supervisor_started_monotonic_ms": 0,
-            },
-            "required_checks": {
-                "focused_tests": "<exact-command-and-PASS-identity>",
-                "independent_exact_commit_receipt": "<absolute-path-and-sha256>",
-                "make_check": "<exact-command-and-PASS-identity>",
-            },
-            "thresholds": thresholds,
-        }
-
-    expected_manifests = {
-        "REACHABILITY_SMOKE": expected_manifest(
-            gate="REACHABILITY_SMOKE",
-            policy_path=smoke_policy_path,
-            policy_digest=smoke_policy_digest,
-            evidence_directory=smoke_evidence,
-            duration_ms=300_000,
-            thresholds=smoke_thresholds,
-        ),
-        "OPERATIONAL_SOAK": expected_manifest(
-            gate="OPERATIONAL_SOAK",
-            policy_path=soak_policy_path,
-            policy_digest=soak_policy_digest,
-            evidence_directory=soak_evidence,
-            duration_ms=3_900_000,
-            thresholds=soak_thresholds,
-        ),
-    }
-
-    def assert_exact_json_value(actual: object, expected: object) -> None:
-        assert type(actual) is type(expected)
-        if isinstance(expected, dict):
-            assert isinstance(actual, dict)
-            assert set(actual) == set(expected)
-            for key, expected_item in expected.items():
-                assert_exact_json_value(actual[key], expected_item)
-        elif isinstance(expected, list):
-            assert isinstance(actual, list)
-            assert len(actual) == len(expected)
-            for actual_item, expected_item in zip(actual, expected, strict=True):
-                assert_exact_json_value(actual_item, expected_item)
-        else:
-            assert actual == expected
-
-    assert_exact_json_value(manifests, expected_manifests)
 
 
 def test_authority_defines_one_live_short_vol_business_flow() -> None:
@@ -647,11 +410,6 @@ def test_repository_owned_contracts_use_semantic_not_ordinal_identities() -> Non
         text = path.read_text(encoding="utf-8")
         if path == ROOT / "apps/radar_runtime/src/radar_runtime/deribit_public.py":
             text = text.replace("/api/" + "v" + "2", "/api/external")
-        if path == ROOT / "tasks/RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION.md":
-            text = text.replace(
-                "/Users/logan/Optimatrix-smoke/policies/reachability-smoke-" + "v" + "2.json",
-                "/registered/external/reachability-smoke-policy.json",
-            )
         relative_path = path.relative_to(ROOT).as_posix()
         assert forbidden.search(relative_path) is None, f"ordinal identity remains in {path}"
         assert forbidden.search(text) is None, f"ordinal identity remains in {path}"
@@ -695,20 +453,41 @@ def test_stage_record_binds_both_independent_live_gates() -> None:
     current_stage_flat = " ".join(current_stage.split())
 
     for invariant in (
-        "candidate commit `7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`",
-        "candidate tree `684a2acc4dba33c045b11aa0b4b278d22d7aec3e`",
-        "both live manifests' pre-run verified remote ref",
-        "`REACHABILITY_SMOKE`: `MET`",
-        "e56e470908022da36b0ae8d7cc65bd041ee479a1fc69aa029039c31d646c48f8",
-        "053c1922b54d9ee902770a7bff3a3ecbc876fc29603872ba6981bcc34cec70f9",
-        "e73d8e5bdb7930acd51b59526f4a9246d60960930cfabe2d6daf392e05e4821a",
-        "`OPERATIONAL_SOAK`: `MET`",
-        "4e9defb35d12bc6318ff77139c1d8196db155fcfcaa5efe067b44df0c2caced9",
-        "c49ed5cf33de728437343681d82d35ab0cfc63228e306240433306752d064b3b",
+        "candidate commit `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`",
+        "candidate tree `1ff49ff697df1a91237eb35f290301e26a7c06dc`",
+        "both live manifests' pre-run verified remote ref "
+        "`refs/heads/codex/radar-repository-consolidation` resolved to that exact candidate commit",
         "does not prove indefinite uptime",
         "no successor closure",
     ):
         assert invariant in current_stage_flat
+
+    smoke_binding = (
+        "`REACHABILITY_SMOKE`: `MET`, independently accepted by "
+        "`/Users/logan/Optimatrix-smoke/receipts/"
+        "reachability-smoke-radar-consolidation-001-independent-acceptance.json`, "
+        "SHA-256 `4bbf832ab7340e7224a0df5db79aea1cd6fed33d156f2aeec12690f986217a4f`, "
+        "manifest SHA-256 `70511dad86aa37dcaaab1167b688d342a33a8248635097b6f4c84b436e8e09fd`, "
+        "evidence directory "
+        "`/Users/logan/Optimatrix-smoke/evidence/reachability-smoke-radar-consolidation-001`, "
+        "summary SHA-256 `700dbbf2649830b656a75de3e3eb74aabef21cb4003786429b823091abcbbfa6`, "
+        "and 47-entry absolute-path-bound ordered evidence manifest SHA-256 "
+        "`3b70b2a7d93b3bbcf2ce31c0e63bc03ff971b18ea4ad7e9270cd943a351cccde`"
+    )
+    soak_binding = (
+        "`OPERATIONAL_SOAK`: `MET`, independently accepted by "
+        "`/Users/logan/Optimatrix-soak/receipts/"
+        "operational-soak-radar-consolidation-001-independent-acceptance.json`, "
+        "SHA-256 `d38c5bebef1e2bccfeeb9c69715970d03fda2a0359f02520a5c3deef08463345`, "
+        "manifest SHA-256 `2cf6af08bdcf7ec3c72e5bbb9292b58261c992dda67b298cf7f4ea99eac64574`, "
+        "evidence directory "
+        "`/Users/logan/Optimatrix-soak/evidence/operational-soak-radar-consolidation-001`, "
+        "summary SHA-256 `1ec01c5dba427e3a273671ef57421a6f6bfe01f95d26416e35a2d69fe6a6b218`, "
+        "and absolute-path-bound ordered evidence manifest SHA-256 "
+        "`7ff691e9b3665e0e9db7196a032440a9f6e79c6802f803b7546cb23f5125f361`"
+    )
+    assert smoke_binding in current_stage_flat
+    assert soak_binding in current_stage_flat
 
 
 def test_delegation_separates_prepush_receipt_from_postpush_remote_equality() -> None:

@@ -23,36 +23,35 @@ entry, Position runtime, Outcome cohort, private/account data, orders, fills, ca
 qualification, Challenger automation, promotion, and execution remain unauthorized. A bounded
 public observation is not authorization for persistent service deployment.
 
-### Accepted establishment record
+### Accepted Radar implementation record
 
-The bounded `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` completed without activating a successor
-closure. The accepted runtime and both independent live gates bind:
+The bounded `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION` established the capability without activating
+a successor closure. The later `RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION_DELEGATION` removed
+only the authorized unreachable compatibility surface and independently requalified the exact
+replacement runtime. The governing accepted runtime and both independent live gates bind:
 
-- candidate commit `7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`;
-- candidate tree `684a2acc4dba33c045b11aa0b4b278d22d7aec3e`;
+- candidate commit `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`;
+- candidate tree `1ff49ff697df1a91237eb35f290301e26a7c06dc`;
 - both live manifests' pre-run verified remote ref
-  `refs/heads/codex/short-vol-radar-establishment` resolved to that exact candidate commit;
+  `refs/heads/codex/radar-repository-consolidation` resolved to that exact candidate commit;
 - `REACHABILITY_SMOKE`: `MET`, independently accepted by
-  `/Users/logan/Optimatrix-smoke/receipts/reachability-smoke-attempt-006-independent-acceptance.json`,
-  SHA-256 `e56e470908022da36b0ae8d7cc65bd041ee479a1fc69aa029039c31d646c48f8`,
-  manifest SHA-256 `447e3f0d75e5fa0a2b24ab612a1be47a66df7b7a4f960ca867efe5610cd9b54c`,
+  `/Users/logan/Optimatrix-smoke/receipts/reachability-smoke-radar-consolidation-001-independent-acceptance.json`,
+  SHA-256 `4bbf832ab7340e7224a0df5db79aea1cd6fed33d156f2aeec12690f986217a4f`,
+  manifest SHA-256 `70511dad86aa37dcaaab1167b688d342a33a8248635097b6f4c84b436e8e09fd`,
   evidence directory
-  `/Users/logan/Optimatrix-smoke/evidence/reachability-smoke-attempt-006`, and summary SHA-256
-  `39707edb16dd7a594f044f6bfdbdb48131bef08fd0d09475d5c02b6fbdd7e638`;
-  the independent directory-binding receipt is
-  `/Users/logan/Optimatrix-smoke/receipts/reachability-smoke-attempt-006-evidence-directory-binding.json`,
-  SHA-256 `053c1922b54d9ee902770a7bff3a3ecbc876fc29603872ba6981bcc34cec70f9`,
-  and binds the 54-entry absolute-path-bound ordered evidence manifest SHA-256
-  `e73d8e5bdb7930acd51b59526f4a9246d60960930cfabe2d6daf392e05e4821a`;
+  `/Users/logan/Optimatrix-smoke/evidence/reachability-smoke-radar-consolidation-001`,
+  summary SHA-256 `700dbbf2649830b656a75de3e3eb74aabef21cb4003786429b823091abcbbfa6`,
+  and 47-entry absolute-path-bound ordered evidence manifest SHA-256
+  `3b70b2a7d93b3bbcf2ce31c0e63bc03ff971b18ea4ad7e9270cd943a351cccde`;
 - `OPERATIONAL_SOAK`: `MET`, independently accepted by
-  `/Users/logan/Optimatrix-soak/receipts/operational-soak-attempt-007-independent-acceptance.json`,
-  SHA-256 `4e9defb35d12bc6318ff77139c1d8196db155fcfcaa5efe067b44df0c2caced9`,
-  manifest SHA-256 `f734cf8f161a6ad26430d949d4ec6bfc560a1882ecd04552eb68d5a4245d01bd`,
+  `/Users/logan/Optimatrix-soak/receipts/operational-soak-radar-consolidation-001-independent-acceptance.json`,
+  SHA-256 `d38c5bebef1e2bccfeeb9c69715970d03fda2a0359f02520a5c3deef08463345`,
+  manifest SHA-256 `2cf6af08bdcf7ec3c72e5bbb9292b58261c992dda67b298cf7f4ea99eac64574`,
   evidence directory
-  `/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-007`, summary SHA-256
-  `be0800f51d04f39977dd3b0288413058f4954aaffb1cea62f6675f94000c7200`, and
+  `/Users/logan/Optimatrix-soak/evidence/operational-soak-radar-consolidation-001`, summary SHA-256
+  `1ec01c5dba427e3a273671ef57421a6f6bfe01f95d26416e35a2d69fe6a6b218`, and
   absolute-path-bound ordered evidence manifest SHA-256
-  `c49ed5cf33de728437343681d82d35ab0cfc63228e306240433306752d064b3b`.
+  `7ff691e9b3665e0e9db7196a032440a9f6e79c6802f803b7546cb23f5125f361`.
 
 Smoke establishes reachability only. Soak establishes only its pre-registered bounded operating
 window and thresholds. The accepted evidence does not prove indefinite uptime, persistent
@@ -76,16 +75,10 @@ capability.
 
 ## Root blocker
 
-There is no active product-capability closure and therefore no current root blocker to record.
-This does not activate or authorize any queued closure.
-
-The active
-[`RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION`](../../tasks/RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION.md)
-task is an implementation-maintenance and requalification closure, not a product-capability
-closure. Its Phase B Smoke and Soak are both `NOT_RUN`.
-`7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0` remains the sole accepted candidate; no consolidated
-candidate may replace this accepted record before its independent exact-candidate verification,
-fresh independently accepted Smoke and Soak, and final stage-record gate.
+There is no active product-capability or implementation-maintenance closure and therefore no
+current root blocker to record. The consolidation completed at exact candidate
+`9c58120d358fd0e0ccb4885123ab95c67d1c3f31`; its independently accepted Smoke and Soak replace
+only the governing implementation identity and do not activate or authorize any queued closure.
 
 ## Implemented capability boundary
 
