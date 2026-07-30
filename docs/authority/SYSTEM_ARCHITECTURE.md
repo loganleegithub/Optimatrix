@@ -15,8 +15,8 @@ Deribit public WebSocket
 → minimal SHORT_VOL_ANOMALY_EVENT on activation
 → while active, independent official atomic-combo availability
 → optional minimal PUBLIC_ATOMIC_QUOTE_EVENT
-→ later Underwriting Decision
-→ later Shadow admission and Position Policy
+→ contracted later Underwriting Decision
+→ contracted later Shadow admission and Position Policy
 → later strictly future Outcome
 ```
 
@@ -235,11 +235,12 @@ completeness-aware aggregate, and per-short-leg-episode
 NO_TARGET_SIZE_CREDIT_QUOTE | PUBLIC_ATOMIC_QUOTE_AVAILABLE`. It does not output Candidate,
 admit Shadow Entry, represent a maker order or fill, manage a position, or produce Outcome.
 
-### Later position and Outcome boundary
+### Contracted later Underwriting and Position boundary
 
-Separately authorized future code will own Underwriting, Shadow admission, immutable
-post-admission Position actions, strictly future close-opportunity facts, and
-actual-versus-counterfactual Outcome semantics. No current package implements or consumes this
+[`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) owns
+Underwriting, deterministic Shadow admission, immutable post-admission Position actions, and
+strictly future close-opportunity semantics. A later contract must separately own
+actual-versus-counterfactual Outcome semantics. No current package implements or consumes either
 boundary.
 
 ### `radar_runtime`
@@ -257,8 +258,9 @@ market_monitor → options_domain → short_vol_radar
 ```
 
 Lower layers never import higher layers. Runtime composition may depend on all internal packages.
-Any later Underwriting or position module must be introduced by its own authorized closure. No
-module receives private/account access under `PUBLIC_SHADOW`.
+Any later Underwriting or Position module must be introduced by its own authorized closure and
+consume lower-layer immutable public DTOs. No module receives private/account access under
+`PUBLIC_SHADOW`.
 
 ## Short Vol Radar boundary
 
@@ -322,18 +324,23 @@ or persisted recomputation contract.
 
 ## Later Decision and position architecture
 
-After separate authorization, Underwriting consumes an active anomaly plus a refreshed official
-atomic quote and compares its executable premium with declared path, jump, tail, friction,
-liquidity, and uncertainty reserves.
+The accepted downstream contract freezes the future behavior, but separate authorization remains
+required to implement it. Underwriting consumes an active anomaly plus a current official atomic
+quote and compares its executable premium with declared path, jump, tail, friction, liquidity, and
+uncertainty reserves.
 
 Candidate is permitted only when a complete Position Policy is already frozen. `SHADOW_ENTRY`
-freezes a refreshed target-size atomic combo entry quote and creates no exposure. A legged Shadow
-admission requires its own later Policy. Future actual exposure begins at the first opening fill,
-including a partial or single-leg fill.
+requires a still-valid Candidate and a post-Candidate official public combo snapshot/change or
+post-Candidate public snapshot response with a strictly later source and causal identity. It
+freezes the refreshed target-size atomic combo entry quote and creates no exposure. Admission has
+no separate configurable Policy; its fixed gates bind the separate Underwriting and Position
+Policies. A legged Shadow admission requires its own later Policy. Future actual exposure begins
+at the first opening fill, including a partial or single-leg fill.
 
 The Position Policy consumes current position-specific facts and returns
 `HOLD | CLOSE | UNKNOWN`. It has explicit latest-exit and settlement boundaries but no
-preselected holding duration.
+preselected holding duration. Position evaluation starts strictly after Entry, and the first
+`CLOSE` is latched for that Shadow Position.
 
 `close_quote_state` is separately
 `ATOMIC_COMBO_CLOSE_QUOTE | LEGGED_CLOSE_REFERENCE | UNEXECUTABLE | UNKNOWN`. A known hard-close
@@ -343,6 +350,15 @@ covers the full remaining quantity. A legged reference is diagnostic until an ex
 exit Policy is authorized. Future execution must reconcile orders and fills; exposure ends only
 when the final closing fill makes every leg flat or authorized settlement completes. Shadow and
 actual durations are different fields and may never be collapsed.
+
+After `SHADOW_ENTRY`, runtime composition must maintain the official public catalog, platform,
+index, ticker, and active-combo-book lifecycle needed by the open Shadow
+Position independently of the Radar anomaly episode. Episode clear, pause, or Layer 2 shutdown
+cannot stop Position observation. Component-option books are optional diagnostics; their absence
+or gap is not a required-source failure. Quiet continuous books do not expire because no level
+changed; last-mutation age remains diagnostic. This is bounded current state, not full-market
+persistence. A public close opportunity never reduces Shadow remaining quantity or creates a
+fill, flatness, settlement, PnL, or Outcome.
 
 ## Denominator model
 

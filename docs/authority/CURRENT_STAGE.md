@@ -9,8 +9,7 @@
 **Production Short Vol Radar:** `ESTABLISHED`
 
 **Sole authorized next product-capability closure:**
-`SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT` — authority-only contract freeze; runtime and
-live commands remain forbidden
+`NONE` — no successor product-capability closure is active
 
 ## Authority
 
@@ -25,11 +24,12 @@ entry, Position runtime, Outcome cohort, private/account data, orders, fills, ca
 qualification, Challenger automation, promotion, and execution remain unauthorized. A bounded
 public observation is not authorization for persistent service deployment.
 
-The sole active closure is
-[`SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT`](../../tasks/SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT.md).
-It authorizes only the downstream Underwriting, Shadow-admission, and Position contract plus the
-owning authority, architecture, README, task, and direct authority-test assertions. It creates no
-Candidate, admission, Position, close-opportunity, cohort, execution, or other runtime behavior.
+The accepted
+[`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) implementation
+contract now freezes the downstream public-only economics, Candidate validity, deterministic
+Shadow admission, Position action, and close-opportunity semantics. Contract presence creates no
+Candidate, admission, Position, close opportunity, cohort, execution, or other runtime behavior.
+No successor task is active.
 
 ### Accepted Radar implementation record
 
@@ -83,12 +83,12 @@ capability.
 
 ## Root blocker
 
-The root blocker to all downstream business behavior is the absence of one complete frozen
-Underwriting, Shadow-admission, and Position contract. The active authority-only task closes only
-that semantic prerequisite. Until it is accepted and a later implementation closure is separately
-activated, no downstream runtime work or live command is authorized. This authority-only task
-changes no accepted Radar runtime or live evidence identity: the governing candidate remains
-`9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
+The Underwriting, Shadow-admission, and Position semantic prerequisite is frozen. The root blocker
+to downstream business behavior is now the absence of a separately activated implementation and
+fixed-Policy forward-cohort closure. Until such a task is active and its pre-runtime authority
+requirements are satisfied, no downstream runtime work or live command is authorized. The
+accepted authority-only contract changes no accepted Radar runtime or live evidence identity: the
+governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
 
 ## Implemented capability boundary
 
@@ -158,8 +158,7 @@ profitability, or fill evidence.
 
 ## Queued sequence — not authorized
 
-The active authority-only contract freeze is not part of the queue below. The following later
-closures remain queued and unauthorized:
+The following closures remain queued and unauthorized:
 
 1. **Fixed-contract runtime and fixed-Policy forward cohort:** after separate activation,
    implement the accepted contract and record complete anomaly/quote opportunity, Decision,
