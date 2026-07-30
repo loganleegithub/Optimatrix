@@ -23,18 +23,26 @@ INTERNAL_PACKAGES = {
     "market_monitor",
     "options_domain",
     "short_vol_radar",
+    "short_vol_underwriting",
     "radar_runtime",
 }
 PACKAGE_ROOTS = {
     "market_monitor": ROOT / "packages/market_monitor/src/market_monitor",
     "options_domain": ROOT / "packages/options_domain/src/options_domain",
     "short_vol_radar": ROOT / "packages/short_vol_radar/src/short_vol_radar",
+    "short_vol_underwriting": (ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting"),
     "radar_runtime": ROOT / "apps/radar_runtime/src/radar_runtime",
 }
 ALLOWED_IMPORTS = {
     "market_monitor": {"market_monitor"},
     "options_domain": {"market_monitor", "options_domain"},
     "short_vol_radar": {"market_monitor", "options_domain", "short_vol_radar"},
+    "short_vol_underwriting": {
+        "market_monitor",
+        "options_domain",
+        "short_vol_radar",
+        "short_vol_underwriting",
+    },
     "radar_runtime": INTERNAL_PACKAGES,
 }
 
@@ -183,38 +191,37 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_activates_fixed_contract_runtime_without_implementing_it() -> None:
+def test_current_stage_records_fixed_contract_runtime_terminal_matrix() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
     assert current.count(marker) == 1
-    assert "`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME`" in flat
+    assert f"{marker} `NONE`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
-    assert "**Fixed-contract public Shadow runtime:** `NOT_IMPLEMENTED`" in current
+    assert (
+        "**Fixed-contract public Shadow runtime:** `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`"
+    ) in current
+    assert "**Evidence gate:** `CLOSED`" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
     assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
     assert "IMPLEMENTED_AWAITING_FORWARD_EVIDENCE" in current
-    assert "that label is not the current state" in flat
-    assert "the evidence/live gate remains closed/forbidden" in flat
-    assert "no live command is authorized" in flat
+    assert "does not establish a live cohort" in flat
+    assert "no live command is authorized" in flat.lower()
+    assert "labels record the state when the immutable contract content was accepted" in flat
     assert "SHORT_VOL_PUBLIC_SHADOW_TERMINAL_GOAL_DELEGATION" in current
     assert "## Queued sequence — not authorized" in current
 
 
-def test_completed_outcome_contract_leaves_one_active_implementation_task() -> None:
-    task = ROOT / "tasks/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT_CONTRACT.md"
-    assert not task.exists()
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md",
-        "TEMPLATE.md",
-    ]
+def test_completed_runtime_has_no_active_task() -> None:
+    assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    assert "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT_CONTRACT" not in current
+    assert "**Sole authorized next product-capability closure:** `NONE`" in current
 
 
-def test_fixed_three_policy_chain_and_preparation_boundary_are_exact() -> None:
-    task_path = ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md"
+def test_fixed_three_policy_chain_and_implementation_boundary_are_exact() -> None:
     radar_path = ROOT / "policies/short-vol-fixed-public-shadow-radar.json"
     underwriting_path = ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json"
     position_path = ROOT / "policies/short-vol-fixed-public-shadow-position.json"
@@ -227,30 +234,9 @@ def test_fixed_three_policy_chain_and_preparation_boundary_are_exact() -> None:
         "policies/short-vol-fixed-public-shadow-radar.json",
         "policies/short-vol-fixed-public-shadow-underwriting.json",
     ]
-    assert not (ROOT / "packages/short_vol_underwriting").exists()
-    assert "short_vol_underwriting" not in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert (ROOT / "packages/short_vol_underwriting").is_dir()
+    assert "short_vol_underwriting" in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
-    task = task_path.read_text(encoding="utf-8")
-    flat_task = " ".join(task.split())
-    for invariant in (
-        "**Status:** ACTIVE",
-        "**Task kind:** `IMPLEMENTATION`",
-        "**Runtime implementation:** REQUIRED",
-        "**Live commands:** FORBIDDEN",
-        "The tuple is not a Policy, semantic identity, manifest, or artifact",
-        "`POLICY_CHOICE_WITHOUT_PRIOR_OUTCOME_EVIDENCE`",
-        "`NON_QUALIFIED_FORWARD_OBSERVATION_BASELINE`",
-        "`IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`",
-        "This activation commit changes exactly",
-        "`EVIDENCE_ONLY`",
-        "A pending admission attempt is never",
-        "CandidateInvalidationIdentity =",
-        "AdmissionAttemptTerminalIdentity =",
-        "UnderwritingPositionSummaryIdentity =",
-    ):
-        assert invariant in task
-    for path in policy_paths:
-        assert path.relative_to(ROOT).as_posix() in task
     declared_policy_digests = (
         "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4",
         "sha256:be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af",
@@ -261,12 +247,6 @@ def test_fixed_three_policy_chain_and_preparation_boundary_are_exact() -> None:
         "sha256:9cbaecf57fb1db0dedf782a4ab002b655e43319a1ad7c5880db3d7b4682d4b03",
         "sha256:61a032fe0fe265d66a38bcbb1a3c8498409664fedbda2c8bd0a245180581a695",
     )
-    for digest in (*declared_policy_digests, *declared_contract_digests):
-        assert task.count(digest) == 1
-    assert "Market/Decision input contract change:** `NONE`" in flat_task
-    assert "Decision Policy change:** `APPROVED`" in flat_task
-    assert "Outcome/evaluation contract change:** `NONE`" in flat_task
-    assert "Stage/authorization change:** `APPROVED`" in flat_task
 
     radar_bytes = radar_path.read_bytes()
     assert len(radar_bytes) == 1405
@@ -1802,7 +1782,7 @@ def test_outcome_contract_freezes_conservation_denominators_and_nulls() -> None:
     )
 
 
-def test_authority_defines_one_live_flow_and_two_frozen_downstream_contracts() -> None:
+def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contracts() -> None:
     constitution = (ROOT / "docs/authority/PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     architecture = (ROOT / "docs/authority/SYSTEM_ARCHITECTURE.md").read_text(encoding="utf-8")
@@ -1864,10 +1844,11 @@ def test_authority_defines_one_live_flow_and_two_frozen_downstream_contracts() -
         "`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`",
         "The two gates remain semantically independent",
         "does not prove indefinite uptime",
-        "not authorization for persistent service deployment",
+        "persistent service deployment unauthorized",
         "private/account data",
         "orders, fills, capital",
-        "no downstream runtime capability exists",
+        "fixed-contract Shadow implementation adds",
+        "`IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`",
         "no live command is authorized",
     ):
         assert invariant in current_stage
@@ -1881,9 +1862,9 @@ def test_authority_defines_one_live_flow_and_two_frozen_downstream_contracts() -
         "NO_TARGET_SIZE_CREDIT_QUOTE",
         "first Radar closure intentionally creates no replay path",
         "no preselected holding duration",
-        "Contracted downstream Underwriting, Position, Outcome, and cohort boundary",
-        "pure downstream owner named `short_vol_underwriting`",
-        "No current package implements or consumes either boundary",
+        "### `short_vol_underwriting`",
+        "The pure downstream owner `short_vol_underwriting`",
+        "production-public evidence gate remains closed",
     ):
         assert invariant in architecture
 
@@ -1965,10 +1946,11 @@ def test_authority_defines_one_live_flow_and_two_frozen_downstream_contracts() -
         "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`",
         "SHORT_VOL_UNDERWRITING_POSITION",
         "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT",
-        "SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME",
+        "`IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`",
+        "`observe-shadow`",
         "live commands remain forbidden",
-        "no Underwriting, Candidate, Shadow Entry, Position",
-        "future maker/order/fill",
+        "Offline Shadow implementation acceptance does not prove",
+        "maker/order/fill",
     ):
         assert invariant in readme
 

@@ -74,6 +74,7 @@ class OptionInstrument:
     amount: AmountMetadata | None
     lifecycle_state: InstrumentLifecycleState = InstrumentLifecycleState.OPEN
     is_active: bool = True
+    taker_commission: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,19 @@ class ComboInstrument:
 
 
 def parse_option_instrument(payload: object) -> OptionInstrument | None:
+    return _parse_option_instrument(payload, include_final_lifecycle=False)
+
+
+def parse_option_instrument_fact(payload: object) -> OptionInstrument | None:
+    """Parse one immutable option fact, including natural terminal lifecycle witnesses."""
+    return _parse_option_instrument(payload, include_final_lifecycle=True)
+
+
+def _parse_option_instrument(
+    payload: object,
+    *,
+    include_final_lifecycle: bool,
+) -> OptionInstrument | None:
     data = require_mapping(payload, "instrument")
     product_fields = {
         "kind": require_str(data.get("kind"), "instrument.kind"),
@@ -121,7 +135,7 @@ def parse_option_instrument(payload: object) -> OptionInstrument | None:
         state = InstrumentLifecycleState(state_raw)
     except ValueError as exc:
         raise SourceDataError("instrument.state is unsupported") from exc
-    if state.value in FINAL_INSTRUMENT_LIFECYCLE_STATES:
+    if state.value in FINAL_INSTRUMENT_LIFECYCLE_STATES and not include_final_lifecycle:
         return None
     option_type_raw = require_str(data.get("option_type"), "instrument.option_type")
     try:
@@ -138,6 +152,14 @@ def parse_option_instrument(payload: object) -> OptionInstrument | None:
         amount = parse_amount_metadata(data, "instrument")
     except SourceDataError:
         amount = None
+    taker_commission: Decimal | None = None
+    if "taker_commission" in data:
+        taker_commission = decimal_from_source(
+            data["taker_commission"],
+            "instrument.taker_commission",
+        )
+        if taker_commission < 0:
+            raise SourceDataError("instrument.taker_commission must be non-negative")
     return OptionInstrument(
         instrument_name=require_str(data.get("instrument_name"), "instrument.instrument_name"),
         expiration_timestamp_ms=expiry,
@@ -146,6 +168,7 @@ def parse_option_instrument(payload: object) -> OptionInstrument | None:
         amount=amount,
         lifecycle_state=state,
         is_active=is_active,
+        taker_commission=taker_commission,
     )
 
 

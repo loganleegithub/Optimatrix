@@ -15,15 +15,16 @@ Deribit public WebSocket
 → minimal SHORT_VOL_ANOMALY_EVENT on activation
 → while active, independent official atomic-combo availability
 → optional minimal PUBLIC_ATOMIC_QUOTE_EVENT
-→ contracted later Underwriting Decision
-→ contracted later Shadow admission and Position Policy
-→ contracted strictly future Outcome and aligned forward-cohort evidence
+→ fixed-contract Underwriting Decision
+→ deterministic Shadow admission and Position Policy
+→ strictly future Outcome and aligned forward-cohort evidence
 ```
 
 The market-state, detector, and public atomic-availability arrows are one event-driven Market
 Monitor and Short Vol Radar flow. There is no
 capture job followed by a scan job, and no scanner that repeatedly rereads an unchanged local
-dataset.
+dataset. The downstream arrows are implemented in the same process, but their production-public
+evidence gate remains closed.
 
 ## Data lifecycles
 
@@ -42,9 +43,10 @@ complete market observation.
 The first durable strategy object is `SHORT_VOL_ANOMALY_EVENT`. It freezes only the detector facts
 consumed at one activation, its exact Policy/code identity, coverage, and causal boundary. While
 that episode is active, a first observed official target-size atomic quote for one combo creates a
-separate `PUBLIC_ATOMIC_QUOTE_EVENT` containing only the official combo facts it consumed. Later
-authorized stages add separate Decision, Shadow Entry, executed-entry, Position-action,
-close-opportunity, and Outcome objects.
+separate `PUBLIC_ATOMIC_QUOTE_EVENT` containing only the official combo facts it consumed. The
+fixed-contract public Shadow implementation can add separate Decision, Shadow Entry,
+Position-action, close-opportunity, and Outcome objects only when a later evidence task authorizes
+that composition to run. Executed-entry and fill objects remain unimplemented and unauthorized.
 
 No-anomaly market updates produce no receipt. Neither event persists the full option chain or
 creates a Shadow Outcome. One bounded run summary records coverage and counts, not reconstructable
@@ -235,31 +237,33 @@ completeness-aware aggregate, and per-short-leg-episode
 NO_TARGET_SIZE_CREDIT_QUOTE | PUBLIC_ATOMIC_QUOTE_AVAILABLE`. It does not output Candidate,
 admit Shadow Entry, represent a maker order or fill, manage a position, or produce Outcome.
 
-### Contracted downstream Underwriting, Position, Outcome, and cohort boundary
+### `short_vol_underwriting`
 
 [`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) owns
 Underwriting, deterministic Shadow admission, immutable post-admission Position actions, and
 strictly future close-opportunity semantics. The accepted contract below separately owns
-counterfactual Outcome and cohort semantics. No current package implements or consumes either
-boundary.
+counterfactual Outcome and cohort semantics.
 
 [`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](../contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
 owns causal-first public counterfactual exit selection, terminal Shadow Outcome and rejected-
 counterfactual maturity/censoring, cohort-aligned `NO_TRADE`, forward-evidence conservation, and
 strict downstream evidence compatibility. It introduces no Outcome/Cohort Policy and no new market,
-delivery, or settlement-price source. Contract presence does not authorize a writer, CLI, live
-integration, cohort, Outcome, private source, or execution interface.
+delivery, or settlement-price source.
 
-A later separately activated implementation must introduce one pure downstream owner named
-`short_vol_underwriting`. It consumes immutable public DTOs from the existing lower layers and owns
+The pure downstream owner `short_vol_underwriting` consumes immutable public DTOs from the existing
+lower layers and owns
 Underwriting, admission, Position, counterfactual, Outcome, aligned-pair, and downstream evidence
-semantics. The Online Runtime remains the sole composer; no lower layer imports that owner.
+semantics. Its schemas, writer, current/complete readers, manifest binding, canonical identities,
+`UNKNOWN` handling, and conservation checks are strict and deterministic. It is a package, not a
+service, client, queue, database, or authority to run live. The Online Runtime remains the sole
+composer; no lower layer imports that owner.
 
 ### `radar_runtime`
 
-Composes the Deribit public adapter, bounded current state, detector, domain construction, health
-metrics, and permitted artifact sink in one continuously running process. It owns process
-lifecycle and stop/reconnect behavior, not economic Policy.
+Composes the Deribit public adapter, bounded current state, detector, domain construction,
+fixed-contract Shadow adapter, health metrics, and permitted artifact sinks in one continuously
+running process. It owns client/queue/request identity, lifecycle, stop/reconnect barriers, and the
+guarded CLI, not downstream economic Policy.
 
 ## Dependency direction
 
@@ -267,25 +271,14 @@ Current implementation:
 
 ```text
 market_monitor → options_domain → short_vol_radar
-       \________________________________/
-                    radar_runtime
-```
+       \______________|_______________/
+                      ↓
+            short_vol_underwriting
 
-Lower layers never import higher layers. Runtime composition may depend on all internal packages.
-Any later Underwriting or Position module must be introduced by its own authorized closure and
-consume lower-layer immutable public DTOs. No module receives private/account access under
-`PUBLIC_SHADOW`.
-
-Authorized future direction, only after a separately active implementation task:
-
-```text
-market_monitor ─┬→ options_domain ─→ short_vol_radar
-                └→ future short_vol_underwriting
-options_domain ───────────────→ future short_vol_underwriting
-short_vol_radar ───────────────→ future short_vol_underwriting
 radar_runtime composes every implemented owner
 ```
 
+Lower layers never import higher layers. Runtime composition may depend on all internal packages.
 `short_vol_underwriting` is one pure domain/evidence owner, not a service. It never imports
 `radar_runtime`; runtime composition may depend on every implemented internal package. No module
 receives private/account access under `PUBLIC_SHADOW`.
@@ -353,12 +346,12 @@ continuity, and projection tests exercise the same small pure functions used by 
 The first Radar closure intentionally creates no replay path, second calculator, provenance graph,
 or persisted recomputation contract.
 
-## Later Decision and position architecture
+## Decision and position architecture
 
-The accepted downstream contract freezes the future behavior, but separate authorization remains
-required to implement it. Underwriting consumes an active anomaly plus a current official atomic
-quote and compares its executable premium with declared path, jump, tail, friction, liquidity, and
-uncertainty reserves.
+The implemented downstream owner follows the accepted contract. Underwriting consumes an active
+anomaly plus a current official atomic quote and compares its executable premium with declared
+path, jump, tail, friction, liquidity, and uncertainty reserves. Separate evidence authorization
+remains required to run this behavior production-public.
 
 Candidate is permitted only when a complete Position Policy is already frozen. `SHADOW_ENTRY`
 requires a still-valid Candidate and a post-Candidate official public combo snapshot/change or
@@ -416,7 +409,7 @@ as `NO_TRADE` versus `REJECTED_COUNTERFACTUAL_TRADE`. The no-trade cashflow is d
 but a pair is economically comparable only when its trade arm is `MATURE_KNOWN`. Unknown and
 censored trade arms cannot enter the comparison denominator.
 
-The future `short_vol_underwriting` owner writes these objects to one downstream evidence directory
+The `short_vol_underwriting` owner writes these objects to one downstream evidence directory
 separate from Radar evidence. Existing Radar schemas and current/sealed readers remain unchanged.
 The runtime continues to maintain bounded current public state for open observations after the
 Radar episode ends; this is not full-market persistence, replay, or a workflow service.

@@ -24,6 +24,7 @@ PUBLIC_METHODS = frozenset(
         "public/get_instruments",
         "public/get_instrument",
         "public/get_combos",
+        "public/get_order_book",
         "public/status",
         "public/get_time",
         "public/set_heartbeat",

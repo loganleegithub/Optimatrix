@@ -30,16 +30,5 @@ jobs:
       - name: Install exact development toolchain
         run: make sync
 
-      - name: Archive exact synchronized checkout for implementation worktree
-        run: tar --exclude=.git/logs --exclude=.git/objects/pack -czf /tmp/optimatrix-synchronized-checkout.tgz .
-
-      - name: Upload exact synchronized checkout artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: optimatrix-synchronized-checkout-${{ github.event.pull_request.head.sha }}
-          path: /tmp/optimatrix-synchronized-checkout.tgz
-          archive: false
-          retention-days: 1
-
       - name: Run repository checks
         run: make check

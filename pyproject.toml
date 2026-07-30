@@ -16,6 +16,7 @@ packages = [
   "market_monitor",
   "options_domain",
   "short_vol_radar",
+  "short_vol_underwriting",
   "radar_runtime",
 ]
 
@@ -23,6 +24,7 @@ packages = [
 market_monitor = "packages/market_monitor/src/market_monitor"
 options_domain = "packages/options_domain/src/options_domain"
 short_vol_radar = "packages/short_vol_radar/src/short_vol_radar"
+short_vol_underwriting = "packages/short_vol_underwriting/src/short_vol_underwriting"
 radar_runtime = "apps/radar_runtime/src/radar_runtime"
 
 [tool.pytest.ini_options]

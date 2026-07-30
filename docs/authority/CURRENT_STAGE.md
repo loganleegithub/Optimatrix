@@ -8,10 +8,13 @@
 
 **Production Short Vol Radar:** `ESTABLISHED`
 
-**Sole authorized next product-capability closure:**
-`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME`
+**Sole authorized next product-capability closure:** `NONE`
 
-**Fixed-contract public Shadow runtime:** `NOT_IMPLEMENTED`
+**Fixed-contract public Shadow runtime:** `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`
+
+**Evidence gate:** `CLOSED`
+
+**Live commands:** `FORBIDDEN`
 
 ## Authority
 
@@ -20,11 +23,12 @@ This document grants permission under
 architecture, detector parameters, or evidence mechanics. Code presence, green tests, old
 receipts, run duration, contract presence, or roadmap order grant no stage.
 
-The current boundary authorizes the guarded production-public Short Vol Radar defined by
-[`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md). Candidate, Shadow admission, executed
-entry, Position runtime, Outcome cohort, private/account data, orders, fills, capital,
-qualification, Challenger automation, promotion, and execution remain unauthorized. A bounded
-public observation is not authorization for persistent service deployment.
+The current boundary authorizes only the already established, guarded production-public Short Vol
+Radar defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md). The fixed-contract public
+Shadow implementation now exists offline, but its production-public Candidate, Shadow admission,
+Entry, Position, Outcome, and cohort path is not authorized to run. The same boundary keeps
+private/account data, orders, fills, capital, qualification, Challenger automation, promotion,
+execution, and persistent service deployment unauthorized.
 
 The accepted
 [`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) implementation
@@ -33,12 +37,10 @@ admission, Position action, and close-opportunity semantics. The accepted
 [`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](../contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
 implementation/evaluation contract freezes deterministic public counterfactual exit, Outcome
 maturity/censoring, rejected-counterfactual, aligned `NO_TRADE`, forward-cohort, conservation, and
-strict downstream evidence semantics. Contract presence creates no Candidate, admission, Position,
-close opportunity, Outcome, cohort, execution, or other runtime behavior. The active
-[`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME`](../../tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md)
-task authorizes only bounded implementation and offline verification against those accepted
-contracts and the exact three-Policy chain; it creates no runtime capability before independent
-implementation acceptance and authorizes no live command.
+strict downstream evidence semantics. The accepted implementation provides the pure owner, strict
+schemas/writer/readers, and sole-process composition against the exact three-Policy chain. It does
+not establish a live cohort, authorize a production-public command, prove natural business
+activity, or change any contract or Policy byte.
 
 ### Terminal-goal delegation for the downstream public Shadow closure
 
@@ -48,20 +50,33 @@ activate and implement one fixed-contract, fixed-Policy public Shadow runtime; r
 pre-bound production-public evidence after exact-candidate gates; and record only the result that
 independent evidence proves.
 
-The authority-only prerequisite is accepted. The implementation gate is now open only for
-`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME` from base
-`f0d852f46756b0f917a0e671a0de2644a34bfd10` on
-`codex/short-vol-fixed-contract-public-shadow-runtime`. Its allowed terminal record is only
-`IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`; that label is not the current state and does not establish
-a live cohort. At that terminal record the permission remains `PUBLIC_SHADOW`, the top implemented
-capability remains `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`, Radar remains `ESTABLISHED`, the sole next
-closure returns to `NONE`, and the evidence/live gate remains closed/forbidden. Private/account
-data, credentials, margin, orders, fills, capital, actual execution Outcome, qualification,
-promotion, persistent deployment, force-push, history rewriting, direct edits to `main`, and every
-production-public command remain forbidden. After implementation acceptance, the implementation
-task is physically deleted; a later `EVIDENCE_ONLY` task must separately bind the exact candidate,
-three Policy identities, separate new empty downstream/Radar evidence directories, and pre-bound
-start/cutoff/stop controls before any live command.
+The authority-only prerequisite and the bounded fixed-contract implementation are accepted. The
+implementation terminal record is `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`; it does not establish a
+live cohort. Permission remains `PUBLIC_SHADOW`, the top implemented capability remains
+`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`, Radar remains `ESTABLISHED`, the sole next closure is `NONE`,
+the evidence gate is `CLOSED`, and live commands are `FORBIDDEN`. The completed implementation task
+is physically absent. Access to private/account data, credentials, margin, orders, fills, capital, actual
+execution Outcome, qualification, promotion, persistent deployment, force-push, history rewriting,
+direct edits to `main`, and every production-public command remain forbidden. A later explicitly
+activated `EVIDENCE_ONLY` task must separately bind the exact candidate, three Policy identities,
+separate new empty downstream/Radar evidence directories, and pre-bound start/cutoff/stop controls
+before any live command is authorized.
+
+### Accepted fixed-contract Shadow implementation record
+
+The implementation adds one pure `short_vol_underwriting` owner and one guarded
+`radar_runtime observe-shadow` composition. Offline deterministic tests cover Underwriting,
+Candidate and admission, Shadow Entry, Position and hard-close, close opportunity, Shadow Outcome,
+rejected-counterfactual, aligned `NO_TRADE`, terminal censoring, strict provenance, duplicate and
+`UNKNOWN` handling, conservation, runtime barriers, and existing Radar regressions. It adds no
+second client, queue, service, database, replay calculator, third-party dependency, or lock-file
+change. No production-public run, private/account access, Candidate, Entry, Position, Outcome, or
+business evidence was created while accepting the implementation.
+
+The two downstream contracts retain their freeze-time
+`CONTRACT_FROZEN_RUNTIME_NOT_IMPLEMENTED` / `RUNTIME_NOT_IMPLEMENTED` labels byte-for-byte. Those
+labels record the state when the immutable contract content was accepted; they do not override
+this permission authority's current implementation record.
 
 ### Accepted Radar implementation record
 
@@ -106,24 +121,23 @@ are not migrated, recalculated, relabelled, or accepted by this transition.
 
 The legacy bounded collector, replay path, fixed-horizon Decision logic, elapsed-time Shadow and
 Outcome logic, receipts, and bundles have been physically removed. No compatibility layer remains.
-The implemented capability adds only the guarded production-public Radar path. It does not add a
-bounded market-capture job, replay closure, Decision, Shadow position, or Outcome engine.
+The top accepted product capability remains the guarded production-public Radar path. The
+separately recorded fixed-contract Shadow implementation adds an offline-qualified Underwriting,
+admission, Position, Outcome, cohort, and evidence path, but no bounded market-capture job, replay
+closure, production-public cohort, or executed position.
 
 Known-at inputs, explicit missingness and continuity, strictly future facts, and visible-quote
-economics remain product invariants in authority. The newly tracked three-Policy chain is an
-approved construction input, not a claim of an implemented runtime capability, prior Outcome
-evidence, qualification, or Policy quality.
+economics remain product invariants in authority. The immutable three-Policy chain is the
+implemented Shadow construction input, not prior Outcome evidence, qualification, Policy quality,
+or authority to run it.
 
 ## Root blocker
 
 The Underwriting, Shadow-admission, Position, Shadow Outcome, rejected-counterfactual, aligned
-`NO_TRADE`, and forward-cohort semantic prerequisites are frozen, and the exact three-Policy chain
-is tracked. The sole active closure is the separately bounded implementation task above. The root
-blocker to downstream business behavior is that its pure downstream owner, minimal sole-process
-composition, strict schemas/writer/readers, and direct evidence have not yet reached independently
-accepted `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`. Until that exact implementation gate passes, no
-downstream runtime capability exists. Even after it passes, no live command is authorized until a
-separate `EVIDENCE_ONLY` task opens the evidence gate.
+`NO_TRADE`, and forward-cohort semantics and exact three-Policy chain are frozen and implemented.
+There is no active closure. The root blocker to downstream business evidence is now the closed
+evidence gate: no live command is authorized until an explicitly activated `EVIDENCE_ONLY` task
+binds and independently verifies one exact candidate, directories, controls, and non-claims.
 
 The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
 the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
@@ -196,8 +210,8 @@ profitability, or fill evidence.
 
 ## Queued sequence — not authorized
 
-The fixed-contract runtime implementation is active and therefore no longer queued. The following
-successor product-capability closures remain queued and unauthorized:
+No product-capability closure is active. The following successor closures remain queued and
+unauthorized:
 
 1. **Production-public forward evidence:** only after independently accepted implementation, open
    a separate `EVIDENCE_ONLY` task with code/Policy changes forbidden and exact candidate,
@@ -219,7 +233,7 @@ explicitly approved change after its prerequisite is accepted.
 - full-market persistence, per-update no-anomaly receipts, replay, or offline recomputation as a
   prerequisite for this Radar;
 - any production-public Candidate, Shadow admission, Shadow Entry, Position, Outcome,
-  rejected-counterfactual, or forward-cohort operation under the active implementation task;
+  rejected-counterfactual, or forward-cohort operation without a separately active evidence task;
 - automatic training, Policy selection, qualification, promotion, or evolution;
 - generic databases, feature stores, registries, workflow engines, services, markets, or
   strategies;

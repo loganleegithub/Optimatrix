@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 
 from market_monitor import BookState, ContinuousOrderBook, TimeInterval
@@ -44,6 +44,8 @@ class TickerState:
     forward_usdc: Decimal
     underlying_index: str
     source_timestamp_ms: int
+    signed_delta: Decimal | None = None
+    mark_iv_fraction: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -465,11 +467,40 @@ def parse_ticker(payload: object, expected_instrument_name: str) -> TickerState:
         raise ValueError("ticker underlying_index is not the expected forward basis")
     try:
         forward = Decimal(str(underlying_price))
-    except Exception as exc:
+    except (InvalidOperation, ValueError) as exc:
         raise ValueError("ticker underlying_price must be numeric") from exc
     if not forward.is_finite():
         raise ValueError("ticker underlying_price must be finite")
-    return TickerState(forward, underlying_index, timestamp)
+
+    greeks = payload.get("greeks")
+    raw_delta = greeks.get("delta") if isinstance(greeks, dict) else None
+    signed_delta = _parse_optional_finite_decimal(raw_delta)
+    if signed_delta is not None and not Decimal("-1") <= signed_delta <= Decimal("1"):
+        signed_delta = None
+
+    mark_iv_percent = _parse_optional_finite_decimal(payload.get("mark_iv"))
+    mark_iv_fraction = (
+        mark_iv_percent / Decimal(100)
+        if mark_iv_percent is not None and mark_iv_percent >= 0
+        else None
+    )
+    return TickerState(
+        forward,
+        underlying_index,
+        timestamp,
+        signed_delta=signed_delta,
+        mark_iv_fraction=mark_iv_fraction,
+    )
+
+
+def _parse_optional_finite_decimal(value: object) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return parsed if parsed.is_finite() else None
 
 
 def _is_otm(option_type: OptionType, strike: Decimal, forward: Decimal) -> bool:

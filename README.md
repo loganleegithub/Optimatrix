@@ -6,23 +6,24 @@ production-public Shadow only: no private API, account, margin, order, fill, or 
 
 ## Current truth
 
-The implemented capability is `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`: one guarded
-production-public Radar runtime and its `observe` command. It contains no bounded market-capture
-job, saved-data scanner, replay closure, fixed holding-period Decision, Shadow position, or
-Outcome engine.
+The top implemented capability is `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`: one guarded
+production-public Radar runtime and its `observe` command. The fixed-contract public Shadow
+implementation is separately `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`; its `observe-shadow`
+composition is present but no production-public invocation is authorized.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
 [`SHORT_VOL_UNDERWRITING_POSITION`](docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md) and
 [`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
-contracts are frozen. The active
-[`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME`](tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md)
-task selects one exact three-Policy chain and authorizes only bounded implementation and offline
-verification; no Underwriting, Candidate, Shadow Entry, Position, close-opportunity, Outcome,
-rejected-counterfactual, or forward-cohort runtime exists yet, and live commands remain forbidden.
+contracts are frozen. The fixed-contract implementation binds one exact three-Policy chain and
+provides the pure
+Underwriting, Candidate/admission, Shadow Entry, Position, close-opportunity, Outcome,
+rejected-counterfactual, aligned-pair, conservation, and strict evidence path. Its evidence gate is
+closed, the sole authorized next closure is `NONE`, and live commands remain forbidden.
 Establishment means the bounded public Radar met its frozen reachability and operating predicates;
 it does not mean the Radar is persistently deployed, always running, indefinitely stable,
-profitable, or authorized to trade.
+profitable, or authorized to trade. Offline Shadow implementation acceptance does not prove a
+natural Candidate, Entry, Position, Outcome, forward cohort, Policy quality, or business success.
 
 ## Intended first business flow
 
@@ -32,6 +33,8 @@ live Deribit BTC-USDC 0–3DTE option-chain changes
 → independent SHORT_VOL_ANOMALY_EVENT
 → while active, independent official atomic-combo availability
 → optional PUBLIC_ATOMIC_QUOTE_EVENT
+→ fixed-contract Underwriting and deterministic Shadow admission
+→ post-Entry Position, causal-first Outcome, and aligned forward-cohort evidence
 ```
 
 Market ingestion, bounded in-memory chain maintenance, and Radar notification are one continuous
@@ -44,7 +47,7 @@ The three layers remain distinct:
 - existing official atomic combo:
   `NOT_EVALUATED | UNKNOWN | NO_ACTIVE_COMBO | NO_TARGET_SIZE_CREDIT_QUOTE |
   PUBLIC_ATOMIC_QUOTE_AVAILABLE`;
-- future maker/order/fill: not implemented or authorized.
+- maker/order/fill: not implemented or authorized.
 
 An anomaly or public atomic quote is not Candidate, Shadow Entry, fill, Outcome, or proof of an
 edge. Component-leg prices cannot substitute for an official combo.
@@ -57,17 +60,18 @@ better forecasting or profitability.
 
 ## Later position and Outcome behavior
 
-Neither a future `SHADOW_ENTRY` nor a filled entry chooses a planned holding duration. The accepted
-Underwriting/Position contract freezes how a future Position Policy evaluates current remaining
+Neither a Shadow `SHADOW_ENTRY` nor a future filled entry chooses a planned holding duration. The
+implemented Underwriting/Position owner evaluates current remaining
 premium, short-leg risk, path, volatility state, liquidity, executable close debit, fee reserves,
-and hard boundaries before returning `HOLD | CLOSE | UNKNOWN`. It also freezes Candidate
-invalidation and the strictly later full-quantity close opportunity.
+and hard boundaries before returning `HOLD | CLOSE | UNKNOWN` exactly as frozen by the contract.
+It also implements Candidate invalidation and the strictly later full-quantity close opportunity.
 
-The accepted Outcome/cohort contract freezes causal-first counterfactual exit selection, terminal
-`MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one bounded
+The implemented Outcome/cohort reducer follows the frozen causal-first counterfactual exit and
+terminal `MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one bounded
 rejected counterfactual per slot, cohort-aligned `NO_TRADE`, exact public-quote PnL equations, and
-honest conservation/null denominators. A public quote remains not a fill, and no runtime behavior
-is implemented or authorized.
+honest conservation/null denominators. A public quote remains not a fill, and the implemented
+runtime remains unauthorized to run production-public until a separate evidence task opens that
+gate.
 
 ## Authority
 
@@ -89,10 +93,11 @@ defines the accepted downstream Outcome and forward-cohort semantics.
   quote arithmetic
 - `short_vol_radar`: detector episodes, official atomic availability, and minimal event
   projection
+- `short_vol_underwriting`: pure fixed-contract Underwriting, admission, Position, Outcome,
+  conservation, and downstream evidence owner
 - `radar_runtime`: guarded composition of the continuous production-public process
 
-There is no `short_vol_underwriting` package yet and no compatibility package or alias for the
-removed pipeline.
+There is no compatibility package or alias for the removed pipeline.
 
 The current bounded runtime separates per-band immutable index-baseline availability from
 generation-global successor publication. Normal time/watermark publication pending keeps an
@@ -115,4 +120,7 @@ The guarded `python -m radar_runtime observe` command is the public-only runtime
 evidence directory and preserves clean-stop and strict-validation behavior. The accepted Smoke and
 Soak establish only their exact pre-bound observation windows; they do not authorize persistent
 service deployment, private/account access, orders, fills, capital, execution, or any queued
-product closure.
+product closure. `python -m radar_runtime observe-shadow` is implemented but its production-public
+use remains `FORBIDDEN`; a later `EVIDENCE_ONLY` task must bind an exact candidate, the three
+Policy identities, two fresh external evidence directories, and pre-bound start/cutoff/stop
+controls before it may run.

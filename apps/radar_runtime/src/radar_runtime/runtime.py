@@ -7,6 +7,7 @@ import signal
 import time
 import uuid
 from collections import Counter, deque
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import StrEnum
@@ -41,6 +42,7 @@ from market_monitor.deribit import (
 )
 from market_monitor.types import (
     SourceDataError,
+    decimal_from_source,
     require_bool,
     require_int,
     require_list,
@@ -157,6 +159,30 @@ class PublicClient(Protocol):
     def enqueue_send_control(self, event: SendControlEvent) -> None: ...
 
 
+class _SessionReconnectRequired(PublicSessionError):
+    def __init__(self, reason: str) -> None:
+        super().__init__("production-public connection closed")
+        self.reason = reason
+
+
+class ShadowRuntimeIntegrityError(RuntimeError):
+    """A synchronous Shadow owner/evidence callback failed closed."""
+
+
+def _call_shadow[ShadowResult](
+    operation: str,
+    callback: Callable[[], ShadowResult],
+) -> ShadowResult:
+    try:
+        return callback()
+    except ShadowRuntimeIntegrityError:
+        raise
+    except Exception as exc:
+        raise ShadowRuntimeIntegrityError(
+            f"Shadow runtime integrity failure during {operation}"
+        ) from exc
+
+
 @dataclass
 class ScopeCounts:
     policy_identity: str
@@ -254,6 +280,25 @@ class AtomicBookSnapshot:
 
 
 @dataclass(frozen=True)
+class AcceptedBookReceipt:
+    instrument_name: str
+    snapshot_kind: str
+    prev_change_id: int | None
+    change_id: int
+    source_timestamp_ms: int
+    session_epoch: int
+    subscription_generation: int
+    boundary: FactBoundary
+
+
+@dataclass(frozen=True)
+class AcceptedIndexReceipt:
+    price_usdc_per_btc: Decimal
+    source_timestamp_ms: int
+    boundary: FactBoundary
+
+
+@dataclass(frozen=True)
 class AtomicScopeSnapshot:
     commit: CausalCommit
     episode_identity: str
@@ -298,6 +343,8 @@ class RpcPurpose(StrEnum):
     COMBO_CATALOG = "COMBO_CATALOG"
     COMBO_METADATA = "COMBO_METADATA"
     HEARTBEAT_TEST = "HEARTBEAT_TEST"
+    ADMISSION_REFRESH = "ADMISSION_REFRESH"
+    POST_CLOSE_REFRESH = "POST_CLOSE_REFRESH"
 
 
 class RpcState(StrEnum):
@@ -309,6 +356,36 @@ class RpcState(StrEnum):
     RETIRED = "RETIRED"
     CENSORED = "CENSORED"
     ORPHAN_LATE_WIRE = "ORPHAN_LATE_WIRE"
+
+
+class ShadowSupervisorControlKind(StrEnum):
+    RUNTIME_START = "RUNTIME_START"
+    ENROLLMENT_CUTOFF = "ENROLLMENT_CUTOFF"
+
+
+@dataclass(frozen=True)
+class ShadowSupervisorTriggers:
+    runtime_start_monotonic_ms: int
+    enrollment_cutoff_monotonic_ms: int
+    final_stop_monotonic_ms: int | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "runtime_start_monotonic_ms",
+            "enrollment_cutoff_monotonic_ms",
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+        if self.enrollment_cutoff_monotonic_ms < self.runtime_start_monotonic_ms:
+            raise ValueError("enrollment cutoff cannot precede runtime start")
+        final_stop_ms = self.final_stop_monotonic_ms
+        if final_stop_ms is not None and (
+            isinstance(final_stop_ms, bool)
+            or not isinstance(final_stop_ms, int)
+            or final_stop_ms < self.enrollment_cutoff_monotonic_ms
+        ):
+            raise ValueError("final stop must be an integer at or after enrollment cutoff")
 
 
 POST_STATUS_BOOTSTRAP_PURPOSES = frozenset(
@@ -427,7 +504,115 @@ class PendingRpc:
     generation: int | None
     origin_boundary: FactBoundary
     send_deadline_monotonic_ms: int
+    response_budget_ms: int
     failure_scope: FailureScope
+
+
+SHADOW_RPC_PURPOSES = frozenset(
+    {
+        RpcPurpose.ADMISSION_REFRESH,
+        RpcPurpose.POST_CLOSE_REFRESH,
+    }
+)
+
+
+@dataclass(frozen=True)
+class ShadowRpcIntent:
+    request_id: int
+    purpose: RpcPurpose
+    method: str
+    params: Mapping[str, object]
+    scope: str
+    origin_boundary: FactBoundary
+    send_budget_ms: int
+    response_budget_ms: int
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.request_id, bool)
+            or not isinstance(self.request_id, int)
+            or self.request_id <= 0
+        ):
+            raise ValueError("Shadow request id must be a positive integer")
+        if self.purpose not in SHADOW_RPC_PURPOSES:
+            raise ValueError("Shadow request purpose is outside the exact typed route")
+        if self.method != "public/get_order_book":
+            raise ValueError("Shadow requests may use only public/get_order_book")
+        if dict(self.params) != {
+            "instrument_name": self.params.get("instrument_name"),
+            "depth": 10000,
+        }:
+            raise ValueError("Shadow request params must be exact")
+        instrument_name = self.params.get("instrument_name")
+        if not isinstance(instrument_name, str) or not instrument_name:
+            raise ValueError("Shadow request instrument_name must be non-empty")
+        if not self.scope:
+            raise ValueError("Shadow request scope must be non-empty")
+        for field_name in ("send_budget_ms", "response_budget_ms"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{field_name} must be a positive integer")
+
+
+class ShadowRuntimeAdapter(Protocol):
+    @property
+    def required_combo_instrument_names(self) -> tuple[str, ...]: ...
+
+    def on_settled_transaction(
+        self,
+        *,
+        reducer: RadarReducer,
+        commit: CausalCommit,
+    ) -> tuple[ShadowRpcIntent, ...]: ...
+
+    def realize_runtime_start(
+        self,
+        *,
+        reducer: RadarReducer,
+        boundary: FactBoundary,
+    ) -> None: ...
+
+    def realize_enrollment_cutoff(
+        self,
+        *,
+        reducer: RadarReducer,
+        boundary: FactBoundary,
+    ) -> None: ...
+
+    def configure_terminal_control(
+        self,
+        *,
+        terminal_disposition: str,
+        terminal_source: Mapping[str, object],
+    ) -> None: ...
+
+    def on_request_sent(
+        self,
+        *,
+        request_id: int,
+        boundary: FactBoundary,
+    ) -> tuple[ShadowRpcIntent, ...]: ...
+
+    def on_request_failure(
+        self,
+        *,
+        request_id: int,
+        terminal_state: RpcState,
+        boundary: FactBoundary,
+    ) -> tuple[ShadowRpcIntent, ...]: ...
+
+    def on_rpc_response(
+        self,
+        *,
+        request_id: int,
+        result: object,
+        sent_boundary: FactBoundary,
+        boundary: FactBoundary,
+    ) -> tuple[ShadowRpcIntent, ...]: ...
+
+    def terminate(self, *, source: str, boundary: FactBoundary) -> None: ...
+
+    def finalize_terminal(self) -> None: ...
 
 
 @dataclass
@@ -435,6 +620,7 @@ class _RpcLifecycle:
     request: PendingRpc
     state: RpcState = RpcState.SCHEDULED
     sent_monotonic_ms: int | None = None
+    sent_boundary: FactBoundary | None = None
     response_deadline_monotonic_ms: int | None = None
     terminal_monotonic_ms: int | None = None
     terminal_from_state: RpcState | None = None
@@ -587,11 +773,13 @@ class RadarReducer:
         code_identity: str,
         evidence_writer: EvidenceWriter,
         runtime_identity: str,
+        shadow_adapter: ShadowRuntimeAdapter | None = None,
     ) -> None:
         self.policy = policy
         self.code_identity = code_identity
         self.writer = evidence_writer
         self.runtime_identity = runtime_identity
+        self.shadow_adapter = shadow_adapter
         self.platform = PlatformReadiness()
         self.option_catalog = CatalogBootstrap()
         self.combo_catalog = CatalogBootstrap()
@@ -600,6 +788,9 @@ class RadarReducer:
         self.combos: dict[str, ComboInstrument] = {}
         self.option_books: dict[str, ContinuousOrderBook] = {}
         self.combo_books: dict[str, ContinuousOrderBook] = {}
+        self.accepted_book_receipts: dict[str, AcceptedBookReceipt] = {}
+        self.accepted_index_receipt: AcceptedIndexReceipt | None = None
+        self.accepted_platform_continuity_boundary: FactBoundary | None = None
         self.tickers: dict[str, TickerState] = {}
         self._ticker_generations: dict[str, int] = {}
         self._ticker_currentness_latches: dict[str, _TickerCurrentnessLatch] = {}
@@ -634,6 +825,11 @@ class RadarReducer:
         self._last_time_currentness_token: tuple[object, ...] | None = None
         self._last_time_currentness_by_instrument: dict[str, tuple[object, ...]] = {}
         self._next_request_id = 1
+        self._reserved_shadow_request_ids: set[int] = set()
+        self._shadow_terminalized = False
+        self._shadow_supervisor_control_active = False
+        self._shadow_runtime_start_committed = False
+        self._shadow_enrollment_cutoff_committed = False
         self._next_channel_generation = 1
         self._commands: list[PendingRpc] = []
         self._bootstrap_queries_issued = False
@@ -709,6 +905,10 @@ class RadarReducer:
         self._queue_lag_transition_pending = False
         self._queue_lag_transition_application: tuple[int, int] | None = None
         self._clean_stop_barrier_open = False
+        self._outbound_barrier_open = False
+        self._terminal_barrier_open = False
+        self._runtime_barrier_monotonic_ms: int | None = None
+        self._runtime_barrier_frontier: tuple[int, int] | None = None
 
     def begin_session(
         self,
@@ -718,10 +918,13 @@ class RadarReducer:
     ) -> tuple[PendingRpc, ...]:
         if session_epoch <= 0 or monotonic_ms < 0:
             raise ValueError("session identity must be positive")
+        if self._terminal_barrier_open or self._shadow_terminalized:
+            raise RuntimeError("terminalized Shadow runtime cannot begin another session")
         if self._session_epoch is not None and session_epoch <= self._session_epoch:
             raise ValueError("session epoch must increase and cannot be reused")
         if self._session_epoch is not None:
             self.diagnostics.reconnect_count += 1
+            self.begin_runtime_barrier(monotonic_ms)
             self._retire_current_epoch()
         else:
             self._coverage = CoverageLedger(
@@ -746,6 +949,9 @@ class RadarReducer:
                 ),
             )
         self._session_epoch = session_epoch
+        self._outbound_barrier_open = False
+        self._runtime_barrier_monotonic_ms = None
+        self._runtime_barrier_frontier = None
         self._last_ingress_seq = 0
         self._application_frontier_by_epoch[session_epoch] = 0
         self._last_boundary_monotonic_ms = monotonic_ms
@@ -767,6 +973,9 @@ class RadarReducer:
         self.combos.clear()
         self.option_books.clear()
         self.combo_books.clear()
+        self.accepted_book_receipts.clear()
+        self.accepted_index_receipt = None
+        self.accepted_platform_continuity_boundary = None
         self.tickers.clear()
         self._ticker_generations.clear()
         self._ticker_currentness_latches.clear()
@@ -968,6 +1177,19 @@ class RadarReducer:
                 self.diagnostics.late_response_count += 1
                 self.diagnostics.rpc_orphan_late_wire_count += 1
             return ()
+        barrier_frontier = self._runtime_barrier_frontier
+        if (
+            self._outbound_barrier_open
+            and barrier_frontier is not None
+            and envelope.session_epoch == barrier_frontier[0]
+            and envelope.ingress_seq > barrier_frontier[1]
+        ):
+            self.diagnostics.retired_epoch_frame_count += 1
+            response_id = envelope.get("id")
+            if isinstance(response_id, int) and not isinstance(response_id, bool):
+                self.diagnostics.late_response_count += 1
+                self.diagnostics.rpc_orphan_late_wire_count += 1
+            return ()
         self._queue_lag_transition_application = None
         lag_ms = processed_monotonic_ms - envelope.received_monotonic_ms
         if lag_ms < 0:
@@ -991,6 +1213,12 @@ class RadarReducer:
                 self._last_boundary_monotonic_ms,
                 envelope.received_monotonic_ms,
             )
+            control_lifecycle = self._rpc_lifecycles.get(envelope.control_event.request_id)
+            if (
+                control_lifecycle is not None
+                and control_lifecycle.request.purpose in SHADOW_RPC_PURPOSES
+            ):
+                self._causal_seq += 1
             self._apply_send_control(
                 envelope.control_event,
                 boundary=self._current_boundary(envelope),
@@ -1045,7 +1273,7 @@ class RadarReducer:
                     raise PublicProtocolIncompatibility(
                         "production-public protocol is incompatible"
                     )
-                raise PublicSessionError("production-public connection closed")
+                raise _SessionReconnectRequired(reason)
             else:
                 raise PublicProtocolError("unexpected inbound JSON-RPC frame")
         self._settle_pending_queue_lag_transition(
@@ -1053,6 +1281,8 @@ class RadarReducer:
             transaction_revision=transaction_revision,
             causal_seq=causal_seq,
         )
+        if self.platform.usable:
+            self.accepted_platform_continuity_boundary = self._current_boundary(envelope)
         return self._take_commands()
 
     def channel_state(self, channel: str) -> ChannelState:
@@ -1099,6 +1329,7 @@ class RadarReducer:
             send_deadline_monotonic_ms=(
                 origin_boundary.received_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
             ),
+            response_budget_ms=self.policy.runtime_limits.rpc_deadline_ms,
             failure_scope=failure_scope,
         )
         self._next_request_id += 1
@@ -1111,8 +1342,237 @@ class RadarReducer:
             self._combo_refresh_request_id = request.request_id
         return request
 
+    def allocate_shadow_request_id(self) -> int:
+        """Reserve the next id from the sole process-wide JSON-RPC sequence."""
+        if self.shadow_adapter is None:
+            raise RuntimeError("cannot reserve a Shadow request without an adapter")
+        request_id = self._next_request_id
+        self._next_request_id += 1
+        self._reserved_shadow_request_ids.add(request_id)
+        return request_id
+
+    def _schedule_shadow_intents(
+        self,
+        intents: tuple[ShadowRpcIntent, ...],
+    ) -> None:
+        if not intents:
+            return
+        if self.shadow_adapter is None:
+            raise RuntimeError("Shadow request intent requires an adapter")
+        if self._session_epoch is None:
+            raise RuntimeError("cannot schedule a Shadow RPC without a session")
+        seen: set[int] = set()
+        for intent in intents:
+            if not isinstance(intent, ShadowRpcIntent):
+                raise TypeError("Shadow adapter must return immutable ShadowRpcIntent values")
+            if intent.request_id in seen:
+                raise ValueError("Shadow adapter returned a duplicate request id")
+            seen.add(intent.request_id)
+            if intent.request_id not in self._reserved_shadow_request_ids:
+                raise ValueError("Shadow request id was not reserved from the global allocator")
+            if intent.request_id in self.pending_rpcs or intent.request_id in self._rpc_lifecycles:
+                raise ValueError("Shadow request id conflicts with an existing lifecycle")
+            if intent.origin_boundary.session_epoch != self._session_epoch:
+                raise ValueError("Shadow request origin belongs to another session epoch")
+            if self._outbound_barrier_open:
+                self._reserved_shadow_request_ids.remove(intent.request_id)
+                continue
+            request = PendingRpc(
+                request_id=intent.request_id,
+                purpose=intent.purpose,
+                method=intent.method,
+                params=dict(intent.params),
+                session_epoch=self._session_epoch,
+                scope=intent.scope,
+                generation=None,
+                origin_boundary=intent.origin_boundary,
+                send_deadline_monotonic_ms=(
+                    intent.origin_boundary.received_monotonic_ms + intent.send_budget_ms
+                ),
+                response_budget_ms=intent.response_budget_ms,
+                failure_scope=FailureScope.COMBO_LAYER,
+            )
+            self._reserved_shadow_request_ids.remove(intent.request_id)
+            self.pending_rpcs[request.request_id] = request
+            self._rpc_lifecycles[request.request_id] = _RpcLifecycle(request=request)
+            self._commands.append(request)
+
+    def begin_runtime_barrier(
+        self,
+        monotonic_ms: int,
+        *,
+        terminal: bool = False,
+    ) -> None:
+        if isinstance(monotonic_ms, bool) or not isinstance(monotonic_ms, int):
+            raise TypeError("runtime barrier monotonic time must be an integer")
+        if monotonic_ms < 0:
+            raise ValueError("runtime barrier monotonic time must be non-negative")
+        self._outbound_barrier_open = True
+        if self._runtime_barrier_monotonic_ms is None:
+            self._runtime_barrier_monotonic_ms = monotonic_ms
+        else:
+            self._runtime_barrier_monotonic_ms = min(
+                self._runtime_barrier_monotonic_ms,
+                monotonic_ms,
+            )
+        if terminal:
+            self._terminal_barrier_open = True
+
+    def bind_runtime_barrier_frontier(
+        self,
+        *,
+        session_epoch: int,
+        ingress_seq: int,
+    ) -> None:
+        if not self._outbound_barrier_open:
+            raise RuntimeError("runtime barrier must open before binding its frontier")
+        if session_epoch != self._session_epoch:
+            raise ValueError("runtime barrier frontier belongs to another session")
+        if ingress_seq < self._last_ingress_seq:
+            raise ValueError("runtime barrier frontier precedes the reduced application frontier")
+        frontier = (session_epoch, ingress_seq)
+        if self._runtime_barrier_frontier not in {None, frontier}:
+            raise ValueError("runtime barrier frontier is immutable")
+        self._runtime_barrier_frontier = frontier
+
     def begin_clean_stop(self) -> None:
+        self.begin_runtime_barrier(
+            max(0, self._last_boundary_monotonic_ms),
+            terminal=True,
+        )
         self._clean_stop_barrier_open = True
+
+    def settle_barrier_deadlines(self, barrier_monotonic_ms: int) -> None:
+        if not self._outbound_barrier_open:
+            raise RuntimeError("RPC deadline barrier has not opened")
+        if (
+            isinstance(barrier_monotonic_ms, bool)
+            or not isinstance(barrier_monotonic_ms, int)
+            or barrier_monotonic_ms < 0
+        ):
+            raise ValueError("RPC deadline barrier time must be a non-negative integer")
+        expired = tuple(
+            request
+            for request in self.pending_rpcs.values()
+            if (
+                (
+                    (lifecycle := self._rpc_lifecycles[request.request_id]).state
+                    is RpcState.SCHEDULED
+                    and barrier_monotonic_ms > request.send_deadline_monotonic_ms
+                )
+                or (
+                    lifecycle.state is RpcState.SENT
+                    and lifecycle.response_deadline_monotonic_ms is not None
+                    and barrier_monotonic_ms > lifecycle.response_deadline_monotonic_ms
+                )
+            )
+        )
+        if not expired:
+            return
+        self._last_boundary_monotonic_ms = max(
+            self._last_boundary_monotonic_ms,
+            barrier_monotonic_ms,
+        )
+        self._causal_seq += 1
+        for request in expired:
+            self.pending_rpcs.pop(request.request_id, None)
+            lifecycle = self._rpc_lifecycles[request.request_id]
+            held_response = self._early_rpc_responses.pop(request.request_id, None)
+            if held_response is not None:
+                self.diagnostics.late_response_count += 1
+                self.diagnostics.rpc_orphan_late_wire_count += 1
+            transitioned = self._finish_rpc(
+                request,
+                state=RpcState.DEADLINE_LATE,
+                terminal_monotonic_ms=self._last_boundary_monotonic_ms,
+                record_latency=False,
+                allow_unsent=(lifecycle.state is RpcState.SCHEDULED),
+            )
+            if transitioned:
+                self._apply_request_failure(
+                    request,
+                    terminal_state=RpcState.DEADLINE_LATE,
+                )
+
+    def commit_shadow_supervisor_control(
+        self,
+        kind: ShadowSupervisorControlKind,
+        *,
+        monotonic_ms: int,
+    ) -> FactBoundary:
+        adapter = self.shadow_adapter
+        if adapter is None:
+            raise RuntimeError("Shadow supervisor control requires an adapter")
+        if not isinstance(kind, ShadowSupervisorControlKind):
+            raise TypeError("Shadow supervisor control kind is invalid")
+        if isinstance(monotonic_ms, bool) or not isinstance(monotonic_ms, int) or monotonic_ms < 0:
+            raise ValueError("Shadow supervisor control time must be a non-negative integer")
+        if self._session_epoch is None or self._session_epoch in self._retired_epochs:
+            raise RuntimeError("Shadow supervisor control requires an active session")
+        if self._outbound_barrier_open or self._shadow_terminalized:
+            raise RuntimeError("Shadow supervisor control cannot cross a runtime barrier")
+        if self._shadow_supervisor_control_active or self._fact_transaction_active:
+            raise RuntimeError("Shadow supervisor control cannot re-enter the reducer")
+        if (
+            kind is ShadowSupervisorControlKind.RUNTIME_START
+            and self._shadow_runtime_start_committed
+        ):
+            raise ValueError("Shadow runtime-start control is immutable")
+        if kind is ShadowSupervisorControlKind.ENROLLMENT_CUTOFF:
+            if not self._shadow_runtime_start_committed:
+                raise ValueError("Shadow cutoff requires an earlier runtime-start control")
+            if self._shadow_enrollment_cutoff_committed:
+                raise ValueError("Shadow enrollment-cutoff control is immutable")
+        self._last_boundary_monotonic_ms = max(
+            self._last_boundary_monotonic_ms,
+            monotonic_ms,
+        )
+        self._causal_seq += 1
+        boundary = self._current_fact_boundary()
+        self._shadow_supervisor_control_active = True
+        try:
+            if kind is ShadowSupervisorControlKind.RUNTIME_START:
+                _call_shadow(
+                    "runtime-start supervisor control",
+                    lambda: adapter.realize_runtime_start(
+                        reducer=self,
+                        boundary=boundary,
+                    ),
+                )
+                self._shadow_runtime_start_committed = True
+            else:
+                _call_shadow(
+                    "enrollment-cutoff supervisor control",
+                    lambda: adapter.realize_enrollment_cutoff(
+                        reducer=self,
+                        boundary=boundary,
+                    ),
+                )
+                self._shadow_enrollment_cutoff_committed = True
+        finally:
+            self._shadow_supervisor_control_active = False
+        return boundary
+
+    def configure_shadow_terminal_control(
+        self,
+        *,
+        terminal_disposition: str,
+        terminal_source: Mapping[str, object],
+    ) -> None:
+        adapter = self.shadow_adapter
+        if adapter is None:
+            raise RuntimeError("Shadow terminal control requires an adapter")
+        if self._shadow_terminalized:
+            raise RuntimeError("Shadow terminal control is already terminalized")
+        if self._terminal_barrier_open and terminal_disposition != "PROCESS_FAILURE":
+            raise RuntimeError("Shadow terminal control must precede the terminal barrier")
+        _call_shadow(
+            "terminal-control configuration",
+            lambda: adapter.configure_terminal_control(
+                terminal_disposition=terminal_disposition,
+                terminal_source=terminal_source,
+            ),
+        )
 
     def _apply_send_control(
         self,
@@ -1133,6 +1593,12 @@ class RadarReducer:
             return
         request = lifecycle.request
         if (
+            event.kind is SendControlKind.SEND_FAILED
+            and event.failure is SendFailureKind.CANCELLED
+            and self._outbound_barrier_open
+        ):
+            return
+        if (
             lifecycle.state is RpcState.SCHEDULED
             and event.boundary_monotonic_ms > request.send_deadline_monotonic_ms
         ):
@@ -1149,7 +1615,10 @@ class RadarReducer:
                 allow_unsent=True,
             )
             if transitioned:
-                self._apply_request_failure(request)
+                self._apply_request_failure(
+                    request,
+                    terminal_state=RpcState.DEADLINE_LATE,
+                )
             return
         if event.kind is SendControlKind.SEND_COMPLETED:
             if lifecycle.state is RpcState.SENT:
@@ -1158,10 +1627,25 @@ class RadarReducer:
                 raise PublicProtocolError("RPC send boundary precedes scheduling boundary")
             lifecycle.state = RpcState.SENT
             lifecycle.sent_monotonic_ms = event.boundary_monotonic_ms
+            lifecycle.sent_boundary = boundary
             lifecycle.response_deadline_monotonic_ms = (
-                event.boundary_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
+                event.boundary_monotonic_ms + request.response_budget_ms
             )
-            self.diagnostics.rpc_sent_count[request.method] += 1
+            if request.purpose in SHADOW_RPC_PURPOSES:
+                adapter = self.shadow_adapter
+                if adapter is None:
+                    raise RuntimeError("Shadow RPC lifecycle lost its adapter")
+                self._schedule_shadow_intents(
+                    _call_shadow(
+                        "request SENT",
+                        lambda: adapter.on_request_sent(
+                            request_id=request.request_id,
+                            boundary=boundary,
+                        ),
+                    )
+                )
+            else:
+                self.diagnostics.rpc_sent_count[request.method] += 1
             held_response = self._early_rpc_responses.pop(event.request_id, None)
             if held_response is not None:
                 self._apply_response(
@@ -1178,15 +1662,6 @@ class RadarReducer:
             self.diagnostics.late_response_count += 1
             self.diagnostics.rpc_orphan_late_wire_count += 1
         self.pending_rpcs.pop(event.request_id, None)
-        if event.failure is SendFailureKind.CANCELLED and self._clean_stop_barrier_open:
-            self._finish_rpc(
-                request,
-                state=RpcState.CENSORED,
-                terminal_monotonic_ms=event.boundary_monotonic_ms,
-                record_latency=False,
-                allow_unsent=True,
-            )
-            return
         transitioned = self._finish_rpc(
             request,
             state=RpcState.ERROR,
@@ -1195,7 +1670,10 @@ class RadarReducer:
             allow_unsent=True,
         )
         if transitioned:
-            self._apply_request_failure(request)
+            self._apply_request_failure(
+                request,
+                terminal_state=RpcState.ERROR,
+            )
 
     def _finish_rpc(
         self,
@@ -1240,6 +1718,8 @@ class RadarReducer:
         lifecycle.state = state
         lifecycle.terminal_from_state = previous_state
         lifecycle.terminal_monotonic_ms = terminal_monotonic_ms
+        if request.purpose in SHADOW_RPC_PURPOSES:
+            return True
         method = request.method
         if state is RpcState.SUCCESS:
             self.diagnostics.rpc_success_count[method] += 1
@@ -1466,13 +1946,17 @@ class RadarReducer:
                 terminal_monotonic_ms=terminal_monotonic_ms,
                 record_latency=True,
             )
-            self._record_heartbeat_wire_terminal(
+            if request.purpose not in SHADOW_RPC_PURPOSES:
+                self._record_heartbeat_wire_terminal(
+                    request,
+                    latency_ms=latency_ms,
+                    success=False,
+                )
+                self._note_source_shape(request.method, envelope.get("result"), valid=False)
+            self._apply_request_failure(
                 request,
-                latency_ms=latency_ms,
-                success=False,
+                terminal_state=RpcState.DEADLINE_LATE,
             )
-            self._note_source_shape(request.method, envelope.get("result"), valid=False)
-            self._apply_request_failure(request)
             return
         if "error" in envelope:
             self._finish_rpc(
@@ -1481,15 +1965,19 @@ class RadarReducer:
                 terminal_monotonic_ms=terminal_monotonic_ms,
                 record_latency=True,
             )
-            self._record_heartbeat_wire_terminal(
+            if request.purpose not in SHADOW_RPC_PURPOSES:
+                self._record_heartbeat_wire_terminal(
+                    request,
+                    latency_ms=latency_ms,
+                    success=False,
+                )
+                self._note_source_shape(request.method, envelope["error"], valid=False)
+                if _is_rate_limit_error(envelope["error"]):
+                    self.diagnostics.rpc_rate_limit_count[request.method] += 1
+            self._apply_request_failure(
                 request,
-                latency_ms=latency_ms,
-                success=False,
+                terminal_state=RpcState.ERROR,
             )
-            self._note_source_shape(request.method, envelope["error"], valid=False)
-            if _is_rate_limit_error(envelope["error"]):
-                self.diagnostics.rpc_rate_limit_count[request.method] += 1
-            self._apply_request_failure(request)
             return
         if "result" not in envelope:
             self._finish_rpc(
@@ -1498,12 +1986,17 @@ class RadarReducer:
                 terminal_monotonic_ms=terminal_monotonic_ms,
                 record_latency=True,
             )
-            self._record_heartbeat_wire_terminal(
+            if request.purpose not in SHADOW_RPC_PURPOSES:
+                self._record_heartbeat_wire_terminal(
+                    request,
+                    latency_ms=latency_ms,
+                    success=False,
+                )
+                self._note_source_shape(request.method, None, valid=False)
+            self._apply_request_failure(
                 request,
-                latency_ms=latency_ms,
-                success=False,
+                terminal_state=RpcState.ERROR,
             )
-            self._note_source_shape(request.method, None, valid=False)
             raise PublicProtocolIncompatibility("JSON-RPC response lacks result")
         result = envelope["result"]
         channel_change_response = request.purpose in {
@@ -1540,6 +2033,25 @@ class RadarReducer:
             if commit_boundary is not None
             else self._current_boundary(envelope)
         )
+        if request.purpose in SHADOW_RPC_PURPOSES:
+            adapter = self.shadow_adapter
+            if adapter is None:
+                raise RuntimeError("Shadow RPC lifecycle lost its adapter")
+            sent_boundary = lifecycle.sent_boundary
+            if sent_boundary is None:
+                raise RuntimeError("Shadow RPC lacks its immutable SENT boundary")
+            self._schedule_shadow_intents(
+                _call_shadow(
+                    "RPC response",
+                    lambda: adapter.on_rpc_response(
+                        request_id=request.request_id,
+                        result=result,
+                        sent_boundary=sent_boundary,
+                        boundary=boundary,
+                    ),
+                )
+            )
+            return
         source_valid = True
         source_shape_noted = False
         if request.purpose is RpcPurpose.SET_HEARTBEAT:
@@ -1709,7 +2221,33 @@ class RadarReducer:
             boundary=self._current_fact_boundary(),
         )
 
-    def _apply_request_failure(self, request: PendingRpc) -> None:
+    def _apply_request_failure(
+        self,
+        request: PendingRpc,
+        *,
+        terminal_state: RpcState | None = None,
+    ) -> None:
+        if request.purpose in SHADOW_RPC_PURPOSES:
+            adapter = self.shadow_adapter
+            if adapter is None:
+                raise RuntimeError("Shadow RPC lifecycle lost its adapter")
+            if terminal_state not in {
+                RpcState.ERROR,
+                RpcState.DEADLINE_LATE,
+                RpcState.RETIRED,
+            }:
+                raise RuntimeError("Shadow RPC failure requires an exact terminal state")
+            self._schedule_shadow_intents(
+                _call_shadow(
+                    f"RPC {terminal_state.value}",
+                    lambda: adapter.on_request_failure(
+                        request_id=request.request_id,
+                        terminal_state=terminal_state,
+                        boundary=self._current_fact_boundary(),
+                    ),
+                )
+            )
+            return
         if request.purpose in {
             RpcPurpose.CLOCK_BOOTSTRAP,
             RpcPurpose.CLOCK_REFRESH,
@@ -2795,9 +3333,17 @@ class RadarReducer:
             data = require_mapping(payload, "index notification")
             if require_str(data.get("index_name"), "index.index_name") != "btc_usdc":
                 raise SourceDataError("unexpected index_name")
+            source_timestamp_ms = require_int(data.get("timestamp"), "index.timestamp")
+            price = decimal_from_source(data.get("price"), "index.price")
+            try:
+                trusted_upper_ms = self.clock.interval_at(boundary.received_monotonic_ms).upper_ms
+            except (ContinuityGap, ValueError):
+                downstream_receipt_eligible = False
+            else:
+                downstream_receipt_eligible = source_timestamp_ms <= trusted_upper_ms
             self.index.accept_tick(
-                source_timestamp_ms=require_int(data.get("timestamp"), "index.timestamp"),
-                price=data.get("price"),
+                source_timestamp_ms=source_timestamp_ms,
+                price=price,
                 causal_seq=self._causal_seq,
             )
         except (ContinuityGap, SourceDataError, ValueError):
@@ -2840,6 +3386,12 @@ class RadarReducer:
                 countable=False,
             )
             return False
+        if downstream_receipt_eligible:
+            self.accepted_index_receipt = AcceptedIndexReceipt(
+                price_usdc_per_btc=price,
+                source_timestamp_ms=source_timestamp_ms,
+                boundary=boundary,
+            )
         self.platform.note_fresh_index_coverage()
         self._settle_fact(
             commit=CausalCommit(
@@ -3655,6 +4207,11 @@ class RadarReducer:
                     failure_scope=FailureScope.OPTION,
                 )
                 return False
+            self._record_accepted_book_receipt(
+                instrument_name=instrument_name,
+                payload=payload,
+                boundary=boundary,
+            )
             self._settle_fact(
                 commit=CausalCommit(
                     boundary=boundary,
@@ -3702,6 +4259,11 @@ class RadarReducer:
             )
         else:
             valid = True
+            self._record_accepted_book_receipt(
+                instrument_name=instrument_name,
+                payload=payload,
+                boundary=boundary,
+            )
         self._settle_fact(
             commit=CausalCommit(
                 boundary=boundary,
@@ -3719,6 +4281,35 @@ class RadarReducer:
             countable=False,
         )
         return valid
+
+    def _record_accepted_book_receipt(
+        self,
+        *,
+        instrument_name: str,
+        payload: object,
+        boundary: FactBoundary,
+    ) -> None:
+        data = require_mapping(payload, "book")
+        snapshot_kind = require_str(data.get("type"), "book.type")
+        change_id = require_int(data.get("change_id"), "book.change_id")
+        source_timestamp_ms = require_int(data.get("timestamp"), "book.timestamp")
+        prev_change_id = (
+            require_int(data.get("prev_change_id"), "book.prev_change_id")
+            if snapshot_kind == "change"
+            else None
+        )
+        slot = self._channels.get(book_channel(instrument_name))
+        generation = slot.generation if slot is not None else 0
+        self.accepted_book_receipts[instrument_name] = AcceptedBookReceipt(
+            instrument_name=instrument_name,
+            snapshot_kind=snapshot_kind,
+            prev_change_id=prev_change_id,
+            change_id=change_id,
+            source_timestamp_ms=source_timestamp_ms,
+            session_epoch=boundary.session_epoch,
+            subscription_generation=generation,
+            boundary=boundary,
+        )
 
     def _settle_combo_boundary(
         self,
@@ -4368,6 +4959,18 @@ class RadarReducer:
                 affected_scope_keys=affected_scope_keys,
                 force_full_currentness=queue_lag_transition_rebuild,
             )
+            adapter = self.shadow_adapter
+            if adapter is not None and not self._shadow_terminalized:
+                self._schedule_shadow_intents(
+                    _call_shadow(
+                        "settled transaction",
+                        lambda: adapter.on_settled_transaction(
+                            reducer=self,
+                            commit=commit,
+                        ),
+                    )
+                )
+                self._sync_combo_subscriptions(commit.boundary)
             self._fact_transaction_revision += 1
             if queue_lag_transition_rebuild:
                 self._queue_lag_transition_pending = False
@@ -5446,7 +6049,19 @@ class RadarReducer:
             self._emitted_atomic_quotes.add(emitted_key)
 
     def _sync_combo_subscriptions(self, boundary: FactBoundary) -> None:
-        needed: set[str] = set()
+        adapter = self.shadow_adapter
+        needed: set[str] = (
+            set(
+                _call_shadow(
+                    "required combo projection",
+                    lambda: adapter.required_combo_instrument_names,
+                )
+            )
+            if adapter is not None
+            else set()
+        )
+        if any(not isinstance(name, str) or not name for name in needed):
+            raise TypeError("Shadow required combo names must be non-empty strings")
         for tracker in self.trackers.values():
             if tracker.detector_state is not DetectorState.ANOMALY_ACTIVE:
                 continue
@@ -5823,6 +6438,7 @@ class RadarReducer:
             if monotonic_ms is None
             else max(self._last_boundary_monotonic_ms, monotonic_ms)
         )
+        self.begin_runtime_barrier(retired_ms)
         self._queue_lag_currentness_active = False
         self._queue_lag_transition_pending = False
         self._queue_lag_transition_application = None
@@ -5856,6 +6472,7 @@ class RadarReducer:
                 continuity_gap=True,
             )
         self._retired_epochs.add(self._session_epoch)
+        self.accepted_platform_continuity_boundary = None
         platform_reason = (
             self.platform.reason
             if self.platform.reason
@@ -5875,12 +6492,17 @@ class RadarReducer:
             self.diagnostics.rpc_orphan_late_wire_count += len(self._early_rpc_responses)
             self._early_rpc_responses.clear()
         for request in tuple(self.pending_rpcs.values()):
-            self._finish_rpc(
+            transitioned = self._finish_rpc(
                 request,
                 state=RpcState.RETIRED,
                 terminal_monotonic_ms=retired_ms,
                 record_latency=False,
             )
+            if transitioned and request.purpose in SHADOW_RPC_PURPOSES:
+                self._apply_request_failure(
+                    request,
+                    terminal_state=RpcState.RETIRED,
+                )
         self.pending_rpcs.clear()
         self._update_band_suspension(retired_ms)
         self._transition_coverage(
@@ -6051,7 +6673,10 @@ class RadarReducer:
                 record_latency=False,
                 allow_unsent=(lifecycle.state is RpcState.SCHEDULED),
             )
-            self._apply_request_failure(request)
+            self._apply_request_failure(
+                request,
+                terminal_state=RpcState.DEADLINE_LATE,
+            )
         due_channel_retries = tuple(
             channel
             for channel, slot in self._channels.items()
@@ -6164,11 +6789,11 @@ class RadarReducer:
         self._retire_current_epoch(cause.value)
 
     def clean_stop(self, monotonic_ms: int) -> Path:
-        self.begin_clean_stop()
-        self._last_boundary_monotonic_ms = max(
-            self._last_boundary_monotonic_ms,
-            monotonic_ms,
-        )
+        if monotonic_ms < self._last_boundary_monotonic_ms:
+            raise RuntimeError("clean-stop boundary precedes an accepted application boundary")
+        self.begin_runtime_barrier(monotonic_ms, terminal=True)
+        self._clean_stop_barrier_open = True
+        self._last_boundary_monotonic_ms = monotonic_ms
         self._causal_seq += 1
         boundary = FactBoundary(
             self._session_epoch or 1,
@@ -6232,7 +6857,53 @@ class RadarReducer:
             public_atomic_quote_state_transition_count=self._atomic_transition_counts,
             operational_diagnostics=self._operational_diagnostics(observation_ms),
         )
-        return self.writer.write_summary(summary)
+        try:
+            summary_path = self.writer.write_summary(summary)
+        except Exception:
+            try:
+                self._terminate_shadow(source="FAILURE", boundary=boundary)
+            except Exception:
+                pass
+            raise
+        self._terminate_shadow(source="STOP", boundary=boundary)
+        return summary_path
+
+    def finalize_shadow_failure(self, monotonic_ms: int) -> None:
+        if self.shadow_adapter is None or self._shadow_terminalized:
+            return
+        if monotonic_ms < self._last_boundary_monotonic_ms:
+            raise RuntimeError("failure boundary precedes an accepted application boundary")
+        self.begin_runtime_barrier(monotonic_ms, terminal=True)
+        self._last_boundary_monotonic_ms = monotonic_ms
+        self._causal_seq += 1
+        boundary = FactBoundary(
+            self._session_epoch or 1,
+            self._last_ingress_seq,
+            self._last_boundary_monotonic_ms,
+            self._causal_seq,
+        )
+        for request in tuple(self.pending_rpcs.values()):
+            self._finish_rpc(
+                request,
+                state=RpcState.CENSORED,
+                terminal_monotonic_ms=monotonic_ms,
+                record_latency=False,
+            )
+        self.pending_rpcs.clear()
+        self._terminate_shadow(source="FAILURE", boundary=boundary)
+
+    def _terminate_shadow(self, *, source: str, boundary: FactBoundary) -> None:
+        adapter = self.shadow_adapter
+        if adapter is None or self._shadow_terminalized:
+            return
+        if source not in {"STOP", "FAILURE"}:
+            raise ValueError("Shadow terminal source must be STOP or FAILURE")
+        _call_shadow(
+            f"{source} terminal",
+            lambda: adapter.terminate(source=source, boundary=boundary),
+        )
+        _call_shadow("terminal evidence finalize", adapter.finalize_terminal)
+        self._shadow_terminalized = True
 
     def _operational_diagnostics(self, observation_ms: int) -> dict[str, object]:
         methods = sorted(self.diagnostics.rpc_request_count)
@@ -6817,6 +7488,7 @@ class LiveRadarRuntime:
         code_identity: str,
         evidence_writer: EvidenceWriter,
         runtime_identity: str | None = None,
+        shadow_adapter: ShadowRuntimeAdapter | None = None,
     ) -> None:
         identity = runtime_identity or str(uuid.uuid4())
         self.reducer = RadarReducer(
@@ -6824,6 +7496,7 @@ class LiveRadarRuntime:
             code_identity=code_identity,
             evidence_writer=evidence_writer,
             runtime_identity=identity,
+            shadow_adapter=shadow_adapter,
         )
 
     @property
@@ -6850,9 +7523,18 @@ class LiveRadarRuntime:
     def session_established(self) -> bool:
         return self.reducer.session_established
 
-    async def run(self, client: PublicClient, stop_event: asyncio.Event) -> Path:
-        if stop_event.is_set():
-            return self.reducer.clean_stop(_monotonic_ms())
+    @property
+    def shadow_terminalized(self) -> bool:
+        return self.reducer._shadow_terminalized
+
+    async def run(
+        self,
+        client: PublicClient,
+        stop_event: asyncio.Event,
+        *,
+        shadow_supervisor_triggers: ShadowSupervisorTriggers | None = None,
+        shadow_terminal_gate: Callable[[int], None] | None = None,
+    ) -> Path:
         self._capture_transport_metrics(client)
         started_monotonic_ms = _monotonic_ms()
         outbound: asyncio.Queue[PendingRpc] = asyncio.Queue(maxsize=MAX_PENDING_INBOUND_FRAMES)
@@ -6865,7 +7547,18 @@ class LiveRadarRuntime:
             session_epoch=client.session_epoch,
             monotonic_ms=started_monotonic_ms,
         )
-        self._enqueue_commands(outbound, commands)
+        initial_control_ms = (
+            self._stop_terminal_monotonic_ms(stop_event, started_monotonic_ms)
+            if stop_event.is_set()
+            else started_monotonic_ms
+        )
+        if stop_event.is_set():
+            self._realize_due_shadow_supervisor_controls(
+                shadow_supervisor_triggers,
+                observed_monotonic_ms=initial_control_ms,
+            )
+        else:
+            self._enqueue_commands(outbound, commands)
         poll_ms = self.policy.runtime_limits.time_boundary_poll_interval_ms
         next_poll_ms = started_monotonic_ms + poll_ms
         failure: BaseException | None = None
@@ -6873,9 +7566,38 @@ class LiveRadarRuntime:
             while True:
                 self._raise_sender_failure(sender_task)
                 buffered.extend(self._drain_client_envelopes(client))
+                now_ms = _monotonic_ms()
                 if stop_event.is_set():
+                    self._realize_due_shadow_supervisor_controls(
+                        shadow_supervisor_triggers,
+                        observed_monotonic_ms=self._stop_terminal_monotonic_ms(
+                            stop_event,
+                            now_ms,
+                        ),
+                    )
                     break
                 if buffered:
+                    envelope = buffered[0]
+                    next_supervisor_trigger_ms = self._next_shadow_supervisor_trigger_ms(
+                        shadow_supervisor_triggers,
+                    )
+                    if (
+                        next_supervisor_trigger_ms is not None
+                        and envelope.received_monotonic_ms >= next_supervisor_trigger_ms
+                    ):
+                        self._realize_due_shadow_supervisor_controls(
+                            shadow_supervisor_triggers,
+                            observed_monotonic_ms=now_ms,
+                            through_monotonic_ms=envelope.received_monotonic_ms,
+                        )
+                    if self._realize_due_shadow_terminal_gate(
+                        shadow_supervisor_triggers,
+                        shadow_terminal_gate,
+                        stop_event,
+                        observed_monotonic_ms=now_ms,
+                        through_monotonic_ms=envelope.received_monotonic_ms,
+                    ):
+                        break
                     envelope = buffered.popleft()
                     while next_poll_ms < envelope.received_monotonic_ms:
                         self._enqueue_commands(
@@ -6887,11 +7609,21 @@ class LiveRadarRuntime:
                         outbound,
                         self.reducer.reduce(
                             envelope,
-                            processed_monotonic_ms=_monotonic_ms(),
+                            processed_monotonic_ms=now_ms,
                         ),
                     )
                     continue
-                now_ms = _monotonic_ms()
+                self._realize_due_shadow_supervisor_controls(
+                    shadow_supervisor_triggers,
+                    observed_monotonic_ms=now_ms,
+                )
+                if self._realize_due_shadow_terminal_gate(
+                    shadow_supervisor_triggers,
+                    shadow_terminal_gate,
+                    stop_event,
+                    observed_monotonic_ms=now_ms,
+                ):
+                    break
                 if now_ms >= next_poll_ms:
                     self._enqueue_commands(
                         outbound,
@@ -6899,32 +7631,61 @@ class LiveRadarRuntime:
                     )
                     next_poll_ms += poll_ms
                     continue
-                timeout_seconds = (next_poll_ms - now_ms) / 1_000
+                next_supervisor_trigger_ms = self._next_shadow_supervisor_trigger_ms(
+                    shadow_supervisor_triggers,
+                )
+                next_wake_ms = (
+                    next_poll_ms
+                    if next_supervisor_trigger_ms is None
+                    else min(next_poll_ms, next_supervisor_trigger_ms)
+                )
+                timeout_seconds = (next_wake_ms - now_ms) / 1_000
                 try:
-                    envelope = await client.next_envelope(timeout_seconds=timeout_seconds)
+                    received_envelope = await self._next_envelope_or_stop(
+                        client,
+                        stop_event,
+                        timeout_seconds=timeout_seconds,
+                    )
                 except TimeoutError:
                     continue
-                buffered.append(envelope)
+                if received_envelope is not None:
+                    buffered.append(received_envelope)
         except BaseException as exc:
             failure = exc
 
         clean_stop_requested = failure is None and stop_event.is_set()
-        if clean_stop_requested:
-            self.reducer.begin_clean_stop()
-        else:
-            self.reducer.prepare_reconnect(
-                type(failure).__name__ if failure is not None else "runtime failure"
+        barrier_monotonic_ms = (
+            self._stop_terminal_monotonic_ms(stop_event, _monotonic_ms())
+            if clean_stop_requested
+            else _monotonic_ms()
+        )
+        self.reducer.begin_runtime_barrier(
+            barrier_monotonic_ms,
+            terminal=clean_stop_requested,
+        )
+        buffered.extend(self._drain_client_envelopes(client))
+        barrier_frontier = self._barrier_frontier(
+            client,
+            buffered,
+            barrier_monotonic_ms=barrier_monotonic_ms,
+            exact_terminal_time=clean_stop_requested
+            and self._has_stop_terminal_monotonic_ms(stop_event),
+        )
+        if self.reducer._session_epoch is not None:
+            self.reducer.bind_runtime_barrier_frontier(
+                session_epoch=client.session_epoch,
+                ingress_seq=barrier_frontier,
             )
 
         sender_cancelled_by_barrier = False
-        if not sender_task.done():
-            sender_cancelled_by_barrier = True
-            sender_task.cancel()
         try:
             await self._stop_client_intake(client)
         except BaseException as exc:
             if failure is None:
                 failure = exc
+        if not sender_task.done():
+            sender_cancelled_by_barrier = True
+            sender_task.cancel()
         try:
             await sender_task
         except asyncio.CancelledError:
@@ -6934,36 +7695,31 @@ class LiveRadarRuntime:
             if failure is None:
                 failure = exc
 
-        if failure is not None and clean_stop_requested:
-            self.reducer.prepare_reconnect(type(failure).__name__)
-            clean_stop_requested = False
-
         buffered.extend(self._drain_client_envelopes(client))
-        if clean_stop_requested:
+        while buffered:
+            envelope = buffered.popleft()
             try:
-                while buffered:
-                    envelope = buffered.popleft()
-                    while next_poll_ms < envelope.received_monotonic_ms:
-                        self.reducer.advance_time(next_poll_ms)
-                        next_poll_ms += poll_ms
-                    self.reducer.reduce(
-                        envelope,
-                        processed_monotonic_ms=_monotonic_ms(),
-                    )
+                while (
+                    next_poll_ms < envelope.received_monotonic_ms
+                    and next_poll_ms <= barrier_monotonic_ms
+                ):
+                    self.reducer.advance_time(next_poll_ms)
+                    next_poll_ms += poll_ms
+                self.reducer.reduce(
+                    envelope,
+                    processed_monotonic_ms=max(
+                        _monotonic_ms(),
+                        envelope.received_monotonic_ms,
+                    ),
+                )
             except BaseException as exc:
+                if failure is None:
+                    failure = exc
+        try:
+            self.reducer.settle_barrier_deadlines(barrier_monotonic_ms)
+        except BaseException as exc:
+            if failure is None:
                 failure = exc
-                self.reducer.prepare_reconnect(type(exc).__name__)
-
-        if failure is not None:
-            while buffered:
-                envelope = buffered.popleft()
-                try:
-                    self.reducer.reduce(
-                        envelope,
-                        processed_monotonic_ms=_monotonic_ms(),
-                    )
-                except BaseException:
-                    continue
 
         while True:
             try:
@@ -6979,8 +7735,197 @@ class LiveRadarRuntime:
             if failure is None:
                 failure = exc
         if failure is not None:
+            reconnect_reason = (
+                failure.reason
+                if isinstance(failure, _SessionReconnectRequired)
+                else type(failure).__name__
+            )
+            self.reducer.prepare_reconnect(reconnect_reason)
             raise failure.with_traceback(failure.__traceback__)
-        return self.reducer.clean_stop(_monotonic_ms())
+        return self.reducer.clean_stop(barrier_monotonic_ms)
+
+    def commit_shadow_supervisor_control(
+        self,
+        kind: ShadowSupervisorControlKind,
+        *,
+        monotonic_ms: int,
+    ) -> FactBoundary:
+        return self.reducer.commit_shadow_supervisor_control(
+            kind,
+            monotonic_ms=monotonic_ms,
+        )
+
+    def configure_shadow_terminal_control(
+        self,
+        *,
+        terminal_disposition: str,
+        terminal_source: Mapping[str, object],
+    ) -> None:
+        self.reducer.configure_shadow_terminal_control(
+            terminal_disposition=terminal_disposition,
+            terminal_source=terminal_source,
+        )
+
+    def clean_stop_without_transport(
+        self,
+        *,
+        session_epoch: int,
+        terminal_monotonic_ms: int,
+        shadow_supervisor_triggers: ShadowSupervisorTriggers,
+    ) -> Path:
+        """Publish an honest zero-activity terminal after pre-session connect failure."""
+        if self.reducer._session_epoch is not None:
+            raise RuntimeError("transport-free clean stop requires no existing session")
+        if terminal_monotonic_ms < shadow_supervisor_triggers.runtime_start_monotonic_ms:
+            raise ShadowRuntimeIntegrityError(
+                "pre-session stop precedes runtime start; complete evidence is unavailable"
+            )
+        self.reducer.begin_session(
+            session_epoch=session_epoch,
+            monotonic_ms=terminal_monotonic_ms,
+        )
+        self._realize_due_shadow_supervisor_controls(
+            shadow_supervisor_triggers,
+            observed_monotonic_ms=terminal_monotonic_ms,
+        )
+        return self.reducer.clean_stop(terminal_monotonic_ms)
+
+    def finalize_shadow_failure(self, monotonic_ms: int) -> None:
+        self.reducer.finalize_shadow_failure(monotonic_ms)
+
+    def _realize_due_shadow_supervisor_controls(
+        self,
+        triggers: ShadowSupervisorTriggers | None,
+        *,
+        observed_monotonic_ms: int,
+        through_monotonic_ms: int | None = None,
+    ) -> None:
+        if triggers is None:
+            return
+        due_through_ms = (
+            observed_monotonic_ms if through_monotonic_ms is None else through_monotonic_ms
+        )
+        if (
+            not self.reducer._shadow_runtime_start_committed
+            and due_through_ms >= triggers.runtime_start_monotonic_ms
+        ):
+            self.commit_shadow_supervisor_control(
+                ShadowSupervisorControlKind.RUNTIME_START,
+                monotonic_ms=observed_monotonic_ms,
+            )
+        if (
+            not self.reducer._shadow_enrollment_cutoff_committed
+            and due_through_ms >= triggers.enrollment_cutoff_monotonic_ms
+        ):
+            self.commit_shadow_supervisor_control(
+                ShadowSupervisorControlKind.ENROLLMENT_CUTOFF,
+                monotonic_ms=observed_monotonic_ms,
+            )
+
+    def _next_shadow_supervisor_trigger_ms(
+        self,
+        triggers: ShadowSupervisorTriggers | None,
+    ) -> int | None:
+        if triggers is None:
+            return None
+        if not self.reducer._shadow_runtime_start_committed:
+            return triggers.runtime_start_monotonic_ms
+        if not self.reducer._shadow_enrollment_cutoff_committed:
+            return triggers.enrollment_cutoff_monotonic_ms
+        return triggers.final_stop_monotonic_ms
+
+    def _realize_due_shadow_terminal_gate(
+        self,
+        triggers: ShadowSupervisorTriggers | None,
+        terminal_gate: Callable[[int], None] | None,
+        stop_event: asyncio.Event,
+        *,
+        observed_monotonic_ms: int,
+        through_monotonic_ms: int | None = None,
+    ) -> bool:
+        if triggers is None or triggers.final_stop_monotonic_ms is None:
+            return False
+        due_through_ms = (
+            observed_monotonic_ms if through_monotonic_ms is None else through_monotonic_ms
+        )
+        if due_through_ms < triggers.final_stop_monotonic_ms:
+            return False
+        if terminal_gate is None:
+            raise RuntimeError("due Shadow final stop has no owning terminal gate")
+        terminal_gate(observed_monotonic_ms)
+        if not stop_event.is_set():
+            raise RuntimeError("Shadow terminal gate did not request a runtime stop")
+        if (
+            self._stop_terminal_monotonic_ms(stop_event, observed_monotonic_ms)
+            != observed_monotonic_ms
+        ):
+            raise RuntimeError("Shadow terminal gate did not preserve its exact boundary")
+        return True
+
+    @staticmethod
+    def _has_stop_terminal_monotonic_ms(stop_event: asyncio.Event) -> bool:
+        return getattr(stop_event, "terminal_monotonic_ms", None) is not None
+
+    @staticmethod
+    def _stop_terminal_monotonic_ms(
+        stop_event: asyncio.Event,
+        fallback_monotonic_ms: int,
+    ) -> int:
+        value = getattr(stop_event, "terminal_monotonic_ms", None)
+        if value is None:
+            return fallback_monotonic_ms
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("stop terminal monotonic time must be a non-negative integer")
+        return value
+
+    def _barrier_frontier(
+        self,
+        client: PublicClient,
+        buffered: deque[InboundEnvelope],
+        *,
+        barrier_monotonic_ms: int,
+        exact_terminal_time: bool,
+    ) -> int:
+        frontier = self.reducer._last_ingress_seq
+        if exact_terminal_time:
+            for envelope in buffered:
+                if envelope.ingress_seq != frontier + 1:
+                    break
+                if envelope.received_monotonic_ms >= barrier_monotonic_ms:
+                    break
+                frontier = envelope.ingress_seq
+            return frontier
+        enqueued = getattr(client, "enqueued_envelope_count", None)
+        if isinstance(enqueued, int) and not isinstance(enqueued, bool) and enqueued >= frontier:
+            return enqueued
+        return max(
+            (envelope.ingress_seq for envelope in buffered),
+            default=frontier,
+        )
+
+    @staticmethod
+    async def _next_envelope_or_stop(
+        client: PublicClient,
+        stop_event: asyncio.Event,
+        *,
+        timeout_seconds: float,
+    ) -> InboundEnvelope | None:
+        envelope_task = asyncio.create_task(client.next_envelope(timeout_seconds=timeout_seconds))
+        stop_task = asyncio.create_task(stop_event.wait())
+        done, pending = await asyncio.wait(
+            {envelope_task, stop_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        for task in pending:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        if envelope_task in done:
+            return await envelope_task
+        return None
 
     async def _sender_loop(
         self,
