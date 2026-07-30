@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -12,26 +14,23 @@ AUTHORITY_FILES = (
     ROOT / "docs/authority/SYSTEM_ARCHITECTURE.md",
     ROOT / "docs/authority/DELIVERY_CONTRACT.md",
 )
-
 IMPLEMENTATION_CONTRACTS = (
     ROOT / "docs/contracts/SHORT_VOL_RADAR.md",
     ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md",
+    ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md",
 )
-
 INTERNAL_PACKAGES = {
     "market_monitor",
     "options_domain",
     "short_vol_radar",
     "radar_runtime",
 }
-
 PACKAGE_ROOTS = {
     "market_monitor": ROOT / "packages/market_monitor/src/market_monitor",
     "options_domain": ROOT / "packages/options_domain/src/options_domain",
     "short_vol_radar": ROOT / "packages/short_vol_radar/src/short_vol_radar",
     "radar_runtime": ROOT / "apps/radar_runtime/src/radar_runtime",
 }
-
 ALLOWED_IMPORTS = {
     "market_monitor": {"market_monitor"},
     "options_domain": {"market_monitor", "options_domain"},
@@ -40,9 +39,72 @@ ALLOWED_IMPORTS = {
 }
 
 
+def _flat(path: Path) -> str:
+    return " ".join(path.read_text(encoding="utf-8").split())
+
+
+def _text_block_after(text: str, marker: str) -> str:
+    tail = text.split(marker, 1)[1]
+    return tail.split("```text\n", 1)[1].split("\n```", 1)[0]
+
+
+def _text_block_after_last(text: str, marker: str) -> str:
+    tail = text.rsplit(marker, 1)[1]
+    return tail.split("```text\n", 1)[1].split("\n```", 1)[0]
+
+
+def _declared_keys(block: str) -> tuple[str, ...]:
+    return tuple(
+        line.strip().split(":", 1)[0]
+        for line in block.splitlines()
+        if line.strip() and line.strip() not in {"{", "}"} and ":" in line
+    )
+
+
+def _table_rows_after(text: str, marker: str) -> tuple[tuple[str, ...], ...]:
+    tail = text.split(marker, 1)[1]
+    rows: list[tuple[str, ...]] = []
+    for line in tail.splitlines():
+        if not line.startswith("|"):
+            if rows:
+                break
+            continue
+        cells = tuple(cell.strip() for cell in line.strip("|").split("|"))
+        if cells and not all(set(cell) <= {"-", ":"} for cell in cells):
+            rows.append(cells)
+    return tuple(rows)
+
+
+def _canonical_identity(label: str, *members: object) -> str:
+    preimage = json.dumps(
+        [label, *members],
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(preimage).hexdigest()}"
+
+
+def _internal_imports(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    values: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules = tuple(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            modules = (node.module,)
+        else:
+            continue
+        values.update(
+            module.split(".", 1)[0]
+            for module in modules
+            if module.split(".", 1)[0] in INTERNAL_PACKAGES
+        )
+    return values
+
+
 def test_agents_is_a_short_map_to_all_active_authority() -> None:
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-
     assert len(agents.splitlines()) <= 100
     assert "are orthogonal; none overrides another" in agents
     for path in AUTHORITY_FILES:
@@ -60,59 +122,40 @@ def test_active_authority_has_explicit_status_and_no_stale_location() -> None:
     assert {path.name for path in (ROOT / "docs/contracts").glob("*.md")} == {
         "SHORT_VOL_RADAR.md",
         "SHORT_VOL_UNDERWRITING_POSITION.md",
+        "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md",
     }
     for path in (*AUTHORITY_FILES, *IMPLEMENTATION_CONTRACTS):
         opening = "\n".join(path.read_text(encoding="utf-8").splitlines()[:8])
         assert "**Status:** ACTIVE" in opening, f"missing active status in {path}"
         assert "**Version:**" not in path.read_text(encoding="utf-8")
-
     markdown = "\n".join(path.read_text(encoding="utf-8") for path in ROOT.rglob("*.md"))
     assert "docs/architecture/PRODUCT_CONSTITUTION.md" not in markdown
 
 
 def test_repository_relative_markdown_links_resolve() -> None:
-    link_pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
-    checked_roots = (
+    pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+    checked = (
         ROOT / "AGENTS.md",
         ROOT / "README.md",
         *AUTHORITY_FILES,
         *IMPLEMENTATION_CONTRACTS,
         *(ROOT / "tasks").glob("*.md"),
     )
-
-    for path in checked_roots:
-        for raw_target in link_pattern.findall(path.read_text(encoding="utf-8")):
+    for path in checked:
+        for raw_target in pattern.findall(path.read_text(encoding="utf-8")):
             target = raw_target.split("#", 1)[0]
             if not target or "://" in target or target.startswith("mailto:"):
                 continue
-            resolved = (path.parent / target).resolve()
-            assert resolved.exists(), f"broken link from {path}: {raw_target}"
-
-
-def _internal_imports(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    imports: set[str] = set()
-    for node in ast.walk(tree):
-        modules: tuple[str, ...]
-        if isinstance(node, ast.Import):
-            modules = tuple(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            modules = (node.module,)
-        else:
-            continue
-        imports.update(
-            module.split(".", 1)[0]
-            for module in modules
-            if module.split(".", 1)[0] in INTERNAL_PACKAGES
-        )
-    return imports
+            assert (path.parent / target).resolve().exists(), (
+                f"broken link from {path}: {raw_target}"
+            )
 
 
 def test_internal_package_dependency_direction() -> None:
     for owner, root in PACKAGE_ROOTS.items():
         for path in root.rglob("*.py"):
             forbidden = _internal_imports(path) - ALLOWED_IMPORTS[owner]
-            assert not forbidden, f"{path} imports forbidden higher layer(s): {sorted(forbidden)}"
+            assert not forbidden, f"{path} imports higher layers: {sorted(forbidden)}"
 
 
 def test_task_template_carries_business_and_evidence_contract() -> None:
@@ -127,58 +170,41 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         "## Definition of done",
     ):
         assert section in template
-
-    assert "**Task kind:** AUTHORITY_ONLY | IMPLEMENTATION | EVIDENCE_ONLY" in template
-    assert "Minimal-hit recomputation" in template
-    assert "business event or human stop" in template
-    assert "duration, file, cutoff, archive, or process lifetime never" in template
-
-    for declaration in (
+    for value in (
+        "**Task kind:** AUTHORITY_ONLY | IMPLEMENTATION | EVIDENCE_ONLY",
+        "Minimal-hit recomputation",
+        "business event or human stop",
+        "duration, file, cutoff, archive, or process lifetime never",
         "**Market/Decision input contract change:**",
         "**Decision Policy change:**",
         "**Outcome/evaluation contract change:**",
         "**Stage/authorization change:**",
     ):
-        assert declaration in template
+        assert value in template
 
 
-def test_current_stage_closes_contract_freeze_without_activating_runtime() -> None:
-    current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    current_stage_flat = " ".join(current_stage.split())
-
+def test_current_stage_closes_outcome_prerequisite_without_runtime() -> None:
+    current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
+    flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
-    assert current_stage.count(marker) == 1
-    assert "`NONE` — no successor product-capability closure is active" in current_stage_flat
-    assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current_stage
-    assert (
-        "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current_stage
-    )
-    assert "**Production Short Vol Radar:** `ESTABLISHED`" in current_stage
-    assert "## Root blocker" in current_stage
-    assert (
-        "Until such a task is active and its pre-runtime authority requirements are satisfied, "
-        "no downstream runtime work or live command is authorized" in current_stage_flat
-    )
-    assert "## Queued sequence — not authorized" in current_stage
-    assert "[`SHORT_VOL_UNDERWRITING_POSITION`]" in current_stage
-    assert "**Fixed-contract runtime and fixed-Policy forward cohort:**" in current_stage
+    assert current.count(marker) == 1
+    assert "`NONE` — no successor product-capability closure is active" in flat
+    assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
+    assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
+    assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
+    assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
+    assert "absence of a separately activated fixed-contract runtime" in flat
+    assert "no downstream runtime or live command is authorized" in flat
+    assert "SHORT_VOL_PUBLIC_SHADOW_TERMINAL_GOAL_DELEGATION" in current
+    assert "## Queued sequence — not authorized" in current
 
 
-def test_completed_underwriting_contract_leaves_no_active_task() -> None:
-    old_task = ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md"
-    completed_task = ROOT / "tasks/RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION.md"
-    contract_task = ROOT / "tasks/SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT.md"
-
-    assert not old_task.exists()
-    assert not completed_task.exists()
-    assert not contract_task.exists()
+def test_completed_outcome_contract_leaves_no_active_task() -> None:
+    task = ROOT / "tasks/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT_CONTRACT.md"
+    assert not task.exists()
     assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
-
-    radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
-    assert "`IndexTailStatus` and `IndexBaselineState.status` remain current production" in radar
-    assert "`INDEX_TAIL_PENDING` was a repository-internal Python-only compatibility name" in radar
-    assert "never serialized by the current or sealed evidence writers" in radar
-    assert "`INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING`" in radar
+    current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
+    assert "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT_CONTRACT" not in current
 
 
 def test_underwriting_position_contract_freezes_public_economics_and_identity() -> None:
@@ -196,7 +222,7 @@ def test_underwriting_position_contract_freezes_public_economics_and_identity() 
         'Policy identity = "sha256:" + lowercase_sha256_of_exact_file_bytes',
         "Underwriting and Position are two separate immutable Policy artifacts",
         "There is no third admission Policy",
-        '`fee_role = "TAKER"`',
+        '`fee_role = "TAKER"',
         "`fee_rate_index_fraction = 0.0003`",
         "`combo_snapshot_send_budget_ms`",
         "`combo_snapshot_response_budget_ms`",
@@ -344,7 +370,6 @@ def test_underwriting_position_contract_freezes_position_and_hard_close_order() 
         encoding="utf-8"
     )
     flat = " ".join(contract.split())
-
     ordered_reasons = (
         "`SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED`",
         "`LATEST_EXIT_BOUNDARY_REACHED`",
@@ -457,7 +482,1125 @@ def test_underwriting_position_contract_freezes_denominators_and_non_claims() ->
         assert invariant in flat
 
 
-def test_authority_defines_one_live_short_vol_business_flow() -> None:
+def test_outcome_contract_freezes_identity_lifecycle_and_no_new_policy() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "**Status:** ACTIVE IMPLEMENTATION/EVALUATION CONTRACT" in contract
+    assert (
+        "**Owning semantic identity:** `SHORT_VOL_PUBLIC_SHADOW_OUTCOME_FORWARD_COHORT`" in contract
+    )
+    assert "**Current implementation state:** `RUNTIME_NOT_IMPLEMENTED`" in contract
+    assert (
+        "There is no Outcome Policy and no Cohort Policy. No fourth strategy Policy exists."
+        in contract
+    )
+    assert _text_block_after(
+        contract, "The initial lifecycle is `PENDING`. Its state machine is exactly:"
+    ).splitlines() == [
+        "PENDING → MATURE_KNOWN",
+        "PENDING → MATURE_UNKNOWN",
+        "PENDING → CENSORED_AT_STOP",
+        "PENDING → CENSORED_AT_FAILURE",
+    ]
+    assert "These are four alternative branches, never a serial chain." in contract
+    assert "Every terminal state is immutable" in contract
+    assert "ShadowObservationIdentity =" in contract
+    assert "ShadowOutcomeIdentity =" in contract
+    canonical = _text_block_after(
+        contract,
+        "Every new identity equation in this contract uses one exact typed encoding.",
+    )
+    assert '"sha256:"' in canonical
+    assert "lowercase_sha256(" in canonical
+    assert "JSON_array(" in canonical
+    assert 'separators = [",", ":"]' in canonical
+    assert "no_BOM = true" in canonical
+    assert "No object or array is first serialized into a JSON string" in contract
+    assert "embedded as its native\n`CanonicalValue`" in contract
+    assert '{"instrument_name": Identity, "depth": 10000}' in contract
+    assert "request params is native JSON `null`" in contract
+    fixed_vectors = _text_block_after(contract, "The normative fixed vectors are:")
+    assert fixed_vectors == (
+        '["FooIdentity","member_1","member_2"]\n'
+        "→ sha256:961665d18281a3f4d46b0e72f1d05c494d73d11a9f829def2f4509e09e76bf3a\n"
+        "\n"
+        '["CompositeIdentity",{"code_identity":"code","runtime_identity":"runtime",'
+        '"session_epoch":1,"ingress_seq":2,"received_monotonic_ms":3,"causal_seq":4},'
+        '["TRUE","UNKNOWN"],{"instrument_name":"combo","depth":10000},7,null]\n'
+        "→ sha256:2a6013410106bda9c407cb910982744c77f406384beb93f17b917464639e05ff\n"
+        "\n"
+        '["UnderwritingPositionSlotKeyIdentity","runtime","radar-policy","episode",'
+        '"short-leg","0.1"]\n'
+        "→ sha256:3d9a604d72459c3f0353f0a623c7f1f014ec0a24ff38a79975dd272f73e0a8dc"
+    )
+    fact_boundary = {
+        "code_identity": "code",
+        "runtime_identity": "runtime",
+        "session_epoch": 1,
+        "ingress_seq": 2,
+        "received_monotonic_ms": 3,
+        "causal_seq": 4,
+    }
+    assert _canonical_identity("FooIdentity", "member_1", "member_2") == (
+        "sha256:961665d18281a3f4d46b0e72f1d05c494d73d11a9f829def2f4509e09e76bf3a"
+    )
+    assert (
+        _canonical_identity(
+            "CompositeIdentity",
+            fact_boundary,
+            ["TRUE", "UNKNOWN"],
+            {"instrument_name": "combo", "depth": 10000},
+            7,
+            None,
+        )
+        == "sha256:2a6013410106bda9c407cb910982744c77f406384beb93f17b917464639e05ff"
+    )
+    assert (
+        _canonical_identity(
+            "UnderwritingPositionSlotKeyIdentity",
+            "runtime",
+            "radar-policy",
+            "episode",
+            "short-leg",
+            "0.1",
+        )
+        == "sha256:3d9a604d72459c3f0353f0a623c7f1f014ec0a24ff38a79975dd272f73e0a8dc"
+    )
+    assert "No native tuple,\narray, object, or alternative slot-key hash is accepted" in contract
+    assert 'CanonicalIdentity("FooIdentity", member_1, member_2)' in contract
+    rejected_observation = _text_block_after(
+        contract, "Each selected rejected anchor creates exactly one:"
+    )
+    assert rejected_observation == (
+        "RejectedCounterfactualObservationIdentity =\n"
+        "    RejectedCounterfactualAnchorIdentity\n"
+        "    × REJECTED_COUNTERFACTUAL_OBSERVATION"  # noqa: RUF001
+    )
+    assert "EXACT_KEYS_AND_TYPES_DECLARED_IN_THIS_CONTRACT" not in contract
+    assert "TBD" not in contract
+
+
+def test_outcome_contract_selects_first_eligible_exit_and_freezes_exact_economics() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert _text_block_after(contract, "Selection is exactly once and causal:") == (
+        "ShadowCounterfactualExitIdentity =\n"
+        "    ShadowObservationIdentity\n"
+        "    × first_latched_CLOSE_action_identity\n"  # noqa: RUF001
+        "    × causal_order_first_ELIGIBLE_CloseOpportunityEvaluationIdentity"  # noqa: RUF001
+    )
+    economics = _text_block_after(contract, "equations are normative:")
+    assert (
+        "gross_pnl_usdc =\n    gross_entry_credit_usdc\n    + gross_close_cashflow_usdc"
+        in economics
+    )
+    assert (
+        "total_public_fee_reserve_usdc =\n    entry_fee_reserve_usdc\n    + close_fee_reserve_usdc"
+    ) in economics
+    assert (
+        "net_pnl_after_public_standard_fee_reserve_usdc =\n"
+        "    gross_pnl_usdc\n"
+        "    - total_public_fee_reserve_usdc"
+    ) in economics
+    assert (
+        "net_loss_usdc =\n    max(0, -net_pnl_after_public_standard_fee_reserve_usdc)" in economics
+    )
+    assert "first qualifying identity in reducer causal order wins atomically" in contract
+    assert "hindsight cannot replace it" in contract
+    assert "exactly the same full `q`" in contract
+    assert "never cap, floor, replace, or clamp Outcome PnL or loss" in contract
+
+
+def test_outcome_contract_freezes_unknown_maturity_without_settlement_payoff() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md").read_text(
+        encoding="utf-8"
+    )
+    traces = _text_block_after(contract, "The required boundary traces are:")
+
+    assert traces.split("\n\n") == [
+        "first_CLOSE < B; eligible_exit = B; ordinary_attempt_terminal <= B;\n"
+        "natural_lifecycle_ready = B\n"
+        "    → MATURE_KNOWN",
+        "first_CLOSE < B; no_eligible_exit; ordinary_attempt_terminal = B;\n"
+        "natural_lifecycle_ready = B\n"
+        "    → MATURE_UNKNOWN",
+        "first_CLOSE < B; no_eligible_exit; attempt_terminal_owner = STOP | FAILURE;\n"
+        "natural_lifecycle_ready = B\n"
+        "    → CENSORED_AT_STOP | CENSORED_AT_FAILURE",
+        "first_CLOSE < ordinary_attempt_terminal < B; no_eligible_exit;\n"
+        "natural_lifecycle_not_ready = B; terminal_source = STOP | FAILURE\n"
+        "    → CENSORED_AT_STOP | CENSORED_AT_FAILURE; retain ORDINARY attempt terminal",
+    ]
+    total_order = contract.split(
+        "At every settled boundary `B`, the reducer applies this exact terminal total order:", 1
+    )[1].split("The natural-terminal predicate at `B`", 1)[0]
+    assert total_order.index("select its causal-order first eligible exit") < total_order.index(
+        "evaluate the natural-terminal predicate"
+    )
+    assert "`causal_seq < B.causal_seq`" in contract
+    assert "`causal_seq <= B.causal_seq`" in contract
+    assert "`first_CLOSE = B` never satisfies the natural-terminal predicate" in contract
+    assert "at an\nordinary boundary with no exit it remains `PENDING`" in contract
+    assert "consumes no delivery or settlement-price source" in contract
+    assert "never computes settlement payoff" in contract
+    assert "`settlement`, `inactive`, `locked`, `halted`" in contract
+    assert "stop/failure-owned attempt terminal cannot manufacture `MATURE_UNKNOWN`" in contract
+
+
+def test_outcome_contract_freezes_one_rejected_anchor_and_separate_path() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md").read_text(
+        encoding="utf-8"
+    )
+    identities = _text_block_after(contract, "The rejected identity family is exact:")
+
+    for identity in (
+        "RejectedCounterfactualPositionEvaluationIdentity",
+        "RejectedCounterfactualPositionActionIdentity",
+        "RejectedScheduledPostCloseQuoteAttemptIdentity",
+        "RejectedPostCloseAttemptTerminalIdentity",
+        "RejectedCounterfactualCloseQuoteEvaluationIdentity",
+        "RejectedCounterfactualCloseOpportunityEvaluationIdentity",
+        "RejectedCounterfactualExitIdentity",
+        "RejectedCounterfactualOutcomeIdentity",
+    ):
+        assert identities.count(f"{identity} =") == 1
+    assert (
+        "causal_order_first_ELIGIBLE_RejectedCounterfactualCloseOpportunityEvaluationIdentity"
+    ) in identities
+    assert "creates exactly one" in contract
+    assert "created at the rejected anchor boundary" in contract
+    assert "strictly greater same-runtime `causal_seq`" in contract
+    assert (
+        "early rejected close-quote or opportunity evaluation whose state is `UNKNOWN` or `INELIGIBLE`"
+        in contract
+    )
+    assert "does not consume the observation and is not an exit" in contract
+    assert "later Candidate or `SHADOW_ENTRY` in the same slot coexists" in contract
+    assert "neither identity cancels, merges, replaces, or consumes the other" in contract
+    assert "not conditioned on cohort enrollment" in contract
+    assert "bytewise-ascending canonical `UnderwritingActionIdentity`" in contract
+
+
+def test_outcome_contract_aligns_no_trade_and_excludes_unknown_trade_arms() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md").read_text(
+        encoding="utf-8"
+    )
+    pair_identity = _text_block_after(contract, "The identity is:")
+
+    assert pair_identity == (
+        "AlignedPolicyNoTradePairIdentity =\n"
+        "    OutcomeContractIdentity\n"
+        "    × pair_anchor\n"  # noqa: RUF001
+        "    × exact_policy_arm\n"  # noqa: RUF001
+        "    × exact_alternative_arm"  # noqa: RUF001
+    )
+    assert "policy_arm = SHADOW_TRADE\nalternative_arm = NO_TRADE" in contract
+    assert "policy_arm = NO_TRADE\nalternative_arm = REJECTED_COUNTERFACTUAL_TRADE" in contract
+    assert "`NO_TRADE` cashflow is exactly zero USDC" in contract
+    assert "one durable `ALIGNED_POLICY_NO_TRADE_PAIR`" in contract
+    assert "Economic comparison is available only when the trade arm is `MATURE_KNOWN`" in contract
+    assert "both-arm comparison fields are `null / UNKNOWN`" in contract
+    assert "known zero `NO_TRADE` arm cannot\nmake an unknown trade arm comparable" in contract
+
+
+def test_outcome_contract_freezes_stop_manifest_and_result_independence() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md").read_text(
+        encoding="utf-8"
+    )
+    trigger = _text_block_after(contract, "They are exact\npre-start supervisor triggers:")
+    emergency = _text_block_after(
+        contract, "An authorized early stop is a distinct external supervisor control:"
+    )
+    fatal = _text_block_after(contract, "A fatal failure uses a distinct supervisor control:")
+    manifest_schema = _text_block_after(contract, "The manifest exact top-level schema is:")
+    realized = _text_block_after(contract, "The summary records one exact realized boundary set:")
+    summary_schema = _text_block_after_last(contract, "`SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY`:")
+    terminal_rows = _table_rows_after(contract, "| Terminal source | Exact disposition")
+
+    assert _declared_keys(trigger) == (
+        '"runtime_identity"',
+        '"supervisor_clock_identity"',
+        '"trigger_monotonic_ms"',
+        '"trigger_kind"',
+    )
+    assert _declared_keys(emergency) == (
+        '"runtime_identity"',
+        '"supervisor_clock_identity"',
+        '"authority_identity"',
+        '"control_monotonic_ms"',
+        '"control_kind"',
+        '"reason"',
+    )
+    assert _declared_keys(fatal) == (
+        '"runtime_identity"',
+        '"supervisor_clock_identity"',
+        '"failure_source_identity"',
+        '"control_monotonic_ms"',
+        '"control_kind"',
+        '"failure_kind"',
+    )
+    assert "PreboundSupervisorTriggerIdentity =" in trigger
+    assert "AuthorizedEmergencyStopControlIdentity =" in emergency
+    assert "FatalFailureControlIdentity =" in fatal
+    assert '"PreboundSupervisorTriggerIdentity"' in trigger
+    assert '"AuthorizedEmergencyStopControlIdentity"' in emergency
+    assert '"FatalFailureControlIdentity"' in fatal
+    assert _declared_keys(manifest_schema) == (
+        "manifest_content_schema_identity",
+        "candidate_commit",
+        "candidate_tree",
+        "intended_remote_ref",
+        "verified_remote_ref",
+        "outcome_contract_identity",
+        "outcome_contract_path",
+        "radar_policy_path",
+        "radar_policy_identity",
+        "underwriting_policy_path",
+        "underwriting_policy_identity",
+        "position_policy_path",
+        "position_policy_identity",
+        "evidence_directory",
+        "process_argv",
+        "process_cwd",
+        "required_pre_run_checks",
+        "runtime_start_trigger",
+        "enrollment_cutoff_trigger",
+        "final_stop_trigger",
+        "clean_stop_predicate",
+        "emergency_stop_authority",
+        "forbidden_capabilities",
+        "non_claims",
+    )
+    assert tuple(realized.splitlines()) == (
+        "runtime_start_fact_boundary: FactBoundary",
+        "enrollment_end_fact_boundary: FactBoundary",
+        'enrollment_end_reason: "PREBOUND_CUTOFF" | "TERMINAL_BEFORE_CUTOFF"',
+        "terminal_fact_boundary: FactBoundary",
+        'terminal_disposition: "PLANNED_CLEAN_STOP" | "AUTHORIZED_EMERGENCY_STOP" |',
+        '                      "PROCESS_FAILURE"',
+        "planned_final_stop_fact_boundary: FactBoundary | null",
+    )
+    assert tuple(realized.splitlines()) == tuple(summary_schema.splitlines()[2:9])
+    assert (
+        "`runtime_start_fact_boundary.causal_seq < anchor.causal_seq <\n"
+        "enrollment_end_fact_boundary.causal_seq`"
+    ) in contract
+    assert (
+        "`enrollment_end_fact_boundary.causal_seq < fact.causal_seq <\n"
+        "terminal_fact_boundary.causal_seq`"
+    ) in contract
+    assert terminal_rows == (
+        (
+            "fatal runtime or evidence-integrity failure",
+            "`PROCESS_FAILURE`",
+            "`FAILURE`",
+            "`null`",
+            "`FatalFailureControl`",
+        ),
+        (
+            "valid `AuthorizedEmergencyStopControl` and no fatal failure at that boundary",
+            "`AUTHORIZED_EMERGENCY_STOP`",
+            "`STOP`",
+            "`null`",
+            "`AuthorizedEmergencyStopControl`",
+        ),
+        (
+            "pre-bound final-stop trigger and neither earlier owner",
+            "`PLANNED_CLEAN_STOP`",
+            "`STOP`",
+            "required and equal to terminal boundary",
+            "manifest `final_stop_trigger`",
+        ),
+    )
+    assert "emergency stop or failure commits before cutoff" in contract
+    assert "No missing future boundary is fabricated" in contract
+    assert "TERMINAL_FAILURE" not in contract
+    assert "terminal_reason:" not in contract
+    assert "`PLANNED_CLEAN_STOP | AUTHORIZED_EMERGENCY_STOP` own `CENSORED_AT_STOP`" in contract
+    assert "`PROCESS_FAILURE` owns `CENSORED_AT_FAILURE`" in contract
+    assert "fatal runtime or evidence-integrity error is never relabelled" in " ".join(
+        contract.split()
+    )
+    assert "exact_file_bytes_including_the_trailing_LF" in contract
+    assert "Pretty printing, key sorting, CRLF" in contract
+    assert "bytewise-ascending UTF-8 Identity bytes" in contract
+    assert "`candidate_commit = verified_remote_ref = every envelope.code_identity`" in contract
+    assert "`candidate_tree = GitTree(candidate_commit)`" in contract
+    assert "recomputes every declared path's exact-byte digest" in contract
+    assert "every envelope and every `FactBoundary`" in contract
+    assert "fresh remote resolution is a process-start preflight gate only" in contract
+    assert "never resolves or depends on current remote state" in " ".join(contract.split())
+    manifest_vector = (
+        json.dumps(
+            {"kind": "组合", "values": ["\u03b1", 1, None]},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
+    assert manifest_vector == '{"kind":"组合","values":["\u03b1",1,null]}\n'.encode()
+    assert hashlib.sha256(manifest_vector).hexdigest() == (
+        "8467e20e8dd44a9849ac4b63dd33d086f4fb7cedc027d663c16f70e3ed4b68f9"
+    )
+    assert hashlib.sha256(manifest_vector[:-1]).hexdigest() != (
+        "8467e20e8dd44a9849ac4b63dd33d086f4fb7cedc027d663c16f70e3ed4b68f9"
+    )
+    assert "The LF is one byte\n`0a`" in contract
+    assert "open the clean-stop barrier" in contract
+    assert "settle every application event already accepted" in contract
+    assert "commit one immutable clean-stop `FactBoundary`" in contract
+    assert "cannot reuse the last quote, mark, mid" in contract
+    assert (
+        "stop predicate cannot depend on anomaly, Candidate, Entry, rejection, Outcome" in contract
+    )
+    assert "Empty/zero natural activity is truthful evidence" in " ".join(contract.split())
+
+
+def test_outcome_contract_freezes_objects_writer_readers_and_compatibility() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md").read_text(
+        encoding="utf-8"
+    )
+    kinds = _text_block_after(
+        contract, "This restriction does\nnot prevent the same future owner"
+    ).splitlines()
+    envelope = _text_block_after(contract, "Every object has exactly this top-level envelope:")
+    provenance = _text_block_after(
+        contract, "Every `source_provenance` member is an object with exactly:"
+    )
+    direct_source = _text_block_after(
+        contract, "Every external direct source reference is an object with exactly:"
+    )
+    leg_commission_source = _text_block_after(
+        contract, "Every leg commission source reference is an object with exactly:"
+    )
+    provenance_roles = _table_rows_after(contract, "| Consumed root | Exact role")
+    provenance_kinds = _table_rows_after(contract, "| Object kind | Exact provenance derivation")
+    opportunity_provenance = _table_rows_after(
+        contract, "| Eligibility reason | `COMMISSION` roots"
+    )
+
+    assert tuple(kinds) == (
+        "SHADOW_OUTCOME_OBSERVATION",
+        "SHADOW_COUNTERFACTUAL_EXIT",
+        "SHADOW_OUTCOME",
+        "REJECTED_COUNTERFACTUAL_ANCHOR",
+        "REJECTED_COUNTERFACTUAL_OBSERVATION",
+        "REJECTED_COUNTERFACTUAL_POSITION_EVALUATION",
+        "REJECTED_COUNTERFACTUAL_POSITION_ACTION",
+        "REJECTED_COUNTERFACTUAL_CLOSE_QUOTE_EVALUATION",
+        "REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION",
+        "REJECTED_COUNTERFACTUAL_EXIT",
+        "REJECTED_COUNTERFACTUAL_OUTCOME",
+        "ALIGNED_POLICY_NO_TRADE_PAIR",
+        "SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY",
+    )
+    assert _declared_keys(envelope) == (
+        "object_kind",
+        "content_schema_identity",
+        "object_identity",
+        "outcome_contract_identity",
+        "code_identity",
+        "runtime_identity",
+        "radar_policy_identity",
+        "underwriting_policy_identity",
+        "position_policy_identity",
+        "fact_boundary",
+        "source_provenance",
+        "payload",
+        "non_claims",
+    )
+    assert _declared_keys(provenance) == (
+        "source_role",
+        "source_identity",
+        "receipt_fact_boundary",
+    )
+    assert _declared_keys(direct_source) == (
+        "source_identity",
+        "receipt_fact_boundary",
+    )
+    assert hashlib.sha256(direct_source.encode("utf-8")).hexdigest() == (
+        "9bddc681625770a66b39caafb5bf79b4f64ed96b395e5da61f9ab7ca42b2df39"
+    )
+    assert _declared_keys(leg_commission_source) == (
+        "canonical_leg_role",
+        "source_identity",
+        "receipt_fact_boundary",
+    )
+    assert hashlib.sha256(leg_commission_source.encode("utf-8")).hexdigest() == (
+        "690ddd9d3b974b910447363be4c2c3efaf63142d61a63281e1fe90ed6bd6d60a"
+    )
+    assert tuple(row[1] for row in provenance_roles) == (
+        "`ANCHOR`",
+        "`POSITION_EVALUATION`",
+        "`POSITION_ACTION`",
+        "`CLOSE_QUOTE_EVALUATION`",
+        "`CLOSE_OPPORTUNITY_EVALUATION`",
+        "`SELECTED_EXIT`",
+        "`TERMINAL_OUTCOME`",
+        "`POSITION_FACT`",
+        "`COMBO_QUOTE`",
+        "`COMMISSION`",
+        "`INDEX`",
+        "`INSTRUMENT_LIFECYCLE`",
+        "`ATTEMPT_CONTROL`",
+        "`SUPERVISOR_CONTROL`",
+    )
+    assert tuple(row[0].strip("`") for row in provenance_kinds) == tuple(kinds)
+    provenance_derivation_bytes = json.dumps(
+        provenance_kinds,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert hashlib.sha256(provenance_derivation_bytes).hexdigest() == (
+        "9b28c00ea94434cf2dae07bd1946ff36553fc45eea9613c00e13de5911157ca7"
+    )
+    assert tuple(row[0] for row in opportunity_provenance) == (
+        "`KNOWN_ATOMIC_UNAVAILABLE`",
+        "`QUOTE_OR_ATTEMPT_UNKNOWN`",
+        "`COMMISSION_UNKNOWN`",
+        "`COMMISSION_ABOVE_POLICY`",
+        "`INDEX_UNKNOWN`",
+        "`ELIGIBLE_COMPLETE`",
+    )
+    assert opportunity_provenance[0][1:] == ("zero", "zero")
+    assert "zero through two" in opportunity_provenance[2][1]
+    assert opportunity_provenance[3][1:] == ("exactly two", "zero")
+    assert opportunity_provenance[5][1:] == ("exactly two", "exactly one")
+    assert "every\nactually consumed short- or long-leg commission fraction" in contract
+    assert "one-hop audit set, not a transitive provenance graph" in contract
+    assert "never attempts to expand an upstream\n`X.source_provenance`" in contract
+    assert "pure projection with no independently supplied identity or boundary" in " ".join(
+        contract.split()
+    )
+    assert "committed terminal-barrier identity" not in contract
+    assert "same `terminal_source_identity` stored by the summary" in contract
+    assert "Every rejected-exit economic field is byte-identical" in " ".join(contract.split())
+    assert "bytewise-ascending UTF-8 `(source_role, source_identity)`" in contract
+    assert "exact sum of `amount_btc` equals the object's `full_quantity_btc`" in contract
+    assert "only\nthe final member may be truncated" in contract
+    expected_payload_keys = {
+        "SHADOW_OUTCOME_OBSERVATION": (
+            "shadow_observation_identity",
+            "shadow_entry_identity",
+            "start_fact_boundary",
+            "aligned_pair_identity",
+            "cohort_enrolled",
+            "lifecycle_state",
+        ),
+        "SHADOW_COUNTERFACTUAL_EXIT": (
+            "shadow_counterfactual_exit_identity",
+            "shadow_observation_identity",
+            "first_latched_close_action_identity",
+            "close_opportunity_evaluation_identity",
+            "shadow_close_opportunity_identity",
+            "selection_fact_boundary",
+            "first_latched_close_action_fact_boundary",
+            "close_opportunity_evaluation_fact_boundary",
+            "combo_quote_source_ref",
+            "commission_source_refs",
+            "index_source_ref",
+            "canonical_combo_identity",
+            "canonical_leg_identities",
+            "close_direction",
+            "full_quantity_btc",
+            "consumed_levels",
+            "short_leg_taker_commission_fraction",
+            "long_leg_taker_commission_fraction",
+            "close_index_usdc_per_btc",
+            "gross_close_cashflow_usdc",
+            "close_fee_reserve_usdc",
+            "net_close_cashflow_usdc",
+            "net_close_debit_usdc",
+            "projected_shadow_net_pnl_usdc",
+            "projected_net_loss_usdc",
+        ),
+        "SHADOW_OUTCOME": (
+            "shadow_outcome_identity",
+            "shadow_observation_identity",
+            "shadow_entry_identity",
+            "terminal_state",
+            "terminal_fact_boundary",
+            "selected_exit_identity",
+            "first_latched_close_action_identity",
+            "first_latched_close_action_fact_boundary",
+            "scheduled_post_close_attempt_identity",
+            "scheduled_post_close_attempt_fact_boundary",
+            "post_close_attempt_terminal_identity",
+            "post_close_attempt_terminal_status",
+            "post_close_attempt_terminal_owner",
+            "post_close_attempt_terminal_fact_boundary",
+            "natural_terminal_lifecycle_witnesses",
+            "censor_mask",
+            "terminal_supervisor_source_identity",
+            "gross_entry_credit_usdc",
+            "entry_fee_reserve_usdc",
+            "net_entry_credit_usdc",
+            "contractual_payoff_max_loss_ex_fees_usdc",
+            "entry_fee_reserved_payoff_loss_usdc",
+            "underwriting_reserved_loss_usdc",
+            "gross_close_cashflow_usdc",
+            "close_fee_reserve_usdc",
+            "net_close_cashflow_usdc",
+            "gross_pnl_usdc",
+            "total_public_fee_reserve_usdc",
+            "net_pnl_after_public_standard_fee_reserve_usdc",
+            "net_loss_usdc",
+            "economic_availability",
+            "actual_entry_fee_usdc",
+            "actual_close_fee_usdc",
+            "actual_total_fee_usdc",
+            "actual_pnl_usdc",
+            "actual_exposure_quantity_btc",
+            "actual_exposure_duration_ms",
+            "actual_all_in_loss_usdc",
+            "actual_all_in_max_loss_usdc",
+            "actual_fill_identity",
+            "actual_settlement_cashflow_usdc",
+            "actual_availability",
+        ),
+        "REJECTED_COUNTERFACTUAL_ANCHOR": (
+            "rejected_anchor_identity",
+            "underwriting_position_slot_key",
+            "underwriting_action_identity",
+            "underwriting_action",
+            "anchor_fact_boundary",
+            "canonical_combo_identity",
+            "canonical_leg_identities",
+            "entry_direction",
+            "full_quantity_btc",
+            "entry_consumed_levels",
+            "entry_combo_quote_source_ref",
+            "entry_commission_source_refs",
+            "entry_index_usdc_per_btc",
+            "entry_index_source_identity",
+            "entry_index_fact_boundary",
+            "entry_short_leg_mark_iv_fraction",
+            "entry_short_leg_mark_iv_source_identity",
+            "entry_short_leg_mark_iv_fact_boundary",
+            "gross_entry_credit_usdc",
+            "entry_fee_reserve_usdc",
+            "net_entry_credit_usdc",
+            "contractual_payoff_max_loss_ex_fees_usdc",
+            "entry_fee_reserved_payoff_loss_usdc",
+            "underwriting_reserved_loss_usdc",
+        ),
+        "REJECTED_COUNTERFACTUAL_OBSERVATION": (
+            "rejected_observation_identity",
+            "rejected_anchor_identity",
+            "start_fact_boundary",
+            "aligned_pair_identity",
+            "cohort_enrolled",
+            "lifecycle_state",
+        ),
+        "REJECTED_COUNTERFACTUAL_POSITION_EVALUATION": (
+            "rejected_position_evaluation_identity",
+            "rejected_observation_identity",
+            "consumed_position_fact_fingerprint",
+            "evaluation_fact_boundary",
+            "ordered_predicate_truth_vector",
+            "entry_index_usdc_per_btc",
+            "entry_index_source_identity",
+            "entry_index_fact_boundary",
+            "entry_short_leg_mark_iv_fraction",
+            "entry_short_leg_mark_iv_source_identity",
+            "entry_short_leg_mark_iv_fact_boundary",
+            "prior_evaluation_index_usdc_per_btc",
+            "prior_evaluation_index_source_identity",
+            "prior_evaluation_index_fact_boundary",
+            "current_index_usdc_per_btc",
+            "current_index_source_identity",
+            "current_index_fact_boundary",
+            "current_index_availability",
+            "next_evaluation_index_usdc_per_btc",
+        ),
+        "REJECTED_COUNTERFACTUAL_POSITION_ACTION": (
+            "rejected_position_action_identity",
+            "rejected_position_evaluation_identity",
+            "serialized_action",
+            "ordered_predicate_truth_vector",
+            "ordered_latched_close_reason_vector",
+            "first_latched_close_action_identity",
+            "scheduled_post_close_attempt_identity",
+            "action_fact_boundary",
+        ),
+        "REJECTED_COUNTERFACTUAL_CLOSE_QUOTE_EVALUATION": (
+            "rejected_close_quote_evaluation_identity",
+            "rejected_observation_identity",
+            "first_latched_close_action_identity",
+            "canonical_combo_identity",
+            "canonical_leg_identities",
+            "close_direction",
+            "full_quantity_btc",
+            "consumed_rule_scoped_quote_fingerprint",
+            "close_quote_state",
+            "close_conditioning",
+            "consumed_levels",
+            "gross_close_cashflow_usdc",
+            "evaluation_fact_boundary",
+        ),
+        "REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION": (
+            "rejected_close_opportunity_evaluation_identity",
+            "rejected_observation_identity",
+            "first_latched_close_action_identity",
+            "close_quote_evaluation_identity",
+            "attempt_terminal_identity",
+            "attempt_terminal_fact_boundary",
+            "opportunity_economics_business_fingerprint",
+            "eligibility",
+            "eligibility_reason",
+            "evaluation_fact_boundary",
+            "gross_close_cashflow_usdc",
+            "gross_cashflow_availability",
+            "short_leg_taker_commission_fraction",
+            "long_leg_taker_commission_fraction",
+            "commission_source_refs",
+            "close_index_usdc_per_btc",
+            "index_source_ref",
+            "close_fee_reserve_usdc",
+            "net_close_cashflow_usdc",
+            "net_close_debit_usdc",
+            "projected_shadow_net_pnl_usdc",
+            "projected_net_loss_usdc",
+            "derived_economics_availability",
+        ),
+        "REJECTED_COUNTERFACTUAL_EXIT": (
+            "rejected_exit_identity",
+            "rejected_observation_identity",
+            "first_latched_close_action_identity",
+            "close_quote_evaluation_identity",
+            "close_opportunity_evaluation_identity",
+            "selection_fact_boundary",
+            "first_latched_close_action_fact_boundary",
+            "close_quote_evaluation_fact_boundary",
+            "close_opportunity_evaluation_fact_boundary",
+            "consumed_rule_scoped_quote_fingerprint",
+            "commission_source_refs",
+            "index_source_ref",
+            "canonical_combo_identity",
+            "canonical_leg_identities",
+            "close_direction",
+            "full_quantity_btc",
+            "consumed_levels",
+            "short_leg_taker_commission_fraction",
+            "long_leg_taker_commission_fraction",
+            "close_index_usdc_per_btc",
+            "gross_close_cashflow_usdc",
+            "close_fee_reserve_usdc",
+            "net_close_cashflow_usdc",
+            "net_close_debit_usdc",
+            "projected_shadow_net_pnl_usdc",
+            "projected_net_loss_usdc",
+        ),
+        "REJECTED_COUNTERFACTUAL_OUTCOME": (
+            "rejected_outcome_identity",
+            "rejected_observation_identity",
+            "rejected_anchor_identity",
+            "terminal_state",
+            "terminal_fact_boundary",
+            "selected_exit_identity",
+            "first_latched_close_action_identity",
+            "first_latched_close_action_fact_boundary",
+            "scheduled_post_close_attempt_identity",
+            "scheduled_post_close_attempt_fact_boundary",
+            "post_close_attempt_terminal_identity",
+            "post_close_attempt_terminal_status",
+            "post_close_attempt_terminal_owner",
+            "post_close_attempt_terminal_fact_boundary",
+            "natural_terminal_lifecycle_witnesses",
+            "censor_mask",
+            "terminal_supervisor_source_identity",
+            "gross_entry_credit_usdc",
+            "entry_fee_reserve_usdc",
+            "net_entry_credit_usdc",
+            "contractual_payoff_max_loss_ex_fees_usdc",
+            "entry_fee_reserved_payoff_loss_usdc",
+            "underwriting_reserved_loss_usdc",
+            "gross_close_cashflow_usdc",
+            "close_fee_reserve_usdc",
+            "net_close_cashflow_usdc",
+            "gross_pnl_usdc",
+            "total_public_fee_reserve_usdc",
+            "net_pnl_after_public_standard_fee_reserve_usdc",
+            "net_loss_usdc",
+            "economic_availability",
+            "actual_entry_fee_usdc",
+            "actual_close_fee_usdc",
+            "actual_total_fee_usdc",
+            "actual_pnl_usdc",
+            "actual_exposure_quantity_btc",
+            "actual_exposure_duration_ms",
+            "actual_all_in_loss_usdc",
+            "actual_all_in_max_loss_usdc",
+            "actual_fill_identity",
+            "actual_settlement_cashflow_usdc",
+            "actual_availability",
+        ),
+        "ALIGNED_POLICY_NO_TRADE_PAIR": (
+            "aligned_pair_identity",
+            "pair_family",
+            "cohort_enrolled",
+            "pair_anchor_identity",
+            "policy_arm",
+            "alternative_arm",
+            "trade_observation_identity",
+            "trade_outcome_identity",
+            "terminal_state",
+            "terminal_fact_boundary",
+            "censor_mask",
+            "no_trade_cashflow_usdc",
+            "trade_net_pnl_after_public_standard_fee_reserve_usdc",
+            "policy_advantage_usdc",
+            "comparison_availability",
+        ),
+        "SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY": (
+            "cohort_summary_identity",
+            "manifest_identity",
+            "runtime_start_fact_boundary",
+            "enrollment_end_fact_boundary",
+            "enrollment_end_reason",
+            "terminal_fact_boundary",
+            "terminal_disposition",
+            "planned_final_stop_fact_boundary",
+            "terminal_source_identity",
+            "terminal_source",
+            "evidence_status",
+            "counts",
+            "rates",
+            "conservation_status",
+        ),
+    }
+    for kind, keys in expected_payload_keys.items():
+        payload_schema = _text_block_after_last(contract, f"`{kind}`:")
+        assert _declared_keys(payload_schema) == keys
+        assert (
+            hashlib.sha256(payload_schema.encode("utf-8")).hexdigest()
+            == {
+                "SHADOW_OUTCOME_OBSERVATION": (
+                    "30ca3ec8d42cf234d45588c9749aa61bc15b246e05f0292dd9af22a93d2d9f99"
+                ),
+                "SHADOW_COUNTERFACTUAL_EXIT": (
+                    "67b813dceab5b0e202de81bbfcc3c986bf57dbae8beae73c65ef7a9f8a02f402"
+                ),
+                "SHADOW_OUTCOME": (
+                    "92c97fa534e9366ba53cd0f9efb63091429ddbaea797c15b889960168975d2f9"
+                ),
+                "REJECTED_COUNTERFACTUAL_ANCHOR": (
+                    "3ef7cfdf942d086bb4a0530c9cf9aacd3a616a32a2ece9d58fd14581943e9614"
+                ),
+                "REJECTED_COUNTERFACTUAL_OBSERVATION": (
+                    "97308f20ff8b3dfb9da8397821e5bff86f762157d2e9670f52438af1b6d7a683"
+                ),
+                "REJECTED_COUNTERFACTUAL_POSITION_EVALUATION": (
+                    "009a94fd5dff1c095658e55f584500cee75200e1d53b2f1dd59f011f6049334c"
+                ),
+                "REJECTED_COUNTERFACTUAL_POSITION_ACTION": (
+                    "ddfea924cdcf649e1d6bdafb7a46aac780bb57e0f8d56b1cd6b3b96ff609b9de"
+                ),
+                "REJECTED_COUNTERFACTUAL_CLOSE_QUOTE_EVALUATION": (
+                    "8ea30fed1e1fde5cf8346759eb0f7233f8902c8542d57d85c99faafbb0e110c9"
+                ),
+                "REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION": (
+                    "04f59da0e1ad343154e2fde26691828e6a391b2c1631dc3eb8fefa860284b20e"
+                ),
+                "REJECTED_COUNTERFACTUAL_EXIT": (
+                    "8ff949f80c5251330929840e2411b030db9433df968972e47e7628f019d243b6"
+                ),
+                "REJECTED_COUNTERFACTUAL_OUTCOME": (
+                    "982141d36ce923778058cae9a27bfa78efdbf54d51e6e079974f5d4eb9d32d11"
+                ),
+                "ALIGNED_POLICY_NO_TRADE_PAIR": (
+                    "471b60dcb44923337f2c87c2da46e27abe3afd954b527f3366a8ef9d7f4c6e99"
+                ),
+                "SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY": (
+                    "9a5a27082374f4c01651ecbca5b0fce5f8ae1eeaf3e1d65547eac7aedbe6042f"
+                ),
+            }[kind]
+        )
+
+    assert "only future pure downstream owner is `short_vol_underwriting`" in contract
+    assert _text_block_after(contract, "For each kind:") == (
+        "content_schema_identity =\n"
+        "    CanonicalIdentity(\n"
+        '        "OUTCOME_CONTENT_SCHEMA",\n'
+        "        OutcomeContractContentDigest,\n"
+        "        object_kind\n"
+        "    )"
+    )
+    assert "EXACT_KEYS_AND_TYPES_DECLARED_IN_THIS_CONTRACT" not in contract
+    assert "they do\nnot accept a minimum subset, unknown extension" in contract
+    assert "identical duplicate is an idempotent no-op" in contract
+    assert "conflicting duplicate is a hard error" in contract
+    assert "mixed code/contract/Policy/runtime identities fail closed" in contract
+    assert "`objects/<object_kind>/<object_identity_without_sha256_prefix>.json`" in contract
+    assert "Unknown entries inside `objects/` are invalid" in contract
+    assert "`NOT_COMPARABLE`" in contract
+    assert "No migration, replay, recomputation, backfill, relabeling" in " ".join(contract.split())
+
+
+def test_outcome_contract_freezes_rejected_rule_matrix_and_witness_dependencies() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md").read_text(
+        encoding="utf-8"
+    )
+    opportunity_rows = _table_rows_after(contract, "| Eligibility reason | eligibility")
+    actual_availability = _text_block_after(
+        contract, "`ActualAvailability` is an object with exactly these keys"
+    )
+    actual_values = _text_block_after(
+        contract, "The following value members are always JSON `null`"
+    )
+
+    assert opportunity_rows == (
+        (
+            "`KNOWN_ATOMIC_UNAVAILABLE`",
+            "`INELIGIBLE`",
+            "`null / NOT_APPLICABLE`",
+            "both `null`",
+            "`null`",
+            "all `null / NOT_APPLICABLE`",
+        ),
+        (
+            "`QUOTE_OR_ATTEMPT_UNKNOWN`",
+            "`UNKNOWN`",
+            "`null / UNKNOWN`",
+            "both `null`",
+            "`null`",
+            "all `null / UNKNOWN`",
+        ),
+        (
+            "`COMMISSION_UNKNOWN`",
+            "`UNKNOWN`",
+            "`Decimal / KNOWN`",
+            "both `null`",
+            "`null`",
+            "all `null / UNKNOWN`",
+        ),
+        (
+            "`COMMISSION_ABOVE_POLICY`",
+            "`INELIGIBLE`",
+            "`Decimal / KNOWN`",
+            "both `Decimal`",
+            "`null`",
+            "all `null / UNKNOWN`",
+        ),
+        (
+            "`INDEX_UNKNOWN`",
+            "`UNKNOWN`",
+            "`Decimal / KNOWN`",
+            "both `Decimal`",
+            "`null`",
+            "all `null / UNKNOWN`",
+        ),
+        (
+            "`ELIGIBLE_COMPLETE`",
+            "`ELIGIBLE`",
+            "`Decimal / KNOWN`",
+            "both `Decimal`",
+            "positive `Decimal`",
+            "all `Decimal / KNOWN`",
+        ),
+    )
+    assert _declared_keys(actual_availability) == (
+        "actual_entry_fee_usdc",
+        "actual_close_fee_usdc",
+        "actual_total_fee_usdc",
+        "actual_pnl_usdc",
+        "actual_exposure_quantity_btc",
+        "actual_exposure_duration_ms",
+        "actual_all_in_loss_usdc",
+        "actual_all_in_max_loss_usdc",
+        "actual_fill_identity",
+        "actual_settlement_cashflow_usdc",
+    )
+    assert tuple(actual_values.splitlines()) == tuple(
+        f"{key}: null" for key in _declared_keys(actual_availability)
+    )
+    assert all(line.endswith(': "UNKNOWN"') for line in actual_availability.splitlines())
+    assert '`close_conditioning = "PRE_CLOSE"` iff' in contract
+    assert "first_latched_close_action_identity` is `null`" in contract
+    assert "only a strictly later accepted source fact changes conditioning" in contract
+    assert "current index availability is `KNOWN`" in contract
+    assert ("`next_evaluation_index_usdc_per_btc = current_index_usdc_per_btc`") in contract
+    assert (
+        "`next_evaluation_index_usdc_per_btc = prior_evaluation_index_usdc_per_btc`"
+    ) in contract
+    assert "first_latched_close_action_identity` is `null` iff" in contract
+    flat = " ".join(contract.split())
+    assert "attempt still pending when the barrier opens" in flat
+    assert "attempt terminal boundary equal to the Outcome terminal boundary" in flat
+
+
+def test_outcome_contract_freezes_conservation_denominators_and_nulls() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md").read_text(
+        encoding="utf-8"
+    )
+    conservation = _text_block_after(contract, "For every complete evidence directory:")
+    cohort_counts = _text_block_after(
+        contract, "`CohortCounts` has exactly these nonnegative-integer keys:"
+    )
+    cohort_rates = _text_block_after(
+        contract, "`CohortRates` has exactly these `ExactRate | null` keys:"
+    )
+    exact_rate = _text_block_after(contract, "`ExactRate` is an object with exactly:")
+    summary_identity = _text_block_after(contract, "The summary identity is:")
+    status_rows = _table_rows_after(contract, "| evidence status | conservation status")
+    null_rows = _table_rows_after(contract, "### Exact terminal null matrix")
+    metric_rows = _table_rows_after(contract, "| `CohortRates` key | Exact numerator")
+
+    assert tuple(cohort_counts.splitlines()) == (
+        "shadow_entry_count",
+        "shadow_observation_count",
+        "shadow_pending_count",
+        "shadow_mature_known_count",
+        "shadow_mature_unknown_count",
+        "shadow_censored_stop_count",
+        "shadow_censored_failure_count",
+        "shadow_outcome_count",
+        "shadow_selected_exit_count",
+        "shadow_terminal_pair_count",
+        "rejected_anchor_count",
+        "rejected_observation_count",
+        "rejected_pending_count",
+        "rejected_mature_known_count",
+        "rejected_mature_unknown_count",
+        "rejected_censored_stop_count",
+        "rejected_censored_failure_count",
+        "rejected_outcome_count",
+        "rejected_selected_exit_count",
+        "rejected_terminal_pair_count",
+        "rejected_position_evaluation_count",
+        "rejected_position_action_count",
+        "rejected_close_quote_evaluation_count",
+        "rejected_close_opportunity_evaluation_count",
+        "logical_admitted_pair_count",
+        "logical_rejected_pair_count",
+        "logical_aligned_pair_count",
+        "non_enrolled_admitted_pair_count",
+        "non_enrolled_rejected_pair_count",
+        "enrolled_admitted_pair_count",
+        "enrolled_admitted_pending_count",
+        "enrolled_admitted_mature_known_count",
+        "enrolled_admitted_mature_unknown_count",
+        "enrolled_admitted_censored_stop_count",
+        "enrolled_admitted_censored_failure_count",
+        "enrolled_rejected_pair_count",
+        "enrolled_rejected_pending_count",
+        "enrolled_rejected_mature_known_count",
+        "enrolled_rejected_mature_unknown_count",
+        "enrolled_rejected_censored_stop_count",
+        "enrolled_rejected_censored_failure_count",
+        "enrolled_aligned_pair_count",
+        "enrolled_terminal_pair_count",
+        "enrolled_comparable_pair_count",
+        "logical_no_trade_arm_count",
+        "durable_terminal_pair_count",
+        "durable_no_trade_arm_count",
+        "enrolled_admitted_mature_known_win_count",
+        "enrolled_admitted_mature_known_loss_count",
+        "enrolled_admitted_mature_known_zero_count",
+        "enrolled_rejected_mature_known_win_count",
+        "enrolled_rejected_mature_known_loss_count",
+        "enrolled_rejected_mature_known_zero_count",
+    )
+    assert tuple(cohort_rates.splitlines()) == (
+        "admitted_terminal_availability_rate",
+        "rejected_terminal_availability_rate",
+        "admitted_maturity_known_share",
+        "rejected_maturity_known_share",
+        "admitted_win_rate",
+        "admitted_loss_rate",
+        "rejected_win_rate",
+        "rejected_loss_rate",
+        "aligned_economic_comparison_availability_rate",
+    )
+    assert tuple(exact_rate.splitlines()) == (
+        "numerator: NonNegativeInteger",
+        "denominator: positive JSON integer",
+    )
+    assert summary_identity == (
+        "CohortSummaryIdentity =\n"
+        "    OutcomeContractIdentity\n"
+        "    × runtime_identity\n"  # noqa: RUF001
+        "    × manifest_identity\n"  # noqa: RUF001
+        "    × terminal_FactBoundary"  # noqa: RUF001
+    )
+    assert tuple(row[:2] for row in status_rows) == (
+        ("`COMPLETE`", "exactly `MET`"),
+        ("`INCOMPLETE` with a deterministic contradiction below", "exactly `NOT_MET`"),
+        (
+            "`INCOMPLETE` with no deterministic contradiction below",
+            "exactly `UNKNOWN`",
+        ),
+    )
+    assert "every positive-denominator formula is its exact `ExactRate`" in status_rows[0][3]
+    assert status_rows[1][3] == "all nine values `null`"
+    assert status_rows[2][3] == "all nine values `null`"
+    assert "`COMPLETE × NOT_MET`, `COMPLETE × UNKNOWN`, and `INCOMPLETE × MET` are invalid" in (  # noqa: RUF001
+        " ".join(contract.split())
+    )
+    assert "observed-valid unique-identity lower-bound counts" in status_rows[1][2]
+    assert "bytewise-ascending relative-path order" in contract
+    assert "existing unreadable or truncated file inside\n`objects/`" in contract
+    for equation in (
+        "shadow_entry_count =\n    shadow_observation_count",
+        "shadow_outcome_count =",
+        "shadow_selected_exit_count =\n    shadow_mature_known_count",
+        "shadow_terminal_pair_count =\n    shadow_outcome_count",
+        "rejected_anchor_count =\n    rejected_observation_count",
+        "rejected_outcome_count =",
+        "rejected_selected_exit_count =\n    rejected_mature_known_count",
+        "rejected_terminal_pair_count =\n    rejected_outcome_count",
+        "rejected_position_evaluation_count =\n    rejected_position_action_count",
+        "logical_admitted_pair_count =",
+        "logical_rejected_pair_count =",
+        "enrolled_admitted_pair_count =",
+        "enrolled_rejected_pair_count =",
+        "enrolled_terminal_pair_count =",
+        "enrolled_comparable_pair_count =",
+        "logical_no_trade_arm_count =\n    logical_aligned_pair_count",
+        "durable_no_trade_arm_count =\n    durable_terminal_pair_count",
+    ):
+        assert equation in conservation
+    assert [row[0] for row in null_rows[1:]] == [
+        "`MATURE_KNOWN`",
+        "`MATURE_UNKNOWN`",
+        "`CENSORED_AT_STOP`",
+        "`CENSORED_AT_FAILURE`",
+    ]
+    assert null_rows[1][6:9] == (
+        "all seven `Decimal`",
+        "`KNOWN`",
+        "all ten `null`; all ten availability values `UNKNOWN`",
+    )
+    assert null_rows[2][6:9] == (
+        "all seven `null`",
+        "`UNKNOWN`",
+        "all ten `null`; all ten availability values `UNKNOWN`",
+    )
+    assert "retain an earlier `ORDINARY` non-`CENSORED` terminal" in null_rows[3][2]
+    assert "owner `STOP`" in null_rows[3][2]
+    assert "retain an earlier `ORDINARY` non-`CENSORED` terminal" in null_rows[4][2]
+    assert "owner `FAILURE`" in null_rows[4][2]
+    assert "stop/failure never rewrites it" in contract
+    aligned_row = next(
+        row for row in metric_rows if row[0] == "`aligned_economic_comparison_availability_rate`"
+    )
+    assert aligned_row[1] == "`enrolled_comparable_pair_count`"
+    assert "`enrolled_terminal_pair_count`" in aligned_row[2]
+    assert "mature-unknown/censored included" in aligned_row[2]
+    assert "so `1/3` remains exactly `{1, 3}`" in contract
+    assert "not tautologically one" in contract
+    assert "Admitted and rejected economic distributions are never silently pooled" in contract
+    assert "exact zero is neither win nor loss" in contract
+    assert "zero or unavailable denominator serializes the rate as `null`, never `0`" in (
+        " ".join(contract.split()).lower()
+    )
+
+
+def test_authority_defines_one_live_flow_and_two_frozen_downstream_contracts() -> None:
     constitution = (ROOT / "docs/authority/PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     architecture = (ROOT / "docs/authority/SYSTEM_ARCHITECTURE.md").read_text(encoding="utf-8")
@@ -466,9 +1609,21 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
     underwriting = (ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md").read_text(
         encoding="utf-8"
     )
+    outcome = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md").read_text(
+        encoding="utf-8"
+    )
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     target_authority = "\n".join(
-        (constitution, current_stage, architecture, delivery, radar, underwriting, readme)
+        (
+            constitution,
+            current_stage,
+            architecture,
+            delivery,
+            radar,
+            underwriting,
+            outcome,
+            readme,
+        )
     )
     constitution = " ".join(constitution.split())
     current_stage = " ".join(current_stage.split())
@@ -476,6 +1631,7 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
     delivery = " ".join(delivery.split())
     radar = " ".join(radar.split())
     underwriting = " ".join(underwriting.split())
+    outcome = " ".join(outcome.split())
     readme = " ".join(readme.split())
 
     for invariant in (
@@ -490,6 +1646,7 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "Actual exposure begins with the first opening fill",
         "Neither entry kind selects a planned holding duration",
         "`SHADOW_CLOSE_OPPORTUNITY`",
+        "Without Shadow admission there is no Outcome object",
         "A missing quote cannot erase a known hard-close obligation",
     ):
         assert invariant in constitution
@@ -508,6 +1665,7 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "not authorization for persistent service deployment",
         "private/account data",
         "orders, fills, capital",
+        "no downstream runtime or live command is authorized",
     ):
         assert invariant in current_stage
 
@@ -520,6 +1678,9 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "NO_TARGET_SIZE_CREDIT_QUOTE",
         "first Radar closure intentionally creates no replay path",
         "no preselected holding duration",
+        "Contracted downstream Underwriting, Position, Outcome, and cohort boundary",
+        "pure downstream owner named `short_vol_underwriting`",
+        "No current package implements or consumes either boundary",
     ):
         assert invariant in architecture
 
@@ -599,9 +1760,10 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "Ordinary no-anomaly updates",
         "planned holding duration",
         "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`",
-        "`SHORT_VOL_UNDERWRITING_POSITION`",
+        "SHORT_VOL_UNDERWRITING_POSITION",
+        "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT",
         "no successor product-capability task is active",
-        "no Underwriting, Candidate, Shadow Entry, Position, close-opportunity, or Outcome runtime",
+        "no Underwriting, Candidate, Shadow Entry, Position",
         "future maker/order/fill",
     ):
         assert invariant in readme
@@ -617,6 +1779,14 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "A zero or unknown denominator serializes rate `null`, never `0`",
     ):
         assert invariant in underwriting
+
+    for invariant in (
+        "**Status:** ACTIVE IMPLEMENTATION/EVALUATION CONTRACT",
+        "No fourth strategy Policy exists",
+        "Same-boundary total order",
+        "NO_ACTUAL_ALL_IN_LOSS_OR_MAX_LOSS",
+    ):
+        assert invariant in outcome
 
     legacy_fragments = (
         "NOT_APPLICABLE_" + "TTE",
@@ -709,7 +1879,6 @@ def test_repository_owned_contracts_use_semantic_not_ordinal_identities() -> Non
         *(ROOT / "packages").rglob("*.py"),
         *(ROOT / "tests").rglob("*.py"),
     )
-
     for path in checked:
         text = path.read_text(encoding="utf-8")
         if path == ROOT / "apps/radar_runtime/src/radar_runtime/deribit_public.py":
