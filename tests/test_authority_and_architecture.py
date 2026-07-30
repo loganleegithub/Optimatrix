@@ -150,123 +150,25 @@ def test_current_stage_records_established_radar_without_activating_successor() 
     assert "## Queued sequence — not authorized" in current_stage
 
 
-def test_short_vol_task_records_consumed_delegation_and_accepted_live_gates() -> None:
-    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-    opening = "\n".join(task.splitlines()[:90])
+def test_completed_radar_consolidation_leaves_no_active_task_or_successor() -> None:
+    old_task = ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md"
+    task_path = ROOT / "tasks/RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION.md"
 
-    assert "**Status:** CLOSED_BY_ACCEPTED_FINAL_STAGE_RECORD" in opening
-    assert "task archival remains unauthorized" in opening
-    assert "**Historical-body interpretation:**" in opening
-    assert "none grants a new live run or other" in opening
-    assert "**Live commands:** named Smoke and Soak gates consumed" in opening
-    assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in opening
-    assert "**Production Short Vol Radar:** `ESTABLISHED`" in opening
-    assert "**Construction gate:** `OPENED_BY_EXPLICIT_HUMAN_COMMAND_2026_07_25`" in opening
-    assert (
-        "**Terminal business-goal delegation:** `PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`" in opening
+    assert not old_task.exists()
+    assert not task_path.exists()
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
+
+    current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
+    assert "There is no active product-capability or implementation-maintenance closure" in (
+        current_stage
     )
-    assert "`CONSUMED_BY_ACCEPTED_FINAL_STAGE_RECORD_2026_07_29`" in opening
-    assert (
-        "**Final construction subgate:** "
-        "`ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`" in opening
-    )
-    assert "`COMPLETED_AT_7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`" in opening
-    assert (
-        "**Final subgate exact base HEAD:** `d6e506b343c6fc5570243ba01def46d6a047428e`" in opening
-    )
-    assert "**Accepted candidate tree:** `684a2acc4dba33c045b11aa0b4b278d22d7aec3e`" in opening
-    assert opening.count("`MET_BY_INDEPENDENT_POST_STOP_ACCEPTANCE`") == 2
-    assert "e56e470908022da36b0ae8d7cc65bd041ee479a1fc69aa029039c31d646c48f8" in opening
-    assert "4e9defb35d12bc6318ff77139c1d8196db155fcfcaa5efe067b44df0c2caced9" in opening
-    for stale_current_state in (
-        "current delegation",
-        "current version-6 candidate",
-        "current conditionally authorized successor",
-        "Current subgate exact base HEAD",
-        "current terminal envelope",
-        "task remains incomplete",
-        "conditionally authorized",
-        "conditionally pre-authorized",
-        "within the pre-authorized Smoke/Soak sequence",
-        "Opening this evidence run requires",
-        "Only then may the controller",
-        "Only after independent Smoke acceptance may",
-        "`CURRENT_STAGE` may change only",
-        "Production establishment additionally requires",
-        "Business acceptance is the conditional",
-    ):
-        assert stale_current_state not in task
-    for consumed_boundary in (
-        "No further run authority is inherited",
-        "grants no new run authority",
-        "authorizes no new invocation",
-        "Any future eligible run would require separate then-current authority",
-    ):
-        assert consumed_boundary in task
+    assert "`NONE — no successor closure activated`" in current_stage
 
-
-def test_successor_soak_keeps_publication_diagnostic_outside_coverage_denominators() -> None:
-    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-    successor = task.split("### Successor `OPERATIONAL_SOAK`", maxsplit=1)[1].split(
-        "## First-principles scope",
-        maxsplit=1,
-    )[0]
-
-    for invariant in (
-        "Integrity ledger",
-        "Index-baseline-publication ledger",
-        "Currentness-incident recovery ledger",
-        "diagnostic and may overlap `KNOWN_COMPLETE`",
-        "duration(K) / 3_600_000 >= 0.99",
-        "`E = W \\ G`",
-    ):
-        assert invariant in successor
-    for forbidden in (
-        "pending_budget_status",
-        "P_budget_ms",
-        "require duration(P) <= 36_000",
-        "E = W \\ (P union G)",
-    ):
-        assert forbidden not in successor
-
-
-def test_successor_soak_local_recovery_does_not_rebind_global_witness() -> None:
-    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-    successor = task.split("### Successor `OPERATIONAL_SOAK`", maxsplit=1)[1].split(
-        "## First-principles scope",
-        maxsplit=1,
-    )[0]
-
-    for invariant in (
-        "does not relabel the earlier global witness as post-recovery",
-        "one registered exact Policy path/digest",
-        "heartbeat wire observation is conditional",
-    ):
-        assert invariant in successor
-    assert "strictly later exact joint witness" not in successor
-
-
-def test_historical_soak_remains_not_met_without_governing_the_terminal_successor() -> None:
-    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-
-    for invariant in (
-        "/Users/logan/Optimatrix-soak/policies/operational-soak-successor.json",
-        "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4",
-        "/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-001",
-        "/Users/logan/Optimatrix-soak/evidence/operational-soak-attempt-003",
-        "425e7304ae3f102aefd2f3bedd23ea12767e597b05e17cc3b74988f4282dd30f",
-        "25f77930d041421a6bc5029848aec79ff4025dc1573cb037dc158064b40bd273",
-        "attempt-003`, whose acceptance is permanently",
-        "continuous_covered_after_witness_ms >= 3_600_000",
-        "semantic comparison to the predecessor Smoke Policy proves that only `band_id` changed",
-        "Attempt-001 is permanently `NOT_MET`",
-        "heartbeat wire probe had to receive its",
-        "a human had to freeze new",
-        "historical `3_600_000 ms` value was not",
-        "They did not govern the now-consumed",
-        "`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`",
-    ):
-        assert invariant in task
+    radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
+    assert "`IndexTailStatus` and `IndexBaselineState.status` remain current production" in radar
+    assert "`INDEX_TAIL_PENDING` was a repository-internal Python-only compatibility name" in radar
+    assert "never serialized by the current or sealed evidence writers" in radar
+    assert "`INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING`" in radar
 
 
 def test_authority_defines_one_live_short_vol_business_flow() -> None:
@@ -508,11 +410,6 @@ def test_repository_owned_contracts_use_semantic_not_ordinal_identities() -> Non
         text = path.read_text(encoding="utf-8")
         if path == ROOT / "apps/radar_runtime/src/radar_runtime/deribit_public.py":
             text = text.replace("/api/" + "v" + "2", "/api/external")
-        if path == ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md":
-            text = text.replace(
-                "/Users/logan/Optimatrix-smoke/policies/reachability-smoke-" + "v" + "2.json",
-                "/registered/external/reachability-smoke-policy.json",
-            )
         relative_path = path.relative_to(ROOT).as_posix()
         assert forbidden.search(relative_path) is None, f"ordinal identity remains in {path}"
         assert forbidden.search(text) is None, f"ordinal identity remains in {path}"
@@ -522,91 +419,33 @@ def test_repository_owned_contracts_use_semantic_not_ordinal_identities() -> Non
             assert '"version":' not in text, f"owned version field remains in {path}"
 
 
-def test_index_publication_successor_records_historical_authority_and_final_acceptance() -> None:
-    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-    opening = "\n".join(task.splitlines()[:75])
-    assert "`ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`" in opening
-    assert "`d6e506b343c6fc5570243ba01def46d6a047428e`" in opening
-    section = task.split(
-        "### `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`",
-        maxsplit=1,
-    )[1].split("## Business closure", maxsplit=1)[0]
-    for declaration in (
-        "**Market/Decision input contract change:** `APPROVED`",
-        "**Decision Policy change:** `NONE`",
-        "**Outcome/evaluation contract change:** `NONE`",
-        "**Stage/authorization change:** `APPROVED`",
-        "At construction time, permission",
-        "implemented runtime capability was `NONE`",
-        "Radar was `NOT_ESTABLISHED`",
-        "Both gates subsequently passed independent",
-        "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR` and `ESTABLISHED`",
-        "activates no successor closure",
-        "operational-soak-attempt-005",
-        "operational-soak-attempt-006",
-        "7270ade324ebcb5c362b279737fab22be2c7745639b238cea0b31bac5d729a52",
-        "4f80b34a1000ca22cc61f04d9f327a310e3f10d86f5514599ebfbd9ad15753bf",
-    ):
-        assert declaration in section
-    assert (
-        len(tuple(path for path in (ROOT / "tasks").glob("*.md") if path.name != "TEMPLATE.md"))
-        == 1
-    )
-
-
-def test_current_index_publication_contract_does_not_reactivate_sealed_pending_semantics() -> None:
+def test_index_publication_contract_owns_current_projection_and_actual_sealed_vocabulary() -> None:
     radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
-    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
     radar_flat = " ".join(radar.split())
-    task_flat = " ".join(task.split())
-    task_currentness = task.split("### Index-minute coverage", maxsplit=1)[1].split(
-        "## Configured trailing-variance baseline",
-        maxsplit=1,
-    )[0]
-    task_currentness_flat = " ".join(task_currentness.split())
 
     for invariant in (
-        "current runtime never enters it",
+        "`IndexTailStatus` and `IndexBaselineState.status` remain current production Python "
+        "projections",
+        "This compatibility projection does not make publication pending a coverage blocker",
+        "`INDEX_TAIL_PENDING` was a repository-internal Python-only compatibility name",
+        "never serialized by the current or sealed evidence writers",
+        "`INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING`",
+        "`SOAK_PENDING_REASONS`",
         "Normal index publication pending is not a suspension or detector state",
         "baseline component of identity is only the exact selected immutable `MinuteClose` tuple",
         "provenance, not detector de-duplication facts",
         "current-schema writer and validator path accept only version 6",
+        "Explicit read-only validators continue to validate sealed version-5, version-4, "
+        "version-3, and version-2",
+        "implementation-surface consolidation may not change the current version-6 writer/reader",
         "same-tail/same-target latch",
     ):
         assert invariant in radar_flat
-    for invariant in (
-        "Normal publication pending preserves the previously published tuple as `AVAILABLE`",
-        "never enters the sealed-version legacy `INDEX_TAIL_PENDING` tracker state",
-        "Pending phase is a target-scoped latch",
-    ):
-        assert invariant in task_currentness_flat
-    assert "provenance, not detector de-duplication facts" in task_flat
     for forbidden in (
         "Pending statuses preserve episode identity",
         "pause known duration, stop Layer 2, reset incomplete persistence",
     ):
-        assert forbidden not in task_currentness
-
-
-def test_current_task_uses_current_schema_and_explicit_sealed_readers() -> None:
-    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-    radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
-    task_flat = " ".join(task.split())
-    current_evidence = task.split(
-        "New evidence requires strict `operational_diagnostics_schema_version = 6`",
-        maxsplit=1,
-    )[1].split("## Product operating behavior", maxsplit=1)[0]
-
-    assert "index_baseline_publication" in current_evidence
-    assert "sealed version-5, version-4, version-3, and version-2" in current_evidence
-    assert "Each current version-6 segment" in current_evidence
-    assert "schema version 5" not in current_evidence
-    assert "No repeated technical approval was required between those consumed steps." in task_flat
-    assert "persistent service deployment" in task_flat
-    assert "remain unauthorized" in task_flat
-    assert "regular non-symlink `.json` entries" in task_flat
-    assert "exactly one summary named `radar-run-summary.json`" in task_flat
-    assert "sealed readers keep their historical behavior" in " ".join(radar.split())
+        assert forbidden not in radar
 
 
 def test_stage_record_binds_both_independent_live_gates() -> None:
@@ -614,39 +453,51 @@ def test_stage_record_binds_both_independent_live_gates() -> None:
     current_stage_flat = " ".join(current_stage.split())
 
     for invariant in (
-        "candidate commit `7c36a3aa4fc9e7bf1ef2977eaeb0c75a620b0ae0`",
-        "candidate tree `684a2acc4dba33c045b11aa0b4b278d22d7aec3e`",
-        "both live manifests' pre-run verified remote ref",
-        "`REACHABILITY_SMOKE`: `MET`",
-        "e56e470908022da36b0ae8d7cc65bd041ee479a1fc69aa029039c31d646c48f8",
-        "053c1922b54d9ee902770a7bff3a3ecbc876fc29603872ba6981bcc34cec70f9",
-        "e73d8e5bdb7930acd51b59526f4a9246d60960930cfabe2d6daf392e05e4821a",
-        "`OPERATIONAL_SOAK`: `MET`",
-        "4e9defb35d12bc6318ff77139c1d8196db155fcfcaa5efe067b44df0c2caced9",
-        "c49ed5cf33de728437343681d82d35ab0cfc63228e306240433306752d064b3b",
+        "candidate commit `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`",
+        "candidate tree `1ff49ff697df1a91237eb35f290301e26a7c06dc`",
+        "both live manifests' pre-run verified remote ref "
+        "`refs/heads/codex/radar-repository-consolidation` resolved to that exact candidate commit",
         "does not prove indefinite uptime",
         "no successor closure",
     ):
         assert invariant in current_stage_flat
 
+    smoke_binding = (
+        "`REACHABILITY_SMOKE`: `MET`, independently accepted by "
+        "`/Users/logan/Optimatrix-smoke/receipts/"
+        "reachability-smoke-radar-consolidation-001-independent-acceptance.json`, "
+        "SHA-256 `4bbf832ab7340e7224a0df5db79aea1cd6fed33d156f2aeec12690f986217a4f`, "
+        "manifest SHA-256 `70511dad86aa37dcaaab1167b688d342a33a8248635097b6f4c84b436e8e09fd`, "
+        "evidence directory "
+        "`/Users/logan/Optimatrix-smoke/evidence/reachability-smoke-radar-consolidation-001`, "
+        "summary SHA-256 `700dbbf2649830b656a75de3e3eb74aabef21cb4003786429b823091abcbbfa6`, "
+        "and 47-entry absolute-path-bound ordered evidence manifest SHA-256 "
+        "`3b70b2a7d93b3bbcf2ce31c0e63bc03ff971b18ea4ad7e9270cd943a351cccde`"
+    )
+    soak_binding = (
+        "`OPERATIONAL_SOAK`: `MET`, independently accepted by "
+        "`/Users/logan/Optimatrix-soak/receipts/"
+        "operational-soak-radar-consolidation-001-independent-acceptance.json`, "
+        "SHA-256 `d38c5bebef1e2bccfeeb9c69715970d03fda2a0359f02520a5c3deef08463345`, "
+        "manifest SHA-256 `2cf6af08bdcf7ec3c72e5bbb9292b58261c992dda67b298cf7f4ea99eac64574`, "
+        "evidence directory "
+        "`/Users/logan/Optimatrix-soak/evidence/operational-soak-radar-consolidation-001`, "
+        "summary SHA-256 `1ec01c5dba427e3a273671ef57421a6f6bfe01f95d26416e35a2d69fe6a6b218`, "
+        "and absolute-path-bound ordered evidence manifest SHA-256 "
+        "`7ff691e9b3665e0e9db7196a032440a9f6e79c6802f803b7546cb23f5125f361`"
+    )
+    assert smoke_binding in current_stage_flat
+    assert soak_binding in current_stage_flat
+
 
 def test_delegation_separates_prepush_receipt_from_postpush_remote_equality() -> None:
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
-    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-    authority = " ".join((current_stage + "\n" + task).split())
+    current_stage_flat = " ".join(current_stage.split())
     delivery_flat = " ".join(delivery.split())
 
-    assert "both live manifests' pre-run verified remote ref" in authority
-    assert "resolved to that exact candidate commit" in authority
-    for invariant in (
-        "pre-push independent exact-commit pass receipt",
-        "intended bounded remote ref",
-        "The controller then non-force pushed",
-        "verified remote ref value equalled the exact candidate commit",
-        "post-push verified remote equality and run binding",
-    ):
-        assert invariant in authority
+    assert "both live manifests' pre-run verified remote ref" in current_stage_flat
+    assert "resolved to that exact candidate commit" in current_stage_flat
     for invariant in (
         "Before a non-force push",
         "pre-push independent exact-commit pass receipt",
@@ -656,52 +507,3 @@ def test_delegation_separates_prepush_receipt_from_postpush_remote_equality() ->
         "Only the post-push binding",
     ):
         assert invariant in delivery_flat
-
-
-def test_external_run_manifest_and_deadline_supervisor_are_exact_and_bounded() -> None:
-    task = (ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md").read_text(encoding="utf-8")
-    manifest = task.split("#### External run manifest", maxsplit=1)[1].split(
-        "### `ONLINE_INDEX_BASELINE_PUBLICATION_CONTINUITY_REARCHITECTURE`",
-        maxsplit=1,
-    )[0]
-    manifest_flat = " ".join(manifest.split())
-
-    for key in (
-        '"external_run_manifest_schema"',
-        '"external_run_manifest_schema_version"',
-        '"gate"',
-        '"commit"',
-        '"tree"',
-        '"branch"',
-        '"intended_remote_ref"',
-        '"verified_remote_ref"',
-        '"verified_remote_commit"',
-        '"policy_path"',
-        '"policy_digest"',
-        '"evidence_directory"',
-        '"startup_empty_proof"',
-        '"argv"',
-        '"cwd"',
-        '"duration_ms"',
-        '"supervisor_started_monotonic_ms"',
-        '"deadline_monotonic_ms"',
-        '"result_independent"',
-        '"signal"',
-        '"emergency_stop"',
-        '"required_checks"',
-        '"thresholds"',
-    ):
-        assert key in manifest
-    for invariant in (
-        "was created and durably flushed before the production-public child started",
-        "exactly one `SIGINT`",
-        "waits for the writer",
-        "`SIGSTOP`",
-        "`SIGCONT`",
-        "`SIGKILL`",
-        "must not inspect a witness, counter, threshold, or provisional verdict",
-        "new manifest and new empty evidence directory",
-        "Smoke and Soak durations are selected before startup",
-        "a missing or unknown key makes the binding invalid",
-    ):
-        assert invariant in manifest_flat

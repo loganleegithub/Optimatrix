@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import market_monitor
+import market_monitor.index as index_module
 import pytest
 from market_monitor import BookState, ContinuityGap, ContinuousOrderBook, TimeInterval, TrustedClock
 from market_monitor.deribit import (
@@ -16,9 +18,7 @@ from market_monitor.deribit import (
 from market_monitor.index import (
     IndexMinuteReducer,
     IndexPublicationBoundary,
-    IndexTail,
     IndexTailStatus,
-    MinuteClose,
 )
 from market_monitor.types import SourceDataError
 
@@ -334,16 +334,11 @@ def test_index_tail_treats_unstarted_bootstrap_as_warmup_not_continuity_gap() ->
     assert real_gap.status is IndexTailStatus.CONTINUITY_GAP
 
 
-def test_legacy_index_tail_remains_an_independent_fail_closed_value() -> None:
-    closes = (MinuteClose(0, Decimal(100), 1),)
-    pending = IndexTail(IndexTailStatus.TIME_BOUNDARY_PENDING, closes)
-    available = IndexTail(IndexTailStatus.AVAILABLE, closes)
-
-    assert type(pending) is IndexTail
-    assert pending.status is IndexTailStatus.TIME_BOUNDARY_PENDING
-    assert pending.closes == closes
-    assert pending.prices is None
-    assert available.prices == (Decimal(100),)
+def test_legacy_index_tail_projection_and_audit_accessors_are_not_runtime_api() -> None:
+    assert not hasattr(index_module, "IndexTail")
+    assert not hasattr(market_monitor, "IndexTail")
+    assert not hasattr(index_module.PublishedIndexTail, "publication_identity")
+    assert not hasattr(IndexMinuteReducer, "accepted_watermark_ms")
 
 
 def test_exact_channels_bounded_subscriptions_and_acknowledgements() -> None:

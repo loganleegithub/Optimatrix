@@ -145,23 +145,10 @@ def test_adjacent_band_suspend_resume_preserves_episode_identity(
     assert tracker.episode_id == episode_id
 
 
-def test_index_tail_pending_preserves_episode_identity_but_is_not_current_truth(
-    policy_factory: PolicyFactory,
-) -> None:
-    tracker, _rule = activated_tracker(policy_factory)
-    episode_id = tracker.episode_id
-
-    tracker.suspend_for_index_tail()
-
-    assert tracker.state is TrackerState.INDEX_TAIL_PENDING
-    assert tracker.detector_state is DetectorState.UNKNOWN
-    assert tracker.episode_id == episode_id
-
-    tracker.resume_after_index_tail()
-
-    assert tracker.state.value == TrackerState.ACTIVE.value
-    assert tracker.detector_state.value == DetectorState.ANOMALY_ACTIVE.value
-    assert tracker.episode_id == episode_id
+def test_index_tail_pending_is_not_a_tracker_runtime_state() -> None:
+    assert "INDEX_TAIL_PENDING" not in TrackerState.__members__
+    assert not hasattr(EpisodeTracker, "suspend_for_index_tail")
+    assert not hasattr(EpisodeTracker, "resume_after_index_tail")
 
 
 def test_interval_boundaries_fail_closed_instead_of_selecting_a_point(

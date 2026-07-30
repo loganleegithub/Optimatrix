@@ -54,7 +54,7 @@ class BaselinePublicationPhase(StrEnum):
 
 
 class IndexTailStatus(StrEnum):
-    """Sealed compatibility names; current runtime consumes the two orthogonal axes."""
+    """Current projection of baseline availability and publication phase."""
 
     AVAILABLE = "AVAILABLE"
     WARMUP = "WARMUP"
@@ -63,20 +63,6 @@ class IndexTailStatus(StrEnum):
     WINDOW_GAP = "WINDOW_GAP"
     SOURCE_STALE = "SOURCE_STALE"
     CONTINUITY_GAP = "CONTINUITY_GAP"
-
-
-@dataclass(frozen=True)
-class IndexTail:
-    """Sealed legacy projection; current runtime consumes IndexBaselineState."""
-
-    status: IndexTailStatus
-    closes: tuple[MinuteClose, ...] = ()
-
-    @property
-    def prices(self) -> tuple[Decimal, ...] | None:
-        if self.status is not IndexTailStatus.AVAILABLE:
-            return None
-        return tuple(close.price for close in self.closes)
 
 
 @dataclass(frozen=True)
@@ -110,15 +96,6 @@ class PublishedIndexTail:
             raise ValueError("published index tail lower-time proof is insufficient")
         if self.proof_watermark_ms < self.published_end_ms:
             raise ValueError("published index tail watermark proof is insufficient")
-
-    @property
-    def publication_identity(self) -> tuple[object, ...]:
-        return (
-            self.generation,
-            self.global_continuity_epoch,
-            self.published_tail_last_minute_start_ms,
-            self.closes,
-        )
 
 
 @dataclass(frozen=True)
@@ -192,10 +169,6 @@ class IndexMinuteReducer:
     @property
     def has_accepted_tick(self) -> bool:
         return self._last_source_timestamp_ms is not None
-
-    @property
-    def accepted_watermark_ms(self) -> int | None:
-        return self._watermark_ms
 
     @property
     def generation(self) -> int | None:
