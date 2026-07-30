@@ -8,16 +8,14 @@
 
 **Production Short Vol Radar:** `ESTABLISHED`
 
-**Sole authorized next product-capability closure:**
-`SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT` — authority-only contract freeze; runtime and
-live commands remain forbidden
+**Sole authorized next product-capability closure:** `NONE — no successor closure activated`
 
 ## Authority
 
 This document grants permission under
 [`PRODUCT_CONSTITUTION.md`](PRODUCT_CONSTITUTION.md). It does not own product definitions,
 architecture, detector parameters, or evidence mechanics. Code presence, green tests, old
-receipts, run duration, or roadmap order grant no stage.
+receipts, run duration, contract presence, or roadmap order grant no stage.
 
 The current boundary authorizes the guarded production-public Short Vol Radar defined by
 [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md). Candidate, Shadow admission, executed
@@ -25,11 +23,11 @@ entry, Position runtime, Outcome cohort, private/account data, orders, fills, ca
 qualification, Challenger automation, promotion, and execution remain unauthorized. A bounded
 public observation is not authorization for persistent service deployment.
 
-The sole active closure is
-[`SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT`](../../tasks/SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT.md).
-It authorizes only the downstream Underwriting, Shadow-admission, and Position contract plus the
-owning authority, architecture, README, task, and direct authority-test assertions. It creates no
-Candidate, admission, Position, close-opportunity, cohort, execution, or other runtime behavior.
+The downstream
+[`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) contract is
+frozen as active implementation authority. It defines future public-only Underwriting,
+Shadow-admission, and Position semantics but creates no capability, permission, package, writer,
+CLI, durable runtime artifact, or live command.
 
 ### Accepted Radar implementation record
 
@@ -83,11 +81,14 @@ capability.
 
 ## Root blocker
 
-The root blocker to all downstream business behavior is the absence of one complete frozen
-Underwriting, Shadow-admission, and Position contract. The active authority-only task closes only
-that semantic prerequisite. Until it is accepted and a later implementation closure is separately
-activated, no downstream runtime work or live command is authorized. This authority-only task
-changes no accepted Radar runtime or live evidence identity: the governing candidate remains
+There is no active product-capability or implementation-maintenance closure. The complete
+Underwriting, Shadow-admission, and Position contract now exists, so the next upstream prerequisite
+is a separately authorized minimal deterministic implementation of that fixed contract.
+
+That implementation is only queued. It may not begin from contract presence, this stage record,
+green authority tests, or the established Radar. Candidate, Shadow admission, Position action,
+close-opportunity, cohort, Outcome, and live commands remain unavailable until a later explicit
+activation. The governing accepted Radar candidate remains
 `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
 
 ## Implemented capability boundary
@@ -158,16 +159,18 @@ profitability, or fill evidence.
 
 ## Queued sequence — not authorized
 
-The active authority-only contract freeze is not part of the queue below. The following later
-closures remain queued and unauthorized:
+The following later closures remain queued and unauthorized:
 
-1. **Fixed-contract runtime and fixed-Policy forward cohort:** after separate activation,
-   implement the accepted contract and record complete anomaly/quote opportunity, Decision,
-   Shadow Entry, Shadow close, Shadow Outcome, rejected-counterfactual, and cohort-aligned
-   `NO_TRADE` denominators.
-2. **Challenger research and qualification:** authorize only after a usable frozen-Policy cohort
+1. **Deterministic Underwriting, Shadow-admission, and Position domain implementation:** introduce
+   only the fixed Policy loaders, pure economics, state transitions, identities, and direct tests
+   required by `SHORT_VOL_UNDERWRITING_POSITION`; no live integration or cohort.
+2. **Production-public integration and fixed-Policy forward cohort:** after the deterministic
+   boundary is separately accepted, connect it to the continuous public runtime and record complete
+   opportunity, Decision, Shadow Entry, Position, Shadow close, Shadow Outcome,
+   rejected-counterfactual, and cohort-aligned `NO_TRADE` denominators.
+3. **Challenger research and qualification:** authorize only after a usable frozen-Policy cohort
    and pre-registered qualification contract.
-3. **Promotion and execution:** authorize separately after independent qualification. Account,
+4. **Promotion and execution:** authorize separately after independent qualification. Account,
    capital, order, and fill authority remain distinct.
 
 A queued closure is not active. Exactly one may be activated only by an explicitly approved
@@ -181,7 +184,8 @@ change after its prerequisite is accepted.
 - treating component-leg quotes as an atomic structure or any public quote as a fill;
 - full-market persistence, per-update no-anomaly receipts, replay, or offline recomputation as a
   prerequisite for this Radar;
-- Candidate, Shadow admission, executed entry, Position runtime, or Outcome cohort behavior;
+- Candidate, Shadow admission, executed entry, Position runtime, close-opportunity, or Outcome
+  cohort behavior;
 - automatic training, Policy selection, qualification, promotion, or evolution;
 - generic databases, feature stores, registries, workflow engines, services, markets, or
   strategies;

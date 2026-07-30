@@ -12,11 +12,12 @@ job, saved-data scanner, replay closure, fixed holding-period Decision, Shadow p
 Outcome engine.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
-Soak evidence. The sole active successor is the authority-only
-[`SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT`](tasks/SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT.md)
-contract freeze; it adds no runtime behavior or live command. Establishment means the bounded
-public runtime met its frozen reachability and operating predicates; it does not mean the Radar
-is persistently deployed, always running, indefinitely stable, profitable, or authorized to
+Soak evidence. No successor product-capability closure is active. The downstream
+[`SHORT_VOL_UNDERWRITING_POSITION`](docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md) contract is
+frozen as active implementation authority, but no Underwriting, Candidate, Shadow admission,
+Position, close-opportunity, or Outcome runtime exists or is authorized. Establishment means the
+bounded public runtime met its frozen reachability and operating predicates; it does not mean the
+Radar is persistently deployed, always running, indefinitely stable, profitable, or authorized to
 trade.
 
 ## Intended first business flow
@@ -50,13 +51,17 @@ human-approved or expressly terminal-goal-delegated successor inside the declare
 uses a new identity and forward observation interval; current Radar evidence alone cannot prove
 better forecasting or profitability.
 
-## Later position behavior
+## Later Underwriting and position behavior
 
-Neither a future `SHADOW_ENTRY` nor a filled entry chooses a planned holding duration. The active
-authority-only closure will freeze how a future Position Policy evaluates current remaining
-premium, short-leg risk, path, volatility state, liquidity, executable close debit, fees, and hard
-boundaries before returning `HOLD | CLOSE | UNKNOWN`. None of that runtime behavior is implemented
-or authorized in the current closure.
+The frozen downstream contract requires separate content-identified Underwriting and Position
+Policies. Shadow admission is a deterministic gate rather than a third Policy: it requires a
+still-valid Candidate and a strictly later current full-quantity official atomic quote proof.
+
+Neither a future `SHADOW_ENTRY` nor a filled entry chooses a planned holding duration. A future
+Position implementation will evaluate remaining premium, short-leg risk, path, volatility state,
+liquidity, executable close debit, fees, and hard boundaries before returning
+`HOLD | CLOSE | UNKNOWN`. A known hard-close obligation remains `CLOSE` when its quote is
+unavailable. None of that runtime behavior is implemented or authorized.
 
 ## Authority
 
@@ -65,7 +70,9 @@ Start with [`AGENTS.md`](AGENTS.md). The
 [`CURRENT_STAGE`](docs/authority/CURRENT_STAGE.md) grants permission,
 [`SYSTEM_ARCHITECTURE`](docs/authority/SYSTEM_ARCHITECTURE.md) owns structure, and
 [`DELIVERY_CONTRACT`](docs/authority/DELIVERY_CONTRACT.md) owns development and evidence.
-[`SHORT_VOL_RADAR`](docs/contracts/SHORT_VOL_RADAR.md) defines the first Radar.
+[`SHORT_VOL_RADAR`](docs/contracts/SHORT_VOL_RADAR.md) defines the established Radar.
+[`SHORT_VOL_UNDERWRITING_POSITION`](docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md) freezes the
+later public-only Underwriting, Shadow-admission, and Position boundary without implementing it.
 
 ## Repository shape
 
@@ -76,7 +83,8 @@ Start with [`AGENTS.md`](AGENTS.md). The
   projection
 - `radar_runtime`: guarded composition of the continuous production-public process
 
-There is no compatibility package or alias for the removed pipeline.
+There is no current Underwriting or Position package and no compatibility package or alias for the
+removed pipeline.
 
 The current bounded runtime separates per-band immutable index-baseline availability from
 generation-global successor publication. Normal time/watermark publication pending keeps an
