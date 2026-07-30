@@ -14,7 +14,7 @@ production-public Shadow runtime and forward cohort may be implemented. It owns:
 - one strictly-future observation for every accepted `SHADOW_ENTRY`;
 - causal-order first eligible counterfactual exit selection without hindsight;
 - terminal Shadow Outcome maturity and censoring;
-- at most one bounded rejected-counterfactual unit per `UnderwritingPositionSlotKey`;
+- at most one bounded rejected-counterfactual unit per `UnderwritingPositionSlotKeyIdentity`;
 - cohort-aligned `NO_TRADE` alternatives;
 - exact public-quote economics, conservation, denominators, and `null` behavior; and
 - strict downstream evidence identity, writing, reading, and compatibility.
@@ -52,18 +52,95 @@ Every object and cohort binds:
 outcome_contract_semantic_identity =
     SHORT_VOL_PUBLIC_SHADOW_OUTCOME_FORWARD_COHORT
 
+OutcomeContractContentDigest =
+    "sha256:" + lowercase_sha256_of_exact_accepted_contract_bytes
+
 OutcomeContractIdentity =
-    outcome_contract_semantic_identity
-    × sha256_of_exact_accepted_contract_bytes
-    × exact_code_identity
-    × Radar_Policy_identity
-    × Underwriting_Policy_identity
-    × Position_Policy_identity
+    CanonicalIdentity(
+        "OUTCOME_CONTRACT",
+        outcome_contract_semantic_identity,
+        OutcomeContractContentDigest,
+        exact_code_identity,
+        Radar_Policy_identity,
+        Underwriting_Policy_identity,
+        Position_Policy_identity
+    )
 ```
 
 The contract-byte digest is a content identity, not an ordinal version. A changed contract receives
 a new digest and applies only to a new forward interval. Runtime cannot hot-reload, select, train,
 approve, or replace any identity.
+
+Every new identity equation in this contract uses one exact typed encoding. A `CanonicalValue` is
+exactly one native JSON value from this closed recursive domain:
+
+- a canonical UTF-8 string, including every identity, enum, semantic label, and canonical Decimal;
+- a JSON integer;
+- JSON `true`, `false`, or `null`;
+- an array of `CanonicalValue` members in declared order; or
+- an object whose exact keys, value types, and key order are declared by this contract.
+
+No object or array is first serialized into a JSON string. No JSON number other than an integer
+enters an identity preimage; every exact non-integer Decimal is its canonical string lexeme.
+
+```text
+CanonicalIdentity(label, ordered_members...) =
+    "sha256:"
+    + lowercase_sha256(
+        UTF8(
+            JSON_array(
+                [label, ordered_members...],
+                ensure_ascii = false,
+                separators = [",", ":"],
+                no_BOM = true,
+                no_trailing_LF = true
+            )
+        )
+    )
+```
+
+`label` is a canonical UTF-8 string and every ordered member is embedded as its native
+`CanonicalValue`. A `FactBoundary` is the native compact JSON object with keys in the exact order
+declared below. Vectors and leg arrays are native JSON arrays in their declared order. A post-CLOSE
+request-params member is exactly the native object
+`{"instrument_name": Identity, "depth": 10000}` in that key order; for a not-requestable attempt,
+request params is native JSON `null`, and the request-id member is the exact declared marker string
+rather than an integer. There is no implicit separator, pre-stringification, string interpolation,
+Unicode normalization, map iteration, or platform-dependent serialization. For every symbolic equation
+`FooIdentity = member_1 × member_2`, the exact encoding is
+`CanonicalIdentity("FooIdentity", member_1, member_2)`; the left-hand identity kind is therefore
+always in the preimage. The symbolic `×` below means those ordered arguments, never raw
+concatenation.
+
+The accepted upstream slot's symbolic members receive one exact string identity here:
+
+```text
+UnderwritingPositionSlotKeyIdentity =
+    CanonicalIdentity(
+        "UnderwritingPositionSlotKeyIdentity",
+        runtime_identity,
+        Radar_Policy_identity,
+        active_episode_identity,
+        short_leg_identity,
+        canonical_q_Decimal
+    )
+```
+
+`canonical_q_Decimal` is the slot's exact positive target-quantity Decimal string. No native tuple,
+array, object, or alternative slot-key hash is accepted.
+
+The normative fixed vectors are:
+
+```text
+["FooIdentity","member_1","member_2"]
+→ sha256:961665d18281a3f4d46b0e72f1d05c494d73d11a9f829def2f4509e09e76bf3a
+
+["CompositeIdentity",{"code_identity":"code","runtime_identity":"runtime","session_epoch":1,"ingress_seq":2,"received_monotonic_ms":3,"causal_seq":4},["TRUE","UNKNOWN"],{"instrument_name":"combo","depth":10000},7,null]
+→ sha256:2a6013410106bda9c407cb910982744c77f406384beb93f17b917464639e05ff
+
+["UnderwritingPositionSlotKeyIdentity","runtime","radar-policy","episode","short-leg","0.1"]
+→ sha256:3d9a604d72459c3f0353f0a623c7f1f014ec0a24ff38a79975dd272f73e0a8dc
+```
 
 Source timestamp, subscription generation, request id, official `change_id`, transport receipt,
 file path, and message count are immutable provenance only. They never create an Outcome,
@@ -87,19 +164,20 @@ integer truncation.
 Every selected entry and exit uses exactly the same full `q`. Partial public depth cannot be scaled,
 rounded, or treated as a partial exit.
 
-The following fields are always `null` with availability `UNKNOWN` under `PUBLIC_SHADOW`:
+The following value members are always JSON `null` under `PUBLIC_SHADOW`; the matching
+`ActualAvailability` member for each is always `"UNKNOWN"`:
 
 ```text
-actual_entry_fee_usdc
-actual_close_fee_usdc
-actual_total_fee_usdc
-actual_pnl_usdc
-actual_exposure_quantity_btc
-actual_exposure_duration_ms
-actual_all_in_loss_usdc
-actual_all_in_max_loss_usdc
-actual_fill_identity
-actual_settlement_cashflow_usdc
+actual_entry_fee_usdc: null
+actual_close_fee_usdc: null
+actual_total_fee_usdc: null
+actual_pnl_usdc: null
+actual_exposure_quantity_btc: null
+actual_exposure_duration_ms: null
+actual_all_in_loss_usdc: null
+actual_all_in_max_loss_usdc: null
+actual_fill_identity: null
+actual_settlement_cashflow_usdc: null
 ```
 
 `contractual_payoff_max_loss_ex_fees_usdc`, `entry_fee_reserved_payoff_loss_usdc`, and
@@ -143,15 +221,14 @@ cannot double as Position, exit, maturity, or Outcome facts.
 The initial lifecycle is `PENDING`. Its state machine is exactly:
 
 ```text
-PENDING
-  → MATURE_KNOWN
-  → MATURE_UNKNOWN
-  → CENSORED_AT_STOP
-  → CENSORED_AT_FAILURE
+PENDING → MATURE_KNOWN
+PENDING → MATURE_UNKNOWN
+PENDING → CENSORED_AT_STOP
+PENDING → CENSORED_AT_FAILURE
 ```
 
-The arrows are alternatives from `PENDING`; every terminal state is immutable. Every terminal
-transition emits exactly one `SHADOW_OUTCOME`:
+These are four alternative branches, never a serial chain. Every terminal state is immutable.
+Every terminal transition emits exactly one `SHADOW_OUTCOME`:
 
 ```text
 ShadowOutcomeIdentity =
@@ -183,6 +260,16 @@ ShadowCounterfactualExitIdentity =
     ShadowObservationIdentity
     × first_latched_CLOSE_action_identity
     × causal_order_first_ELIGIBLE_CloseOpportunityEvaluationIdentity
+```
+
+The observation's attempt terminal identity is:
+
+```text
+PostCloseAttemptTerminalIdentity =
+    ScheduledPostCloseQuoteAttemptIdentity
+    × exact_attempt_terminal_status
+    × terminal_owner_ORDINARY_or_STOP_or_FAILURE
+    × attempt_terminal_FactBoundary
 ```
 
 The first qualifying identity in reducer causal order wins atomically. Later eligible quotes,
@@ -223,22 +310,63 @@ A `MATURE_KNOWN` Outcome freezes all four values. `MATURE_UNKNOWN`, `CENSORED_AT
 `CENSORED_AT_FAILURE` require all four Outcome economic fields to be `null` with availability
 `UNKNOWN`; Entry-time decision measures remain present only as audit fields.
 
-## Unknown maturity without settlement-price economics
+## Same-boundary total order and unknown maturity
 
 This contract consumes no delivery or settlement-price source and never computes settlement payoff.
-A `PENDING` admitted observation becomes `MATURE_UNKNOWN` only when one settled boundary proves all
-of the following:
+At every settled boundary `B`, the reducer applies this exact terminal total order:
+
+1. settle all source and control effects accepted at `B`, including Position action, the matched
+   post-CLOSE attempt terminal, close-opportunity evaluation, and both instrument lifecycle facts;
+2. if the observation was already `PENDING` before `B`, select its causal-order first eligible exit
+   accepted through `B`; if one exists, emit `MATURE_KNOWN` and stop terminal evaluation;
+3. only when no exit was selected, evaluate the natural-terminal predicate below; if it is true,
+   emit `MATURE_UNKNOWN`; and
+4. only when neither prior terminal applies and `B` is the committed clean-stop or process-failure
+   boundary, emit `CENSORED_AT_STOP` or `CENSORED_AT_FAILURE` respectively; otherwise leave the
+   observation `PENDING`.
+
+The natural-terminal predicate at `B` is true only when all of the following hold:
 
 1. no `ShadowCounterfactualExitIdentity` has been selected;
-2. the observation's own first Position `CLOSE` is already latched;
-3. the observation's exact `ScheduledPostCloseQuoteAttemptIdentity` is already terminal through its
-   ordinary request, response, deadline, error, or explicit not-requestable state; a stop-owned or
-   failure-owned censor terminal does not satisfy this condition;
+2. the observation's own first Position `CLOSE` is already latched at a boundary whose
+   `causal_seq < B.causal_seq`;
+3. the observation's exact `ScheduledPostCloseQuoteAttemptIdentity` is terminal through its
+   ordinary request, response, deadline, error, or explicit not-requestable state at a boundary
+   whose `causal_seq <= B.causal_seq`; a stop-owned or failure-owned censor terminal does not
+   satisfy this condition;
 4. both canonical option instrument records are current, identity-matched, and each has known
-   lifecycle state `delivered` or `archivized`;
-5. the maturity boundary is strictly later than Entry, first CLOSE, and the post-CLOSE attempt's
-   terminal boundary; and
-6. the observation is still `PENDING`.
+   lifecycle state `delivered` or `archivized` at `B`;
+5. `B` is strictly later than Entry and the observation is still `PENDING`; and
+6. every identity belongs to the same runtime, code, contract, and three-Policy set.
+
+Therefore an ordinary attempt may become terminal at the same boundary as the two natural
+lifecycle witnesses. A first CLOSE created at that boundary is not already latched and cannot
+mature there. If an eligible exit and the natural-terminal predicate are both visible at the same
+settled boundary, exit selection wins and the Outcome is `MATURE_KNOWN`.
+
+The required boundary traces are:
+
+```text
+first_CLOSE < B; eligible_exit = B; ordinary_attempt_terminal <= B;
+natural_lifecycle_ready = B
+    → MATURE_KNOWN
+
+first_CLOSE < B; no_eligible_exit; ordinary_attempt_terminal = B;
+natural_lifecycle_ready = B
+    → MATURE_UNKNOWN
+
+first_CLOSE < B; no_eligible_exit; attempt_terminal_owner = STOP | FAILURE;
+natural_lifecycle_ready = B
+    → CENSORED_AT_STOP | CENSORED_AT_FAILURE
+
+first_CLOSE < ordinary_attempt_terminal < B; no_eligible_exit;
+natural_lifecycle_not_ready = B; terminal_source = STOP | FAILURE
+    → CENSORED_AT_STOP | CENSORED_AT_FAILURE; retain ORDINARY attempt terminal
+```
+
+Independently, `first_CLOSE = B` never satisfies the natural-terminal predicate at `B`; at an
+ordinary boundary with no exit it remains `PENDING`, while a stop/failure boundary still applies
+the censor branch.
 
 `settlement`, `inactive`, `locked`, `halted`, missing lifecycle, one delivered leg, or an unresolved
 second leg is insufficient. The Outcome records the two lifecycle witnesses, CLOSE/attempt
@@ -253,12 +381,12 @@ upgrade `MATURE_UNKNOWN`; terminal means terminal.
 A rejected unit is an independently labeled causal unit. It is not a Candidate, admission,
 `SHADOW_ENTRY`, Shadow Position, `SHADOW_OUTCOME`, actual exposure, or actual trade.
 
-For each exact `UnderwritingPositionSlotKey`, select at most one anchor:
+For each exact `UnderwritingPositionSlotKeyIdentity`, select at most one anchor:
 
 ```text
 RejectedCounterfactualAnchorIdentity =
     OutcomeContractIdentity
-    × UnderwritingPositionSlotKey
+    × UnderwritingPositionSlotKeyIdentity
     × causal_order_first_complete_EVALUABLE_WATCH_or_ABSTAIN_UnderwritingActionIdentity
 ```
 
@@ -289,9 +417,12 @@ Each selected rejected anchor creates exactly one:
 ```text
 RejectedCounterfactualObservationIdentity =
     RejectedCounterfactualAnchorIdentity
+    × REJECTED_COUNTERFACTUAL_OBSERVATION
 ```
 
-It starts strictly after the rejected action boundary and uses only distinct semantic identities:
+The observation is created at the rejected anchor boundary. Like an admitted observation, it may
+consume only facts with a strictly greater same-runtime `causal_seq`; the anchor fact cannot double
+as Position, exit, maturity, or Outcome evidence. It uses only distinct semantic identities:
 
 ```text
 REJECTED_COUNTERFACTUAL_POSITION_EVALUATION
@@ -305,7 +436,66 @@ REJECTED_COUNTERFACTUAL_OUTCOME
 None may serialize Candidate, `SHADOW_ENTRY`, `SHORT_VOL_POSITION_ACTION`,
 `SHADOW_CLOSE_OPPORTUNITY`, or `SHADOW_OUTCOME` as its object kind.
 
-Without alteration, the rejected path reuses:
+The rejected identity family is exact:
+
+```text
+RejectedCounterfactualPositionEvaluationIdentity =
+    RejectedCounterfactualObservationIdentity
+    × Position_Policy_identity
+    × consumed_position_fact_fingerprint
+    × evaluation_FactBoundary
+
+RejectedCounterfactualPositionActionIdentity =
+    RejectedCounterfactualPositionEvaluationIdentity
+    × serialized_action
+    × ordered_predicate_truth_vector
+    × ordered_latched_close_reason_vector
+
+RejectedScheduledPostCloseQuoteAttemptIdentity =
+    RejectedCounterfactualObservationIdentity
+    × first_latched_rejected_CLOSE_action_identity
+    × unique_request_id_or_NOT_REQUESTABLE_KNOWN_or_NOT_REQUESTABLE_UNKNOWN
+    × method_public_get_order_book
+    × exact_request_params_including_depth_10000_or_null
+    × first_latched_rejected_CLOSE_FactBoundary
+
+RejectedPostCloseAttemptTerminalIdentity =
+    RejectedScheduledPostCloseQuoteAttemptIdentity
+    × exact_attempt_terminal_status
+    × terminal_owner_ORDINARY_or_STOP_or_FAILURE
+    × attempt_terminal_FactBoundary
+
+RejectedCounterfactualCloseQuoteEvaluationIdentity =
+    RejectedCounterfactualObservationIdentity
+    × Position_Policy_identity
+    × official_combo_and_canonical_leg_identity
+    × exact_reverse_direction
+    × full_remaining_q
+    × consumed_rule_scoped_quote_fingerprint
+    × close_quote_state
+    × close_conditioning_PRE_CLOSE_or_first_latched_rejected_CLOSE_action_identity
+    × close_quote_evaluation_FactBoundary
+
+RejectedCounterfactualCloseOpportunityEvaluationIdentity =
+    RejectedCounterfactualObservationIdentity
+    × first_latched_rejected_CLOSE_action_identity
+    × post_CLOSE_rejected_CloseQuoteEvaluationIdentity_or_attempt_terminal_identity
+    × opportunity_economics_business_fingerprint
+    × opportunity_eligibility_ELIGIBLE_or_INELIGIBLE_or_UNKNOWN
+    × opportunity_evaluation_FactBoundary
+
+RejectedCounterfactualExitIdentity =
+    RejectedCounterfactualObservationIdentity
+    × first_latched_rejected_CLOSE_action_identity
+    × causal_order_first_ELIGIBLE_RejectedCounterfactualCloseOpportunityEvaluationIdentity
+
+RejectedCounterfactualOutcomeIdentity =
+    RejectedCounterfactualObservationIdentity
+    × exact_terminal_state
+    × terminal_FactBoundary
+```
+
+Without semantic alteration, the rejected path reuses:
 
 - the exact compatible Position Policy identity;
 - the same first strictly-future Position evaluation requirement;
@@ -315,35 +505,32 @@ Without alteration, the rejected path reuses:
 - the deterministic single post-CLOSE snapshot attempt and subscription-versus-RPC race; and
 - the first causal-order `ELIGIBLE` full-`q` strictly-post-CLOSE exit rule.
 
-Every upstream identity is transformed only by replacing the admitted Entry anchor with
-`RejectedCounterfactualAnchorIdentity` and using the distinct rejected object kind. The rejected
-anchor's entry index, short-leg mark implied volatility, canonical combo/legs/direction, `q`, gross
-entry credit, fee reserve, net entry credit, and Entry loss measures become the rejected trade's
-frozen entry facts.
+An early rejected close-quote or opportunity evaluation whose state is `UNKNOWN` or `INELIGIBLE`
+does not consume the observation and is not an exit. The first later `ELIGIBLE` identity still wins
+exactly once; best, worst, last, or equal-value later quotes cannot replace it. Every identity is
+formed by replacing the admitted Entry anchor with
+`RejectedCounterfactualObservationIdentity`, retaining the exact upstream identity members, and
+using the distinct rejected object kind. The rejected anchor's entry index, short-leg mark implied
+volatility, canonical combo/legs/direction, `q`, gross entry credit, fee reserve, net entry credit,
+and Entry loss measures become the rejected trade's frozen entry facts.
 
 The rejected observation has the same lifecycle:
 
 ```text
-PENDING
-  → MATURE_KNOWN
-  → MATURE_UNKNOWN
-  → CENSORED_AT_STOP
-  → CENSORED_AT_FAILURE
+PENDING → MATURE_KNOWN
+PENDING → MATURE_UNKNOWN
+PENDING → CENSORED_AT_STOP
+PENDING → CENSORED_AT_FAILURE
 ```
 
-Known and unknown maturity rules are identical after identity substitution. Its terminal identity
-is:
-
-```text
-RejectedCounterfactualOutcomeIdentity =
-    RejectedCounterfactualObservationIdentity
-    × exact_terminal_state
-    × terminal_FactBoundary
-```
+Known and unknown maturity rules, including the same-boundary total order, are identical after
+identity substitution.
 
 Each slot can contribute at most one rejected observation, regardless of quote flicker or later
-actions. Known rejected-trade economics use the same exact four equations; unknown/censored fields
-are `null / UNKNOWN`.
+actions. A later Candidate or `SHADOW_ENTRY` in the same slot coexists with the rejected
+observation: neither identity cancels, merges, replaces, or consumes the other. Known
+rejected-trade economics use the same exact four equations; unknown/censored fields are
+`null / UNKNOWN`.
 
 ## Cohort-aligned NO_TRADE pairs
 
@@ -396,8 +583,9 @@ rejected_policy_advantage_usdc =
 
 If the trade arm is `PENDING`, `MATURE_UNKNOWN`, `CENSORED_AT_STOP`, or
 `CENSORED_AT_FAILURE`, both-arm comparison fields are `null / UNKNOWN`, and the pair is excluded
-from the aligned economic-comparison denominator. A known zero `NO_TRADE` arm cannot make an
-unknown trade arm comparable.
+from economic-advantage, PnL, win, and loss denominators. Terminal unknown/censored pairs remain in
+the separate aligned comparison-availability-rate denominator. A known zero `NO_TRADE` arm cannot
+make an unknown trade arm comparable.
 
 ## Lifecycle censoring and failure
 
@@ -417,6 +605,10 @@ A later evidence runtime must apply this exact order:
 
 The stop boundary cannot reuse the last quote, mark, mid, component-leg reference, or cached
 projection to invent an exit. Terminal objects remain immutable.
+
+A valid `AuthorizedEmergencyStopControl` runs this same drain sequence at its committed control
+boundary, records `AUTHORIZED_EMERGENCY_STOP`, and owns `CENSORED_AT_STOP`; it does not fabricate or
+reuse the pre-bound final-stop boundary.
 
 ### Process failure
 
@@ -440,7 +632,127 @@ Product behavior remains continuous and event-driven. There is no planned holdin
 Outcome horizon, periodic batch, saved-data scan, or replay.
 
 A later production-public evidence task must pre-bind one immutable manifest before process start.
-It contains exactly:
+The manifest's three time members are not guessed runtime `FactBoundary` values. They are exact
+pre-start supervisor triggers:
+
+```text
+PreboundSupervisorTrigger = {
+    "runtime_identity": Identity,
+    "supervisor_clock_identity": Identity,
+    "trigger_monotonic_ms": NonNegativeInteger,
+    "trigger_kind": "RUNTIME_START" | "ENROLLMENT_CUTOFF" | "FINAL_STOP"
+}
+
+PreboundSupervisorTriggerIdentity =
+    CanonicalIdentity(
+        "PreboundSupervisorTriggerIdentity",
+        PreboundSupervisorTrigger
+    )
+```
+
+The pre-bound `runtime_identity` binds the same monotonic-clock origin used by every later
+`FactBoundary.received_monotonic_ms`. At each trigger the supervisor opens the corresponding
+barrier and submits one reducer control. A fatal failure may preempt the cutoff or final-stop
+trigger; this never moves either trigger or rewrites the manifest.
+
+An authorized early stop is a distinct external supervisor control:
+
+```text
+AuthorizedEmergencyStopControl = {
+    "runtime_identity": Identity,
+    "supervisor_clock_identity": Identity,
+    "authority_identity": Identity,
+    "control_monotonic_ms": NonNegativeInteger,
+    "control_kind": "AUTHORIZED_EMERGENCY_STOP",
+    "reason": "USER_REQUEST" | "AUTHORITY_REVOCATION" | "EXTERNAL_SAFETY_STOP"
+}
+
+AuthorizedEmergencyStopControlIdentity =
+    CanonicalIdentity(
+        "AuthorizedEmergencyStopControlIdentity",
+        AuthorizedEmergencyStopControl
+    )
+```
+
+A fatal failure uses a distinct supervisor control:
+
+```text
+FatalFailureControl = {
+    "runtime_identity": Identity,
+    "supervisor_clock_identity": Identity,
+    "failure_source_identity": Identity,
+    "control_monotonic_ms": NonNegativeInteger,
+    "control_kind": "PROCESS_FAILURE",
+    "failure_kind": "FATAL_RUNTIME" | "FATAL_EVIDENCE_INTEGRITY"
+}
+
+FatalFailureControlIdentity =
+    CanonicalIdentity(
+        "FatalFailureControlIdentity",
+        FatalFailureControl
+    )
+```
+
+Both controls' runtime and clock identities must equal the manifest triggers. The emergency
+control's authority identity must equal the manifest's pre-bound `emergency_stop_authority`; it is
+valid only when issued externally to the product reducer and without inspecting anomaly,
+Candidate, Entry, Outcome, PnL, counts, rates, acceptance, or pass likelihood. A fatal runtime or
+evidence-integrity error is never relabelled as an emergency control; it emits the exact
+`FatalFailureControl` above and owns `PROCESS_FAILURE`. Each control or trigger identity applies
+the canonical identity rule to the native object as its sole member.
+
+The manifest content schema identity is:
+
+```text
+ManifestContentSchemaIdentity =
+    CanonicalIdentity(
+        "SHORT_VOL_SHADOW_FORWARD_COHORT_MANIFEST_SCHEMA",
+        OutcomeContractContentDigest
+    )
+```
+
+The manifest exact top-level schema is:
+
+```text
+manifest_content_schema_identity: ManifestContentSchemaIdentity
+candidate_commit: exact lowercase 40-hex Git commit identity
+candidate_tree: exact lowercase 40-hex Git tree identity
+intended_remote_ref: exact refs/heads/... string
+verified_remote_ref: exact lowercase 40-hex commit identity
+outcome_contract_identity: OutcomeContractIdentity
+outcome_contract_path: repository-relative UTF-8 path
+radar_policy_path: repository-relative UTF-8 path
+radar_policy_identity: Identity
+underwriting_policy_path: repository-relative UTF-8 path
+underwriting_policy_identity: Identity
+position_policy_path: repository-relative UTF-8 path
+position_policy_identity: Identity
+evidence_directory: new empty absolute UTF-8 path
+process_argv: non-empty array[UTF-8 string]
+process_cwd: absolute UTF-8 path
+required_pre_run_checks: non-empty array[UTF-8 string]
+runtime_start_trigger: PreboundSupervisorTrigger with trigger_kind "RUNTIME_START"
+enrollment_cutoff_trigger: PreboundSupervisorTrigger with trigger_kind "ENROLLMENT_CUTOFF"
+final_stop_trigger: PreboundSupervisorTrigger with trigger_kind "FINAL_STOP"
+clean_stop_predicate: exact result-independent UTF-8 predicate
+emergency_stop_authority: Identity
+forbidden_capabilities: exact non-empty array[Identity] sorted by bytewise-ascending UTF-8 Identity bytes
+non_claims: exact non-empty array[Identity] sorted by bytewise-ascending UTF-8 Identity bytes
+```
+
+Unknown, duplicate, or missing keys and invalid types fail validation. The manifest has no
+`manifest_identity` member. Its exact file bytes are one JSON object with keys in the schema order
+above; each trigger uses its declared key order; every other nested object or array uses its
+declared order; separators are exactly `","` and `":"`; UTF-8 is emitted with
+`ensure_ascii = false`, no BOM, no Unicode normalization, and exactly one trailing LF. The identity
+is `"sha256:" + lowercase_sha256(exact_file_bytes_including_the_trailing_LF)`, avoiding a self-hash
+cycle. Pretty printing, key sorting, CRLF, or hashing bytes without the LF produces a different and
+invalid manifest identity. It contains:
+
+The normative serializer vector is the exact UTF-8 file bytes
+`{"kind":"组合","values":["α",1,null]}\n`, whose identity is
+`sha256:8467e20e8dd44a9849ac4b63dd33d086f4fb7cedc027d663c16f70e3ed4b68f9`. The LF is one byte
+`0a` and is included in that digest.
 
 - exact candidate commit/tree and intended/verified bounded remote ref;
 - `OutcomeContractIdentity` and exact accepted contract path;
@@ -448,25 +760,92 @@ It contains exactly:
 - one new empty absolute downstream evidence directory, separate from every Radar evidence
   directory;
 - exact process argv/cwd and required pre-run checks;
-- `runtime_start_boundary`, `enrollment_cutoff_boundary`, and `final_stop_boundary`, with strict
-  ordering `start < cutoff < stop`;
+- the three exact `PreboundSupervisorTrigger` objects, with one shared runtime/clock identity and
+  strict `trigger_monotonic_ms` ordering `start < cutoff < stop`;
 - half-open enrollment interval `[start, cutoff)` and strictly-future follow-up interval
   `[cutoff, stop)`;
-- one deterministic clean-stop predicate and emergency-stop authority; and
+- one deterministic clean-stop predicate and exact external emergency-stop authority; and
 - explicit forbidden capabilities and non-claims.
 
-Enrollment applies only to admitted Entry boundaries and rejected-anchor action boundaries inside
-`[start, cutoff)`. Units created before start or at/after cutoff remain product facts but are not
-cohort-enrolled. Already enrolled units continue observation through the follow-up interval.
+Preflight validates one closed identity graph before the process starts:
+
+```text
+candidate_commit = verified_remote_ref = every envelope.code_identity
+candidate_tree = GitTree(candidate_commit)
+Resolve(intended_remote_ref) = verified_remote_ref
+SHA256(exact bytes at outcome_contract_path) = OutcomeContractContentDigest
+SHA256(exact bytes at each Policy path) = its declared Policy identity
+RecomputeOutcomeContractIdentity(
+    OutcomeContractContentDigest,
+    candidate_commit,
+    radar_policy_identity,
+    underwriting_policy_identity,
+    position_policy_identity
+) = outcome_contract_identity
+```
+
+The repository must contain the named commit and tree, and a fresh read of the intended remote ref
+must resolve to that same commit; a manifest cannot treat an unverified local ref as remote
+equality. This fresh remote resolution is a process-start preflight gate only; its successful
+commit value is then frozen in the immutable manifest. In particular,
+`candidate_commit = verified_remote_ref = every envelope.code_identity`.
+The repository object database must also prove
+`candidate_tree = GitTree(candidate_commit)`.
+The validator recomputes every declared path's exact-byte digest rather than trusting the
+path or identity member. The three trigger objects must have one byte-identical runtime identity;
+that identity equals every envelope and every `FactBoundary` runtime identity. Every envelope's
+contract and three Policy identities equal the manifest members, and every boundary's code identity
+equals `candidate_commit`. The summary's `manifest_identity` is the digest of the exact validated
+manifest file bytes. Any mismatch is a preflight or directory-validation failure, never
+`NOT_COMPARABLE`, `UNKNOWN`, or a partial cohort.
+
+The summary records one exact realized boundary set:
+
+```text
+runtime_start_fact_boundary: FactBoundary
+enrollment_end_fact_boundary: FactBoundary
+enrollment_end_reason: "PREBOUND_CUTOFF" | "TERMINAL_BEFORE_CUTOFF"
+terminal_fact_boundary: FactBoundary
+terminal_disposition: "PLANNED_CLEAN_STOP" | "AUTHORIZED_EMERGENCY_STOP" |
+                      "PROCESS_FAILURE"
+planned_final_stop_fact_boundary: FactBoundary | null
+```
+
+The terminal owner is the first applicable row after all controls accepted at the boundary settle:
+
+| Terminal source | Exact disposition | Outcome censor owner | planned final-stop boundary | Native terminal source |
+|---|---|---|---|---|
+| fatal runtime or evidence-integrity failure | `PROCESS_FAILURE` | `FAILURE` | `null` | `FatalFailureControl` |
+| valid `AuthorizedEmergencyStopControl` and no fatal failure at that boundary | `AUTHORIZED_EMERGENCY_STOP` | `STOP` | `null` | `AuthorizedEmergencyStopControl` |
+| pre-bound final-stop trigger and neither earlier owner | `PLANNED_CLEAN_STOP` | `STOP` | required and equal to terminal boundary | manifest `final_stop_trigger` |
+
+For a normal run, the start, cutoff, and final-stop controls create the three boundaries in causal
+order and at `received_monotonic_ms >=` their respective triggers; enrollment end is the cutoff and
+terminal is final stop. If emergency stop or failure commits before cutoff, enrollment end and
+terminal are the same terminal boundary with reason `TERMINAL_BEFORE_CUTOFF`. If it commits after
+cutoff but before final stop, enrollment end remains the cutoff with reason `PREBOUND_CUTOFF` and
+terminal is the later boundary. No missing future boundary is fabricated.
+
+Enrollment applies only to admitted Entry boundaries and rejected-anchor action boundaries for
+which
+`runtime_start_fact_boundary.causal_seq < anchor.causal_seq <
+enrollment_end_fact_boundary.causal_seq`. Units outside that half-open barrier interval remain
+product facts but are not cohort-enrolled. Already enrolled units continue observation through the
+strictly later follow-up interval, whose accepted facts satisfy
+`enrollment_end_fact_boundary.causal_seq < fact.causal_seq <
+terminal_fact_boundary.causal_seq`. A fact on enrollment end cannot be both enrolled and follow-up
+evidence; a fact on the terminal boundary is terminal-owned censor evidence.
 
 The stop predicate cannot depend on anomaly, Candidate, Entry, rejection, Outcome, maturity,
 knownness, PnL, win/loss, close opportunity, denominator, or likelihood of passing. Empty/zero
 natural activity is truthful evidence but does not by itself establish a usable qualification
 cohort.
 
-## Durable object kinds and minimum fields
+## Exact durable object schemas
 
-All downstream semantic object names are ordinal-free. The future owner may write only these kinds:
+The object kinds below are the only new kinds in this Outcome/cohort family. This restriction does
+not prevent the same future owner from writing the separate upstream Underwriting, admission,
+Entry, Position, or close-opportunity kinds accepted by their owning contract.
 
 ```text
 SHADOW_OUTCOME_OBSERVATION
@@ -484,26 +863,811 @@ ALIGNED_POLICY_NO_TRADE_PAIR
 SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY
 ```
 
-Every object strictly requires, as applicable:
+### Canonical types and shared envelope
 
-- object semantic kind and content schema identity;
-- `OutcomeContractIdentity`, code identity, runtime identity, and all three Policy identities;
-- complete anchor and prior-object identities;
-- complete accepted `FactBoundary` values;
-- canonical option/combo identities, direction, exact full `q`, and consumed levels;
-- lifecycle/terminal state, availability, censor mask, and ordered reasons;
-- all units and exact gross/fee-reserve/net/PnL/loss fields;
-- explicit nullability and availability for every unavailable field;
-- source provenance separated from the normalized business fingerprint; and
-- `PUBLIC_QUOTE_NOT_FILL`, `NO_ACTUAL_EXPOSURE`, `NO_ACTUAL_PNL`,
-  `NO_ACTUAL_ACCOUNT_FEE`, `NO_SETTLEMENT_PAYOFF`, and
-  `NO_ACTUAL_ALL_IN_LOSS_OR_MAX_LOSS` non-claims.
+`Identity` is either an exact accepted upstream semantic identity or the lowercase
+`sha256:`-prefixed 64-hex output of `CanonicalIdentity`. `Decimal` is a finite canonical base-10
+string matching `0|-?(?:[1-9][0-9]*(?:\.[0-9]*[1-9])?|0\.[0-9]*[1-9])`. Thus zero has only the
+lexeme `"0"`; negative zero, trailing fractional zeroes, exponent notation, `NaN`, and infinity
+are forbidden. `NonNegativeInteger` is a JSON integer `>= 0`; `Boolean` is a JSON boolean.
+Every nullable member is written explicitly as `type | null`.
 
-A `PENDING` observation object contains the anchor and start boundary but no terminal boundary,
-exit, or Outcome economics. A terminal Outcome requires one terminal state and terminal boundary.
-`MATURE_KNOWN` requires a selected exit and all four exact economics; every other terminal state
-requires no selected exit and `null / UNKNOWN` economics, except that audit-only Entry decision
-measures remain present.
+Every `FactBoundary` is an object with exactly these keys and types:
+
+```text
+code_identity: Identity
+runtime_identity: Identity
+session_epoch: NonNegativeInteger
+ingress_seq: NonNegativeInteger
+received_monotonic_ms: NonNegativeInteger
+causal_seq: NonNegativeInteger
+```
+
+Every consumed atomic level is:
+
+```text
+price_usdc_per_btc: Decimal
+amount_btc: positive Decimal
+```
+
+Every non-empty `consumed_levels` or `entry_consumed_levels` array preserves the accepted upstream
+required-side consumption order from best to worse price. It contains no unconsumed level, every
+amount is positive, the exact sum of `amount_btc` equals the object's `full_quantity_btc`, and only
+the final member may be truncated to the exact remaining quantity. Reordering equal-price levels,
+retaining depth after full quantity, aggregating levels, or serializing zero consumption is
+invalid. These rules apply identically to admitted and rejected entry/exit payloads.
+
+Every exact two-element `canonical_leg_identities` array is ordered
+`[short_leg_identity, long_leg_identity]`. It is never sorted lexically.
+
+Every natural lifecycle witness is:
+
+```text
+canonical_leg_role: "SHORT" | "LONG"
+instrument_identity: Identity
+lifecycle_state: "delivered" | "archivized"
+source_identity: Identity
+witness_fact_boundary: FactBoundary
+```
+
+The two-element witness array is ordered `[SHORT, LONG]`.
+
+Every external direct source reference is an object with exactly:
+
+```text
+DirectSourceRef = {
+source_identity: Identity
+receipt_fact_boundary: FactBoundary
+}
+```
+
+Every leg commission source reference is an object with exactly:
+
+```text
+LegCommissionSourceRef = {
+canonical_leg_role: "SHORT" | "LONG"
+source_identity: Identity
+receipt_fact_boundary: FactBoundary
+}
+```
+
+A two-member leg commission array is ordered `[SHORT, LONG]`; a partial array preserves that
+relative order and cannot contain the same role twice. Each reference names the exact accepted
+public fact whose normalized value is copied into the owning payload. Its boundary is the fact's
+settled acceptance boundary, not the later evaluation or serialization boundary.
+
+`ActualAvailability` is an object with exactly these keys, each fixed to `"UNKNOWN"`:
+
+```text
+actual_entry_fee_usdc: "UNKNOWN"
+actual_close_fee_usdc: "UNKNOWN"
+actual_total_fee_usdc: "UNKNOWN"
+actual_pnl_usdc: "UNKNOWN"
+actual_exposure_quantity_btc: "UNKNOWN"
+actual_exposure_duration_ms: "UNKNOWN"
+actual_all_in_loss_usdc: "UNKNOWN"
+actual_all_in_max_loss_usdc: "UNKNOWN"
+actual_fill_identity: "UNKNOWN"
+actual_settlement_cashflow_usdc: "UNKNOWN"
+```
+
+`ExactRate` is an object with exactly:
+
+```text
+numerator: NonNegativeInteger
+denominator: positive JSON integer
+```
+
+No decimal quotient is durable. An unavailable rate is JSON `null`; a presentation layer may
+derive a display decimal from the exact rational without changing evidence.
+
+Every `source_provenance` member is an object with exactly:
+
+```text
+source_role: "ANCHOR" | "POSITION_EVALUATION" | "POSITION_ACTION" |
+             "CLOSE_QUOTE_EVALUATION" | "CLOSE_OPPORTUNITY_EVALUATION" |
+             "SELECTED_EXIT" | "TERMINAL_OUTCOME" | "POSITION_FACT" |
+             "COMBO_QUOTE" | "COMMISSION" | "INDEX" |
+             "INSTRUMENT_LIFECYCLE" | "ATTEMPT_CONTROL" | "SUPERVISOR_CONTROL"
+source_identity: Identity
+receipt_fact_boundary: FactBoundary
+```
+
+All three keys are required. Raw timestamp, subscription generation, request id, and official
+`change_id` remain inside their accepted upstream `source_identity`; they are not duplicated into
+this envelope. Policy identity binds the fee formula and compatibility threshold, but every
+actually consumed short- or long-leg commission fraction still requires its current public
+option-instrument source identity and receipt boundary under role `COMMISSION`.
+
+Every one-hop root maps to exactly one role:
+
+| Consumed root | Exact role |
+|---|---|
+| `SHADOW_ENTRY`, rejected Underwriting action/anchor, or admitted/rejected observation identity | `ANCHOR` |
+| rejected Position evaluation identity | `POSITION_EVALUATION` |
+| admitted or rejected Position action identity | `POSITION_ACTION` |
+| admitted or rejected close-quote evaluation identity | `CLOSE_QUOTE_EVALUATION` |
+| admitted or rejected close-opportunity evaluation identity | `CLOSE_OPPORTUNITY_EVALUATION` |
+| admitted or rejected selected-exit identity | `SELECTED_EXIT` |
+| admitted or rejected terminal Outcome identity | `TERMINAL_OUTCOME` |
+| normalized Position-fact fingerprint, trusted-clock, platform, catalog, option-ticker, Delta, or volatility fact identity | `POSITION_FACT` |
+| accepted official combo subscription or matched RPC quote identity | `COMBO_QUOTE` |
+| current public option-instrument commission fact identity for one named leg | `COMMISSION` |
+| accepted BTC-USDC index identity used by an economic formula | `INDEX` |
+| accepted option-instrument `delivered` or `archivized` witness identity | `INSTRUMENT_LIFECYCLE` |
+| scheduled/send/response/error/deadline/retired/censored attempt-control identity | `ATTEMPT_CONTROL` |
+| manifest, pre-bound trigger, authorized emergency-stop control, or fatal-failure control | `SUPERVISOR_CONTROL` |
+
+This is deliberately a one-hop audit set, not a transitive provenance graph. A durable root uses
+its owning object's exact `fact_boundary`; an opaque normalized fingerprint uses the evaluation
+boundary that created it; a directly consumed public fact uses its accepted receipt boundary; the
+manifest identity uses `runtime_start_fact_boundary`; and a trigger/control identity uses the
+realized boundary it created. A reader never attempts to expand an upstream
+`X.source_provenance`.
+
+The array is sorted by bytewise-ascending UTF-8 `(source_role, source_identity)`. One identical pair
+with one identical boundary appears once. A repeated pair with a different boundary is a
+conflicting duplicate and fails validation. It is a pure projection with no independently supplied
+identity or boundary: local durable roots are resolved by their identity to the exact object path;
+external roots are projected from the owning payload's exact direct-source reference or opaque
+fingerprint plus its declared boundary; and supervisor roots are recomputed from the manifest or
+summary's native control object. A missing referenced local object, a failed identity recomputation,
+or any projection mismatch invalidates the object or directory. The exact one-hop set for each
+object is:
+
+| Object kind | Exact provenance derivation |
+|---|---|
+| `SHADOW_OUTCOME_OBSERVATION` | one `ANCHOR` for `shadow_entry_identity` |
+| `SHADOW_COUNTERFACTUAL_EXIT` | resolve the local `ANCHOR` observation; project `POSITION_ACTION` and `CLOSE_OPPORTUNITY_EVALUATION` from their identities and direct boundaries; project one `COMBO_QUOTE`, exactly two ordered `COMMISSION`, and one `INDEX` from the three direct-source fields |
+| `SHADOW_OUTCOME` | resolve the local `ANCHOR` observation; for `MATURE_KNOWN`, resolve exactly one local `SELECTED_EXIT`; otherwise project every present Position-action/scheduled-attempt/attempt-terminal root from its identity and direct boundary and project exactly two lifecycle witnesses only for `MATURE_UNKNOWN`; any censor projects exactly the same `terminal_source_identity` stored by the summary as one `SUPERVISOR_CONTROL` at the terminal boundary |
+| `REJECTED_COUNTERFACTUAL_ANCHOR` | project the upstream Underwriting action as one `ANCHOR` at `anchor_fact_boundary`; project one `COMBO_QUOTE` and exactly two ordered `COMMISSION` roots from direct-source fields; project one `INDEX` and one `POSITION_FACT` for entry short-leg IV from their exact source/boundary fields |
+| `REJECTED_COUNTERFACTUAL_OBSERVATION` | one `ANCHOR` rejected anchor |
+| `REJECTED_COUNTERFACTUAL_POSITION_EVALUATION` | one `ANCHOR` rejected observation; one opaque `POSITION_FACT` for `consumed_position_fact_fingerprint`; one `POSITION_FACT` for entry short-leg IV; `INDEX` roots for entry, prior evaluation, and current evaluation exactly when current is known |
+| `REJECTED_COUNTERFACTUAL_POSITION_ACTION` | exactly one `POSITION_EVALUATION` |
+| `REJECTED_COUNTERFACTUAL_CLOSE_QUOTE_EVALUATION` | one `ANCHOR` rejected observation and one opaque `COMBO_QUOTE` for `consumed_rule_scoped_quote_fingerprint` at `evaluation_fact_boundary` |
+| `REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION` | resolve exactly one local `POSITION_ACTION`; resolve exactly one local `CLOSE_QUOTE_EVALUATION` or project one `ATTEMPT_CONTROL` from its identity and direct boundary; project commission/index direct-source roots by the exact rule table below |
+| `REJECTED_COUNTERFACTUAL_EXIT` | one `ANCHOR` rejected observation, one `CLOSE_OPPORTUNITY_EVALUATION`, one `COMBO_QUOTE`, exactly two `COMMISSION`, and exactly one `INDEX` |
+| `REJECTED_COUNTERFACTUAL_OUTCOME` | resolve one local `ANCHOR` rejected observation; for `MATURE_KNOWN`, resolve exactly one local `SELECTED_EXIT`; otherwise resolve/project every present Position-action/scheduled-attempt/attempt-terminal root and resolve exactly two lifecycle witnesses only for `MATURE_UNKNOWN`; any censor projects exactly the same `terminal_source_identity` stored by the summary as one `SUPERVISOR_CONTROL` at the terminal boundary |
+| `ALIGNED_POLICY_NO_TRADE_PAIR` | one `ANCHOR` observation and one `TERMINAL_OUTCOME` |
+| `SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY` | recompute the manifest identity at `runtime_start_fact_boundary`, its runtime-start trigger at that boundary, its enrollment-cutoff trigger iff realized, and the one native `terminal_source` object selected by disposition at `terminal_fact_boundary`, all as `SUPERVISOR_CONTROL` |
+
+For rejected close-opportunity provenance:
+
+| Eligibility reason | `COMMISSION` roots | `INDEX` roots |
+|---|---|---|
+| `KNOWN_ATOMIC_UNAVAILABLE` | zero | zero |
+| `QUOTE_OR_ATTEMPT_UNKNOWN` | zero | zero |
+| `COMMISSION_UNKNOWN` | one for each accepted short/long commission fact actually consumed; zero through two | zero |
+| `COMMISSION_ABOVE_POLICY` | exactly two | zero |
+| `INDEX_UNKNOWN` | exactly two | zero when no accepted index fact exists, otherwise exactly one consumed invalid/stale index root |
+| `ELIGIBLE_COMPLETE` | exactly two | exactly one |
+
+Raw provenance never enters a normalized business fingerprint or kind-specific `object_identity`.
+Omitting one required one-hop root or appending an unconsumed root fails validation.
+
+Every object has exactly this top-level envelope:
+
+```text
+object_kind: one exact kind above
+content_schema_identity: Identity
+object_identity: Identity
+outcome_contract_identity: OutcomeContractIdentity
+code_identity: Identity
+runtime_identity: Identity
+radar_policy_identity: Identity
+underwriting_policy_identity: Identity
+position_policy_identity: Identity
+fact_boundary: FactBoundary
+source_provenance: array[source provenance member]
+payload: exact kind-specific object below
+non_claims: exact six-element array below
+```
+
+The required non-claim array, in this order, is:
+
+```text
+PUBLIC_QUOTE_NOT_FILL
+NO_ACTUAL_EXPOSURE
+NO_ACTUAL_PNL
+NO_ACTUAL_ACCOUNT_FEE
+NO_SETTLEMENT_PAYOFF
+NO_ACTUAL_ALL_IN_LOSS_OR_MAX_LOSS
+```
+
+For each kind:
+
+```text
+content_schema_identity =
+    CanonicalIdentity(
+        "OUTCOME_CONTENT_SCHEMA",
+        OutcomeContractContentDigest,
+        object_kind
+    )
+```
+
+The contract content digest binds every declared key, type, enum, condition, and null matrix without
+a non-executable placeholder. Code/runtime/Policy identities remain envelope data and do not create
+a different schema.
+
+The envelope `object_identity` equals the kind-specific identity field in `payload`.
+`fact_boundary` equals the payload's creation, evaluation, selection, terminal, or summary boundary
+and every duplicated code/runtime/Policy member must be byte-identical. Unknown top-level or
+payload keys, missing keys, duplicate keys, invalid array cardinality/order, or a conditionally
+forbidden non-null value fail validation.
+
+### Exact payload key sets
+
+`SHADOW_OUTCOME_OBSERVATION`:
+
+```text
+shadow_observation_identity: ShadowObservationIdentity
+shadow_entry_identity: ShadowEntryIdentity
+start_fact_boundary: FactBoundary
+aligned_pair_identity: AlignedPolicyNoTradePairIdentity
+cohort_enrolled: Boolean
+lifecycle_state: "PENDING"
+```
+
+`SHADOW_COUNTERFACTUAL_EXIT`:
+
+```text
+shadow_counterfactual_exit_identity: ShadowCounterfactualExitIdentity
+shadow_observation_identity: ShadowObservationIdentity
+first_latched_close_action_identity: PositionActionIdentity
+close_opportunity_evaluation_identity: CloseOpportunityEvaluationIdentity
+shadow_close_opportunity_identity: ShadowCloseOpportunityIdentity
+selection_fact_boundary: FactBoundary
+first_latched_close_action_fact_boundary: FactBoundary
+close_opportunity_evaluation_fact_boundary: FactBoundary
+combo_quote_source_ref: DirectSourceRef
+commission_source_refs: exact two-element array[LegCommissionSourceRef]
+index_source_ref: DirectSourceRef
+canonical_combo_identity: Identity
+canonical_leg_identities: exact two-element array[Identity]
+close_direction: "BUY" | "SELL"
+full_quantity_btc: Decimal
+consumed_levels: non-empty array[atomic level]
+short_leg_taker_commission_fraction: Decimal
+long_leg_taker_commission_fraction: Decimal
+close_index_usdc_per_btc: Decimal
+gross_close_cashflow_usdc: Decimal
+close_fee_reserve_usdc: Decimal
+net_close_cashflow_usdc: Decimal
+net_close_debit_usdc: Decimal
+projected_shadow_net_pnl_usdc: Decimal
+projected_net_loss_usdc: Decimal
+```
+
+The action and opportunity boundaries are their accepted upstream object boundaries and must be
+strictly after Entry in the order required above. `combo_quote_source_ref` is the accepted official
+atomic quote consumed by that opportunity. The two commission refs are `[SHORT, LONG]`, match the
+two serialized commission fractions, and `index_source_ref` matches
+`close_index_usdc_per_btc`. Their projected `source_provenance` members are therefore independently
+reconstructed from payload bytes rather than accepted as envelope-only claims.
+
+`SHADOW_OUTCOME`:
+
+```text
+shadow_outcome_identity: ShadowOutcomeIdentity
+shadow_observation_identity: ShadowObservationIdentity
+shadow_entry_identity: ShadowEntryIdentity
+terminal_state: "MATURE_KNOWN" | "MATURE_UNKNOWN" | "CENSORED_AT_STOP" |
+                "CENSORED_AT_FAILURE"
+terminal_fact_boundary: FactBoundary
+selected_exit_identity: ShadowCounterfactualExitIdentity | null
+first_latched_close_action_identity: PositionActionIdentity | null
+first_latched_close_action_fact_boundary: FactBoundary | null
+scheduled_post_close_attempt_identity: ScheduledPostCloseQuoteAttemptIdentity | null
+scheduled_post_close_attempt_fact_boundary: FactBoundary | null
+post_close_attempt_terminal_identity: PostCloseAttemptTerminalIdentity | null
+post_close_attempt_terminal_status: "SUCCESS" | "ERROR" | "DEADLINE_LATE" | "RETIRED" |
+                                    "NOT_REQUESTABLE_KNOWN_ATOMIC_UNAVAILABLE" |
+                                    "NOT_REQUESTABLE_UNKNOWN" | "CENSORED" | null
+post_close_attempt_terminal_owner: "ORDINARY" | "STOP" | "FAILURE" | null
+post_close_attempt_terminal_fact_boundary: FactBoundary | null
+natural_terminal_lifecycle_witnesses:
+    exact zero- or two-element array[natural lifecycle witness]
+censor_mask: exact array[] | ["STOP"] | ["FAILURE"]
+terminal_supervisor_source_identity: Identity | null
+gross_entry_credit_usdc: Decimal
+entry_fee_reserve_usdc: Decimal
+net_entry_credit_usdc: Decimal
+contractual_payoff_max_loss_ex_fees_usdc: Decimal
+entry_fee_reserved_payoff_loss_usdc: Decimal
+underwriting_reserved_loss_usdc: Decimal
+gross_close_cashflow_usdc: Decimal | null
+close_fee_reserve_usdc: Decimal | null
+net_close_cashflow_usdc: Decimal | null
+gross_pnl_usdc: Decimal | null
+total_public_fee_reserve_usdc: Decimal | null
+net_pnl_after_public_standard_fee_reserve_usdc: Decimal | null
+net_loss_usdc: Decimal | null
+economic_availability: "KNOWN" | "UNKNOWN"
+actual_entry_fee_usdc: null
+actual_close_fee_usdc: null
+actual_total_fee_usdc: null
+actual_pnl_usdc: null
+actual_exposure_quantity_btc: null
+actual_exposure_duration_ms: null
+actual_all_in_loss_usdc: null
+actual_all_in_max_loss_usdc: null
+actual_fill_identity: null
+actual_settlement_cashflow_usdc: null
+actual_availability: ActualAvailability
+```
+
+For both admitted and rejected Outcome payloads, a non-null first-CLOSE identity has a non-null
+matching action boundary; its scheduled-attempt identity and boundary are also non-null and the
+scheduled boundary equals that first-CLOSE boundary. All four members are null together before
+CLOSE. A present attempt-terminal identity has its exact terminal boundary in the existing
+attempt-terminal field. The terminal supervisor source is null for `MATURE_KNOWN` and
+`MATURE_UNKNOWN`; for either censored state it is non-null, recomputes from the summary's native
+`terminal_source`, equals the summary's `terminal_source_identity`, and uses the Outcome terminal
+boundary. Thus a censor object cannot name a different stop/failure control than the directory
+summary.
+
+`REJECTED_COUNTERFACTUAL_ANCHOR`:
+
+```text
+rejected_anchor_identity: RejectedCounterfactualAnchorIdentity
+underwriting_position_slot_key: UnderwritingPositionSlotKeyIdentity
+underwriting_action_identity: UnderwritingActionIdentity
+underwriting_action: "WATCH" | "ABSTAIN"
+anchor_fact_boundary: FactBoundary
+canonical_combo_identity: Identity
+canonical_leg_identities: exact two-element array[Identity]
+entry_direction: "BUY" | "SELL"
+full_quantity_btc: Decimal
+entry_consumed_levels: non-empty array[atomic level]
+entry_combo_quote_source_ref: DirectSourceRef
+entry_commission_source_refs: exact two-element array[LegCommissionSourceRef]
+entry_index_usdc_per_btc: Decimal
+entry_index_source_identity: Identity
+entry_index_fact_boundary: FactBoundary
+entry_short_leg_mark_iv_fraction: Decimal
+entry_short_leg_mark_iv_source_identity: Identity
+entry_short_leg_mark_iv_fact_boundary: FactBoundary
+gross_entry_credit_usdc: Decimal
+entry_fee_reserve_usdc: Decimal
+net_entry_credit_usdc: Decimal
+contractual_payoff_max_loss_ex_fees_usdc: Decimal
+entry_fee_reserved_payoff_loss_usdc: Decimal
+underwriting_reserved_loss_usdc: Decimal
+```
+
+The entry combo reference is the one official full-quantity atomic quote consumed by the rejected
+Underwriting action. The two entry commission refs are ordered `[SHORT, LONG]`, match the exact
+accepted commission facts used in `entry_fee_reserve_usdc`, and share the anchor's settled
+known-at scope. The already explicit index and IV source identity/boundary pairs are the other two
+external roots. An anchor with a missing, duplicated, role-swapped, or value-incompatible direct
+source reference is invalid.
+
+`REJECTED_COUNTERFACTUAL_OBSERVATION`:
+
+```text
+rejected_observation_identity: RejectedCounterfactualObservationIdentity
+rejected_anchor_identity: RejectedCounterfactualAnchorIdentity
+start_fact_boundary: FactBoundary
+aligned_pair_identity: AlignedPolicyNoTradePairIdentity
+cohort_enrolled: Boolean
+lifecycle_state: "PENDING"
+```
+
+`REJECTED_COUNTERFACTUAL_POSITION_EVALUATION`:
+
+```text
+rejected_position_evaluation_identity: RejectedCounterfactualPositionEvaluationIdentity
+rejected_observation_identity: RejectedCounterfactualObservationIdentity
+consumed_position_fact_fingerprint: Identity
+evaluation_fact_boundary: FactBoundary
+ordered_predicate_truth_vector: exact nine-element array["TRUE" | "FALSE" | "UNKNOWN"]
+entry_index_usdc_per_btc: Decimal
+entry_index_source_identity: Identity
+entry_index_fact_boundary: FactBoundary
+entry_short_leg_mark_iv_fraction: Decimal
+entry_short_leg_mark_iv_source_identity: Identity
+entry_short_leg_mark_iv_fact_boundary: FactBoundary
+prior_evaluation_index_usdc_per_btc: Decimal
+prior_evaluation_index_source_identity: Identity
+prior_evaluation_index_fact_boundary: FactBoundary
+current_index_usdc_per_btc: Decimal | null
+current_index_source_identity: Identity | null
+current_index_fact_boundary: FactBoundary | null
+current_index_availability: "KNOWN" | "UNKNOWN"
+next_evaluation_index_usdc_per_btc: Decimal
+```
+
+If current index availability is `KNOWN`, all three current-index members are non-null, the decimal
+is finite and positive, and `next_evaluation_index_usdc_per_btc = current_index_usdc_per_btc`.
+If it is `UNKNOWN`, all three current-index value/source/boundary members are `null` and
+`next_evaluation_index_usdc_per_btc = prior_evaluation_index_usdc_per_btc`.
+
+`REJECTED_COUNTERFACTUAL_POSITION_ACTION`:
+
+```text
+rejected_position_action_identity: RejectedCounterfactualPositionActionIdentity
+rejected_position_evaluation_identity: RejectedCounterfactualPositionEvaluationIdentity
+serialized_action: "HOLD" | "CLOSE" | "UNKNOWN"
+ordered_predicate_truth_vector: exact nine-element array["TRUE" | "FALSE" | "UNKNOWN"]
+ordered_latched_close_reason_vector: array[exact accepted close-reason enum in total order]
+first_latched_close_action_identity: RejectedCounterfactualPositionActionIdentity | null
+scheduled_post_close_attempt_identity: RejectedScheduledPostCloseQuoteAttemptIdentity | null
+action_fact_boundary: FactBoundary
+```
+
+`first_latched_close_action_identity` is `null` iff no rejected CLOSE has latched; then the scheduled
+attempt is also `null`. Once CLOSE latches, both fields are non-null, immutable across later
+rejected action objects, and the one attempt is created in that same reducer transaction. On the
+first CLOSE action, the first-latched identity equals
+`rejected_position_action_identity`.
+
+`REJECTED_COUNTERFACTUAL_CLOSE_QUOTE_EVALUATION`:
+
+```text
+rejected_close_quote_evaluation_identity: RejectedCounterfactualCloseQuoteEvaluationIdentity
+rejected_observation_identity: RejectedCounterfactualObservationIdentity
+first_latched_close_action_identity: RejectedCounterfactualPositionActionIdentity | null
+canonical_combo_identity: Identity
+canonical_leg_identities: exact two-element array[Identity]
+close_direction: "BUY" | "SELL"
+full_quantity_btc: Decimal
+consumed_rule_scoped_quote_fingerprint: Identity
+close_quote_state: "ATOMIC_COMBO_CLOSE_QUOTE" | "LEGGED_CLOSE_REFERENCE" |
+                   "UNEXECUTABLE" | "UNKNOWN"
+close_conditioning: "PRE_CLOSE" | RejectedCounterfactualPositionActionIdentity
+consumed_levels: array[atomic level]
+gross_close_cashflow_usdc: Decimal | null
+evaluation_fact_boundary: FactBoundary
+```
+
+`close_conditioning = "PRE_CLOSE"` iff `first_latched_close_action_identity` is `null`.
+Post-CLOSE conditioning equals the exact non-null first-latched identity. A first-CLOSE-boundary
+evaluation remains `PRE_CLOSE`; only a strictly later accepted source fact changes conditioning.
+`consumed_levels` is non-empty and gross cashflow is `Decimal` exactly for
+`ATOMIC_COMBO_CLOSE_QUOTE`; for every other close-quote state the array is empty and gross cashflow
+is `null`.
+
+`REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION`:
+
+```text
+rejected_close_opportunity_evaluation_identity:
+    RejectedCounterfactualCloseOpportunityEvaluationIdentity
+rejected_observation_identity: RejectedCounterfactualObservationIdentity
+first_latched_close_action_identity: RejectedCounterfactualPositionActionIdentity
+close_quote_evaluation_identity: RejectedCounterfactualCloseQuoteEvaluationIdentity | null
+attempt_terminal_identity: RejectedPostCloseAttemptTerminalIdentity | null
+attempt_terminal_fact_boundary: FactBoundary | null
+opportunity_economics_business_fingerprint: Identity
+eligibility: "ELIGIBLE" | "INELIGIBLE" | "UNKNOWN"
+eligibility_reason: "KNOWN_ATOMIC_UNAVAILABLE" | "QUOTE_OR_ATTEMPT_UNKNOWN" |
+                    "COMMISSION_UNKNOWN" | "COMMISSION_ABOVE_POLICY" |
+                    "INDEX_UNKNOWN" | "ELIGIBLE_COMPLETE"
+evaluation_fact_boundary: FactBoundary
+gross_close_cashflow_usdc: Decimal | null
+gross_cashflow_availability: "KNOWN" | "UNKNOWN" | "NOT_APPLICABLE"
+short_leg_taker_commission_fraction: Decimal | null
+long_leg_taker_commission_fraction: Decimal | null
+commission_source_refs: zero-to-two-element array[LegCommissionSourceRef]
+close_index_usdc_per_btc: Decimal | null
+index_source_ref: DirectSourceRef | null
+close_fee_reserve_usdc: Decimal | null
+net_close_cashflow_usdc: Decimal | null
+net_close_debit_usdc: Decimal | null
+projected_shadow_net_pnl_usdc: Decimal | null
+projected_net_loss_usdc: Decimal | null
+derived_economics_availability: "KNOWN" | "UNKNOWN" | "NOT_APPLICABLE"
+```
+
+Exactly one of `close_quote_evaluation_identity` and `attempt_terminal_identity` is non-null.
+The exact first-match value/null matrix is:
+
+| Eligibility reason | eligibility | gross cashflow | commission values | close index | fee/net/debit/projected fields |
+|---|---|---|---|---|---|
+| `KNOWN_ATOMIC_UNAVAILABLE` | `INELIGIBLE` | `null / NOT_APPLICABLE` | both `null` | `null` | all `null / NOT_APPLICABLE` |
+| `QUOTE_OR_ATTEMPT_UNKNOWN` | `UNKNOWN` | `null / UNKNOWN` | both `null` | `null` | all `null / UNKNOWN` |
+| `COMMISSION_UNKNOWN` | `UNKNOWN` | `Decimal / KNOWN` | both `null` | `null` | all `null / UNKNOWN` |
+| `COMMISSION_ABOVE_POLICY` | `INELIGIBLE` | `Decimal / KNOWN` | both `Decimal` | `null` | all `null / UNKNOWN` |
+| `INDEX_UNKNOWN` | `UNKNOWN` | `Decimal / KNOWN` | both `Decimal` | `null` | all `null / UNKNOWN` |
+| `ELIGIBLE_COMPLETE` | `ELIGIBLE` | `Decimal / KNOWN` | both `Decimal` | positive `Decimal` | all `Decimal / KNOWN` |
+
+The last column's availability is `derived_economics_availability`. The gross field remains known
+when an atomic quote is known even if commission or index prevents fee/net economics. Every
+`ELIGIBLE_COMPLETE` row satisfies the accepted upstream equations; no other row invents a fee,
+net cashflow, projected PnL, or projected loss.
+
+`attempt_terminal_fact_boundary` is non-null exactly when `attempt_terminal_identity` is non-null;
+otherwise it is null and the referenced local close-quote evaluation supplies its own boundary.
+`commission_source_refs` and `index_source_ref` follow the provenance rule table exactly. Every
+present commission ref's normalized value equals the matching short/long commission fact consumed
+by the first-match classifier. A present index ref names the exact accepted current, stale, or
+invalid index fact actually consumed; `ELIGIBLE_COMPLETE` requires it to match the positive
+`close_index_usdc_per_btc`. A numeric source field with no required ref, or a ref that the
+eligibility row forbids, fails validation.
+
+`REJECTED_COUNTERFACTUAL_EXIT`:
+
+```text
+rejected_exit_identity: RejectedCounterfactualExitIdentity
+rejected_observation_identity: RejectedCounterfactualObservationIdentity
+first_latched_close_action_identity: RejectedCounterfactualPositionActionIdentity
+close_opportunity_evaluation_identity:
+    RejectedCounterfactualCloseOpportunityEvaluationIdentity
+selection_fact_boundary: FactBoundary
+canonical_combo_identity: Identity
+canonical_leg_identities: exact two-element array[Identity]
+close_direction: "BUY" | "SELL"
+full_quantity_btc: Decimal
+consumed_levels: non-empty array[atomic level]
+short_leg_taker_commission_fraction: Decimal
+long_leg_taker_commission_fraction: Decimal
+close_index_usdc_per_btc: Decimal
+gross_close_cashflow_usdc: Decimal
+close_fee_reserve_usdc: Decimal
+net_close_cashflow_usdc: Decimal
+net_close_debit_usdc: Decimal
+projected_shadow_net_pnl_usdc: Decimal
+projected_net_loss_usdc: Decimal
+```
+
+`REJECTED_COUNTERFACTUAL_OUTCOME`:
+
+```text
+rejected_outcome_identity: RejectedCounterfactualOutcomeIdentity
+rejected_observation_identity: RejectedCounterfactualObservationIdentity
+rejected_anchor_identity: RejectedCounterfactualAnchorIdentity
+terminal_state: "MATURE_KNOWN" | "MATURE_UNKNOWN" | "CENSORED_AT_STOP" |
+                "CENSORED_AT_FAILURE"
+terminal_fact_boundary: FactBoundary
+selected_exit_identity: RejectedCounterfactualExitIdentity | null
+first_latched_close_action_identity: RejectedCounterfactualPositionActionIdentity | null
+first_latched_close_action_fact_boundary: FactBoundary | null
+scheduled_post_close_attempt_identity: RejectedScheduledPostCloseQuoteAttemptIdentity | null
+scheduled_post_close_attempt_fact_boundary: FactBoundary | null
+post_close_attempt_terminal_identity: RejectedPostCloseAttemptTerminalIdentity | null
+post_close_attempt_terminal_status: "SUCCESS" | "ERROR" | "DEADLINE_LATE" | "RETIRED" |
+                                    "NOT_REQUESTABLE_KNOWN_ATOMIC_UNAVAILABLE" |
+                                    "NOT_REQUESTABLE_UNKNOWN" | "CENSORED" | null
+post_close_attempt_terminal_owner: "ORDINARY" | "STOP" | "FAILURE" | null
+post_close_attempt_terminal_fact_boundary: FactBoundary | null
+natural_terminal_lifecycle_witnesses:
+    exact zero- or two-element array[natural lifecycle witness]
+censor_mask: exact array[] | ["STOP"] | ["FAILURE"]
+terminal_supervisor_source_identity: Identity | null
+gross_entry_credit_usdc: Decimal
+entry_fee_reserve_usdc: Decimal
+net_entry_credit_usdc: Decimal
+contractual_payoff_max_loss_ex_fees_usdc: Decimal
+entry_fee_reserved_payoff_loss_usdc: Decimal
+underwriting_reserved_loss_usdc: Decimal
+gross_close_cashflow_usdc: Decimal | null
+close_fee_reserve_usdc: Decimal | null
+net_close_cashflow_usdc: Decimal | null
+gross_pnl_usdc: Decimal | null
+total_public_fee_reserve_usdc: Decimal | null
+net_pnl_after_public_standard_fee_reserve_usdc: Decimal | null
+net_loss_usdc: Decimal | null
+economic_availability: "KNOWN" | "UNKNOWN"
+actual_entry_fee_usdc: null
+actual_close_fee_usdc: null
+actual_total_fee_usdc: null
+actual_pnl_usdc: null
+actual_exposure_quantity_btc: null
+actual_exposure_duration_ms: null
+actual_all_in_loss_usdc: null
+actual_all_in_max_loss_usdc: null
+actual_fill_identity: null
+actual_settlement_cashflow_usdc: null
+actual_availability: ActualAvailability
+```
+
+`ALIGNED_POLICY_NO_TRADE_PAIR`:
+
+```text
+aligned_pair_identity: AlignedPolicyNoTradePairIdentity
+pair_family: "ADMITTED" | "REJECTED"
+cohort_enrolled: Boolean
+pair_anchor_identity: ShadowEntryIdentity | RejectedCounterfactualAnchorIdentity
+policy_arm: "SHADOW_TRADE" | "NO_TRADE"
+alternative_arm: "NO_TRADE" | "REJECTED_COUNTERFACTUAL_TRADE"
+trade_observation_identity:
+    ShadowObservationIdentity | RejectedCounterfactualObservationIdentity
+trade_outcome_identity: ShadowOutcomeIdentity | RejectedCounterfactualOutcomeIdentity
+terminal_state: "MATURE_KNOWN" | "MATURE_UNKNOWN" | "CENSORED_AT_STOP" |
+                "CENSORED_AT_FAILURE"
+terminal_fact_boundary: FactBoundary
+censor_mask: exact array[] | ["STOP"] | ["FAILURE"]
+no_trade_cashflow_usdc: Decimal exactly "0"
+trade_net_pnl_after_public_standard_fee_reserve_usdc: Decimal | null
+policy_advantage_usdc: Decimal | null
+comparison_availability: "KNOWN" | "UNKNOWN"
+```
+
+The only legal family/arm combinations are exactly
+`ADMITTED × SHADOW_TRADE × NO_TRADE` and
+`REJECTED × NO_TRADE × REJECTED_COUNTERFACTUAL_TRADE`. The anchor, observation, and Outcome
+identity types must match that family. `cohort_enrolled` equals the immutable enrollment bit on the
+owning observation; it cannot be inferred from terminal state.
+
+The summary identity is:
+
+```text
+CohortSummaryIdentity =
+    OutcomeContractIdentity
+    × runtime_identity
+    × manifest_identity
+    × terminal_FactBoundary
+```
+
+`SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY`:
+
+```text
+cohort_summary_identity: CohortSummaryIdentity
+manifest_identity: Identity
+runtime_start_fact_boundary: FactBoundary
+enrollment_end_fact_boundary: FactBoundary
+enrollment_end_reason: "PREBOUND_CUTOFF" | "TERMINAL_BEFORE_CUTOFF"
+terminal_fact_boundary: FactBoundary
+terminal_disposition: "PLANNED_CLEAN_STOP" | "AUTHORIZED_EMERGENCY_STOP" |
+                      "PROCESS_FAILURE"
+planned_final_stop_fact_boundary: FactBoundary | null
+terminal_source_identity: PreboundSupervisorTriggerIdentity |
+                          AuthorizedEmergencyStopControlIdentity |
+                          FatalFailureControlIdentity
+terminal_source: PreboundSupervisorTrigger | AuthorizedEmergencyStopControl |
+                 FatalFailureControl
+evidence_status: "COMPLETE" | "INCOMPLETE"
+counts: exact CohortCounts object below
+rates: exact CohortRates object below
+conservation_status: "MET" | "NOT_MET" | "UNKNOWN"
+```
+
+For `PLANNED_CLEAN_STOP`, `planned_final_stop_fact_boundary` is non-null and equals
+`terminal_fact_boundary`. For an authorized early clean-stop safety action or process failure it is
+`null`; the exact earlier terminal boundary and disposition are preserved. A completed pre-bound
+cutoff gives `PREBOUND_CUTOFF`; otherwise enrollment end equals terminal boundary and reason is
+`TERMINAL_BEFORE_CUTOFF`.
+`PLANNED_CLEAN_STOP | AUTHORIZED_EMERGENCY_STOP` own `CENSORED_AT_STOP`;
+`PROCESS_FAILURE` owns `CENSORED_AT_FAILURE`.
+
+`terminal_source` and `terminal_source_identity` are one exact native-object pair. For
+`PLANNED_CLEAN_STOP`, the object is byte-identical to the manifest's `final_stop_trigger` and the
+identity recomputes as its `PreboundSupervisorTriggerIdentity`. For `AUTHORIZED_EMERGENCY_STOP`, it
+is the accepted `AuthorizedEmergencyStopControl`; for `PROCESS_FAILURE`, it is the accepted
+`FatalFailureControl`. Its runtime/clock identity must match the manifest, its control/trigger time
+must create `terminal_fact_boundary`, and recomputing its typed identity must equal
+`terminal_source_identity`. That same identity is the sole supervisor root on every Outcome
+censored by this terminal disposition.
+
+The status cross-matrix is exact:
+
+| evidence status | conservation status | counts | rates |
+|---|---|---|---|
+| `COMPLETE` | exactly `MET` | exact complete-directory counts satisfying every equation and one-to-one cross-bind below; every pending count is zero | every positive-denominator formula is its exact `ExactRate`; every zero-denominator formula is `null` |
+| `INCOMPLETE` with a deterministic contradiction below | exactly `NOT_MET` | observed-valid unique-identity lower-bound counts below, never authoritative zero claims | all nine values `null` |
+| `INCOMPLETE` with no deterministic contradiction below | exactly `UNKNOWN` | observed-valid unique-identity lower-bound counts below, never authoritative zero claims | all nine values `null` |
+
+`COMPLETE × NOT_MET`, `COMPLETE × UNKNOWN`, and `INCOMPLETE × MET` are invalid. `COMPLETE` is
+permitted only after manifest validation, terminal barrier drain, successful validation and
+enumeration of every durable object in the directory, exact source-root/provenance derivation,
+zero pending objects, all equations, and every identity cross-bind.
+
+Incomplete enumeration is deterministic. The reader walks the exact `objects/` namespace in
+bytewise-ascending relative-path order. A file contributes once to the lower-bound count for its
+declared kind iff it individually passes the exact envelope, payload, bound-directory identities,
+path/identity, and arithmetic checks. Identical semantic identities count once. An individually
+invalid object file, unexpected entry inside `objects/`, conflicting duplicate identity, two
+otherwise valid present objects that violate an immutable state or one-to-one cross-bind, or a
+present summary whose counts disagree with the observed-valid lower bounds is a deterministic
+contradiction and therefore `NOT_MET`. If none exists but manifest/terminal publication, barrier
+drain, a required cross-bound object, or directory completeness cannot be proved, the status is
+`UNKNOWN`. An absent expected path or an inaccessible directory segment never contributes a count
+and never proves `NOT_MET` by absence alone; an existing unreadable or truncated file inside
+`objects/` is an invalid object and therefore a deterministic contradiction. Neither incomplete
+state permits a rate or an authoritative zero claim.
+
+`CohortCounts` has exactly these nonnegative-integer keys:
+
+```text
+shadow_entry_count
+shadow_observation_count
+shadow_pending_count
+shadow_mature_known_count
+shadow_mature_unknown_count
+shadow_censored_stop_count
+shadow_censored_failure_count
+shadow_outcome_count
+shadow_selected_exit_count
+shadow_terminal_pair_count
+rejected_anchor_count
+rejected_observation_count
+rejected_pending_count
+rejected_mature_known_count
+rejected_mature_unknown_count
+rejected_censored_stop_count
+rejected_censored_failure_count
+rejected_outcome_count
+rejected_selected_exit_count
+rejected_terminal_pair_count
+rejected_position_evaluation_count
+rejected_position_action_count
+rejected_close_quote_evaluation_count
+rejected_close_opportunity_evaluation_count
+logical_admitted_pair_count
+logical_rejected_pair_count
+logical_aligned_pair_count
+non_enrolled_admitted_pair_count
+non_enrolled_rejected_pair_count
+enrolled_admitted_pair_count
+enrolled_admitted_pending_count
+enrolled_admitted_mature_known_count
+enrolled_admitted_mature_unknown_count
+enrolled_admitted_censored_stop_count
+enrolled_admitted_censored_failure_count
+enrolled_rejected_pair_count
+enrolled_rejected_pending_count
+enrolled_rejected_mature_known_count
+enrolled_rejected_mature_unknown_count
+enrolled_rejected_censored_stop_count
+enrolled_rejected_censored_failure_count
+enrolled_aligned_pair_count
+enrolled_terminal_pair_count
+enrolled_comparable_pair_count
+logical_no_trade_arm_count
+durable_terminal_pair_count
+durable_no_trade_arm_count
+enrolled_admitted_mature_known_win_count
+enrolled_admitted_mature_known_loss_count
+enrolled_admitted_mature_known_zero_count
+enrolled_rejected_mature_known_win_count
+enrolled_rejected_mature_known_loss_count
+enrolled_rejected_mature_known_zero_count
+```
+
+`CohortRates` has exactly these `ExactRate | null` keys:
+
+```text
+admitted_terminal_availability_rate
+rejected_terminal_availability_rate
+admitted_maturity_known_share
+rejected_maturity_known_share
+admitted_win_rate
+admitted_loss_rate
+rejected_win_rate
+rejected_loss_rate
+aligned_economic_comparison_availability_rate
+```
+
+### Exact terminal null matrix
+
+The matrix applies independently to admitted and rejected terminal Outcomes:
+
+| Terminal state | selected exit | first CLOSE / scheduled attempt / terminal witness | natural lifecycle witnesses | censor mask | entry audit fields | close and four Outcome economics | economic availability | actual fields and availability |
+|---|---|---|---|---|---|---|---|---|
+| `MATURE_KNOWN` | required identity | all required; terminal owner `ORDINARY` | exact empty array | `[]` | all six `Decimal` | all seven `Decimal` | `KNOWN` | all ten `null`; all ten availability values `UNKNOWN` |
+| `MATURE_UNKNOWN` | `null` | all required; terminal owner `ORDINARY` | exact `[SHORT, LONG]` witnesses | `[]` | all six `Decimal` | all seven `null` | `UNKNOWN` | all ten `null`; all ten availability values `UNKNOWN` |
+| `CENSORED_AT_STOP` | `null` | either all eight close/attempt identity/boundary members `null`, or all eight required; retain an earlier `ORDINARY` non-`CENSORED` terminal, otherwise terminal status `CENSORED`, owner `STOP`, and boundary equal to Outcome terminal | exact empty array | `["STOP"]` | all six `Decimal` | all seven `null` | `UNKNOWN` | all ten `null`; all ten availability values `UNKNOWN` |
+| `CENSORED_AT_FAILURE` | `null` | either all eight close/attempt identity/boundary members `null`, or all eight required; retain an earlier `ORDINARY` non-`CENSORED` terminal, otherwise terminal status `CENSORED`, owner `FAILURE`, and boundary equal to Outcome terminal | exact empty array | `["FAILURE"]` | all six `Decimal` | all seven `null` | `UNKNOWN` | all ten `null`; all ten availability values `UNKNOWN` |
+
+The seven close/Outcome economics are
+`gross_close_cashflow_usdc`, `close_fee_reserve_usdc`, `net_close_cashflow_usdc`,
+`gross_pnl_usdc`, `total_public_fee_reserve_usdc`,
+`net_pnl_after_public_standard_fee_reserve_usdc`, and `net_loss_usdc`. The six Entry audit fields
+never become Outcome availability and never turn an unknown exit into known economics.
+For every state, `first_latched_close_action_identity` and its boundary are `null` iff the scheduled
+attempt identity, its boundary, and all attempt-terminal members are `null`. A non-null first CLOSE
+requires the one deterministic scheduled attempt. Terminal Outcomes require that attempt's
+ordinary or barrier-owned terminal identity, status, owner, and boundary; the members are never
+independently nullable.
+`ORDINARY` requires a non-`CENSORED` terminal status. An immutable ordinary terminal that predates a
+later censor boundary is retained unchanged; stop/failure never rewrites it. Only an attempt still
+pending when the barrier opens receives status `CENSORED`, owner `STOP | FAILURE` matching the
+Outcome censor state/mask, and an attempt terminal boundary equal to the Outcome terminal boundary.
+`terminal_supervisor_source_identity` is null for both mature rows and is required for both censor
+rows under the exact summary cross-bind above.
+
+For aligned pairs, `no_trade_cashflow_usdc` is always exact known `"0"`. The trade net PnL and
+policy advantage are both `Decimal` with comparison availability `KNOWN` only for
+`MATURE_KNOWN`; for the other three terminal states both are `null` and availability is `UNKNOWN`.
 
 ## Writer, readers, validation, and compatibility
 
@@ -514,8 +1678,25 @@ semantics. It consumes immutable public DTOs from `market_monitor`, `options_dom
 
 One downstream evidence directory binds exactly one code identity, runtime identity,
 `OutcomeContractIdentity`, and exact three-Policy identity set. It is separate from Radar evidence.
-The writer uses canonical UTF-8 JSON, sorted keys, finite exact decimal strings, newline termination,
-exclusive creation, file flush, and directory flush.
+The validated manifest is exactly `manifest.json` at that directory root; no alternate manifest
+path or second manifest is accepted. The directory identity graph is the preflight graph above:
+manifest candidate/ref/tree, contract bytes, three Policy bytes, every envelope, every
+`FactBoundary`, summary manifest identity, and all typed identity preimages must satisfy every
+recorded-value and content equality again during read. A sealed reader never resolves or depends on
+current remote state. Moving or deleting `intended_remote_ref`, loss of network access, or later
+repository history does not invalidate immutable evidence; the reader validates the recorded
+`verified_remote_ref` value and locally available named commit/tree without making a network call.
+The writer accepts only the shared envelope and exact payload key set for the declared kind. It
+recomputes `content_schema_identity`, every kind-specific `object_identity`, arithmetic, conditional
+nullability, direct-source projection, array order/cardinality, and the top-level identity
+cross-bind before persistence. It
+uses canonical UTF-8 JSON with bytewise-ascending keys at every object level, separators exactly
+`","` and `":"`, `ensure_ascii = false`, no BOM, no Unicode normalization, finite exact Decimal
+strings, and exactly one trailing LF. Each object path is exactly
+`objects/<object_kind>/<object_identity_without_sha256_prefix>.json`; the path identity must match
+the envelope identity. Creation is exclusive and followed by file flush and directory flush.
+Unknown entries inside `objects/` are invalid; diagnostics outside that namespace are
+non-authoritative and never enter counts.
 
 For every semantic identity:
 
@@ -526,11 +1707,13 @@ For every semantic identity:
 - mixed code/contract/Policy/runtime identities fail closed; and
 - writers never overwrite an existing object.
 
-Repository-owned current readers validate only the exact current downstream schema. Any explicitly
-sealed future reader remains immutable under its owning schema. A different contract digest,
-Policy identity, code identity, source family, maturity rule, exit rule, cohort rule, or arithmetic
-is `NOT_COMPARABLE` for economic/qualification claims unless a later authorized compatibility
-contract proves otherwise.
+Repository-owned current readers target exactly
+`CanonicalIdentity("OUTCOME_CONTENT_SCHEMA", OutcomeContractContentDigest, object_kind)`; they do
+not accept a minimum subset, unknown extension, ordinal fallback, or an older/newer contract digest.
+Any explicitly sealed future reader remains immutable under its owning exact schema. A different
+contract digest, Policy identity, code identity, source family, maturity rule, exit rule, cohort
+rule, or arithmetic is `NOT_COMPARABLE` for economic/qualification claims unless a later authorized
+compatibility contract proves otherwise.
 
 Existing `SHORT_VOL_ANOMALY_EVENT`, `PUBLIC_ATOMIC_QUOTE_EVENT`, `RADAR_RUN_SUMMARY`, current Radar
 writer/readers, and sealed Radar readers remain unchanged. No migration, replay, recomputation,
@@ -545,72 +1728,180 @@ calculations, or elapsed seconds.
 For every complete evidence directory:
 
 ```text
-ShadowEntry_count =
+shadow_entry_count =
+    shadow_observation_count
+
+shadow_observation_count =
     shadow_pending_count
     + shadow_mature_known_count
     + shadow_mature_unknown_count
     + shadow_censored_stop_count
     + shadow_censored_failure_count
 
-RejectedCounterfactualAnchor_count =
+shadow_outcome_count =
+    shadow_mature_known_count
+    + shadow_mature_unknown_count
+    + shadow_censored_stop_count
+    + shadow_censored_failure_count
+
+shadow_selected_exit_count =
+    shadow_mature_known_count
+
+shadow_terminal_pair_count =
+    shadow_outcome_count
+
+rejected_anchor_count =
+    rejected_observation_count
+
+rejected_observation_count =
     rejected_pending_count
     + rejected_mature_known_count
     + rejected_mature_unknown_count
     + rejected_censored_stop_count
     + rejected_censored_failure_count
 
+rejected_outcome_count =
+    rejected_mature_known_count
+    + rejected_mature_unknown_count
+    + rejected_censored_stop_count
+    + rejected_censored_failure_count
+
+rejected_selected_exit_count =
+    rejected_mature_known_count
+
+rejected_terminal_pair_count =
+    rejected_outcome_count
+
+rejected_position_evaluation_count =
+    rejected_position_action_count
+
+logical_admitted_pair_count =
+    shadow_observation_count
+
+logical_rejected_pair_count =
+    rejected_observation_count
+
 logical_aligned_pair_count =
-    ShadowEntry_count
-    + RejectedCounterfactualAnchor_count
+    logical_admitted_pair_count
+    + logical_rejected_pair_count
+
+logical_no_trade_arm_count =
+    logical_aligned_pair_count
+
+logical_admitted_pair_count =
+    enrolled_admitted_pair_count
+    + non_enrolled_admitted_pair_count
+
+logical_rejected_pair_count =
+    enrolled_rejected_pair_count
+    + non_enrolled_rejected_pair_count
+
+enrolled_admitted_pair_count =
+    enrolled_admitted_pending_count
+    + enrolled_admitted_mature_known_count
+    + enrolled_admitted_mature_unknown_count
+    + enrolled_admitted_censored_stop_count
+    + enrolled_admitted_censored_failure_count
+
+enrolled_rejected_pair_count =
+    enrolled_rejected_pending_count
+    + enrolled_rejected_mature_known_count
+    + enrolled_rejected_mature_unknown_count
+    + enrolled_rejected_censored_stop_count
+    + enrolled_rejected_censored_failure_count
 
 enrolled_aligned_pair_count =
     enrolled_admitted_pair_count
     + enrolled_rejected_pair_count
 
-enrolled_aligned_pair_count =
-    enrolled_pair_pending_count
-    + enrolled_pair_mature_known_count
-    + enrolled_pair_mature_unknown_count
-    + enrolled_pair_censored_stop_count
-    + enrolled_pair_censored_failure_count
+enrolled_terminal_pair_count =
+    enrolled_admitted_mature_known_count
+    + enrolled_admitted_mature_unknown_count
+    + enrolled_admitted_censored_stop_count
+    + enrolled_admitted_censored_failure_count
+    + enrolled_rejected_mature_known_count
+    + enrolled_rejected_mature_unknown_count
+    + enrolled_rejected_censored_stop_count
+    + enrolled_rejected_censored_failure_count
+
+enrolled_comparable_pair_count =
+    enrolled_admitted_mature_known_count
+    + enrolled_rejected_mature_known_count
+
+enrolled_admitted_mature_known_count =
+    enrolled_admitted_mature_known_win_count
+    + enrolled_admitted_mature_known_loss_count
+    + enrolled_admitted_mature_known_zero_count
+
+enrolled_rejected_mature_known_count =
+    enrolled_rejected_mature_known_win_count
+    + enrolled_rejected_mature_known_loss_count
+    + enrolled_rejected_mature_known_zero_count
+
+durable_terminal_pair_count =
+    shadow_terminal_pair_count
+    + rejected_terminal_pair_count
+
+durable_no_trade_arm_count =
+    durable_terminal_pair_count
 ```
 
-Every terminal Outcome count cross-binds exactly one observation and terminal aligned pair. Every
-selected exit cross-binds exactly one `MATURE_KNOWN` Outcome. Every `MATURE_KNOWN` Outcome has
-exactly one selected exit. `MATURE_UNKNOWN` and censored units have none.
+Every terminal Outcome cross-binds exactly one observation and one durable terminal pair of the
+same family; the reverse mapping is also one-to-one. Every selected exit cross-binds exactly one
+`MATURE_KNOWN` Outcome and vice versa. `MATURE_UNKNOWN` and censored units have no selected exit.
+Every rejected Position evaluation has exactly one rejected Position action. Every logical pair
+has one logical `NO_TRADE` arm, while only a terminal pair writes one durable `NO_TRADE` arm;
+pending pairs are never counted as durable pair objects. Enrollment changes denominators, not
+product-object creation. For a terminal summary with `evidence_status = COMPLETE`,
+`shadow_pending_count = rejected_pending_count = enrolled_admitted_pending_count =
+enrolled_rejected_pending_count = 0`.
 
-| Metric | Numerator | Denominator and conditioning | `null` rule |
+| `CohortRates` key | Exact numerator | Exact denominator and conditioning | `null` rule |
 |---|---|---|---|
-| admitted terminal-availability rate | `shadow_mature_known + shadow_mature_unknown` | admitted units that are terminal mature or censored | `null` if denominator zero/unknown |
-| rejected terminal-availability rate | `rejected_mature_known + rejected_mature_unknown` | rejected units that are terminal mature or censored | `null` if denominator zero/unknown |
-| maturity known share | mature-known | `mature_known + mature_unknown` only | `null` if denominator zero/unknown |
-| PnL/win/loss statistics | mature-known units with exact economics | mature-known units only | `null` if denominator zero/unknown |
-| aligned economic-comparison rate | comparable enrolled pairs | enrolled pairs whose trade arm is `MATURE_KNOWN`; unknown/censored trade arms excluded and counted separately | `null` if denominator zero/unknown |
+| `admitted_terminal_availability_rate` | `enrolled_admitted_mature_known_count + enrolled_admitted_mature_unknown_count` | `enrolled_admitted_mature_known_count + enrolled_admitted_mature_unknown_count + enrolled_admitted_censored_stop_count + enrolled_admitted_censored_failure_count` | `null` iff denominator zero |
+| `rejected_terminal_availability_rate` | `enrolled_rejected_mature_known_count + enrolled_rejected_mature_unknown_count` | `enrolled_rejected_mature_known_count + enrolled_rejected_mature_unknown_count + enrolled_rejected_censored_stop_count + enrolled_rejected_censored_failure_count` | `null` iff denominator zero |
+| `admitted_maturity_known_share` | `enrolled_admitted_mature_known_count` | `enrolled_admitted_mature_known_count + enrolled_admitted_mature_unknown_count` | `null` iff denominator zero |
+| `rejected_maturity_known_share` | `enrolled_rejected_mature_known_count` | `enrolled_rejected_mature_known_count + enrolled_rejected_mature_unknown_count` | `null` iff denominator zero |
+| `admitted_win_rate` | `enrolled_admitted_mature_known_win_count` | `enrolled_admitted_mature_known_count` | `null` iff denominator zero |
+| `admitted_loss_rate` | `enrolled_admitted_mature_known_loss_count` | `enrolled_admitted_mature_known_count` | `null` iff denominator zero |
+| `rejected_win_rate` | `enrolled_rejected_mature_known_win_count` | `enrolled_rejected_mature_known_count` | `null` iff denominator zero |
+| `rejected_loss_rate` | `enrolled_rejected_mature_known_loss_count` | `enrolled_rejected_mature_known_count` | `null` iff denominator zero |
+| `aligned_economic_comparison_availability_rate` | `enrolled_comparable_pair_count` | `enrolled_terminal_pair_count`; pending excluded, mature-unknown/censored included and separately counted | `null` iff denominator zero |
+
+Every non-null cell is the exact `ExactRate {numerator, denominator}` above; equality is rational
+equality, so `1/3` remains exactly `{1, 3}` and is never rounded into a `Decimal`.
 
 A win is exact net PnL `> 0`, a loss is `< 0`, and exact zero is neither win nor loss and is reported
-separately. No `MATURE_UNKNOWN`, pending, or censored unit enters PnL, win, loss, or aligned economic
-comparison.
+separately. Admitted and rejected economic distributions are never silently pooled. A combined
+view, if reported, must be explicitly labeled and must carry both family numerators and
+denominators. No `MATURE_UNKNOWN`, pending, or censored unit enters PnL, win, loss, or aligned
+economic comparison; those terminal states do enter the availability-rate denominator above so
+the rate is not tautologically one.
 
-A numeric zero Entry claim requires the known nonzero upstream admission-evaluable denominator. A
-numeric zero rejected-anchor claim requires a known nonzero complete `EVALUABLE WATCH | ABSTAIN`
-slot denominator. A numeric zero mature Outcome or exit claim requires a known nonzero admitted or
-rejected observation denominator with complete conservation. A zero or unknown denominator
-serializes every rate as `null`, never `0`.
+An exact zero object count is authoritative only in a `COMPLETE × MET` summary and means only that
+the complete enumerated directory contains zero such objects. This contract defines no Entry rate
+or rejected-anchor rate and binds no upstream opportunity-coverage denominator, so a zero Entry or
+anchor count cannot claim zero opportunity rate, reachability, or usable cohort. In an incomplete
+summary, a partial zero is diagnostic only and never an absence claim. A numeric zero cohort rate
+requires its exact positive denominator above; a zero or unavailable denominator serializes the
+rate as `null`, never `0`.
 
 ## Direct verification and evidence boundary
 
 Direct contract tests must prove:
 
-- semantic identity, exact three-Policy binding, and absence of another Policy;
+- typed canonical identity fixed vectors, semantic identity, exact three-Policy binding, and
+  absence of another Policy;
 - strictly-future observation and immutable five-state lifecycle;
 - causal-order first eligible exit and no hindsight replacement;
 - exact four economics equations, signs, full `q`, and actual-field non-claims;
 - exact `MATURE_UNKNOWN` predicates without settlement payoff;
 - one rejected anchor per slot, excluded inputs, and separate rejected identities;
 - aligned `NO_TRADE`, terminal/censor-mask alignment, and comparison exclusion;
-- manifest result-independence and clean-stop/failure ordering;
-- durable object fields, writer/readers, strict duplicate/mixed-identity behavior;
-- conservation, denominators, natural zero, `null`, and `UNKNOWN`; and
+- manifest exact-byte identity, result-independence, emergency/failure mapping, and stop ordering;
+- durable object fields, full-quantity consumed-level order, exact provenance derivation,
+  writer/readers, and strict duplicate/mixed-identity behavior;
+- conservation, completeness/status matrix, denominators, natural zero, `null`, and `UNKNOWN`; and
 - compatibility with unchanged Radar and Underwriting/Position contracts.
 
 This authority-only closure requires no production-public command, live market fact, capture,

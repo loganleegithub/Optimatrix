@@ -126,6 +126,9 @@ Implementation may reuse immutable member results, but every affected aggregate 
 and settled as one complete snapshot before any aggregate, witness, or Layer 2 result is consumed.
 The architecture does not require a generic dependency engine.
 
+Detector clear, hysteresis, and re-arm rules define Radar episodes. Evaluations inside one armed
+episode update the current observation but do not multiply the Radar-episode count.
+
 ## Continuity and availability
 
 Streaming order books begin from an acknowledged subscription and accepted snapshot, then require
@@ -179,7 +182,7 @@ participates in current-truth decisions.
 Index baseline availability and publication are separate. For each Policy return count, the
 Monitor projects an exact `N + 1` immutable `MinuteClose` window ending at the latest minute jointly
 proven by trusted-time lower bound and accepted source watermark. Per-band availability is
-`AVAILABLE| WARMUP | WINDOW_GAP | SOURCE_STALE | CONTINUITY_GAP`; a shorter band may remain
+`AVAILABLE | WARMUP | WINDOW_GAP | SOURCE_STALE | CONTINUITY_GAP`; a shorter band may remain
 available while a longer band is warming or contains an older window gap. Independently, one
 tracker per acknowledged index generation and global-continuity epoch records only the immediate
 successor publication phase `CURRENT | TIME_BOUNDARY_PENDING | WATERMARK_PENDING` after the first
@@ -234,19 +237,18 @@ admit Shadow Entry, represent a maker order or fill, manage a position, or produ
 
 ### Contracted downstream Underwriting, Position, Outcome, and cohort boundary
 
-[`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) owns the
-future meanings of separate Underwriting and Position Policies, public-fact contracts, atomic
-entry/close economics, Candidate validity, deterministic Shadow admission, Position actions,
-hard-close priority, close quote state, and Shadow close opportunity.
+[`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) owns
+Underwriting, deterministic Shadow admission, immutable post-admission Position actions, and
+strictly future close-opportunity semantics. The accepted contract below separately owns
+counterfactual Outcome and cohort semantics. No current package implements or consumes either
+boundary.
 
 [`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](../contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
 owns causal-first public counterfactual exit selection, terminal Shadow Outcome and rejected-
 counterfactual maturity/censoring, cohort-aligned `NO_TRADE`, forward-evidence conservation, and
 strict downstream evidence compatibility. It introduces no Outcome/Cohort Policy and no new market,
-delivery, or settlement-price source.
-
-No current package implements or consumes either boundary. Contract presence does not authorize a
-writer, CLI, live integration, cohort, Outcome, private source, or execution interface.
+delivery, or settlement-price source. Contract presence does not authorize a writer, CLI, live
+integration, cohort, Outcome, private source, or execution interface.
 
 A later separately activated implementation must introduce one pure downstream owner named
 `short_vol_underwriting`. It consumes immutable public DTOs from the existing lower layers and owns
@@ -269,11 +271,17 @@ market_monitor → options_domain → short_vol_radar
                     radar_runtime
 ```
 
+Lower layers never import higher layers. Runtime composition may depend on all internal packages.
+Any later Underwriting or Position module must be introduced by its own authorized closure and
+consume lower-layer immutable public DTOs. No module receives private/account access under
+`PUBLIC_SHADOW`.
+
 Authorized future direction, only after a separately active implementation task:
 
 ```text
 market_monitor ─┬→ options_domain ─→ short_vol_radar
                 └→ future short_vol_underwriting
+options_domain ───────────────→ future short_vol_underwriting
 short_vol_radar ───────────────→ future short_vol_underwriting
 radar_runtime composes every implemented owner
 ```
@@ -323,10 +331,13 @@ desired signed legs and positive normalized gross entry credit from an active of
 book. `NO_ACTIVE_COMBO`, `NO_TARGET_SIZE_CREDIT_QUOTE`, and combo `UNKNOWN` do not change
 `ANOMALY_ACTIVE`; with no active anomaly the state is `NOT_EVALUATED`.
 
-Component-leg prices are not an input or diagnostic object in the Radar closure: they are not
+Component-leg prices are not an input or diagnostic object in this closure: they are not
 simultaneous, carry leg risk, and cannot substitute for an official atomic combo. A public atomic
-quote is not a maker order or fill. Public fee reserves, defined-risk loss measures, margin
-non-claims, Greeks-based structure quality, and future closeability belong to downstream contracts.
+quote is not a maker order or fill. Fee tiers, delivery fees, maximum loss, margin, Greeks-based
+structure quality, and future closeability belong to later Underwriting or Execution.
+
+The accepted downstream contracts refine those later public fee-reserve, defined-risk loss,
+Candidate, Position, and counterfactual Outcome meanings without changing the Radar boundary.
 
 ## Minimal events and direct verification
 
@@ -342,27 +353,45 @@ continuity, and projection tests exercise the same small pure functions used by 
 The first Radar closure intentionally creates no replay path, second calculator, provenance graph,
 or persisted recomputation contract.
 
-## Frozen Underwriting, Position, Outcome, and cohort architecture
+## Later Decision and position architecture
 
-The accepted Underwriting/Position contract freezes two separate content-identified Policy
-artifacts. Underwriting consumes a current active anomaly plus a current official full-target
-atomic entry quote and exact public risk/economic facts. Candidate is permitted only when the
-complete Position Policy is already frozen.
+The accepted downstream contract freezes the future behavior, but separate authorization remains
+required to implement it. Underwriting consumes an active anomaly plus a current official atomic
+quote and compares its executable premium with declared path, jump, tail, friction, liquidity, and
+uncertainty reserves.
 
-Shadow admission has no independent Policy. It is a deterministic gate that requires a still-valid
-Candidate and a post-Candidate official atomic refresh. A quiet continuous book may be re-proved by
-the one bounded public snapshot race; a historical atomic event or Candidate-time projection cannot
-be reused. `SHADOW_ENTRY` creates no exposure.
+Candidate is permitted only when a complete Position Policy is already frozen. `SHADOW_ENTRY`
+requires a still-valid Candidate and a post-Candidate official public combo snapshot/change or
+post-Candidate public snapshot response with a strictly later source and causal identity. It
+freezes the refreshed target-size atomic combo entry quote and creates no exposure. Admission has
+no separate configurable Policy; its fixed gates bind the separate Underwriting and Position
+Policies. A legged Shadow admission requires its own later Policy. Future actual exposure begins
+at the first opening fill, including a partial or single-leg fill.
 
-The Position Policy consumes current entry-specific public facts and returns
-`HOLD | CLOSE | UNKNOWN`. It has explicit latest-exit and expiry boundaries but no preselected
-holding duration. Position evaluation starts strictly after Entry, the first known CLOSE is latched,
-and a missing quote cannot erase that action.
+The Position Policy consumes current position-specific facts and returns
+`HOLD | CLOSE | UNKNOWN`. It has explicit latest-exit and settlement boundaries but no
+preselected holding duration. Position evaluation starts strictly after Entry, and the first
+`CLOSE` is latched for that Shadow Position.
 
-`close_quote_state` remains independent:
-`ATOMIC_COMBO_CLOSE_QUOTE | LEGGED_CLOSE_REFERENCE | UNEXECUTABLE | UNKNOWN`. Public Shadow records
+`close_quote_state` is separately
+`ATOMIC_COMBO_CLOSE_QUOTE | LEGGED_CLOSE_REFERENCE | UNEXECUTABLE | UNKNOWN`. A known hard-close
+condition remains `CLOSE` when its quote is unavailable. Public Shadow records
 `SHADOW_CLOSE_OPPORTUNITY` only when action is `CLOSE` and a strictly later atomic combo quote
-covers full remaining quantity. Component-leg references remain diagnostic.
+covers the full remaining quantity. A legged reference is diagnostic until an explicit legging
+exit Policy is authorized. Future execution must reconcile orders and fills; exposure ends only
+when the final closing fill makes every leg flat or authorized settlement completes. Shadow and
+actual durations are different fields and may never be collapsed.
+
+After `SHADOW_ENTRY`, runtime composition must maintain the official public catalog, platform,
+index, ticker, and active-combo-book lifecycle needed by the open Shadow
+Position independently of the Radar anomaly episode. Episode clear, pause, or Layer 2 shutdown
+cannot stop Position observation. Component-option books are optional diagnostics; their absence
+or gap is not a required-source failure. Quiet continuous books do not expire because no level
+changed; last-mutation age remains diagnostic. This is bounded current state, not full-market
+persistence. A public close opportunity never reduces Shadow remaining quantity or creates a
+fill, flatness, settlement, PnL, or Outcome.
+
+### Frozen Outcome and forward-cohort extension
 
 The accepted Outcome/cohort contract begins after these upstream identities. Each `SHADOW_ENTRY`
 starts one strictly-future observation. Its own causal-order first `ELIGIBLE` full-quantity close
@@ -383,9 +412,9 @@ a Candidate, Entry, Shadow Position, or Shadow Outcome. A later Entry in the sam
 separate causal unit.
 
 Every admitted unit is aligned as `SHADOW_TRADE` versus `NO_TRADE`; every rejected unit is aligned
-as `NO_TRADE` versus `REJECTED_COUNTERFACTUAL_TRADE`. The no-trade cashflow is definitionally zero, but a pair is
-economically comparable only when its trade arm is `MATURE_KNOWN`. Unknown and censored trade arms
-cannot enter the comparison denominator.
+as `NO_TRADE` versus `REJECTED_COUNTERFACTUAL_TRADE`. The no-trade cashflow is definitionally zero,
+but a pair is economically comparable only when its trade arm is `MATURE_KNOWN`. Unknown and
+censored trade arms cannot enter the comparison denominator.
 
 The future `short_vol_underwriting` owner writes these objects to one downstream evidence directory
 separate from Radar evidence. Existing Radar schemas and current/sealed readers remain unchanged.
@@ -398,11 +427,11 @@ Each layer has its own unit:
 
 ```text
 monitor: covered / degraded / unknown time
-radar: usable evaluations by current TTE band; distinct short-leg episodes by activation band
+radar: usable evaluations by current TTE band; distinct short-leg episodes attributed once to activation band
 atomic availability: active-anomaly evaluations by official combo state
-underwriting: distinct opportunities, consumed-fact Decisions, and evaluable actions
-admission: still-valid Candidates, terminal admission outcomes, and Shadow Entries
-position: Entry-specific evaluations, known actions, UNKNOWN actions, and close quote states
+underwriting: evaluable future opportunities and Candidate / Watch / Abstain actions
+admission: Candidates and Shadow Entries / future executed Entries
+position: Shadow Entries or opening fills and their separate mature / unknown Outcomes
 close opportunity: known CLOSE actions and strictly later full-quantity atomic opportunities
 outcome: admitted or rejected observations partitioned into pending, mature, or censored state
 aligned cohort: one policy/no-trade pair per admitted or rejected anchor
@@ -412,21 +441,22 @@ aligned cohort: one policy/no-trade pair per admitted or rejected anchor
 `MATURE_UNKNOWN` enters only the known-maturity availability denominator. A zero rate requires a
 known nonzero denominator; a zero or unknown denominator serializes `null`.
 
-Market messages, detector calculations, quote updates, legs, schema checks, source generations,
-request ids, files, and elapsed runtime are not business opportunities, Outcomes, or cohort units.
+Market messages, detector calculations, quote updates, legs, schema checks, and elapsed runtime
+are neither Radar-episode nor Candidate-opportunity denominators. Source generations, request ids,
+files, and elapsed runtime are not Outcomes or cohort units.
 
 ## Structural non-goals
 
 - a durable full-market event store on the Online Runtime hot path;
 - periodic batch scanning or one process per structure;
 - a generic scheduler, dependency graph, stream platform, feature store, or model registry;
-- persisting every market evaluation or theoretical structure;
-- replay, an offline second calculator, or provenance machinery for the Radar closure;
-- maker, order, fill, margin, account, delivery-price, or settlement-price machinery under public
-  Shadow;
+- persisting every evaluation or theoretical structure;
+- replay, an offline second calculator, or provenance machinery for the first Radar closure;
+- maker, order, fill, fee, margin, or maximum-loss machinery inside public availability;
+- services split before a business closure requires them;
+- account, delivery-price, or settlement-price machinery under public Shadow;
 - an Outcome or Cohort Policy beyond the three accepted strategy Policy identities;
 - hindsight, best-quote, last-quote, mark, midpoint, or settlement-payoff exits;
 - combining qualification, Challenger, promotion, or execution with the first fixed-contract
   runtime/cohort closure;
-- services split before a business closure requires them; and
 - private execution components under public Shadow authority.
