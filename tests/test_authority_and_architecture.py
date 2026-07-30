@@ -13,7 +13,10 @@ AUTHORITY_FILES = (
     ROOT / "docs/authority/DELIVERY_CONTRACT.md",
 )
 
-IMPLEMENTATION_CONTRACTS = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md",)
+IMPLEMENTATION_CONTRACTS = (
+    ROOT / "docs/contracts/SHORT_VOL_RADAR.md",
+    ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md",
+)
 
 INTERNAL_PACKAGES = {
     "market_monitor",
@@ -54,7 +57,10 @@ def test_active_authority_has_explicit_status_and_no_stale_location() -> None:
         "PRODUCT_CONSTITUTION.md",
         "SYSTEM_ARCHITECTURE.md",
     }
-    assert {path.name for path in (ROOT / "docs/contracts").glob("*.md")} == {"SHORT_VOL_RADAR.md"}
+    assert {path.name for path in (ROOT / "docs/contracts").glob("*.md")} == {
+        "SHORT_VOL_RADAR.md",
+        "SHORT_VOL_UNDERWRITING_POSITION.md",
+    }
     for path in (*AUTHORITY_FILES, *IMPLEMENTATION_CONTRACTS):
         opening = "\n".join(path.read_text(encoding="utf-8").splitlines()[:8])
         assert "**Status:** ACTIVE" in opening, f"missing active status in {path}"
@@ -136,33 +142,37 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert declaration in template
 
 
-def test_current_stage_records_established_radar_without_activating_successor() -> None:
+def test_current_stage_closes_contract_freeze_without_activating_runtime() -> None:
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
+    current_stage_flat = " ".join(current_stage.split())
 
     marker = "**Sole authorized next product-capability closure:**"
     assert current_stage.count(marker) == 1
-    assert f"{marker} `NONE — no successor closure activated`" in current_stage
+    assert "`NONE` — no successor product-capability closure is active" in current_stage_flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current_stage
     assert (
         "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current_stage
     )
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current_stage
+    assert "## Root blocker" in current_stage
+    assert (
+        "Until such a task is active and its pre-runtime authority requirements are satisfied, "
+        "no downstream runtime work or live command is authorized" in current_stage_flat
+    )
     assert "## Queued sequence — not authorized" in current_stage
+    assert "[`SHORT_VOL_UNDERWRITING_POSITION`]" in current_stage
+    assert "**Fixed-contract runtime and fixed-Policy forward cohort:**" in current_stage
 
 
-def test_completed_radar_consolidation_leaves_no_active_task_or_successor() -> None:
+def test_completed_underwriting_contract_leaves_no_active_task() -> None:
     old_task = ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md"
-    task_path = ROOT / "tasks/RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION.md"
+    completed_task = ROOT / "tasks/RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION.md"
+    contract_task = ROOT / "tasks/SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT.md"
 
     assert not old_task.exists()
-    assert not task_path.exists()
+    assert not completed_task.exists()
+    assert not contract_task.exists()
     assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
-
-    current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    assert "There is no active product-capability or implementation-maintenance closure" in (
-        current_stage
-    )
-    assert "`NONE — no successor closure activated`" in current_stage
 
     radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
     assert "`IndexTailStatus` and `IndexBaselineState.status` remain current production" in radar
@@ -171,21 +181,301 @@ def test_completed_radar_consolidation_leaves_no_active_task_or_successor() -> N
     assert "`INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING`" in radar
 
 
+def test_underwriting_position_contract_freezes_public_economics_and_identity() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md").read_text(
+        encoding="utf-8"
+    )
+    flat = " ".join(contract.split())
+
+    assert "**Status:** ACTIVE IMPLEMENTATION CONTRACT" in contract
+    assert "**Current implementation state:** `CONTRACT_FROZEN_RUNTIME_NOT_IMPLEMENTED`" in contract
+    assert "TBD" not in contract
+    assert "`combo_book_currentness_budget_ms`" not in contract
+    assert "`catalog_currentness_budget_ms`" not in contract
+    for invariant in (
+        'Policy identity = "sha256:" + lowercase_sha256_of_exact_file_bytes',
+        "Underwriting and Position are two separate immutable Policy artifacts",
+        "There is no third admission Policy",
+        '`fee_role = "TAKER"`',
+        "`fee_rate_index_fraction = 0.0003`",
+        "`combo_snapshot_send_budget_ms`",
+        "`combo_snapshot_response_budget_ms`",
+        "`fee_schedule_effective_label`",
+        "buy_leg_standard_fee_usdc <= 0.0003 × index × q",  # noqa: RUF001
+        "combo_standard_base_fee_usdc = max(buy_leg_standard_fee_usdc, "
+        "sell_leg_standard_fee_usdc) <= 0.0003 × index × q",  # noqa: RUF001
+        "public standard base-trading-fee upper bound",
+        "`taker_commission <= 0.0003`",
+        "entry_fee_reserve_usdc",
+        "net_entry_credit_usdc",
+        "contractual_payoff_max_loss_ex_fees_usdc",
+        "entry_fee_reserved_payoff_loss_usdc",
+        "underwriting_reserved_loss_usdc",
+        "`actual_all_in_max_loss_usdc` is always `null`",
+        "never `actual_fee`",
+        "A Candidate has no arbitrary TTL and never revives",
+        "`ADMITTED` and `INVALIDATED` are terminal",
+        "Candidate-scoped",
+        "`public/get_order_book` request",
+        "later source identities with the same fingerprint cannot repeat it",
+    ):
+        assert invariant in flat
+
+    key_blocks = re.findall(
+        r"The exact top-level key set is:\n\n```text\n(.*?)\n```",
+        contract,
+        flags=re.DOTALL,
+    )
+    assert len(key_blocks) == 2
+    assert tuple(key_blocks[0].splitlines()) == (
+        "policy_semantic_name",
+        "radar_policy_identity",
+        "target_base_quantity_btc",
+        "clock_currentness_budget_ms",
+        "platform_currentness_budget_ms",
+        "combo_snapshot_send_budget_ms",
+        "combo_snapshot_response_budget_ms",
+        "index_currentness_budget_ms",
+        "option_ticker_currentness_budget_ms",
+        "fee_role",
+        "fee_schedule_source_url",
+        "fee_schedule_retrieved_at_utc",
+        "fee_schedule_effective_label",
+        "fee_rate_index_fraction",
+        "path_risk_reserve_usdc",
+        "jump_risk_reserve_usdc",
+        "tail_risk_reserve_usdc",
+        "liquidity_cost_reserve_usdc",
+        "uncertainty_reserve_usdc",
+        "settlement_cost_reserve_usdc",
+        "maximum_underwriting_reserved_loss_usdc",
+        "minimum_net_entry_credit_usdc",
+        "minimum_net_credit_to_payoff_cap_fraction",
+        "maximum_entry_consumed_level_count",
+    )
+    assert tuple(key_blocks[1].splitlines()) == (
+        "policy_semantic_name",
+        "underwriting_policy_identity",
+        "target_base_quantity_btc",
+        "clock_currentness_budget_ms",
+        "platform_currentness_budget_ms",
+        "combo_snapshot_send_budget_ms",
+        "combo_snapshot_response_budget_ms",
+        "index_currentness_budget_ms",
+        "option_ticker_currentness_budget_ms",
+        "fee_role",
+        "fee_schedule_source_url",
+        "fee_schedule_retrieved_at_utc",
+        "fee_schedule_effective_label",
+        "fee_rate_index_fraction",
+        "latest_exit_lead_ms",
+        "maximum_projected_net_loss_usdc",
+        "maximum_absolute_short_delta",
+        "maximum_absolute_index_return_since_entry_fraction",
+        "maximum_absolute_index_return_since_prior_evaluation_fraction",
+        "maximum_short_mark_iv_increase_fraction",
+        "maximum_close_consumed_level_count",
+        "minimum_take_profit_usdc",
+        "maximum_remaining_premium_fraction",
+    )
+
+
+def test_underwriting_position_contract_freezes_causality_and_admission() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md").read_text(
+        encoding="utf-8"
+    )
+    flat = " ".join(contract.split())
+
+    for invariant in (
+        "code_identity × runtime_identity × session_epoch × ingress_seq",  # noqa: RUF001
+        "Source timestamps describe the exchange fact but do not replace local known-at order",
+        "`NOT_EVALUATED`",
+        "`UNKNOWN`",
+        "exactly one of `CANDIDATE | WATCH | ABSTAIN`",
+        "UnderwritingAvailabilityEvaluationIdentity",
+        "consumed_availability_fact_fingerprint",
+        "An availability identity is created only when that normalized fingerprint or resulting "
+        "availability changes",
+        "UnderwritingActionIdentity",
+        "UnderwritingPositionSlotKey",
+        "at most one Shadow Entry and open Position may arise",
+        "candidate_activation_FactBoundary",
+        "`RUNTIME_OR_CODE_IDENTITY_CHANGED`",
+        "`RADAR_POLICY_OR_EPISODE_PAUSED_ENDED_OR_CHANGED`",
+        "`CONSUMED_NON_ADMISSION_BUSINESS_FINGERPRINT_CHANGED`",
+        "`REUNDERWRITING_NO_LONGER_CANDIDATE`",
+        "`FAILED_ADMISSION_EVALUATION_CONSUMED`",
+        "SubscriptionAdmissionRefreshSourceIdentity",
+        "RpcAdmissionRefreshSourceIdentity",
+        "ScheduledAdmissionAttemptIdentity",
+        "Candidate-scoped `PendingRpc`",
+        "request_SENT_FactBoundary",
+        "all before/after claims use same-runtime `FactBoundary.causal_seq`",
+        "The refreshed book may have economically identical levels",
+        "Raw source identity, source timestamp, receipt identity, request id, subscription "
+        "generation, and official `change_id` are immutable provenance only",
+        "A source update that preserves every normalized business fact neither creates another "
+        "evaluation or Candidate nor invalidates the existing Candidate",
+        "exact_request_params_including_depth_10000",
+        "change_id` must equal the current accepted same-session combo-book market frontier",
+        "No second admission request is permitted",
+        "`ORPHAN_LATE_WIRE` and cannot consume the Candidate's own pending attempt",
+        "Candidate-time projection",
+        "component legs, mark, or mid cannot refresh admission",
+        "After `SHADOW_ENTRY`, the Shadow Position lifecycle is independent",
+        "Radar Layer 2 stopping cannot stop Position observation",
+    ):
+        assert invariant in flat
+    assert "source event began after Candidate activation" not in contract
+    assert "Last-mutation age is diagnostic only and never expires the book" in contract
+    assert (
+        "| no active Radar episode; the episode/short-leg slot is already consumed by Entry; "
+        "complete current scope proves "
+        "`NO_ACTIVE_COMBO` / `NO_TARGET_SIZE_CREDIT_QUOTE`;"
+    ) in contract
+    assert (
+        "| an active episode exists but atomic availability is `UNKNOWN`, or any required public "
+        "fact is missing, stale, incomplete, malformed, gapped, contradictory, or contaminated"
+    ) in contract
+
+
+def test_underwriting_position_contract_freezes_position_and_hard_close_order() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md").read_text(
+        encoding="utf-8"
+    )
+    flat = " ".join(contract.split())
+
+    ordered_reasons = (
+        "`SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED`",
+        "`LATEST_EXIT_BOUNDARY_REACHED`",
+        "`PLATFORM_OR_SOURCE_DISCONTINUITY`",
+        "`MAXIMUM_NET_LOSS_BOUNDARY_REACHED`",
+        "`SHORT_LEG_RISK_BOUNDARY_REACHED`",
+        "`PATH_OR_JUMP_RISK_BOUNDARY_REACHED`",
+        "`VOLATILITY_STATE_BOUNDARY_REACHED`",
+        "`LIQUIDITY_EXIT_BOUNDARY_REACHED`",
+        "`ECONOMIC_EXIT_BOUNDARY_REACHED`",
+    )
+    reason_section = contract.split("## Hard-close and close-reason total order", 1)[1].split(
+        "The predicate truth rules are exact:", 1
+    )[0]
+    offsets = [reason_section.index(reason) for reason in ordered_reasons]
+    assert offsets == sorted(offsets)
+
+    for invariant in (
+        "ENTRY_BOUNDARY → PENDING_STRICTLY_FUTURE_FACT",
+        "CLOSE_LATCHED → CLOSE_LATCHED",
+        "if lifecycle is already `CLOSE_LATCHED`, serialized action remains `CLOSE`",
+        "An unknown higher-priority predicate cannot erase a lower-priority known true predicate",
+        "`trusted_time.upper_ms >= expiry_ms - 1800000`",
+        "`index >= short_strike` for a short call",
+        "`index <= short_strike` for a short put",
+        "`abs(current_index - entry_index) >= entry_return_limit × entry_index`",  # noqa: RUF001
+        "PositionEvaluationIdentity",
+        "PositionActionIdentity",
+        "CloseQuoteEvaluationIdentity",
+        "CloseOpportunityEvaluationIdentity",
+        "ScheduledPostCloseQuoteAttemptIdentity",
+        "The entry index is the initial `prior_evaluation_index`",
+        "An evaluation with index `UNKNOWN` does not advance the anchor",
+        "Position action and quote state are separate",
+        "`ATOMIC_COMBO_CLOSE_QUOTE`",
+        "`LEGGED_CLOSE_REFERENCE`",
+        "`UNEXECUTABLE` or `LEGGED_CLOSE_REFERENCE`",
+        "`UNEXECUTABLE`",
+        "full remaining `q`",
+        "Every quote evaluation on the first-CLOSE boundary remains `PRE_CLOSE`",
+        "That one conditioning transition permits verification of a quiet book even when the "
+        "normalized business fingerprint is unchanged",
+        "The opportunity fingerprint consumes only facts through the first matched eligibility "
+        "rule",
+        "commission and index are ignored",
+        "index is ignored and fee/net economics remain `null / UNKNOWN`",
+        "A new official `change_id`, generation, request id, receipt, or equal-value repeated tick "
+        "alone cannot",
+        "`NOT_REQUESTABLE_UNKNOWN`",
+        "quiet market still invalidates a Candidate at admission cutoff",
+    ):
+        assert invariant in flat
+
+    for lifecycle_row in (
+        "| `open` | trusted-time rule below | false when every other required source is continuous |",
+        "| `settlement` | `TRUE` | false unless another discontinuity exists |",
+        "| `delivered` | `TRUE` | false unless another discontinuity exists |",
+        "| `archivized` | `TRUE` | false unless another discontinuity exists |",
+        "| `inactive` | trusted-time rule below | `TRUE` |",
+        "| `locked` | trusted-time rule below | `TRUE` |",
+        "| `halted` | trusted-time rule below | `TRUE` |",
+    ):
+        assert lifecycle_row in contract
+
+    classifier = contract.split("The classifier applies this first-match total order:", 1)[1].split(
+        "`LEGGED_CLOSE_REFERENCE` cannot", 1
+    )[0]
+    classifier_states = (
+        "`UNEXECUTABLE`",
+        "`LEGGED_CLOSE_REFERENCE`",
+        "`UNEXECUTABLE`",
+        "`UNKNOWN`",
+        "`ATOMIC_COMBO_CLOSE_QUOTE`",
+        "`UNEXECUTABLE`",
+    )
+    offsets = []
+    start = 0
+    for state in classifier_states:
+        offset = classifier.index(state, start)
+        offsets.append(offset)
+        start = offset + len(state)
+    assert offsets == sorted(offsets)
+    assert "A bounded REST response that does not cover `q` is also `UNKNOWN`" in flat
+
+
+def test_underwriting_position_contract_freezes_denominators_and_non_claims() -> None:
+    contract = (ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md").read_text(
+        encoding="utf-8"
+    )
+    flat = " ".join(contract.split())
+
+    for invariant in (
+        "Underwriting action rate",
+        "Candidate activation rate",
+        "admission-evaluable rate",
+        "Shadow Entry rate",
+        "Position known-action rate",
+        "close-quote known-state rate",
+        "close-opportunity rate while closing",
+        "A zero or unknown denominator serializes rate `null`, never `0`",
+        "No `SHADOW_ENTRY` means no Position, close opportunity, or Outcome object",
+        "Position `UNKNOWN` is a serialized decision-availability result",
+        "every `PositionActionIdentity` whose action is `HOLD` or `CLOSE`",
+        "`CloseOpportunityEvaluationIdentity` values with eligibility `ELIGIBLE + INELIGIBLE`",
+        "all-`UNKNOWN` economics therefore serialize `null`, never zero",
+        "No current package implements this boundary",
+        "This contract requires no live market command",
+        "public-quote-not-fill",
+    ):
+        assert invariant in flat
+
+
 def test_authority_defines_one_live_short_vol_business_flow() -> None:
     constitution = (ROOT / "docs/authority/PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     architecture = (ROOT / "docs/authority/SYSTEM_ARCHITECTURE.md").read_text(encoding="utf-8")
     delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
     radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
+    underwriting = (ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md").read_text(
+        encoding="utf-8"
+    )
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     target_authority = "\n".join(
-        (constitution, current_stage, architecture, delivery, radar, readme)
+        (constitution, current_stage, architecture, delivery, radar, underwriting, readme)
     )
     constitution = " ".join(constitution.split())
     current_stage = " ".join(current_stage.split())
     architecture = " ".join(architecture.split())
     delivery = " ".join(delivery.split())
     radar = " ".join(radar.split())
+    underwriting = " ".join(underwriting.split())
     readme = " ".join(readme.split())
 
     for invariant in (
@@ -309,10 +599,24 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "Ordinary no-anomaly updates",
         "planned holding duration",
         "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`",
-        "No successor product-capability closure is active",
+        "`SHORT_VOL_UNDERWRITING_POSITION`",
+        "no successor product-capability task is active",
+        "no Underwriting, Candidate, Shadow Entry, Position, close-opportunity, or Outcome runtime",
         "future maker/order/fill",
     ):
         assert invariant in readme
+
+    for invariant in (
+        "**Status:** ACTIVE IMPLEMENTATION CONTRACT",
+        "`CONTRACT_FROZEN_RUNTIME_NOT_IMPLEMENTED`",
+        "public quote is not a fill",
+        "`actual_all_in_max_loss_usdc` is always `null`",
+        "A Candidate has no arbitrary TTL",
+        "The refreshed book may have economically identical levels",
+        "Once a known close predicate is true",
+        "A zero or unknown denominator serializes rate `null`, never `0`",
+    ):
+        assert invariant in underwriting
 
     legacy_fragments = (
         "NOT_APPLICABLE_" + "TTE",
@@ -458,7 +762,8 @@ def test_stage_record_binds_both_independent_live_gates() -> None:
         "both live manifests' pre-run verified remote ref "
         "`refs/heads/codex/radar-repository-consolidation` resolved to that exact candidate commit",
         "does not prove indefinite uptime",
-        "no successor closure",
+        "The accepted authority-only contract changes no accepted Radar runtime or live evidence "
+        "identity",
     ):
         assert invariant in current_stage_flat
 
