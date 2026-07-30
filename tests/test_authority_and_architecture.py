@@ -320,9 +320,9 @@ def test_outcome_contract_freezes_one_rejected_anchor_and_separate_path() -> Non
         "never create a rejected anchor",
         "REJECTED_COUNTERFACTUAL_POSITION_EVALUATION",
         "REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION",
-        "RejectedCounterfactualExitIdentity",
+        "REJECTED_COUNTERFACTUAL_EXIT",
         "RejectedCounterfactualOutcomeIdentity",
-        "never becomes a Candidate",
+        "None may serialize Candidate",
         "Each slot can contribute at most one rejected observation",
     ):
         assert invariant in contract
@@ -430,7 +430,7 @@ def test_authority_defines_one_live_flow_and_two_frozen_downstream_contracts() -
     for invariant in (
         "There is no capture job followed by a scan job",
         "Contracted downstream Underwriting, Position, Outcome, and cohort boundary",
-        "future `short_vol_underwriting`",
+        "pure downstream owner named `short_vol_underwriting`",
         "No current package implements or consumes either boundary",
     ):
         assert invariant in architecture
@@ -471,10 +471,13 @@ def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
     active = tuple(
         path
         for path in paths
-        if "**Status:** ACTIVE" in "\n".join(path.read_text(encoding="utf-8").splitlines()[:8])
+        if "**Status:** ACTIVE"
+        in "\n".join(path.read_text(encoding="utf-8").splitlines()[:8])
     )
     assert len(active) <= 1
-    assert all("**Status:** COMPLETE" not in path.read_text(encoding="utf-8") for path in paths)
+    assert all(
+        "**Status:** COMPLETE" not in path.read_text(encoding="utf-8") for path in paths
+    )
     for path in active:
         text = path.read_text(encoding="utf-8")
         if "**Task kind:** `AUTHORITY_ONLY`" in text:
@@ -509,7 +512,9 @@ def test_repository_owned_contracts_use_semantic_not_ordinal_identities() -> Non
             text = text.replace("/api/" + "v" + "2", "/api/external")
         assert forbidden.search(path.relative_to(ROOT).as_posix()) is None
         assert forbidden.search(text) is None, f"ordinal identity remains in {path}"
-        if path.suffix == ".py" and (ROOT / "apps" in path.parents or ROOT / "packages" in path.parents):
+        if path.suffix == ".py" and (
+            ROOT / "apps" in path.parents or ROOT / "packages" in path.parents
+        ):
             assert '"version":' not in text
 
 
