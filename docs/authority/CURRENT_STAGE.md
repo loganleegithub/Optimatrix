@@ -9,7 +9,8 @@
 **Production Short Vol Radar:** `ESTABLISHED`
 
 **Sole authorized next product-capability closure:**
-`NONE` — no successor product-capability closure is active
+`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT_CONTRACT` — authority-only prerequisite; runtime and live
+commands forbidden
 
 ## Authority
 
@@ -29,7 +30,26 @@ The accepted
 contract now freezes the downstream public-only economics, Candidate validity, deterministic
 Shadow admission, Position action, and close-opportunity semantics. Contract presence creates no
 Candidate, admission, Position, close opportunity, cohort, execution, or other runtime behavior.
-No successor task is active.
+The sole active task may freeze only the missing public Shadow Outcome, rejected-counterfactual,
+aligned `NO_TRADE`, and forward-cohort semantics. It does not activate the queued runtime.
+
+### Terminal-goal delegation for the downstream public Shadow closure
+
+`SHORT_VOL_PUBLIC_SHADOW_TERMINAL_GOAL_DELEGATION` records the user's 2026-07-30 authorization for
+the controller to complete one bounded sequence: accept the missing Outcome/cohort prerequisite;
+activate and implement one fixed-contract, fixed-Policy public Shadow runtime; run only its later
+pre-bound production-public evidence after exact-candidate gates; and record only the result that
+independent evidence proves.
+
+The current authority-only phase is bounded to branch
+`codex/short-vol-shadow-outcome-forward-cohort-contract`, one active task, the new contract,
+minimum `CURRENT_STAGE`/architecture/README links, and direct authority tests. Its allowed terminal
+state is an accepted implementation/evaluation contract, physical task deletion, sole next
+closure returned to `NONE`, and no runtime capability. Private/account data, credentials, margin,
+orders, fills, capital, actual execution Outcome, qualification, promotion, persistent
+deployment, force-push, history rewriting, and direct edits to `main` remain forbidden. Later
+implementation and evidence require their own one-at-a-time task-kind gates, exact candidate and
+Policy bindings, independent verification, non-force push, and post-push remote equality.
 
 ### Accepted Radar implementation record
 
@@ -83,12 +103,14 @@ capability.
 
 ## Root blocker
 
-The Underwriting, Shadow-admission, and Position semantic prerequisite is frozen. The root blocker
-to downstream business behavior is now the absence of a separately activated implementation and
-fixed-Policy forward-cohort closure. Until such a task is active and its pre-runtime authority
-requirements are satisfied, no downstream runtime work or live command is authorized. The
-accepted authority-only contract changes no accepted Radar runtime or live evidence identity: the
-governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
+The Underwriting, Shadow-admission, and Position semantic prerequisite is frozen. The immediate
+root blocker is the missing contract for deterministic Shadow counterfactual exit, Outcome
+maturity/censoring, rejected-counterfactual enrollment, cohort-aligned `NO_TRADE`, and honest
+denominators. The active authority-only task must close that prerequisite before any downstream
+runtime or live command may be activated. This task changes no accepted Radar runtime or live
+evidence identity. The accepted authority-only contract changes no accepted Radar runtime or live
+evidence identity: the governing candidate remains
+`9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
 
 ## Implemented capability boundary
 
@@ -156,9 +178,10 @@ The accepted establishment requires no replay, independent offline recomputation
 command, full-market archive, Candidate, Shadow Entry, Position action, mature Outcome,
 profitability, or fill evidence.
 
-## Queued sequence — not authorized
+## Active prerequisite and queued sequence
 
-The following closures remain queued and unauthorized:
+The authority-only Outcome/cohort contract prerequisite is active. It creates no runtime. The
+following product-capability closures remain queued and unauthorized:
 
 1. **Fixed-contract runtime and fixed-Policy forward cohort:** after separate activation,
    implement the accepted contract and record complete anomaly/quote opportunity, Decision,
@@ -169,8 +192,8 @@ The following closures remain queued and unauthorized:
 3. **Promotion and execution:** authorize separately after independent qualification. Account,
    capital, order, and fill authority remain distinct.
 
-A queued closure is not active. Exactly one may be activated only by an explicitly approved
-change after its prerequisite is accepted.
+A queued product-capability closure is not active. The first may be activated only after the
+current prerequisite is accepted and this authority returns the sole next closure to `NONE`.
 
 ## Forbidden under the current boundary
 

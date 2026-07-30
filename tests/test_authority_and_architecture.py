@@ -142,13 +142,16 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert declaration in template
 
 
-def test_current_stage_closes_contract_freeze_without_activating_runtime() -> None:
+def test_current_stage_activates_outcome_contract_without_runtime() -> None:
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     current_stage_flat = " ".join(current_stage.split())
 
     marker = "**Sole authorized next product-capability closure:**"
     assert current_stage.count(marker) == 1
-    assert "`NONE` — no successor product-capability closure is active" in current_stage_flat
+    assert (
+        "`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT_CONTRACT` — authority-only prerequisite; "
+        "runtime and live commands forbidden"
+    ) in current_stage_flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current_stage
     assert (
         "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current_stage
@@ -156,15 +159,15 @@ def test_current_stage_closes_contract_freeze_without_activating_runtime() -> No
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current_stage
     assert "## Root blocker" in current_stage
     assert (
-        "Until such a task is active and its pre-runtime authority requirements are satisfied, "
-        "no downstream runtime work or live command is authorized" in current_stage_flat
+        "The active authority-only task must close that prerequisite before any downstream "
+        "runtime or live command may be activated" in current_stage_flat
     )
-    assert "## Queued sequence — not authorized" in current_stage
+    assert "## Active prerequisite and queued sequence" in current_stage
     assert "[`SHORT_VOL_UNDERWRITING_POSITION`]" in current_stage
     assert "**Fixed-contract runtime and fixed-Policy forward cohort:**" in current_stage
 
 
-def test_completed_underwriting_contract_leaves_no_active_task() -> None:
+def test_completed_underwriting_contract_leaves_only_outcome_contract_task() -> None:
     old_task = ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md"
     completed_task = ROOT / "tasks/RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION.md"
     contract_task = ROOT / "tasks/SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT.md"
@@ -172,7 +175,10 @@ def test_completed_underwriting_contract_leaves_no_active_task() -> None:
     assert not old_task.exists()
     assert not completed_task.exists()
     assert not contract_task.exists()
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
+        "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT_CONTRACT.md",
+        "TEMPLATE.md",
+    ]
 
     radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
     assert "`IndexTailStatus` and `IndexBaselineState.status` remain current production" in radar
