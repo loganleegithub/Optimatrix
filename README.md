@@ -15,11 +15,14 @@ The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact
 Soak evidence. The downstream
 [`SHORT_VOL_UNDERWRITING_POSITION`](docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md) and
 [`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
-contracts are frozen, but no successor product-capability task is active and no Underwriting,
-Candidate, Shadow Entry, Position, close-opportunity, Outcome, rejected-counterfactual, or forward
-cohort runtime exists. Establishment means the bounded public Radar met its frozen reachability and
-operating predicates; it does not mean the Radar is persistently deployed, always running,
-indefinitely stable, profitable, or authorized to trade.
+contracts are frozen. The active
+[`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME`](tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md)
+task selects one exact three-Policy chain and authorizes only bounded implementation and offline
+verification; no Underwriting, Candidate, Shadow Entry, Position, close-opportunity, Outcome,
+rejected-counterfactual, or forward-cohort runtime exists yet, and live commands remain forbidden.
+Establishment means the bounded public Radar met its frozen reachability and operating predicates;
+it does not mean the Radar is persistently deployed, always running, indefinitely stable,
+profitable, or authorized to trade.
 
 ## Intended first business flow
 
