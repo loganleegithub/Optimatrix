@@ -9,15 +9,14 @@
 **Production Short Vol Radar:** `ESTABLISHED`
 
 **Sole authorized next product-capability closure:**
-`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT_CONTRACT` — authority-only prerequisite; runtime and live
-commands forbidden
+`NONE` — no successor product-capability closure is active
 
 ## Authority
 
 This document grants permission under
 [`PRODUCT_CONSTITUTION.md`](PRODUCT_CONSTITUTION.md). It does not own product definitions,
 architecture, detector parameters, or evidence mechanics. Code presence, green tests, old
-receipts, run duration, or roadmap order grant no stage.
+receipts, run duration, contract presence, or roadmap order grant no stage.
 
 The current boundary authorizes the guarded production-public Short Vol Radar defined by
 [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md). Candidate, Shadow admission, executed
@@ -27,11 +26,14 @@ public observation is not authorization for persistent service deployment.
 
 The accepted
 [`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) implementation
-contract now freezes the downstream public-only economics, Candidate validity, deterministic
-Shadow admission, Position action, and close-opportunity semantics. Contract presence creates no
-Candidate, admission, Position, close opportunity, cohort, execution, or other runtime behavior.
-The sole active task may freeze only the missing public Shadow Outcome, rejected-counterfactual,
-aligned `NO_TRADE`, and forward-cohort semantics. It does not activate the queued runtime.
+contract freezes downstream public-only economics, Candidate validity, deterministic Shadow
+admission, Position action, and close-opportunity semantics. The accepted
+[`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](../contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
+implementation/evaluation contract freezes deterministic public counterfactual exit, Outcome
+maturity/censoring, rejected-counterfactual, aligned `NO_TRADE`, forward-cohort, conservation, and
+strict downstream evidence semantics. Contract presence creates no Candidate, admission, Position,
+close opportunity, Outcome, cohort, execution, or other runtime behavior. No successor task is
+active.
 
 ### Terminal-goal delegation for the downstream public Shadow closure
 
@@ -41,15 +43,13 @@ activate and implement one fixed-contract, fixed-Policy public Shadow runtime; r
 pre-bound production-public evidence after exact-candidate gates; and record only the result that
 independent evidence proves.
 
-The current authority-only phase is bounded to branch
-`codex/short-vol-shadow-outcome-forward-cohort-contract`, one active task, the new contract,
-minimum `CURRENT_STAGE`/architecture/README links, and direct authority tests. Its allowed terminal
-state is an accepted implementation/evaluation contract, physical task deletion, sole next
-closure returned to `NONE`, and no runtime capability. Private/account data, credentials, margin,
-orders, fills, capital, actual execution Outcome, qualification, promotion, persistent
-deployment, force-push, history rewriting, and direct edits to `main` remain forbidden. Later
-implementation and evidence require their own one-at-a-time task-kind gates, exact candidate and
-Policy bindings, independent verification, non-force push, and post-push remote equality.
+The authority-only prerequisite is accepted. Its terminal state is the active
+implementation/evaluation contract, physical task deletion, sole next closure returned to `NONE`,
+and no runtime capability. Private/account data, credentials, margin, orders, fills, capital,
+actual execution Outcome, qualification, promotion, persistent deployment, force-push, history
+rewriting, and direct edits to `main` remain forbidden. Later implementation and evidence require
+their own one-at-a-time task-kind gates, exact candidate and Policy bindings, independent
+verification, non-force push, and post-push remote equality.
 
 ### Accepted Radar implementation record
 
@@ -103,14 +103,15 @@ capability.
 
 ## Root blocker
 
-The Underwriting, Shadow-admission, and Position semantic prerequisite is frozen. The immediate
-root blocker is the missing contract for deterministic Shadow counterfactual exit, Outcome
-maturity/censoring, rejected-counterfactual enrollment, cohort-aligned `NO_TRADE`, and honest
-denominators. The active authority-only task must close that prerequisite before any downstream
-runtime or live command may be activated. This task changes no accepted Radar runtime or live
-evidence identity. The accepted authority-only contract changes no accepted Radar runtime or live
-evidence identity: the governing candidate remains
-`9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
+The Underwriting, Shadow-admission, Position, Shadow Outcome, rejected-counterfactual, aligned
+`NO_TRADE`, and forward-cohort semantic prerequisites are frozen. There is no active
+product-capability or implementation-maintenance closure. The root blocker to downstream business
+behavior is now the absence of a separately activated fixed-contract runtime and fixed-Policy
+forward-cohort closure. Until such a task is active and its pre-runtime authority requirements are
+satisfied, no downstream runtime or live command is authorized.
+
+The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
+the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
 
 ## Implemented capability boundary
 
@@ -178,13 +179,12 @@ The accepted establishment requires no replay, independent offline recomputation
 command, full-market archive, Candidate, Shadow Entry, Position action, mature Outcome,
 profitability, or fill evidence.
 
-## Active prerequisite and queued sequence
+## Queued sequence — not authorized
 
-The authority-only Outcome/cohort contract prerequisite is active. It creates no runtime. The
-following product-capability closures remain queued and unauthorized:
+The following product-capability closures remain queued and unauthorized:
 
 1. **Fixed-contract runtime and fixed-Policy forward cohort:** after separate activation,
-   implement the accepted contract and record complete anomaly/quote opportunity, Decision,
+   implement the accepted contracts and record complete anomaly/quote opportunity, Decision,
    Shadow Entry, Shadow close, Shadow Outcome, rejected-counterfactual, and cohort-aligned
    `NO_TRADE` denominators.
 2. **Challenger research and qualification:** authorize only after a usable frozen-Policy cohort
@@ -192,8 +192,8 @@ following product-capability closures remain queued and unauthorized:
 3. **Promotion and execution:** authorize separately after independent qualification. Account,
    capital, order, and fill authority remain distinct.
 
-A queued product-capability closure is not active. The first may be activated only after the
-current prerequisite is accepted and this authority returns the sole next closure to `NONE`.
+A queued product-capability closure is not active. Exactly one may be activated only by an
+explicitly approved change after its prerequisite is accepted.
 
 ## Forbidden under the current boundary
 
@@ -203,7 +203,8 @@ current prerequisite is accepted and this authority returns the sole next closur
 - treating component-leg quotes as an atomic structure or any public quote as a fill;
 - full-market persistence, per-update no-anomaly receipts, replay, or offline recomputation as a
   prerequisite for this Radar;
-- Candidate, Shadow admission, executed entry, Position runtime, or Outcome cohort behavior;
+- Candidate, Shadow admission, executed entry, Position runtime, Outcome, rejected-counterfactual,
+  or forward-cohort behavior;
 - automatic training, Policy selection, qualification, promotion, or evolution;
 - generic databases, feature stores, registries, workflow engines, services, markets, or
   strategies;

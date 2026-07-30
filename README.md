@@ -13,11 +13,13 @@ Outcome engine.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
-[`SHORT_VOL_UNDERWRITING_POSITION`](docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md) contract is
-frozen, but no successor product-capability task is active and no Underwriting, Candidate, Shadow
-Entry, Position, close-opportunity, or Outcome runtime exists. Establishment means the bounded
-public Radar met its frozen reachability and operating predicates; it does not mean the Radar is
-persistently deployed, always running, indefinitely stable, profitable, or authorized to trade.
+[`SHORT_VOL_UNDERWRITING_POSITION`](docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md) and
+[`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
+contracts are frozen, but no successor product-capability task is active and no Underwriting,
+Candidate, Shadow Entry, Position, close-opportunity, Outcome, rejected-counterfactual, or forward
+cohort runtime exists. Establishment means the bounded public Radar met its frozen reachability and
+operating predicates; it does not mean the Radar is persistently deployed, always running,
+indefinitely stable, profitable, or authorized to trade.
 
 ## Intended first business flow
 
@@ -50,14 +52,19 @@ human-approved or expressly terminal-goal-delegated successor inside the declare
 uses a new identity and forward observation interval; current Radar evidence alone cannot prove
 better forecasting or profitability.
 
-## Later position behavior
+## Later position and Outcome behavior
 
-Neither a future `SHADOW_ENTRY` nor a filled entry chooses a planned holding duration. The active
-implementation contract freezes how a future Position Policy evaluates current remaining premium,
-short-leg risk, path, volatility state, liquidity, executable close debit, fee reserves, and hard
-boundaries before returning `HOLD | CLOSE | UNKNOWN`. It also freezes Candidate invalidation and
-the strictly later full-quantity close opportunity. None of that runtime behavior is implemented
-or authorized.
+Neither a future `SHADOW_ENTRY` nor a filled entry chooses a planned holding duration. The accepted
+Underwriting/Position contract freezes how a future Position Policy evaluates current remaining
+premium, short-leg risk, path, volatility state, liquidity, executable close debit, fee reserves,
+and hard boundaries before returning `HOLD | CLOSE | UNKNOWN`. It also freezes Candidate
+invalidation and the strictly later full-quantity close opportunity.
+
+The accepted Outcome/cohort contract freezes causal-first counterfactual exit selection, terminal
+`MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one bounded
+rejected counterfactual per slot, cohort-aligned `NO_TRADE`, exact public-quote PnL equations, and
+honest conservation/null denominators. A public quote remains not a fill, and no runtime behavior
+is implemented or authorized.
 
 ## Authority
 
@@ -66,9 +73,11 @@ Start with [`AGENTS.md`](AGENTS.md). The
 [`CURRENT_STAGE`](docs/authority/CURRENT_STAGE.md) grants permission,
 [`SYSTEM_ARCHITECTURE`](docs/authority/SYSTEM_ARCHITECTURE.md) owns structure, and
 [`DELIVERY_CONTRACT`](docs/authority/DELIVERY_CONTRACT.md) owns development and evidence.
-[`SHORT_VOL_RADAR`](docs/contracts/SHORT_VOL_RADAR.md) defines the first Radar, and
+[`SHORT_VOL_RADAR`](docs/contracts/SHORT_VOL_RADAR.md) defines the first Radar,
 [`SHORT_VOL_UNDERWRITING_POSITION`](docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md) defines the
-accepted downstream Underwriting, admission, and Shadow Position semantics.
+accepted downstream Underwriting, admission, and Shadow Position semantics, and
+[`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
+defines the accepted downstream Outcome and forward-cohort semantics.
 
 ## Repository shape
 
@@ -79,7 +88,8 @@ accepted downstream Underwriting, admission, and Shadow Position semantics.
   projection
 - `radar_runtime`: guarded composition of the continuous production-public process
 
-There is no compatibility package or alias for the removed pipeline.
+There is no `short_vol_underwriting` package yet and no compatibility package or alias for the
+removed pipeline.
 
 The current bounded runtime separates per-band immutable index-baseline availability from
 generation-global successor publication. Normal time/watermark publication pending keeps an
