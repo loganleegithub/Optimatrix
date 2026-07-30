@@ -44,10 +44,11 @@ option chain. Receiving a relevant public market event, validating continuity, u
 current state, and notifying the first Radar are one product flow. There is no second job that
 periodically rereads saved market data and calls that another scan.
 
-Normal market events that produce no Short Vol hit are not durable business objects. Raw full-chain
-ticks and per-update `NO_HIT` rows are not persisted by default. The runtime may retain bounded
+Normal market events that produce no Short Vol anomaly are not durable business objects. Raw
+full-chain ticks and per-update `NO_ANOMALY` rows are not persisted by default. The runtime may
+retain bounded
 in-memory history required by a declared causal feature. Minimal service coverage and gap metadata
-may be retained so a report can distinguish observed `NO_HIT` from blindness; it is not market
+may be retained so a report can distinguish observed `NO_ANOMALY` from blindness; it is not market
 evidence and cannot reconstruct the chain.
 
 An explicitly approved evidence task may temporarily seal a bounded public stream. That mode is a
@@ -59,60 +60,77 @@ validation harness, never a dependency of the Online Runtime and never its unit 
 re-evaluates the affected current market state. Static saved facts are never scanned repeatedly,
 and an arbitrary timer does not manufacture a new Radar episode.
 
-The Radar asks exactly:
+The Radar asks one question:
 
-> Is option-implied volatility unusually rich under the frozen detector, and does the same
-> strict-as-of state contain an authorized, defined-risk net-credit structure with a visible
-> target-size atomic combo quote?
+> Is target-size executable sell-side implied volatility unusually rich under the exact deployed
+> causal baseline for the same remaining-life interval?
 
-The Radar separates:
+It then reports official atomic-quote availability as an independent fact. For each applicable
+option instrument, detector truth is:
 
-- `NO_HIT`: required current facts are usable, but the detector did not produce a hit;
-- `UNKNOWN`: required facts are missing, stale, discontinuous, or cannot be aligned;
-- `ANOMALY_OBSERVED`: the volatility detector fired, but no authorized target-size atomic combo
-  quote was found; component-leg quotes are diagnostic only;
-- `RADAR_HIT`: the detector fired and at least one authorized target-size atomic combo quote
-  exists.
+- `UNKNOWN`: required detector facts are missing/invalid or derived classification is numerically
+  unresolved;
+- `NO_ANOMALY`: required detector facts are usable and the activation rule has not passed;
+- `ANOMALY_ACTIVE`: the activation rule has passed and the clear/re-arm rule has not completed.
 
-`NO_HIT` is a current query result, not a receipt written for every update. `UNKNOWN` is never
-converted to `NO_HIT`, zero, calm, or economic rejection.
+For each short-leg episode, `public_atomic_quote_state` is independently
+`NOT_EVALUATED | UNKNOWN | NO_ACTIVE_COMBO | NO_TARGET_SIZE_CREDIT_QUOTE |
+PUBLIC_ATOMIC_QUOTE_AVAILABLE`. It is `NOT_EVALUATED` when no anomaly is active. A missing or
+empty combo book cannot erase a known anomaly. Future order state and fill state form a third,
+private-authority layer; they are not inferred from any public quote.
 
-A Short Vol detector is an immutable `SHORT_VOL_RICHNESS_RADAR_POLICY` artifact. Before live use it
-must freeze:
+`NO_ANOMALY` is a current query result, not a receipt written for every update. `UNKNOWN` is never
+converted to `NO_ANOMALY`, zero, calm, no-combo, or economic rejection.
+
+A Short Vol detector is one content-identified
+`POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE` Policy artifact. Before each live run it must freeze:
 
 - feature definitions, units, instrument scope, and strict known-at inputs;
-- a causal same-remaining-life baseline or forecast;
+- a causal same-remaining-life trailing-index-variance baseline;
 - trigger formula and numerical boundary;
 - any confirmation or persistence rule;
 - clear, hysteresis, episode identity, and re-arm rules;
-- quote freshness, continuity, warm-up, and missingness behavior.
+- source continuity, warm-up, missingness behavior, and exact numeric parameter values.
 
-The primary signal is a pre-registered pointwise hypothesis: target-size executable sell-side
-implied total variance versus a causal forecast of physical total variance over the same
-now-to-expiry interval. It is not model-free VRP or a proven edge. The Policy maps each
-expiry/option-type episode to an exact triggered-short-leg set; a structure may qualify only when
-its short leg belongs to that set. Same-expiry skew, adjacent-expiry total variance, and local
+The primary signal is a pre-registered pointwise hypothesis: target-size executable sell-side IV
+versus the annualized volatility obtained by scaling a causal trailing-index-variance baseline
+over the same now-to-expiry interval. Implied and baseline total variance remain inspectable, but
+a stated IV percentage is never silently interpreted as the same percentage in variance. This
+baseline is neither a delivery-TWAP distribution forecast nor a validated physical forecast,
+model-free VRP, or proven edge. The Policy gives each option instrument its own pointwise
+episode. One complete active short-leg episode is a positive anomaly witness even when unrelated
+potential legs are unavailable; aggregate coverage is then `DEGRADED`. An aggregate
+`NO_ANOMALY` requires complete relevant scope. Within one runtime that scope is exactly
+`Policy identity × expiry_timestamp × option_type`, contains at least one reconciled catalog
+instrument, and never drops a known OTM/Delta/liquidity-ineligible instrument merely to improve
+coverage. An empty scope is not an evaluation. A structure may qualify only when its short leg has
+a current active episode, which the atomic event references directly. Same-expiry skew,
+adjacent-expiry total variance, and local
 surface richness may be declared confirmations. Order-book, trade, volume, or open-interest
 changes may trigger recomputation but cannot alone prove that volatility is rich.
 
-No universal numerical threshold is part of this Constitution. A later implementation task must
-freeze and test the exact first detector before observing its production acceptance result.
-Changing that artifact is a Radar Policy change, not an operational adjustment.
+No universal numerical threshold is part of this Constitution. Numeric values belong to the
+Policy file, not implementation constants. One process binds one exact Policy identity for its
+entire run and cannot hot-reload, tune, approve, or promote it. After an observation interval, a
+human may approve a successor within the already authorized Policy schema, including target
+quantity, TTE bands/gaps and call/put inclusion, lookbacks/weights/floor, Delta boundaries, and
+activation/clear persistence. These are explicit detector scope/parameter changes, not silent
+edits. The successor has a new identity, process, and forward interval; historical events are
+never relabeled. Formula, source-family, structure-family, or evaluation-claim changes require a
+new authorized task. Automatic training, selection, or deployment is never implied by calibration.
 
-On `RADAR_HIT`, the runtime freezes one minimal `SHORT_VOL_RADAR_HIT` snapshot containing the
-detector's causal feature-state digest and outputs, the complete triggered-short-leg set, plus
-every qualifying atomic structure within the declared usable combo-book scope at the first hit
-state in canonical order, including target quantity, combo quote and depth, fees, net credit,
-maximum-loss inputs, and causal boundary. The snapshot declares unavailable related scope and
-does not claim complete-universe selection from partial coverage. Radar does not secretly rank or
-select among the observed set. Direct sequence tests verify the rolling feature engine; the hit
-snapshot verifies the final comparison and economics without storing the full feed. Only then may
-the system begin targeted analysis or future-path collection for that hit.
+On one `ANOMALY_ACTIVE` episode transition, the runtime freezes one minimal
+`SHORT_VOL_ANOMALY_EVENT` containing the consumed detector facts and Policy identity. If a
+matching official atomic combo later exposes a positive normalized target-size credit quote in
+the required combo direction, the runtime separately freezes `PUBLIC_ATOMIC_QUOTE_EVENT` with
+only the official combo facts. Neither event
+contains the full option chain. Direct tests verify formulas and state transitions; this first
+closure does not require replay, a second calculator, or persisted recomputation evidence.
 
 ### Underwriting Decision
 
-`RADAR_HIT` says that an anomaly and an atomic quote-executable structure coexist. It does not say
-the trade is worth taking.
+An active anomaly and an official target-size atomic quote are necessary inputs to later
+Underwriting. Neither says the trade is worth taking.
 
 A separately authorized immutable Underwriting Policy compares:
 
@@ -170,17 +188,17 @@ every leg's remaining quantity to zero or an authorized exchange settlement clos
 exposure duration runs from the first opening fill to that fact.
 
 A `SHADOW_ENTRY` may create a `SHADOW_OUTCOME`. An `EXECUTED_ENTRY` may create a separately
-identified actual execution Outcome. A rejected or merely observed Radar hit may be studied only
-under a labeled counterfactual contract and never creates exposure. No Radar hit means no Shadow
-admission and no Outcome object; it does not create an `UNKNOWN` Outcome.
+identified actual execution Outcome. A rejected or merely observed anomaly/quote opportunity may
+be studied only under a labeled counterfactual contract and never creates exposure. Without
+Shadow admission there is no Outcome object; that absence does not create an `UNKNOWN` Outcome.
 
 ## Product business loop
 
 ```text
 1. continuously maintain the live Deribit BTC 0–3DTE option-chain state in memory
-2. on relevant changed facts, run the frozen Short Vol anomaly detector
-3. on anomaly, construct and quote-check the authorized defined-risk structures
-4. persist only a minimal RADAR_HIT snapshot when anomaly and atomic combo structure coexist
+2. on relevant changed facts, run the exact content-identified Short Vol anomaly detector
+3. persist one minimal anomaly event on activation
+4. while active, report official target-size atomic-combo availability independently
 5. let the frozen Underwriting Policy compare premium with path, tail, liquidity, cost, and
    uncertainty
 6. output CANDIDATE / WATCH / ABSTAIN; admit SHADOW_ENTRY only under the current authorization
@@ -193,9 +211,10 @@ admission and no Outcome object; it does not create an `UNKNOWN` Outcome.
 11. execute only after separate account, capital, order, and fill authorization
 ```
 
-Radar continues while prior hits, Decisions, positions, and Outcomes mature independently. There
-is no one-hour or six-hour business run. A bounded observation duration may limit an acceptance
-test, but it cannot force the market to produce a hit and does not define product behavior.
+Radar continues while prior anomaly/quote events, Decisions, positions, and Outcomes mature
+independently. There is no one-hour or six-hour business run. A bounded observation duration may
+limit an acceptance test, but it cannot force the market to produce an anomaly or atomic quote
+and does not define product behavior.
 
 ## Roles and trust boundaries
 
@@ -203,13 +222,15 @@ test, but it cannot force the market to produce a hit and does not define produc
 
 The Online Runtime may ingest authorized facts, maintain bounded current state, apply immutable
 deployed Radar, Underwriting, and Position Policy artifacts, and emit the artifacts permitted by
-the current stage. It may not train, rewrite, approve, promote, or replace them.
+the current stage. It may not train, rewrite, approve, promote, or replace them. Parameter
+or declared detector-scope calibration happens only between runs through a human-approved
+successor identity.
 
 ### AI Researcher
 
-The AI Researcher has read-only access to authorized hit, Decision, and Outcome evidence. It may
-propose one declared Challenger. It may not change criteria after seeing results, approve its own
-work, write to the Online Runtime, or access execution interfaces.
+The AI Researcher has read-only access to authorized anomaly, quote, Decision, and Outcome
+evidence. It may propose one declared Challenger. It may not change criteria after seeing
+results, approve its own work, write to the Online Runtime, or access execution interfaces.
 
 ### Independent Verifier and Promotion Controller
 
@@ -222,6 +243,16 @@ after a valid QualificationReceipt and inside a separately authorized promotion 
 Humans own this Constitution, data and market scope, allowed strategy and model classes,
 qualification criteria, capital and account limits, credentials, emergency stop, and every stage
 transition. They do not manually choose individual machine decisions or trades.
+
+A human may own and conditionally approve one stage transition by naming a bounded terminal
+business goal. That delegation must freeze the market, data, strategy/model class, permitted
+terminal stage, acceptance predicates, and forbidden capabilities. Exact commits, paths, digests,
+new empty evidence directories, test commands, and deterministic clean-stop facts may then be
+bound durably by an engineering controller before use. The candidate author may not be its sole
+verifier: an independent read-only verifier must bind a pass receipt to the exact candidate.
+Executing a bounded-branch push, production-public evidence run, or stage record strictly inside
+such a delegation implements the human decision; it is not self-approval. Anything outside the
+delegation still requires a new explicit human decision.
 
 ### Future execution gateway
 
@@ -236,27 +267,44 @@ stop.
    strictly after the first opening fill. Counterfactuals are labeled and never create exposure.
 3. Missing, stale, discontinuous, incomplete, or contaminated evidence is `UNKNOWN`, never zero
    or calm.
+   Negative absence claims require complete relevant scope; one positive witness never implies a
+   best-price or complete-market claim.
 4. The first slice's Shadow admission and close economics require visible target-size atomic combo
    quotes. Component-leg references are diagnostic until an exact legging Policy is authorized;
-   actual execution economics use fills. Mark and mid are descriptive only.
-5. Public quotes, Radar hits, Shadow Entries, and Shadow close opportunities are never represented
+   actual execution economics use fills. Mark and mid are descriptive only. Detector truth,
+   public atomic-quote availability, and future order/fill state remain separate.
+5. Public quotes, anomaly events, Shadow Entries, and Shadow close opportunities are never represented
    as fills.
-6. Every Radar hit freezes code and Policy identity, causal feature-state digest, feature outputs,
-   trigger values, and qualifying structure economics. It does not require the full market feed.
-7. Normal non-hit full-chain events are not durably retained as product evidence. A bounded
+6. Every anomaly event freezes code and Policy identity, one short-leg instrument, causal feature
+   summary, outputs, coverage, and trigger values. Every atomic-quote event directly references
+   that active short-leg episode and separately freezes official combo identity, direction,
+   target quantity, and consumed required-side bid or ask levels. Neither requires the full market
+   feed.
+7. Normal non-anomaly full-chain events are not durably retained as product evidence. A bounded
    evidence capture requires an explicit task and never changes Online Runtime semantics.
 8. The Radar, Underwriting action, admission, Position action, and Outcome are separate states.
 9. Availability is separate from economic action. `UNKNOWN` has no `ABSTAIN` action and no zero
    contribution.
-10. One anomaly episode is counted once until its frozen clear and re-arm rule has completed.
-    Repeated observations and quote flicker do not multiply Radar episodes.
+10. One observed anomaly episode is namespaced by runtime, Policy, short-leg instrument, and
+    activation boundary. It is counted once until clear, known ineligibility, detector-scope exit,
+    membership loss, a required detector fact becoming missing or invalid, a derived detector
+    classification becoming numerically unresolved, source continuity loss, or run stop. Every
+    end stops atomic availability and later recovery requires fresh activation. A source gap ends
+    it with `UNKNOWN_AT_GAP`; resync never claims continuity across the gap. An explicitly declared
+    adjacent-TTE-band suspension may pause and resume the same identity. Normal index-baseline
+    `TIME_BOUNDARY_PENDING | WATERMARK_PENDING` publication is instead orthogonal diagnostic state:
+    an already proven immutable baseline tuple remains consumable, detector truth and Layer 2 stay
+    current, known-active duration continues, and incomplete activation/clear persistence neither
+    increments nor resets. A newly proven consumed baseline may create at most one ordinary
+    observation only on an already countable economic boundary. Repeated observations and quote
+    flicker do not multiply Radar episodes.
 11. A structure identity is its product, canonical legs, direction, expiry, and target quantity.
-    Strict as-of state belongs to an observation, not the identity; quote flicker and individual
-    legs are not new structures or Radar episodes.
-12. An unchanged consumed market state cannot create a new hit, Decision, or Radar episode.
-13. A numeric zero-hit statement requires known monitor coverage. A numeric zero-Candidate
-    statement additionally requires a nonzero Underwriting-evaluable Radar-hit denominator.
-14. Without a Radar hit, the pipeline creates no Outcome object. A `SHADOW_ENTRY` or
+    Strict as-of state belongs to an observation, not the identity; quote flicker is not a new
+    structure or Radar episode.
+12. An unchanged consumed market state cannot create a new anomaly, Decision, or Radar episode.
+13. A numeric zero-anomaly statement requires known monitor coverage. A numeric zero-Candidate
+    statement additionally requires a nonzero Underwriting-evaluable opportunity denominator.
+14. Without a later authorized admission, the pipeline creates no Outcome object. A `SHADOW_ENTRY` or
     `EXECUTED_ENTRY` with incomplete strictly future evidence may create its own `UNKNOWN`
     Outcome; these are different facts.
 15. Strategy risk and future account risk may reduce or veto a decision; they may never create
