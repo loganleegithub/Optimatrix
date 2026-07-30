@@ -136,33 +136,90 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert declaration in template
 
 
-def test_current_stage_records_established_radar_without_activating_successor() -> None:
+def test_current_stage_activates_only_the_underwriting_position_contract_freeze() -> None:
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
+    current_stage_flat = " ".join(current_stage.split())
 
     marker = "**Sole authorized next product-capability closure:**"
     assert current_stage.count(marker) == 1
-    assert f"{marker} `NONE — no successor closure activated`" in current_stage
+    assert marker in current_stage
+    assert (
+        "`SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT` — authority-only contract freeze; "
+        "runtime and live commands remain forbidden" in current_stage_flat
+    )
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current_stage
     assert (
         "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current_stage
     )
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current_stage
+    assert "## Root blocker" in current_stage
+    assert (
+        "Until it is accepted and a later implementation closure is separately activated, no "
+        "downstream runtime work or live command is authorized" in current_stage_flat
+    )
     assert "## Queued sequence — not authorized" in current_stage
+    assert "**Underwriting, Shadow admission, and Position contract:**" not in current_stage
+    assert "**Fixed-contract runtime and fixed-Policy forward cohort:**" in current_stage
 
 
-def test_completed_radar_consolidation_leaves_no_active_task_or_successor() -> None:
+def test_completed_radar_consolidation_leaves_one_authority_only_active_task() -> None:
     old_task = ROOT / "tasks/SHORT_VOL_RADAR_ESTABLISHMENT.md"
-    task_path = ROOT / "tasks/RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION.md"
+    completed_task = ROOT / "tasks/RADAR_IMPLEMENTATION_SURFACE_CONSOLIDATION.md"
+    active_task = ROOT / "tasks/SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT.md"
 
     assert not old_task.exists()
-    assert not task_path.exists()
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
+    assert not completed_task.exists()
+    assert active_task.exists()
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
+        "SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT.md",
+        "TEMPLATE.md",
+    ]
+
+    task = active_task.read_text(encoding="utf-8")
+    for invariant in (
+        "**Status:** ACTIVE AUTHORITY",
+        "**Task kind:** `AUTHORITY_ONLY`",
+        "**Runtime implementation:** FORBIDDEN",
+        "**Live commands:** FORBIDDEN",
+        "**Implementation contract(s):** `NOT_APPLICABLE AT ACTIVATION`",
+        "**Base commit:** `0529c9c9e380b8b62382fddda10b38f2571350e9`",
+        "`codex/short-vol-underwriting-shadow-position-contract`",
+        "| Direct behavior | REQUIRED",
+        "| Production-public Radar | NOT_APPLICABLE |",
+        "| Shadow forward Outcome | NOT_APPLICABLE |",
+        "Acceptance removes the completed task, returns the sole next closure to",
+    ):
+        assert invariant in task
+    for declaration in (
+        "**Market/Decision input contract change:**",
+        "**Decision Policy change:**",
+        "**Outcome/evaluation contract change:**",
+        "**Stage/authorization change:**",
+    ):
+        assert f"{declaration} `APPROVED`" in task
+    allowed_scope = task.split("The complete allowed task scope is:", 1)[1].split("## Contract", 1)[
+        0
+    ]
+    assert [
+        line.strip() for line in allowed_scope.splitlines() if line.lstrip().startswith("- ")
+    ] == [
+        "- `docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md`;",
+        "- `docs/authority/SYSTEM_ARCHITECTURE.md`;",
+        "- `docs/authority/CURRENT_STAGE.md`;",
+        "- `README.md`;",
+        "- this active task;",
+        "- `tests/test_authority_and_architecture.py`.",
+    ]
+    assert not (ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md").exists()
 
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    assert "There is no active product-capability or implementation-maintenance closure" in (
-        current_stage
+    assert (
+        "[`SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT`]"
+        "(../../tasks/SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT.md)" in current_stage
     )
-    assert "`NONE — no successor closure activated`" in current_stage
+    assert (
+        "The active authority-only contract freeze is not part of the queue below" in current_stage
+    )
 
     radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
     assert "`IndexTailStatus` and `IndexBaselineState.status` remain current production" in radar
@@ -309,7 +366,9 @@ def test_authority_defines_one_live_short_vol_business_flow() -> None:
         "Ordinary no-anomaly updates",
         "planned holding duration",
         "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`",
-        "No successor product-capability closure is active",
+        "The sole active successor is the authority-only",
+        "`SHORT_VOL_UNDERWRITING_SHADOW_POSITION_CONTRACT`",
+        "it adds no runtime behavior or live command",
         "future maker/order/fill",
     ):
         assert invariant in readme
@@ -458,7 +517,7 @@ def test_stage_record_binds_both_independent_live_gates() -> None:
         "both live manifests' pre-run verified remote ref "
         "`refs/heads/codex/radar-repository-consolidation` resolved to that exact candidate commit",
         "does not prove indefinite uptime",
-        "no successor closure",
+        "This authority-only task changes no accepted Radar runtime or live evidence identity",
     ):
         assert invariant in current_stage_flat
 
