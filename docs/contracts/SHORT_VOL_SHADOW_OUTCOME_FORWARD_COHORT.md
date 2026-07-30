@@ -1026,7 +1026,7 @@ object is:
 | `REJECTED_COUNTERFACTUAL_POSITION_ACTION` | exactly one `POSITION_EVALUATION` |
 | `REJECTED_COUNTERFACTUAL_CLOSE_QUOTE_EVALUATION` | one `ANCHOR` rejected observation and one opaque `COMBO_QUOTE` for `consumed_rule_scoped_quote_fingerprint` at `evaluation_fact_boundary` |
 | `REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION` | resolve exactly one local `POSITION_ACTION`; resolve exactly one local `CLOSE_QUOTE_EVALUATION` or project one `ATTEMPT_CONTROL` from its identity and direct boundary; project commission/index direct-source roots by the exact rule table below |
-| `REJECTED_COUNTERFACTUAL_EXIT` | one `ANCHOR` rejected observation, one `CLOSE_OPPORTUNITY_EVALUATION`, one `COMBO_QUOTE`, exactly two `COMMISSION`, and exactly one `INDEX` |
+| `REJECTED_COUNTERFACTUAL_EXIT` | resolve one local `ANCHOR` rejected observation, one local `POSITION_ACTION`, one local `CLOSE_QUOTE_EVALUATION`, and one local `CLOSE_OPPORTUNITY_EVALUATION`; project the owning payload's opaque quote fingerprint at the exact quote-evaluation boundary as one `COMBO_QUOTE`, its two ordered direct commission refs as exactly two `COMMISSION`, and its direct index ref as one `INDEX` |
 | `REJECTED_COUNTERFACTUAL_OUTCOME` | resolve one local `ANCHOR` rejected observation; for `MATURE_KNOWN`, resolve exactly one local `SELECTED_EXIT`; otherwise resolve/project every present Position-action/scheduled-attempt/attempt-terminal root and resolve exactly two lifecycle witnesses only for `MATURE_UNKNOWN`; any censor projects exactly the same `terminal_source_identity` stored by the summary as one `SUPERVISOR_CONTROL` at the terminal boundary |
 | `ALIGNED_POLICY_NO_TRADE_PAIR` | one `ANCHOR` observation and one `TERMINAL_OUTCOME` |
 | `SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY` | recompute the manifest identity at `runtime_start_fact_boundary`, its runtime-start trigger at that boundary, its enrollment-cutoff trigger iff realized, and the one native `terminal_source` object selected by disposition at `terminal_fact_boundary`, all as `SUPERVISOR_CONTROL` |
@@ -1390,9 +1390,16 @@ eligibility row forbids, fails validation.
 rejected_exit_identity: RejectedCounterfactualExitIdentity
 rejected_observation_identity: RejectedCounterfactualObservationIdentity
 first_latched_close_action_identity: RejectedCounterfactualPositionActionIdentity
+close_quote_evaluation_identity: RejectedCounterfactualCloseQuoteEvaluationIdentity
 close_opportunity_evaluation_identity:
     RejectedCounterfactualCloseOpportunityEvaluationIdentity
 selection_fact_boundary: FactBoundary
+first_latched_close_action_fact_boundary: FactBoundary
+close_quote_evaluation_fact_boundary: FactBoundary
+close_opportunity_evaluation_fact_boundary: FactBoundary
+consumed_rule_scoped_quote_fingerprint: Identity
+commission_source_refs: exact two-element array[LegCommissionSourceRef]
+index_source_ref: DirectSourceRef
 canonical_combo_identity: Identity
 canonical_leg_identities: exact two-element array[Identity]
 close_direction: "BUY" | "SELL"
@@ -1408,6 +1415,16 @@ net_close_debit_usdc: Decimal
 projected_shadow_net_pnl_usdc: Decimal
 projected_net_loss_usdc: Decimal
 ```
+
+The selected local opportunity must be the causal-order first `ELIGIBLE_COMPLETE` opportunity named
+by `rejected_exit_identity`; its local close-quote evaluation, first-CLOSE action, and all three
+boundaries must resolve to the exact identity/boundary fields above. The opaque quote fingerprint
+must equal the resolved quote evaluation's fingerprint. Both ordered commission refs and the index
+ref must equal the resolved opportunity's direct-source refs. Every rejected-exit economic field is
+byte-identical to the corresponding selected-opportunity or resolved-quote field, including combo,
+legs, direction, full quantity, levels, both commissions, index, gross/fee/net/debit, projected PnL,
+and projected loss. Any mismatch invalidates the exit and directory; a reader never obtains these
+roots by expanding another object's `source_provenance`.
 
 `REJECTED_COUNTERFACTUAL_OUTCOME`:
 

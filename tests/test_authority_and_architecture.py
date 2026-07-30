@@ -956,7 +956,7 @@ def test_outcome_contract_freezes_objects_writer_readers_and_compatibility() -> 
         separators=(",", ":"),
     ).encode("utf-8")
     assert hashlib.sha256(provenance_derivation_bytes).hexdigest() == (
-        "978f4c80c852a6a8a9afe529b142ec23e612916407ad83a7a6ecdae5312c87b7"
+        "9b28c00ea94434cf2dae07bd1946ff36553fc45eea9613c00e13de5911157ca7"
     )
     assert tuple(row[0] for row in opportunity_provenance) == (
         "`KNOWN_ATOMIC_UNAVAILABLE`",
@@ -978,6 +978,7 @@ def test_outcome_contract_freezes_objects_writer_readers_and_compatibility() -> 
     )
     assert "committed terminal-barrier identity" not in contract
     assert "same `terminal_source_identity` stored by the summary" in contract
+    assert "Every rejected-exit economic field is byte-identical" in " ".join(contract.split())
     assert "bytewise-ascending UTF-8 `(source_role, source_identity)`" in contract
     assert "exact sum of `amount_btc` equals the object's `full_quantity_btc`" in contract
     assert "only\nthe final member may be truncated" in contract
@@ -1170,8 +1171,15 @@ def test_outcome_contract_freezes_objects_writer_readers_and_compatibility() -> 
             "rejected_exit_identity",
             "rejected_observation_identity",
             "first_latched_close_action_identity",
+            "close_quote_evaluation_identity",
             "close_opportunity_evaluation_identity",
             "selection_fact_boundary",
+            "first_latched_close_action_fact_boundary",
+            "close_quote_evaluation_fact_boundary",
+            "close_opportunity_evaluation_fact_boundary",
+            "consumed_rule_scoped_quote_fingerprint",
+            "commission_source_refs",
+            "index_source_ref",
             "canonical_combo_identity",
             "canonical_leg_identities",
             "close_direction",
@@ -1299,7 +1307,7 @@ def test_outcome_contract_freezes_objects_writer_readers_and_compatibility() -> 
                     "04f59da0e1ad343154e2fde26691828e6a391b2c1631dc3eb8fefa860284b20e"
                 ),
                 "REJECTED_COUNTERFACTUAL_EXIT": (
-                    "29499afac9dd05ae27eaa94e3d6937f16a9a706b084188bcb795bf3fc3c4b358"
+                    "8ff949f80c5251330929840e2411b030db9433df968972e47e7628f019d243b6"
                 ),
                 "REJECTED_COUNTERFACTUAL_OUTCOME": (
                     "982141d36ce923778058cae9a27bfa78efdbf54d51e6e079974f5d4eb9d32d11"
