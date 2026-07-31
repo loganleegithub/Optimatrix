@@ -498,6 +498,979 @@ def _rewrite_underwriting_summary_from_objects(
     )
 
 
+@pytest.mark.parametrize(
+    ("request_id", "request_method"),
+    (
+        (0, "public/get_order_book"),
+        (41, "private/get_positions"),
+    ),
+)
+def test_writer_rejects_illegal_admission_schedule_semantics(
+    complete_directory: tuple[Path, RuntimeBindings],
+    request_id: int,
+    request_method: str,
+) -> None:
+    directory, bindings = complete_directory
+    boundary = _boundary(102, 302)
+    candidate_identity = "sha256:" + "5" * 64
+    params = {"instrument_name": "BTC-TEST-COMBO", "depth": 10000}
+    identity = canonical_identity(
+        "ScheduledAdmissionAttemptIdentity",
+        candidate_identity,
+        request_id,
+        request_method,
+        params,
+        boundary.as_object(),
+    )
+
+    with pytest.raises(DownstreamEvidenceError, match=r"request|method|positive"):
+        DownstreamEvidenceWriter(directory, bindings=bindings).write(
+            object_kind="ADMISSION_ATTEMPT_SCHEDULED",
+            object_identity=identity,
+            fact_boundary=boundary,
+            payload={
+                "scheduled_admission_attempt_identity": identity,
+                "candidate_identity": candidate_identity,
+                "request_id": request_id,
+                "request_method": request_method,
+                "request_params": params,
+                "schedule_fact_boundary": boundary.as_object(),
+            },
+            source_provenance=(
+                {
+                    "source_role": "ANCHOR",
+                    "source_identity": candidate_identity,
+                    "receipt_fact_boundary": boundary.as_object(),
+                },
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("request_member", "request_method", "request_params"),
+    (
+        (41, "private/get_positions", {"instrument_name": "BTC-TEST-COMBO", "depth": 10000}),
+        ("ARBITRARY_MARKER", "public/get_order_book", None),
+        (
+            "NOT_REQUESTABLE_UNKNOWN",
+            "public/get_order_book",
+            {"instrument_name": "BTC-TEST-COMBO", "depth": 10000},
+        ),
+        (41, "public/get_order_book", None),
+    ),
+)
+def test_writer_rejects_illegal_post_close_schedule_semantics(
+    complete_directory: tuple[Path, RuntimeBindings],
+    request_member: object,
+    request_method: str,
+    request_params: object,
+) -> None:
+    directory, bindings = complete_directory
+    boundary = _boundary(102, 302)
+    entry_identity = "sha256:" + "6" * 64
+    action_identity = "sha256:" + "7" * 64
+    identity = canonical_identity(
+        "ScheduledPostCloseQuoteAttemptIdentity",
+        entry_identity,
+        action_identity,
+        request_member,
+        request_method,
+        request_params,
+        boundary.as_object(),
+    )
+
+    with pytest.raises(DownstreamEvidenceError, match=r"request|method|marker|params"):
+        DownstreamEvidenceWriter(directory, bindings=bindings).write(
+            object_kind="POST_CLOSE_ATTEMPT_SCHEDULED",
+            object_identity=identity,
+            fact_boundary=boundary,
+            payload={
+                "scheduled_post_close_attempt_identity": identity,
+                "shadow_entry_identity": entry_identity,
+                "first_latched_close_action_identity": action_identity,
+                "request_id_or_marker": request_member,
+                "request_method": request_method,
+                "request_params": request_params,
+                "schedule_fact_boundary": boundary.as_object(),
+            },
+            source_provenance=(
+                {
+                    "source_role": "POSITION_ACTION",
+                    "source_identity": action_identity,
+                    "receipt_fact_boundary": boundary.as_object(),
+                },
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("object_kind", "field", "invalid_value"),
+    (
+        ("ADMISSION_ATTEMPT_TERMINAL", "terminal_source_identity", None),
+        ("ADMISSION_ATTEMPT_TERMINAL", "matched_response_identity", {"private": "get_positions"}),
+        ("POST_CLOSE_ATTEMPT_TERMINAL", "matched_response_identity", {"private": "get_positions"}),
+    ),
+)
+def test_current_and_complete_readers_reject_invalid_attempt_terminal_sources(
+    mature_known_complete_directory: tuple[Path, RuntimeBindings],
+    object_kind: str,
+    field: str,
+    invalid_value: object,
+) -> None:
+    directory, bindings = mature_known_complete_directory
+    objects = read_current_evidence(directory, bindings=bindings)
+    path = _object_file(directory, objects, object_kind)
+    value = json.loads(path.read_text())
+    value["payload"][field] = invalid_value
+    _rewrite_object(path, value)
+
+    for reader in (read_current_evidence, read_complete_evidence):
+        with pytest.raises(DownstreamEvidenceError, match=r"source|matched|identity"):
+            reader(directory, bindings=bindings)
+
+
+def test_current_and_complete_readers_require_exact_admission_terminal_provenance(
+    mature_known_complete_directory: tuple[Path, RuntimeBindings],
+) -> None:
+    directory, bindings = mature_known_complete_directory
+    objects = read_current_evidence(directory, bindings=bindings)
+    path = _object_file(directory, objects, "ADMISSION_ATTEMPT_TERMINAL")
+    value = json.loads(path.read_text())
+    value["source_provenance"][0]["source_identity"] = "sha256:" + "f" * 64
+    _rewrite_object(path, value)
+
+    for reader in (read_current_evidence, read_complete_evidence):
+        with pytest.raises(DownstreamEvidenceError, match=r"provenance|source"):
+            reader(directory, bindings=bindings)
+
+
+def test_writer_rejects_request_id_reuse_across_admission_and_post_close(
+    tmp_path: Path,
+) -> None:
+    owner, _bindings = _mature_known_owner(tmp_path)
+    entry_identity = _admit_mature_known_owner(owner)
+
+    with pytest.raises(DownstreamEvidenceError, match=r"request id.*reused"):
+        owner.settle_position(
+            anchor_identity=entry_identity,
+            facts=_mature_known_position_facts(
+                boundary=_mature_known_boundary(4, 140),
+                change_id=12,
+                previous_change_id=11,
+            ),
+            allocate_request_id=lambda: 41,
+        )
+
+
+def test_current_reader_rejects_rekeyed_cross_attempt_request_id_reuse(
+    mature_known_complete_directory: tuple[Path, RuntimeBindings],
+) -> None:
+    directory, bindings = mature_known_complete_directory
+    objects = read_current_evidence(directory, bindings=bindings)
+    admission = next(
+        value for value in objects.values() if value["object_kind"] == "ADMISSION_ATTEMPT_SCHEDULED"
+    )
+    admission_payload = cast(Mapping[str, object], admission["payload"])
+    reused_id = cast(int, admission_payload["request_id"])
+    old_path = _object_file(directory, objects, "POST_CLOSE_ATTEMPT_SCHEDULED")
+    scheduled = json.loads(old_path.read_text())
+    scheduled["payload"]["request_id_or_marker"] = reused_id
+    request_params = scheduled["payload"]["request_params"]
+    assert isinstance(request_params, dict)
+    new_identity = canonical_identity(
+        "ScheduledPostCloseQuoteAttemptIdentity",
+        scheduled["payload"]["shadow_entry_identity"],
+        scheduled["payload"]["first_latched_close_action_identity"],
+        reused_id,
+        scheduled["payload"]["request_method"],
+        {
+            "instrument_name": request_params["instrument_name"],
+            "depth": request_params["depth"],
+        },
+        FactBoundary.from_object(scheduled["fact_boundary"]),
+    )
+    scheduled["object_identity"] = new_identity
+    scheduled["payload"]["scheduled_post_close_attempt_identity"] = new_identity
+    old_path.unlink()
+    new_path = old_path.with_name(f"{new_identity.removeprefix('sha256:')}.json")
+    _rewrite_object(new_path, scheduled)
+
+    with pytest.raises(DownstreamEvidenceError, match=r"request id.*reused"):
+        read_current_evidence(directory, bindings=bindings)
+
+
+def test_owner_writer_rejects_second_admission_schedule_for_candidate(
+    tmp_path: Path,
+) -> None:
+    owner, _bindings = _mature_known_owner(tmp_path)
+    _admit_mature_known_owner(owner)
+    scheduled = next(
+        value
+        for value in owner.writer.objects
+        if value["object_kind"] == "ADMISSION_ATTEMPT_SCHEDULED"
+    )
+    payload = dict(cast(Mapping[str, object], scheduled["payload"]))
+    payload["request_id"] = 99
+    boundary = FactBoundary.from_object(scheduled["fact_boundary"])
+    identity = canonical_identity(
+        "ScheduledAdmissionAttemptIdentity",
+        payload["candidate_identity"],
+        99,
+        payload["request_method"],
+        payload["request_params"],
+        boundary.as_object(),
+    )
+    payload["scheduled_admission_attempt_identity"] = identity
+
+    with pytest.raises(DownstreamEvidenceError, match=r"multiple Admission schedules"):
+        owner.writer.write(
+            object_kind="ADMISSION_ATTEMPT_SCHEDULED",
+            object_identity=identity,
+            fact_boundary=boundary,
+            payload=payload,
+            source_provenance=cast(
+                Sequence[Mapping[str, object]],
+                scheduled["source_provenance"],
+            ),
+        )
+
+
+def test_current_reader_rejects_rekeyed_second_admission_schedule_for_candidate(
+    mature_known_complete_directory: tuple[Path, RuntimeBindings],
+) -> None:
+    directory, bindings = mature_known_complete_directory
+    objects = read_current_evidence(directory, bindings=bindings)
+    scheduled = next(
+        value for value in objects.values() if value["object_kind"] == "ADMISSION_ATTEMPT_SCHEDULED"
+    )
+    duplicate = json.loads(json.dumps(scheduled))
+    duplicate["payload"]["request_id"] = 99
+    boundary = FactBoundary.from_object(duplicate["fact_boundary"])
+    request_params = duplicate["payload"]["request_params"]
+    assert isinstance(request_params, dict)
+    identity = canonical_identity(
+        "ScheduledAdmissionAttemptIdentity",
+        duplicate["payload"]["candidate_identity"],
+        99,
+        duplicate["payload"]["request_method"],
+        {
+            "instrument_name": request_params["instrument_name"],
+            "depth": request_params["depth"],
+        },
+        boundary.as_object(),
+    )
+    duplicate["object_identity"] = identity
+    duplicate["payload"]["scheduled_admission_attempt_identity"] = identity
+    path = (
+        directory
+        / "objects"
+        / "ADMISSION_ATTEMPT_SCHEDULED"
+        / f"{identity.removeprefix('sha256:')}.json"
+    )
+    _rewrite_object(path, duplicate)
+
+    with pytest.raises(DownstreamEvidenceError, match=r"multiple Admission schedules"):
+        read_current_evidence(directory, bindings=bindings)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    (
+        "NOT_REQUESTABLE_KNOWN_ATOMIC_UNAVAILABLE",
+        "NOT_REQUESTABLE_UNKNOWN",
+    ),
+)
+def test_owner_writer_rejects_requestable_post_close_terminal_with_marker(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    owner, _bindings = _mature_known_owner(tmp_path)
+    entry_identity = _admit_mature_known_owner(owner)
+    owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=_mature_known_position_facts(
+            boundary=_mature_known_boundary(4, 140),
+            change_id=12,
+            previous_change_id=11,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+    scheduled = next(
+        value
+        for value in owner.writer.objects
+        if value["object_kind"] == "POST_CLOSE_ATTEMPT_SCHEDULED"
+    )
+    boundary = _mature_known_boundary(5, 150)
+    scheduled_identity = cast(str, scheduled["object_identity"])
+    identity = canonical_identity(
+        "PostCloseAttemptTerminalIdentity",
+        scheduled_identity,
+        marker,
+        "ORDINARY",
+        boundary.as_object(),
+    )
+
+    with pytest.raises(DownstreamEvidenceError, match=r"cannot use a not-requestable terminal"):
+        owner.writer.write(
+            object_kind="POST_CLOSE_ATTEMPT_TERMINAL",
+            object_identity=identity,
+            fact_boundary=boundary,
+            payload={
+                "post_close_attempt_terminal_identity": identity,
+                "scheduled_post_close_attempt_identity": scheduled_identity,
+                "terminal_status": marker,
+                "terminal_owner": "ORDINARY",
+                "terminal_fact_boundary": boundary.as_object(),
+                "matched_response_identity": None,
+            },
+            source_provenance=(
+                {
+                    "source_role": "ATTEMPT_CONTROL",
+                    "source_identity": identity,
+                    "receipt_fact_boundary": boundary.as_object(),
+                },
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "marker",
+    (
+        "NOT_REQUESTABLE_KNOWN_ATOMIC_UNAVAILABLE",
+        "NOT_REQUESTABLE_UNKNOWN",
+    ),
+)
+def test_current_and_complete_readers_reject_rekeyed_requestable_terminal_with_marker(
+    mature_known_complete_directory: tuple[Path, RuntimeBindings],
+    marker: str,
+) -> None:
+    directory, bindings = mature_known_complete_directory
+    objects = read_current_evidence(directory, bindings=bindings)
+    old_path = _object_file(directory, objects, "POST_CLOSE_ATTEMPT_TERMINAL")
+    terminal = json.loads(old_path.read_text())
+    boundary = FactBoundary.from_object(terminal["fact_boundary"])
+    terminal["payload"]["terminal_status"] = marker
+    terminal["payload"]["matched_response_identity"] = None
+    identity = canonical_identity(
+        "PostCloseAttemptTerminalIdentity",
+        terminal["payload"]["scheduled_post_close_attempt_identity"],
+        marker,
+        terminal["payload"]["terminal_owner"],
+        boundary.as_object(),
+    )
+    terminal["object_identity"] = identity
+    terminal["payload"]["post_close_attempt_terminal_identity"] = identity
+    terminal["source_provenance"][0]["source_identity"] = identity
+    old_path.unlink()
+    path = old_path.with_name(f"{identity.removeprefix('sha256:')}.json")
+    _rewrite_object(path, terminal)
+
+    for reader in (read_current_evidence, read_complete_evidence):
+        with pytest.raises(
+            DownstreamEvidenceError,
+            match=r"cannot use a not-requestable terminal",
+        ):
+            reader(directory, bindings=bindings)
+
+
+@pytest.mark.parametrize(
+    "object_kind",
+    ("ADMISSION_ATTEMPT_TERMINAL", "POST_CLOSE_ATTEMPT_TERMINAL"),
+)
+def test_current_reader_rejects_rekeyed_requestable_terminal_at_schedule_boundary(
+    mature_known_complete_directory: tuple[Path, RuntimeBindings],
+    object_kind: str,
+) -> None:
+    directory, bindings = mature_known_complete_directory
+    objects = read_current_evidence(directory, bindings=bindings)
+    if object_kind == "ADMISSION_ATTEMPT_TERMINAL":
+        schedule_kind = "ADMISSION_ATTEMPT_SCHEDULED"
+        identity_field = "admission_attempt_terminal_identity"
+        identity_label = "ADMISSION_ATTEMPT_TERMINAL"
+    else:
+        schedule_kind = "POST_CLOSE_ATTEMPT_SCHEDULED"
+        identity_field = "post_close_attempt_terminal_identity"
+        identity_label = "PostCloseAttemptTerminalIdentity"
+    schedule = next(value for value in objects.values() if value["object_kind"] == schedule_kind)
+    schedule_boundary = json.loads(json.dumps(schedule["fact_boundary"]))
+    old_path = _object_file(directory, objects, object_kind)
+    terminal = json.loads(old_path.read_text())
+    terminal["fact_boundary"] = schedule_boundary
+    terminal["payload"]["terminal_fact_boundary"] = schedule_boundary
+    if object_kind == "ADMISSION_ATTEMPT_TERMINAL":
+        new_identity = canonical_identity(
+            identity_label,
+            terminal["payload"]["scheduled_admission_attempt_identity"],
+            terminal["payload"]["terminal_outcome"],
+            FactBoundary.from_object(schedule_boundary),
+        )
+    else:
+        new_identity = canonical_identity(
+            identity_label,
+            terminal["payload"]["scheduled_post_close_attempt_identity"],
+            terminal["payload"]["terminal_status"],
+            terminal["payload"]["terminal_owner"],
+            FactBoundary.from_object(schedule_boundary),
+        )
+        terminal["source_provenance"][0]["source_identity"] = new_identity
+    terminal["object_identity"] = new_identity
+    terminal["payload"][identity_field] = new_identity
+    terminal["source_provenance"][0]["receipt_fact_boundary"] = schedule_boundary
+    old_path.unlink()
+    new_path = old_path.with_name(f"{new_identity.removeprefix('sha256:')}.json")
+    _rewrite_object(new_path, terminal)
+
+    with pytest.raises(DownstreamEvidenceError, match=r"strictly after"):
+        read_current_evidence(directory, bindings=bindings)
+
+
+def test_current_reader_rejects_internally_rekeyed_admission_source_not_used_by_entry(
+    mature_known_complete_directory: tuple[Path, RuntimeBindings],
+) -> None:
+    directory, bindings = mature_known_complete_directory
+    objects = read_current_evidence(directory, bindings=bindings)
+    path = _object_file(directory, objects, "ADMISSION_ATTEMPT_TERMINAL")
+    terminal = json.loads(path.read_text())
+    forged_source = "sha256:" + "f" * 64
+    terminal["payload"]["terminal_source_identity"] = forged_source
+    terminal["payload"]["matched_response_identity"] = forged_source
+    terminal["source_provenance"][0]["source_identity"] = forged_source
+    _rewrite_object(path, terminal)
+
+    with pytest.raises(DownstreamEvidenceError, match=r"Entry quote source"):
+        read_current_evidence(directory, bindings=bindings)
+
+
+def test_current_and_complete_readers_bind_successful_post_close_match_to_quote(
+    mature_known_complete_directory: tuple[Path, RuntimeBindings],
+) -> None:
+    directory, bindings = mature_known_complete_directory
+    objects = read_current_evidence(directory, bindings=bindings)
+    path = _object_file(directory, objects, "POST_CLOSE_ATTEMPT_TERMINAL")
+    terminal = json.loads(path.read_text())
+    terminal["payload"]["matched_response_identity"] = "sha256:" + "f" * 64
+    _rewrite_object(path, terminal)
+
+    for reader in (read_current_evidence, read_complete_evidence):
+        with pytest.raises(DownstreamEvidenceError, match=r"matched response.*close quote"):
+            reader(directory, bindings=bindings)
+
+
+def test_owner_writer_rejects_success_quote_for_another_shadow_entry(
+    tmp_path: Path,
+) -> None:
+    target_directory = tmp_path / "target"
+    template_directory = tmp_path / "template"
+    target_directory.mkdir()
+    template_directory.mkdir()
+    target, bindings = _mature_known_owner(target_directory)
+    target_entry = _admit_mature_known_owner(target)
+    target.settle_position(
+        anchor_identity=target_entry,
+        facts=_mature_known_position_facts(
+            boundary=_mature_known_boundary(4, 140),
+            change_id=12,
+            previous_change_id=11,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+
+    template, _template_bindings = _mature_known_owner(template_directory)
+    template_entry = _admit_mature_known_owner(template)
+    template.settle_position(
+        anchor_identity=template_entry,
+        facts=_mature_known_position_facts(
+            boundary=_mature_known_boundary(4, 140),
+            change_id=12,
+            previous_change_id=11,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+    template.settle_position(
+        anchor_identity=template_entry,
+        facts=_mature_known_position_facts(
+            boundary=_mature_known_boundary(5, 150),
+            change_id=13,
+            previous_change_id=12,
+        ),
+        allocate_request_id=lambda: 43,
+    )
+    quote = next(
+        value
+        for value in template.writer.objects
+        if value["object_kind"] == "CLOSE_QUOTE_EVALUATION"
+        and cast(Mapping[str, object], value["payload"])["close_conditioning"] != "PRE_CLOSE"
+    )
+    terminal = next(
+        value
+        for value in template.writer.objects
+        if value["object_kind"] == "POST_CLOSE_ATTEMPT_TERMINAL"
+    )
+    quote_payload = dict(cast(Mapping[str, object], quote["payload"]))
+    quote_payload["shadow_entry_identity"] = "sha256:" + "f" * 64
+    boundary = FactBoundary.from_object(quote["fact_boundary"])
+    structure = canonical_identity(
+        "OfficialComboAndCanonicalLegIdentity",
+        quote_payload["canonical_combo_identity"],
+        quote_payload["canonical_leg_identities"],
+    )
+    quote_identity = canonical_identity(
+        "CloseQuoteEvaluationIdentity",
+        quote_payload["shadow_entry_identity"],
+        POSITION_POLICY_IDENTITY,
+        structure,
+        quote_payload["close_direction"],
+        quote_payload["full_quantity_btc"],
+        quote_payload["consumed_rule_scoped_quote_fingerprint"],
+        quote_payload["close_quote_state"],
+        quote_payload["close_conditioning"],
+        boundary.as_object(),
+    )
+    quote_payload["close_quote_evaluation_identity"] = quote_identity
+    target.writer.write(
+        object_kind="CLOSE_QUOTE_EVALUATION",
+        object_identity=quote_identity,
+        fact_boundary=boundary,
+        payload=quote_payload,
+        source_provenance=cast(
+            Sequence[Mapping[str, object]],
+            quote["source_provenance"],
+        ),
+    )
+
+    with pytest.raises(DownstreamEvidenceError, match=r"owner/first CLOSE"):
+        target.writer.write(
+            object_kind="POST_CLOSE_ATTEMPT_TERMINAL",
+            object_identity=cast(str, terminal["object_identity"]),
+            fact_boundary=FactBoundary.from_object(terminal["fact_boundary"]),
+            payload=cast(Mapping[str, object], terminal["payload"]),
+            source_provenance=cast(
+                Sequence[Mapping[str, object]],
+                terminal["source_provenance"],
+            ),
+        )
+    terminal_identity = cast(str, terminal["object_identity"])
+    terminal_path = (
+        target_directory
+        / "objects"
+        / "POST_CLOSE_ATTEMPT_TERMINAL"
+        / f"{terminal_identity.removeprefix('sha256:')}.json"
+    )
+    terminal_path.parent.mkdir(exist_ok=True)
+    _rewrite_object(terminal_path, terminal)
+    with pytest.raises(DownstreamEvidenceError, match=r"owner/first CLOSE"):
+        read_current_evidence(target_directory, bindings=bindings)
+
+
+@pytest.mark.parametrize("mutation", ("REQUEST_ID", "SHADOW_ENTRY"))
+def test_current_reader_rejects_rekeyed_post_close_schedule_cross_bind(
+    mature_known_complete_directory: tuple[Path, RuntimeBindings],
+    mutation: str,
+) -> None:
+    directory, bindings = mature_known_complete_directory
+    objects = read_current_evidence(directory, bindings=bindings)
+    old_path = _object_file(directory, objects, "POST_CLOSE_ATTEMPT_SCHEDULED")
+    scheduled = json.loads(old_path.read_text())
+    if mutation == "REQUEST_ID":
+        scheduled["payload"]["request_id_or_marker"] = 99
+    else:
+        scheduled["payload"]["shadow_entry_identity"] = "sha256:" + "f" * 64
+    request_params = scheduled["payload"]["request_params"]
+    assert isinstance(request_params, dict)
+    new_identity = canonical_identity(
+        "ScheduledPostCloseQuoteAttemptIdentity",
+        scheduled["payload"]["shadow_entry_identity"],
+        scheduled["payload"]["first_latched_close_action_identity"],
+        scheduled["payload"]["request_id_or_marker"],
+        scheduled["payload"]["request_method"],
+        {
+            "instrument_name": request_params["instrument_name"],
+            "depth": request_params["depth"],
+        },
+        FactBoundary.from_object(scheduled["fact_boundary"]),
+    )
+    scheduled["object_identity"] = new_identity
+    scheduled["payload"]["scheduled_post_close_attempt_identity"] = new_identity
+    old_path.unlink()
+    new_path = old_path.with_name(f"{new_identity.removeprefix('sha256:')}.json")
+    _rewrite_object(new_path, scheduled)
+
+    with pytest.raises(DownstreamEvidenceError, match=r"schedule cross-bind"):
+        read_current_evidence(directory, bindings=bindings)
+
+
+def test_complete_reader_requires_attempt_owned_opportunity_for_every_ordinary_failure(
+    mature_unknown_complete_directory: tuple[Path, RuntimeBindings, str],
+) -> None:
+    directory, bindings, _outcome_kind = mature_unknown_complete_directory
+    objects = read_current_evidence(directory, bindings=bindings)
+    opportunity_kind = next(
+        value["object_kind"]
+        for value in objects.values()
+        if value["object_kind"]
+        in {
+            "CLOSE_OPPORTUNITY_EVALUATION",
+            "REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION",
+        }
+        and cast(Mapping[str, object], value["payload"])["attempt_terminal_identity"] is not None
+    )
+    _object_file(directory, objects, opportunity_kind).unlink()
+    _rewrite_underwriting_summary_from_objects(directory, bindings=bindings)
+
+    assert read_current_evidence(directory, bindings=bindings)
+    with pytest.raises(DownstreamEvidenceError, match=r"attempt|opportunity|terminal"):
+        read_complete_evidence(directory, bindings=bindings)
+
+
+def test_owner_writer_rejects_orphan_duplicate_attempt_owned_opportunity(
+    tmp_path: Path,
+) -> None:
+    owner, _bindings = _mature_known_owner(tmp_path)
+    entry_identity = _admit_mature_known_owner(owner)
+    owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=_mature_known_position_facts(
+            boundary=_mature_known_boundary(4, 140),
+            change_id=12,
+            previous_change_id=11,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+    owner.note_request_failure(
+        request_id=42,
+        boundary=_mature_known_boundary(5, 150),
+    )
+    owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=_mature_unknown_position_facts(
+            boundary=_mature_known_boundary(5, 150),
+        ),
+        allocate_request_id=lambda: 43,
+    )
+    opportunity = next(
+        value
+        for value in owner.writer.objects
+        if value["object_kind"] == "CLOSE_OPPORTUNITY_EVALUATION"
+        and cast(Mapping[str, object], value["payload"])["attempt_terminal_identity"] is not None
+    )
+    payload = dict(cast(Mapping[str, object], opportunity["payload"]))
+    forged_terminal = "sha256:" + "f" * 64
+    payload["attempt_terminal_identity"] = forged_terminal
+    boundary = FactBoundary.from_object(opportunity["fact_boundary"])
+    identity = canonical_identity(
+        "CloseOpportunityEvaluationIdentity",
+        payload["shadow_entry_identity"],
+        payload["first_latched_close_action_identity"],
+        forged_terminal,
+        payload["opportunity_economics_business_fingerprint"],
+        payload["eligibility"],
+        boundary.as_object(),
+    )
+    payload["close_opportunity_evaluation_identity"] = identity
+    provenance = json.loads(json.dumps(opportunity["source_provenance"]))
+    for root in provenance:
+        if root["source_role"] == "ATTEMPT_CONTROL":
+            root["source_identity"] = forged_terminal
+
+    with pytest.raises(
+        DownstreamEvidenceError,
+        match=r"missing its local terminal|duplicate.*owner boundary",
+    ):
+        owner.writer.write(
+            object_kind="CLOSE_OPPORTUNITY_EVALUATION",
+            object_identity=identity,
+            fact_boundary=boundary,
+            payload=payload,
+            source_provenance=cast(Sequence[Mapping[str, object]], provenance),
+        )
+
+
+def test_owner_writer_and_current_reader_reject_quote_and_attempt_opportunities_at_one_boundary(
+    tmp_path: Path,
+) -> None:
+    target_directory = tmp_path / "target"
+    template_directory = tmp_path / "template"
+    target_directory.mkdir()
+    template_directory.mkdir()
+    target, bindings = _mature_known_owner(target_directory)
+    target_entry = _admit_mature_known_owner(target)
+    target.settle_position(
+        anchor_identity=target_entry,
+        facts=_mature_known_position_facts(
+            boundary=_mature_known_boundary(4, 140),
+            change_id=12,
+            previous_change_id=11,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+    target.note_request_failure(
+        request_id=42,
+        boundary=_mature_known_boundary(5, 150),
+    )
+    target.settle_position(
+        anchor_identity=target_entry,
+        facts=_mature_unknown_position_facts(
+            boundary=_mature_known_boundary(5, 150),
+        ),
+        allocate_request_id=lambda: 43,
+    )
+
+    template, _template_bindings = _mature_known_owner(template_directory)
+    template_entry = _admit_mature_known_owner(template)
+    template.settle_position(
+        anchor_identity=template_entry,
+        facts=_mature_known_position_facts(
+            boundary=_mature_known_boundary(4, 140),
+            change_id=12,
+            previous_change_id=11,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+    template.settle_position(
+        anchor_identity=template_entry,
+        facts=_mature_known_position_facts(
+            boundary=_mature_known_boundary(5, 150),
+            change_id=13,
+            previous_change_id=12,
+        ),
+        allocate_request_id=lambda: 43,
+    )
+    quote = next(
+        value
+        for value in template.writer.objects
+        if value["object_kind"] == "CLOSE_QUOTE_EVALUATION"
+        and cast(Mapping[str, object], value["payload"])["close_conditioning"] != "PRE_CLOSE"
+    )
+    opportunity = next(
+        value
+        for value in template.writer.objects
+        if value["object_kind"] == "CLOSE_OPPORTUNITY_EVALUATION"
+        and cast(Mapping[str, object], value["payload"])["close_quote_evaluation_identity"]
+        is not None
+    )
+    target.writer.write(
+        object_kind="CLOSE_QUOTE_EVALUATION",
+        object_identity=cast(str, quote["object_identity"]),
+        fact_boundary=FactBoundary.from_object(quote["fact_boundary"]),
+        payload=cast(Mapping[str, object], quote["payload"]),
+        source_provenance=cast(
+            Sequence[Mapping[str, object]],
+            quote["source_provenance"],
+        ),
+    )
+    with pytest.raises(DownstreamEvidenceError, match=r"duplicate close opportunities"):
+        target.writer.write(
+            object_kind="CLOSE_OPPORTUNITY_EVALUATION",
+            object_identity=cast(str, opportunity["object_identity"]),
+            fact_boundary=FactBoundary.from_object(opportunity["fact_boundary"]),
+            payload=cast(Mapping[str, object], opportunity["payload"]),
+            source_provenance=cast(
+                Sequence[Mapping[str, object]],
+                opportunity["source_provenance"],
+            ),
+        )
+
+    identity = cast(str, opportunity["object_identity"])
+    path = (
+        target_directory
+        / "objects"
+        / "CLOSE_OPPORTUNITY_EVALUATION"
+        / f"{identity.removeprefix('sha256:')}.json"
+    )
+    _rewrite_object(path, opportunity)
+    with pytest.raises(DownstreamEvidenceError, match=r"duplicate close opportunities"):
+        read_current_evidence(target_directory, bindings=bindings)
+
+
+def test_current_and_complete_readers_reject_rekeyed_duplicate_attempt_opportunity(
+    mature_unknown_complete_directory: tuple[Path, RuntimeBindings, str],
+) -> None:
+    directory, bindings, outcome_kind = mature_unknown_complete_directory
+    objects = read_current_evidence(directory, bindings=bindings)
+    rejected = outcome_kind.startswith("REJECTED_")
+    opportunity_kind = (
+        "REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION"
+        if rejected
+        else "CLOSE_OPPORTUNITY_EVALUATION"
+    )
+    opportunity = next(
+        value
+        for value in objects.values()
+        if value["object_kind"] == opportunity_kind
+        and cast(Mapping[str, object], value["payload"])["attempt_terminal_identity"] is not None
+    )
+    duplicate = json.loads(json.dumps(opportunity))
+    payload = duplicate["payload"]
+    forged_terminal = "sha256:" + "f" * 64
+    payload["attempt_terminal_identity"] = forged_terminal
+    boundary = FactBoundary.from_object(duplicate["fact_boundary"])
+    label = (
+        "RejectedCounterfactualCloseOpportunityEvaluationIdentity"
+        if rejected
+        else "CloseOpportunityEvaluationIdentity"
+    )
+    owner_field = "rejected_observation_identity" if rejected else "shadow_entry_identity"
+    identity_field = (
+        "rejected_close_opportunity_evaluation_identity"
+        if rejected
+        else "close_opportunity_evaluation_identity"
+    )
+    identity = canonical_identity(
+        label,
+        payload[owner_field],
+        payload["first_latched_close_action_identity"],
+        forged_terminal,
+        payload["opportunity_economics_business_fingerprint"],
+        payload["eligibility"],
+        boundary.as_object(),
+    )
+    duplicate["object_identity"] = identity
+    payload[identity_field] = identity
+    for root in duplicate["source_provenance"]:
+        if root["source_role"] == "ATTEMPT_CONTROL":
+            root["source_identity"] = forged_terminal
+    path = directory / "objects" / opportunity_kind / f"{identity.removeprefix('sha256:')}.json"
+    _rewrite_object(path, duplicate)
+
+    for reader in (read_current_evidence, read_complete_evidence):
+        with pytest.raises(
+            DownstreamEvidenceError,
+            match=r"missing its local terminal|duplicate.*owner boundary|differs from its owning Outcome",
+        ):
+            reader(directory, bindings=bindings)
+
+
+@pytest.mark.parametrize(
+    "mature_unknown_complete_directory",
+    ("rejected",),
+    indirect=True,
+)
+def test_current_reader_binds_only_rejected_attempt_opportunity_to_outcome(
+    mature_unknown_complete_directory: tuple[Path, RuntimeBindings, str],
+) -> None:
+    directory, bindings, outcome_kind = mature_unknown_complete_directory
+    assert outcome_kind == "REJECTED_COUNTERFACTUAL_OUTCOME"
+    objects = read_current_evidence(directory, bindings=bindings)
+    opportunity_kind = "REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION"
+    opportunity = next(
+        value
+        for value in objects.values()
+        if value["object_kind"] == opportunity_kind
+        and cast(Mapping[str, object], value["payload"])["attempt_terminal_identity"] is not None
+    )
+    old_path = _object_file(directory, objects, opportunity_kind)
+    rekeyed = json.loads(json.dumps(opportunity))
+    payload = rekeyed["payload"]
+    forged_terminal = "sha256:" + "f" * 64
+    payload["attempt_terminal_identity"] = forged_terminal
+    boundary = FactBoundary.from_object(rekeyed["fact_boundary"])
+    identity = canonical_identity(
+        "RejectedCounterfactualCloseOpportunityEvaluationIdentity",
+        payload["rejected_observation_identity"],
+        payload["first_latched_close_action_identity"],
+        forged_terminal,
+        payload["opportunity_economics_business_fingerprint"],
+        payload["eligibility"],
+        boundary.as_object(),
+    )
+    rekeyed["object_identity"] = identity
+    payload["rejected_close_opportunity_evaluation_identity"] = identity
+    for root in rekeyed["source_provenance"]:
+        if root["source_role"] == "ATTEMPT_CONTROL":
+            root["source_identity"] = forged_terminal
+    old_path.unlink()
+    path = old_path.with_name(f"{identity.removeprefix('sha256:')}.json")
+    _rewrite_object(path, rekeyed)
+
+    with pytest.raises(DownstreamEvidenceError, match=r"differs from its owning Outcome"):
+        read_current_evidence(directory, bindings=bindings)
+
+
+@pytest.mark.parametrize(
+    "atomic_availability",
+    (
+        CloseAtomicAvailability.KNOWN_UNAVAILABLE,
+        CloseAtomicAvailability.UNKNOWN,
+    ),
+)
+def test_owner_and_complete_reader_accept_not_requestable_first_close_atomically(
+    tmp_path: Path,
+    atomic_availability: CloseAtomicAvailability,
+) -> None:
+    owner, bindings = _mature_known_owner(tmp_path)
+    entry_identity = _admit_mature_known_owner(owner)
+    first_close = _mature_known_position_facts(
+        boundary=_mature_known_boundary(4, 140),
+        change_id=12,
+        previous_change_id=11,
+    )
+    first_close = replace(
+        first_close,
+        current_short_delta=Decimal("0.6"),
+        close_quote_facts=replace(
+            first_close.close_quote_facts,
+            option_availability=(
+                CloseOptionAvailability.TRADEABLE
+                if atomic_availability is CloseAtomicAvailability.KNOWN_UNAVAILABLE
+                else CloseOptionAvailability.UNKNOWN
+            ),
+            atomic_availability=atomic_availability,
+            component_reference=PredicateTruth.UNKNOWN,
+            book_availability=CloseBookAvailability.UNKNOWN,
+            consumed_levels=(),
+        ),
+        quote_source=None,
+        quote_refresh_witness=None,
+        current_combo_subscription_witness=None,
+    )
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=first_close,
+        allocate_request_id=lambda: 42,
+    )
+    assert [item.object_kind for item in transition.emitted] == [
+        "POSITION_EVALUATION",
+        "POSITION_ACTION",
+        "POST_CLOSE_ATTEMPT_SCHEDULED",
+        "POST_CLOSE_ATTEMPT_TERMINAL",
+        "CLOSE_OPPORTUNITY_EVALUATION",
+    ]
+    manifest, final_trigger = _manifest_for_mature_known_owner(tmp_path)
+    terminal_boundary = _mature_known_boundary(101, 300)
+    owner.terminate(
+        boundary=terminal_boundary,
+        terminal_source_identity=canonical_identity(
+            "PreboundSupervisorTriggerIdentity",
+            final_trigger,
+        ),
+        terminal_source=TerminalSource.STOP,
+    )
+    owner.finalize_terminal(
+        manifest=manifest,
+        terminal_disposition="PLANNED_CLEAN_STOP",
+        terminal_source=final_trigger,
+    )
+    (tmp_path / "manifest.json").write_bytes(manifest.exact_bytes)
+
+    complete = read_complete_evidence(tmp_path, bindings=bindings)
+    scheduled = next(
+        value
+        for value in complete.values()
+        if value["object_kind"] == "POST_CLOSE_ATTEMPT_SCHEDULED"
+    )
+    terminal = next(
+        value
+        for value in complete.values()
+        if value["object_kind"] == "POST_CLOSE_ATTEMPT_TERMINAL"
+    )
+    opportunity = next(
+        value
+        for value in complete.values()
+        if value["object_kind"] == "CLOSE_OPPORTUNITY_EVALUATION"
+    )
+    assert scheduled["fact_boundary"] == terminal["fact_boundary"] == opportunity["fact_boundary"]
+
+
 def test_complete_reader_closes_manifest_summaries_and_rederived_counts(
     complete_directory: tuple[Path, RuntimeBindings],
 ) -> None:

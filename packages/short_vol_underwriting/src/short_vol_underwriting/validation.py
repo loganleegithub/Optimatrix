@@ -65,6 +65,13 @@ POST_CLOSE_TERMINAL_STATUSES = frozenset(
         "CENSORED",
     }
 )
+PUBLIC_ORDER_BOOK_METHOD = "public/get_order_book"
+POST_CLOSE_NOT_REQUESTABLE_MARKERS = frozenset(
+    {
+        "NOT_REQUESTABLE_KNOWN_ATOMIC_UNAVAILABLE",
+        "NOT_REQUESTABLE_UNKNOWN",
+    }
+)
 
 
 class PayloadValidationError(ValueError):
@@ -90,6 +97,7 @@ def validate_payload_semantics(
             _boundary(value, key, code_identity, runtime_identity)
     _validate_common_shapes(payload)
     _validate_enums(object_kind, payload)
+    _validate_attempt_payload_semantics(object_kind, payload)
     _validate_position_source_graph(object_kind, payload)
     _validate_levels_and_arithmetic(object_kind, payload)
     expected = _expected_object_identity(
@@ -138,6 +146,39 @@ def validate_provenance_shape(
     if keys != sorted(keys) or len(keys) != len(set(keys)):
         raise PayloadValidationError("source_provenance must be unique and bytewise sorted")
     return tuple(result)
+
+
+def validate_exact_attempt_provenance(value: Mapping[str, object]) -> None:
+    """Bind every attempt object to its single frozen one-hop source root."""
+    object_kind = _string(value.get("object_kind"), "object_kind")
+    if object_kind not in {
+        "ADMISSION_ATTEMPT_SCHEDULED",
+        "ADMISSION_ATTEMPT_TERMINAL",
+        "POST_CLOSE_ATTEMPT_SCHEDULED",
+        "POST_CLOSE_ATTEMPT_TERMINAL",
+    }:
+        return
+    payload = _mapping(value.get("payload"), f"{object_kind} payload")
+    boundary = _graph_boundary(value.get("fact_boundary"), f"{object_kind} boundary")
+    if object_kind == "ADMISSION_ATTEMPT_SCHEDULED":
+        role = "ANCHOR"
+        source_identity = _identity(payload.get("candidate_identity"), "candidate_identity")
+    elif object_kind == "ADMISSION_ATTEMPT_TERMINAL":
+        role = "ATTEMPT_CONTROL"
+        source_identity = _identity(
+            payload.get("terminal_source_identity"),
+            "terminal_source_identity",
+        )
+    elif object_kind == "POST_CLOSE_ATTEMPT_SCHEDULED":
+        role = "POSITION_ACTION"
+        source_identity = _identity(
+            payload.get("first_latched_close_action_identity"),
+            "first_latched_close_action_identity",
+        )
+    else:
+        role = "ATTEMPT_CONTROL"
+        source_identity = _identity(value.get("object_identity"), "object_identity")
+    _require_exact_provenance(value, {(role, source_identity): boundary})
 
 
 def validate_object_graph(objects: Mapping[str, Mapping[str, object]]) -> None:
@@ -235,6 +276,534 @@ def validate_object_graph(objects: Mapping[str, Mapping[str, object]]) -> None:
         by_kind=by_kind,
         by_kind_identity=by_kind_identity,
     )
+    if objects and all("code_identity" in value for value in objects.values()):
+        validate_attempt_relationships(objects, require_complete=False)
+
+
+def validate_attempt_relationships(
+    objects: Mapping[str, Mapping[str, object]],
+    *,
+    require_complete: bool,
+) -> None:
+    """Validate partial or terminal attempt graphs without inventing pending facts."""
+    by_kind: dict[str, list[Mapping[str, object]]] = {}
+    by_kind_identity: dict[tuple[str, str], Mapping[str, object]] = {}
+    for value in objects.values():
+        kind = _string(value.get("object_kind"), "object_kind")
+        identity = _identity(value.get("object_identity"), "object_identity")
+        by_kind.setdefault(kind, []).append(value)
+        key = (kind, identity)
+        if key in by_kind_identity:
+            raise PayloadValidationError(f"duplicate attempt-graph object: {kind} {identity}")
+        by_kind_identity[key] = value
+
+    request_ids: dict[int, tuple[str, str]] = {}
+
+    def reserve_request_id(value: object, *, kind: str, identity: str) -> None:
+        if type(value) is not int:
+            return
+        request_id = _positive_integer(value, "attempt request id")
+        previous = request_ids.get(request_id)
+        if previous is not None and previous != (kind, identity):
+            raise PayloadValidationError(
+                "attempt request id is reused across Admission/Post-close schedules"
+            )
+        request_ids[request_id] = (kind, identity)
+
+    admission_schedules: dict[str, Mapping[str, object]] = {}
+    admission_schedules_by_candidate: dict[str, list[str]] = {}
+    for value in by_kind.get("ADMISSION_ATTEMPT_SCHEDULED", ()):
+        identity = _identity(value.get("object_identity"), "admission schedule identity")
+        payload = _mapping(value.get("payload"), "admission schedule payload")
+        reserve_request_id(payload.get("request_id"), kind="ADMISSION", identity=identity)
+        candidate_identity = _identity(payload.get("candidate_identity"), "candidate_identity")
+        candidate = by_kind_identity.get(("CANDIDATE_ACTIVATION", candidate_identity))
+        if candidate is None or candidate.get("fact_boundary") != value.get("fact_boundary"):
+            raise PayloadValidationError(
+                "admission schedule is missing its atomic Candidate activation"
+            )
+        candidate_schedules = admission_schedules_by_candidate.setdefault(
+            candidate_identity,
+            [],
+        )
+        candidate_schedules.append(identity)
+        if len(candidate_schedules) != 1:
+            raise PayloadValidationError("Candidate has multiple Admission schedules")
+        admission_schedules[identity] = value
+
+    admission_terminals_by_schedule: dict[str, list[Mapping[str, object]]] = {}
+    admission_terminals: dict[str, Mapping[str, object]] = {}
+    for value in by_kind.get("ADMISSION_ATTEMPT_TERMINAL", ()):
+        identity = _identity(value.get("object_identity"), "admission terminal identity")
+        payload = _mapping(value.get("payload"), "admission terminal payload")
+        schedule_identity = _identity(
+            payload.get("scheduled_admission_attempt_identity"),
+            "scheduled_admission_attempt_identity",
+        )
+        schedule = admission_schedules.get(schedule_identity)
+        if schedule is None:
+            raise PayloadValidationError("admission attempt terminal is missing its schedule")
+        schedule_payload = _mapping(schedule.get("payload"), "admission schedule payload")
+        if payload.get("candidate_identity") != schedule_payload.get("candidate_identity"):
+            raise PayloadValidationError("admission terminal candidate differs from its schedule")
+        schedule_boundary = _graph_boundary(
+            schedule.get("fact_boundary"),
+            "admission schedule boundary",
+        )
+        terminal_boundary = _graph_boundary(
+            value.get("fact_boundary"),
+            "admission terminal boundary",
+        )
+        if not terminal_boundary.is_strictly_after(schedule_boundary):
+            raise PayloadValidationError("admission terminal must be strictly after its schedule")
+        admission_terminals_by_schedule.setdefault(schedule_identity, []).append(value)
+        if len(admission_terminals_by_schedule[schedule_identity]) != 1:
+            raise PayloadValidationError("admission schedule has multiple terminals")
+        admission_terminals[identity] = value
+
+    entries_by_terminal: dict[str, list[Mapping[str, object]]] = {}
+    for value in by_kind.get("SHADOW_ENTRY", ()):
+        payload = _mapping(value.get("payload"), "Shadow Entry payload")
+        terminal_identity_value = payload.get("admission_attempt_terminal_identity")
+        if terminal_identity_value is None:
+            # Outcome-provenance unit graphs intentionally project only their
+            # owning roots. Full downstream objects cannot reach this branch
+            # because their per-kind schema requires the attempt identity.
+            continue
+        terminal_identity = _identity(
+            terminal_identity_value,
+            "admission_attempt_terminal_identity",
+        )
+        terminal = admission_terminals.get(terminal_identity)
+        if terminal is None:
+            raise PayloadValidationError("Shadow Entry is missing its admission attempt terminal")
+        terminal_payload = _mapping(terminal.get("payload"), "admission terminal payload")
+        if (
+            terminal_payload.get("terminal_outcome") != "ENTRY_EMITTED"
+            or payload.get("candidate_identity") != terminal_payload.get("candidate_identity")
+            or value.get("fact_boundary") != terminal.get("fact_boundary")
+        ):
+            raise PayloadValidationError("Shadow Entry differs from its atomic admission terminal")
+        source_ref = _mapping(
+            payload.get("entry_combo_quote_source_ref"),
+            "entry_combo_quote_source_ref",
+        )
+        terminal_source = _identity(
+            terminal_payload.get("terminal_source_identity"),
+            "terminal_source_identity",
+        )
+        if source_ref.get("source_identity") != terminal_source or source_ref.get(
+            "receipt_fact_boundary"
+        ) != terminal.get("fact_boundary"):
+            raise PayloadValidationError(
+                "Shadow Entry quote source differs from its admission response"
+            )
+        provenance = value.get("source_provenance")
+        if not isinstance(provenance, list):
+            raise PayloadValidationError("Shadow Entry provenance must be an array")
+        combo_roots = [
+            _mapping(member, "Shadow Entry provenance root")
+            for member in provenance
+            if _mapping(member, "Shadow Entry provenance root").get("source_role") == "COMBO_QUOTE"
+        ]
+        if len(combo_roots) != 1 or (
+            combo_roots[0].get("source_identity") != terminal_source
+            or combo_roots[0].get("receipt_fact_boundary") != terminal.get("fact_boundary")
+        ):
+            raise PayloadValidationError(
+                "Shadow Entry requires its exact admission combo-quote provenance"
+            )
+        entries_by_terminal.setdefault(terminal_identity, []).append(value)
+        if len(entries_by_terminal[terminal_identity]) != 1:
+            raise PayloadValidationError("admission terminal has multiple Shadow Entries")
+
+    for terminal_identity, terminal in admission_terminals.items():
+        payload = _mapping(terminal.get("payload"), "admission terminal payload")
+        entries = entries_by_terminal.get(terminal_identity, ())
+        if payload.get("terminal_outcome") != "ENTRY_EMITTED" and entries:
+            raise PayloadValidationError("non-entry admission terminal owns a Shadow Entry")
+        if (
+            require_complete
+            and payload.get("terminal_outcome") == "ENTRY_EMITTED"
+            and len(entries) != 1
+        ):
+            raise PayloadValidationError(
+                "complete ENTRY_EMITTED admission terminal requires one Shadow Entry"
+            )
+    if require_complete:
+        for schedule_identity in admission_schedules:
+            if len(admission_terminals_by_schedule.get(schedule_identity, ())) != 1:
+                raise PayloadValidationError(
+                    "complete admission schedule requires exactly one terminal"
+                )
+
+    post_close_schedules: dict[str, Mapping[str, object]] = {}
+    post_close_actions: dict[str, Mapping[str, object]] = {}
+    for value in by_kind.get("POST_CLOSE_ATTEMPT_SCHEDULED", ()):
+        identity = _identity(value.get("object_identity"), "post-close schedule identity")
+        payload = _mapping(value.get("payload"), "post-close schedule payload")
+        reserve_request_id(
+            payload.get("request_id_or_marker"),
+            kind="POST_CLOSE",
+            identity=identity,
+        )
+        action_identity = _identity(
+            payload.get("first_latched_close_action_identity"),
+            "first_latched_close_action_identity",
+        )
+        action = by_kind_identity.get(("POSITION_ACTION", action_identity))
+        if action is None or action.get("fact_boundary") != value.get("fact_boundary"):
+            raise PayloadValidationError(
+                "post-close schedule is missing its atomic first CLOSE action"
+            )
+        action_payload = _mapping(action.get("payload"), "first CLOSE action payload")
+        evaluation_identity = _identity(
+            action_payload.get("position_evaluation_identity"),
+            "position_evaluation_identity",
+        )
+        evaluation = by_kind_identity.get(("POSITION_EVALUATION", evaluation_identity))
+        if evaluation is None:
+            raise PayloadValidationError(
+                "post-close schedule is missing its owning Position evaluation"
+            )
+        evaluation_payload = _mapping(
+            evaluation.get("payload"),
+            "Position evaluation payload",
+        )
+        if (
+            action_payload.get("serialized_action") != "CLOSE"
+            or action_payload.get("first_latched_close_action_identity") != action_identity
+            or action_payload.get("scheduled_post_close_attempt_identity") != identity
+            or evaluation_payload.get("shadow_entry_identity")
+            != payload.get("shadow_entry_identity")
+        ):
+            raise PayloadValidationError(
+                "post-close attempt schedule cross-bind differs from first CLOSE"
+            )
+        post_close_schedules[identity] = value
+        post_close_actions[identity] = action
+
+    post_close_terminals_by_schedule: dict[str, list[Mapping[str, object]]] = {}
+    post_close_terminals: dict[str, tuple[Mapping[str, object], str]] = {}
+    for value in by_kind.get("POST_CLOSE_ATTEMPT_TERMINAL", ()):
+        identity = _identity(value.get("object_identity"), "post-close terminal identity")
+        payload = _mapping(value.get("payload"), "post-close terminal payload")
+        schedule_identity = _identity(
+            payload.get("scheduled_post_close_attempt_identity"),
+            "scheduled_post_close_attempt_identity",
+        )
+        schedule = post_close_schedules.get(schedule_identity)
+        if schedule is None:
+            raise PayloadValidationError("post-close attempt terminal is missing its schedule")
+        schedule_payload = _mapping(schedule.get("payload"), "post-close schedule payload")
+        schedule_boundary = _graph_boundary(
+            schedule.get("fact_boundary"),
+            "post-close schedule boundary",
+        )
+        terminal_boundary = _graph_boundary(
+            value.get("fact_boundary"),
+            "post-close terminal boundary",
+        )
+        request_member = schedule_payload.get("request_id_or_marker")
+        if type(request_member) is int:
+            if payload.get("terminal_status") in POST_CLOSE_NOT_REQUESTABLE_MARKERS:
+                raise PayloadValidationError(
+                    "requestable post-close schedule cannot use a not-requestable terminal"
+                )
+            if not terminal_boundary.is_strictly_after(schedule_boundary):
+                raise PayloadValidationError(
+                    "requestable post-close terminal must be strictly after its schedule"
+                )
+        elif (
+            payload.get("terminal_status") != request_member
+            or terminal_boundary != schedule_boundary
+        ):
+            raise PayloadValidationError(
+                "not-requestable post-close terminal must atomically match its marker"
+            )
+        if payload.get("terminal_status") == "SUCCESS":
+            action = post_close_actions[schedule_identity]
+            action_identity = _identity(
+                action.get("object_identity"),
+                "first CLOSE action identity",
+            )
+            matching_quotes: list[Mapping[str, object]] = []
+            for quote in by_kind.get("CLOSE_QUOTE_EVALUATION", ()):
+                quote_payload = _mapping(quote.get("payload"), "close quote payload")
+                if quote_payload.get(
+                    "first_latched_close_action_identity"
+                ) == action_identity and quote.get("fact_boundary") == value.get("fact_boundary"):
+                    matching_quotes.append(quote)
+            if len(matching_quotes) != 1:
+                raise PayloadValidationError(
+                    "successful post-close terminal requires exactly one atomic close quote"
+                )
+            matching_quote = matching_quotes[0]
+            matching_quote_payload = _mapping(
+                matching_quote.get("payload"),
+                "close quote payload",
+            )
+            if (
+                matching_quote_payload.get("shadow_entry_identity")
+                != schedule_payload.get("shadow_entry_identity")
+                or matching_quote_payload.get("close_conditioning") != action_identity
+                or matching_quote_payload.get("close_quote_state") != "ATOMIC_COMBO_CLOSE_QUOTE"
+            ):
+                raise PayloadValidationError(
+                    "successful post-close close quote differs from its owner/first CLOSE"
+                )
+            provenance = matching_quote.get("source_provenance")
+            if not isinstance(provenance, list):
+                raise PayloadValidationError("close quote provenance must be an array")
+            combo_roots = [
+                _mapping(member, "close quote provenance root")
+                for member in provenance
+                if _mapping(member, "close quote provenance root").get("source_role")
+                == "COMBO_QUOTE"
+            ]
+            if len(combo_roots) != 1 or (
+                combo_roots[0].get("source_identity") != payload.get("matched_response_identity")
+                or combo_roots[0].get("receipt_fact_boundary") != value.get("fact_boundary")
+            ):
+                raise PayloadValidationError(
+                    "successful post-close matched response differs from atomic close quote"
+                )
+        post_close_terminals_by_schedule.setdefault(schedule_identity, []).append(value)
+        if len(post_close_terminals_by_schedule[schedule_identity]) != 1:
+            raise PayloadValidationError("post-close schedule has multiple terminals")
+        post_close_terminals[identity] = (value, schedule_identity)
+
+    attempt_opportunities_by_terminal: dict[str, list[str]] = {}
+    close_opportunities_by_owner_boundary: dict[tuple[str, FactBoundary], list[str]] = {}
+    opportunity_families = (
+        (
+            "CLOSE_OPPORTUNITY_EVALUATION",
+            "shadow_entry_identity",
+            "POSITION_ACTION",
+            "position_evaluation_identity",
+            "POSITION_EVALUATION",
+            False,
+        ),
+        (
+            "REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION",
+            "rejected_observation_identity",
+            "REJECTED_COUNTERFACTUAL_POSITION_ACTION",
+            "rejected_position_evaluation_identity",
+            "REJECTED_COUNTERFACTUAL_POSITION_EVALUATION",
+            True,
+        ),
+    )
+    for (
+        opportunity_kind,
+        owner_field,
+        action_kind,
+        action_evaluation_field,
+        evaluation_kind,
+        rejected,
+    ) in opportunity_families:
+        for value in by_kind.get(opportunity_kind, ()):
+            value_payload = _mapping(value.get("payload"), "close opportunity payload")
+            identity = _identity(value.get("object_identity"), "close opportunity identity")
+            owner_identity = _identity(value_payload.get(owner_field), owner_field)
+            opportunity_boundary = _graph_boundary(
+                value.get("fact_boundary"),
+                "close opportunity boundary",
+            )
+            boundary_opportunities = close_opportunities_by_owner_boundary.setdefault(
+                (owner_identity, opportunity_boundary),
+                [],
+            )
+            boundary_opportunities.append(identity)
+            if len(boundary_opportunities) != 1:
+                raise PayloadValidationError(
+                    "duplicate close opportunities share one owner boundary"
+                )
+            if value_payload.get("close_quote_evaluation_identity") is not None:
+                continue
+            action_identity = _identity(
+                value_payload.get("first_latched_close_action_identity"),
+                "first_latched_close_action_identity",
+            )
+            action = by_kind_identity.get((action_kind, action_identity))
+            if action is None:
+                raise PayloadValidationError(
+                    "attempt-owned close opportunity is missing its first CLOSE action"
+                )
+            action_payload = _mapping(action.get("payload"), "first CLOSE action payload")
+            evaluation_identity = _identity(
+                action_payload.get(action_evaluation_field),
+                action_evaluation_field,
+            )
+            evaluation = by_kind_identity.get((evaluation_kind, evaluation_identity))
+            if evaluation is None:
+                raise PayloadValidationError(
+                    "attempt-owned close opportunity is missing its Position evaluation"
+                )
+            evaluation_payload = _mapping(
+                evaluation.get("payload"),
+                "Position evaluation payload",
+            )
+            if (
+                action_payload.get("serialized_action") != "CLOSE"
+                or action_payload.get("first_latched_close_action_identity") != action_identity
+                or evaluation_payload.get(owner_field) != owner_identity
+            ):
+                raise PayloadValidationError(
+                    "attempt-owned close opportunity differs from its first CLOSE owner"
+                )
+            action_boundary = _graph_boundary(
+                action.get("fact_boundary"),
+                "first CLOSE action boundary",
+            )
+            attempt_boundary = _graph_boundary(
+                value_payload.get("attempt_terminal_fact_boundary"),
+                "attempt_terminal_fact_boundary",
+            )
+            if attempt_boundary != opportunity_boundary:
+                raise PayloadValidationError(
+                    "attempt-owned close opportunity differs from its terminal boundary"
+                )
+            terminal_identity = _identity(
+                value_payload.get("attempt_terminal_identity"),
+                "attempt_terminal_identity",
+            )
+            terminal_status: str | None = None
+            if not rejected:
+                terminal_record = post_close_terminals.get(terminal_identity)
+                if terminal_record is None:
+                    raise PayloadValidationError(
+                        "attempt-owned close opportunity is missing its local terminal"
+                    )
+                terminal_value, schedule_identity = terminal_record
+                terminal_payload = _mapping(
+                    terminal_value.get("payload"),
+                    "post-close attempt terminal payload",
+                )
+                schedule = post_close_schedules[schedule_identity]
+                schedule_payload = _mapping(
+                    schedule.get("payload"),
+                    "post-close attempt schedule payload",
+                )
+                scheduled_action = post_close_actions[schedule_identity]
+                if (
+                    terminal_value.get("fact_boundary") != value.get("fact_boundary")
+                    or terminal_payload.get("terminal_owner") != "ORDINARY"
+                    or schedule_payload.get("shadow_entry_identity") != owner_identity
+                    or scheduled_action.get("object_identity") != action_identity
+                ):
+                    raise PayloadValidationError(
+                        "attempt-owned close opportunity differs from its local terminal/schedule"
+                    )
+                terminal_status = _string(
+                    terminal_payload.get("terminal_status"),
+                    "post-close terminal status",
+                )
+
+            outcome_kind = "REJECTED_COUNTERFACTUAL_OUTCOME" if rejected else "SHADOW_OUTCOME"
+            owning_outcomes = [
+                outcome
+                for outcome in by_kind.get(outcome_kind, ())
+                if _mapping(outcome.get("payload"), "Outcome payload").get(owner_field)
+                == owner_identity
+            ]
+            if len(owning_outcomes) > 1:
+                raise PayloadValidationError(
+                    "attempt-owned close opportunity has multiple owning Outcomes"
+                )
+            if owning_outcomes:
+                outcome_payload = _mapping(
+                    owning_outcomes[0].get("payload"),
+                    "Outcome payload",
+                )
+                outcome_terminal_status = _string(
+                    outcome_payload.get("post_close_attempt_terminal_status"),
+                    "Outcome post-close terminal status",
+                )
+                if (
+                    outcome_payload.get("first_latched_close_action_identity") != action_identity
+                    or outcome_payload.get("scheduled_post_close_attempt_identity")
+                    != action_payload.get("scheduled_post_close_attempt_identity")
+                    or outcome_payload.get("post_close_attempt_terminal_identity")
+                    != terminal_identity
+                    or outcome_payload.get("post_close_attempt_terminal_fact_boundary")
+                    != value.get("fact_boundary")
+                    or outcome_payload.get("post_close_attempt_terminal_owner") != "ORDINARY"
+                    or (terminal_status is not None and outcome_terminal_status != terminal_status)
+                ):
+                    raise PayloadValidationError(
+                        "attempt-owned close opportunity differs from its owning Outcome"
+                    )
+                terminal_status = outcome_terminal_status
+
+            candidate_statuses = (
+                (terminal_status,)
+                if terminal_status is not None
+                else (
+                    "ERROR",
+                    "DEADLINE_LATE",
+                    "RETIRED",
+                    "NOT_REQUESTABLE_KNOWN_ATOMIC_UNAVAILABLE",
+                    "NOT_REQUESTABLE_UNKNOWN",
+                )
+            )
+            matched_statuses: list[str] = []
+            for candidate_status in candidate_statuses:
+                if candidate_status in {"SUCCESS", "CENSORED"}:
+                    continue
+                known_unavailable = candidate_status == "NOT_REQUESTABLE_KNOWN_ATOMIC_UNAVAILABLE"
+                expected_eligibility = "INELIGIBLE" if known_unavailable else "UNKNOWN"
+                expected_reason = (
+                    "KNOWN_ATOMIC_UNAVAILABLE" if known_unavailable else "QUOTE_OR_ATTEMPT_UNKNOWN"
+                )
+                expected_fingerprint = canonical_identity(
+                    "OpportunityEconomicsBusinessFingerprint",
+                    {
+                        "attempt_terminal_status": candidate_status,
+                        "eligibility": expected_eligibility,
+                        "eligibility_reason": expected_reason,
+                    },
+                )
+                if (
+                    value_payload.get("eligibility") == expected_eligibility
+                    and value_payload.get("eligibility_reason") == expected_reason
+                    and value_payload.get("opportunity_economics_business_fingerprint")
+                    == expected_fingerprint
+                ):
+                    matched_statuses.append(candidate_status)
+            if len(matched_statuses) != 1:
+                raise PayloadValidationError(
+                    "attempt-owned close opportunity terminal economics mismatch"
+                )
+            resolved_status = matched_statuses[0]
+            if resolved_status in POST_CLOSE_NOT_REQUESTABLE_MARKERS:
+                if opportunity_boundary != action_boundary:
+                    raise PayloadValidationError(
+                        "not-requestable attempt opportunity must be atomic with first CLOSE"
+                    )
+            elif not opportunity_boundary.is_strictly_after(action_boundary):
+                raise PayloadValidationError(
+                    "requestable attempt opportunity must be strictly after first CLOSE"
+                )
+            _require_exact_provenance(
+                value,
+                {
+                    ("POSITION_ACTION", action_identity): action_boundary,
+                    ("ATTEMPT_CONTROL", terminal_identity): opportunity_boundary,
+                },
+            )
+            terminal_opportunities = attempt_opportunities_by_terminal.setdefault(
+                terminal_identity,
+                [],
+            )
+            terminal_opportunities.append(identity)
+            if len(terminal_opportunities) != 1:
+                raise PayloadValidationError("attempt terminal has multiple close opportunities")
+    if require_complete:
+        for schedule_identity in post_close_schedules:
+            if len(post_close_terminals_by_schedule.get(schedule_identity, ())) != 1:
+                raise PayloadValidationError(
+                    "complete post-close attempt schedule requires exactly one terminal"
+                )
 
 
 def _validate_position_source_chains(
@@ -926,6 +1495,7 @@ def _validate_family_reverse_closure(
     rejected = family["pair_family"] == "REJECTED"
     observations: dict[str, Mapping[str, object]] = {}
     owner_by_observation: dict[str, str] = {}
+    observation_by_owner: dict[str, str] = {}
     anchor_by_owner: dict[str, Mapping[str, object]] = {}
     for value in by_kind.get(observation_kind, ()):
         observation_identity = _identity(value["object_identity"], "observation identity")
@@ -942,6 +1512,7 @@ def _validate_family_reverse_closure(
             raise PayloadValidationError("multiple observations share one family owner")
         observations[observation_identity] = value
         owner_by_observation[observation_identity] = owner_identity
+        observation_by_owner[owner_identity] = observation_identity
         anchor_by_owner[owner_identity] = _mapping(
             anchor_value["payload"],
             "observation anchor payload",
@@ -1065,6 +1636,7 @@ def _validate_family_reverse_closure(
     opportunity_payloads: dict[str, Mapping[str, object]] = {}
     opportunity_owners: dict[str, str] = {}
     opportunities_by_quote: dict[str, list[str]] = {}
+    opportunities_by_attempt_terminal: dict[str, list[str]] = {}
     opportunities_by_owner_boundary: dict[tuple[str, FactBoundary], list[str]] = {}
     for value in by_kind.get(family["opportunity_kind"], ()):
         identity = _identity(value["object_identity"], "close opportunity identity")
@@ -1093,10 +1665,12 @@ def _validate_family_reverse_closure(
             actions[action_identity]["fact_boundary"],
             "first CLOSE action boundary",
         )
-        if not opportunity_boundary.is_strictly_after(action_boundary):
-            raise PayloadValidationError("close opportunity must be strictly after first CLOSE")
         quote_identity_value = value_payload["close_quote_evaluation_identity"]
         if quote_identity_value is not None:
+            if not opportunity_boundary.is_strictly_after(action_boundary):
+                raise PayloadValidationError(
+                    "quote-owned close opportunity must be strictly after first CLOSE"
+                )
             quote_identity = _identity(quote_identity_value, "close opportunity quote")
             quote_payload = quote_payloads.get(quote_identity)
             quote_boundary = (
@@ -1120,8 +1694,97 @@ def _validate_family_reverse_closure(
                     "close opportunity differs from its owning quote/action"
                 )
             opportunities_by_quote.setdefault(quote_identity, []).append(identity)
-        elif value_payload["attempt_terminal_identity"] is None:
-            raise PayloadValidationError("close opportunity requires one quote or attempt terminal")
+        else:
+            attempt_terminal_identity = _identity(
+                value_payload["attempt_terminal_identity"],
+                "close opportunity attempt terminal",
+            )
+            observation_identity = observation_by_owner[owner_identity]
+            outcomes = outcomes_by_observation.get(observation_identity, ())
+            if len(outcomes) != 1:
+                raise PayloadValidationError(
+                    "attempt-owned opportunity requires exactly one owning Outcome"
+                )
+            outcome = _mapping(outcomes[0]["payload"], "attempt opportunity Outcome payload")
+            if (
+                outcome["post_close_attempt_terminal_identity"] != attempt_terminal_identity
+                or outcome["post_close_attempt_terminal_fact_boundary"] != value["fact_boundary"]
+                or value_payload["attempt_terminal_fact_boundary"] != value["fact_boundary"]
+            ):
+                raise PayloadValidationError(
+                    "attempt-owned opportunity differs from its terminal boundary"
+                )
+            terminal_status = _string(
+                outcome["post_close_attempt_terminal_status"],
+                "post-close attempt terminal status",
+            )
+            if outcome["post_close_attempt_terminal_owner"] != "ORDINARY":
+                raise PayloadValidationError(
+                    "attempt-owned opportunity requires an ordinary terminal"
+                )
+            if not rejected:
+                terminal_value = by_kind_identity.get(
+                    ("POST_CLOSE_ATTEMPT_TERMINAL", attempt_terminal_identity)
+                )
+                if terminal_value is None:
+                    raise PayloadValidationError(
+                        "attempt-owned opportunity is missing its local terminal"
+                    )
+                terminal_payload = _mapping(
+                    terminal_value["payload"],
+                    "post-close attempt terminal payload",
+                )
+                if (
+                    terminal_value["fact_boundary"] != value["fact_boundary"]
+                    or terminal_payload["terminal_status"] != terminal_status
+                    or terminal_payload["terminal_owner"] != "ORDINARY"
+                ):
+                    raise PayloadValidationError(
+                        "attempt-owned opportunity differs from its local terminal"
+                    )
+            if terminal_status in POST_CLOSE_NOT_REQUESTABLE_MARKERS:
+                if opportunity_boundary != action_boundary:
+                    raise PayloadValidationError(
+                        "not-requestable attempt opportunity must be atomic with first CLOSE"
+                    )
+            elif not opportunity_boundary.is_strictly_after(action_boundary):
+                raise PayloadValidationError(
+                    "requestable attempt opportunity must be strictly after first CLOSE"
+                )
+            known_unavailable = terminal_status == "NOT_REQUESTABLE_KNOWN_ATOMIC_UNAVAILABLE"
+            expected_eligibility = "INELIGIBLE" if known_unavailable else "UNKNOWN"
+            expected_reason = (
+                "KNOWN_ATOMIC_UNAVAILABLE" if known_unavailable else "QUOTE_OR_ATTEMPT_UNKNOWN"
+            )
+            expected_fingerprint = canonical_identity(
+                "OpportunityEconomicsBusinessFingerprint",
+                {
+                    "attempt_terminal_status": terminal_status,
+                    "eligibility": expected_eligibility,
+                    "eligibility_reason": expected_reason,
+                },
+            )
+            if (
+                terminal_status in {"SUCCESS", "CENSORED"}
+                or value_payload["eligibility"] != expected_eligibility
+                or value_payload["eligibility_reason"] != expected_reason
+                or value_payload["opportunity_economics_business_fingerprint"]
+                != expected_fingerprint
+            ):
+                raise PayloadValidationError(
+                    "attempt-owned opportunity terminal economics mismatch"
+                )
+            _require_exact_provenance(
+                value,
+                {
+                    ("POSITION_ACTION", action_identity): action_boundary,
+                    ("ATTEMPT_CONTROL", attempt_terminal_identity): opportunity_boundary,
+                },
+            )
+            opportunities_by_attempt_terminal.setdefault(
+                attempt_terminal_identity,
+                [],
+            ).append(identity)
         opportunities[identity] = value
         opportunity_payloads[identity] = value_payload
         opportunity_owners[identity] = owner_identity
@@ -1136,6 +1799,27 @@ def _validate_family_reverse_closure(
         conditioning = quote_payload["close_conditioning"]
         if conditioning != "PRE_CLOSE" and not opportunities_by_quote.get(quote_identity):
             raise PayloadValidationError("each post-CLOSE quote requires an owning opportunity")
+
+    for _observation_identity, outcomes in outcomes_by_observation.items():
+        if len(outcomes) != 1:
+            raise PayloadValidationError(
+                "attempt terminal reverse closure requires exactly one Outcome"
+            )
+        outcome = _mapping(outcomes[0]["payload"], "attempt reverse-closure Outcome payload")
+        terminal_identity_value = outcome["post_close_attempt_terminal_identity"]
+        if terminal_identity_value is None:
+            continue
+        terminal_identity = _identity(
+            terminal_identity_value,
+            "post-close attempt terminal identity",
+        )
+        status = outcome["post_close_attempt_terminal_status"]
+        owner = outcome["post_close_attempt_terminal_owner"]
+        expected_count = 1 if owner == "ORDINARY" and status not in {"SUCCESS", "CENSORED"} else 0
+        if len(opportunities_by_attempt_terminal.get(terminal_identity, ())) != expected_count:
+            raise PayloadValidationError(
+                "post-close attempt terminal and opportunity are not one-to-one"
+            )
 
     exits_by_opportunity: dict[str, list[str]] = {}
     exits_by_observation: dict[str, list[str]] = {}
@@ -1394,6 +2078,7 @@ def validate_complete_attempt_relationships(
     objects: Mapping[str, Mapping[str, object]],
 ) -> None:
     """Require every complete-directory local attempt and its owning anchor."""
+    validate_attempt_relationships(objects, require_complete=True)
     by_kind_identity: dict[tuple[str, str], Mapping[str, object]] = {}
     by_kind: dict[str, list[Mapping[str, object]]] = {}
     for value in objects.values():
@@ -2210,7 +2895,7 @@ def _expected_object_identity(
         return canonical_identity(
             "ScheduledAdmissionAttemptIdentity",
             _identity(payload["candidate_identity"], "candidate_identity"),
-            _non_negative_integer(payload["request_id"], "request_id"),
+            _positive_integer(payload["request_id"], "request_id"),
             payload["request_method"],
             request_params,
             boundary,
@@ -2663,6 +3348,80 @@ def _validate_enums(object_kind: str, payload: Mapping[str, object]) -> None:
         _validate_outcome_matrix(payload)
     if object_kind == "ALIGNED_POLICY_NO_TRADE_PAIR":
         _validate_aligned_pair(payload)
+
+
+def _validate_attempt_payload_semantics(
+    object_kind: str,
+    payload: Mapping[str, object],
+) -> None:
+    if object_kind == "ADMISSION_ATTEMPT_SCHEDULED":
+        if payload.get("request_method") != PUBLIC_ORDER_BOOK_METHOD:
+            raise PayloadValidationError(
+                "admission request_method must be exactly public/get_order_book"
+            )
+        _positive_integer(payload.get("request_id"), "request_id")
+        _exact_request_params(payload.get("request_params"))
+        return
+    if object_kind == "POST_CLOSE_ATTEMPT_SCHEDULED":
+        if payload.get("request_method") != PUBLIC_ORDER_BOOK_METHOD:
+            raise PayloadValidationError(
+                "post-close request_method must be exactly public/get_order_book"
+            )
+        request_member = payload.get("request_id_or_marker")
+        request_params = payload.get("request_params")
+        if type(request_member) is int:
+            _positive_integer(request_member, "request_id_or_marker")
+            _exact_request_params(request_params)
+            return
+        if request_member not in POST_CLOSE_NOT_REQUESTABLE_MARKERS:
+            raise PayloadValidationError("post-close request marker is invalid")
+        if request_params is not None:
+            raise PayloadValidationError(
+                "post-close not-requestable marker requires null request_params"
+            )
+        return
+    if object_kind == "ADMISSION_ATTEMPT_TERMINAL":
+        terminal_source = _identity(
+            payload.get("terminal_source_identity"),
+            "terminal_source_identity",
+        )
+        matched = payload.get("matched_response_identity")
+        if payload.get("terminal_outcome") in {
+            "ENTRY_EMITTED",
+            "KNOWN_COMPLETE_NO_ENTRY",
+        }:
+            if _identity(matched, "matched_response_identity") != terminal_source:
+                raise PayloadValidationError(
+                    "admission matched response must equal its terminal source"
+                )
+        elif matched is not None:
+            raise PayloadValidationError(
+                "admission non-response terminal requires null matched_response_identity"
+            )
+        return
+    if object_kind == "POST_CLOSE_ATTEMPT_TERMINAL":
+        status = payload.get("terminal_status")
+        owner = payload.get("terminal_owner")
+        matched = payload.get("matched_response_identity")
+        if status == "SUCCESS":
+            if owner != "ORDINARY":
+                raise PayloadValidationError("successful post-close terminal must be ordinary")
+            _identity(matched, "matched_response_identity")
+            return
+        if status == "CENSORED":
+            if owner not in {"STOP", "FAILURE"} or matched is not None:
+                raise PayloadValidationError(
+                    "censored post-close terminal requires a barrier owner and null match"
+                )
+            return
+        if status not in POST_CLOSE_TERMINAL_STATUSES or owner != "ORDINARY":
+            raise PayloadValidationError(
+                "non-success post-close terminal requires ordinary ownership"
+            )
+        if matched is not None:
+            raise PayloadValidationError(
+                "non-success post-close terminal requires null matched_response_identity"
+            )
 
 
 def _validate_levels_and_arithmetic(
@@ -3248,6 +4007,12 @@ def _string_array(value: object, field: str) -> tuple[str, ...]:
 def _non_negative_integer(value: object, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise PayloadValidationError(f"{field} must be a non-negative integer")
+    return value
+
+
+def _positive_integer(value: object, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise PayloadValidationError(f"{field} must be a positive integer")
     return value
 
 

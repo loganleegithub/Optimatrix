@@ -49,9 +49,11 @@ from short_vol_underwriting.schemas import (
 )
 from short_vol_underwriting.validation import (
     PayloadValidationError,
+    validate_attempt_relationships,
     validate_complete_attempt_relationships,
     validate_complete_cohort_summary_provenance,
     validate_complete_semantic_graph,
+    validate_exact_attempt_provenance,
     validate_object_graph,
     validate_payload_semantics,
     validate_provenance_shape,
@@ -141,6 +143,14 @@ class DownstreamEvidenceWriter:
             source_provenance=source_provenance,
             bindings=self.bindings,
         )
+        prospective = {
+            f"{kind}:{identity}": existing for (kind, identity), existing in self._objects.items()
+        }
+        prospective[f"{object_kind}:{object_identity}"] = value
+        try:
+            validate_attempt_relationships(prospective, require_complete=False)
+        except PayloadValidationError as exc:
+            raise DownstreamEvidenceError(str(exc)) from exc
         serialized = _serialize(value)
         path = _object_path(self.objects_directory, object_kind, object_identity)
         published = _publish_exclusive(path, serialized)
@@ -833,6 +843,7 @@ def validate_downstream_object(
             underwriting_contract_digest=bindings.underwriting_position_contract_digest,
             outcome_contract_identity=bindings.outcome_contract_identity,
         )
+        validate_exact_attempt_provenance(value)
     except PayloadValidationError as exc:
         raise DownstreamEvidenceError(str(exc)) from exc
 

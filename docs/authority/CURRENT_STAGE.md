@@ -8,9 +8,11 @@
 
 **Production Short Vol Radar:** `ESTABLISHED`
 
-**Sole authorized next product-capability closure:** `NONE`
+**Sole authorized next product-capability closure:**
+`SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`
 
-**Fixed-contract public Shadow runtime:** `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`
+**Fixed-contract public Shadow runtime:**
+`IMPLEMENTED_AWAITING_ATTEMPT_EVIDENCE_INTEGRITY_REPAIR`
 
 **Evidence gate:** `CLOSED`
 
@@ -37,10 +39,15 @@ admission, Position action, and close-opportunity semantics. The accepted
 [`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](../contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
 implementation/evaluation contract freezes deterministic public counterfactual exit, Outcome
 maturity/censoring, rejected-counterfactual, aligned `NO_TRADE`, forward-cohort, conservation, and
-strict downstream evidence semantics. The accepted implementation provides the pure owner, strict
-schemas/writer/readers, and sole-process composition against the exact three-Policy chain. It does
-not establish a live cohort, authorize a production-public command, prove natural business
-activity, or change any contract or Policy byte.
+strict downstream evidence semantics. The accepted implementation provides the pure owner and
+sole-process composition against the exact three-Policy chain. Independent pre-run review has
+since proved that its downstream writer/readers do not yet enforce every reconstructible frozen
+attempt method/id/marker/params shape, terminal-source projection, causal-boundary, provenance
+consistency, and terminal-to-opportunity relation after affected identities are recomputed. The active
+[`SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`](../../tasks/SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md)
+task authorizes only that offline implementation repair. It does not establish a live cohort,
+authorize a production-public command, prove natural business activity, or change any contract or
+Policy byte.
 
 ### Terminal-goal delegation for the downstream public Shadow closure
 
@@ -50,19 +57,20 @@ activate and implement one fixed-contract, fixed-Policy public Shadow runtime; r
 pre-bound production-public evidence after exact-candidate gates; and record only the result that
 independent evidence proves.
 
-The authority-only prerequisite and the bounded fixed-contract implementation are accepted. The
-implementation terminal record is `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`; it does not establish a
-live cohort. Permission remains `PUBLIC_SHADOW`, the top implemented capability remains
-`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`, Radar remains `ESTABLISHED`, the sole next closure is `NONE`,
-the evidence gate is `CLOSED`, and live commands are `FORBIDDEN`. The completed implementation task
-is physically absent. Access to private/account data, credentials, margin, orders, fills, capital, actual
-execution Outcome, qualification, promotion, persistent deployment, force-push, history rewriting,
-direct edits to `main`, and every production-public command remain forbidden. A later explicitly
-activated `EVIDENCE_ONLY` task must separately bind the exact candidate, three Policy identities,
-separate new empty downstream/Radar evidence directories, and pre-bound start/cutoff/stop controls
-before any live command is authorized.
+The authority-only prerequisite and bounded fixed-contract implementation are accepted, but the
+strict attempt-evidence proof is not. Permission remains `PUBLIC_SHADOW`, the top implemented
+capability remains `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`, Radar remains `ESTABLISHED`, the sole next
+closure is `SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`, the evidence gate is `CLOSED`, and live
+commands are `FORBIDDEN`. The active repair changes no product semantics and may terminate only by
+restoring `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE` after independent exact-commit acceptance.
+Access to private/account data, credentials, margin, orders, fills, capital, actual execution
+Outcome, qualification, promotion, persistent deployment, force-push, history rewriting, direct
+edits to `main`, and every production-public command remain forbidden. A later explicitly
+activated `EVIDENCE_ONLY` task must separately bind the repaired exact candidate, three Policy
+identities, separate new empty downstream/Radar evidence directories, and pre-bound
+start/cutoff/stop controls before any live command is authorized.
 
-### Accepted fixed-contract Shadow implementation record
+### Fixed-contract Shadow implementation and active integrity repair
 
 The implementation adds one pure `short_vol_underwriting` owner and one guarded
 `radar_runtime observe-shadow` composition. Offline deterministic tests cover Underwriting,
@@ -71,7 +79,10 @@ rejected-counterfactual, aligned `NO_TRADE`, terminal censoring, strict provenan
 `UNKNOWN` handling, conservation, runtime barriers, and existing Radar regressions. It adds no
 second client, queue, service, database, replay calculator, third-party dependency, or lock-file
 change. No production-public run, private/account access, Candidate, Entry, Position, Outcome, or
-business evidence was created while accepting the implementation.
+business evidence was created while accepting the implementation. The active repair changes no
+owner or sender behavior; it makes the repository-owned writer/current reader/complete reader
+independently reject malformed or incomplete attempt evidence that the exact base accepted after
+identity recomputation.
 
 The two downstream contracts retain their freeze-time
 `CONTRACT_FROZEN_RUNTIME_NOT_IMPLEMENTED` / `RUNTIME_NOT_IMPLEMENTED` labels byte-for-byte. Those
@@ -135,9 +146,12 @@ or authority to run it.
 
 The Underwriting, Shadow-admission, Position, Shadow Outcome, rejected-counterfactual, aligned
 `NO_TRADE`, and forward-cohort semantics and exact three-Policy chain are frozen and implemented.
-There is no active closure. The root blocker to downstream business evidence is now the closed
-evidence gate: no live command is authorized until an explicitly activated `EVIDENCE_ONLY` task
-binds and independently verifies one exact candidate, directories, controls, and non-claims.
+The sole active closure is the offline attempt-evidence integrity repair. The root blocker to
+downstream business evidence is that the exact base writer/readers cannot yet independently prove
+the frozen public-only attempt lifecycle or accept both legal not-requestable branches, and no live
+command is authorized. After the repair is independently accepted, a separate `EVIDENCE_ONLY`
+task must bind and verify one exact repaired candidate, directories, controls, effective-time
+gate, and non-claims.
 
 The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
 the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
@@ -210,19 +224,19 @@ profitability, or fill evidence.
 
 ## Queued sequence — not authorized
 
-No product-capability closure is active. The following successor closures remain queued and
-unauthorized:
+Only `SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY` is active, and it authorizes offline repair
+only. The following successor closures remain queued and unauthorized:
 
-1. **Production-public forward evidence:** only after independently accepted implementation, open
-   a separate `EVIDENCE_ONLY` task with code/Policy changes forbidden and exact candidate,
-   Policy, evidence-directory, trigger, stop, and non-claim bindings.
+1. **Production-public forward evidence:** only after independently accepted integrity repair,
+   open a separate `EVIDENCE_ONLY` task with code/Policy changes forbidden and exact candidate,
+   Policy, evidence-directory, effective-time, trigger, stop, and non-claim bindings.
 2. **Challenger research and qualification:** authorize only after a usable frozen-Policy cohort
    and pre-registered qualification contract.
 3. **Promotion and execution:** authorize separately after independent qualification. Account,
    capital, order, and fill authority remain distinct.
 
-A queued product-capability closure is not active. Exactly one may be activated only by an
-explicitly approved change after its prerequisite is accepted.
+A queued product-capability closure is not active. Exactly one may replace the current repair only
+by an explicitly approved change after its prerequisite is accepted.
 
 ## Forbidden under the current boundary
 

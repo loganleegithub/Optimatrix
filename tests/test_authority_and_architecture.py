@@ -196,17 +196,18 @@ def test_current_stage_records_fixed_contract_runtime_terminal_matrix() -> None:
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
     assert current.count(marker) == 1
-    assert f"{marker} `NONE`" in flat
+    assert f"{marker} `SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
     assert (
-        "**Fixed-contract public Shadow runtime:** `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`"
-    ) in current
+        "**Fixed-contract public Shadow runtime:** "
+        "`IMPLEMENTED_AWAITING_ATTEMPT_EVIDENCE_INTEGRITY_REPAIR`"
+    ) in flat
     assert "**Evidence gate:** `CLOSED`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
     assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
-    assert "IMPLEMENTED_AWAITING_FORWARD_EVIDENCE" in current
+    assert "offline attempt-evidence integrity repair" in flat
     assert "does not establish a live cohort" in flat
     assert "no live command is authorized" in flat.lower()
     assert "labels record the state when the immutable contract content was accepted" in flat
@@ -214,11 +215,64 @@ def test_current_stage_records_fixed_contract_runtime_terminal_matrix() -> None:
     assert "## Queued sequence — not authorized" in current
 
 
-def test_completed_runtime_has_no_active_task() -> None:
+def test_attempt_integrity_repair_is_the_single_active_task() -> None:
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
+        "SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md",
+        "TEMPLATE.md",
+    ]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    assert "**Sole authorized next product-capability closure:** `NONE`" in current
+    assert (
+        "**Sole authorized next product-capability closure:**\n"
+        "`SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`"
+    ) in current
+
+
+def test_attempt_integrity_task_freezes_scope_and_immutable_identities() -> None:
+    task = (ROOT / "tasks/SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md").read_text(
+        encoding="utf-8"
+    )
+    flat = " ".join(task.split())
+    for invariant in (
+        "**Status:** ACTIVE",
+        "**Task kind:** `IMPLEMENTATION`",
+        "**Runtime implementation:** REQUIRED",
+        "**Live commands:** FORBIDDEN",
+        "**Base commit:** `a7bb495a391cbf76377356c9b31b0360667104dd`",
+        "**Base tree:** `3d4eba9e3ec5dd2bb103da7e60463fe4ce6baee7`",
+        "`codex/short-vol-fixed-contract-public-shadow-runtime`; Draft PR #5",
+        "**Market/Decision input contract change:** `NONE`",
+        "**Decision Policy change:** `NONE`",
+        "**Outcome/evaluation contract change:** `NONE`",
+        "**Stage/authorization change:** `APPROVED`",
+        "evidence gate remains `CLOSED`",
+        "upstream market-catalog preimage",
+        "outside reader authentication",
+        "Private API:** FORBIDDEN",
+    ):
+        assert invariant in flat
+
+    expected_digests = (
+        "sha256:b9733ad0c90837338b88fb5b6eb66ad8eed448cce6372a3f527988395087b3fe",
+        "sha256:9cbaecf57fb1db0dedf782a4ab002b655e43319a1ad7c5880db3d7b4682d4b03",
+        "sha256:61a032fe0fe265d66a38bcbb1a3c8498409664fedbda2c8bd0a245180581a695",
+        "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4",
+        "sha256:be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af",
+        "sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439",
+    )
+    assert all(task.count(digest) == 1 for digest in expected_digests)
+
+    scope = task.split("**Exact allowed files:**", maxsplit=1)[1].split("```", maxsplit=2)[1]
+    assert set(scope.strip().removeprefix("text\n").splitlines()) == {
+        "README.md",
+        "docs/authority/CURRENT_STAGE.md",
+        "packages/short_vol_underwriting/src/short_vol_underwriting/evidence.py",
+        "packages/short_vol_underwriting/src/short_vol_underwriting/validation.py",
+        "tasks/SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md",
+        "tests/test_authority_and_architecture.py",
+        "tests/test_complete_downstream_evidence.py",
+        "tests/test_short_vol_underwriting.py",
+    }
 
 
 def test_fixed_three_policy_chain_and_implementation_boundary_are_exact() -> None:
@@ -1946,10 +2000,11 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`",
         "SHORT_VOL_UNDERWRITING_POSITION",
         "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT",
-        "`IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`",
+        "`IMPLEMENTED_AWAITING_ATTEMPT_EVIDENCE_INTEGRITY_REPAIR`",
         "`observe-shadow`",
         "live commands remain forbidden",
-        "Offline Shadow implementation acceptance does not prove",
+        "attempt-evidence integrity repair",
+        "evidence-integrity acceptance does not prove",
         "maker/order/fill",
     ):
         assert invariant in readme
@@ -2041,6 +2096,9 @@ def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
         text = path.read_text(encoding="utf-8")
         if "**Task kind:** `AUTHORITY_ONLY`" in text:
             assert "**Runtime implementation:** FORBIDDEN" in text
+            assert "**Live commands:** FORBIDDEN" in text
+        if "**Task kind:** `IMPLEMENTATION`" in text:
+            assert "**Runtime implementation:** REQUIRED" in text
             assert "**Live commands:** FORBIDDEN" in text
         for declaration in (
             "**Market/Decision input contract change:**",
