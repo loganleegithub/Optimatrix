@@ -8,9 +8,10 @@ production-public Shadow only: no private API, account, margin, order, fill, or 
 
 The top implemented capability is `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`: one guarded
 production-public Radar runtime and its `observe` command. The fixed-contract public Shadow
-implementation is separately `IMPLEMENTATION_ACCEPTED_EVIDENCE_NOT_ACCEPTED`. Its single authorized
-production-public attempt is consumed and failed; `observe-shadow` is not currently authorized and
-no product-capability task is active.
+implementation is separately `IMPLEMENTATION_ACCEPTED_ENGINEERING_EVIDENCE_ACTIVE`. Its first
+production-public attempt is consumed and failed. The active
+[`SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE`](tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md)
+task now authorizes one new exact `observe-shadow` smoke from new paths after every preflight passes.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
@@ -29,14 +30,26 @@ Underwriting identity error. Its downstream failure summaries are complete and c
 persisted Candidate/Entry/Position/Outcome counts, but the Radar run summary is absent; the full
 forward result is `INCOMPLETE`, `NOT_ACCEPTED`, and business-`NOT_EVALUABLE`. Radar writes its run
 summary only on clean stop, so partial Radar evidence is truthful on this process failure rather
-than a second implementation defect. No second
-production-public invocation is authorized. No private/account/order/fill/capital capability,
-replay, Policy change, qualification, or persistent service is authorized.
+than a second implementation defect. That attempt remains sealed and cannot be retried or reused.
+The distinct active task authorizes exactly one new process with a 14-minute enrollment cutoff,
+29-minute final-stop trigger, and realized runtime no longer than 30 minutes. No
+private/account/order/fill/capital capability, replay, Policy change, qualification, or persistent
+service is authorized.
 Establishment means the bounded public Radar met its frozen reachability and operating predicates;
 it does not mean the Radar is persistently deployed, always running, indefinitely stable,
 profitable, or authorized to trade. Offline Shadow implementation or evidence-integrity
 acceptance does not prove a natural Candidate, Entry, Position, Outcome, forward cohort, Policy
 quality, or business success.
+
+The active acceptance has two layers. Existing deterministic tests compose the real
+`EpisodeTracker.observe()` identity handoff, concrete adapter/owner Candidate-to-Outcome path, and
+complete reader/conservation checks; this is engineering evidence, not a market trade. The one
+production-public smoke gates only real Deribit integration, non-vacuous Radar coverage/formula,
+at least one real episode-identity handoff into Underwriting availability, clean stop, complete
+summaries, readers/conservation, and absence of forbidden capabilities.
+Natural Candidate, Entry, and Outcome are reported independently as
+`OBSERVED | NOT_OBSERVED`; their absence cannot extend the run, change a Policy, trigger a retry,
+or block later development.
 
 ## Intended first business flow
 
@@ -83,8 +96,8 @@ The implemented Outcome/cohort reducer follows the frozen causal-first counterfa
 terminal `MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one bounded
 rejected counterfactual per slot, cohort-aligned `NO_TRADE`, exact public-quote PnL equations, and
 honest conservation/null denominators. A public quote remains not a fill. The consumed attempt did
-not establish production-public Shadow evidence, and accepted offline repair authorizes no live
-invocation or trading capability.
+not establish production-public Shadow evidence. Only the active task's one exact bounded smoke is
+authorized; no trading capability follows from it.
 
 ## Authority
 
@@ -133,9 +146,10 @@ The guarded `python -m radar_runtime observe` command is the public-only runtime
 evidence directory and preserves clean-stop and strict-validation behavior. The accepted Smoke and
 Soak establish only their exact pre-bound observation windows; they do not authorize persistent
 service deployment, private/account access, orders, fills, capital, execution, or any queued
-product closure. `python -m radar_runtime observe-shadow` remains implemented, but no active task
-authorizes invoking it.
+product closure. `python -m radar_runtime observe-shadow` remains guarded and may be invoked only
+once under the active task's exact remotely bound manifest and new external paths.
 
 The failed manifest, evidence directories, log, and terminal record are sealed and cannot be
-edited, deleted, completed retroactively, migrated, relabelled, or reused. A future live attempt
-requires a new `EVIDENCE_ONLY` task, new external paths, and separate explicit authorization.
+edited, deleted, completed retroactively, migrated, relabelled, retried, or reused. The active
+`EVIDENCE_ONLY` task supplies distinct authorization and new external paths; it carries no fact or
+acceptance forward from the failed interval.
