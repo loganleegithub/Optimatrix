@@ -34,3 +34,34 @@ jobs:
           path: /tmp/optimatrix-worktree.tgz
           if-no-files-found: error
           retention-days: 1
+
+  toolchain:
+    name: Export locked Python toolchain
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install pinned uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.10.0"
+          python-version: "3.13.5"
+
+      - name: Export exact locked site-packages
+        run: |
+          mkdir -p /tmp/optimatrix-locked-site-packages
+          uv pip install --python 3.13.5 --target /tmp/optimatrix-locked-site-packages -r requirements-dev.lock
+          tar -C /tmp -czf /tmp/optimatrix-locked-site-packages.tgz optimatrix-locked-site-packages
+
+      - name: Upload locked toolchain
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimatrix-locked-site-packages
+          path: /tmp/optimatrix-locked-site-packages.tgz
+          if-no-files-found: error
+          retention-days: 1
