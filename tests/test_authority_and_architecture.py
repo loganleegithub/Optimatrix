@@ -254,10 +254,7 @@ def test_two_layer_shadow_engineering_task_is_closed_without_an_active_task() ->
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md").exists()
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "CLOSE_STALE_SHADOW_EVIDENCE_AUTHORITY.md",
-        "TEMPLATE.md",
-    ]
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Sole authorized next product-capability closure:**\n`NONE`" in current
 
