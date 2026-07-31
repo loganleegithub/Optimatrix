@@ -1,0 +1,29 @@
+name: ChatGPT bootstrap source snapshot
+
+on:
+  push:
+    branches:
+      - chatgpt/persistent-radar-shadow-web-workbench
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    name: Export exact source tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out exact branch commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Build source archive
+        run: tar --exclude=.git -czf /tmp/optimatrix-source.tar.gz .
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: optimatrix-source-${{ github.sha }}
+          path: /tmp/optimatrix-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
