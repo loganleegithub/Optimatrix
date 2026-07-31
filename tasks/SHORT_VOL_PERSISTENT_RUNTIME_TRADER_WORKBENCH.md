@@ -14,8 +14,9 @@
 
 **Implementation contracts:**
 [`SHORT_VOL_RADAR`](../docs/contracts/SHORT_VOL_RADAR.md),
-[`SHORT_VOL_UNDERWRITING_POSITION`](../docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md), and
-[`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](../docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
+[`SHORT_VOL_UNDERWRITING_POSITION`](../docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md),
+[`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](../docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md), and
+[`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`](../docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md)
 
 **Base commit:** `967e82ea36a7fcae13c6c8a8b07108af5b21a633`
 
@@ -23,102 +24,114 @@
 
 ## Business closure
 
-**Given:** the accepted production-public Radar reducer and fixed-contract public Shadow owner can
-already consume one public Deribit session under one immutable three-Policy chain, but the
-repository exposes only bounded observation commands and no trader-facing read-only projection.
+**Given:** the accepted public Radar reducer and fixed-contract public Shadow owner have passed
+bounded deterministic and production-public integration evidence, but the repository exposes only
+bounded `observe` / `observe-shadow` commands and no trader-facing read-only projection.
 
-**When:** one offline-qualified persistent process host owns one deployment state root, creates one
-new runtime identity, freezes the three Policies, maintains one public connection/reducer/Shadow
-owner across reconnects, and publishes an immutable read-only trader snapshot over loopback HTTP.
+**When:** one offline-qualified persistent process host owns one external state root, creates one
+new runtime identity, freezes the exact three Policies, reuses the sole public client/reducer/Shadow
+owner across reconnects, writes the persistent-service evidence contract, and atomically publishes a
+loopback read-only trader snapshot after each settled Radar-plus-Shadow transaction.
 
-**Then:** an externally supervised process can continue until an explicit stop or fatal integrity
-failure; duplicate processes sharing the same state root fail before market I/O; business objects
-are terminalized once; and the trader can inspect system, Radar, Underwriting, simulated Shadow,
+**Then:** the implementation is ready for Codex review without authorizing invocation or deployment;
+a duplicate process fails before market I/O; a future authorized process can stop gracefully and
+terminalize once; and a trader can inspect settled system, Radar, Underwriting, simulated Shadow,
 Position, close-opportunity, and Outcome truth without a second decision engine.
 
-**Independent verification:** direct deterministic tests falsify lease exclusivity, runtime
-identity renewal, Policy immutability, health/readiness separation, loopback/read-only HTTP,
-terminal idempotence, no-client pre-latched stop, and the absence of a bounded-cohort summary.
-Repository CI runs focused tests plus `make check` on the exact candidate.
+**Independent verification:** deterministic tests falsify lease exclusivity, runtime identity
+renewal, Policy immutability, reconnect continuity, state separation, exact service evidence,
+complete-reader failure modes, atomic snapshot ordering, loopback/read-only HTTP, no-client
+pre-latched stop, terminal idempotence, and truthful empty/zero/null UI fixtures. Repository CI runs
+focused tests and `make check` on the exact candidate.
 
-**Valid zero/no-hit/UNKNOWN result:** zero anomalies, zero Candidates, zero Shadow Entries, zero
-Positions, or only `UNKNOWN` rows is valid operating truth. It neither extends process duration nor
-changes thresholds. Empty panels display no settled object; `UNKNOWN` is never rendered as zero or
-calm.
+**Valid zero/no-hit/UNKNOWN result:** panel emptiness and business zero are separate. An empty panel
+means no matching settled object is present; it is not a zero claim. A numeric zero-anomaly claim
+requires a known complete non-empty monitor denominator. Numeric zero Candidate additionally requires a
+strictly positive Underwriting-evaluable denominator. Unknown or zero denominators serialize and
+render as `null / UNKNOWN`, never `0`, calm, or no opportunity.
 
-**Upstream prerequisite:** exact main commit `967e82ea36a7fcae13c6c8a8b07108af5b21a633`,
-which records the accepted Radar runtime, fixed-contract Shadow owner/adapter, immutable
-three-Policy chain, and the completed two-layer public integration evidence. This task does not
-re-open their economics, identity, or evidence semantics.
+**Upstream prerequisite:** exact accepted main commit
+`967e82ea36a7fcae13c6c8a8b07108af5b21a633`, including the accepted Radar runtime, fixed-contract
+Shadow owner/adapter, immutable three-Policy chain, and closed two-layer engineering evidence.
 
 ## Change declarations
 
-**Market/Decision input contract change:** NONE. The same public source, trusted clock, continuity,
-official combo, target quantity, and known-at rules remain authoritative.
+**Market/Decision input contract change:** NONE. Public sources, universe, trusted time,
+continuity/currentness, official atomic combo, target quantity, and known-at rules are unchanged.
 
-**Decision Policy change:** NONE. Exact Policy bytes and identities are loaded once before runtime
-construction and are not watched or reloaded.
+**Decision Policy change:** NONE. Exact Radar, Underwriting, and Position Policy bytes and identities
+are loaded once before runtime construction; no watcher, reload, tuning, promotion, or
+no-opportunity extension surface is added.
 
-**Outcome/evaluation contract change:** NONE. The existing bounded forward-cohort command retains
-its manifest, cutoff, final-stop, summary, and acceptance semantics. The persistent service does
-not impersonate a forward cohort and emits no cohort summary.
+**Outcome/evaluation contract change:** APPROVED — add exact semantic identity
+`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`, contract digest
+`sha256:e3e6c91aaefcdc867a0cdd64d528cebfe2b3a40681e192c7f4f924bdbfc27bff`, and its non-cohort
+run-segment lifecycle/terminal/conservation/writer/reader semantics. It also adds one exact Radar
+summary compatibility rule for a transport generation retired at the coverage-start instant: only a
+contiguous unrecovered zero-duration restart chain may precede the first represented coverage epoch.
+Existing Candidate, Position, Outcome, rejected-counterfactual, and aligned-pair objects remain
+governed by their current contracts, but service-created units are explicitly
+`cohort_enrolled=false`; no manifest, enrollment cutoff, or forward-cohort summary is emitted.
+`observe` and `observe-shadow` business behavior and bounded evidence semantics remain unchanged.
 
-**Stage/authorization change:** APPROVED — this user-authorized branch may implement and test the
-persistent service and read-only workbench offline. Production-public invocation, persistent
-deployment, private/account access, orders, fills, capital, qualification, promotion, execution,
-and supervisor installation remain forbidden. A later explicit authority task is required before
-invocation or deployment.
+**Stage/authorization change:** APPROVED — activate this exact offline implementation closure only.
+Permission remains `PUBLIC_SHADOW`; `serve-shadow`, every production-public invocation, persistent
+deployment, supervisor installation, 24x7 acceptance, private/account access, orders, fills,
+capital, qualification, promotion, and execution remain `FORBIDDEN`.
 
 ## Product operating behavior
 
-One process acquires an advisory exclusive lease at `<state-root>/service.lock`. A different state
-root is a distinct deployment boundary and is not silently merged. After the lease is held, the
-process owns one runtime identity, one Policy chain, one `LiveRadarRuntime`, one `RadarReducer`, one
-fixed-contract Shadow owner, one downstream writer, and one public WebSocket client at a time.
-Reconnects increment the session epoch but do not create a second business owner or reuse retired
-continuity.
+A future separately authorized process acquires a non-blocking exclusive lease at
+`<state-root>/service.lock` before creating any client. One startup creates one new canonical
+runtime identity and one run directory. Reconnects increment the session epoch but retain the same
+runtime, reducer, owner, and frozen Policy chain. Process restart never resumes old business state.
 
-The existing runtime remains responsible for heartbeat/test-request handling, bounded ingress,
-subscription acknowledgements, resubscription, book continuity, currentness, reconnect barriers,
-and `UNKNOWN`. The new host owns only process lifecycle, reconnect delay, signal-to-stop latching,
-loopback HTTP, and append-only operational records. It has no threshold, Policy, duration-extension,
-or opportunity-generation setter.
+The existing runtime owns heartbeat/test-request handling, bounded ingress, subscription
+acknowledgement, reconnect/resubscription, catalog and book continuity, clock/index/ticker
+currentness, queue lag, `UNKNOWN`, and drain barriers. The service host owns only lifecycle,
+reconnect delay, first-signal stop latching, loopback HTTP, and exact service evidence. It has no
+threshold, duration-extension, or opportunity-generation setter.
 
-SIGINT/SIGTERM latch one exact monotonic stop boundary. Runtime drain and the existing terminal
-barrier settle already accepted envelopes, prevent new outbound work, terminate pending
-Candidate/Position/Outcome objects once, write the Radar summary, and write one persistent-service
-terminal record. A fatal protocol, evidence-integrity, or runtime failure follows the existing
-failure terminalization path and cannot be relabeled as a clean stop.
+SIGINT/SIGTERM latch the first exact monotonic boundary. Runtime drain settles already accepted
+envelopes, prevents new outbound work, terminalizes valid Candidates and pending observations once,
+and writes the Radar summary on clean stop. Process failure preserves partial Radar semantics and
+cannot be relabeled clean.
 
-Restarting creates a new runtime identity and a new run directory. Exact Policy identities remain
-visible in every run. Policy files may change only between separately started runtimes after human
-authorization; the running process never hot-reloads them.
+The persistent Shadow adapter uses no forward-cohort manifest or enrollment window. It writes normal
+business objects through the existing downstream writer, terminalizes them through the existing
+owner, and then writes one service-specific terminal record whose independently recomputed counts,
+rates, inventory, and conservation statuses are `MET`. It rejects any bounded cohort summary in the
+service directory.
 
-The Web workbench reads immutable snapshots constructed synchronously from the same reducer,
-Shadow adapter, and append-only downstream objects. HTTP handlers never call market, Policy,
-Underwriting, Position, Outcome, account, or order logic. The browser performs formatting and
-rendering only.
+After each normal fact transaction completes Radar settlement and Shadow owner settlement,
+`runtime.py` invokes one snapshot publisher. The publisher builds complete immutable JSON bytes and
+atomically replaces the published reference. HTTP handlers read only this reference. Lifecycle-only
+republishing reuses the previous immutable business body and never traverses mutable runtime or owner
+state.
 
-Transient facts are the in-memory current reducer/owner state and immutable Web snapshot. Durable
-facts are the existing minimal Radar and downstream business objects plus minimal service lifecycle
-records. Full order-book depth, private data, credentials, requests from the browser, and browser
-state are not persisted.
+Transient facts are current in-memory reducer/owner state and the immutable published snapshot.
+Durable facts are existing minimal Radar/downstream objects plus exact service lifecycle/terminal
+records. Full books, ordinary no-anomaly rows, HTTP requests, browser state, private data,
+credentials, orders, and fills are not persisted.
 
 ## Validation harness
 
-Use deterministic temporary state roots, repository Policies, an ephemeral loopback port, a fake
-client factory that must remain unopened for a pre-latched stop, and the existing reducer's clean
-terminal path. No production-public command, elapsed soak, replay, full-market archive, or external
-supervisor installation is part of this task.
+Use temporary external state roots, exact repository Policies, an ephemeral loopback port, fake
+public client contexts, and deterministic reducer/owner fixtures. The pre-latched-stop fixture must
+prove that no client factory is called and still produce one Radar summary and one valid service
+terminal. No Deribit command, elapsed soak, replay, full-market archive, external supervisor, or
+24x7 process is part of this task.
 
 ## Evidence boundary
 
-**Proves:** the candidate process composition, lease, lifecycle state machine, read-only projection,
-HTTP method boundary, and terminal plumbing behave as specified under deterministic tests.
+**Proves:** offline process composition, lease, runtime identity renewal, immutable Policy sharing,
+reconnect lifecycle, stop/terminal plumbing, service evidence identity/reader integrity, atomic
+read-only projection, HTTP method/host boundary, and truthful zero/null rendering.
 
-**Does not prove:** indefinite uptime, production deployment safety, forward market coverage,
-natural Candidate/Entry/Position/Outcome occurrence, Policy quality, forecast quality, edge,
-profitability, fill quality, actual fees, private-account truth, or execution authority.
+**Does not prove:** production invocation, indefinite uptime, deployment safety, forward market
+coverage, natural Candidate/Entry/Position/Outcome occurrence, Policy quality, opportunity
+frequency, forecast skill, edge, fillability, actual fees, actual PnL, profitability,
+private-account truth, qualification, promotion, or execution.
 
 | Evidence class | Requirement |
 |---|---|
@@ -132,102 +145,109 @@ profitability, fill quality, actual fees, private-account truth, or execution au
 
 ## Scope
 
-**In:** process lease; persistent runtime composition; reconnect loop using the existing runtime;
-new runtime identity per start; immutable Policy chain; lifecycle/health/ready/stale projection;
-minimal append-only service records; loopback read-only HTTP/API; trader-flow HTML; focused tests;
-architecture documentation; the narrow CLI composition needed to expose the capability while its
-invocation remains unauthorized.
+**In:** Current Stage authorization for offline implementation; persistent-service contract;
+single-instance lease; startup/run composition; new runtime identity; immutable three-Policy chain;
+reconnect loop using the existing runtime; lifecycle/health/ready/stale/UNKNOWN state; exact
+append-only service evidence and complete reader; runtime-settled immutable snapshot publisher;
+loopback GET/HEAD workbench; CLI wiring; direct and authority tests; architecture documentation.
 
-**Out:** changing existing contracts or Policies; a second market client/reducer; database; queue;
-microservice split; full order-book storage; replay; fixed process duration; automatic calibration;
-launchd/systemd installation; production-public invocation; private/account/order/fill/capital;
-write APIs; authentication exposed beyond loopback; public Internet binding; order buttons.
+**Out:** Policy or business-rule changes; second market client/reducer/owner; database, queue, or
+microservice split; full-book persistence; replay; automatic calibration; launchd/systemd/Docker
+unit; production-public invocation; 24x7 evidence; private/account/order/fill/capital; write APIs;
+Internet binding; browser Deribit connection; order controls.
 
 **Owning module/artifact:** `apps/radar_runtime/src/radar_runtime/service.py`,
-`apps/radar_runtime/src/radar_runtime/workbench.py`, the existing CLI entry point, direct tests, this
-task, `docs/architecture/PERSISTENT_RUNTIME_TRADER_WORKBENCH.md`, and the narrow authority record
-that keeps live invocation and deployment disabled.
+`service_evidence.py`, `workbench.py`, `runtime.py` publisher hook, the exact zero-duration
+continuity validation in `short_vol_radar/evidence.py`, CLI, exact service contract, Current
+Stage/System Architecture, and direct tests.
 
 ## Contract
 
-**Inputs and known-at rule:** exact repository code identity; exact three-Policy bytes and digests;
-one external state root; loopback port; public Deribit facts accepted only by the existing causal
-runtime. The workbench may show only current reducer state or already settled downstream objects.
+**Inputs and known-at rule:** exact clean code identity; exact service-contract digest; exact
+three-Policy bytes/identities; external state root; loopback host/port; only facts settled by the
+existing causal runtime. The workbench displays only a published immutable settled snapshot.
 
-**Durable output and identity:** one new runtime directory per process identity; existing Radar and
-downstream objects retain their contract identities; service events and the terminal record are
-content-identified, append-only, runtime-bound operational evidence. They are not a forward cohort.
+**Durable output and identity:** one new runtime directory; existing Radar/downstream identities;
+content-identified lifecycle events; one content-identified service terminal. No forward-cohort
+manifest or summary.
 
-**Missing/invalid/UNKNOWN semantics:** missing clock/catalog/currentness/quote/economics remains
-`UNKNOWN`; reconnect is `INTERRUPTED`; accepted but incomplete data may be `DEGRADED`; stale source
-or liveness/queue-lag breach is `STALE`; stopped and failed are terminal process states. The front
-end does not infer missing values.
+**Missing/invalid/UNKNOWN semantics:** missing/stale/discontinuous facts remain `UNKNOWN` at their
+smallest scope. `RECONNECTING` projects `INTERRUPTED`. Explicit currentness expiry projects `STALE`.
+Connected but incomplete data may be `DEGRADED`. Empty panels do not imply zero. Invalid/mixed/
+missing/incomplete service evidence fails closed.
 
-**Persisted meaning and compatibility:** new workbench schema version `1` is a read-only runtime
-projection and not a business contract or historical API promise. Existing business object schemas
-remain `COMPATIBLE`; no migration occurs. Persistent service lifecycle objects are new and not
-comparable to bounded forward-cohort summaries.
+**Persisted meaning and compatibility:** service schema version 1; exact required fields and identity
+recomputation; dedicated current and complete readers; `NOT_COMPARABLE` to bounded
+forward-cohort evidence; no migration. Existing business object schemas remain `COMPATIBLE`.
 
-**Business denominators:** workbench `coverage_ratio_percent` is explicitly
-`known current instrument evaluations / monitored instrument evaluations` for the current runtime
-snapshot. Zero denominator is `null`. It is not market coverage, opportunity rate, success rate, or
-forecast accuracy.
+**Business denominators:** monitor zero-anomaly denominator is the current non-empty fully known
+relevant monitor scope. Candidate zero denominator is the count of current or terminal
+Underwriting-evaluable opportunities and must be positive. Coverage ratio is known current
+instrument evaluations divided by monitored current instruments; denominator zero gives `null`.
+No value is an opportunity-frequency or profitability claim.
 
 ## Acceptance
 
 ### Direct behavior
 
-1. A second process using the same state root fails its lease; after release the root can be used by
-   a new runtime identity.
-2. One startup constructs exactly one immutable Policy chain shared by the reducer and Shadow
-   owner; no hot-reload or lifecycle threshold surface exists.
-3. Process health can be live while readiness is false; stale/degraded/interrupted/unknown remain
-   distinct and are projected without strategy recomputation.
-4. HTTP binds only to loopback, accepts only `GET`/`HEAD`, exposes no mutation or order route, and
-   labels Shadow Entry as simulation rather than an order or fill.
-5. A pre-latched stop opens no market client and still writes one Radar summary and one service
-   terminal record. Repeated terminal finalization creates no second terminal file or cohort
-   summary.
-6. Existing `observe` and `observe-shadow` commands retain their behavior and bounded evidence
-   semantics.
+1. Same-root second lease fails before client construction; release permits a new, different runtime
+   identity.
+2. One startup shares one immutable PolicyChain across reducer and owner and exposes no reload path.
+3. Reconnect retires prior continuity, increments session epoch, preserves the one business owner,
+   and distinctly projects `INTERRUPTED / UNKNOWN / STALE / DEGRADED / CURRENT`; an immediate
+   zero-duration first generation remains a validated diagnostics restart rather than a fabricated
+   positive-duration coverage segment.
+4. Snapshot publication occurs in `runtime.py` only after the same transaction's Shadow transition;
+   GET/HEAD reads immutable bytes and never invokes business functions or mutable private containers.
+5. HTTP rejects non-loopback binding, accepts only GET/HEAD, returns 405 for mutations, and contains
+   no order, Policy, private-account, credential, or Deribit browser route.
+6. Lifecycle/terminal writer and readers recompute exact identities, digests, schemas, inventory,
+   counts, rates, null denominators, and conservation; missing/corrupt/mixed/duplicate/pending
+   evidence fails closed.
+7. Pre-latched stop opens no client, writes exactly one Radar summary and service terminal, emits no
+   forward-cohort summary, and repeated finalization creates no second terminal.
+8. Empty-panel fixtures remain separate from zero claims; zero or unknown denominators display
+   `null / UNKNOWN` and never calm/no-opportunity text.
+9. Existing `observe` and `observe-shadow` behavior and bounded evidence semantics remain green.
 
 ### Required commands
 
 - `make sync`
-- focused tests: `pytest tests/test_persistent_service.py tests/test_trader_workbench.py`
+- focused tests: `pytest tests/test_persistent_service.py tests/test_trader_workbench.py tests/test_authority_and_architecture.py`
 - `make check`
+- `git diff --check`
 - production-public command: NOT_APPLICABLE; live commands are forbidden
-- independent recomputation or reconstruction command: NOT_APPLICABLE
+- independent recomputation/reconstruction: NOT_APPLICABLE
 
 ### Real evidence
 
 **Required:** NO
 
-**Environment and stopping condition:** deterministic offline tests only. The implementation is not
-invoked against Deribit and no supervisor is installed.
+**Environment and stopping condition:** deterministic offline tests only.
 
-**Required report:** exact base/head/tree, changed files, focused tests, `make check`, CI, limitations,
-no-live-command statement, and remote branch/PR state.
+**Required report:** exact branch/base/head/tree, commits and changed files relative to base, focused
+and full checks, CI, Draft PR, explicit removal of temporary workflow, and all unexecuted/non-proven
+items.
 
 **Private API:** FORBIDDEN.
 
 ## Artifacts and delivery report
 
-**Artifact paths and digests:** NOT_APPLICABLE until an authorized runtime is invoked. Test temp
-files are not product evidence.
+**Artifact paths and digests:** NOT_APPLICABLE; test temporary files are not product evidence.
 
-**Policy/contract identities:** unchanged exact repository Policy and contract identities at the
-base commit.
+**Policy/contract identities:** existing three contracts and three Policies unchanged; new service
+contract digest exactly
+`sha256:e3e6c91aaefcdc867a0cdd64d528cebfe2b3a40681e192c7f4f924bdbfc27bff`.
 
-**Commit/PR:** recorded by Git and the final delivery report.
+**Commit/PR:** append-only non-force commits on the named branch and Draft PR against `main`.
 
-**Unknowns and non-claims:** the workbench is not a second decision system, complete market view,
-fill simulator, actual PnL ledger, cohort evaluator, qualification result, deployment receipt, or
-execution surface.
+**Unknowns and non-claims:** implementation and green tests are not live authority, deployment,
+24x7 evidence, strategy validation, a complete market view, actual PnL, qualification, or execution.
 
 ## Definition of done
 
-The offline implementation candidate satisfies the direct behavior above; existing business
-contracts and commands remain unchanged; all tests and CI pass on the exact candidate; the diff is
-bounded to this closure; no production-public command is run; and the Draft PR clearly requires
-Codex review and separate authority before invocation or deployment.
+The authority and contract accurately authorize only this offline implementation; the runtime,
+service evidence, projection, HTTP, and tests satisfy the exact behavior above; existing commands
+remain unchanged; focused/full/diff/CI checks pass; temporary transfer infrastructure is absent from
+the final diff; the remote branch and Draft PR bind the exact candidate; and no live/private/account/
+order/fill/capital/deployment action occurred.

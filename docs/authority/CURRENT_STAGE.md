@@ -9,14 +9,19 @@
 **Production Short Vol Radar:** `ESTABLISHED`
 
 **Sole authorized next product-capability closure:**
-`NONE`
+`SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH`
 
 **Fixed-contract public Shadow runtime:**
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
+**Persistent public Shadow service/workbench:**
+`OFFLINE_IMPLEMENTATION_AUTHORIZED`
+
 **Evidence gate:** `CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`
 
 **Live commands:** `FORBIDDEN`
+
+**Persistent deployment / 24x7 acceptance:** `FORBIDDEN`
 
 ## Authority
 
@@ -28,10 +33,13 @@ receipts, run duration, contract presence, or roadmap order grant no stage.
 The current boundary retains the already established, guarded production-public Short Vol Radar
 defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md), records the independently
 accepted fixed-contract Shadow implementation-integrity repair and two-layer engineering evidence
-defined below, and authorizes no current production-public Shadow process. The failed attempt and
-the later accepted smoke are both consumed and sealed. No product-capability task is active. The
-same boundary keeps private/account data, orders, fills, capital, qualification, Challenger
-automation, promotion, execution, and persistent service deployment unauthorized.
+defined below, and authorizes the active
+[`SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH`](../../tasks/SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH.md)
+closure for offline implementation and deterministic tests only. The failed attempt and the later
+accepted smoke are both consumed and sealed. Production-public persistent service deployment is
+unauthorized; no service invocation, persistent deployment, or 24x7 acceptance is authorized.
+Private/account data, orders, fills, capital,
+qualification, Challenger automation, promotion, and execution remain unauthorized.
 
 The accepted
 [`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) implementation
@@ -52,6 +60,14 @@ at the declared downstream boundary, retains strict downstream-owned identities,
 missing fatal coordinator regression. It changes no contract, Policy, schema, economic rule,
 dependency, or lock and authorizes no market command, private/account/order/fill capability,
 qualification, or persistent deployment.
+
+The active
+[`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`](../contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md)
+implementation/evidence contract adds only a persistent-service run-segment identity, exact
+lifecycle/terminal evidence, non-cohort conservation/reader semantics, and an immutable loopback
+read-only workbench projection. It keeps every service-created pair `cohort_enrolled=false`, emits
+no forward-cohort summary, and leaves `observe-shadow` manifest/cutoff/final-stop semantics
+unchanged. Contract and code presence grant no live command or deployment permission.
 
 ### Accepted two-layer engineering evidence
 
@@ -248,10 +264,12 @@ Shadow interval remains active. The consumed failed interval remains `INCOMPLETE
 and `NOT_EVALUABLE`; no new evidence can complete or relabel it. Natural Candidate, Entry, or
 Outcome occurrence was not a blocker for the accepted engineering closure.
 
-The next business prerequisite for estimating opportunity frequency, strategy quality, or PnL is
-a separately authorized persistent public-only service and long-running sample closure. Until an
-exact task activates that closure, persistent deployment and any additional public Shadow process
-remain forbidden.
+The active business prerequisite is now the offline implementation of the exact persistent
+public-only service, service-evidence reader, and read-only workbench named above. This task may
+change authority, contract, runtime code, and direct tests only inside its declared scope. It may
+not invoke the service, connect it to Deribit, install a supervisor, deploy persistently, or run a
+24x7 sample. A later explicit `EVIDENCE_ONLY` or deployment task remains required for every such
+action and cannot reuse either consumed bounded Shadow interval.
 
 The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
 the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
@@ -322,20 +340,26 @@ The accepted establishment requires no replay, independent offline recomputation
 command, full-market archive, Candidate, Shadow Entry, Position action, mature Outcome,
 profitability, or fill evidence.
 
-## Queued sequence — not authorized
+## Active and queued sequence
 
-No product-capability task is active. The two-layer engineering closure above is accepted and
-closed; its bounded smoke cannot be extended, retried, reused, or relabelled as a long-running
-sample. The following successor closures remain queued and unauthorized:
+Exactly one product-capability closure is active:
 
-1. **Long-running frozen-Policy sample:** separately authorize persistent public-only observation
-   before estimating opportunity frequency, strategy quality, or PnL.
+1. **Persistent runtime and read-only workbench — offline implementation only:** implement and
+   directly test the exact service/terminal/reader/projection contract. Live commands, supervisor
+   installation, persistent deployment, and 24x7 evidence remain forbidden.
+
+The accepted two-layer smoke cannot be extended, retried, reused, or relabelled. After independent
+acceptance of the active implementation, these successor closures remain queued and unauthorized:
+
+1. **Long-running frozen-Policy sample:** separately authorize a new production-public service
+   invocation, external deployment envelope, result-independent stop/retention rules, and new empty
+   evidence paths before estimating opportunity frequency, strategy quality, or PnL.
 2. **Challenger research and qualification:** authorize only after a usable frozen-Policy cohort
    and pre-registered qualification contract.
 3. **Promotion and execution:** authorize separately after independent qualification. Account,
    capital, order, and fill authority remain distinct.
 
-A queued product-capability closure is not active.
+No queued closure is active.
 
 ## Forbidden under the current boundary
 
@@ -345,13 +369,14 @@ A queued product-capability closure is not active.
 - treating component-leg quotes as an atomic structure or any public quote as a fill;
 - full-market persistence, per-update no-anomaly receipts, replay, or offline recomputation as a
   prerequisite for this Radar;
-- any production-public Candidate, Shadow admission, Shadow Entry, Position, Outcome,
-  rejected-counterfactual, or forward-cohort operation without a separately active exact task;
+- any production-public service invocation, Candidate, Shadow admission, Shadow Entry, Position,
+  Outcome, rejected-counterfactual, or forward-cohort operation; the active task is offline-only;
 - any second invocation, retry, alternate manifest, reuse, mutation, deletion, completion,
   migration, or relabeling of either consumed Shadow attempt's artifacts;
 - automatic training, Policy selection, qualification, promotion, or evolution;
-- generic databases, feature stores, registries, workflow engines, services, markets, or
-  strategies;
+- generic databases, feature stores, registries, workflow engines, reusable service platforms,
+  markets, or strategies; only the one bounded offline process host named by the active task is
+  authorized;
 - private/account APIs, test-environment market sources, credentials, balances, margin, positions,
   orders, fills, settlement, execution gateways, maker behavior, or money; production
   `public/test` is allowed only as the protocol-required response to an established heartbeat

@@ -48,7 +48,7 @@ process id, and startup time. The runtime writes to:
   service.lock
   runs/<runtime-identity-without-prefix>/
     radar/
-    shadow/
+    downstream/
     service/
       events/
       terminal.json
@@ -114,6 +114,12 @@ divided by monitored instrument evaluations in the current snapshot. A zero deno
 SIGINT or SIGTERM latches the first exact monotonic stop boundary and moves the lifecycle to
 `STOPPING`. Repeated signals do not replace that boundary.
 
+A connection may fail at the same monotonic instant as its coverage-ledger start. If the operator
+stops while between sessions, the runtime does not manufacture a reconnect or positive-duration
+segment. The Radar summary validator accepts the successor first represented continuity epoch only
+when diagnostics prove the exact contiguous unrecovered zero-duration restart chain and matching
+first-segment blocker; otherwise it fails closed.
+
 If a transport is active, `LiveRadarRuntime.run` performs its existing exact drain. Between
 sessions, the host creates only the minimum session boundary needed to invoke the same reducer
 clean-stop path; it does not open a market client. The reducer owns:
@@ -166,7 +172,7 @@ hard-close rules, or Outcome maturity. Unit/date formatting is presentation, not
 | `GET`/`HEAD /` | Trader-flow page |
 | `GET`/`HEAD /app.js` | Static renderer |
 | `GET`/`HEAD /styles.css` | Static styles |
-| `GET`/`HEAD /api/v1/workbench` | Current immutable snapshot |
+| `GET`/`HEAD /api/workbench/current` | Current immutable snapshot |
 | `GET`/`HEAD /healthz` | Process liveness |
 | `GET`/`HEAD /readyz` | Current-data readiness |
 | any mutation method | `405 Method Not Allowed` |

@@ -18,6 +18,7 @@ IMPLEMENTATION_CONTRACTS = (
     ROOT / "docs/contracts/SHORT_VOL_RADAR.md",
     ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md",
     ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md",
+    ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md",
 )
 INTERNAL_PACKAGES = {
     "market_monitor",
@@ -131,6 +132,7 @@ def test_active_authority_has_explicit_status_and_no_stale_location() -> None:
         "SHORT_VOL_RADAR.md",
         "SHORT_VOL_UNDERWRITING_POSITION.md",
         "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md",
+        "SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md",
     }
     for path in (*AUTHORITY_FILES, *IMPLEMENTATION_CONTRACTS):
         opening = "\n".join(path.read_text(encoding="utf-8").splitlines()[:8])
@@ -196,7 +198,7 @@ def test_current_stage_records_accepted_two_layer_shadow_engineering_evidence() 
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
     assert current.count(marker) == 1
-    assert f"{marker} `NONE`" in flat
+    assert f"{marker} `SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
@@ -226,14 +228,16 @@ def test_current_stage_records_accepted_two_layer_shadow_engineering_evidence() 
     assert "f9ce7f98623ed7249160ee29c940c9c026fc4173" in current
     assert "21af26c71ef625889d29c4d7e00ebeae92f8a15d" in current
     assert "11b8a42d920e6be9eff7a56f45fd3c02c8ef6bed" in current
-    assert "No product-capability task is active" in current
+    assert "Exactly one product-capability closure is active" in current
+    assert "`OFFLINE_IMPLEMENTATION_AUTHORIZED`" in current
+    assert "**Persistent deployment / 24x7 acceptance:** `FORBIDDEN`" in current
     assert (
         "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json"
     ) in current
     assert "1090b3d9b643c621721e59552fc0ca1e7b6a7616d9b6ec136c0660c936d62e45" in current
     assert "labels record the state when the immutable contract content was accepted" in flat
     assert "SHORT_VOL_PUBLIC_SHADOW_TERMINAL_GOAL_DELEGATION" in current
-    assert "## Queued sequence — not authorized" in current
+    assert "## Active and queued sequence" in current
     assert "engineering_end_to_end = PASS" in current
     assert "production_public_integration = PASS" in current
     assert "natural_shadow_opportunity = NOT_OBSERVED" in current
@@ -250,13 +254,21 @@ def test_current_stage_records_accepted_two_layer_shadow_engineering_evidence() 
     assert "c7d8eb4e6bdc9953716892376c26935089d384e5460aa11073544b7521b96cf3" in current
 
 
-def test_two_layer_shadow_engineering_task_is_closed_without_an_active_task() -> None:
+def test_two_layer_engineering_is_closed_and_persistent_offline_task_is_active() -> None:
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md").exists()
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
+        "SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH.md",
+        "TEMPLATE.md",
+    ]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    assert "**Sole authorized next product-capability closure:**\n`NONE`" in current
+    assert (
+        "**Sole authorized next product-capability closure:**\n"
+        "`SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH`"
+    ) in current
+    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "**Persistent deployment / 24x7 acceptance:** `FORBIDDEN`" in current
 
 
 def test_shadow_attempt_integrity_acceptance_preserves_failure_scope_and_identities() -> None:
@@ -1852,6 +1864,9 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
     outcome = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md").read_text(
         encoding="utf-8"
     )
+    service = (ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md").read_text(
+        encoding="utf-8"
+    )
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     target_authority = "\n".join(
         (
@@ -1862,6 +1877,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
             radar,
             underwriting,
             outcome,
+            service,
             readme,
         )
     )
@@ -1872,6 +1888,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
     radar = " ".join(radar.split())
     underwriting = " ".join(underwriting.split())
     outcome = " ".join(outcome.split())
+    service = " ".join(service.split())
     readme = " ".join(readme.split())
 
     for invariant in (
@@ -1902,13 +1919,14 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`",
         "The two gates remain semantically independent",
         "does not prove indefinite uptime",
-        "persistent service deployment unauthorized",
+        "persistent service deployment is unauthorized",
         "private/account data",
         "orders, fills, capital",
         "fixed-contract Shadow implementation adds",
         "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
         "`CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`",
-        "No product-capability task is active",
+        "Exactly one product-capability closure is active",
+        "OFFLINE_IMPLEMENTATION_AUTHORIZED",
         "Radar run summary is absent",
         "one result-independent production-public process",
         "natural_shadow_opportunity = NOT_OBSERVED",
@@ -1926,7 +1944,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "no preselected holding duration",
         "### `short_vol_underwriting`",
         "The pure downstream owner `short_vol_underwriting`",
-        "permission to run those downstream arrows comes only from `CURRENT_STAGE`",
+        "permission to invoke or deploy the persistent host, comes only from `CURRENT_STAGE`",
     ):
         assert invariant in architecture
 
@@ -2089,6 +2107,43 @@ def test_radar_contract_keeps_market_signal_execution_and_decision_distinct() ->
     assert "never let a missing quote override a known hard-close condition" in radar_flat
     assert "emit `SHADOW_CLOSE_OPPORTUNITY` only when action is `CLOSE`" in radar_flat
     assert "keep `LEGGED_CLOSE_REFERENCE` diagnostic" in radar_flat
+
+
+def test_persistent_service_contract_and_task_close_exact_governance_change() -> None:
+    contract_path = ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md"
+    contract = contract_path.read_text(encoding="utf-8")
+    flat = " ".join(contract.split())
+    task = (ROOT / "tasks/SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH.md").read_text(
+        encoding="utf-8"
+    )
+    current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
+    digest = f"sha256:{hashlib.sha256(contract_path.read_bytes()).hexdigest()}"
+
+    assert digest == ("sha256:e3e6c91aaefcdc867a0cdd64d528cebfe2b3a40681e192c7f4f924bdbfc27bff")
+    assert "**Base commit:** `967e82ea36a7fcae13c6c8a8b07108af5b21a633`" in task
+    assert "Draft PR against `main`" in task
+    assert "**Outcome/evaluation contract change:** APPROVED" in task
+    assert digest in task
+    assert "**Stage/authorization change:** APPROVED" in task
+    assert "production-public invocation" in task
+    assert "24x7 acceptance" in task
+    assert "zero-anomaly claim" in task
+    assert "Underwriting-evaluable" in task
+    for invariant in (
+        "DISABLED_NON_COHORT_SERVICE",
+        "forward_cohort_summary_emitted",
+        "read_complete_persistent_service_evidence",
+        "NOT_COMPARABLE",
+        "PersistentServiceTerminalIdentity",
+        "Atomic read-only workbench projection",
+        "zero_anomaly_state = PROVEN_ZERO | NOT_ZERO | UNKNOWN",
+        "zero_candidate_state = PROVEN_ZERO | NOT_ZERO | UNKNOWN",
+    ):
+        assert invariant in flat
+    assert "SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH" in current
+    assert "OFFLINE_IMPLEMENTATION_AUTHORIZED" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "**Persistent deployment / 24x7 acceptance:** `FORBIDDEN`" in current
 
 
 def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:

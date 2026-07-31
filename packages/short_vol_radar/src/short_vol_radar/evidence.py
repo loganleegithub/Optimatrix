@@ -3675,8 +3675,27 @@ def _validate_version_three_coverage(
     represented_restart_edges = (
         restart_edges[:-1] if terminal_restart is not None else restart_edges
     )
+    leading_unrepresented_count = epochs[0] - 1
+    if leading_unrepresented_count < 0 or leading_unrepresented_count > len(
+        represented_restart_edges
+    ):
+        raise EvidenceError("coverage continuity epoch does not match global continuity")
+    leading_unrepresented = represented_restart_edges[:leading_unrepresented_count]
+    for expected_from_epoch, restart in enumerate(leading_unrepresented, start=1):
+        boundary = _mapping(
+            restart["boundary"],
+            "leading zero-duration global continuity restart boundary",
+        )
+        if (
+            boundary["received_monotonic_ms"] != segments[0].start_monotonic_ms
+            or restart["from_epoch"] != expected_from_epoch
+            or restart["to_epoch"] != expected_from_epoch + 1
+            or restart["incident_id"] in recovery_edges
+        ):
+            raise EvidenceError("unrepresented leading continuity restart is not zero-duration")
+    represented_restart_edges = represented_restart_edges[leading_unrepresented_count:]
     expected_final_epoch = current_epoch - 1 if terminal_restart is not None else current_epoch
-    if epochs[0] != 1 or epochs[-1] != expected_final_epoch:
+    if epochs[-1] != expected_final_epoch:
         raise EvidenceError("coverage continuity epoch does not match global continuity")
     if epochs != sorted(epochs):
         raise EvidenceError("coverage continuity epoch moved backward")
@@ -3745,7 +3764,26 @@ def _validate_version_three_coverage(
         )
         if not invalidating_groups:
             continue
-        if index == 0 or segment.global_continuity_epoch == 1:
+        if index == 0:
+            leading_restart = leading_unrepresented[-1] if leading_unrepresented else None
+            if leading_restart is None:
+                raise EvidenceError(
+                    "global currentness blocker requires an earlier matching epoch edge"
+                )
+            leading_scopes = _validate_affected_scopes(leading_restart["affected_scopes"])
+            if (
+                segment.global_continuity_epoch != leading_restart["to_epoch"]
+                or segment.reason != leading_restart["trigger_cause"]
+                or not any(
+                    group.blocking_reason == leading_restart["reason"]
+                    and group.affected_scopes == leading_scopes
+                    for group in invalidating_groups
+                )
+            ):
+                raise EvidenceError(
+                    "leading currentness blocker does not match its zero-duration restart"
+                )
+        elif segment.global_continuity_epoch == 1:
             raise EvidenceError(
                 "global currentness blocker requires an earlier matching epoch edge"
             )

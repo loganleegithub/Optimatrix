@@ -1133,8 +1133,14 @@ def validate_complete_semantic_graph(
     runtime_start: FactBoundary,
     enrollment_end: FactBoundary,
     terminal_boundary: FactBoundary,
+    cohort_enrollment_mode: str = "BOUNDED_FORWARD_COHORT",
 ) -> None:
     """Cross-bind complete terminal objects after individual object validation."""
+    if cohort_enrollment_mode not in {
+        "BOUNDED_FORWARD_COHORT",
+        "DISABLED_NON_COHORT_SERVICE",
+    }:
+        raise PayloadValidationError("invalid cohort enrollment mode")
     by_kind: dict[str, list[Mapping[str, object]]] = {}
     by_kind_identity: dict[tuple[str, str], Mapping[str, object]] = {}
     for value in objects.values():
@@ -1266,9 +1272,14 @@ def validate_complete_semantic_graph(
             if observation_payload["start_fact_boundary"] != anchor["fact_boundary"]:
                 raise PayloadValidationError("observation start differs from anchor boundary")
             anchor_boundary = _graph_boundary(anchor["fact_boundary"], "anchor boundary")
-            expected_enrollment = anchor_boundary.is_strictly_after(
-                runtime_start
-            ) and enrollment_end.is_strictly_after(anchor_boundary)
+            expected_enrollment = (
+                False
+                if cohort_enrollment_mode == "DISABLED_NON_COHORT_SERVICE"
+                else (
+                    anchor_boundary.is_strictly_after(runtime_start)
+                    and enrollment_end.is_strictly_after(anchor_boundary)
+                )
+            )
             if observation_payload["cohort_enrolled"] is not expected_enrollment:
                 raise PayloadValidationError(
                     "observation enrollment differs from realized causal boundaries"
