@@ -1,0 +1,67 @@
+name: Fix publisher temporary cleanup
+
+on:
+  push:
+    branches:
+      - chatgpt/persistent-radar-shadow-web-workbench
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-publisher-temporary-cleanup
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    name: Apply exact git rm force exception
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out exact branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: chatgpt/persistent-radar-shadow-web-workbench
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Replace only the exact cleanup block
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/worktree-bootstrap.yml')
+          text = path.read_text(encoding='utf-8')
+          old = '''          git rm .github/final-patch.part00 \\
+                 .github/final-patch.part01 \\
+                 .github/final-patch.part02 \\
+                 .github/final-patch.part03 \\
+                 .github/final-patch.part04 \\
+                 .github/workflows/worktree-bootstrap.yml
+'''
+          new = '''          git rm .github/final-patch.part00 \\
+                 .github/final-patch.part02 \\
+                 .github/final-patch.part03 \\
+                 .github/final-patch.part04 \\
+                 .github/workflows/worktree-bootstrap.yml
+          git rm -f .github/final-patch.part01
+'''
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          git diff --check -- .github/workflows/worktree-bootstrap.yml
+          git diff -- .github/workflows/worktree-bootstrap.yml
+
+      - name: Commit the exact fix and remove this helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add .github/workflows/worktree-bootstrap.yml
+          git rm .github/workflows/fix-publisher-cleanup.yml
+          git config user.name "OpenAI ChatGPT"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Fix exact temporary patch cleanup"
+          git push origin HEAD:refs/heads/chatgpt/persistent-radar-shadow-web-workbench
