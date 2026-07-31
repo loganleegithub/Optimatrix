@@ -207,7 +207,10 @@ def test_current_stage_opens_only_one_bounded_shadow_forward_run() -> None:
     assert "**Live commands:** `REQUIRED_ONCE`" in current
     assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
     assert "6207d59763e1aab7c455854169cd9dde6b0f940f" in current
-    assert "2026-08-01T00:00:00Z" in current
+    assert "explicit immediate-start authorization" in flat
+    assert "no calendar, market-session, or fee-date clock gate remains" in flat
+    assert "2026-08-01T00:00:00Z" not in current
+    assert "effective-time" not in current
     assert "one result-independent production-public invocation" in flat
     assert "Outside the active task's one exact manifest and bounded process" in flat
     assert "does not authorize a private/account/order/fill capability" in flat
@@ -247,7 +250,8 @@ def test_forward_evidence_task_freezes_candidate_window_scope_and_identities() -
         "**Decision Policy change:** `NONE`",
         "**Outcome/evaluation contract change:** `NONE`",
         "**Stage/authorization change:** `APPROVED`",
-        "2026-08-01T00:00:00Z",
+        "explicit immediate-start authorization",
+        "no calendar, market-session, or fee-date clock gate",
         "30 minutes after runtime start",
         "60 minutes after runtime start",
         "/Users/logan/Optimatrix-shadow/evidence/public-shadow-forward-001-downstream",
@@ -263,6 +267,8 @@ def test_forward_evidence_task_freezes_candidate_window_scope_and_identities() -
         "Private API:** FORBIDDEN",
     ):
         assert invariant in flat
+    assert "2026-08-01T00:00:00Z" not in task
+    assert "effective-time" not in task
 
     expected_digests = (
         "sha256:b9733ad0c90837338b88fb5b6eb66ad8eed448cce6372a3f527988395087b3fe",
@@ -2017,9 +2023,12 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "evidence-integrity acceptance does not prove",
         "maker/order/fill",
         "current active task's exact manifest authorizes its one bounded production-public process",
+        "no calendar-time gate",
         "Every other invocation remains forbidden",
     ):
         assert invariant in readme
+    assert "effective-time" not in readme
+    assert "2026-08-01T00:00:00Z" not in readme
 
     for invariant in (
         "**Status:** ACTIVE IMPLEMENTATION CONTRACT",

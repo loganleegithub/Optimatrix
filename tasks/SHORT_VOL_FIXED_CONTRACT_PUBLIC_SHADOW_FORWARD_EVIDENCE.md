@@ -29,10 +29,11 @@
 full, scope, immutable-digest, and three independent reviews, while no production-public Shadow
 interval or downstream forward evidence exists.
 
-**When:** after the fee effective-time gate, one and only one result-independent production-public
-invocation runs from a clean exact candidate whose local HEAD, tree, remote branch, PR head,
-contracts, three-Policy chain, manifest, process argv/cwd, two new evidence directories, and
-pre-bound start/cutoff/stop controls all match.
+**When:** under the user's explicit immediate-start authorization, one and only one
+result-independent production-public invocation runs immediately after every preflight passes from
+a clean exact candidate whose local HEAD, tree, remote branch, PR head, contracts, three-Policy
+chain, manifest, process argv/cwd, two new evidence directories, and pre-bound
+start/cutoff/stop controls all match.
 
 **Then:** the run terminates at its pre-bound stop or an earlier safety failure and leaves one
 strictly readable Radar/downstream evidence set that reports exactly the natural public-market
@@ -64,8 +65,9 @@ thresholds, admission decisions, Position actions, and hard-close total order ar
 aligned pair, denominators, conservation, compatibility, and non-claims are unchanged.
 
 **Stage/authorization change:** `APPROVED` — authorize exactly this one bounded
-production-public Shadow evidence run after every preflight and effective-time gate. This grants no
-private/account/order/fill/capital, execution, qualification, promotion, persistent deployment,
+production-public Shadow evidence run immediately after every exact preflight. The user's explicit
+instruction `不要浪费时间，现在就开始` removes the earlier internal calendar-time gate; this grants
+no private/account/order/fill/capital, execution, qualification, promotion, persistent deployment,
 or second-run authority.
 
 ## Product operating behavior
@@ -76,11 +78,16 @@ downstream writer, and result-independent stop controller. It may use only produ
 market methods, including the frozen positive-id `public/get_order_book` attempts. Component-leg
 prices never replace an official combo and public quotes never become fills.
 
-The process starts only after `2026-08-01T00:00:00Z`, when the immutable chain's
-`FEE_TIER_CHANGES_EFFECTIVE_2026-08-01` schedule is in force. Its manifest pre-binds runtime start,
-enrollment cutoff exactly 30 minutes after runtime start, and final stop exactly 60 minutes after
-runtime start. The stop does not depend on anomaly, Candidate, Entry, Position, Outcome, PnL,
-coverage, or likelihood of passing. Emergency stop remains safety-only.
+The process starts immediately after the exact preflight under the explicit immediate-start
+authorization; no calendar, market-session, or fee-date clock gate remains. The immutable
+`FEE_TIER_CHANGES_EFFECTIVE_2026-08-01` label stays byte-identical as reviewed Policy provenance,
+not a claim that the future schedule is already effective, that the venue published an exact
+switch time, or that any account tier applies. The frozen `0.0003` reserve rate and Policy bytes
+remain unchanged; this stage-only amendment makes no account-tier or exact venue-switch-time
+claim. The manifest pre-binds runtime start, enrollment cutoff exactly 30 minutes after runtime
+start, and final stop exactly 60 minutes after runtime start. The stop does not depend on anomaly,
+Candidate, Entry, Position, Outcome, PnL, coverage, or likelihood of passing. Emergency stop
+remains safety-only.
 
 No standalone market probe, synthetic event, replay, Policy change, quiet-book retry, second
 process, or second live invocation is authorized. A preflight or runtime failure is recorded and
@@ -179,8 +186,9 @@ opportunity, Outcome, pair, and cohort units. Zero or unknown denominators seria
 2. The manifest binds exact argv/cwd/ref/candidate, 30-minute cutoff, 60-minute result-independent
    stop, forbidden capabilities, and two distinct new external directories; malformed or stale
    state fails before Deribit I/O.
-3. Exactly one live process starts after the effective-time gate and stops without result-based
-   extension or retry. Clean stop and failure both preserve terminal evidence.
+3. Exactly one live process starts immediately after the exact preflight under the explicit
+   immediate-start authorization and stops without result-based extension or retry. Clean stop and
+   failure both preserve terminal evidence.
 4. Strict readers accept the final complete set, conservation is `MET`, all duplicates/orphans and
    impossible attempt/Outcome relations remain rejected, and `UNKNOWN`/null/zero remain truthful.
 5. Network and evidence inspection finds zero private/account/order/fill/capital activity.
@@ -270,8 +278,8 @@ deployment claim is permitted.
 
 ## Definition of done
 
-One and only one remotely bound post-effective-time process reaches its frozen clean-stop or
-truthful failure terminal; strict readers and conservation accept exactly what exists; manifest,
-evidence, log, hashes, terminal record, Git, remote, and PR head are independently reconciled; no
-forbidden capability or second run occurred; and the final authority transition records only the
-result actually proved.
+One and only one remotely bound immediate-start-authorized process reaches its frozen clean-stop
+or truthful failure terminal; strict readers and conservation accept exactly what exists;
+manifest, evidence, log, hashes, terminal record, Git, remote, and PR head are independently
+reconciled; no forbidden capability or second run occurred; and the final authority transition
+records only the result actually proved.

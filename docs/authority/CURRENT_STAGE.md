@@ -47,8 +47,9 @@ attempt writer/current/complete-reader boundary without changing a contract, Pol
 owner, sender, economics, dependency, or lock. The active
 [`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE`](../../tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md)
 task now authorizes one result-independent production-public invocation only after its exact
-post-publication candidate, manifest, directories, effective-time, and stop gates match. It does
-not authorize a private/account/order/fill capability, qualification, or persistent deployment.
+post-publication candidate, manifest, directories, and start/cutoff/final-stop controls match. It
+does not authorize a private/account/order/fill capability, qualification, or persistent
+deployment.
 
 ### Terminal-goal delegation for the downstream public Shadow closure
 
@@ -62,13 +63,15 @@ The authority-only prerequisite, bounded fixed-contract implementation, and stri
 repair are accepted. Permission remains `PUBLIC_SHADOW`, the top implemented capability remains
 `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`, and Radar remains `ESTABLISHED`. The sole next closure is
 `SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE`; its gate is open for exactly one
-bounded run and its live command is required once every preflight passes and no earlier than
-`2026-08-01T00:00:00Z`. The external manifest must bind the post-publication activation
-commit/tree/ref, exact three-Policy chain, two distinct new external directories, actual argv/cwd,
-and start/cutoff/final-stop controls before any Deribit I/O. Access to private/account data,
-credentials, margin, orders, fills, capital, actual execution Outcome, qualification, promotion,
-persistent deployment, force-push, history rewriting, direct edits to `main`, a second run, and
-every command outside that manifest remain forbidden.
+bounded run and its live command is required immediately after every exact preflight passes under
+the user's explicit immediate-start authorization; no calendar, market-session, or fee-date clock
+gate remains. The external manifest must bind the post-publication activation commit/tree/ref,
+exact three-Policy chain, two distinct new external directories, actual argv/cwd, and
+start/cutoff/final-stop controls before any Deribit I/O. The immutable fee-schedule label remains
+Policy provenance and does not claim an account tier or an exact venue switch time. Access to
+private/account data, credentials, margin, orders, fills, capital, actual execution Outcome,
+qualification, promotion, persistent deployment, force-push, history rewriting, direct edits to
+`main`, a second run, and every command outside that manifest remain forbidden.
 
 ### Fixed-contract Shadow implementation and active forward evidence
 
@@ -148,8 +151,8 @@ The Underwriting, Shadow-admission, Position, Shadow Outcome, rejected-counterfa
 `NO_TRADE`, and forward-cohort semantics and exact three-Policy chain are frozen, implemented, and
 strictly repaired. The root blocker is now the absence of one remotely bound production-public
 forward interval. The active evidence task must bind and verify the post-publication candidate,
-directories, controls, `2026-08-01T00:00:00Z` effective-time gate, and non-claims, then run once.
-Zero natural business objects is an honest result and does not establish a usable cohort.
+directories, controls, explicit immediate-start authorization, and non-claims, then run once. Zero
+natural business objects is an honest result and does not establish a usable cohort.
 
 The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
 the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.

@@ -10,7 +10,7 @@ The top implemented capability is `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`: one guard
 production-public Radar runtime and its `observe` command. The fixed-contract public Shadow
 implementation is separately `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`; its `observe-shadow`
 composition is authorized for exactly one pre-bound production-public evidence run after the
-effective-time and exact-candidate gates, not for trading or persistent deployment.
+immediate-start authorization and exact-candidate gates, not for trading or persistent deployment.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
@@ -23,10 +23,11 @@ rejected-counterfactual, aligned-pair, conservation, and strict evidence path. E
 `6207d59763e1aab7c455854169cd9dde6b0f940f` independently closed the writer/current/complete-reader
 attempt-integrity gap. The sole active closure is now
 `SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE`: one result-independent 60-minute
-production-public interval with a 30-minute enrollment cutoff, no earlier than
-`2026-08-01T00:00:00Z`, using one post-publication exact manifest and two new external evidence
-directories. No private/account/order/fill/capital capability, replay, retry, second run, Policy
-change, qualification, or persistent service is authorized.
+production-public interval with a 30-minute enrollment cutoff, starting immediately after the
+post-publication exact preflight under the user's explicit authorization and using two new external
+evidence directories. There is no calendar-time gate. No private/account/order/fill/capital
+capability, replay, retry, second run, Policy change, qualification, or persistent service is
+authorized.
 Establishment means the bounded public Radar met its frozen reachability and operating predicates;
 it does not mean the Radar is persistently deployed, always running, indefinitely stable,
 profitable, or authorized to trade. Offline Shadow implementation or evidence-integrity
@@ -131,5 +132,6 @@ service deployment, private/account access, orders, fills, capital, execution, o
 product closure. `python -m radar_runtime observe-shadow` is implemented and the active
 `EVIDENCE_ONLY` task requires exactly one production-public invocation after it binds the remotely
 published activation candidate, three Policy identities, two fresh external evidence directories,
-the frozen fee schedule's effective-time gate, and pre-bound start/cutoff/stop controls. Every
-other invocation remains forbidden.
+the explicit immediate-start authorization, and pre-bound start/cutoff/stop controls. The frozen
+fee schedule label remains provenance rather than an account-fee or exact venue-switch-time claim.
+Every other invocation remains forbidden.
