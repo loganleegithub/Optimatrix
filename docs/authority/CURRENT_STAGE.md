@@ -9,14 +9,14 @@
 **Production Short Vol Radar:** `ESTABLISHED`
 
 **Sole authorized next product-capability closure:**
-`SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE`
+`NONE`
 
 **Fixed-contract public Shadow runtime:**
-`IMPLEMENTATION_ACCEPTED_ENGINEERING_EVIDENCE_ACTIVE`
+`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
-**Evidence gate:** `OPEN_FOR_ONE_RESULT_INDEPENDENT_PUBLIC_SMOKE`
+**Evidence gate:** `CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`
 
-**Live commands:** `REQUIRED_ONCE`
+**Live commands:** `FORBIDDEN`
 
 ## Authority
 
@@ -27,11 +27,11 @@ receipts, run duration, contract presence, or roadmap order grant no stage.
 
 The current boundary retains the already established, guarded production-public Short Vol Radar
 defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md), records the independently
-accepted fixed-contract Shadow implementation-integrity repair defined below, and authorizes only
-the active two-layer engineering-acceptance task's one exact production-public process. The prior
-live attempt remains consumed and failed and cannot be retried or reused. The same boundary keeps
-private/account data, orders, fills, capital, qualification, Challenger automation, promotion,
-execution, and persistent service deployment unauthorized.
+accepted fixed-contract Shadow implementation-integrity repair and two-layer engineering evidence
+defined below, and authorizes no current production-public Shadow process. The failed attempt and
+the later accepted smoke are both consumed and sealed. No product-capability task is active. The
+same boundary keeps private/account data, orders, fills, capital, qualification, Challenger
+automation, promotion, execution, and persistent service deployment unauthorized.
 
 The accepted
 [`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) implementation
@@ -53,48 +53,71 @@ missing fatal coordinator regression. It changes no contract, Policy, schema, ec
 dependency, or lock and authorizes no market command, private/account/order/fill capability,
 qualification, or persistent deployment.
 
-### Active two-layer engineering acceptance
+### Accepted two-layer engineering evidence
 
-The user's 2026-08-01 instruction activates
-[`SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE`](../../tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md)
-as one `EVIDENCE_ONLY` closure. Runtime/package/schema/contract/Policy changes are forbidden. The
-frozen runtime implementation remains exact commit
+The user's 2026-08-01 `EVIDENCE_ONLY` closure is complete. Runtime/package/schema/contract/Policy
+bytes did not change. The deterministic layer ran on activation commit
+`21af26c71ef625889d29c4d7e00ebeae92f8a15d`, tree
+`11b8a42d920e6be9eff7a56f45fd3c02c8ef6bed`, parent
+`07d035c5ee798cfd11de9bcc75592071652e232d`; the frozen runtime implementation remains exact commit
 `6eaaddfecf4c59a19c8029682a80fc52b7896a64`, tree
-`f9ce7f98623ed7249160ee29c940c9c026fc4173`; the authority base remains exact commit
-`07d035c5ee798cfd11de9bcc75592071652e232d`, tree
-`7aeb85661cd129b05035ff85b4c4229b1ddd4362`.
+`f9ce7f98623ed7249160ee29c940c9c026fc4173`.
 
-Acceptance has two independent layers. Existing deterministic tests must compose the real
-`EpisodeTracker.observe()` identity handoff with the concrete adapter/owner Candidate, refreshed
-quote, `SHADOW_ENTRY`, Position, later close-opportunity, Outcome, complete-reader, and conservation
-paths. That layer is engineering evidence, not a natural market trade. Separately, one exact
-remotely bound production-public smoke must use a new manifest, new absent Radar/downstream paths,
-a 14-minute enrollment cutoff, a 29-minute final-stop trigger, and a realized terminal no later
-than 30 minutes after runtime start. Its stop is independent of every market or strategy result.
+The deterministic composed proof passed the real `EpisodeTracker.observe()` identity handoff,
+concrete adapter/owner Candidate, refreshed quote, `SHADOW_ENTRY`, Position, later
+close-opportunity, Outcome, complete-reader, and conservation paths. This is deterministic
+engineering evidence, not a natural market trade.
 
-The engineering result is accepted only as:
+The same activation candidate then ran one result-independent production-public process under
+manifest `/Users/logan/Optimatrix-shadow/manifests/public-shadow-engineering-smoke-002.json`,
+identity `sha256:30c13e13424db7c7e71781004cb4c7a7cba7626deb4fa2bab259821e22ede058`.
+Its enrollment cutoff was exactly `840,000` ms after runtime start; its final-stop trigger was
+exactly `1,740,000` ms after runtime start. The realized runtime-start fact to terminal was
+`1,739,999` ms. It exited `0` at `PLANNED_CLEAN_STOP`; reconnect, session-gap, RPC-error,
+post-terminal retry, and second-invocation counts were all zero.
+
+Strict Radar validation returned 135 anomaly objects plus one run summary. Coverage recorded
+`1,742,199` ms observed, `1,561,903` ms `KNOWN_COMPLETE`, `180,296` ms `UNKNOWN`, and zero partition
+error. The current-epoch joint witness was non-null. Both call and put rows independently had
+positive applicable-instrument, known per-instrument, known full-formula, complete-aggregate, and
+complete-aggregate-with-full-formula counts. Real source-shape valid counts were index `1,649`,
+option book `30,582`, option ticker `79,989`, and `public/get_instruments` `1`.
+
+All 135 real anomaly episode identities matched
+`runtime_identity:policy_identity:instrument_name:activation_causal_seq`; those 135 activation
+sequences were all accepted by the real adapter/owner path into downstream Underwriting
+availability without the historical fatal. The durable Underwriting payload has no episode foreign
+key, so this is a producer/path/activation-sequence composite proof, not a persisted-FK claim.
+Downstream current and complete readers returned the same 271 objects: 269 availability
+evaluations and one of each terminal summary. Underwriting and cohort conservation were `MET`, and
+cohort evidence was `COMPLETE`.
+
+Actual RPC methods were only `public/get_combos`, `public/get_instruments`, `public/get_time`,
+`public/set_heartbeat`, `public/status`, and `public/subscribe`. Private/account/order/fill/capital
+calls and artifacts were zero. The accepted result is exact:
 
 ```text
 engineering_end_to_end = PASS
 production_public_integration = PASS
-natural_shadow_opportunity = OBSERVED | NOT_OBSERVED
+natural_candidate = NOT_OBSERVED
+natural_shadow_entry = NOT_OBSERVED
+natural_shadow_outcome = NOT_OBSERVED
+natural_shadow_opportunity = NOT_OBSERVED
 ```
 
-Natural Candidate, Entry, or Outcome occurrence is not a current engineering gate. Absence cannot
-extend the window, change a Policy, trigger another process, or block later development. The live
-integration gate does require at least one real anomaly episode and its composite identity to reach
-the downstream Underwriting-availability path without the historical fatal. Zero real handoff
-fails that integration gate but still cannot alter or repeat the run. The live gate also requires
-non-vacuous real Deribit Radar source traffic, coverage and a same-snapshot full-formula witness,
-planned clean stop, complete Radar and downstream summaries, strict readers, conservation `MET`,
-and zero private/account/order/fill/capital activity.
+Candidate, Entry, admitted Outcome, and rejected Outcome counts were each zero. These natural
+labels were computed only after complete readers and conservation passed; they are not engineering
+gates. This bounded interval does not establish Policy quality, opportunity frequency, forecast
+skill, fillability, profitability, actual exposure, fees, or PnL. Those claims require a separately
+authorized long-running sample.
 
-Exactly one process invocation is authorized after its activation commit/tree/ref, Draft PR head,
-six immutable digests, manifest, argv/cwd, and absent paths pass preflight. A terminal, preflight,
-fatal runtime, or fatal evidence failure receives no retry and no second evidence invocation. The
-frozen runtime may reconnect inside that same process after a recoverable public WebSocket or
-continuity failure; those reconnects are separate continuity facts and must be reported, not
-hidden as retries or counted as another run.
+The external terminal record is
+`/Users/logan/Optimatrix-shadow/receipts/public-shadow-engineering-smoke-002-terminal-record.json`,
+SHA-256 `a4b7a66c51133cef08a4d0420943b6fe5464a78cc10d5a8f2169c0c9d9d4db3c`, 171,701 bytes. It contains
+an ordered absolute-path inventory of 410 pre-terminal-record files with inventory identity
+`sha256:c7d8eb4e6bdc9953716892376c26935089d384e5460aa11073544b7521b96cf3`.
+The manifest, both evidence directories, process log, and terminal record are consumed and sealed;
+they cannot authorize another process or retry.
 
 ### Terminal-goal delegation and consumed downstream public Shadow attempt
 
@@ -126,8 +149,8 @@ result.
 
 The failed manifest, Radar directory, downstream directory, process log, and terminal record are
 sealed append-only evidence. They may not be edited, completed retroactively, deleted, migrated,
-relabelled, retried, or reused. The distinct active task's new paths and one invocation carry
-nothing forward from that attempt. Access to
+relabelled, retried, or reused. The later accepted smoke used distinct paths and carried nothing
+forward from that failed interval. Access to
 private/account data, credentials, margin, orders, fills, capital, actual execution Outcome,
 qualification, promotion, persistent deployment, force-push, history rewriting, and direct edits
 to `main` remain forbidden.
@@ -295,23 +318,20 @@ The accepted establishment requires no replay, independent offline recomputation
 command, full-market archive, Candidate, Shadow Entry, Position action, mature Outcome,
 profitability, or fill evidence.
 
-## Active closure and queued sequence
+## Queued sequence — not authorized
 
-Exactly one product-capability task is active:
+No product-capability task is active. The two-layer engineering closure above is accepted and
+closed; its bounded smoke cannot be extended, retried, reused, or relabelled as a long-running
+sample. The following successor closures remain queued and unauthorized:
 
-1. **Two-layer Shadow engineering acceptance:** the active task above may run exactly one new
-   result-independent public smoke after all preflight gates. Nothing carries forward from the
-   consumed attempt, and natural Shadow activity is not the engineering gate.
-
-The following successor closures remain queued and unauthorized:
-
+1. **Long-running frozen-Policy sample:** separately authorize persistent public-only observation
+   before estimating opportunity frequency, strategy quality, or PnL.
 2. **Challenger research and qualification:** authorize only after a usable frozen-Policy cohort
    and pre-registered qualification contract.
 3. **Promotion and execution:** authorize separately after independent qualification. Account,
    capital, order, and fill authority remain distinct.
 
-A queued product-capability closure is not active. No successor may become active while the one
-current task remains active.
+A queued product-capability closure is not active.
 
 ## Forbidden under the current boundary
 
@@ -322,10 +342,9 @@ current task remains active.
 - full-market persistence, per-update no-anomaly receipts, replay, or offline recomputation as a
   prerequisite for this Radar;
 - any production-public Candidate, Shadow admission, Shadow Entry, Position, Outcome,
-  rejected-counterfactual, or forward-cohort operation outside the active task's one exact process;
-- any second `radar_runtime observe-shadow` invocation, retry after terminal/preflight/fatal
-  failure, second process, alternate live manifest, or reuse, mutation, deletion, completion,
-  migration, or relabeling of the consumed attempt's artifacts;
+  rejected-counterfactual, or forward-cohort operation without a separately active exact task;
+- any second invocation, retry, alternate manifest, reuse, mutation, deletion, completion,
+  migration, or relabeling of either consumed Shadow attempt's artifacts;
 - automatic training, Policy selection, qualification, promotion, or evolution;
 - generic databases, feature stores, registries, workflow engines, services, markets, or
   strategies;

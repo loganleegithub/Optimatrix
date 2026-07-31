@@ -191,21 +191,20 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_opens_one_two_layer_shadow_engineering_acceptance() -> None:
+def test_current_stage_records_accepted_two_layer_shadow_engineering_evidence() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
     assert current.count(marker) == 1
-    assert f"{marker} `SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE`" in flat
+    assert f"{marker} `NONE`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
     assert (
-        "**Fixed-contract public Shadow runtime:** "
-        "`IMPLEMENTATION_ACCEPTED_ENGINEERING_EVIDENCE_ACTIVE`"
+        "**Fixed-contract public Shadow runtime:** `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`"
     ) in flat
-    assert "**Evidence gate:** `OPEN_FOR_ONE_RESULT_INDEPENDENT_PUBLIC_SMOKE`" in current
-    assert "**Live commands:** `REQUIRED_ONCE`" in current
+    assert "**Evidence gate:** `CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
     assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
     assert "4b225ee1f199523fb052611d84612ec75c7abf78" in current
     assert "9e53c6233949348c5805e96ea1eefb5998bf4c49" in current
@@ -217,64 +216,60 @@ def test_current_stage_opens_one_two_layer_shadow_engineering_acceptance() -> No
     assert "downstream complete-reader and conservation checks passed" in flat
     assert "Radar run summary is absent" in flat
     assert "overall forward evidence remains `INCOMPLETE` and `NOT_ACCEPTED`" in flat
-    assert (
-        "The prior live attempt remains consumed and failed and cannot be retried or reused" in flat
-    )
+    assert "The failed attempt and the later accepted smoke are both consumed and sealed" in flat
     assert "6eaaddfecf4c59a19c8029682a80fc52b7896a64" in current
     assert "f9ce7f98623ed7249160ee29c940c9c026fc4173" in current
-    assert "Exactly one product-capability task is active" in current
+    assert "21af26c71ef625889d29c4d7e00ebeae92f8a15d" in current
+    assert "11b8a42d920e6be9eff7a56f45fd3c02c8ef6bed" in current
+    assert "No product-capability task is active" in current
     assert (
         "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json"
     ) in current
     assert "1090b3d9b643c621721e59552fc0ca1e7b6a7616d9b6ec136c0660c936d62e45" in current
     assert "labels record the state when the immutable contract content was accepted" in flat
     assert "SHORT_VOL_PUBLIC_SHADOW_TERMINAL_GOAL_DELEGATION" in current
-    assert "## Active closure and queued sequence" in current
+    assert "## Queued sequence — not authorized" in current
     assert "engineering_end_to_end = PASS" in current
     assert "production_public_integration = PASS" in current
-    assert "natural_shadow_opportunity = OBSERVED | NOT_OBSERVED" in current
-    assert "14-minute enrollment cutoff" in current
-    assert "29-minute final-stop trigger" in current
-    assert "no later than 30 minutes" in flat
+    assert "natural_shadow_opportunity = NOT_OBSERVED" in current
+    assert "`1,739,999` ms" in current
+    assert "135 real anomaly episode identities" in current
+    assert "271 objects" in current
+    assert "zero partition" in current
+    assert "Private/account/order/fill/capital" in flat
+    assert (
+        "/Users/logan/Optimatrix-shadow/receipts/"
+        "public-shadow-engineering-smoke-002-terminal-record.json"
+    ) in current
+    assert "a4b7a66c51133cef08a4d0420943b6fe5464a78cc10d5a8f2169c0c9d9d4db3c" in current
+    assert "c7d8eb4e6bdc9953716892376c26935089d384e5460aa11073544b7521b96cf3" in current
 
 
-def test_two_layer_shadow_engineering_task_is_the_only_active_task() -> None:
+def test_two_layer_shadow_engineering_task_is_closed_without_an_active_task() -> None:
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").exists()
-    task_path = ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md"
-    assert task_path.exists()
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md",
-        "TEMPLATE.md",
-    ]
-    task = task_path.read_text(encoding="utf-8")
-    assert "**Status:** ACTIVE" in task
-    assert "**Task kind:** `EVIDENCE_ONLY`" in task
-    assert "**Runtime implementation:** FORBIDDEN" in task
-    assert "**Live commands:** REQUIRED" in task
+    assert not (ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md").exists()
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    assert (
-        "**Sole authorized next product-capability closure:**\n"
-        "`SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE`"
-    ) in current
+    assert "**Sole authorized next product-capability closure:**\n`NONE`" in current
 
 
 def test_shadow_attempt_integrity_acceptance_preserves_failure_scope_and_identities() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     for invariant in (
-        "**Live commands:** `REQUIRED_ONCE`",
+        "**Live commands:** `FORBIDDEN`",
         "CONSUMED_FAILED_NO_RETRY",
         "Underwriting semantic identity must be sha256:<64 lowercase hex>",
         "Radar run summary",
-        "cannot be retried or reused",
+        "relabelled, retried, or reused",
         "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json",
         "1090b3d9b643c621721e59552fc0ca1e7b6a7616d9b6ec136c0660c936d62e45",
         "6eaaddfecf4c59a19c8029682a80fc52b7896a64",
         "f9ce7f98623ed7249160ee29c940c9c026fc4173",
         "74eaa501db193a8db09baa3f5a449dc8a28f3d7b",
-        "SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE",
-        "zero private/account/order/fill/capital activity",
+        "later accepted smoke used distinct paths",
+        "Private/account/order/fill/capital",
     ):
         assert invariant in flat
 
@@ -1906,12 +1901,12 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "private/account data",
         "orders, fills, capital",
         "fixed-contract Shadow implementation adds",
-        "`IMPLEMENTATION_ACCEPTED_ENGINEERING_EVIDENCE_ACTIVE`",
-        "`OPEN_FOR_ONE_RESULT_INDEPENDENT_PUBLIC_SMOKE`",
-        "Exactly one product-capability task is active",
+        "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
+        "`CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`",
+        "No product-capability task is active",
         "Radar run summary is absent",
-        "one process invocation is authorized",
-        "natural_shadow_opportunity = OBSERVED | NOT_OBSERVED",
+        "one result-independent production-public process",
+        "natural_shadow_opportunity = NOT_OBSERVED",
     ):
         assert invariant in current_stage
 
@@ -2008,14 +2003,14 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`",
         "SHORT_VOL_UNDERWRITING_POSITION",
         "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT",
-        "`IMPLEMENTATION_ACCEPTED_ENGINEERING_EVIDENCE_ACTIVE`",
-        "`observe-shadow`",
-        "first production-public attempt is consumed",
+        "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
+        "`python -m radar_runtime observe-shadow`",
+        "two-layer engineering closure is consumed and closed",
         "Exact repair commit",
         "evidence-integrity acceptance does not prove",
         "maker/order/fill",
-        "active task authorizes exactly one new process",
-        "Natural Candidate, Entry, and Outcome",
+        "production_public_integration = PASS",
+        "natural_shadow_opportunity = NOT_OBSERVED",
     ):
         assert invariant in readme
     assert "effective-time" not in readme
