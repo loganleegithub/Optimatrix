@@ -35,6 +35,7 @@ jobs:
         run: |
           tar --exclude=.git -czf /tmp/optimatrix-source.tar.gz .
           tar -C .venv/lib/python3.13 -czf /tmp/optimatrix-site-packages.tar.gz site-packages
+          cp .venv/bin/ruff /tmp/ruff
 
       - name: Upload source archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -49,5 +50,13 @@ jobs:
         with:
           name: optimatrix-site-packages
           path: /tmp/optimatrix-site-packages.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload locked Ruff binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: optimatrix-ruff
+          path: /tmp/ruff
           if-no-files-found: error
           retention-days: 1
