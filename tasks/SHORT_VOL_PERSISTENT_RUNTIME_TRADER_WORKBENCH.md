@@ -65,12 +65,13 @@ no-opportunity extension surface is added.
 
 **Outcome/evaluation contract change:** APPROVED — add exact semantic identity
 `SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`, contract digest
-`sha256:e3e6c91aaefcdc867a0cdd64d528cebfe2b3a40681e192c7f4f924bdbfc27bff`, and its non-cohort
-run-segment lifecycle/terminal/conservation/writer/reader semantics. It also adds one exact Radar
-summary compatibility rule for a transport generation retired at the coverage-start instant: only a
-contiguous unrecovered zero-duration restart chain may precede the first represented coverage epoch.
-Existing Candidate, Position, Outcome, rejected-counterfactual, and aligned-pair objects remain
-governed by their current contracts, but service-created units are explicitly
+`sha256:cd141d34cc1e0a9ac1470cda94c924d8929e1d9e6f1af9efbfbdfdf6d0cc0d90`, and its non-cohort
+run-segment lifecycle/terminal/conservation/writer/reader semantics. A service-only Radar summary
+writer/reader compatibility path accepts a real transport generation retired at its coverage-start
+instant only with an exact zero-duration restart chain and matching first segment; standard Radar
+summary/directory readers remain strict. Existing Candidate, Position, Outcome,
+rejected-counterfactual, and aligned-pair objects remain governed by their current contracts, but
+service-created units are explicitly
 `cohort_enrolled=false`; no manifest, enrollment cutoff, or forward-cohort summary is emitted.
 `observe` and `observe-shadow` business behavior and bounded evidence semantics remain unchanged.
 
@@ -157,9 +158,9 @@ unit; production-public invocation; 24x7 evidence; private/account/order/fill/ca
 Internet binding; browser Deribit connection; order controls.
 
 **Owning module/artifact:** `apps/radar_runtime/src/radar_runtime/service.py`,
-`service_evidence.py`, `workbench.py`, `runtime.py` publisher hook, the exact zero-duration
-continuity validation in `short_vol_radar/evidence.py`, CLI, exact service contract, Current
-Stage/System Architecture, and direct tests.
+`service_evidence.py`, `workbench.py`, `runtime.py` publisher hook, Radar partial-object relationship
+validation in `short_vol_radar/evidence.py`, CLI, exact service contract, Current Stage/System
+Architecture, and direct tests.
 
 ## Contract
 
@@ -191,19 +192,21 @@ No value is an opportunity-frequency or profitability claim.
 ### Direct behavior
 
 1. Same-root second lease fails before client construction; release permits a new, different runtime
-   identity.
+   identity. Symlinked/non-regular lock or `runs/` paths fail before target truncation, evidence
+   redirection, run creation, or client construction.
 2. One startup shares one immutable PolicyChain across reducer and owner and exposes no reload path.
 3. Reconnect retires prior continuity, increments session epoch, preserves the one business owner,
-   and distinctly projects `INTERRUPTED / UNKNOWN / STALE / DEGRADED / CURRENT`; an immediate
-   zero-duration first generation remains a validated diagnostics restart rather than a fabricated
-   positive-duration coverage segment.
+   and distinctly projects `INTERRUPTED / UNKNOWN / STALE / DEGRADED / CURRENT`; a stop before the
+   first client seals the initial Radar epoch directly without fabricating a transport session or
+   continuity restart, while an actual zero-duration transport retirement is accepted only by the
+   service-specific strict compatibility reader.
 4. Snapshot publication occurs in `runtime.py` only after the same transaction's Shadow transition;
    GET/HEAD reads immutable bytes and never invokes business functions or mutable private containers.
 5. HTTP rejects non-loopback binding, accepts only GET/HEAD, returns 405 for mutations, and contains
    no order, Policy, private-account, credential, or Deribit browser route.
 6. Lifecycle/terminal writer and readers recompute exact identities, digests, schemas, inventory,
-   counts, rates, null denominators, and conservation; missing/corrupt/mixed/duplicate/pending
-   evidence fails closed.
+   counts, rates, null denominators, conservation, Radar cross-object relationships, and the service
+   terminal causal bound; missing/corrupt/mixed/duplicate/pending/future evidence fails closed.
 7. Pre-latched stop opens no client, writes exactly one Radar summary and service terminal, emits no
    forward-cohort summary, and repeated finalization creates no second terminal.
 8. Empty-panel fixtures remain separate from zero claims; zero or unknown denominators display
@@ -237,7 +240,7 @@ items.
 
 **Policy/contract identities:** existing three contracts and three Policies unchanged; new service
 contract digest exactly
-`sha256:e3e6c91aaefcdc867a0cdd64d528cebfe2b3a40681e192c7f4f924bdbfc27bff`.
+`sha256:cd141d34cc1e0a9ac1470cda94c924d8929e1d9e6f1af9efbfbdfdf6d0cc0d90`.
 
 **Commit/PR:** append-only non-force commits on the named branch and Draft PR against `main`.
 

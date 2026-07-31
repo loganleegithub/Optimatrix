@@ -59,6 +59,10 @@ duplicate business owners for one configured deployment state root. A different 
 explicitly different deployment boundary; an operator or supervisor must not generate a fresh root
 to bypass the lease.
 
+The state root, lock, and `runs/` directory reject symbolic-link redirection; the lock must also be
+a single regular file. These checks happen before the lock target can be truncated or a run/client
+can be created.
+
 Restart never reuses the preceding runtime identity or run directory. Historical objects retain
 their original runtime and Policy meaning.
 
@@ -114,15 +118,17 @@ divided by monitored instrument evaluations in the current snapshot. A zero deno
 SIGINT or SIGTERM latches the first exact monotonic stop boundary and moves the lifecycle to
 `STOPPING`. Repeated signals do not replace that boundary.
 
-A connection may fail at the same monotonic instant as its coverage-ledger start. If the operator
-stops while between sessions, the runtime does not manufacture a reconnect or positive-duration
-segment. The Radar summary validator accepts the successor first represented continuity epoch only
-when diagnostics prove the exact contiguous unrecovered zero-duration restart chain and matching
-first-segment blocker; otherwise it fails closed.
+A stop latched before the first client seals the reducer's initial coverage epoch directly. It does
+not manufacture a transport session, reconnect, continuity restart, positive-duration segment, or
+business fact. Existing Radar summary validation remains unchanged.
+
+If a real transport generation retires at its coverage-start instant, the service-only Radar
+summary writer/reader accepts the omitted zero-duration leading epoch only after exact restart-chain
+and first-segment trigger/blocker/scope matching. The standard Radar readers stay strict.
 
 If a transport is active, `LiveRadarRuntime.run` performs its existing exact drain. Between
-sessions, the host creates only the minimum session boundary needed to invoke the same reducer
-clean-stop path; it does not open a market client. The reducer owns:
+sessions, the host invokes the same reducer clean-stop path without opening a market client or
+creating another session epoch. The reducer owns:
 
 1. outbound barrier;
 2. accepted-envelope drain;
@@ -138,7 +144,8 @@ lifetime into an evaluation cohort.
 
 Fatal failure uses the existing Shadow failure terminalization path and writes a failure lifecycle
 record. A partial Radar evidence directory remains partial if the underlying runtime contract does
-not permit a clean summary.
+not permit a clean summary. Its current objects must still be unique, mutually bound, and no later
+than the service terminal causal boundary.
 
 ## Append-only evidence boundary
 

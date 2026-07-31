@@ -3,10 +3,20 @@ from __future__ import annotations
 import http.client
 import inspect
 import json
+import socket
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import radar_runtime.workbench as workbench_module
+from radar_runtime.runtime import (
+    CausalCause,
+    CausalCommit,
+    FactBoundary,
+    FailureScope,
+    RadarReducer,
+)
 from radar_runtime.service_evidence import (
     DataState,
     PersistentServiceBindings,
@@ -27,6 +37,8 @@ from radar_runtime.workbench import (
     zero_anomaly_claim,
     zero_candidate_claim,
 )
+from short_vol_radar.atomic import PublicAtomicQuoteState
+from short_vol_radar.detector import DetectorState
 from short_vol_underwriting.constants import (
     POSITION_POLICY_IDENTITY,
     RADAR_POLICY_IDENTITY,
@@ -117,6 +129,98 @@ def test_business_zero_requires_exact_known_positive_denominators() -> None:
     assert anomaly.state.value == "PROVEN_ZERO" and anomaly.value == 0
     assert candidate.state.value == "PROVEN_ZERO" and candidate.value == 0
     assert positive.state.value == "NOT_ZERO" and positive.value == 2
+
+
+def test_radar_projection_binds_atomic_state_to_active_episode_identity() -> None:
+    episode_identity = "sha256:" + "9" * 64
+    tracker = SimpleNamespace(
+        episode_id=episode_identity,
+        detector_state=DetectorState.ANOMALY_ACTIVE,
+    )
+    reducer = cast(
+        RadarReducer,
+        SimpleNamespace(
+            options={
+                "BTC-TEST": SimpleNamespace(
+                    expiration_timestamp_ms=10_000,
+                    option_type=SimpleNamespace(value="call"),
+                    strike=100,
+                )
+            },
+            results={
+                "BTC-TEST": SimpleNamespace(
+                    detector_state=DetectorState.ANOMALY_ACTIVE,
+                    reason="ACTIVE",
+                    known_evaluation=True,
+                    band_id="band",
+                    calculation=None,
+                )
+            },
+            trackers={"BTC-TEST": tracker},
+            atomic_states={episode_identity: PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE},
+            episode_started_monotonic_ms=lambda _episode: 100,
+            episode_active_duration_ms=lambda _episode, *, observed_monotonic_ms: (
+                observed_monotonic_ms - 100
+            ),
+        ),
+    )
+    commit = CausalCommit(
+        boundary=FactBoundary(1, 1, 200, 1),
+        cause=CausalCause.TIME_BOUNDARY,
+        failure_domain=FailureScope.CLOCK_INDEX,
+        affected_scopes=("GLOBAL",),
+    )
+
+    (row,) = workbench_module._radar_rows(reducer, commit, None)
+
+    assert row["public_atomic_quote_state"] == "PUBLIC_ATOMIC_QUOTE_AVAILABLE"
+
+
+def test_radar_projection_uses_not_evaluated_without_active_detector_truth() -> None:
+    episode_identity = "sha256:" + "8" * 64
+    reducer = cast(
+        RadarReducer,
+        SimpleNamespace(
+            options={
+                "BTC-TEST": SimpleNamespace(
+                    expiration_timestamp_ms=10_000,
+                    option_type=SimpleNamespace(value="call"),
+                    strike=100,
+                )
+            },
+            results={
+                "BTC-TEST": SimpleNamespace(
+                    detector_state=DetectorState.UNKNOWN,
+                    reason="TIME_BAND_BOUNDARY",
+                    known_evaluation=False,
+                    band_id=None,
+                    calculation=None,
+                )
+            },
+            trackers={
+                "BTC-TEST": SimpleNamespace(
+                    episode_id=episode_identity,
+                    detector_state=DetectorState.UNKNOWN,
+                )
+            },
+            atomic_states={episode_identity: PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE},
+            episode_started_monotonic_ms=lambda _episode: 100,
+            episode_active_duration_ms=lambda _episode, *, observed_monotonic_ms: (
+                observed_monotonic_ms - 100
+            ),
+        ),
+    )
+    commit = CausalCommit(
+        boundary=FactBoundary(1, 1, 200, 1),
+        cause=CausalCause.TIME_BOUNDARY,
+        failure_domain=FailureScope.CLOCK_INDEX,
+        affected_scopes=("GLOBAL",),
+    )
+
+    (row,) = workbench_module._radar_rows(reducer, commit, None)
+
+    assert row["public_atomic_quote_state"] == "NOT_EVALUATED"
+    assert workbench_module._active_anomaly_count(reducer) == 0
 
 
 def test_initial_snapshot_keeps_empty_panels_separate_from_unknown_zero_claims() -> None:
@@ -324,6 +428,26 @@ def test_http_rejects_non_loopback_or_hostname_bindings() -> None:
         LoopbackWorkbenchServer(host="0.0.0.0", port=0, store=store)
     with pytest.raises(ValueError, match="explicit loopback"):
         LoopbackWorkbenchServer(host="localhost", port=0, store=store)
+
+
+def test_http_supports_explicit_ipv6_loopback_when_available() -> None:
+    probe = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    store = SnapshotStore(initial_workbench_document(_bindings()))
+    try:
+        probe.bind(("::1", 0))
+    except OSError as exc:
+        pytest.skip(f"IPv6 loopback unavailable: {exc}")
+    finally:
+        probe.close()
+    server = LoopbackWorkbenchServer(host="::1", port=0, store=store)
+    assert server._server.address_family == socket.AF_INET6
+    server.start()
+    try:
+        status, _, body = _request(server, "GET", "/api/workbench/current")
+        assert status == 200
+        assert json.loads(body)["runtime_identity"] == _bindings().runtime_identity
+    finally:
+        server.close()
 
 
 def test_health_and_readiness_are_independent_published_facts() -> None:

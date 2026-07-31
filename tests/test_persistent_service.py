@@ -5,14 +5,19 @@ import hashlib
 import json
 from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
-from dataclasses import FrozenInstanceError, dataclass, field
+from copy import deepcopy
+from dataclasses import FrozenInstanceError, dataclass, field, replace
 from pathlib import Path
 from typing import NoReturn, cast
 
 import pytest
 import radar_runtime.service as service_module
 from conftest import PolicyFactory
-from radar_runtime.deribit_public import InboundEnvelope, SendControlEvent
+from radar_runtime.deribit_public import (
+    InboundEnvelope,
+    PublicProtocolIncompatibility,
+    SendControlEvent,
+)
 from radar_runtime.runtime import (
     CausalCause,
     CausalCommit,
@@ -45,8 +50,20 @@ from radar_runtime.service_evidence import (
     read_complete_persistent_service_evidence,
     read_current_persistent_service_evidence,
 )
-from short_vol_radar.evidence import EvidenceWriter
+from short_vol_radar.evidence import (
+    AnomalyEvidence,
+    AtomicEvidence,
+    EvidenceError,
+    EvidenceWriter,
+    project_anomaly_event,
+    project_atomic_event,
+    validate_anomaly_event,
+    validate_atomic_event,
+    validate_evidence_directory,
+    validate_persistent_service_run_summary,
+)
 from short_vol_radar.policy import load_policy_bytes
+from test_evidence_and_runtime import anomaly_evidence, atomic_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE = "a" * 40
@@ -71,7 +88,14 @@ def _run_pre_latched(
     startup = _startup(tmp_path)
     composition = build_persistent_service_composition(startup)
     event = PersistentStopEvent()
-    assert event.request(terminal_monotonic_ms=1_000, reason="TEST_STOP") is True
+    terminal_monotonic_ms = service_module._monotonic_ms() + 1
+    assert (
+        event.request(
+            terminal_monotonic_ms=terminal_monotonic_ms,
+            reason="TEST_STOP",
+        )
+        is True
+    )
     client_calls = 0
 
     def forbidden_client(**_: object) -> NoReturn:
@@ -84,7 +108,7 @@ def _run_pre_latched(
             composition,
             stop_event=event,
             client_factory=forbidden_client,
-            monotonic_ms=lambda: 1_000,
+            monotonic_ms=lambda: terminal_monotonic_ms,
             signal_registrar=lambda _signal, _callback: None,
             start_workbench=False,
         )
@@ -114,6 +138,47 @@ def test_single_instance_lease_rejects_duplicate_and_releases(tmp_path: Path) ->
     second.acquire()
     assert second.acquired is True
     second.release()
+
+
+def test_single_instance_lease_rejects_symlink_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    target = tmp_path / "must-not-be-truncated"
+    target.write_text("preserve-me\n", encoding="utf-8")
+    (state_root / "service.lock").symlink_to(target)
+    lease = SingleInstanceLease(state_root)
+
+    try:
+        with pytest.raises(PersistentServiceStartupError, match="lock path"):
+            lease.acquire()
+    finally:
+        lease.release()
+
+    assert target.read_text(encoding="utf-8") == "preserve-me\n"
+
+
+def test_startup_rejects_symlinked_runs_directory(tmp_path: Path) -> None:
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    redirected = tmp_path / "redirected-runs"
+    redirected.mkdir()
+    (state_root / "runs").symlink_to(redirected, target_is_directory=True)
+
+    with pytest.raises(PersistentServiceStartupError, match="runs directory"):
+        prepare_persistent_service_startup(
+            state_root=state_root.resolve(),
+            process_cwd=ROOT,
+            workbench_host="127.0.0.1",
+            workbench_port=0,
+            code_identity=CODE,
+            startup_monotonic_ms=100,
+            process_id=123,
+            nonce_factory=lambda: "symlinked-runs",
+        )
+
+    assert tuple(redirected.iterdir()) == ()
 
 
 def test_runtime_identity_changes_each_start_and_is_canonical() -> None:
@@ -293,6 +358,137 @@ def test_process_failure_writer_rejects_corrupt_partial_radar_inventory(
         composition.workbench.close()
 
 
+def _bound_partial_radar(
+    startup: PersistentServiceStartup,
+) -> tuple[AnomalyEvidence, AtomicEvidence]:
+    anomaly = replace(
+        anomaly_evidence(),
+        code_identity=startup.code_identity,
+        runtime_identity=startup.runtime_identity,
+        policy_identity=startup.policies.radar.identity,
+    )
+    atomic = replace(
+        atomic_evidence(),
+        code_identity=startup.code_identity,
+        runtime_identity=startup.runtime_identity,
+        policy_identity=startup.policies.radar.identity,
+    )
+    return anomaly, atomic
+
+
+def _write_future_partial_radar(
+    startup: PersistentServiceStartup,
+    composition: PersistentServiceComposition,
+    *,
+    future_object_kind: str,
+) -> None:
+    anomaly, atomic = _bound_partial_radar(startup)
+    if future_object_kind == "anomaly":
+        composition.radar_writer.write_anomaly(project_anomaly_event(anomaly))
+        return
+    assert future_object_kind == "atomic"
+    composition.radar_writer.write_anomaly(project_anomaly_event(replace(anomaly, causal_seq=0)))
+    composition.radar_writer.write_atomic(project_atomic_event(atomic))
+
+
+def test_process_failure_rejects_duplicate_atomic_identity(tmp_path: Path) -> None:
+    startup = _startup(tmp_path)
+    composition = build_persistent_service_composition(startup)
+    try:
+        anomaly, atomic = _bound_partial_radar(startup)
+        composition.radar_writer.write_anomaly(project_anomaly_event(anomaly))
+        atomic_path = composition.radar_writer.write_atomic(project_atomic_event(atomic))
+        assert atomic_path is not None
+        (startup.radar_directory / "duplicate-atomic.json").write_bytes(atomic_path.read_bytes())
+
+        with pytest.raises(ShadowRuntimeIntegrityError, match="terminal evidence finalize"):
+            composition.runtime.finalize_shadow_failure(1_000)
+
+        assert composition.service_writer.terminal is None
+        assert not (startup.service_directory / "terminal.json").exists()
+    finally:
+        composition.workbench.close()
+
+
+def test_process_failure_rejects_atomic_anomaly_short_leg_mismatch(
+    tmp_path: Path,
+) -> None:
+    startup = _startup(tmp_path)
+    composition = build_persistent_service_composition(startup)
+    try:
+        anomaly, atomic = _bound_partial_radar(startup)
+        mismatched_atomic = replace(
+            atomic,
+            short_instrument_name="OTHER",
+            combo_legs=(("OTHER", atomic.combo_legs[0][1]), atomic.combo_legs[1]),
+        )
+        anomaly_value = project_anomaly_event(anomaly)
+        atomic_value = project_atomic_event(mismatched_atomic)
+        validate_anomaly_event(anomaly_value)
+        validate_atomic_event(atomic_value)
+        composition.radar_writer.write_anomaly(anomaly_value)
+        composition.radar_writer.write_atomic(atomic_value)
+
+        with pytest.raises(ShadowRuntimeIntegrityError, match="terminal evidence finalize"):
+            composition.runtime.finalize_shadow_failure(1_000)
+
+        assert composition.service_writer.terminal is None
+        assert not (startup.service_directory / "terminal.json").exists()
+    finally:
+        composition.workbench.close()
+
+
+@pytest.mark.parametrize("future_object_kind", ("anomaly", "atomic"))
+def test_process_failure_writer_rejects_partial_radar_after_terminal_boundary(
+    tmp_path: Path,
+    future_object_kind: str,
+) -> None:
+    startup = _startup(tmp_path)
+    composition = build_persistent_service_composition(startup)
+    try:
+        _write_future_partial_radar(
+            startup,
+            composition,
+            future_object_kind=future_object_kind,
+        )
+
+        with pytest.raises(ShadowRuntimeIntegrityError, match="terminal evidence finalize"):
+            composition.runtime.finalize_shadow_failure(1_000)
+
+        assert composition.service_writer.terminal is None
+        assert not (startup.service_directory / "terminal.json").exists()
+    finally:
+        composition.workbench.close()
+
+
+@pytest.mark.parametrize("future_object_kind", ("anomaly", "atomic"))
+def test_process_failure_reader_rejects_partial_radar_after_terminal_boundary(
+    tmp_path: Path,
+    future_object_kind: str,
+) -> None:
+    startup = _startup(tmp_path)
+    composition = build_persistent_service_composition(startup)
+    try:
+        composition.runtime.finalize_shadow_failure(1_000)
+        _write_future_partial_radar(
+            startup,
+            composition,
+            future_object_kind=future_object_kind,
+        )
+
+        with pytest.raises(
+            PersistentServiceEvidenceError,
+            match="causal boundary follows the service terminal",
+        ):
+            read_complete_persistent_service_evidence(
+                startup.run_directory,
+                bindings=startup.service_bindings,
+                downstream_bindings=startup.downstream_bindings,
+            )
+    finally:
+        composition.workbench.close()
+
+
 def test_service_reader_fails_closed_on_missing_corrupt_or_mixed_evidence(
     tmp_path: Path,
 ) -> None:
@@ -339,11 +535,13 @@ def test_service_reader_fails_closed_on_missing_corrupt_or_mixed_evidence(
 
 
 class _WaitingClient:
-    session_epoch = 1
     queue_high_water_frames = 0
     overflow_count = 0
     received_frame_count = 0
     enqueued_envelope_count = 0
+
+    def __init__(self, session_epoch: int = 1) -> None:
+        self.session_epoch = session_epoch
 
     async def send_request(self, **_kwargs: object) -> None:
         return None
@@ -378,6 +576,18 @@ class _WaitingClientContext(AbstractAsyncContextManager[_WaitingClient]):
     ) -> bool | None:
         del exc_type, exc_value, traceback
         return None
+
+
+class _RecoverableFailureClient(_WaitingClient):
+    async def next_envelope(self, timeout_seconds: float | None = None) -> InboundEnvelope:
+        del timeout_seconds
+        raise ConnectionError("test recoverable transport failure")
+
+
+class _FatalProtocolClient(_WaitingClient):
+    async def next_envelope(self, timeout_seconds: float | None = None) -> InboundEnvelope:
+        del timeout_seconds
+        raise PublicProtocolIncompatibility("test protocol incompatibility")
 
 
 def test_active_stop_publishes_stopping_before_exact_terminal(tmp_path: Path) -> None:
@@ -427,6 +637,114 @@ def test_active_stop_publishes_stopping_before_exact_terminal(tmp_path: Path) ->
         phases = [str(value["service_phase"]) for value in evidence.events]
         assert phases[-2:] == ["STOPPING", "STOPPED"]
         assert evidence.events[-2]["reason"] == "TEST_ACTIVE_STOP"
+    finally:
+        composition.workbench.close()
+
+
+def test_outer_service_loop_reconnects_without_replacing_business_owner(
+    tmp_path: Path,
+) -> None:
+    startup = _startup(tmp_path)
+    composition = build_persistent_service_composition(startup)
+    event = PersistentStopEvent()
+    owner = composition.owner
+    factory_epochs: list[int] = []
+
+    def client_factory(
+        *,
+        session_epoch: int,
+        rpc_deadline_ms: int,
+    ) -> AbstractAsyncContextManager[PublicClient]:
+        assert rpc_deadline_ms > 0
+        factory_epochs.append(session_epoch)
+        client: _WaitingClient = (
+            _RecoverableFailureClient(session_epoch)
+            if session_epoch == 1
+            else _WaitingClient(session_epoch)
+        )
+        return _WaitingClientContext(client)
+
+    async def no_delay(_seconds: float) -> None:
+        return None
+
+    async def scenario() -> Path:
+        task = asyncio.create_task(
+            run_persistent_service_composition(
+                composition,
+                stop_event=event,
+                client_factory=client_factory,
+                signal_registrar=lambda _signal, _callback: None,
+                sleep=no_delay,
+                start_workbench=False,
+            )
+        )
+        for _ in range(1_000):
+            if (
+                composition.runtime.reducer.current_session_epoch == 2
+                and composition.publisher.status.phase is ServicePhase.RUNNING
+            ):
+                break
+            await asyncio.sleep(0)
+        assert composition.runtime.reducer.current_session_epoch == 2
+        assert composition.publisher.status.phase is ServicePhase.RUNNING
+        assert event.request(
+            terminal_monotonic_ms=service_module._monotonic_ms(),
+            reason="TEST_AFTER_RECONNECT",
+        )
+        return await task
+
+    try:
+        summary = asyncio.run(scenario())
+        assert summary.is_file()
+        assert factory_epochs == [1, 2]
+        assert composition.owner is owner
+        assert composition.runtime.reducer.diagnostics.reconnect_count == 1
+        phases = [str(value["service_phase"]) for value in composition.service_writer.events]
+        assert "RECONNECTING" in phases
+        evidence = read_complete_persistent_service_evidence(
+            startup.run_directory,
+            bindings=startup.service_bindings,
+            downstream_bindings=startup.downstream_bindings,
+        )
+        assert evidence.terminal is not None
+        assert evidence.terminal["terminal_disposition"] == "CLEAN_STOP"
+    finally:
+        composition.workbench.close()
+
+
+def test_outer_service_loop_terminalizes_protocol_incompatibility(
+    tmp_path: Path,
+) -> None:
+    startup = _startup(tmp_path)
+    composition = build_persistent_service_composition(startup)
+
+    def client_factory(
+        *,
+        session_epoch: int,
+        rpc_deadline_ms: int,
+    ) -> AbstractAsyncContextManager[PublicClient]:
+        assert session_epoch == 1
+        assert rpc_deadline_ms > 0
+        return _WaitingClientContext(_FatalProtocolClient(session_epoch))
+
+    try:
+        with pytest.raises(PublicProtocolIncompatibility):
+            asyncio.run(
+                run_persistent_service_composition(
+                    composition,
+                    client_factory=client_factory,
+                    signal_registrar=lambda _signal, _callback: None,
+                    start_workbench=False,
+                )
+            )
+        evidence = read_complete_persistent_service_evidence(
+            startup.run_directory,
+            bindings=startup.service_bindings,
+            downstream_bindings=startup.downstream_bindings,
+        )
+        assert evidence.terminal is not None
+        assert evidence.terminal["terminal_disposition"] == "PROCESS_FAILURE"
+        assert evidence.terminal["radar_evidence_status"] == "INCOMPLETE_PROCESS_FAILURE"
     finally:
         composition.workbench.close()
 
@@ -484,7 +802,6 @@ def test_stop_between_sessions_does_not_create_a_synthetic_reconnect(tmp_path: P
         summary = service_module._stop_without_client(
             composition,
             event=event,
-            session_epoch=1,
             monotonic_ms=lambda: 2_000,
         )
 
@@ -498,6 +815,69 @@ def test_stop_between_sessions_does_not_create_a_synthetic_reconnect(tmp_path: P
         )
         assert evidence.terminal is not None
         assert evidence.terminal["terminal_disposition"] == "CLEAN_STOP"
+
+        with pytest.raises(EvidenceError, match="coverage continuity epoch"):
+            validate_evidence_directory(startup.radar_directory)
+
+        summary_value = json.loads(summary.read_text(encoding="utf-8"))
+        validate_persistent_service_run_summary(summary_value)
+
+        trigger_mismatch = deepcopy(summary_value)
+        trigger_mismatch["coverage_segments"][0]["trigger_cause"] = "RUNTIME_START"
+
+        blocker_mismatch = deepcopy(summary_value)
+        blocker_mismatch["coverage_segments"][0]["blocking_reason"] = "RUNTIME_START_PENDING"
+        blocker_mismatch["coverage_segments"][0]["blocking_groups"][0]["blocking_reason"] = (
+            "RUNTIME_START_PENDING"
+        )
+
+        scope_mismatch = deepcopy(summary_value)
+        mismatched_scope = ["SCOPE:10000:call:band"]
+        scope_mismatch["coverage_segments"][0]["affected_scopes"] = mismatched_scope
+        scope_mismatch["coverage_segments"][0]["blocking_groups"][0]["affected_scopes"] = (
+            mismatched_scope
+        )
+
+        boundary_mismatch = deepcopy(summary_value)
+        restart = boundary_mismatch["operational_diagnostics"]["global_continuity"][
+            "restart_edges"
+        ][0]
+        restart["boundary"]["received_monotonic_ms"] += 1
+
+        recovered_leading_restart = deepcopy(summary_value)
+        recovered_leading_restart["operational_diagnostics"]["global_continuity"][
+            "recovery_edges"
+        ] = [
+            {
+                "incident_id": 1,
+                "boundary": {
+                    "session_epoch": 1,
+                    "ingress_seq": 0,
+                    "received_monotonic_ms": 1_500,
+                    "causal_seq": 2,
+                },
+            }
+        ]
+
+        recovered_at_segment_end = deepcopy(recovered_leading_restart)
+        recovered_at_segment_end["operational_diagnostics"]["global_continuity"]["recovery_edges"][
+            0
+        ]["boundary"]["received_monotonic_ms"] = summary_value["clean_stop_monotonic_ms"]
+        assert (
+            summary_value["coverage_segments"][0]["end_monotonic_ms"]
+            == summary_value["clean_stop_monotonic_ms"]
+        )
+        validate_persistent_service_run_summary(recovered_at_segment_end)
+
+        for invalid in (
+            trigger_mismatch,
+            blocker_mismatch,
+            scope_mismatch,
+            boundary_mismatch,
+            recovered_leading_restart,
+        ):
+            with pytest.raises(EvidenceError):
+                validate_persistent_service_run_summary(invalid)
     finally:
         composition.workbench.close()
 

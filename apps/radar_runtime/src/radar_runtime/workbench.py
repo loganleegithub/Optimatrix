@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import socket
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from typing import Protocol, cast
 
 from market_monitor import ContinuityGap, TimeInterval
 from short_vol_radar.black import DecimalInterval
+from short_vol_radar.detector import DetectorState
 from short_vol_radar.evidence import CoverageBlockingReason, CoverageState
 from short_vol_underwriting.conservation import derive_underwriting_counts
 from short_vol_underwriting.evidence import DownstreamEvidenceWriter
@@ -387,7 +389,7 @@ def _build_business_projection(
         if name in reducer.options
     )
     coverage_ratio = _ratio_percent(known_count, monitored_count)
-    active_anomalies = sum(tracker.episode_id is not None for tracker in reducer.trackers.values())
+    active_anomalies = _active_anomaly_count(reducer)
     monitor_complete = (
         reducer.current_coverage_state is CoverageState.KNOWN_COMPLETE and monitored_count > 0
     )
@@ -519,10 +521,10 @@ def _radar_rows(
                 "richness_ratio_interval": (
                     _decimal_interval(calculation.richness) if calculation is not None else None
                 ),
-                "public_atomic_quote_state": (
-                    reducer.atomic_states[name].value
-                    if name in reducer.atomic_states
-                    else "UNKNOWN"
+                "public_atomic_quote_state": _public_atomic_quote_state(
+                    reducer,
+                    tracker=tracker,
+                    episode_identity=episode,
                 ),
                 "active_episode_identity": episode,
                 "anomaly_started_monotonic_ms": (
@@ -539,6 +541,30 @@ def _radar_rows(
             }
         )
     return rows
+
+
+def _active_anomaly_count(reducer: RadarReducer) -> int:
+    return sum(
+        tracker.detector_state is DetectorState.ANOMALY_ACTIVE
+        for tracker in reducer.trackers.values()
+    )
+
+
+def _public_atomic_quote_state(
+    reducer: RadarReducer,
+    *,
+    tracker: object,
+    episode_identity: str | None,
+) -> str:
+    if (
+        tracker is None
+        or getattr(tracker, "detector_state", None) is not DetectorState.ANOMALY_ACTIVE
+    ):
+        return "NOT_EVALUATED"
+    if episode_identity is None:
+        return "UNKNOWN"
+    state = reducer.atomic_states.get(episode_identity)
+    return "UNKNOWN" if state is None else state.value
 
 
 def _underwriting_rows(
@@ -1452,6 +1478,11 @@ class WorkbenchHTTPServer(ThreadingHTTPServer):
         snapshot_store: SnapshotStore,
     ) -> None:
         self.snapshot_store = snapshot_store
+        self.address_family = (
+            socket.AF_INET6
+            if ipaddress.ip_address(server_address[0]).version == 6
+            else socket.AF_INET
+        )
         super().__init__(server_address, WorkbenchRequestHandler)
 
 

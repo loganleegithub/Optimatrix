@@ -73,6 +73,11 @@ startup, but every startup creates a new canonical runtime identity and a new ru
         terminal.json
 ```
 
+`state_root`, `service.lock`, and `runs/` must be real filesystem entries rather than symbolic
+links. The lock must be one regular file. A redirected or non-regular path fails before truncation,
+run-directory creation, or client construction, so declared evidence ownership cannot escape the
+configured root.
+
 A reconnect increments the transport session epoch inside the same runtime. It does not create a
 second owner, reuse retired continuity, or create a second business object for unchanged settled
 facts. A process restart creates a new runtime identity and cannot continue old Candidate,
@@ -302,14 +307,19 @@ accepted envelope before that boundary, prevents new outbound work, terminalizes
 Candidates and pending observations exactly once, writes one Radar run summary, and then writes the
 service terminal record.
 
-A transport generation may retire at the exact monotonic instant at which its Radar coverage ledger
-starts, before any positive-duration segment exists. In that one bounded case, the run summary may
-begin at the successor global-continuity epoch. The Radar summary validator accepts the omitted
-leading zero-duration epochs only when the diagnostics contain an exact contiguous unrecovered
-restart chain from epoch 1 to the first represented epoch, every restart boundary equals the first
-coverage-segment start, and the first segment's trigger, blocker, and affected scopes match the last
-restart. No elapsed coverage, reconnect count, or business fact is synthesized. Any mismatch fails
-closed.
+If stop is already latched before the first market client is constructed, the service seals the
+reducer's initial Radar coverage epoch directly. It does not fabricate a transport session,
+reconnect, continuity restart, elapsed coverage, or business fact. Existing Radar run-summary
+validation semantics remain unchanged.
+
+A real transport generation may still retire at the exact monotonic instant at which its coverage
+ledger starts, before any positive-duration segment exists. Only the service-specific Radar summary
+writer/reader path may then accept a successor first represented continuity epoch. It requires an
+exact contiguous restart chain from epoch 1, every omitted restart boundary equal to the first
+segment start, and the first segment's trigger, blocker, blocking group, and affected scopes equal
+to the last omitted restart. A recovery, if present, must remain an exact later diagnostics edge and
+the matching blocker segment may not extend beyond it. The standard Radar summary and directory
+readers remain strict and reject a first represented epoch other than 1.
 
 A process failure terminalizes downstream state as `CENSORED_AT_FAILURE` where applicable and
 writes one service terminal when terminalization succeeds. Radar evidence is then explicitly
@@ -330,8 +340,10 @@ Before a service terminal is accepted, the writer and reader independently requi
    denominators, and terminal identity;
 9. a valid Radar run summary only for `CLEAN_STOP`, and its explicit absence for
    `PROCESS_FAILURE`;
-10. every process-failure Radar anomaly/atomic file individually validates under the current Radar
-    schema, matches the exact code/runtime/Policy identities, and contains no unknown file kind.
+10. every Radar anomaly/atomic file individually validates under the current Radar schema, matches
+    the exact code/runtime/Policy identities, and falls no later than the service terminal causal
+    boundary; object uniqueness and anomaly/atomic cross-bindings also validate when process failure
+    leaves Radar incomplete, and no unknown file kind is accepted.
 
 The existing bounded `read_complete_evidence` remains manifest/cohort-specific and is not a reader
 for this service. The new `read_complete_persistent_service_evidence` is the only complete reader

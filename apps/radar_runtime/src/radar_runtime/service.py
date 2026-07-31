@@ -4,6 +4,7 @@ import asyncio
 import fcntl
 import os
 import signal
+import stat
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
@@ -95,8 +96,24 @@ class SingleInstanceLease:
     def acquire(self) -> None:
         if self._descriptor is not None:
             raise RuntimeError("single-instance lease is already acquired")
+        if self.state_root.is_symlink():
+            raise PersistentServiceStartupError("service state root cannot be a symlink")
         self.state_root.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+        if self.path.is_symlink():
+            raise PersistentServiceStartupError(
+                "service lock path must be a regular non-symlink file"
+            )
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(self.path, flags, 0o600)
+        except OSError as exc:
+            raise PersistentServiceStartupError(
+                "service lock path must be a regular non-symlink file"
+            ) from exc
+        lock_status = os.fstat(descriptor)
+        if not stat.S_ISREG(lock_status.st_mode) or lock_status.st_nlink != 1:
+            os.close(descriptor)
+            raise PersistentServiceStartupError("service lock path must be one regular file")
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             os.ftruncate(descriptor, 0)
@@ -423,6 +440,7 @@ def build_persistent_service_composition(
         code_identity=startup.code_identity,
         runtime_identity=startup.runtime_identity,
         policy_identity=startup.policies.radar.identity,
+        allow_service_leading_zero_duration_restarts=True,
     )
     runtime = LiveRadarRuntime(
         policy=startup.policies.radar,
@@ -431,6 +449,7 @@ def build_persistent_service_composition(
         runtime_identity=startup.runtime_identity,
         shadow_adapter=adapter,
         snapshot_publisher=publisher,
+        allow_service_leading_zero_duration_restarts=True,
     )
     adapter.bind_reducer(runtime.reducer)
     workbench = LoopbackWorkbenchServer(
@@ -535,7 +554,6 @@ async def run_persistent_service_composition(
                 return _stop_without_client(
                     composition,
                     event=event,
-                    session_epoch=session_epoch,
                     monotonic_ms=clock,
                 )
             composition.publisher.update_status(
@@ -661,7 +679,6 @@ def _stop_without_client(
     composition: PersistentServiceComposition,
     *,
     event: PersistentStopEvent,
-    session_epoch: int,
     monotonic_ms: MonotonicClock,
 ) -> Path:
     terminal_ms = _terminal_ms(event, monotonic_ms())
@@ -676,13 +693,6 @@ def _stop_without_client(
             terminal_ms,
         )
     )
-    current_epoch = composition.runtime.reducer.current_session_epoch
-    if current_epoch is None:
-        next_epoch = max(session_epoch + 1, 1)
-        composition.runtime.reducer.begin_session(
-            session_epoch=next_epoch,
-            monotonic_ms=terminal_ms,
-        )
     summary = composition.runtime.reducer.clean_stop(terminal_ms)
     composition.publisher.update_status(
         ServiceStatus(
@@ -748,7 +758,15 @@ def _prepare_state_root(state_root: Path, repository: Path) -> Path:
     resolved.mkdir(parents=True, exist_ok=True)
     if not resolved.is_dir():
         raise PersistentServiceStartupError("persistent state root is not a directory")
-    (resolved / "runs").mkdir(exist_ok=True)
+    runs_directory = resolved / "runs"
+    if runs_directory.is_symlink():
+        raise PersistentServiceStartupError("persistent runs directory cannot be a symlink")
+    try:
+        runs_directory.mkdir(exist_ok=True)
+    except OSError as exc:
+        raise PersistentServiceStartupError("persistent runs directory cannot be created") from exc
+    if not runs_directory.is_dir() or runs_directory.is_symlink():
+        raise PersistentServiceStartupError("persistent runs directory is invalid")
     return resolved
 
 

@@ -13,7 +13,8 @@ from short_vol_radar.evidence import (
     EvidenceError,
     validate_anomaly_event,
     validate_atomic_event,
-    validate_evidence_directory,
+    validate_persistent_service_evidence_directory,
+    validate_radar_object_relationships,
 )
 from short_vol_underwriting.conservation import (
     COHORT_COUNT_KEYS,
@@ -47,7 +48,7 @@ from short_vol_underwriting.validation import (
 )
 
 PERSISTENT_SERVICE_CONTRACT_DIGEST = (
-    "sha256:e3e6c91aaefcdc867a0cdd64d528cebfe2b3a40681e192c7f4f924bdbfc27bff"
+    "sha256:cd141d34cc1e0a9ac1470cda94c924d8929e1d9e6f1af9efbfbdfdf6d0cc0d90"
 )
 PERSISTENT_SERVICE_SEMANTIC_IDENTITY = "SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE"
 SERVICE_NON_CLAIMS = (
@@ -655,6 +656,7 @@ def _build_terminal_value(
         radar_directory,
         bindings=bindings,
         terminal_disposition=terminal_disposition,
+        terminal_fact_boundary=terminal_fact_boundary,
     )
     lifecycle_event_count, lifecycle_inventory_identity = _lifecycle_inventory(
         service_directory / "events",
@@ -742,12 +744,13 @@ def _validate_radar_inventory(
     *,
     bindings: PersistentServiceBindings,
     terminal_disposition: str,
+    terminal_fact_boundary: FactBoundary,
 ) -> tuple[str, str | None, int, str]:
     if not directory.is_dir():
         raise PersistentServiceEvidenceError("Radar evidence directory is missing")
     inventory: list[list[str]] = []
-    anomaly_episodes: set[str] = set()
-    atomic_roots: list[str] = []
+    anomaly_objects: list[Mapping[str, object]] = []
+    atomic_objects: list[Mapping[str, object]] = []
     summary_count = 0
     try:
         entries = sorted(directory.iterdir(), key=lambda item: item.name)
@@ -769,15 +772,10 @@ def _validate_radar_inventory(
         try:
             if kind == "SHORT_VOL_ANOMALY_EVENT":
                 validate_anomaly_event(value)
-                episode = _string(value.get("episode_identity"), "episode_identity")
-                if episode in anomaly_episodes:
-                    raise PersistentServiceEvidenceError(
-                        "Radar evidence duplicates an anomaly episode"
-                    )
-                anomaly_episodes.add(episode)
+                anomaly_objects.append(value)
             elif kind == "PUBLIC_ATOMIC_QUOTE_EVENT":
                 validate_atomic_event(value)
-                atomic_roots.append(_string(value.get("episode_identity"), "episode_identity"))
+                atomic_objects.append(value)
             elif kind == "RADAR_RUN_SUMMARY":
                 summary_count += 1
             else:
@@ -785,14 +783,32 @@ def _validate_radar_inventory(
         except EvidenceError as exc:
             raise PersistentServiceEvidenceError(str(exc)) from exc
         inventory.append([path.name, _sha256_identity(exact)])
-    if any(episode not in anomaly_episodes for episode in atomic_roots):
+    try:
+        validate_radar_object_relationships(
+            anomalies=anomaly_objects,
+            atomic_events=atomic_objects,
+        )
+    except EvidenceError as exc:
+        raise PersistentServiceEvidenceError(str(exc)) from exc
+    terminal_causal_seq = terminal_fact_boundary.causal_seq
+    if any(
+        _non_negative_int(value["causal_seq"], "anomaly causal_seq") > terminal_causal_seq
+        for value in anomaly_objects
+    ) or any(
+        max(
+            _non_negative_int(value["detector_causal_seq"], "atomic detector_causal_seq"),
+            _non_negative_int(value["quote_causal_seq"], "atomic quote_causal_seq"),
+        )
+        > terminal_causal_seq
+        for value in atomic_objects
+    ):
         raise PersistentServiceEvidenceError(
-            "Radar atomic evidence references an absent anomaly episode"
+            "Radar evidence causal boundary follows the service terminal"
         )
     summary_path = directory / "radar-run-summary.json"
     if terminal_disposition == "CLEAN_STOP":
         try:
-            validate_evidence_directory(directory)
+            validate_persistent_service_evidence_directory(directory)
         except EvidenceError as exc:
             raise PersistentServiceEvidenceError(str(exc)) from exc
         if summary_count != 1 or not summary_path.is_file():

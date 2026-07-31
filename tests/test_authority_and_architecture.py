@@ -2119,7 +2119,7 @@ def test_persistent_service_contract_and_task_close_exact_governance_change() ->
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     digest = f"sha256:{hashlib.sha256(contract_path.read_bytes()).hexdigest()}"
 
-    assert digest == ("sha256:e3e6c91aaefcdc867a0cdd64d528cebfe2b3a40681e192c7f4f924bdbfc27bff")
+    assert digest == ("sha256:cd141d34cc1e0a9ac1470cda94c924d8929e1d9e6f1af9efbfbdfdf6d0cc0d90")
     assert "**Base commit:** `967e82ea36a7fcae13c6c8a8b07108af5b21a633`" in task
     assert "Draft PR against `main`" in task
     assert "**Outcome/evaluation contract change:** APPROVED" in task
@@ -2161,13 +2161,20 @@ def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
     )
     for path in active:
         text = path.read_text(encoding="utf-8")
-        if "**Task kind:** `AUTHORITY_ONLY`" in text:
+        task_kind_matches = re.findall(
+            r"^\*\*Task kind:\*\* (AUTHORITY_ONLY|IMPLEMENTATION|EVIDENCE_ONLY)$",
+            text,
+            flags=re.MULTILINE,
+        )
+        assert len(task_kind_matches) == 1, f"invalid or missing task kind in {path}"
+        task_kind = task_kind_matches[0]
+        if task_kind == "AUTHORITY_ONLY":
             assert "**Runtime implementation:** FORBIDDEN" in text
             assert "**Live commands:** FORBIDDEN" in text
-        if "**Task kind:** `IMPLEMENTATION`" in text:
+        elif task_kind == "IMPLEMENTATION":
             assert "**Runtime implementation:** REQUIRED" in text
             assert "**Live commands:** FORBIDDEN" in text
-        if "**Task kind:** `EVIDENCE_ONLY`" in text:
+        else:
             assert "**Runtime implementation:** FORBIDDEN" in text
             assert "**Live commands:** REQUIRED" in text
         for declaration in (

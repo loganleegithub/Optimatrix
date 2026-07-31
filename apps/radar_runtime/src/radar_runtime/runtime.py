@@ -791,6 +791,7 @@ class RadarReducer:
         runtime_identity: str,
         shadow_adapter: ShadowRuntimeAdapter | None = None,
         snapshot_publisher: SettledSnapshotPublisher | None = None,
+        allow_service_leading_zero_duration_restarts: bool = False,
     ) -> None:
         self.policy = policy
         self.code_identity = code_identity
@@ -798,6 +799,9 @@ class RadarReducer:
         self.runtime_identity = runtime_identity
         self.shadow_adapter = shadow_adapter
         self.snapshot_publisher = snapshot_publisher
+        self._allow_service_leading_zero_duration_restarts = (
+            allow_service_leading_zero_duration_restarts
+        )
         self.platform = PlatformReadiness()
         self.option_catalog = CatalogBootstrap()
         self.combo_catalog = CatalogBootstrap()
@@ -6985,6 +6989,9 @@ class RadarReducer:
             known_active_duration_ms_sum_by_end_reason=self._known_active_duration_ms,
             public_atomic_quote_state_transition_count=self._atomic_transition_counts,
             operational_diagnostics=self._operational_diagnostics(observation_ms),
+            allow_service_leading_zero_duration_restarts=(
+                self._allow_service_leading_zero_duration_restarts
+            ),
         )
         try:
             summary_path = self.writer.write_summary(summary)
@@ -7631,6 +7638,7 @@ class LiveRadarRuntime:
         runtime_identity: str | None = None,
         shadow_adapter: ShadowRuntimeAdapter | None = None,
         snapshot_publisher: SettledSnapshotPublisher | None = None,
+        allow_service_leading_zero_duration_restarts: bool = False,
     ) -> None:
         identity = runtime_identity or str(uuid.uuid4())
         self.reducer = RadarReducer(
@@ -7640,6 +7648,9 @@ class LiveRadarRuntime:
             runtime_identity=identity,
             shadow_adapter=shadow_adapter,
             snapshot_publisher=snapshot_publisher,
+            allow_service_leading_zero_duration_restarts=(
+                allow_service_leading_zero_duration_restarts
+            ),
         )
 
     @property
