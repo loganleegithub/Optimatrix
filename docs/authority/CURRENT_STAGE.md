@@ -9,12 +9,12 @@
 **Production Short Vol Radar:** `ESTABLISHED`
 
 **Sole authorized next product-capability closure:**
-`SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`
+`NONE`
 
 **Fixed-contract public Shadow runtime:**
-`LIVE_INTEGRITY_DEFECT_REPAIR_REQUIRED`
+`IMPLEMENTATION_ACCEPTED_EVIDENCE_NOT_ACCEPTED`
 
-**Evidence gate:** `CLOSED_AFTER_FAILED_SINGLE_ATTEMPT`
+**Evidence gate:** `CLOSED_REAUTHORIZATION_REQUIRED`
 
 **Live commands:** `FORBIDDEN`
 
@@ -26,11 +26,12 @@ architecture, detector parameters, or evidence mechanics. Code presence, green t
 receipts, run duration, contract presence, or roadmap order grant no stage.
 
 The current boundary retains the already established, guarded production-public Short Vol Radar
-defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md) and authorizes only the active
-fixed-contract Shadow implementation-integrity repair defined below. The sole live attempt is
-consumed and failed; no production-public Shadow process is now authorized. The same boundary keeps
-private/account data, orders, fills, capital, qualification, Challenger automation, promotion,
-execution, and persistent service deployment unauthorized.
+defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md) and records the independently
+accepted fixed-contract Shadow implementation-integrity repair defined below. No product-capability
+task is active. The sole live attempt is consumed and failed; no production-public Shadow process
+is now authorized. The same boundary keeps private/account data, orders, fills, capital,
+qualification, Challenger automation, promotion, execution, and persistent service deployment
+unauthorized.
 
 The accepted
 [`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) implementation
@@ -43,11 +44,14 @@ strict downstream evidence semantics. Exact commit
 `6207d59763e1aab7c455854169cd9dde6b0f940f`, tree
 `31406d7cf3762ac286677497b52d0d0bbf463332`, independently repaired and accepted the strict
 attempt writer/current/complete-reader boundary without changing a contract, Policy, source,
-owner, sender, economics, dependency, or lock. The active
-[`SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`](../../tasks/SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md)
-task now authorizes only the observed live-identity and fatal-terminal implementation repair. It
-does not authorize a market command, private/account/order/fill capability, qualification, or
-persistent deployment.
+owner, sender, economics, dependency, or lock. Exact implementation-acceptance commit
+`6eaaddfecf4c59a19c8029682a80fc52b7896a64`, tree
+`f9ce7f98623ed7249160ee29c940c9c026fc4173`, parent
+`74eaa501db193a8db09baa3f5a449dc8a28f3d7b`, accepts the existing composite Radar episode identity
+at the declared downstream boundary, retains strict downstream-owned identities, and adds the
+missing fatal coordinator regression. It changes no contract, Policy, schema, economic rule,
+dependency, or lock and authorizes no market command, private/account/order/fill capability,
+qualification, or persistent deployment.
 
 ### Terminal-goal delegation and consumed downstream public Shadow attempt
 
@@ -89,7 +93,7 @@ The controller terminal record is
 `1090b3d9b643c621721e59552fc0ca1e7b6a7616d9b6ec136c0660c936d62e45`, 26,919 bytes. It records
 the failed evidence result and cannot grant a retry or stage advance.
 
-### Fixed-contract Shadow implementation and active integrity repair
+### Fixed-contract Shadow implementation and accepted integrity repair
 
 The implementation adds one pure `short_vol_underwriting` owner and one guarded
 `radar_runtime observe-shadow` composition. Offline deterministic tests cover Underwriting,
@@ -100,10 +104,13 @@ second client, queue, service, database, replay calculator, third-party dependen
 change. No production-public run, private/account access, Candidate, Entry, Position, Outcome, or
 business evidence was created while accepting the implementation. The later single public attempt
 proved that the offline fixtures had substituted a canonical hash for the real composite Radar
-episode identity. The missing Radar summary is honest process-failure semantics, not a second
-implementation gap. The accepted earlier repair still makes the downstream
-writer/current reader/complete reader reject malformed or incomplete attempt evidence after
-identity recomputation; the active task now repairs only the newly proven identity mismatch.
+episode identity. Exact acceptance tip `6eaaddfecf4c59a19c8029682a80fc52b7896a64` repairs that
+boundary using the real `EpisodeTracker` producer path and preserves the existing
+`PROCESS_FAILURE` / `FATAL_EVIDENCE_INTEGRITY` terminal, current and complete downstream readers,
+both conservation summaries, no-retry behavior, and the absence of a Radar failure summary. The
+missing Radar summary remains honest process-failure semantics, not a second implementation gap.
+The accepted earlier writer repair still makes the downstream writer/current reader/complete reader
+reject malformed or incomplete attempt evidence after identity recomputation.
 
 The two downstream contracts retain their freeze-time
 `CONTRACT_FROZEN_RUNTIME_NOT_IMPLEMENTED` / `RUNTIME_NOT_IMPLEMENTED` labels byte-for-byte. Those
@@ -166,12 +173,13 @@ or authority to run it.
 ## Root blocker
 
 The Underwriting, Shadow-admission, Position, Shadow Outcome, rejected-counterfactual, aligned
-`NO_TRADE`, and forward-cohort semantics and exact three-Policy chain remain frozen. The root
-blocker is the live-proven mismatch between the exact accepted upstream Radar episode identity and
-the downstream canonical-only validator. The active implementation task must repair that one
-existing-contract path, retain the current legal downstream failure terminal and partial-Radar
-failure semantics, and pass exact-commit independent acceptance without any market command. A green
-repair still does not authorize another forward interval.
+`NO_TRADE`, and forward-cohort semantics and exact three-Policy chain remain frozen. The proven
+implementation-integrity blocker is closed at exact tip
+`6eaaddfecf4c59a19c8029682a80fc52b7896a64`. The remaining blocker before any fresh forward
+evidence is authority, not code: a new explicit `EVIDENCE_ONLY` task, separate live-run
+authorization, a new manifest, and new empty external paths. The consumed failed interval remains
+`INCOMPLETE`, `NOT_ACCEPTED`, and `NOT_EVALUABLE`; implementation acceptance does not complete or
+relabel it.
 
 The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
 the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
@@ -244,8 +252,8 @@ profitability, or fill evidence.
 
 ## Queued sequence — not authorized
 
-Only `SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY` is active, and it authorizes offline
-implementation repair only. The following successor closures remain queued and unauthorized:
+No product-capability task is active. The following successor closures remain queued and
+unauthorized:
 
 1. **Fresh production-public Shadow evidence:** requires an independently accepted repair, a new
    explicit `EVIDENCE_ONLY` task, separate live-run authorization, a new manifest, and new empty
@@ -255,8 +263,8 @@ implementation repair only. The following successor closures remain queued and u
 3. **Promotion and execution:** authorize separately after independent qualification. Account,
    capital, order, and fill authority remain distinct.
 
-A queued product-capability closure is not active. Exactly one may replace the current
-implementation task only by an explicitly approved change after its prerequisite is accepted.
+A queued product-capability closure is not active. Exactly one may become active only by an
+explicitly approved authority change after its prerequisite is accepted.
 
 ## Forbidden under the current boundary
 

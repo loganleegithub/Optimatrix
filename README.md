@@ -8,8 +8,9 @@ production-public Shadow only: no private API, account, margin, order, fill, or 
 
 The top implemented capability is `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`: one guarded
 production-public Radar runtime and its `observe` command. The fixed-contract public Shadow
-implementation is separately `LIVE_INTEGRITY_DEFECT_REPAIR_REQUIRED`. Its single authorized
-production-public attempt is consumed and failed; `observe-shadow` is not currently authorized.
+implementation is separately `IMPLEMENTATION_ACCEPTED_EVIDENCE_NOT_ACCEPTED`. Its single authorized
+production-public attempt is consumed and failed; `observe-shadow` is not currently authorized and
+no product-capability task is active.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
@@ -20,9 +21,9 @@ provides the pure
 Underwriting, Candidate/admission, Shadow Entry, Position, close-opportunity, Outcome,
 rejected-counterfactual, aligned-pair, conservation, and strict evidence path. Exact repair commit
 `6207d59763e1aab7c455854169cd9dde6b0f940f` independently closed the writer/current/complete-reader
-attempt-integrity gap. The sole active closure is now
-`SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`: an offline repair of the real Radar episode-identity
-boundary while preserving the existing failure terminal. Exact candidate
+attempt-integrity gap. Exact implementation-acceptance tip
+`6eaaddfecf4c59a19c8029682a80fc52b7896a64` repairs the real Radar episode-identity boundary and
+preserves the existing failure terminal. Exact candidate
 `4b225ee1f199523fb052611d84612ec75c7abf78` exited `1` after five anomaly artifacts and a fatal
 Underwriting identity error. Its downstream failure summaries are complete and conserved with zero
 persisted Candidate/Entry/Position/Outcome counts, but the Radar run summary is absent; the full
@@ -81,9 +82,9 @@ It also implements Candidate invalidation and the strictly later full-quantity c
 The implemented Outcome/cohort reducer follows the frozen causal-first counterfactual exit and
 terminal `MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one bounded
 rejected counterfactual per slot, cohort-aligned `NO_TRADE`, exact public-quote PnL equations, and
-honest conservation/null denominators. A public quote remains not a fill. The runtime was
-unauthorized before the consumed evidence attempt; the current active repair task authorizes
-offline implementation work only, and no live invocation or trading capability follows.
+honest conservation/null denominators. A public quote remains not a fill. The consumed attempt did
+not establish production-public Shadow evidence, and accepted offline repair authorizes no live
+invocation or trading capability.
 
 ## Authority
 
@@ -132,9 +133,8 @@ The guarded `python -m radar_runtime observe` command is the public-only runtime
 evidence directory and preserves clean-stop and strict-validation behavior. The accepted Smoke and
 Soak establish only their exact pre-bound observation windows; they do not authorize persistent
 service deployment, private/account access, orders, fills, capital, execution, or any queued
-product closure. `python -m radar_runtime observe-shadow` remains implemented, but the active
-`IMPLEMENTATION` task permits only offline tests for the proven identity mismatch and regression
-checks for the existing legal downstream failure terminal.
+product closure. `python -m radar_runtime observe-shadow` remains implemented, but no active task
+authorizes invoking it.
 
 The failed manifest, evidence directories, log, and terminal record are sealed and cannot be
 edited, deleted, completed retroactively, migrated, relabelled, or reused. A future live attempt
