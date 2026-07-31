@@ -1,0 +1,50 @@
+{
+  "policy_schema_version": 3,
+  "policy_family": "POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE",
+  "target_base_quantity_btc": 0.1,
+  "runtime_limits": {
+    "heartbeat_interval_seconds": 30,
+    "session_liveness_deadline_ms": 90000,
+    "rpc_deadline_ms": 30000,
+    "clock_refresh_interval_ms": 15000,
+    "clock_stale_deadline_ms": 45000,
+    "index_source_stale_deadline_ms": 90000,
+    "ticker_source_stale_deadline_ms": 300000,
+    "notification_queue_lag_deadline_ms": 5000,
+    "time_boundary_poll_interval_ms": 1000
+  },
+  "tte_bands": [
+    {
+      "band_id": "operational-soak-30m-to-72h",
+      "lower_bound_minutes": 30,
+      "upper_bound_minutes": 4320,
+      "lookbacks_minutes": [
+        1
+      ],
+      "lookback_weights": [
+        1
+      ],
+      "annualized_variance_floor": 0.01,
+      "option_rules": {
+        "call": {
+          "abs_delta_min": 0,
+          "abs_delta_max": 1,
+          "activation_ratio": 1.2,
+          "clear_ratio": 0.9,
+          "activation_observation_count": 2,
+          "clear_observation_count": 2,
+          "minimum_separation_ms": 1000
+        },
+        "put": {
+          "abs_delta_min": 0,
+          "abs_delta_max": 1,
+          "activation_ratio": 1.2,
+          "clear_ratio": 0.9,
+          "activation_observation_count": 2,
+          "clear_observation_count": 2,
+          "minimum_separation_ms": 1000
+        }
+      }
+    }
+  ]
+}

@@ -17,6 +17,7 @@ from options_domain import (
     monitor_applicability,
     parse_combo_instrument,
     parse_option_instrument,
+    parse_option_instrument_fact,
 )
 from options_domain.quotes import walk_target_depth
 
@@ -59,6 +60,24 @@ def test_option_parser_tolerates_extra_but_rejects_missing_consumed_field(
     amount_unknown = parse_option_instrument(payload)
     assert amount_unknown is not None
     assert amount_unknown.amount is None
+
+
+def test_option_parser_preserves_public_taker_commission_without_defaulting(
+    option_payload_factory: OptionPayloadFactory,
+) -> None:
+    payload = option_payload_factory()
+    without_commission = parse_option_instrument(payload)
+    assert without_commission is not None
+    assert without_commission.taker_commission is None
+
+    payload["taker_commission"] = "0.0003"
+    with_commission = parse_option_instrument(payload)
+    assert with_commission is not None
+    assert with_commission.taker_commission == Decimal("0.0003")
+
+    payload["taker_commission"] = -0.0001
+    with pytest.raises(SourceDataError, match="taker_commission"):
+        parse_option_instrument(payload)
 
 
 @pytest.mark.parametrize(
@@ -113,6 +132,30 @@ def test_option_parser_excludes_final_lifecycle_states(
     payload["state"] = state.value
 
     assert parse_option_instrument(payload) is None
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        InstrumentLifecycleState.DELIVERED,
+        InstrumentLifecycleState.ARCHIVIZED,
+    ],
+)
+def test_downstream_option_fact_parser_preserves_natural_terminal_witness(
+    option_payload_factory: OptionPayloadFactory,
+    state: InstrumentLifecycleState,
+) -> None:
+    payload = option_payload_factory()
+    payload["state"] = state.value
+    payload["is_active"] = False
+    payload["taker_commission"] = "0.0003"
+
+    witness = parse_option_instrument_fact(payload)
+
+    assert witness is not None
+    assert witness.lifecycle_state is state
+    assert not witness.is_active
+    assert witness.taker_commission == Decimal("0.0003")
 
 
 def test_option_parser_rejects_unknown_lifecycle_state(

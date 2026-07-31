@@ -6,20 +6,60 @@ production-public Shadow only: no private API, account, margin, order, fill, or 
 
 ## Current truth
 
-The implemented capability is `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`: one guarded
-production-public Radar runtime and its `observe` command. It contains no bounded market-capture
-job, saved-data scanner, replay closure, fixed holding-period Decision, Shadow position, or
-Outcome engine.
+The top implemented capability is `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`: one guarded
+production-public Radar runtime and its `observe` command. The fixed-contract public Shadow
+implementation is separately `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`. The two-layer
+engineering closure is consumed and closed; no product-capability task or live command is active.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
 [`SHORT_VOL_UNDERWRITING_POSITION`](docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md) and
 [`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
-contracts are frozen, but no successor product-capability task is active and no Underwriting,
-Candidate, Shadow Entry, Position, close-opportunity, Outcome, rejected-counterfactual, or forward
-cohort runtime exists. Establishment means the bounded public Radar met its frozen reachability and
-operating predicates; it does not mean the Radar is persistently deployed, always running,
-indefinitely stable, profitable, or authorized to trade.
+contracts are frozen. The fixed-contract implementation binds one exact three-Policy chain and
+provides the pure
+Underwriting, Candidate/admission, Shadow Entry, Position, close-opportunity, Outcome,
+rejected-counterfactual, aligned-pair, conservation, and strict evidence path. Exact repair commit
+`6207d59763e1aab7c455854169cd9dde6b0f940f` independently closed the writer/current/complete-reader
+attempt-integrity gap. Exact implementation-acceptance tip
+`6eaaddfecf4c59a19c8029682a80fc52b7896a64` repairs the real Radar episode-identity boundary and
+preserves the existing failure terminal. The earlier exact candidate
+`4b225ee1f199523fb052611d84612ec75c7abf78` exited `1` after five anomaly artifacts and a fatal
+Underwriting identity error. Its downstream failure summaries are complete and conserved with zero
+persisted Candidate/Entry/Position/Outcome counts, but the Radar run summary is absent; the full
+forward result is `INCOMPLETE`, `NOT_ACCEPTED`, and business-`NOT_EVALUABLE`. Radar writes its run
+summary only on clean stop, so partial Radar evidence is truthful on this process failure rather
+than a second implementation defect. That attempt remains sealed and cannot be retried or reused.
+
+The later activation commit `21af26c71ef625889d29c4d7e00ebeae92f8a15d`, tree
+`11b8a42d920e6be9eff7a56f45fd3c02c8ef6bed`, passed the deterministic composed chain and one
+result-independent production-public smoke. The process used a 14-minute enrollment cutoff and
+29-minute final-stop trigger, exited `0` at `PLANNED_CLEAN_STOP`, and realized `1,739,999` ms from
+runtime-start fact to terminal. Strict Radar/current/complete readers passed; both downstream
+conservation summaries are `MET`. Real Deribit coverage was non-vacuous, and all 135 real anomaly
+activation sequences reached the Underwriting-availability path without the historical identity
+fatal. Actual RPCs were public-only, with zero RPC errors, reconnects, private/account/order/fill/
+capital activity, post-terminal retries, or second evidence invocations.
+
+The accepted result is exact:
+
+```text
+engineering_end_to_end = PASS
+production_public_integration = PASS
+natural_shadow_opportunity = NOT_OBSERVED
+```
+
+Candidate, Shadow Entry, admitted Outcome, and rejected Outcome counts were all zero. That natural
+`NOT_OBSERVED` is not an engineering failure and does not establish opportunity frequency. The
+terminal record is
+`/Users/logan/Optimatrix-shadow/receipts/public-shadow-engineering-smoke-002-terminal-record.json`,
+SHA-256 `a4b7a66c51133cef08a4d0420943b6fe5464a78cc10d5a8f2169c0c9d9d4db3c`.
+No private/account/order/fill/capital capability, replay, Policy change, qualification, retry,
+persistent service, or further live invocation is authorized.
+Establishment means the bounded public Radar met its frozen reachability and operating predicates;
+it does not mean the Radar is persistently deployed, always running, indefinitely stable,
+profitable, or authorized to trade. Offline Shadow implementation or evidence-integrity
+acceptance does not prove a natural Candidate, Entry, Position, Outcome, forward cohort, Policy
+quality, or business success.
 
 ## Intended first business flow
 
@@ -29,6 +69,8 @@ live Deribit BTC-USDC 0–3DTE option-chain changes
 → independent SHORT_VOL_ANOMALY_EVENT
 → while active, independent official atomic-combo availability
 → optional PUBLIC_ATOMIC_QUOTE_EVENT
+→ fixed-contract Underwriting and deterministic Shadow admission
+→ post-Entry Position, causal-first Outcome, and aligned forward-cohort evidence
 ```
 
 Market ingestion, bounded in-memory chain maintenance, and Radar notification are one continuous
@@ -41,7 +83,7 @@ The three layers remain distinct:
 - existing official atomic combo:
   `NOT_EVALUATED | UNKNOWN | NO_ACTIVE_COMBO | NO_TARGET_SIZE_CREDIT_QUOTE |
   PUBLIC_ATOMIC_QUOTE_AVAILABLE`;
-- future maker/order/fill: not implemented or authorized.
+- maker/order/fill: not implemented or authorized.
 
 An anomaly or public atomic quote is not Candidate, Shadow Entry, fill, Outcome, or proof of an
 edge. Component-leg prices cannot substitute for an official combo.
@@ -54,17 +96,18 @@ better forecasting or profitability.
 
 ## Later position and Outcome behavior
 
-Neither a future `SHADOW_ENTRY` nor a filled entry chooses a planned holding duration. The accepted
-Underwriting/Position contract freezes how a future Position Policy evaluates current remaining
+Neither a Shadow `SHADOW_ENTRY` nor a future filled entry chooses a planned holding duration. The
+implemented Underwriting/Position owner evaluates current remaining
 premium, short-leg risk, path, volatility state, liquidity, executable close debit, fee reserves,
-and hard boundaries before returning `HOLD | CLOSE | UNKNOWN`. It also freezes Candidate
-invalidation and the strictly later full-quantity close opportunity.
+and hard boundaries before returning `HOLD | CLOSE | UNKNOWN` exactly as frozen by the contract.
+It also implements Candidate invalidation and the strictly later full-quantity close opportunity.
 
-The accepted Outcome/cohort contract freezes causal-first counterfactual exit selection, terminal
-`MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one bounded
+The implemented Outcome/cohort reducer follows the frozen causal-first counterfactual exit and
+terminal `MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one bounded
 rejected counterfactual per slot, cohort-aligned `NO_TRADE`, exact public-quote PnL equations, and
-honest conservation/null denominators. A public quote remains not a fill, and no runtime behavior
-is implemented or authorized.
+honest conservation/null denominators. A public quote remains not a fill. The consumed attempt did
+not establish production-public Shadow evidence. The later exact bounded smoke established only
+the two engineering layers recorded above; no trading capability follows from it.
 
 ## Authority
 
@@ -86,10 +129,11 @@ defines the accepted downstream Outcome and forward-cohort semantics.
   quote arithmetic
 - `short_vol_radar`: detector episodes, official atomic availability, and minimal event
   projection
+- `short_vol_underwriting`: pure fixed-contract Underwriting, admission, Position, Outcome,
+  conservation, and downstream evidence owner
 - `radar_runtime`: guarded composition of the continuous production-public process
 
-There is no `short_vol_underwriting` package yet and no compatibility package or alias for the
-removed pipeline.
+There is no compatibility package or alias for the removed pipeline.
 
 The current bounded runtime separates per-band immutable index-baseline availability from
 generation-global successor publication. Normal time/watermark publication pending keeps an
@@ -112,4 +156,11 @@ The guarded `python -m radar_runtime observe` command is the public-only runtime
 evidence directory and preserves clean-stop and strict-validation behavior. The accepted Smoke and
 Soak establish only their exact pre-bound observation windows; they do not authorize persistent
 service deployment, private/account access, orders, fills, capital, execution, or any queued
-product closure.
+product closure. `python -m radar_runtime observe-shadow` remains guarded and may be invoked only
+under a separately active exact task. No such task is active now.
+
+Both the failed attempt and the accepted smoke's manifest, evidence directories, log, and terminal
+record are sealed and cannot be edited, deleted, completed retroactively, migrated, relabelled,
+retried, or reused. A future long-running sample requires separate explicit authorization and
+cannot carry this bounded interval forward as evidence of Policy quality, opportunity frequency,
+or PnL.

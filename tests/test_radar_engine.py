@@ -95,6 +95,81 @@ def test_ticker_forward_basis_must_match_the_option_expiry_future_or_index() -> 
             parse_ticker({**common, "underlying_index": invalid_basis}, instrument_name)
 
 
+def test_ticker_preserves_official_signed_delta_and_normalizes_mark_iv() -> None:
+    instrument_name = "BTC_USDC-27SEP24-110000-C"
+    common = {
+        "instrument_name": instrument_name,
+        "timestamp": 1,
+        "underlying_price": 100,
+        "underlying_index": "index_price",
+    }
+
+    ticker = parse_ticker(
+        {
+            **common,
+            "greeks": {"delta": "-0.375"},
+            "mark_iv": "52.125",
+        },
+        instrument_name,
+    )
+
+    assert ticker.signed_delta == Decimal("-0.375")
+    assert ticker.mark_iv_fraction == Decimal("0.52125")
+    missing = parse_ticker(common, instrument_name)
+    assert missing.signed_delta is None
+    assert missing.mark_iv_fraction is None
+
+
+@pytest.mark.parametrize(
+    "delta",
+    [True, "malformed", "NaN", "Infinity", "-Infinity", "1.0000001", "-1.0000001"],
+)
+def test_ticker_invalid_official_delta_is_unknown_without_hiding_valid_mark_iv(
+    delta: object,
+) -> None:
+    instrument_name = "BTC_USDC-27SEP24-110000-C"
+
+    ticker = parse_ticker(
+        {
+            "instrument_name": instrument_name,
+            "timestamp": 1,
+            "underlying_price": 100,
+            "underlying_index": "index_price",
+            "greeks": {"delta": delta},
+            "mark_iv": "50",
+        },
+        instrument_name,
+    )
+
+    assert ticker.signed_delta is None
+    assert ticker.mark_iv_fraction == Decimal("0.5")
+
+
+@pytest.mark.parametrize(
+    "mark_iv",
+    [True, "malformed", "NaN", "Infinity", "-Infinity", "-0.0001"],
+)
+def test_ticker_invalid_mark_iv_is_unknown_without_hiding_valid_delta(
+    mark_iv: object,
+) -> None:
+    instrument_name = "BTC_USDC-27SEP24-110000-C"
+
+    ticker = parse_ticker(
+        {
+            "instrument_name": instrument_name,
+            "timestamp": 1,
+            "underlying_price": 100,
+            "underlying_index": "index_price",
+            "greeks": {"delta": "-0.25"},
+            "mark_iv": mark_iv,
+        },
+        instrument_name,
+    )
+
+    assert ticker.signed_delta == Decimal("-0.25")
+    assert ticker.mark_iv_fraction is None
+
+
 def test_full_baseline_iv_delta_richness_path_can_activate(
     policy_factory: PolicyFactory,
 ) -> None:
@@ -365,6 +440,22 @@ def test_observation_identity_ignores_ask_and_depth_beyond_target(
 
     assert first == after_unconsumed_change
     assert first == after_forward_basis_label_change
+
+    after_unconsumed_risk_projection_change = radar_module.detector_observation_identity(
+        policy=policy,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        option_book=book,
+        ticker=TickerState(
+            Decimal(100),
+            "index_price",
+            3,
+            signed_delta=Decimal("-0.75"),
+            mark_iv_fraction=Decimal("0.8"),
+        ),
+        baseline_identity=baseline_identity,
+    )
+    assert first == after_unconsumed_risk_projection_change
 
 
 def test_known_liquidity_and_otm_failures_short_circuit_missing_inputs(

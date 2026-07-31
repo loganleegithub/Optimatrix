@@ -23,18 +23,26 @@ INTERNAL_PACKAGES = {
     "market_monitor",
     "options_domain",
     "short_vol_radar",
+    "short_vol_underwriting",
     "radar_runtime",
 }
 PACKAGE_ROOTS = {
     "market_monitor": ROOT / "packages/market_monitor/src/market_monitor",
     "options_domain": ROOT / "packages/options_domain/src/options_domain",
     "short_vol_radar": ROOT / "packages/short_vol_radar/src/short_vol_radar",
+    "short_vol_underwriting": (ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting"),
     "radar_runtime": ROOT / "apps/radar_runtime/src/radar_runtime",
 }
 ALLOWED_IMPORTS = {
     "market_monitor": {"market_monitor"},
     "options_domain": {"market_monitor", "options_domain"},
     "short_vol_radar": {"market_monitor", "options_domain", "short_vol_radar"},
+    "short_vol_underwriting": {
+        "market_monitor",
+        "options_domain",
+        "short_vol_radar",
+        "short_vol_underwriting",
+    },
     "radar_runtime": INTERNAL_PACKAGES,
 }
 
@@ -183,28 +191,260 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_closes_outcome_prerequisite_without_runtime() -> None:
+def test_current_stage_records_accepted_two_layer_shadow_engineering_evidence() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
     assert current.count(marker) == 1
-    assert "`NONE` — no successor product-capability closure is active" in flat
+    assert f"{marker} `NONE`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
+    assert (
+        "**Fixed-contract public Shadow runtime:** `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`"
+    ) in flat
+    assert "**Evidence gate:** `CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
+    assert current.count("**Evidence gate:**") == 1
+    assert current.count("**Live commands:**") == 1
+    assert "required fresh `EVIDENCE_ONLY` authority is now" not in current
+    assert "acceptance remains pending its exact activation publication" not in current
+    assert "No `EVIDENCE_ONLY` authority, live command, retry" in flat
     assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
-    assert "absence of a separately activated fixed-contract runtime" in flat
-    assert "no downstream runtime or live command is authorized" in flat
+    assert "4b225ee1f199523fb052611d84612ec75c7abf78" in current
+    assert "9e53c6233949348c5805e96ea1eefb5998bf4c49" in current
+    assert "CONSUMED_FAILED_NO_RETRY" in current
+    assert "PROCESS_FAILURE" in current
+    assert "FATAL_EVIDENCE_INTEGRITY" in current
+    assert "Underwriting semantic identity must be sha256:<64 lowercase hex>" in current
+    assert "Five anomaly artifacts" in flat
+    assert "downstream complete-reader and conservation checks passed" in flat
+    assert "Radar run summary is absent" in flat
+    assert "overall forward evidence remains `INCOMPLETE` and `NOT_ACCEPTED`" in flat
+    assert "The failed attempt and the later accepted smoke are both consumed and sealed" in flat
+    assert "6eaaddfecf4c59a19c8029682a80fc52b7896a64" in current
+    assert "f9ce7f98623ed7249160ee29c940c9c026fc4173" in current
+    assert "21af26c71ef625889d29c4d7e00ebeae92f8a15d" in current
+    assert "11b8a42d920e6be9eff7a56f45fd3c02c8ef6bed" in current
+    assert "No product-capability task is active" in current
+    assert (
+        "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json"
+    ) in current
+    assert "1090b3d9b643c621721e59552fc0ca1e7b6a7616d9b6ec136c0660c936d62e45" in current
+    assert "labels record the state when the immutable contract content was accepted" in flat
     assert "SHORT_VOL_PUBLIC_SHADOW_TERMINAL_GOAL_DELEGATION" in current
     assert "## Queued sequence — not authorized" in current
+    assert "engineering_end_to_end = PASS" in current
+    assert "production_public_integration = PASS" in current
+    assert "natural_shadow_opportunity = NOT_OBSERVED" in current
+    assert "`1,739,999` ms" in current
+    assert "135 real anomaly episode identities" in current
+    assert "271 objects" in current
+    assert "zero partition" in current
+    assert "Private/account/order/fill/capital" in flat
+    assert (
+        "/Users/logan/Optimatrix-shadow/receipts/"
+        "public-shadow-engineering-smoke-002-terminal-record.json"
+    ) in current
+    assert "a4b7a66c51133cef08a4d0420943b6fe5464a78cc10d5a8f2169c0c9d9d4db3c" in current
+    assert "c7d8eb4e6bdc9953716892376c26935089d384e5460aa11073544b7521b96cf3" in current
 
 
-def test_completed_outcome_contract_leaves_no_active_task() -> None:
-    task = ROOT / "tasks/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT_CONTRACT.md"
-    assert not task.exists()
+def test_two_layer_shadow_engineering_task_is_closed_without_an_active_task() -> None:
+    assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
+    assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").exists()
+    assert not (ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md").exists()
     assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    assert "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT_CONTRACT" not in current
+    assert "**Sole authorized next product-capability closure:**\n`NONE`" in current
+
+
+def test_shadow_attempt_integrity_acceptance_preserves_failure_scope_and_identities() -> None:
+    current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
+    flat = " ".join(current.split())
+    for invariant in (
+        "**Live commands:** `FORBIDDEN`",
+        "CONSUMED_FAILED_NO_RETRY",
+        "Underwriting semantic identity must be sha256:<64 lowercase hex>",
+        "Radar run summary",
+        "relabelled, retried, or reused",
+        "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json",
+        "1090b3d9b643c621721e59552fc0ca1e7b6a7616d9b6ec136c0660c936d62e45",
+        "6eaaddfecf4c59a19c8029682a80fc52b7896a64",
+        "f9ce7f98623ed7249160ee29c940c9c026fc4173",
+        "74eaa501db193a8db09baa3f5a449dc8a28f3d7b",
+        "later accepted smoke used distinct paths",
+        "Private/account/order/fill/capital",
+    ):
+        assert invariant in flat
+
+
+def test_fixed_three_policy_chain_and_implementation_boundary_are_exact() -> None:
+    radar_path = ROOT / "policies/short-vol-fixed-public-shadow-radar.json"
+    underwriting_path = ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json"
+    position_path = ROOT / "policies/short-vol-fixed-public-shadow-position.json"
+    policy_paths = (radar_path, underwriting_path, position_path)
+
+    assert sorted(
+        path.relative_to(ROOT).as_posix() for path in (ROOT / "policies").rglob("*.json")
+    ) == [
+        "policies/short-vol-fixed-public-shadow-position.json",
+        "policies/short-vol-fixed-public-shadow-radar.json",
+        "policies/short-vol-fixed-public-shadow-underwriting.json",
+    ]
+    assert (ROOT / "packages/short_vol_underwriting").is_dir()
+    assert "short_vol_underwriting" in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    declared_policy_digests = (
+        "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4",
+        "sha256:be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af",
+        "sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439",
+    )
+    declared_contract_digests = (
+        "sha256:b9733ad0c90837338b88fb5b6eb66ad8eed448cce6372a3f527988395087b3fe",
+        "sha256:9cbaecf57fb1db0dedf782a4ab002b655e43319a1ad7c5880db3d7b4682d4b03",
+        "sha256:61a032fe0fe265d66a38bcbb1a3c8498409664fedbda2c8bd0a245180581a695",
+    )
+
+    radar_bytes = radar_path.read_bytes()
+    assert len(radar_bytes) == 1405
+    assert hashlib.sha256(radar_bytes).hexdigest() == (
+        declared_policy_digests[0].removeprefix("sha256:")
+    )
+    radar = json.loads(radar_bytes)
+    assert radar_bytes == (json.dumps(radar, ensure_ascii=False, indent=2).encode("utf-8") + b"\n")
+    assert radar["policy_schema_version"] == 3
+    assert radar["policy_family"] == "POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE"
+    assert radar["target_base_quantity_btc"] == 0.1
+
+    contract = (ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md").read_text(
+        encoding="utf-8"
+    )
+    key_blocks = re.findall(
+        r"The exact top-level key set is:\n\n```text\n(.*?)\n```",
+        contract,
+        flags=re.DOTALL,
+    )
+    assert len(key_blocks) == 2
+    underwriting_keys = tuple(key_blocks[0].splitlines())
+    position_keys = tuple(key_blocks[1].splitlines())
+    assert len(underwriting_keys) == 24
+    assert len(position_keys) == 23
+
+    underwriting_bytes = underwriting_path.read_bytes()
+    position_bytes = position_path.read_bytes()
+    assert hashlib.sha256(underwriting_bytes).hexdigest() == (
+        declared_policy_digests[1].removeprefix("sha256:")
+    )
+    assert hashlib.sha256(position_bytes).hexdigest() == (
+        declared_policy_digests[2].removeprefix("sha256:")
+    )
+    underwriting = json.loads(underwriting_bytes)
+    position = json.loads(position_bytes)
+    assert tuple(underwriting) == underwriting_keys
+    assert tuple(position) == position_keys
+    assert underwriting_bytes == (
+        json.dumps(underwriting, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
+    )
+    assert position_bytes == (
+        json.dumps(position, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
+    )
+
+    expected_budgets = {
+        "clock_currentness_budget_ms": 45000,
+        "platform_currentness_budget_ms": 90000,
+        "combo_snapshot_send_budget_ms": 30000,
+        "combo_snapshot_response_budget_ms": 30000,
+        "index_currentness_budget_ms": 90000,
+        "option_ticker_currentness_budget_ms": 300000,
+    }
+    fee_metadata = (
+        "TAKER",
+        "https://support.deribit.com/hc/en-us/articles/25944746248989-Fees",
+        "2026-07-30T10:47:09Z",
+        "FEE_TIER_CHANGES_EFFECTIVE_2026-08-01",
+        0.0003,
+    )
+    assert underwriting["policy_semantic_name"] == ("SHORT_VOL_PUBLIC_SHADOW_UNDERWRITING_POLICY")
+    assert underwriting["radar_policy_identity"] == (
+        "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
+    )
+    assert position["policy_semantic_name"] == "SHORT_VOL_PUBLIC_SHADOW_POSITION_POLICY"
+    assert position["underwriting_policy_identity"] == (
+        f"sha256:{hashlib.sha256(underwriting_bytes).hexdigest()}"
+    )
+    assert (
+        underwriting["target_base_quantity_btc"]
+        == radar["target_base_quantity_btc"]
+        == (position["target_base_quantity_btc"])
+    )
+    for key, value in expected_budgets.items():
+        assert underwriting[key] == position[key] == value
+        assert type(underwriting[key]) is int
+        assert type(position[key]) is int
+    for policy in (underwriting, position):
+        assert (
+            policy["fee_role"],
+            policy["fee_schedule_source_url"],
+            policy["fee_schedule_retrieved_at_utc"],
+            policy["fee_schedule_effective_label"],
+            policy["fee_rate_index_fraction"],
+        ) == fee_metadata
+        for key, value in policy.items():
+            if key not in {
+                "policy_semantic_name",
+                "radar_policy_identity",
+                "underwriting_policy_identity",
+                "fee_role",
+                "fee_schedule_source_url",
+                "fee_schedule_retrieved_at_utc",
+                "fee_schedule_effective_label",
+            }:
+                assert type(value) in {int, float}
+
+    assert tuple(
+        underwriting[key]
+        for key in (
+            "path_risk_reserve_usdc",
+            "jump_risk_reserve_usdc",
+            "tail_risk_reserve_usdc",
+            "liquidity_cost_reserve_usdc",
+            "uncertainty_reserve_usdc",
+            "settlement_cost_reserve_usdc",
+        )
+    ) == (2, 2, 2, 2, 2, 2)
+    assert underwriting["maximum_underwriting_reserved_loss_usdc"] == 250
+    assert underwriting["minimum_net_entry_credit_usdc"] == 15
+    assert underwriting["minimum_net_credit_to_payoff_cap_fraction"] == 0.1
+    assert underwriting["maximum_entry_consumed_level_count"] == 10000
+    assert position["latest_exit_lead_ms"] == 1800000
+    assert position["maximum_projected_net_loss_usdc"] == 125
+    assert position["maximum_absolute_short_delta"] == 0.5
+    assert position["maximum_absolute_index_return_since_entry_fraction"] == 0.05
+    assert position["maximum_absolute_index_return_since_prior_evaluation_fraction"] == 0.01
+    assert position["maximum_short_mark_iv_increase_fraction"] == 0.15
+    assert position["maximum_close_consumed_level_count"] == 10000
+    assert position["minimum_take_profit_usdc"] == 10
+    assert position["maximum_remaining_premium_fraction"] == 0.5
+
+    for label in (
+        "POLICY_CHOICE_WITHOUT_PRIOR_OUTCOME_EVIDENCE",
+        "NON_QUALIFIED_FORWARD_OBSERVATION_BASELINE",
+    ):
+        assert all(label.encode("utf-8") not in path.read_bytes() for path in policy_paths)
+
+    radar_contract = ROOT / "docs/contracts/SHORT_VOL_RADAR.md"
+    underwriting_contract = ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md"
+    outcome_contract = ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md"
+    assert hashlib.sha256(radar_contract.read_bytes()).hexdigest() == (
+        declared_contract_digests[0].removeprefix("sha256:")
+    )
+    assert hashlib.sha256(underwriting_contract.read_bytes()).hexdigest() == (
+        declared_contract_digests[1].removeprefix("sha256:")
+    )
+    assert hashlib.sha256(outcome_contract.read_bytes()).hexdigest() == (
+        declared_contract_digests[2].removeprefix("sha256:")
+    )
 
 
 def test_underwriting_position_contract_freezes_public_economics_and_identity() -> None:
@@ -1600,7 +1840,7 @@ def test_outcome_contract_freezes_conservation_denominators_and_nulls() -> None:
     )
 
 
-def test_authority_defines_one_live_flow_and_two_frozen_downstream_contracts() -> None:
+def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contracts() -> None:
     constitution = (ROOT / "docs/authority/PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
     current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     architecture = (ROOT / "docs/authority/SYSTEM_ARCHITECTURE.md").read_text(encoding="utf-8")
@@ -1662,10 +1902,16 @@ def test_authority_defines_one_live_flow_and_two_frozen_downstream_contracts() -
         "`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`",
         "The two gates remain semantically independent",
         "does not prove indefinite uptime",
-        "not authorization for persistent service deployment",
+        "persistent service deployment unauthorized",
         "private/account data",
         "orders, fills, capital",
-        "no downstream runtime or live command is authorized",
+        "fixed-contract Shadow implementation adds",
+        "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
+        "`CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`",
+        "No product-capability task is active",
+        "Radar run summary is absent",
+        "one result-independent production-public process",
+        "natural_shadow_opportunity = NOT_OBSERVED",
     ):
         assert invariant in current_stage
 
@@ -1678,9 +1924,9 @@ def test_authority_defines_one_live_flow_and_two_frozen_downstream_contracts() -
         "NO_TARGET_SIZE_CREDIT_QUOTE",
         "first Radar closure intentionally creates no replay path",
         "no preselected holding duration",
-        "Contracted downstream Underwriting, Position, Outcome, and cohort boundary",
-        "pure downstream owner named `short_vol_underwriting`",
-        "No current package implements or consumes either boundary",
+        "### `short_vol_underwriting`",
+        "The pure downstream owner `short_vol_underwriting`",
+        "permission to run those downstream arrows comes only from `CURRENT_STAGE`",
     ):
         assert invariant in architecture
 
@@ -1762,11 +2008,18 @@ def test_authority_defines_one_live_flow_and_two_frozen_downstream_contracts() -
         "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`",
         "SHORT_VOL_UNDERWRITING_POSITION",
         "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT",
-        "no successor product-capability task is active",
-        "no Underwriting, Candidate, Shadow Entry, Position",
-        "future maker/order/fill",
+        "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
+        "`python -m radar_runtime observe-shadow`",
+        "two-layer engineering closure is consumed and closed",
+        "Exact repair commit",
+        "evidence-integrity acceptance does not prove",
+        "maker/order/fill",
+        "production_public_integration = PASS",
+        "natural_shadow_opportunity = NOT_OBSERVED",
     ):
         assert invariant in readme
+    assert "effective-time" not in readme
+    assert "2026-08-01T00:00:00Z" not in readme
 
     for invariant in (
         "**Status:** ACTIVE IMPLEMENTATION CONTRACT",
@@ -1856,6 +2109,12 @@ def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
         if "**Task kind:** `AUTHORITY_ONLY`" in text:
             assert "**Runtime implementation:** FORBIDDEN" in text
             assert "**Live commands:** FORBIDDEN" in text
+        if "**Task kind:** `IMPLEMENTATION`" in text:
+            assert "**Runtime implementation:** REQUIRED" in text
+            assert "**Live commands:** FORBIDDEN" in text
+        if "**Task kind:** `EVIDENCE_ONLY`" in text:
+            assert "**Runtime implementation:** FORBIDDEN" in text
+            assert "**Live commands:** REQUIRED" in text
         for declaration in (
             "**Market/Decision input contract change:**",
             "**Decision Policy change:**",

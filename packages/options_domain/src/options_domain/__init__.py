@@ -15,6 +15,7 @@ from options_domain.instruments import (
     monitor_applicability,
     parse_combo_instrument,
     parse_option_instrument,
+    parse_option_instrument_fact,
 )
 from options_domain.quotes import AmountCheck, AmountState, DepthWalk, check_target_amount
 
@@ -37,4 +38,5 @@ __all__ = [
     "monitor_applicability",
     "parse_combo_instrument",
     "parse_option_instrument",
+    "parse_option_instrument_fact",
 ]

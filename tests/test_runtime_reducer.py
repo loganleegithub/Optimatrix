@@ -2054,7 +2054,7 @@ def test_send_cancel_and_failure_enter_reducer_as_terminal_control_events(
     assert reducer.diagnostics.rpc_error_count[command.method] == 1
 
 
-def test_response_racing_send_receipt_is_held_then_reduced_once(
+def test_response_preceding_send_receipt_is_orphan_and_cannot_complete_request(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
@@ -2090,9 +2090,24 @@ def test_response_racing_send_receipt_is_held_then_reduced_once(
     )
 
     lifecycle = reducer._rpc_lifecycles[command.request_id]
+    assert lifecycle.state is runtime_module.RpcState.SENT
+    assert reducer.diagnostics.rpc_success_count[command.method] == 0
+    assert reducer.diagnostics.rpc_orphan_late_wire_count == 1
+    assert commands == ()
+
+    commands = reducer.reduce(
+        envelope(
+            {"id": command.request_id, "result": "ok"},
+            seq=3,
+            received_ms=1_270,
+        ),
+        processed_monotonic_ms=1_270,
+    )
+
+    lifecycle = reducer._rpc_lifecycles[command.request_id]
     assert lifecycle.state is runtime_module.RpcState.SUCCESS
     assert reducer.diagnostics.rpc_success_count[command.method] == 1
-    assert reducer.diagnostics.rpc_latency_sum[command.method] == 0
+    assert reducer.diagnostics.rpc_latency_sum[command.method] == 10
     assert only(commands, RpcPurpose.SUBSCRIBE_CHANNELS)
 
 
@@ -2321,7 +2336,7 @@ def test_pre_send_deadline_terminal_summary_is_strictly_valid(
     assert row["pre_send_deadline_late_count"] == 1
 
 
-def test_nonheartbeat_response_race_commits_after_the_send_receipt_boundary(
+def test_nonheartbeat_pre_sent_response_is_orphan_and_later_response_keeps_its_boundary(
     tmp_path: Path,
     policy_factory: PolicyFactory,
     monkeypatch: pytest.MonkeyPatch,
@@ -2366,10 +2381,24 @@ def test_nonheartbeat_response_race_commits_after_the_send_receipt_boundary(
         processed_monotonic_ms=1_260,
     )
 
+    assert reducer.causal_seq == 0
+    assert captured == []
+    assert reducer._rpc_lifecycles[command.request_id].state is runtime_module.RpcState.SENT
+    assert reducer.diagnostics.rpc_orphan_late_wire_count == 1
+
+    reducer.reduce(
+        envelope(
+            {"id": command.request_id, "result": 1_000_000},
+            seq=3,
+            received_ms=1_270,
+        ),
+        processed_monotonic_ms=1_270,
+    )
+
     assert reducer.causal_seq == 1
     assert len(captured) == 1
-    assert captured[0].boundary == FactBoundary(1, 2, 1_260, 1)
-    assert reducer.diagnostics.rpc_latency_sum[command.method] == 0
+    assert captured[0].boundary == FactBoundary(1, 3, 1_270, 1)
+    assert reducer.diagnostics.rpc_latency_sum[command.method] == 10
 
 
 def test_send_cancellation_after_send_deadline_cannot_rewrite_terminal_state(
