@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -60,10 +61,12 @@ from short_vol_underwriting import (
     load_policy_chain,
     manifest_identity_bytes,
     ordered_candidate_invalidation,
-    read_complete_evidence,
     read_current_evidence,
 )
-from short_vol_underwriting.evidence import validate_downstream_object
+from short_vol_underwriting.evidence import (
+    _read_complete_evidence_with_git_reader,
+    validate_downstream_object,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 RADAR_POLICY_IDENTITY = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
@@ -75,6 +78,23 @@ UNDERWRITING_CONTRACT_DIGEST = (
     "sha256:9cbaecf57fb1db0dedf782a4ab002b655e43319a1ad7c5880db3d7b4682d4b03"
 )
 OUTCOME_CONTRACT_DIGEST = "sha256:61a032fe0fe265d66a38bcbb1a3c8498409664fedbda2c8bd0a245180581a695"
+
+
+def _fake_manifest_git_reader(repository: Path, arguments: Sequence[str]) -> bytes:
+    assert repository == ROOT
+    command = tuple(arguments)
+    if command == ("rev-parse", "--show-toplevel"):
+        return f"{ROOT}\n".encode()
+    if command == ("cat-file", "-e", f"{'a' * 40}^{{commit}}"):
+        return b""
+    if command == ("rev-parse", f"{'a' * 40}^{{tree}}"):
+        return f"{'d' * 40}\n".encode()
+    if command == ("cat-file", "-e", f"{'d' * 40}^{{tree}}"):
+        return b""
+    prefix = f"{'a' * 40}:"
+    if len(command) == 3 and command[:2] == ("cat-file", "blob") and command[2].startswith(prefix):
+        return (ROOT / command[2].removeprefix(prefix)).read_bytes()
+    raise AssertionError(f"unexpected Git object command: {command}")
 
 
 def _object(value: object) -> dict[str, object]:
@@ -331,15 +351,15 @@ def _position_subscription_witness(
     previous_change_id: int | None,
     snapshot_kind: str = "change",
     subscription_generation: int = 1,
+    canonical_combo_identity: str = "sha256:" + "3" * 64,
+    instrument_name: str = "BTC-TEST-COMBO",
 ) -> SubscriptionAdmissionRefreshWitness:
-    combo_identity = "sha256:" + "3" * 64
-    instrument_name = "BTC-TEST-COMBO"
     quote_identity = canonical_identity(
         "SubscriptionAdmissionRefreshSourceIdentity",
         boundary.runtime_identity,
         boundary.session_epoch,
         subscription_generation,
-        combo_identity,
+        canonical_combo_identity,
         snapshot_kind,
         previous_change_id,
         change_id,
@@ -349,7 +369,7 @@ def _position_subscription_witness(
     return SubscriptionAdmissionRefreshWitness(
         source_identity=quote_identity,
         boundary=boundary,
-        canonical_combo_identity=combo_identity,
+        canonical_combo_identity=canonical_combo_identity,
         instrument_name=instrument_name,
         change_id=change_id,
         source_timestamp_ms=2_000 + change_id,
@@ -409,6 +429,10 @@ def _position_facts(
         ),
         index_source=SourceFact(
             canonical_identity("TestIndexSourceIdentity", boundary.as_object()),
+            boundary,
+        ),
+        ticker_source=SourceFact(
+            canonical_identity("TestTickerSourceIdentity", boundary.as_object()),
             boundary,
         ),
         current_combo_subscription_witness=witness,
@@ -688,6 +712,94 @@ def test_entry_and_close_economics_preserve_signs_and_public_fee_reserve() -> No
     assert close.close_fee_reserve_usdc == Decimal("3")
     assert close.net_close_cashflow_usdc == Decimal("-8")
     assert close.projected_shadow_net_pnl_usdc == Decimal("8.4")
+
+    closing_credit = compute_close_economics(
+        direction="BUY",
+        full_quantity_btc=Decimal("0.1"),
+        consumed_levels=((Decimal("-50"), Decimal("0.1")),),
+        index_usdc_per_btc=Decimal("100000"),
+        fee_rate_index_fraction=Decimal("0.0003"),
+        net_entry_credit_usdc=entry.net_entry_credit_usdc,
+    )
+    assert closing_credit.required_close_side_total_quote_usdc == Decimal("-5")
+    assert closing_credit.gross_close_cashflow_usdc == Decimal("5")
+    assert closing_credit.close_fee_reserve_usdc == Decimal("3")
+    assert closing_credit.net_close_cashflow_usdc == Decimal("2")
+    assert closing_credit.net_close_debit_usdc == Decimal("0")
+    assert closing_credit.projected_shadow_net_pnl_usdc == Decimal("18.4")
+    assert closing_credit.projected_net_loss_usdc == Decimal("0")
+
+
+@pytest.mark.parametrize(
+    (
+        "direction",
+        "price",
+        "required_total",
+        "gross",
+        "net",
+        "debit",
+        "projected",
+        "loss",
+    ),
+    (
+        ("BUY", "-50", "-5", "5", "2", "0", "3", "0"),
+        ("BUY", "50", "5", "-5", "-8", "8", "-7", "7"),
+        ("SELL", "-50", "-5", "-5", "-8", "8", "-7", "7"),
+        ("SELL", "50", "5", "5", "2", "0", "3", "0"),
+    ),
+)
+def test_close_economics_preserves_all_signed_combo_orientations(
+    direction: str,
+    price: str,
+    required_total: str,
+    gross: str,
+    net: str,
+    debit: str,
+    projected: str,
+    loss: str,
+) -> None:
+    close = compute_close_economics(
+        direction=direction,
+        full_quantity_btc=Decimal("0.1"),
+        consumed_levels=((Decimal(price), Decimal("0.1")),),
+        index_usdc_per_btc=Decimal("100000"),
+        fee_rate_index_fraction=Decimal("0.0003"),
+        net_entry_credit_usdc=Decimal("1"),
+    )
+
+    assert close.required_close_side_total_quote_usdc == Decimal(required_total)
+    assert close.gross_close_cashflow_usdc == Decimal(gross)
+    assert close.net_close_cashflow_usdc == Decimal(net)
+    assert close.net_close_debit_usdc == Decimal(debit)
+    assert close.projected_shadow_net_pnl_usdc == Decimal(projected)
+    assert close.projected_net_loss_usdc == Decimal(loss)
+
+
+def test_entry_economics_accepts_only_signed_orientation_with_positive_credit() -> None:
+    entry = compute_entry_economics(
+        direction="BUY",
+        full_quantity_btc=Decimal("0.1"),
+        consumed_levels=((Decimal("-200"), Decimal("0.1")),),
+        index_usdc_per_btc=Decimal("100000"),
+        short_strike_usdc_per_btc=Decimal("110000"),
+        long_strike_usdc_per_btc=Decimal("120000"),
+        fee_rate_index_fraction=Decimal("0.0003"),
+        future_cost_reserve_usdc=Decimal("12"),
+    )
+    assert entry.required_side_total_quote_usdc == Decimal("-20")
+    assert entry.gross_entry_credit_usdc == Decimal("20")
+
+    with pytest.raises(ValueError, match="positive gross credit"):
+        compute_entry_economics(
+            direction="BUY",
+            full_quantity_btc=Decimal("0.1"),
+            consumed_levels=((Decimal("200"), Decimal("0.1")),),
+            index_usdc_per_btc=Decimal("100000"),
+            short_strike_usdc_per_btc=Decimal("110000"),
+            long_strike_usdc_per_btc=Decimal("120000"),
+            fee_rate_index_fraction=Decimal("0.0003"),
+            future_cost_reserve_usdc=Decimal("12"),
+        )
 
 
 def test_outcome_terminal_order_is_exit_then_natural_then_stop_or_failure() -> None:
@@ -1008,6 +1120,139 @@ def test_owner_treats_negative_public_commission_as_unknown(
     objects = read_current_evidence(tmp_path, bindings=bindings)
     availability = next(iter(objects.values()))
     assert _object(availability["payload"])["availability"] == "UNKNOWN"
+
+
+def test_owner_rejects_initial_target_quantity_mismatch_before_any_write(
+    tmp_path: Path,
+) -> None:
+    owner, _bindings = _owner(tmp_path)
+    facts = replace(
+        _underwriting_facts(
+            boundary=_boundary(1, 110),
+            change_id=10,
+            previous_change_id=None,
+            snapshot_kind="snapshot",
+        ),
+        target_quantity_btc=Decimal("0.2"),
+        entry_consumed_levels=((Decimal("300"), Decimal("0.2")),),
+    )
+
+    with pytest.raises(RuntimeError, match="target quantity"):
+        owner.settle_underwriting((facts,), allocate_request_id=lambda: 41)
+
+    assert owner.writer.objects == ()
+
+
+def test_owner_rejects_refresh_target_quantity_mismatch_without_consuming_candidate(
+    tmp_path: Path,
+) -> None:
+    owner, _bindings = _owner(tmp_path)
+    origin = _underwriting_facts(
+        boundary=_boundary(1, 110),
+        change_id=10,
+        previous_change_id=None,
+        snapshot_kind="snapshot",
+    )
+    activated = owner.settle_underwriting((origin,), allocate_request_id=lambda: 41)
+    candidate_identity = next(
+        item.object_identity
+        for item in activated.emitted
+        if item.object_kind == "CANDIDATE_ACTIVATION"
+    )
+    before = tuple(owner.writer.objects)
+    refreshed = replace(
+        _underwriting_facts(
+            boundary=_boundary(2, 120),
+            change_id=11,
+            previous_change_id=10,
+            snapshot_kind="change",
+        ),
+        target_quantity_btc=Decimal("0.2"),
+        entry_consumed_levels=((Decimal("300"), Decimal("0.2")),),
+    )
+    witness = refreshed.quote_refresh_witness
+    assert witness is not None
+
+    with pytest.raises(RuntimeError, match="target quantity"):
+        owner.settle_admission(
+            candidate_identity=candidate_identity,
+            refreshed_facts=refreshed,
+            refresh_witness=witness,
+        )
+
+    assert tuple(owner.writer.objects) == before
+
+
+def test_owner_explicit_unknown_reasons_prevent_economic_action(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    facts = replace(
+        _underwriting_facts(
+            boundary=_boundary(1, 110),
+            change_id=10,
+            previous_change_id=None,
+            snapshot_kind="snapshot",
+        ),
+        unknown_reasons=("INDEX_SOURCE_UNKNOWN",),
+    )
+
+    transition = owner.settle_underwriting((facts,), allocate_request_id=lambda: 41)
+
+    assert [item.object_kind for item in transition.emitted] == [
+        "UNDERWRITING_AVAILABILITY_EVALUATION"
+    ]
+    assert transition.request_intents == ()
+    objects = read_current_evidence(tmp_path, bindings=bindings)
+    payload = _object(next(iter(objects.values()))["payload"])
+    assert payload["availability"] == "UNKNOWN"
+    assert payload["unknown_reasons"] == ["INDEX_SOURCE_UNKNOWN"]
+
+
+def test_owner_unknown_refresh_invalidates_candidate_before_admission(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    origin = _underwriting_facts(
+        boundary=_boundary(1, 110),
+        change_id=10,
+        previous_change_id=None,
+        snapshot_kind="snapshot",
+    )
+    owner.settle_underwriting((origin,), allocate_request_id=lambda: 41)
+    refreshed = replace(
+        _underwriting_facts(
+            boundary=_boundary(2, 120),
+            change_id=11,
+            previous_change_id=10,
+            snapshot_kind="change",
+        ),
+        unknown_reasons=("COMBO_BOOK_SOURCE_UNKNOWN",),
+    )
+
+    transition = owner.settle_underwriting((refreshed,), allocate_request_id=lambda: 42)
+
+    assert [item.object_kind for item in transition.emitted] == [
+        "ADMISSION_ATTEMPT_TERMINAL",
+        "CANDIDATE_INVALIDATION",
+    ]
+    objects = read_current_evidence(tmp_path, bindings=bindings)
+    kinds = {value["object_kind"] for value in objects.values()}
+    assert "SHADOW_ENTRY" not in kinds
+    terminal = next(
+        _object(value["payload"])
+        for value in objects.values()
+        if value["object_kind"] == "ADMISSION_ATTEMPT_TERMINAL"
+    )
+    invalidation = next(
+        _object(value["payload"])
+        for value in objects.values()
+        if value["object_kind"] == "CANDIDATE_INVALIDATION"
+    )
+    assert terminal["terminal_outcome"] == "KNOWN_INVALIDATED_BEFORE_REFRESH"
+    assert invalidation["primary_reason"] == (
+        "SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN"
+    )
 
 
 def test_owner_enrolls_anchor_after_start_before_cutoff_control_is_realized(
@@ -1374,6 +1619,7 @@ def test_owner_rejects_unqualified_subscription_after_post_close_rpc_error(
             facts,
             quote_source=SourceFact(witness.source_identity, boundary),
             quote_refresh_witness=witness,
+            current_combo_subscription_witness=witness,
         ),
         allocate_request_id=lambda: 43,
     )
@@ -1452,6 +1698,7 @@ def test_owner_accepts_valid_subscription_after_post_close_rpc_error(
             facts,
             quote_source=SourceFact(witness.source_identity, boundary),
             quote_refresh_witness=witness,
+            current_combo_subscription_witness=witness,
         ),
         allocate_request_id=lambda: 43,
     )
@@ -1607,6 +1854,7 @@ def test_owner_advances_lineage_after_equal_business_new_generation_snapshot(
             snapshot_facts,
             quote_source=SourceFact(snapshot.source_identity, snapshot_boundary),
             quote_refresh_witness=snapshot,
+            current_combo_subscription_witness=snapshot,
             short_leg_taker_commission_fraction=None,
         ),
         allocate_request_id=lambda: 43,
@@ -1630,6 +1878,7 @@ def test_owner_advances_lineage_after_equal_business_new_generation_snapshot(
             change_facts,
             quote_source=SourceFact(change.source_identity, change_boundary),
             quote_refresh_witness=change,
+            current_combo_subscription_witness=change,
         ),
         allocate_request_id=lambda: 44,
     )
@@ -2117,6 +2366,588 @@ def test_owner_position_fingerprint_reacts_when_fee_economics_become_known(
     )
 
 
+def test_position_source_less_index_is_unknown_and_does_not_advance_anchor(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+    first = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=replace(
+            _quiet_position_facts(boundary=_boundary(4, 140)),
+            current_index_usdc_per_btc=Decimal("100500"),
+            index_source=None,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+
+    payload = _position_evaluation_payload(tmp_path, bindings, first)
+    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
+    assert truths[POSITION_CLOSE_REASONS.index("SHORT_LEG_RISK_BOUNDARY_REACHED")] == "UNKNOWN"
+    assert truths[POSITION_CLOSE_REASONS.index("PATH_OR_JUMP_RISK_BOUNDARY_REACHED")] == "UNKNOWN"
+    assert payload["current_index_usdc_per_btc"] is None
+    assert payload["current_index_source_identity"] is None
+    assert payload["current_index_fact_boundary"] is None
+    assert payload["current_index_availability"] == "UNKNOWN"
+    assert payload["next_evaluation_index_usdc_per_btc"] == "100000"
+
+    second = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=replace(
+            _quiet_position_facts(
+                boundary=_boundary(5, 150),
+                change_id=13,
+                previous_change_id=12,
+            ),
+            current_index_usdc_per_btc=Decimal("101000"),
+        ),
+        allocate_request_id=lambda: 43,
+    )
+    second_payload = _position_evaluation_payload(tmp_path, bindings, second)
+    second_truths = cast(list[str], second_payload["ordered_predicate_truth_vector"])
+    assert second_payload["prior_evaluation_index_usdc_per_btc"] == "100000"
+    assert (
+        second_truths[POSITION_CLOSE_REASONS.index("PATH_OR_JUMP_RISK_BOUNDARY_REACHED")] == "TRUE"
+    )
+
+
+def test_position_source_less_ticker_cannot_trigger_risk_or_volatility_close(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=replace(
+            _quiet_position_facts(boundary=_boundary(4, 140)),
+            current_short_delta=Decimal("0.9"),
+            current_short_mark_iv_fraction=Decimal("0.9"),
+            ticker_source=None,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+
+    payload = _position_evaluation_payload(tmp_path, bindings, transition)
+    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
+    assert truths[POSITION_CLOSE_REASONS.index("SHORT_LEG_RISK_BOUNDARY_REACHED")] == "UNKNOWN"
+    assert truths[POSITION_CLOSE_REASONS.index("VOLATILITY_STATE_BOUNDARY_REACHED")] == "UNKNOWN"
+
+
+def test_position_source_less_atomic_quote_has_no_quote_economics(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=replace(
+            _position_facts(
+                boundary=_boundary(4, 140),
+                change_id=12,
+                previous_change_id=11,
+            ),
+            quote_source=None,
+            quote_refresh_witness=None,
+            current_combo_subscription_witness=None,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+
+    payload = _position_evaluation_payload(tmp_path, bindings, transition)
+    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
+    assert truths[POSITION_CLOSE_REASONS.index("LIQUIDITY_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
+    assert truths[POSITION_CLOSE_REASONS.index("ECONOMIC_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
+    objects = read_current_evidence(tmp_path, bindings=bindings)
+    assert all(value["object_kind"] != "CLOSE_QUOTE_EVALUATION" for value in objects.values())
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "SOURCE_IDENTITY",
+        "SOURCE_BOUNDARY",
+        "CANONICAL_COMBO",
+        "INSTRUMENT",
+        "LINEAGE",
+    ),
+)
+def test_preclose_atomic_quote_requires_exact_source_witness_and_lineage(
+    tmp_path: Path,
+    fault: str,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+    facts = _position_facts(
+        boundary=_boundary(4, 140),
+        change_id=12,
+        previous_change_id=11,
+    )
+    witness = facts.current_combo_subscription_witness
+    assert witness is not None
+    quote_source = facts.quote_source
+    refresh_witness = facts.quote_refresh_witness
+    if fault == "SOURCE_IDENTITY":
+        quote_source = SourceFact(canonical_identity("WrongQuoteSource"), witness.boundary)
+        refresh_witness = None
+    elif fault == "SOURCE_BOUNDARY":
+        quote_source = SourceFact(witness.source_identity, _boundary(3, 130))
+        refresh_witness = None
+    elif fault == "CANONICAL_COMBO":
+        witness = _position_subscription_witness(
+            boundary=facts.boundary,
+            change_id=12,
+            previous_change_id=11,
+            canonical_combo_identity=canonical_identity("WrongCombo"),
+        )
+        quote_source = SourceFact(witness.source_identity, witness.boundary)
+        refresh_witness = witness
+    elif fault == "INSTRUMENT":
+        witness = _position_subscription_witness(
+            boundary=facts.boundary,
+            change_id=12,
+            previous_change_id=11,
+            instrument_name="WRONG-COMBO",
+        )
+        quote_source = SourceFact(witness.source_identity, witness.boundary)
+        refresh_witness = witness
+    elif fault == "LINEAGE":
+        witness = _position_subscription_witness(
+            boundary=facts.boundary,
+            change_id=12,
+            previous_change_id=999,
+        )
+        quote_source = SourceFact(witness.source_identity, witness.boundary)
+        refresh_witness = witness
+    else:
+        raise AssertionError(f"unhandled fault: {fault}")
+
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=replace(
+            facts,
+            quote_source=quote_source,
+            quote_refresh_witness=refresh_witness,
+            current_combo_subscription_witness=witness,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+
+    payload = _position_evaluation_payload(tmp_path, bindings, transition)
+    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
+    assert truths[POSITION_CLOSE_REASONS.index("LIQUIDITY_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
+    assert truths[POSITION_CLOSE_REASONS.index("ECONOMIC_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
+    objects = read_current_evidence(tmp_path, bindings=bindings)
+    assert all(value["object_kind"] != "CLOSE_QUOTE_EVALUATION" for value in objects.values())
+
+
+@pytest.mark.parametrize(
+    ("hard_close_kind", "expected_reason"),
+    (
+        (
+            "SETTLEMENT",
+            "SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED",
+        ),
+        (
+            "LATEST_EXIT",
+            "LATEST_EXIT_BOUNDARY_REACHED",
+        ),
+    ),
+)
+def test_invalid_quote_lineage_does_not_mask_hard_close(
+    tmp_path: Path,
+    hard_close_kind: str,
+    expected_reason: str,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+    facts = _position_facts(
+        boundary=_boundary(4, 140),
+        change_id=12,
+        previous_change_id=11,
+    )
+    invalid_witness = _position_subscription_witness(
+        boundary=facts.boundary,
+        change_id=12,
+        previous_change_id=999,
+    )
+    facts = replace(
+        facts,
+        quote_source=SourceFact(
+            invalid_witness.source_identity,
+            invalid_witness.boundary,
+        ),
+        quote_refresh_witness=invalid_witness,
+        current_combo_subscription_witness=invalid_witness,
+    )
+    if hard_close_kind == "SETTLEMENT":
+        facts = replace(facts, short_leg_state="settlement")
+    elif hard_close_kind == "LATEST_EXIT":
+        facts = replace(
+            facts,
+            trusted_time_lower_ms=8_200_000,
+            trusted_time_upper_ms=8_200_001,
+        )
+    else:
+        raise AssertionError(f"unhandled hard close kind: {hard_close_kind}")
+
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=facts,
+        allocate_request_id=lambda: 42,
+    )
+
+    payload = _position_evaluation_payload(tmp_path, bindings, transition)
+    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
+    assert truths[POSITION_CLOSE_REASONS.index("LIQUIDITY_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
+    objects = read_current_evidence(tmp_path, bindings=bindings)
+    action = next(
+        _object(value["payload"])
+        for value in objects.values()
+        if value["object_kind"] == "POSITION_ACTION"
+    )
+    assert action["serialized_action"] == "CLOSE"
+    assert action["primary_close_reason"] == expected_reason
+    assert transition.request_intents == ()
+    assert all(value["object_kind"] != "CLOSE_QUOTE_EVALUATION" for value in objects.values())
+
+
+def test_known_position_source_loss_closes_and_still_schedules_quote_rpc(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+    facts = _position_facts(
+        boundary=_boundary(4, 140),
+        change_id=12,
+        previous_change_id=11,
+    )
+
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=replace(
+            facts,
+            required_sources_continuous=False,
+            current_index_usdc_per_btc=None,
+            current_short_delta=None,
+            current_short_mark_iv_fraction=None,
+            index_source=None,
+            ticker_source=None,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+
+    payload = _position_evaluation_payload(tmp_path, bindings, transition)
+    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
+    assert truths[POSITION_CLOSE_REASONS.index("PLATFORM_OR_SOURCE_DISCONTINUITY")] == "TRUE"
+    objects = read_current_evidence(tmp_path, bindings=bindings)
+    action = next(
+        _object(value["payload"])
+        for value in objects.values()
+        if value["object_kind"] == "POSITION_ACTION"
+    )
+    assert action["serialized_action"] == "CLOSE"
+    assert action["primary_close_reason"] == "PLATFORM_OR_SOURCE_DISCONTINUITY"
+    assert len(transition.request_intents) == 1
+
+
+def test_exact_expiry_has_only_settlement_primary_and_latest_exit_secondary(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+    facts = _position_facts(
+        boundary=_boundary(4, 140),
+        change_id=12,
+        previous_change_id=11,
+    )
+
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=replace(
+            facts,
+            trusted_time_lower_ms=10_000_000,
+            trusted_time_upper_ms=10_000_001,
+            required_sources_continuous=True,
+            close_quote_facts=replace(
+                facts.close_quote_facts,
+                atomic_availability=CloseAtomicAvailability.UNKNOWN,
+                book_availability=CloseBookAvailability.UNKNOWN,
+                consumed_levels=(),
+            ),
+            quote_source=None,
+            quote_refresh_witness=None,
+            current_combo_subscription_witness=None,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+
+    objects = read_current_evidence(tmp_path, bindings=bindings)
+    action = next(
+        _object(value["payload"])
+        for value in objects.values()
+        if value["object_kind"] == "POSITION_ACTION"
+    )
+    assert action["primary_close_reason"] == "SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED"
+    assert action["secondary_close_reasons"] == ["LATEST_EXIT_BOUNDARY_REACHED"]
+    assert transition.request_intents == ()
+
+
+def test_admitted_position_evaluation_persists_complete_index_source_graph(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+    facts = _quiet_position_facts(boundary=_boundary(4, 140))
+    assert facts.index_source is not None
+
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=facts,
+        allocate_request_id=lambda: 42,
+    )
+
+    payload = _position_evaluation_payload(tmp_path, bindings, transition)
+    assert payload["entry_index_usdc_per_btc"] == "100000"
+    assert payload["entry_index_source_identity"] == "sha256:" + "a" * 64
+    assert payload["entry_index_fact_boundary"] == _boundary(3, 130).as_object()
+    assert payload["entry_short_leg_mark_iv_fraction"] == "0.5"
+    assert payload["entry_short_leg_mark_iv_source_identity"] == "sha256:" + "b" * 64
+    assert payload["entry_short_leg_mark_iv_fact_boundary"] == _boundary(3, 130).as_object()
+    assert payload["prior_evaluation_index_usdc_per_btc"] == "100000"
+    assert payload["prior_evaluation_index_source_identity"] == "sha256:" + "a" * 64
+    assert payload["prior_evaluation_index_fact_boundary"] == _boundary(3, 130).as_object()
+    assert payload["current_index_usdc_per_btc"] == "100000"
+    assert payload["current_index_source_identity"] == facts.index_source.source_identity
+    assert payload["current_index_fact_boundary"] == facts.index_source.boundary.as_object()
+    assert payload["current_index_availability"] == "KNOWN"
+    assert payload["next_evaluation_index_usdc_per_btc"] == "100000"
+
+
+def test_known_above_policy_position_fee_is_hard_discontinuity(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=replace(
+            _quiet_position_facts(boundary=_boundary(4, 140)),
+            short_leg_taker_commission_fraction=Decimal("0.0004"),
+        ),
+        allocate_request_id=lambda: 42,
+    )
+
+    payload = _position_evaluation_payload(tmp_path, bindings, transition)
+    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
+    discontinuity_index = POSITION_CLOSE_REASONS.index("PLATFORM_OR_SOURCE_DISCONTINUITY")
+    assert truths[discontinuity_index] == "TRUE"
+    action = next(
+        _object(value["payload"])
+        for value in read_current_evidence(tmp_path, bindings=bindings).values()
+        if value["object_kind"] == "POSITION_ACTION"
+    )
+    assert action["serialized_action"] == "CLOSE"
+    assert action["primary_close_reason"] == "PLATFORM_OR_SOURCE_DISCONTINUITY"
+
+
+def test_initial_missing_position_fee_remains_unknown_not_hard_discontinuity(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=replace(
+            _quiet_position_facts(boundary=_boundary(4, 140)),
+            short_leg_taker_commission_fraction=None,
+            short_commission_source=None,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+
+    payload = _position_evaluation_payload(tmp_path, bindings, transition)
+    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
+    assert truths[POSITION_CLOSE_REASONS.index("PLATFORM_OR_SOURCE_DISCONTINUITY")] == "UNKNOWN"
+    action = next(
+        _object(value["payload"])
+        for value in read_current_evidence(tmp_path, bindings=bindings).values()
+        if value["object_kind"] == "POSITION_ACTION"
+    )
+    assert action["serialized_action"] == "UNKNOWN"
+
+
+def test_first_match_quote_fields_do_not_manufacture_new_business_objects(
+    tmp_path: Path,
+) -> None:
+    owner, _bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+    first = _position_facts(
+        boundary=_boundary(4, 140),
+        change_id=12,
+        previous_change_id=11,
+    )
+    first = replace(
+        first,
+        close_quote_facts=replace(
+            first.close_quote_facts,
+            option_availability=CloseOptionAvailability.UNKNOWN,
+        ),
+    )
+    owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=first,
+        allocate_request_id=lambda: 42,
+    )
+    second = _position_facts(
+        boundary=_boundary(5, 150),
+        change_id=13,
+        previous_change_id=12,
+    )
+    second = replace(
+        second,
+        close_quote_facts=replace(
+            second.close_quote_facts,
+            option_availability=CloseOptionAvailability.UNKNOWN,
+            component_reference=PredicateTruth.TRUE,
+            consumed_levels=((Decimal("75"), Decimal("0.1")),),
+        ),
+    )
+
+    repeated = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=second,
+        allocate_request_id=lambda: 43,
+    )
+
+    assert repeated.emitted == ()
+    assert repeated.request_intents == ()
+
+
+def test_negative_signed_close_level_preserves_atomic_quote_and_credit(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+    facts = _position_facts(
+        boundary=_boundary(4, 140),
+        change_id=12,
+        previous_change_id=11,
+    )
+    facts = replace(
+        facts,
+        close_quote_facts=replace(
+            facts.close_quote_facts,
+            consumed_levels=((Decimal("-1"), Decimal("0.1")),),
+        ),
+    )
+
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=facts,
+        allocate_request_id=lambda: 42,
+    )
+
+    payload = _position_evaluation_payload(tmp_path, bindings, transition)
+    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
+    assert truths[POSITION_CLOSE_REASONS.index("LIQUIDITY_EXIT_BOUNDARY_REACHED")] == "FALSE"
+    quotes = [
+        _object(value["payload"])
+        for value in read_current_evidence(tmp_path, bindings=bindings).values()
+        if value["object_kind"] == "CLOSE_QUOTE_EVALUATION"
+    ]
+    assert len(quotes) == 1
+    assert quotes[0]["close_quote_state"] == "ATOMIC_COMBO_CLOSE_QUOTE"
+    assert quotes[0]["consumed_levels"] == [{"price_usdc_per_btc": "-1", "amount_btc": "0.1"}]
+    assert quotes[0]["gross_close_cashflow_usdc"] == "0.1"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    (
+        ("price_usdc_per_btc", "NaN", "price"),
+        ("price_usdc_per_btc", "Infinity", "price"),
+        ("amount_btc", "0", "amount"),
+        ("amount_btc", "-0.1", "amount"),
+        ("amount_btc", "NaN", "amount"),
+        ("amount_btc", "Infinity", "amount"),
+    ),
+)
+def test_current_reader_rejects_malformed_persisted_close_level(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    error: str,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+    owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=_position_facts(
+            boundary=_boundary(4, 140),
+            change_id=12,
+            previous_change_id=11,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+    quote = next(
+        value
+        for value in read_current_evidence(tmp_path, bindings=bindings).values()
+        if value["object_kind"] == "CLOSE_QUOTE_EVALUATION"
+    )
+    tampered = json.loads(json.dumps(quote))
+    tampered["payload"]["consumed_levels"][0][field] = value
+
+    with pytest.raises(DownstreamEvidenceError, match=error):
+        validate_downstream_object(tampered, bindings=bindings)
+
+
+def test_current_reader_rederives_signed_close_cashflow_from_levels(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+    owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=_position_facts(
+            boundary=_boundary(4, 140),
+            change_id=12,
+            previous_change_id=11,
+        ),
+        allocate_request_id=lambda: 42,
+    )
+    quote = next(
+        value
+        for value in read_current_evidence(tmp_path, bindings=bindings).values()
+        if value["object_kind"] == "CLOSE_QUOTE_EVALUATION"
+    )
+    tampered = json.loads(json.dumps(quote))
+    tampered["payload"]["consumed_levels"][0]["price_usdc_per_btc"] = "-1"
+
+    with pytest.raises(DownstreamEvidenceError, match="gross close cashflow"):
+        validate_downstream_object(tampered, bindings=bindings)
+
+
+def test_current_reader_rederives_signed_entry_credit_from_levels(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    _admit_owner(owner)
+    entry = next(
+        value
+        for value in read_current_evidence(tmp_path, bindings=bindings).values()
+        if value["object_kind"] == "SHADOW_ENTRY"
+    )
+    tampered = json.loads(json.dumps(entry))
+    tampered["payload"]["entry_consumed_levels"][0]["price_usdc_per_btc"] = "-200"
+
+    with pytest.raises(DownstreamEvidenceError, match="gross entry credit"):
+        validate_downstream_object(tampered, bindings=bindings)
+
+
 def test_owner_rejected_counterfactual_closes_through_same_future_quote(
     tmp_path: Path,
 ) -> None:
@@ -2187,6 +3018,18 @@ def test_owner_rejected_counterfactual_closes_through_same_future_quote(
     assert (
         sum(value["object_kind"] == "ALIGNED_POLICY_NO_TRADE_PAIR" for value in objects.values())
         == 1
+    )
+    rejected_exit = next(
+        _object(value["payload"])
+        for value in objects.values()
+        if value["object_kind"] == "REJECTED_COUNTERFACTUAL_EXIT"
+    )
+    rejected_quote = _object(
+        objects[cast(str, rejected_exit["close_quote_evaluation_identity"])]["payload"]
+    )
+    assert (
+        rejected_exit["consumed_rule_scoped_quote_fingerprint"]
+        == (rejected_quote["consumed_rule_scoped_quote_fingerprint"])
     )
 
 
@@ -2381,7 +3224,11 @@ def test_owner_failure_before_cutoff_censors_pending_trade_and_closes_enrollment
         terminal_source=failure_control,
     )
     (tmp_path / "manifest.json").write_bytes(manifest.exact_bytes)
-    objects = read_complete_evidence(tmp_path, bindings=bindings)
+    objects = _read_complete_evidence_with_git_reader(
+        tmp_path,
+        bindings=bindings,
+        git_object_reader=_fake_manifest_git_reader,
+    )
     outcome = next(value for value in objects.values() if value["object_kind"] == "SHADOW_OUTCOME")
     outcome_payload = _object(outcome["payload"])
     assert outcome_payload["terminal_state"] == "CENSORED_AT_FAILURE"
@@ -2417,7 +3264,11 @@ def test_owner_failure_before_cutoff_censors_pending_trade_and_closes_enrollment
     )
     assert read_current_evidence(tmp_path, bindings=bindings)
     with pytest.raises(DownstreamEvidenceError, match="differs from cohort summary"):
-        read_complete_evidence(tmp_path, bindings=bindings)
+        _read_complete_evidence_with_git_reader(
+            tmp_path,
+            bindings=bindings,
+            git_object_reader=_fake_manifest_git_reader,
+        )
 
 
 def test_owner_rejects_non_identity_process_failure_source(tmp_path: Path) -> None:
@@ -2682,6 +3533,56 @@ def test_close_quote_classifier_follows_the_frozen_first_match_order() -> None:
         )
         is CloseQuoteState.UNKNOWN
     )
+    assert (
+        classify_close_quote(
+            CloseQuoteFacts(
+                option_availability=CloseOptionAvailability.TRADEABLE,
+                atomic_availability=CloseAtomicAvailability.ACTIVE,
+                component_reference=PredicateTruth.FALSE,
+                book_availability=CloseBookAvailability.FULL_QUANTITY,
+                consumed_levels=((Decimal("-1"), Decimal("0.1")),),
+            )
+        )
+        is CloseQuoteState.ATOMIC_COMBO_CLOSE_QUOTE
+    )
+
+
+@pytest.mark.parametrize(
+    ("price", "amount"),
+    (
+        (Decimal("NaN"), Decimal("0.1")),
+        (Decimal("Infinity"), Decimal("0.1")),
+        (Decimal("50"), Decimal("0")),
+        (Decimal("50"), Decimal("-0.1")),
+        (Decimal("50"), Decimal("NaN")),
+        (Decimal("50"), Decimal("Infinity")),
+    ),
+)
+def test_malformed_atomic_close_level_normalizes_to_unknown(
+    price: Decimal,
+    amount: Decimal,
+) -> None:
+    facts = CloseQuoteFacts(
+        option_availability=CloseOptionAvailability.TRADEABLE,
+        atomic_availability=CloseAtomicAvailability.ACTIVE,
+        component_reference=PredicateTruth.FALSE,
+        book_availability=CloseBookAvailability.FULL_QUANTITY,
+        consumed_levels=((price, amount),),
+    )
+
+    assert classify_close_quote(facts) is CloseQuoteState.UNKNOWN
+
+
+def test_first_match_ignores_malformed_levels_after_unexecutable_option() -> None:
+    facts = CloseQuoteFacts(
+        option_availability=CloseOptionAvailability.UNEXECUTABLE,
+        atomic_availability=CloseAtomicAvailability.ACTIVE,
+        component_reference=PredicateTruth.TRUE,
+        book_availability=CloseBookAvailability.FULL_QUANTITY,
+        consumed_levels=((Decimal("NaN"), Decimal("0")),),
+    )
+
+    assert classify_close_quote(facts) is CloseQuoteState.UNEXECUTABLE
 
 
 def test_close_opportunity_preserves_unknown_and_only_full_quote_is_eligible() -> None:

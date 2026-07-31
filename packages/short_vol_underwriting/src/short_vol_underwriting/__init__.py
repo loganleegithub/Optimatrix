@@ -94,7 +94,9 @@ from short_vol_underwriting.owner import (
     FixedContractShadowOwner,
     OwnerTransition,
     PositionFacts,
+    RpcRetirementIntent,
     SourceFact,
+    TrustedTimeBoundary,
     UnderwritingFacts,
 )
 from short_vol_underwriting.policy import (
@@ -154,11 +156,13 @@ __all__ = [
     "RejectedAnchorSelector",
     "RpcAdmissionRefreshWitness",
     "RpcRequestIntent",
+    "RpcRetirementIntent",
     "RuntimeBindings",
     "ShadowOutcomeEconomics",
     "SourceFact",
     "SubscriptionAdmissionRefreshWitness",
     "TerminalSource",
+    "TrustedTimeBoundary",
     "UnderwritingAction",
     "UnderwritingAvailability",
     "UnderwritingFacts",

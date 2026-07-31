@@ -420,7 +420,8 @@ def _consumed_total(
     amount_sum = Decimal(0)
     total = Decimal(0)
     for price, amount in consumed_levels:
-        _require_non_negative(price, "level price")
+        if not price.is_finite():
+            raise ValueError("level price must be finite")
         _require_positive(amount, "level amount")
         amount_sum += amount
         total += price * amount

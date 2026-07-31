@@ -71,21 +71,6 @@ class CloseQuoteFacts:
     book_availability: CloseBookAvailability
     consumed_levels: tuple[tuple[Decimal, Decimal], ...]
 
-    def __post_init__(self) -> None:
-        for price, amount in self.consumed_levels:
-            if not price.is_finite() or not amount.is_finite() or amount <= 0:
-                raise ValueError("close quote levels require finite price and positive amount")
-        if (
-            self.book_availability is CloseBookAvailability.FULL_QUANTITY
-            and not self.consumed_levels
-        ):
-            raise ValueError("full-quantity close book requires consumed levels")
-        if (
-            self.book_availability is not CloseBookAvailability.FULL_QUANTITY
-            and self.consumed_levels
-        ):
-            raise ValueError("non-full close book cannot carry consumed levels")
-
 
 @dataclass(frozen=True)
 class CloseOpportunity:
@@ -94,26 +79,96 @@ class CloseOpportunity:
     economics: CloseEconomics | None
 
 
+@dataclass(frozen=True)
+class NormalizedCloseQuote:
+    state: CloseQuoteState
+    consumed_levels: tuple[tuple[Decimal, Decimal], ...]
+    fingerprint_members: tuple[object, ...]
+
+
+def normalize_close_quote(facts: CloseQuoteFacts) -> NormalizedCloseQuote:
+    """Apply the first matching quote rule and retain only facts that rule consumed."""
+    if facts.option_availability is CloseOptionAvailability.UNEXECUTABLE:
+        return NormalizedCloseQuote(
+            CloseQuoteState.UNEXECUTABLE,
+            (),
+            (facts.option_availability.value,),
+        )
+    if facts.option_availability is CloseOptionAvailability.UNKNOWN:
+        return NormalizedCloseQuote(
+            CloseQuoteState.UNKNOWN,
+            (),
+            (facts.option_availability.value,),
+        )
+    if facts.atomic_availability is CloseAtomicAvailability.KNOWN_UNAVAILABLE:
+        members = (
+            facts.option_availability.value,
+            facts.atomic_availability.value,
+            facts.component_reference.value,
+        )
+        if facts.component_reference is PredicateTruth.TRUE:
+            return NormalizedCloseQuote(CloseQuoteState.LEGGED_CLOSE_REFERENCE, (), members)
+        if facts.component_reference is PredicateTruth.FALSE:
+            return NormalizedCloseQuote(CloseQuoteState.UNEXECUTABLE, (), members)
+        return NormalizedCloseQuote(CloseQuoteState.UNKNOWN, (), members)
+    if facts.atomic_availability is CloseAtomicAvailability.UNKNOWN:
+        return NormalizedCloseQuote(
+            CloseQuoteState.UNKNOWN,
+            (),
+            (
+                facts.option_availability.value,
+                facts.atomic_availability.value,
+            ),
+        )
+    members = (
+        facts.option_availability.value,
+        facts.atomic_availability.value,
+        facts.book_availability.value,
+    )
+    if facts.book_availability is CloseBookAvailability.UNKNOWN:
+        return NormalizedCloseQuote(CloseQuoteState.UNKNOWN, (), members)
+    if facts.book_availability is CloseBookAvailability.FULL_QUANTITY:
+        if not facts.consumed_levels:
+            return NormalizedCloseQuote(
+                CloseQuoteState.UNKNOWN,
+                (),
+                (*members, "MALFORMED_OR_MISSING_LEVEL"),
+            )
+        for level in facts.consumed_levels:
+            if (
+                not isinstance(level, tuple)
+                or len(level) != 2
+                or not all(isinstance(member, Decimal) for member in level)
+            ):
+                return NormalizedCloseQuote(
+                    CloseQuoteState.UNKNOWN,
+                    (),
+                    (*members, "MALFORMED_OR_MISSING_LEVEL"),
+                )
+            price, amount = level
+            if not price.is_finite() or not amount.is_finite() or amount <= 0:
+                return NormalizedCloseQuote(
+                    CloseQuoteState.UNKNOWN,
+                    (),
+                    (*members, "MALFORMED_OR_MISSING_LEVEL"),
+                )
+        return NormalizedCloseQuote(
+            CloseQuoteState.ATOMIC_COMBO_CLOSE_QUOTE,
+            facts.consumed_levels,
+            (*members, facts.consumed_levels),
+        )
+    if facts.consumed_levels:
+        return NormalizedCloseQuote(
+            CloseQuoteState.UNKNOWN,
+            (),
+            (*members, "MALFORMED_UNEXPECTED_LEVEL"),
+        )
+    return NormalizedCloseQuote(CloseQuoteState.UNEXECUTABLE, (), members)
+
+
 def classify_close_quote(facts: CloseQuoteFacts) -> CloseQuoteState:
     """Apply the frozen six-rule classifier in first-match order."""
-    if facts.option_availability is CloseOptionAvailability.UNEXECUTABLE:
-        return CloseQuoteState.UNEXECUTABLE
-    if facts.option_availability is CloseOptionAvailability.UNKNOWN:
-        return CloseQuoteState.UNKNOWN
-    if facts.atomic_availability is CloseAtomicAvailability.KNOWN_UNAVAILABLE:
-        if facts.component_reference is PredicateTruth.TRUE:
-            return CloseQuoteState.LEGGED_CLOSE_REFERENCE
-        if facts.component_reference is PredicateTruth.FALSE:
-            return CloseQuoteState.UNEXECUTABLE
-        return CloseQuoteState.UNKNOWN
-    if (
-        facts.atomic_availability is CloseAtomicAvailability.UNKNOWN
-        or facts.book_availability is CloseBookAvailability.UNKNOWN
-    ):
-        return CloseQuoteState.UNKNOWN
-    if facts.book_availability is CloseBookAvailability.FULL_QUANTITY:
-        return CloseQuoteState.ATOMIC_COMBO_CLOSE_QUOTE
-    return CloseQuoteState.UNEXECUTABLE
+    return normalize_close_quote(facts).state
 
 
 def evaluate_close_opportunity(

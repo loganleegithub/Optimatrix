@@ -448,6 +448,25 @@ def test_exact_outcome_provenance_rejects_direct_source_boundary_mismatch() -> N
         validate_object_graph(graph)
 
 
+def test_rejected_exit_must_reuse_its_owning_quote_fingerprint() -> None:
+    graph = _exact_graph()
+    rejected_exit = next(
+        value for value in graph.values() if value["object_kind"] == "REJECTED_COUNTERFACTUAL_EXIT"
+    )
+    payload = rejected_exit["payload"]
+    provenance = rejected_exit["source_provenance"]
+    assert isinstance(payload, dict)
+    assert isinstance(provenance, list)
+    tampered_fingerprint = _identity(999)
+    payload["consumed_rule_scoped_quote_fingerprint"] = tampered_fingerprint
+    combo_root = next(item for item in provenance if item["source_role"] == "COMBO_QUOTE")
+    combo_root["source_identity"] = tampered_fingerprint
+    provenance.sort(key=lambda item: (item["source_role"], item["source_identity"]))
+
+    with pytest.raises(PayloadValidationError, match="quote fingerprint"):
+        validate_object_graph(graph)
+
+
 @pytest.mark.parametrize(
     ("reason", "commission_count", "has_index"),
     (

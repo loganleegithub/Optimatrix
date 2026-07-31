@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import subprocess
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,6 +51,7 @@ from short_vol_underwriting.validation import (
     PayloadValidationError,
     validate_complete_attempt_relationships,
     validate_complete_cohort_summary_provenance,
+    validate_complete_semantic_graph,
     validate_object_graph,
     validate_payload_semantics,
     validate_provenance_shape,
@@ -57,6 +60,9 @@ from short_vol_underwriting.validation import (
 
 class DownstreamEvidenceError(ValueError):
     """Downstream evidence is malformed, mixed, incomplete, or conflicting."""
+
+
+GitObjectReader = Callable[[Path, Sequence[str]], bytes]
 
 
 @dataclass(frozen=True)
@@ -258,6 +264,20 @@ def read_complete_evidence(
     bindings: RuntimeBindings,
 ) -> dict[str, dict[str, object]]:
     """Read one terminal, conservation-valid fixed-contract evidence directory."""
+    return _read_complete_evidence_with_git_reader(
+        directory,
+        bindings=bindings,
+        git_object_reader=_read_local_git_object,
+    )
+
+
+def _read_complete_evidence_with_git_reader(
+    directory: Path,
+    *,
+    bindings: RuntimeBindings,
+    git_object_reader: GitObjectReader,
+) -> dict[str, dict[str, object]]:
+    """Private deterministic seam for exercising local Git-object failure cases."""
     manifest_path = directory / "manifest.json"
     if not manifest_path.is_file():
         raise DownstreamEvidenceError("complete evidence requires root manifest.json")
@@ -269,6 +289,10 @@ def read_complete_evidence(
         manifest,
         directory=directory,
         bindings=bindings,
+    )
+    _validate_manifest_repository_graph(
+        manifest,
+        git_object_reader=git_object_reader,
     )
 
     objects = read_current_evidence(directory, bindings=bindings)
@@ -287,6 +311,81 @@ def read_complete_evidence(
         manifest=manifest,
     )
     return objects
+
+
+def _read_local_git_object(repository: Path, arguments: Sequence[str]) -> bytes:
+    try:
+        return subprocess.run(
+            ("git", "-C", str(repository), *arguments),
+            check=True,
+            capture_output=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise DownstreamEvidenceError("cannot read required local Git object") from exc
+
+
+def _validate_manifest_repository_graph(
+    manifest: ValidatedManifest,
+    *,
+    git_object_reader: GitObjectReader,
+) -> None:
+    repository = Path(_required_string(manifest.value, "process_cwd"))
+
+    def read(*arguments: str) -> bytes:
+        try:
+            return git_object_reader(repository, arguments)
+        except DownstreamEvidenceError:
+            raise
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise DownstreamEvidenceError("cannot read required local Git object") from exc
+
+    try:
+        top_level = Path(read("rev-parse", "--show-toplevel").decode("utf-8").strip()).resolve(
+            strict=True
+        )
+        expected_top_level = repository.resolve(strict=True)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise DownstreamEvidenceError("invalid local Git repository root") from exc
+    if top_level != expected_top_level:
+        raise DownstreamEvidenceError("manifest process_cwd is not the local Git repository root")
+
+    candidate = manifest.candidate_commit
+    read("cat-file", "-e", f"{candidate}^{{commit}}")
+    try:
+        candidate_tree = read("rev-parse", f"{candidate}^{{tree}}").decode("ascii").strip()
+    except UnicodeDecodeError as exc:
+        raise DownstreamEvidenceError("candidate tree is not an ASCII Git identity") from exc
+    if candidate_tree != manifest.candidate_tree:
+        raise DownstreamEvidenceError("manifest candidate tree differs from named commit tree")
+    read("cat-file", "-e", f"{manifest.candidate_tree}^{{tree}}")
+
+    expected_blobs = (
+        (
+            "Outcome contract",
+            _required_string(manifest.value, "outcome_contract_path"),
+            OUTCOME_CONTRACT_DIGEST,
+        ),
+        (
+            "Radar Policy",
+            _required_string(manifest.value, "radar_policy_path"),
+            _required_identity(manifest.value, "radar_policy_identity"),
+        ),
+        (
+            "Underwriting Policy",
+            _required_string(manifest.value, "underwriting_policy_path"),
+            _required_identity(manifest.value, "underwriting_policy_identity"),
+        ),
+        (
+            "Position Policy",
+            _required_string(manifest.value, "position_policy_path"),
+            _required_identity(manifest.value, "position_policy_identity"),
+        ),
+    )
+    for label, path, expected_digest in expected_blobs:
+        exact_bytes = read("cat-file", "blob", f"{candidate}:{path}")
+        actual_digest = f"sha256:{hashlib.sha256(exact_bytes).hexdigest()}"
+        if actual_digest != expected_digest:
+            raise DownstreamEvidenceError(f"{label} blob digest differs from manifest binding")
 
 
 def _validate_manifest_bindings(
@@ -359,7 +458,7 @@ def _validate_complete_summaries(
     )
     if underwriting_payload["terminal_source_identity"] != terminal_source_identity:
         raise DownstreamEvidenceError("summary terminal source identity mismatch")
-    _validate_cohort_terminal(
+    runtime_start, enrollment_end = _validate_cohort_terminal(
         cohort_payload,
         terminal_boundary=terminal_boundary,
         terminal_source_identity=terminal_source_identity,
@@ -389,6 +488,15 @@ def _validate_complete_summaries(
             "terminal_disposition",
         ),
     )
+    try:
+        validate_complete_semantic_graph(
+            objects,
+            runtime_start=runtime_start,
+            enrollment_end=enrollment_end,
+            terminal_boundary=terminal_boundary,
+        )
+    except PayloadValidationError as exc:
+        raise DownstreamEvidenceError(str(exc)) from exc
 
     values = tuple(objects.values())
     try:
@@ -454,7 +562,7 @@ def _validate_cohort_terminal(
     terminal_boundary: FactBoundary,
     terminal_source_identity: str,
     manifest: ValidatedManifest,
-) -> None:
+) -> tuple[FactBoundary, FactBoundary]:
     start = _fact_boundary(
         payload["runtime_start_fact_boundary"],
         "runtime_start_fact_boundary",
@@ -493,6 +601,14 @@ def _validate_cohort_terminal(
         raise DownstreamEvidenceError("runtime start boundary does not realize manifest trigger")
     reason = payload["enrollment_end_reason"]
     if reason == "PREBOUND_CUTOFF":
+        if not (
+            enrollment_end.is_strictly_after(start)
+            and terminal_boundary.is_strictly_after(enrollment_end)
+        ):
+            raise DownstreamEvidenceError(
+                "realized enrollment cutoff must be strictly after runtime start "
+                "and strictly before terminal"
+            )
         cutoff_monotonic_ms = _non_negative_integer(
             cutoff_trigger["trigger_monotonic_ms"],
             "enrollment_cutoff_trigger.trigger_monotonic_ms",
@@ -504,6 +620,10 @@ def _validate_cohort_terminal(
     elif reason == "TERMINAL_BEFORE_CUTOFF":
         if enrollment_end != terminal_boundary:
             raise DownstreamEvidenceError("terminal-before-cutoff enrollment boundary mismatch")
+        if not terminal_boundary.is_strictly_after(start):
+            raise DownstreamEvidenceError(
+                "terminal-before-cutoff must be strictly after runtime start"
+            )
     else:
         raise DownstreamEvidenceError("invalid enrollment end reason")
 
@@ -618,6 +738,7 @@ def _validate_cohort_terminal(
         raise DownstreamEvidenceError("terminal source identity mismatch")
     if not terminal_time_matches:
         raise DownstreamEvidenceError("terminal boundary does not realize terminal source")
+    return start, enrollment_end
 
 
 def validate_downstream_object(

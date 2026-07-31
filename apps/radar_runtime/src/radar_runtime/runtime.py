@@ -565,6 +565,13 @@ class ShadowRuntimeAdapter(Protocol):
         commit: CausalCommit,
     ) -> tuple[ShadowRpcIntent, ...]: ...
 
+    def next_time_boundary_monotonic_ms(
+        self,
+        *,
+        reducer: RadarReducer,
+        after_monotonic_ms: int,
+    ) -> int | None: ...
+
     def realize_runtime_start(
         self,
         *,
@@ -1397,6 +1404,50 @@ class RadarReducer:
             self._rpc_lifecycles[request.request_id] = _RpcLifecycle(request=request)
             self._commands.append(request)
 
+    def retire_shadow_rpc(
+        self,
+        *,
+        request_id: int,
+        boundary: FactBoundary,
+    ) -> bool:
+        request = self.pending_rpcs.get(request_id)
+        lifecycle = self._rpc_lifecycles.get(request_id)
+        if request is None or lifecycle is None:
+            return False
+        if request.purpose not in SHADOW_RPC_PURPOSES:
+            raise ValueError("only a Shadow RPC may use owner retirement")
+        if boundary.session_epoch != request.session_epoch:
+            raise ValueError("Shadow RPC retirement belongs to another session")
+        if boundary.causal_seq <= request.origin_boundary.causal_seq:
+            raise ValueError("Shadow RPC retirement must be strictly after its origin")
+        self.pending_rpcs.pop(request_id, None)
+        held_response = self._early_rpc_responses.pop(request_id, None)
+        if held_response is not None:
+            self.diagnostics.late_response_count += 1
+            self.diagnostics.rpc_orphan_late_wire_count += 1
+        return self._finish_rpc(
+            request,
+            state=RpcState.RETIRED,
+            terminal_monotonic_ms=boundary.received_monotonic_ms,
+            record_latency=False,
+        )
+
+    def next_shadow_time_boundary_monotonic_ms(
+        self,
+        *,
+        after_monotonic_ms: int,
+    ) -> int | None:
+        adapter = self.shadow_adapter
+        if adapter is None or self._shadow_terminalized:
+            return None
+        return _call_shadow(
+            "trusted-time boundary schedule",
+            lambda: adapter.next_time_boundary_monotonic_ms(
+                reducer=self,
+                after_monotonic_ms=after_monotonic_ms,
+            ),
+        )
+
     def begin_runtime_barrier(
         self,
         monotonic_ms: int,
@@ -1648,10 +1699,8 @@ class RadarReducer:
                 self.diagnostics.rpc_sent_count[request.method] += 1
             held_response = self._early_rpc_responses.pop(event.request_id, None)
             if held_response is not None:
-                self._apply_response(
-                    held_response,
-                    commit_boundary=boundary,
-                )
+                self.diagnostics.late_response_count += 1
+                self.diagnostics.rpc_orphan_late_wire_count += 1
             return
         if event.kind is not SendControlKind.SEND_FAILED:
             raise PublicProtocolError("unknown send control kind")
@@ -1899,8 +1948,6 @@ class RadarReducer:
     def _apply_response(
         self,
         envelope: InboundEnvelope,
-        *,
-        commit_boundary: FactBoundary | None = None,
     ) -> None:
         request_id = envelope.get("id")
         if isinstance(request_id, bool) or not isinstance(request_id, int):
@@ -2028,11 +2075,7 @@ class RadarReducer:
                 terminal_monotonic_ms=terminal_monotonic_ms,
                 record_latency=True,
             )
-        boundary = (
-            replace(commit_boundary, causal_seq=self._causal_seq)
-            if commit_boundary is not None
-            else self._current_boundary(envelope)
-        )
+        boundary = self._current_boundary(envelope)
         if request.purpose in SHADOW_RPC_PURPOSES:
             adapter = self.shadow_adapter
             if adapter is None:
@@ -4871,6 +4914,8 @@ class RadarReducer:
                 boundary,
                 failure_scope=FailureScope.CLOCK_INDEX,
             )
+        if not self._fact_transaction_active:
+            self._settle_shadow_transaction(transaction_commit)
 
     def _instrument_time_currentness_token(
         self,
@@ -4959,23 +5004,33 @@ class RadarReducer:
                 affected_scope_keys=affected_scope_keys,
                 force_full_currentness=queue_lag_transition_rebuild,
             )
-            adapter = self.shadow_adapter
-            if adapter is not None and not self._shadow_terminalized:
-                self._schedule_shadow_intents(
-                    _call_shadow(
-                        "settled transaction",
-                        lambda: adapter.on_settled_transaction(
-                            reducer=self,
-                            commit=commit,
-                        ),
-                    )
-                )
-                self._sync_combo_subscriptions(commit.boundary)
+            self._settle_shadow_transaction(commit)
             self._fact_transaction_revision += 1
             if queue_lag_transition_rebuild:
                 self._queue_lag_transition_pending = False
         finally:
             self._fact_transaction_active = False
+
+    def _settle_shadow_transaction(
+        self,
+        commit: CausalCommit,
+        *,
+        sync_combo_subscriptions: bool = True,
+    ) -> None:
+        adapter = self.shadow_adapter
+        if adapter is None or self._shadow_terminalized or commit.cause is CausalCause.CLEAN_STOP:
+            return
+        self._schedule_shadow_intents(
+            _call_shadow(
+                "settled transaction",
+                lambda: adapter.on_settled_transaction(
+                    reducer=self,
+                    commit=commit,
+                ),
+            )
+        )
+        if sync_combo_subscriptions:
+            self._sync_combo_subscriptions(commit.boundary)
 
     def _settle_fact_transaction(
         self,
@@ -6510,6 +6565,15 @@ class RadarReducer:
             commit=commit,
             blocking_reason=commit.cause.value,
         )
+        self._settle_shadow_transaction(
+            CausalCommit(
+                boundary=boundary,
+                cause=commit.cause,
+                failure_domain=commit.failure_domain,
+                affected_scopes=commit.affected_scopes,
+            ),
+            sync_combo_subscriptions=False,
+        )
 
     def _update_subscription_peaks(self) -> None:
         acknowledged = tuple(
@@ -7599,12 +7663,19 @@ class LiveRadarRuntime:
                     ):
                         break
                     envelope = buffered.popleft()
-                    while next_poll_ms < envelope.received_monotonic_ms:
+                    next_time_boundary_ms = self._next_runtime_time_boundary_ms(
+                        next_poll_ms,
+                    )
+                    while next_time_boundary_ms < envelope.received_monotonic_ms:
                         self._enqueue_commands(
                             outbound,
-                            self.reducer.advance_time(next_poll_ms),
+                            self.reducer.advance_time(next_time_boundary_ms),
                         )
-                        next_poll_ms += poll_ms
+                        if next_time_boundary_ms == next_poll_ms:
+                            next_poll_ms += poll_ms
+                        next_time_boundary_ms = self._next_runtime_time_boundary_ms(
+                            next_poll_ms,
+                        )
                     self._enqueue_commands(
                         outbound,
                         self.reducer.reduce(
@@ -7624,20 +7695,24 @@ class LiveRadarRuntime:
                     observed_monotonic_ms=now_ms,
                 ):
                     break
-                if now_ms >= next_poll_ms:
+                next_time_boundary_ms = self._next_runtime_time_boundary_ms(
+                    next_poll_ms,
+                )
+                if now_ms >= next_time_boundary_ms:
                     self._enqueue_commands(
                         outbound,
-                        self.reducer.advance_time(next_poll_ms),
+                        self.reducer.advance_time(next_time_boundary_ms),
                     )
-                    next_poll_ms += poll_ms
+                    if next_time_boundary_ms == next_poll_ms:
+                        next_poll_ms += poll_ms
                     continue
                 next_supervisor_trigger_ms = self._next_shadow_supervisor_trigger_ms(
                     shadow_supervisor_triggers,
                 )
                 next_wake_ms = (
-                    next_poll_ms
+                    next_time_boundary_ms
                     if next_supervisor_trigger_ms is None
-                    else min(next_poll_ms, next_supervisor_trigger_ms)
+                    else min(next_time_boundary_ms, next_supervisor_trigger_ms)
                 )
                 timeout_seconds = (next_wake_ms - now_ms) / 1_000
                 try:
@@ -7699,12 +7774,19 @@ class LiveRadarRuntime:
         while buffered:
             envelope = buffered.popleft()
             try:
+                next_time_boundary_ms = self._next_runtime_time_boundary_ms(
+                    next_poll_ms,
+                )
                 while (
-                    next_poll_ms < envelope.received_monotonic_ms
-                    and next_poll_ms <= barrier_monotonic_ms
+                    next_time_boundary_ms < envelope.received_monotonic_ms
+                    and next_time_boundary_ms <= barrier_monotonic_ms
                 ):
-                    self.reducer.advance_time(next_poll_ms)
-                    next_poll_ms += poll_ms
+                    self.reducer.advance_time(next_time_boundary_ms)
+                    if next_time_boundary_ms == next_poll_ms:
+                        next_poll_ms += poll_ms
+                    next_time_boundary_ms = self._next_runtime_time_boundary_ms(
+                        next_poll_ms,
+                    )
                 self.reducer.reduce(
                     envelope,
                     processed_monotonic_ms=max(
@@ -7834,6 +7916,12 @@ class LiveRadarRuntime:
             return triggers.enrollment_cutoff_monotonic_ms
         return triggers.final_stop_monotonic_ms
 
+    def _next_runtime_time_boundary_ms(self, next_poll_ms: int) -> int:
+        shadow_boundary_ms = self.reducer.next_shadow_time_boundary_monotonic_ms(
+            after_monotonic_ms=self.reducer._last_boundary_monotonic_ms,
+        )
+        return next_poll_ms if shadow_boundary_ms is None else min(next_poll_ms, shadow_boundary_ms)
+
     def _realize_due_shadow_terminal_gate(
         self,
         triggers: ShadowSupervisorTriggers | None,
@@ -7944,6 +8032,13 @@ class LiveRadarRuntime:
         client: PublicClient,
         command: PendingRpc,
     ) -> None:
+        lifecycle = self.reducer._rpc_lifecycles.get(command.request_id)
+        if command.purpose in SHADOW_RPC_PURPOSES and (
+            self.reducer.pending_rpcs.get(command.request_id) != command
+            or lifecycle is None
+            or lifecycle.state is not RpcState.SCHEDULED
+        ):
+            return
         try:
             remaining_ms = command.send_deadline_monotonic_ms - _monotonic_ms()
             if remaining_ms <= 0:

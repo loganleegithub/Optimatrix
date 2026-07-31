@@ -59,6 +59,15 @@ class RecordingShadowAdapter:
             ),
         )
 
+    def next_time_boundary_monotonic_ms(
+        self,
+        *,
+        reducer: RadarReducer,
+        after_monotonic_ms: int,
+    ) -> int | None:
+        del reducer, after_monotonic_ms
+        return None
+
     def on_request_sent(
         self,
         *,
@@ -296,6 +305,7 @@ def test_shadow_terminal_is_idempotent_for_clean_stop(
     assert len(adapter.terminals) == 1
     assert adapter.terminals[0][0] == "STOP"
     assert adapter.finalized == 1
+    assert all(commit.cause is not CausalCause.CLEAN_STOP for commit in adapter.settled)
 
 
 def test_shadow_terminal_is_idempotent_for_failure(

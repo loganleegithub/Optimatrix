@@ -90,6 +90,7 @@ def validate_payload_semantics(
             _boundary(value, key, code_identity, runtime_identity)
     _validate_common_shapes(payload)
     _validate_enums(object_kind, payload)
+    _validate_position_source_graph(object_kind, payload)
     _validate_levels_and_arithmetic(object_kind, payload)
     expected = _expected_object_identity(
         object_kind=object_kind,
@@ -208,6 +209,1185 @@ def validate_object_graph(objects: Mapping[str, Mapping[str, object]]) -> None:
         by_kind.get("ALIGNED_POLICY_NO_TRADE_PAIR", ()),
         "payload.trade_observation_identity",
     )
+    for rejected_exit in by_kind.get("REJECTED_COUNTERFACTUAL_EXIT", ()):
+        payload = _mapping(rejected_exit.get("payload"), "rejected exit payload")
+        quote_identity = _identity(
+            payload.get("close_quote_evaluation_identity"),
+            "close_quote_evaluation_identity",
+        )
+        quote = by_kind_identity.get(
+            ("REJECTED_COUNTERFACTUAL_CLOSE_QUOTE_EVALUATION", quote_identity)
+        )
+        if quote is None:
+            raise PayloadValidationError("rejected exit is missing its owning close quote")
+        quote_payload = _mapping(quote.get("payload"), "rejected close quote payload")
+        if payload.get("consumed_rule_scoped_quote_fingerprint") != quote_payload.get(
+            "consumed_rule_scoped_quote_fingerprint"
+        ):
+            raise PayloadValidationError(
+                "rejected exit quote fingerprint differs from its owning close quote"
+            )
+    _validate_position_source_chains(
+        by_kind=by_kind,
+        by_kind_identity=by_kind_identity,
+    )
+    _validate_position_action_chains(
+        by_kind=by_kind,
+        by_kind_identity=by_kind_identity,
+    )
+
+
+def _validate_position_source_chains(
+    *,
+    by_kind: Mapping[str, Sequence[Mapping[str, object]]],
+    by_kind_identity: Mapping[tuple[str, str], Mapping[str, object]],
+) -> None:
+    families = (
+        ("POSITION_EVALUATION", "shadow_entry_identity", False),
+        (
+            "REJECTED_COUNTERFACTUAL_POSITION_EVALUATION",
+            "rejected_observation_identity",
+            True,
+        ),
+    )
+    for evaluation_kind, owner_field, rejected in families:
+        evaluations_by_owner: dict[str, list[Mapping[str, object]]] = {}
+        for value in by_kind.get(evaluation_kind, ()):
+            evaluation = _mapping(value.get("payload"), "Position evaluation payload")
+            if not {
+                "entry_index_usdc_per_btc",
+                "entry_short_leg_mark_iv_fraction",
+                "prior_evaluation_index_usdc_per_btc",
+                "current_index_usdc_per_btc",
+                "next_evaluation_index_usdc_per_btc",
+            }.issubset(evaluation):
+                continue
+            owner_identity = _identity(evaluation.get(owner_field), owner_field)
+            evaluations_by_owner.setdefault(owner_identity, []).append(value)
+
+        for owner_identity, values in evaluations_by_owner.items():
+            anchor_identity = owner_identity
+            anchor_kind = "SHADOW_ENTRY"
+            if rejected:
+                observation = by_kind_identity.get(
+                    ("REJECTED_COUNTERFACTUAL_OBSERVATION", owner_identity)
+                )
+                if observation is None:
+                    raise PayloadValidationError(
+                        "rejected Position evaluation is missing its observation"
+                    )
+                anchor_identity = _identity(
+                    _mapping(
+                        observation.get("payload"),
+                        "rejected observation payload",
+                    ).get("rejected_anchor_identity"),
+                    "rejected_anchor_identity",
+                )
+                anchor_kind = "REJECTED_COUNTERFACTUAL_ANCHOR"
+            anchor_value = by_kind_identity.get((anchor_kind, anchor_identity))
+            if anchor_value is None:
+                raise PayloadValidationError("Position evaluation is missing its entry anchor")
+            anchor = _mapping(anchor_value.get("payload"), "Position entry anchor payload")
+            if rejected:
+                expected_entry = {
+                    field: anchor.get(field)
+                    for field in (
+                        "entry_index_usdc_per_btc",
+                        "entry_index_source_identity",
+                        "entry_index_fact_boundary",
+                        "entry_short_leg_mark_iv_fraction",
+                        "entry_short_leg_mark_iv_source_identity",
+                        "entry_short_leg_mark_iv_fact_boundary",
+                    )
+                }
+            else:
+                index_source = _mapping(
+                    anchor.get("entry_index_source_ref"),
+                    "entry_index_source_ref",
+                )
+                ticker_source = _mapping(
+                    anchor.get("entry_short_leg_mark_iv_source_ref"),
+                    "entry_short_leg_mark_iv_source_ref",
+                )
+                expected_entry = {
+                    "entry_index_usdc_per_btc": anchor.get("entry_index_usdc_per_btc"),
+                    "entry_index_source_identity": index_source.get("source_identity"),
+                    "entry_index_fact_boundary": index_source.get("receipt_fact_boundary"),
+                    "entry_short_leg_mark_iv_fraction": anchor.get(
+                        "entry_short_leg_mark_iv_fraction"
+                    ),
+                    "entry_short_leg_mark_iv_source_identity": ticker_source.get("source_identity"),
+                    "entry_short_leg_mark_iv_fact_boundary": ticker_source.get(
+                        "receipt_fact_boundary"
+                    ),
+                }
+            expected_prior = (
+                expected_entry["entry_index_usdc_per_btc"],
+                expected_entry["entry_index_source_identity"],
+                expected_entry["entry_index_fact_boundary"],
+            )
+            for value in sorted(
+                values,
+                key=lambda item: (
+                    _graph_boundary(
+                        item.get("fact_boundary"),
+                        "Position evaluation boundary",
+                    ).causal_seq
+                ),
+            ):
+                evaluation = _mapping(value.get("payload"), "Position evaluation payload")
+                if any(
+                    evaluation.get(field) != expected for field, expected in expected_entry.items()
+                ):
+                    raise PayloadValidationError(
+                        "Position evaluation entry source graph differs from its entry anchor"
+                    )
+                actual_prior = (
+                    evaluation.get("prior_evaluation_index_usdc_per_btc"),
+                    evaluation.get("prior_evaluation_index_source_identity"),
+                    evaluation.get("prior_evaluation_index_fact_boundary"),
+                )
+                if actual_prior != expected_prior:
+                    raise PayloadValidationError(
+                        "Position evaluation prior index anchor differs from the committed chain"
+                    )
+                if not rejected:
+                    roots: dict[tuple[str, str], FactBoundary] = {}
+                    _add_expected_root(
+                        roots,
+                        role="ANCHOR",
+                        identity=anchor_identity,
+                        boundary=_graph_boundary(
+                            anchor_value.get("fact_boundary"),
+                            "SHADOW_ENTRY.fact_boundary",
+                        ),
+                    )
+                    for role, identity_field, boundary_field in (
+                        (
+                            "POSITION_FACT",
+                            "consumed_position_fact_fingerprint",
+                            "evaluation_fact_boundary",
+                        ),
+                        (
+                            "POSITION_FACT",
+                            "entry_short_leg_mark_iv_source_identity",
+                            "entry_short_leg_mark_iv_fact_boundary",
+                        ),
+                        (
+                            "INDEX",
+                            "entry_index_source_identity",
+                            "entry_index_fact_boundary",
+                        ),
+                        (
+                            "INDEX",
+                            "prior_evaluation_index_source_identity",
+                            "prior_evaluation_index_fact_boundary",
+                        ),
+                    ):
+                        _add_expected_root(
+                            roots,
+                            role=role,
+                            identity=_identity(evaluation.get(identity_field), identity_field),
+                            boundary=_graph_boundary(
+                                evaluation.get(boundary_field),
+                                boundary_field,
+                            ),
+                        )
+                    if evaluation.get("current_index_availability") == "KNOWN":
+                        _add_expected_root(
+                            roots,
+                            role="INDEX",
+                            identity=_identity(
+                                evaluation.get("current_index_source_identity"),
+                                "current_index_source_identity",
+                            ),
+                            boundary=_graph_boundary(
+                                evaluation.get("current_index_fact_boundary"),
+                                "current_index_fact_boundary",
+                            ),
+                        )
+                    _require_exact_provenance(value, roots)
+                if evaluation.get("current_index_availability") == "KNOWN":
+                    expected_prior = (
+                        evaluation.get("next_evaluation_index_usdc_per_btc"),
+                        evaluation.get("current_index_source_identity"),
+                        evaluation.get("current_index_fact_boundary"),
+                    )
+
+
+def _validate_position_action_chains(
+    *,
+    by_kind: Mapping[str, Sequence[Mapping[str, object]]],
+    by_kind_identity: Mapping[tuple[str, str], Mapping[str, object]],
+) -> None:
+    families = (
+        (
+            "POSITION_EVALUATION",
+            "POSITION_ACTION",
+            "shadow_entry_identity",
+            "position_evaluation_identity",
+            False,
+        ),
+        (
+            "REJECTED_COUNTERFACTUAL_POSITION_EVALUATION",
+            "REJECTED_COUNTERFACTUAL_POSITION_ACTION",
+            "rejected_observation_identity",
+            "rejected_position_evaluation_identity",
+            True,
+        ),
+    )
+    for (
+        evaluation_kind,
+        action_kind,
+        owner_field,
+        action_evaluation_field,
+        rejected,
+    ) in families:
+        actions_by_owner: dict[str, list[Mapping[str, object]]] = {}
+        action_evaluations: set[str] = set()
+        for value in by_kind.get(action_kind, ()):
+            action = _mapping(value.get("payload"), "Position action payload")
+            if not {
+                action_evaluation_field,
+                "serialized_action",
+                "ordered_predicate_truth_vector",
+                "ordered_latched_close_reason_vector",
+                "first_latched_close_action_identity",
+            }.issubset(action):
+                continue
+            evaluation_identity = _identity(
+                action.get(action_evaluation_field),
+                action_evaluation_field,
+            )
+            evaluation = by_kind_identity.get((evaluation_kind, evaluation_identity))
+            if evaluation is None:
+                continue
+            if evaluation_identity in action_evaluations:
+                raise PayloadValidationError("duplicate Position actions share one evaluation")
+            action_evaluations.add(evaluation_identity)
+            evaluation_payload = _mapping(
+                evaluation.get("payload"),
+                "Position evaluation payload",
+            )
+            owner_identity = _identity(evaluation_payload.get(owner_field), owner_field)
+            actions_by_owner.setdefault(owner_identity, []).append(value)
+
+        for values in actions_by_owner.values():
+            action_rows: list[
+                tuple[
+                    FactBoundary,
+                    str,
+                    Mapping[str, object],
+                    Mapping[str, object],
+                    str,
+                ]
+            ] = []
+            for value in values:
+                action = _mapping(value.get("payload"), "Position action payload")
+                evaluation_identity = _identity(
+                    action.get(action_evaluation_field),
+                    action_evaluation_field,
+                )
+                evaluation = by_kind_identity[(evaluation_kind, evaluation_identity)]
+                evaluation_payload = _mapping(
+                    evaluation.get("payload"),
+                    "Position evaluation payload",
+                )
+                action_boundary = _graph_boundary(
+                    value.get("fact_boundary"),
+                    "Position action boundary",
+                )
+                evaluation_boundary = _graph_boundary(
+                    evaluation.get("fact_boundary"),
+                    "Position evaluation boundary",
+                )
+                if action_boundary != evaluation_boundary or action.get(
+                    "ordered_predicate_truth_vector"
+                ) != evaluation_payload.get("ordered_predicate_truth_vector"):
+                    raise PayloadValidationError(
+                        "Position action boundary/truth vector differs from owning evaluation"
+                    )
+                action_rows.append(
+                    (
+                        action_boundary,
+                        _identity(value.get("object_identity"), "Position action identity"),
+                        action,
+                        evaluation_payload,
+                        evaluation_identity,
+                    )
+                )
+            causal_seqs = [row[0].causal_seq for row in action_rows]
+            if len(causal_seqs) != len(set(causal_seqs)):
+                raise PayloadValidationError(
+                    "duplicate Position actions share one owner causal boundary"
+                )
+            action_rows.sort(key=lambda row: row[0].causal_seq)
+            latched_reasons: set[str] = set()
+            first_close_identity: str | None = None
+            for _, action_identity, action, evaluation, _ in action_rows:
+                truths = _string_array(
+                    evaluation.get("ordered_predicate_truth_vector"),
+                    "ordered_predicate_truth_vector",
+                )
+                latched_reasons.update(
+                    reason
+                    for reason, truth in zip(POSITION_CLOSE_REASONS, truths, strict=True)
+                    if truth == "TRUE"
+                )
+                ordered_latched = tuple(
+                    reason for reason in POSITION_CLOSE_REASONS if reason in latched_reasons
+                )
+                expected_action = (
+                    "CLOSE" if ordered_latched else ("UNKNOWN" if "UNKNOWN" in truths else "HOLD")
+                )
+                if first_close_identity is None and expected_action == "CLOSE":
+                    first_close_identity = action_identity
+                if (
+                    action.get("serialized_action") != expected_action
+                    or action.get("ordered_latched_close_reason_vector") != list(ordered_latched)
+                    or action.get("first_latched_close_action_identity") != first_close_identity
+                    or (
+                        not rejected
+                        and (
+                            action.get("primary_close_reason")
+                            != (ordered_latched[0] if ordered_latched else None)
+                            or action.get("secondary_close_reasons") != list(ordered_latched[1:])
+                        )
+                    )
+                ):
+                    raise PayloadValidationError("Position action causal latch history mismatch")
+
+
+def validate_complete_semantic_graph(
+    objects: Mapping[str, Mapping[str, object]],
+    *,
+    runtime_start: FactBoundary,
+    enrollment_end: FactBoundary,
+    terminal_boundary: FactBoundary,
+) -> None:
+    """Cross-bind complete terminal objects after individual object validation."""
+    by_kind: dict[str, list[Mapping[str, object]]] = {}
+    by_kind_identity: dict[tuple[str, str], Mapping[str, object]] = {}
+    for value in objects.values():
+        kind = _string(value.get("object_kind"), "object_kind")
+        identity = _identity(value.get("object_identity"), "object_identity")
+        by_kind.setdefault(kind, []).append(value)
+        key = (kind, identity)
+        if key in by_kind_identity:
+            raise PayloadValidationError(f"duplicate complete-graph object: {kind} {identity}")
+        by_kind_identity[key] = value
+
+    def local(kind: str, identity: object, relationship: str) -> Mapping[str, object]:
+        target_identity = _identity(identity, relationship)
+        target = by_kind_identity.get((kind, target_identity))
+        if target is None:
+            raise PayloadValidationError(
+                f"complete semantic graph is missing {relationship}: {target_identity}"
+            )
+        return target
+
+    def payload(value: Mapping[str, object], label: str) -> Mapping[str, object]:
+        return _mapping(value.get("payload"), label)
+
+    families = (
+        {
+            "observation_kind": "SHADOW_OUTCOME_OBSERVATION",
+            "anchor_kind": "SHADOW_ENTRY",
+            "anchor_field": "shadow_entry_identity",
+            "outcome_kind": "SHADOW_OUTCOME",
+            "outcome_observation_field": "shadow_observation_identity",
+            "outcome_anchor_field": "shadow_entry_identity",
+            "exit_kind": "SHADOW_COUNTERFACTUAL_EXIT",
+            "exit_observation_field": "shadow_observation_identity",
+            "opportunity_kind": "CLOSE_OPPORTUNITY_EVALUATION",
+            "opportunity_anchor_field": "shadow_entry_identity",
+            "quote_kind": "CLOSE_QUOTE_EVALUATION",
+            "action_kind": "POSITION_ACTION",
+            "evaluation_kind": "POSITION_EVALUATION",
+            "pair_family": "ADMITTED",
+            "policy_arm": "SHADOW_TRADE",
+            "alternative_arm": "NO_TRADE",
+        },
+        {
+            "observation_kind": "REJECTED_COUNTERFACTUAL_OBSERVATION",
+            "anchor_kind": "REJECTED_COUNTERFACTUAL_ANCHOR",
+            "anchor_field": "rejected_anchor_identity",
+            "outcome_kind": "REJECTED_COUNTERFACTUAL_OUTCOME",
+            "outcome_observation_field": "rejected_observation_identity",
+            "outcome_anchor_field": "rejected_anchor_identity",
+            "exit_kind": "REJECTED_COUNTERFACTUAL_EXIT",
+            "exit_observation_field": "rejected_observation_identity",
+            "opportunity_kind": "REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION",
+            "opportunity_anchor_field": "rejected_observation_identity",
+            "quote_kind": "REJECTED_COUNTERFACTUAL_CLOSE_QUOTE_EVALUATION",
+            "action_kind": "REJECTED_COUNTERFACTUAL_POSITION_ACTION",
+            "evaluation_kind": "REJECTED_COUNTERFACTUAL_POSITION_EVALUATION",
+            "pair_family": "REJECTED",
+            "policy_arm": "NO_TRADE",
+            "alternative_arm": "REJECTED_COUNTERFACTUAL_TRADE",
+        },
+    )
+    entry_audit_fields = (
+        "gross_entry_credit_usdc",
+        "entry_fee_reserve_usdc",
+        "net_entry_credit_usdc",
+        "contractual_payoff_max_loss_ex_fees_usdc",
+        "entry_fee_reserved_payoff_loss_usdc",
+        "underwriting_reserved_loss_usdc",
+    )
+    quote_fields = (
+        "canonical_combo_identity",
+        "canonical_leg_identities",
+        "close_direction",
+        "full_quantity_btc",
+        "consumed_levels",
+        "gross_close_cashflow_usdc",
+    )
+    opportunity_fields = (
+        "commission_source_refs",
+        "index_source_ref",
+        "gross_close_cashflow_usdc",
+        "close_fee_reserve_usdc",
+        "net_close_cashflow_usdc",
+        "net_close_debit_usdc",
+        "projected_shadow_net_pnl_usdc",
+        "projected_net_loss_usdc",
+    )
+
+    for family in families:
+        observation_kind = family["observation_kind"]
+        outcomes_by_observation: dict[str, list[Mapping[str, object]]] = {}
+        for value in by_kind.get(family["outcome_kind"], ()):
+            value_payload = payload(value, "Outcome payload")
+            observation_identity = _identity(
+                value_payload[family["outcome_observation_field"]],
+                "Outcome observation identity",
+            )
+            outcomes_by_observation.setdefault(observation_identity, []).append(value)
+        opportunities_by_owner: dict[str, list[Mapping[str, object]]] = {}
+        for value in by_kind.get(family["opportunity_kind"], ()):
+            value_payload = payload(value, "close opportunity payload")
+            owner_identity = _identity(
+                value_payload[family["opportunity_anchor_field"]],
+                "close opportunity owner identity",
+            )
+            opportunities_by_owner.setdefault(owner_identity, []).append(value)
+        _validate_family_reverse_closure(
+            family=family,
+            by_kind=by_kind,
+            by_kind_identity=by_kind_identity,
+            outcomes_by_observation=outcomes_by_observation,
+        )
+        for observation in by_kind.get(observation_kind, ()):
+            observation_identity = _identity(
+                observation.get("object_identity"),
+                "observation identity",
+            )
+            observation_payload = payload(observation, f"{observation_kind} payload")
+            anchor_identity = _identity(
+                observation_payload[family["anchor_field"]],
+                "observation anchor identity",
+            )
+            anchor = local(
+                family["anchor_kind"],
+                anchor_identity,
+                "observation anchor",
+            )
+            anchor_payload = payload(anchor, "observation anchor payload")
+            if observation_payload["start_fact_boundary"] != anchor["fact_boundary"]:
+                raise PayloadValidationError("observation start differs from anchor boundary")
+            anchor_boundary = _graph_boundary(anchor["fact_boundary"], "anchor boundary")
+            expected_enrollment = anchor_boundary.is_strictly_after(
+                runtime_start
+            ) and enrollment_end.is_strictly_after(anchor_boundary)
+            if observation_payload["cohort_enrolled"] is not expected_enrollment:
+                raise PayloadValidationError(
+                    "observation enrollment differs from realized causal boundaries"
+                )
+
+            outcomes = outcomes_by_observation.get(observation_identity, ())
+            if len(outcomes) != 1:
+                raise PayloadValidationError(
+                    "complete semantic graph requires exactly one Outcome per observation"
+                )
+            outcome = outcomes[0]
+            outcome_identity = _identity(outcome["object_identity"], "Outcome identity")
+            outcome_payload = payload(outcome, "Outcome payload")
+            if outcome_payload[family["outcome_anchor_field"]] != anchor_identity:
+                raise PayloadValidationError("Outcome anchor differs from observation anchor")
+            if outcome_payload["terminal_fact_boundary"] != outcome["fact_boundary"]:
+                raise PayloadValidationError("Outcome terminal boundary differs from envelope")
+            outcome_boundary = _graph_boundary(outcome["fact_boundary"], "Outcome boundary")
+            if terminal_boundary.causal_seq < outcome_boundary.causal_seq:
+                raise PayloadValidationError("Outcome occurs after complete-directory terminal")
+            _require_equal_fields(
+                outcome_payload,
+                anchor_payload,
+                entry_audit_fields,
+                "Outcome entry audit differs from anchor",
+            )
+            if outcome_payload["terminal_state"] == "MATURE_UNKNOWN":
+                witnesses = outcome_payload["natural_terminal_lifecycle_witnesses"]
+                if not isinstance(witnesses, list):
+                    raise PayloadValidationError(
+                        "MATURE_UNKNOWN lifecycle witnesses must be an array"
+                    )
+                canonical_legs = anchor_payload["canonical_leg_identities"]
+                if not isinstance(canonical_legs, list) or len(canonical_legs) != 2:
+                    raise PayloadValidationError("anchor canonical legs are incomplete")
+                for index, role in enumerate(("SHORT", "LONG")):
+                    witness = _mapping(witnesses[index], f"{role} lifecycle witness")
+                    if (
+                        witness["canonical_leg_role"] != role
+                        or witness["instrument_identity"] != canonical_legs[index]
+                    ):
+                        raise PayloadValidationError(
+                            "MATURE_UNKNOWN lifecycle witness differs from anchor leg"
+                        )
+                    witness_boundary = _graph_boundary(
+                        witness["witness_fact_boundary"],
+                        f"{role} lifecycle witness boundary",
+                    )
+                    if (
+                        witness_boundary.code_identity != anchor_boundary.code_identity
+                        or witness_boundary.runtime_identity != anchor_boundary.runtime_identity
+                        or witness_boundary.causal_seq <= anchor_boundary.causal_seq
+                    ):
+                        raise PayloadValidationError(
+                            "MATURE_UNKNOWN lifecycle witness must be strictly after its entry anchor"
+                        )
+                    if (
+                        witness_boundary.code_identity != outcome_boundary.code_identity
+                        or witness_boundary.runtime_identity != outcome_boundary.runtime_identity
+                        or witness_boundary.causal_seq > outcome_boundary.causal_seq
+                    ):
+                        raise PayloadValidationError(
+                            "MATURE_UNKNOWN lifecycle witness cannot follow its Outcome"
+                        )
+
+            pair = local(
+                "ALIGNED_POLICY_NO_TRADE_PAIR",
+                observation_payload["aligned_pair_identity"],
+                "aligned pair",
+            )
+            pair_payload = payload(pair, "aligned pair payload")
+            expected_pair = {
+                "pair_family": family["pair_family"],
+                "cohort_enrolled": expected_enrollment,
+                "pair_anchor_identity": anchor_identity,
+                "policy_arm": family["policy_arm"],
+                "alternative_arm": family["alternative_arm"],
+                "trade_observation_identity": observation_identity,
+                "trade_outcome_identity": outcome_identity,
+                "terminal_state": outcome_payload["terminal_state"],
+                "terminal_fact_boundary": outcome_payload["terminal_fact_boundary"],
+                "censor_mask": outcome_payload["censor_mask"],
+            }
+            for field, expected in expected_pair.items():
+                if pair_payload[field] != expected:
+                    raise PayloadValidationError(
+                        f"aligned pair differs from Outcome/observation at {field}"
+                    )
+
+            opportunity_owner = (
+                observation_identity if family["pair_family"] == "REJECTED" else anchor_identity
+            )
+            eligible = [
+                value
+                for value in opportunities_by_owner.get(opportunity_owner, ())
+                if payload(value, "close opportunity payload")["eligibility"] == "ELIGIBLE"
+                and _graph_boundary(
+                    value["fact_boundary"],
+                    "eligible opportunity boundary",
+                ).causal_seq
+                <= outcome_boundary.causal_seq
+            ]
+            selected_exit_identity = outcome_payload["selected_exit_identity"]
+            if outcome_payload["terminal_state"] == "MATURE_KNOWN":
+                if selected_exit_identity is None or not eligible:
+                    raise PayloadValidationError(
+                        "MATURE_KNOWN requires a selected causal-first eligible exit"
+                    )
+                earliest_seq = min(
+                    _graph_boundary(value["fact_boundary"], "eligible boundary").causal_seq
+                    for value in eligible
+                )
+                first_eligible = [
+                    value
+                    for value in eligible
+                    if _graph_boundary(
+                        value["fact_boundary"],
+                        "eligible boundary",
+                    ).causal_seq
+                    == earliest_seq
+                ]
+                if len(first_eligible) != 1:
+                    raise PayloadValidationError(
+                        "multiple eligible opportunities share the causal-first boundary"
+                    )
+                selected_exit = local(
+                    family["exit_kind"],
+                    selected_exit_identity,
+                    "selected exit",
+                )
+                selected_exit_payload = payload(selected_exit, "selected exit payload")
+                if selected_exit_payload[family["exit_observation_field"]] != observation_identity:
+                    raise PayloadValidationError("selected exit belongs to another observation")
+                selected_opportunity_identity = _identity(
+                    selected_exit_payload["close_opportunity_evaluation_identity"],
+                    "selected opportunity identity",
+                )
+                if selected_opportunity_identity != first_eligible[0]["object_identity"]:
+                    raise PayloadValidationError(
+                        "selected exit is not the causal-first eligible opportunity"
+                    )
+                if selected_exit["fact_boundary"] != outcome["fact_boundary"]:
+                    raise PayloadValidationError(
+                        "selected exit boundary differs from MATURE_KNOWN Outcome"
+                    )
+                if first_eligible[0]["fact_boundary"] != selected_exit["fact_boundary"]:
+                    raise PayloadValidationError(
+                        "eligible opportunity, selected exit, and Outcome require "
+                        "one atomic FactBoundary"
+                    )
+                _validate_selected_exit_semantics(
+                    selected_exit_payload,
+                    selected_opportunity_identity=selected_opportunity_identity,
+                    family=family,
+                    by_kind_identity=by_kind_identity,
+                    quote_fields=quote_fields,
+                    opportunity_fields=opportunity_fields,
+                )
+                if (
+                    pair_payload["trade_net_pnl_after_public_standard_fee_reserve_usdc"]
+                    != outcome_payload["net_pnl_after_public_standard_fee_reserve_usdc"]
+                ):
+                    raise PayloadValidationError("aligned pair PnL differs from Outcome")
+                expected_advantage = (
+                    outcome_payload["net_pnl_after_public_standard_fee_reserve_usdc"]
+                    if family["pair_family"] == "ADMITTED"
+                    else canonical_decimal(
+                        -_decimal(
+                            outcome_payload["net_pnl_after_public_standard_fee_reserve_usdc"],
+                            "Outcome net PnL",
+                        )
+                    )
+                )
+                if pair_payload["policy_advantage_usdc"] != expected_advantage:
+                    raise PayloadValidationError("aligned pair advantage differs from Outcome")
+                exit_payload = selected_exit_payload
+                known_outcome_exit_pairs = (
+                    ("gross_close_cashflow_usdc", "gross_close_cashflow_usdc"),
+                    ("close_fee_reserve_usdc", "close_fee_reserve_usdc"),
+                    ("net_close_cashflow_usdc", "net_close_cashflow_usdc"),
+                    (
+                        "net_pnl_after_public_standard_fee_reserve_usdc",
+                        "projected_shadow_net_pnl_usdc",
+                    ),
+                    ("net_loss_usdc", "projected_net_loss_usdc"),
+                )
+                for outcome_field, exit_field in known_outcome_exit_pairs:
+                    if outcome_payload[outcome_field] != exit_payload[exit_field]:
+                        raise PayloadValidationError(
+                            f"Outcome economics differ from selected exit at {outcome_field}"
+                        )
+            else:
+                if selected_exit_identity is not None:
+                    raise PayloadValidationError(
+                        "unknown/censored Outcome cannot reference a selected exit"
+                    )
+                if eligible:
+                    raise PayloadValidationError(
+                        "eligible opportunity cannot be rewritten as unknown or censored"
+                    )
+                if (
+                    pair_payload["trade_net_pnl_after_public_standard_fee_reserve_usdc"] is not None
+                    or pair_payload["policy_advantage_usdc"] is not None
+                ):
+                    raise PayloadValidationError(
+                        "unknown/censored aligned pair cannot contain economics"
+                    )
+
+            _validate_outcome_attempt_links(
+                outcome_payload,
+                family=family,
+                by_kind_identity=by_kind_identity,
+            )
+
+
+def _validate_family_reverse_closure(
+    *,
+    family: Mapping[str, str],
+    by_kind: Mapping[str, Sequence[Mapping[str, object]]],
+    by_kind_identity: Mapping[tuple[str, str], Mapping[str, object]],
+    outcomes_by_observation: Mapping[str, Sequence[Mapping[str, object]]],
+) -> None:
+    observation_kind = family["observation_kind"]
+    rejected = family["pair_family"] == "REJECTED"
+    observations: dict[str, Mapping[str, object]] = {}
+    owner_by_observation: dict[str, str] = {}
+    anchor_by_owner: dict[str, Mapping[str, object]] = {}
+    for value in by_kind.get(observation_kind, ()):
+        observation_identity = _identity(value["object_identity"], "observation identity")
+        observation = _mapping(value["payload"], "observation payload")
+        anchor_identity = _identity(
+            observation[family["anchor_field"]],
+            "observation anchor identity",
+        )
+        anchor_value = by_kind_identity.get((family["anchor_kind"], anchor_identity))
+        if anchor_value is None:
+            raise PayloadValidationError("observation is missing its owning anchor")
+        owner_identity = observation_identity if rejected else anchor_identity
+        if owner_identity in anchor_by_owner:
+            raise PayloadValidationError("multiple observations share one family owner")
+        observations[observation_identity] = value
+        owner_by_observation[observation_identity] = owner_identity
+        anchor_by_owner[owner_identity] = _mapping(
+            anchor_value["payload"],
+            "observation anchor payload",
+        )
+    if set(outcomes_by_observation) != set(observations):
+        raise PayloadValidationError("Outcome graph has an orphan or missing observation")
+
+    evaluation_owner_field = family["opportunity_anchor_field"]
+    evaluations: dict[str, Mapping[str, object]] = {}
+    evaluation_payloads: dict[str, Mapping[str, object]] = {}
+    evaluation_owners: dict[str, str] = {}
+    evaluations_by_owner_boundary: dict[tuple[str, FactBoundary], list[str]] = {}
+    for value in by_kind.get(family["evaluation_kind"], ()):
+        identity = _identity(value["object_identity"], "Position evaluation identity")
+        value_payload = _mapping(value["payload"], "Position evaluation payload")
+        owner_identity = _identity(
+            value_payload[evaluation_owner_field],
+            "Position evaluation owner",
+        )
+        if owner_identity not in anchor_by_owner:
+            raise PayloadValidationError("orphan Position evaluation owner")
+        evaluations[identity] = value
+        evaluation_payloads[identity] = value_payload
+        evaluation_owners[identity] = owner_identity
+        boundary = _graph_boundary(value["fact_boundary"], "Position evaluation boundary")
+        boundary_evaluations = evaluations_by_owner_boundary.setdefault(
+            (owner_identity, boundary),
+            [],
+        )
+        boundary_evaluations.append(identity)
+        if len(boundary_evaluations) != 1:
+            raise PayloadValidationError("duplicate Position evaluations share one owner boundary")
+
+    action_evaluation_field = (
+        "rejected_position_evaluation_identity" if rejected else "position_evaluation_identity"
+    )
+    actions: dict[str, Mapping[str, object]] = {}
+    action_payloads: dict[str, Mapping[str, object]] = {}
+    action_owners: dict[str, str] = {}
+    actions_by_evaluation: dict[str, list[str]] = {}
+    for value in by_kind.get(family["action_kind"], ()):
+        identity = _identity(value["object_identity"], "Position action identity")
+        value_payload = _mapping(value["payload"], "Position action payload")
+        evaluation_identity = _identity(
+            value_payload[action_evaluation_field],
+            "owning Position evaluation identity",
+        )
+        evaluation_value = evaluations.get(evaluation_identity)
+        evaluation_payload = evaluation_payloads.get(evaluation_identity)
+        if evaluation_value is None or evaluation_payload is None:
+            raise PayloadValidationError("orphan Position action evaluation")
+        if (
+            value["fact_boundary"] != evaluation_value["fact_boundary"]
+            or value_payload["ordered_predicate_truth_vector"]
+            != evaluation_payload["ordered_predicate_truth_vector"]
+        ):
+            raise PayloadValidationError(
+                "Position action boundary/truth vector differs from owning evaluation"
+            )
+        actions[identity] = value
+        action_payloads[identity] = value_payload
+        action_owners[identity] = evaluation_owners[evaluation_identity]
+        actions_by_evaluation.setdefault(evaluation_identity, []).append(identity)
+    for evaluation_identity in evaluations:
+        if len(actions_by_evaluation.get(evaluation_identity, ())) != 1:
+            raise PayloadValidationError(
+                "each Position evaluation requires exactly one owning action"
+            )
+
+    quotes: dict[str, Mapping[str, object]] = {}
+    quote_payloads: dict[str, Mapping[str, object]] = {}
+    quote_owners: dict[str, str] = {}
+    quotes_by_owner_boundary: dict[tuple[str, FactBoundary], list[str]] = {}
+    for value in by_kind.get(family["quote_kind"], ()):
+        identity = _identity(value["object_identity"], "close quote identity")
+        value_payload = _mapping(value["payload"], "close quote payload")
+        owner_identity = _identity(value_payload[evaluation_owner_field], "close quote owner")
+        anchor_payload = anchor_by_owner.get(owner_identity)
+        if anchor_payload is None:
+            raise PayloadValidationError("orphan close quote owner")
+        _require_equal_fields(
+            value_payload,
+            anchor_payload,
+            (
+                "canonical_combo_identity",
+                "canonical_leg_identities",
+                "full_quantity_btc",
+            ),
+            "close quote differs from owning anchor",
+        )
+        expected_close_direction = "BUY" if anchor_payload["entry_direction"] == "SELL" else "SELL"
+        if value_payload["close_direction"] != expected_close_direction:
+            raise PayloadValidationError("close quote direction differs from owning anchor")
+        first_action = value_payload["first_latched_close_action_identity"]
+        if first_action is not None:
+            first_action_identity = _identity(first_action, "first CLOSE action identity")
+            first_action_payload = action_payloads.get(first_action_identity)
+            if (
+                first_action_payload is None
+                or action_owners[first_action_identity] != owner_identity
+                or first_action_payload["serialized_action"] != "CLOSE"
+                or first_action_payload["first_latched_close_action_identity"]
+                != first_action_identity
+            ):
+                raise PayloadValidationError("close quote has an orphan first CLOSE action")
+        quotes[identity] = value
+        quote_payloads[identity] = value_payload
+        quote_owners[identity] = owner_identity
+        boundary = _graph_boundary(value["fact_boundary"], "close quote boundary")
+        boundary_quotes = quotes_by_owner_boundary.setdefault((owner_identity, boundary), [])
+        boundary_quotes.append(identity)
+        if len(boundary_quotes) != 1:
+            raise PayloadValidationError("duplicate close quotes share one owner boundary")
+        if value_payload["close_conditioning"] == "PRE_CLOSE":
+            if len(evaluations_by_owner_boundary.get((owner_identity, boundary), ())) != 1:
+                raise PayloadValidationError(
+                    "pre-CLOSE quote requires exactly one owning Position evaluation"
+                )
+
+    opportunities: dict[str, Mapping[str, object]] = {}
+    opportunity_payloads: dict[str, Mapping[str, object]] = {}
+    opportunity_owners: dict[str, str] = {}
+    opportunities_by_quote: dict[str, list[str]] = {}
+    opportunities_by_owner_boundary: dict[tuple[str, FactBoundary], list[str]] = {}
+    for value in by_kind.get(family["opportunity_kind"], ()):
+        identity = _identity(value["object_identity"], "close opportunity identity")
+        value_payload = _mapping(value["payload"], "close opportunity payload")
+        owner_identity = _identity(
+            value_payload[evaluation_owner_field],
+            "close opportunity owner",
+        )
+        if owner_identity not in anchor_by_owner:
+            raise PayloadValidationError("orphan close opportunity owner")
+        action_identity = _identity(
+            value_payload["first_latched_close_action_identity"],
+            "close opportunity first CLOSE action",
+        )
+        if (
+            action_identity not in actions
+            or action_owners[action_identity] != owner_identity
+            or action_payloads[action_identity]["serialized_action"] != "CLOSE"
+        ):
+            raise PayloadValidationError("close opportunity has an orphan first CLOSE action")
+        opportunity_boundary = _graph_boundary(
+            value["fact_boundary"],
+            "close opportunity boundary",
+        )
+        action_boundary = _graph_boundary(
+            actions[action_identity]["fact_boundary"],
+            "first CLOSE action boundary",
+        )
+        if not opportunity_boundary.is_strictly_after(action_boundary):
+            raise PayloadValidationError("close opportunity must be strictly after first CLOSE")
+        quote_identity_value = value_payload["close_quote_evaluation_identity"]
+        if quote_identity_value is not None:
+            quote_identity = _identity(quote_identity_value, "close opportunity quote")
+            quote_payload = quote_payloads.get(quote_identity)
+            quote_boundary = (
+                _graph_boundary(
+                    quotes[quote_identity]["fact_boundary"],
+                    "close opportunity quote boundary",
+                )
+                if quote_payload is not None
+                else None
+            )
+            if (
+                quote_payload is None
+                or quote_owners[quote_identity] != owner_identity
+                or quote_payload["first_latched_close_action_identity"] != action_identity
+                or quote_payload["close_conditioning"] != action_identity
+                or quote_boundary is None
+                or not quote_boundary.is_strictly_after(action_boundary)
+                or quote_boundary.causal_seq > opportunity_boundary.causal_seq
+            ):
+                raise PayloadValidationError(
+                    "close opportunity differs from its owning quote/action"
+                )
+            opportunities_by_quote.setdefault(quote_identity, []).append(identity)
+        elif value_payload["attempt_terminal_identity"] is None:
+            raise PayloadValidationError("close opportunity requires one quote or attempt terminal")
+        opportunities[identity] = value
+        opportunity_payloads[identity] = value_payload
+        opportunity_owners[identity] = owner_identity
+        boundary_opportunities = opportunities_by_owner_boundary.setdefault(
+            (owner_identity, opportunity_boundary),
+            [],
+        )
+        boundary_opportunities.append(identity)
+        if len(boundary_opportunities) != 1:
+            raise PayloadValidationError("duplicate close opportunities share one owner boundary")
+    for quote_identity, quote_payload in quote_payloads.items():
+        conditioning = quote_payload["close_conditioning"]
+        if conditioning != "PRE_CLOSE" and not opportunities_by_quote.get(quote_identity):
+            raise PayloadValidationError("each post-CLOSE quote requires an owning opportunity")
+
+    exits_by_opportunity: dict[str, list[str]] = {}
+    exits_by_observation: dict[str, list[str]] = {}
+    for value in by_kind.get(family["exit_kind"], ()):
+        identity = _identity(value["object_identity"], "selected exit identity")
+        value_payload = _mapping(value["payload"], "selected exit payload")
+        observation_identity = _identity(
+            value_payload[family["exit_observation_field"]],
+            "selected exit observation",
+        )
+        selected_owner = owner_by_observation.get(observation_identity)
+        if selected_owner is None:
+            raise PayloadValidationError("orphan selected exit observation")
+        opportunity_identity = _identity(
+            value_payload["close_opportunity_evaluation_identity"],
+            "selected exit opportunity",
+        )
+        opportunity = opportunities.get(opportunity_identity)
+        if (
+            opportunity is None
+            or opportunity_owners[opportunity_identity] != selected_owner
+            or opportunity_payloads[opportunity_identity]["eligibility"] != "ELIGIBLE"
+            or opportunity["fact_boundary"] != value["fact_boundary"]
+        ):
+            raise PayloadValidationError(
+                "selected exit differs from its atomic eligible opportunity"
+            )
+        exits_by_opportunity.setdefault(opportunity_identity, []).append(identity)
+        exits_by_observation.setdefault(observation_identity, []).append(identity)
+    for opportunity_identity, value_payload in opportunity_payloads.items():
+        expected = 1 if value_payload["eligibility"] == "ELIGIBLE" else 0
+        if len(exits_by_opportunity.get(opportunity_identity, ())) != expected:
+            raise PayloadValidationError("close opportunity and selected exit are not one-to-one")
+    for observation_identity, exit_identities in exits_by_observation.items():
+        outcomes = outcomes_by_observation.get(observation_identity, ())
+        if len(outcomes) != 1:
+            raise PayloadValidationError("selected exit lacks one owning Outcome")
+        outcome = _mapping(outcomes[0]["payload"], "selected exit Outcome payload")
+        if len(exit_identities) != 1 or outcome["selected_exit_identity"] != exit_identities[0]:
+            raise PayloadValidationError("selected exit and Outcome are not one-to-one")
+
+    if not rejected:
+        shadow_opportunities = {
+            _identity(value["object_identity"], "Shadow close opportunity identity"): value
+            for value in by_kind.get("SHADOW_CLOSE_OPPORTUNITY", ())
+        }
+        eligible = {
+            identity
+            for identity, value_payload in opportunity_payloads.items()
+            if value_payload["eligibility"] == "ELIGIBLE"
+        }
+        if set(shadow_opportunities) != eligible:
+            raise PayloadValidationError(
+                "eligible evaluation and Shadow close opportunity are not one-to-one"
+            )
+
+
+def _require_equal_fields(
+    left: Mapping[str, object],
+    right: Mapping[str, object],
+    fields: Sequence[str],
+    message: str,
+) -> None:
+    for field in fields:
+        if left[field] != right[field]:
+            raise PayloadValidationError(f"{message}: {field}")
+
+
+def _semantic_local_payload(
+    by_kind_identity: Mapping[tuple[str, str], Mapping[str, object]],
+    *,
+    kind: str,
+    identity: object,
+    relationship: str,
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    target_identity = _identity(identity, relationship)
+    value = by_kind_identity.get((kind, target_identity))
+    if value is None:
+        raise PayloadValidationError(
+            f"complete semantic graph is missing {relationship}: {target_identity}"
+        )
+    return value, _mapping(value.get("payload"), f"{relationship} payload")
+
+
+def _validate_selected_exit_semantics(
+    selected_exit: Mapping[str, object],
+    *,
+    selected_opportunity_identity: str,
+    family: Mapping[str, str],
+    by_kind_identity: Mapping[tuple[str, str], Mapping[str, object]],
+    quote_fields: Sequence[str],
+    opportunity_fields: Sequence[str],
+) -> None:
+    opportunity_value, opportunity = _semantic_local_payload(
+        by_kind_identity,
+        kind=family["opportunity_kind"],
+        identity=selected_opportunity_identity,
+        relationship="selected close opportunity evaluation",
+    )
+    if opportunity["eligibility"] != "ELIGIBLE":
+        raise PayloadValidationError("selected close opportunity is not ELIGIBLE")
+    quote_value, quote = _semantic_local_payload(
+        by_kind_identity,
+        kind=family["quote_kind"],
+        identity=opportunity["close_quote_evaluation_identity"],
+        relationship="selected close quote evaluation",
+    )
+    if (
+        quote["close_quote_state"] != "ATOMIC_COMBO_CLOSE_QUOTE"
+        or quote["first_latched_close_action_identity"]
+        != selected_exit["first_latched_close_action_identity"]
+        or opportunity["first_latched_close_action_identity"]
+        != selected_exit["first_latched_close_action_identity"]
+    ):
+        raise PayloadValidationError("selected exit action/quote relationship mismatch")
+    if (
+        selected_exit["close_opportunity_evaluation_fact_boundary"]
+        != opportunity_value["fact_boundary"]
+    ):
+        raise PayloadValidationError("selected exit opportunity boundary mismatch")
+    _require_equal_fields(
+        selected_exit,
+        quote,
+        quote_fields,
+        "selected exit differs from owning quote",
+    )
+    _require_equal_fields(
+        selected_exit,
+        opportunity,
+        opportunity_fields,
+        "selected exit differs from owning opportunity",
+    )
+
+    if family["pair_family"] == "ADMITTED":
+        shadow_value, shadow = _semantic_local_payload(
+            by_kind_identity,
+            kind="SHADOW_CLOSE_OPPORTUNITY",
+            identity=selected_exit["shadow_close_opportunity_identity"],
+            relationship="Shadow close opportunity",
+        )
+        if (
+            shadow["close_opportunity_evaluation_identity"] != selected_opportunity_identity
+            or shadow_value["fact_boundary"] != opportunity_value["fact_boundary"]
+        ):
+            raise PayloadValidationError("Shadow close opportunity relationship mismatch")
+        _require_equal_fields(
+            shadow,
+            quote,
+            quote_fields,
+            "Shadow close opportunity differs from quote",
+        )
+        _require_equal_fields(
+            shadow,
+            opportunity,
+            opportunity_fields,
+            "Shadow close opportunity differs from evaluation",
+        )
+        quote_provenance = quote_value.get("source_provenance")
+        if not isinstance(quote_provenance, list):
+            raise PayloadValidationError("owning quote provenance must be an array")
+        quote_roots = [
+            item
+            for item in quote_provenance
+            if _mapping(item, "quote provenance root")["source_role"] == "COMBO_QUOTE"
+        ]
+        if len(quote_roots) != 1:
+            raise PayloadValidationError("owning quote requires exactly one combo source")
+        root = _mapping(quote_roots[0], "combo quote provenance")
+        expected_ref = {
+            "source_identity": root["source_identity"],
+            "receipt_fact_boundary": root["receipt_fact_boundary"],
+        }
+        if selected_exit["combo_quote_source_ref"] != expected_ref:
+            raise PayloadValidationError("selected exit differs from owning quote source")
+    else:
+        if (
+            selected_exit["close_quote_evaluation_identity"] != quote_value["object_identity"]
+            or selected_exit["close_quote_evaluation_fact_boundary"] != quote_value["fact_boundary"]
+            or selected_exit["consumed_rule_scoped_quote_fingerprint"]
+            != quote["consumed_rule_scoped_quote_fingerprint"]
+        ):
+            raise PayloadValidationError("rejected exit differs from owning quote")
+
+
+def _validate_outcome_attempt_links(
+    outcome: Mapping[str, object],
+    *,
+    family: Mapping[str, str],
+    by_kind_identity: Mapping[tuple[str, str], Mapping[str, object]],
+) -> None:
+    first_action_identity = outcome["first_latched_close_action_identity"]
+    if first_action_identity is None:
+        return
+    action_value, action = _semantic_local_payload(
+        by_kind_identity,
+        kind=family["action_kind"],
+        identity=first_action_identity,
+        relationship="first CLOSE action",
+    )
+    if (
+        action_value["fact_boundary"] != outcome["first_latched_close_action_fact_boundary"]
+        or action["first_latched_close_action_identity"] != first_action_identity
+    ):
+        raise PayloadValidationError("Outcome first CLOSE action cross-bind mismatch")
+    outcome_boundary = _graph_boundary(outcome["terminal_fact_boundary"], "Outcome boundary")
+    first_boundary = _graph_boundary(
+        outcome["first_latched_close_action_fact_boundary"],
+        "first CLOSE boundary",
+    )
+    attempt_boundary = _graph_boundary(
+        outcome["post_close_attempt_terminal_fact_boundary"],
+        "attempt terminal boundary",
+    )
+    if family["pair_family"] == "REJECTED":
+        if outcome["terminal_state"] == "MATURE_UNKNOWN" and not (
+            outcome_boundary.is_strictly_after(first_boundary)
+            and attempt_boundary.causal_seq <= outcome_boundary.causal_seq
+            and outcome["post_close_attempt_terminal_owner"] == "ORDINARY"
+        ):
+            raise PayloadValidationError("MATURE_UNKNOWN causal attempt relationship mismatch")
+        return
+    scheduled_kind = "POST_CLOSE_ATTEMPT_SCHEDULED"
+    terminal_kind = "POST_CLOSE_ATTEMPT_TERMINAL"
+    scheduled_value, scheduled = _semantic_local_payload(
+        by_kind_identity,
+        kind=scheduled_kind,
+        identity=outcome["scheduled_post_close_attempt_identity"],
+        relationship="scheduled post-CLOSE attempt",
+    )
+    if (
+        scheduled_value["fact_boundary"] != outcome["scheduled_post_close_attempt_fact_boundary"]
+        or scheduled["first_latched_close_action_identity"] != first_action_identity
+    ):
+        raise PayloadValidationError("Outcome scheduled attempt cross-bind mismatch")
+    terminal_value, terminal = _semantic_local_payload(
+        by_kind_identity,
+        kind=terminal_kind,
+        identity=outcome["post_close_attempt_terminal_identity"],
+        relationship="post-CLOSE attempt terminal",
+    )
+    if (
+        terminal_value["fact_boundary"] != outcome["post_close_attempt_terminal_fact_boundary"]
+        or terminal["terminal_status"] != outcome["post_close_attempt_terminal_status"]
+        or terminal["terminal_owner"] != outcome["post_close_attempt_terminal_owner"]
+    ):
+        raise PayloadValidationError("Outcome attempt terminal cross-bind mismatch")
+    if outcome["terminal_state"] == "MATURE_UNKNOWN" and not (
+        outcome_boundary.is_strictly_after(first_boundary)
+        and attempt_boundary.causal_seq <= outcome_boundary.causal_seq
+        and outcome["post_close_attempt_terminal_owner"] == "ORDINARY"
+    ):
+        raise PayloadValidationError("MATURE_UNKNOWN causal attempt relationship mismatch")
 
 
 def validate_complete_attempt_relationships(
@@ -1332,6 +2512,75 @@ def _validate_common_shapes(payload: Mapping[str, object]) -> None:
             _direct_source_ref(value, key)
 
 
+def _validate_position_source_graph(
+    object_kind: str,
+    payload: Mapping[str, object],
+) -> None:
+    if object_kind not in {
+        "POSITION_EVALUATION",
+        "REJECTED_COUNTERFACTUAL_POSITION_EVALUATION",
+    }:
+        return
+    for field in (
+        "entry_index_usdc_per_btc",
+        "prior_evaluation_index_usdc_per_btc",
+        "next_evaluation_index_usdc_per_btc",
+    ):
+        if _decimal(payload.get(field), field) <= 0:
+            raise PayloadValidationError(f"{field} must be positive")
+    entry_iv = _decimal(
+        payload.get("entry_short_leg_mark_iv_fraction"),
+        "entry_short_leg_mark_iv_fraction",
+    )
+    if entry_iv < 0:
+        raise PayloadValidationError("entry_short_leg_mark_iv_fraction must be nonnegative")
+    for field in (
+        "entry_index_source_identity",
+        "entry_short_leg_mark_iv_source_identity",
+        "prior_evaluation_index_source_identity",
+    ):
+        _identity(payload.get(field), field)
+    for field in (
+        "entry_index_fact_boundary",
+        "entry_short_leg_mark_iv_fact_boundary",
+        "prior_evaluation_index_fact_boundary",
+    ):
+        if payload.get(field) is None:
+            raise PayloadValidationError(f"{field} is required")
+    current_availability = payload.get("current_index_availability")
+    current_members = (
+        payload.get("current_index_usdc_per_btc"),
+        payload.get("current_index_source_identity"),
+        payload.get("current_index_fact_boundary"),
+    )
+    prior = _decimal(
+        payload.get("prior_evaluation_index_usdc_per_btc"),
+        "prior_evaluation_index_usdc_per_btc",
+    )
+    next_index = _decimal(
+        payload.get("next_evaluation_index_usdc_per_btc"),
+        "next_evaluation_index_usdc_per_btc",
+    )
+    if current_availability == "KNOWN":
+        if any(member is None for member in current_members):
+            raise PayloadValidationError("KNOWN current index requires value, source, and boundary")
+        current = _decimal(current_members[0], "current_index_usdc_per_btc")
+        if current <= 0:
+            raise PayloadValidationError("current_index_usdc_per_btc must be positive")
+        _identity(current_members[1], "current_index_source_identity")
+        if next_index != current:
+            raise PayloadValidationError("KNOWN current index must become the next index anchor")
+    elif current_availability == "UNKNOWN":
+        if any(member is not None for member in current_members):
+            raise PayloadValidationError(
+                "UNKNOWN current index requires null value, source, and boundary"
+            )
+        if next_index != prior:
+            raise PayloadValidationError("UNKNOWN current index must retain the prior index anchor")
+    else:
+        raise PayloadValidationError("current_index_availability is invalid")
+
+
 def _validate_enums(object_kind: str, payload: Mapping[str, object]) -> None:
     enums: dict[str, set[str]] = {
         "availability": {"NOT_EVALUATED", "UNKNOWN", "EVALUABLE"},
@@ -1391,6 +2640,25 @@ def _validate_enums(object_kind: str, payload: Mapping[str, object]) -> None:
                 raise PayloadValidationError(f"{field} has invalid close reasons")
             if values != tuple(reason for reason in POSITION_CLOSE_REASONS if reason in values):
                 raise PayloadValidationError(f"{field} is outside the close-reason total order")
+    if object_kind in {
+        "POSITION_ACTION",
+        "REJECTED_COUNTERFACTUAL_POSITION_ACTION",
+    }:
+        latched = _string_array(
+            payload["ordered_latched_close_reason_vector"],
+            "ordered_latched_close_reason_vector",
+        )
+        if bool(latched) != (payload.get("first_latched_close_action_identity") is not None) or (
+            bool(latched) != (payload.get("serialized_action") == "CLOSE")
+        ):
+            raise PayloadValidationError("Position action differs from its latched close reasons")
+        if object_kind == "POSITION_ACTION" and (
+            payload.get("primary_close_reason") != (latched[0] if latched else None)
+            or payload.get("secondary_close_reasons") != list(latched[1:])
+        ):
+            raise PayloadValidationError(
+                "Position action primary/secondary differ from latched close reasons"
+            )
     if object_kind in {"SHADOW_OUTCOME", "REJECTED_COUNTERFACTUAL_OUTCOME"}:
         _validate_outcome_matrix(payload)
     if object_kind == "ALIGNED_POLICY_NO_TRADE_PAIR":
@@ -1414,7 +2682,8 @@ def _validate_levels_and_arithmetic(
         quantity = _decimal(payload.get("full_quantity_btc"), "full_quantity_btc")
         if quantity <= 0:
             raise PayloadValidationError("full_quantity_btc must be positive")
-        total = Decimal(0)
+        amount_total = Decimal(0)
+        quote_total = Decimal(0)
         prices: list[Decimal] = []
         for index, member in enumerate(levels):
             level = _mapping(member, f"{levels_field}[{index}]")
@@ -1427,15 +2696,36 @@ def _validate_levels_and_arithmetic(
             amount = _decimal(level["amount_btc"], "amount_btc")
             if amount <= 0:
                 raise PayloadValidationError("consumed level amount must be positive")
-            total += amount
+            amount_total += amount
+            quote_total += price * amount
             prices.append(price)
-        if total != quantity:
+        if amount_total != quantity:
             raise PayloadValidationError(f"{levels_field} must consume exact full quantity")
         direction = payload.get("close_direction", payload.get("entry_direction"))
+        if direction not in {"BUY", "SELL"}:
+            raise PayloadValidationError(f"{levels_field} requires BUY or SELL direction")
         if direction == "BUY" and prices != sorted(prices):
             raise PayloadValidationError("BUY consumed levels must be best-to-worse ascending")
         if direction == "SELL" and prices != sorted(prices, reverse=True):
             raise PayloadValidationError("SELL consumed levels must be best-to-worse descending")
+        expected_cashflow = -quote_total if direction == "BUY" else quote_total
+        if levels_field == "entry_consumed_levels":
+            gross_entry = _decimal(
+                payload.get("gross_entry_credit_usdc"), "gross_entry_credit_usdc"
+            )
+            if gross_entry <= 0 or gross_entry != expected_cashflow:
+                raise PayloadValidationError(
+                    "gross entry credit differs from signed consumed levels"
+                )
+        elif payload.get("gross_close_cashflow_usdc") is not None:
+            gross_close = _decimal(
+                payload["gross_close_cashflow_usdc"],
+                "gross_close_cashflow_usdc",
+            )
+            if gross_close != expected_cashflow:
+                raise PayloadValidationError(
+                    "gross close cashflow differs from signed consumed levels"
+                )
     if object_kind in {
         "UNDERWRITING_ACTION",
         "SHADOW_ENTRY",

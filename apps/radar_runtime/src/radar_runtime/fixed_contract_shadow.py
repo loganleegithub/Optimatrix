@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 
-from market_monitor import BookState, ContinuityGap, PriceLevel, TimeInterval
+from market_monitor import BookState, ContinuityGap, PriceLevel, TimeInterval, TrustedClock
 from options_domain import (
     AmountState,
     ComboInstrument,
@@ -38,6 +38,7 @@ from short_vol_underwriting import (
     FactBoundary as DownstreamFactBoundary,
 )
 from short_vol_underwriting.admission import RpcRequestIntent
+from short_vol_underwriting.constants import ADMISSION_CUTOFF_LEAD_MS
 from short_vol_underwriting.owner import OwnerTransition
 
 from radar_runtime.runtime import (
@@ -121,6 +122,7 @@ class FixedContractShadowRuntimeAdapter:
         self._underwriting_by_scope: dict[str, UnderwritingFacts] = {}
         self._candidate_origins: dict[str, UnderwritingFacts] = {}
         self._anchors: dict[str, _Anchor] = {}
+        self._anchors_by_observation: dict[str, _Anchor] = {}
         self._requests: dict[int, _RequestContext] = {}
         self._last_reducer: RadarReducer | None = None
         self._enrollment_opened = False
@@ -142,6 +144,149 @@ class FixedContractShadowRuntimeAdapter:
     @property
     def required_option_instrument_names(self) -> tuple[str, ...]:
         return self.owner.required_option_instrument_names
+
+    def next_time_boundary_monotonic_ms(
+        self,
+        *,
+        reducer: RadarReducer,
+        after_monotonic_ms: int,
+    ) -> int | None:
+        self._require_bindings(reducer)
+        clock = reducer.clock
+        if clock is None:
+            return None
+        crossings = [
+            crossing
+            for target in self.owner.pending_trusted_time_boundaries
+            if (
+                crossing := _first_trusted_time_crossing(
+                    clock=clock,
+                    market_time_ms=target.market_time_ms,
+                    bound=target.bound,
+                    clock_currentness_budget_ms=target.clock_currentness_budget_ms,
+                    after_monotonic_ms=after_monotonic_ms,
+                )
+            )
+            is not None
+        ]
+        for facts in self._underwriting_by_scope.values():
+            if facts.active_episode_identity is None or facts.expiry_ms is None:
+                continue
+            crossing = _first_trusted_time_crossing(
+                clock=clock,
+                market_time_ms=facts.expiry_ms - ADMISSION_CUTOFF_LEAD_MS,
+                bound="UPPER",
+                clock_currentness_budget_ms=(
+                    self.owner.policies.underwriting.clock_currentness_budget_ms
+                ),
+                after_monotonic_ms=after_monotonic_ms,
+            )
+            if crossing is not None:
+                crossings.append(crossing)
+        active_underwriting = tuple(
+            facts
+            for facts in self._underwriting_by_scope.values()
+            if facts.active_episode_identity is not None
+        )
+        if active_underwriting:
+            crossings.extend(
+                self._currentness_crossings(
+                    reducer=reducer,
+                    clock=clock,
+                    after_monotonic_ms=after_monotonic_ms,
+                    clock_budget_ms=(self.owner.policies.underwriting.clock_currentness_budget_ms),
+                    platform_budget_ms=(
+                        self.owner.policies.underwriting.platform_currentness_budget_ms
+                    ),
+                    index_budget_ms=(self.owner.policies.underwriting.index_currentness_budget_ms),
+                    ticker_budget_ms=(
+                        self.owner.policies.underwriting.option_ticker_currentness_budget_ms
+                    ),
+                    ticker_instrument_names=tuple(
+                        sorted(
+                            {
+                                facts.short_leg_instrument_name
+                                for facts in active_underwriting
+                                if facts.short_leg_instrument_name is not None
+                            }
+                        )
+                    ),
+                )
+            )
+        pending_position_names = self.owner.required_option_instrument_names
+        if pending_position_names:
+            crossings.extend(
+                self._currentness_crossings(
+                    reducer=reducer,
+                    clock=clock,
+                    after_monotonic_ms=after_monotonic_ms,
+                    clock_budget_ms=self.owner.policies.position.clock_currentness_budget_ms,
+                    platform_budget_ms=(
+                        self.owner.policies.position.platform_currentness_budget_ms
+                    ),
+                    index_budget_ms=self.owner.policies.position.index_currentness_budget_ms,
+                    ticker_budget_ms=(
+                        self.owner.policies.position.option_ticker_currentness_budget_ms
+                    ),
+                    ticker_instrument_names=pending_position_names,
+                )
+            )
+        return min(crossings) if crossings else None
+
+    def _currentness_crossings(
+        self,
+        *,
+        reducer: RadarReducer,
+        clock: TrustedClock,
+        after_monotonic_ms: int,
+        clock_budget_ms: int,
+        platform_budget_ms: int,
+        index_budget_ms: int,
+        ticker_budget_ms: int,
+        ticker_instrument_names: tuple[str, ...],
+    ) -> tuple[int, ...]:
+        crossings: list[int] = []
+        clock_crossing = _first_clock_currentness_expiry(
+            clock=clock,
+            clock_currentness_budget_ms=clock_budget_ms,
+            after_monotonic_ms=after_monotonic_ms,
+        )
+        if clock_crossing is not None:
+            crossings.append(clock_crossing)
+        platform_crossing = _first_platform_currentness_expiry(
+            session_epoch=self._session_epoch,
+            platform_usable=reducer.platform.usable,
+            receipt=reducer.accepted_platform_continuity_boundary,
+            platform_currentness_budget_ms=platform_budget_ms,
+            after_monotonic_ms=after_monotonic_ms,
+        )
+        if platform_crossing is not None:
+            crossings.append(platform_crossing)
+        index_receipt = reducer.accepted_index_receipt
+        if index_receipt is not None:
+            index_crossing = _first_source_currentness_expiry(
+                clock=clock,
+                source_timestamp_ms=index_receipt.source_timestamp_ms,
+                source_currentness_budget_ms=index_budget_ms,
+                clock_currentness_budget_ms=clock_budget_ms,
+                after_monotonic_ms=after_monotonic_ms,
+            )
+            if index_crossing is not None:
+                crossings.append(index_crossing)
+        for instrument_name in ticker_instrument_names:
+            ticker = self._ticker_sources.get(instrument_name)
+            if ticker is None:
+                continue
+            ticker_crossing = _first_source_currentness_expiry(
+                clock=clock,
+                source_timestamp_ms=ticker.value.source_timestamp_ms,
+                source_currentness_budget_ms=ticker_budget_ms,
+                clock_currentness_budget_ms=clock_budget_ms,
+                after_monotonic_ms=after_monotonic_ms,
+            )
+            if ticker_crossing is not None:
+                crossings.append(ticker_crossing)
+        return tuple(crossings)
 
     def on_settled_transaction(
         self,
@@ -256,11 +401,17 @@ class FixedContractShadowRuntimeAdapter:
         boundary: FactBoundary,
     ) -> tuple[ShadowRpcIntent, ...]:
         reducer = self._require_reducer()
+        downstream = self._boundary(reducer, boundary)
         transition = self.owner.note_request_sent(
             request_id=request_id,
-            boundary=self._boundary(reducer, boundary),
+            boundary=downstream,
         )
-        return self._consume_transition(transition, ())
+        return self._consume_ordinary_post_close_terminal(
+            reducer=reducer,
+            request_id=request_id,
+            boundary=downstream,
+            transition=transition,
+        )
 
     def on_request_failure(
         self,
@@ -278,12 +429,18 @@ class FixedContractShadowRuntimeAdapter:
         except KeyError as exc:
             raise ValueError("Shadow RPC terminal state is not an ordinary failure") from exc
         reducer = self._require_reducer()
+        downstream = self._boundary(reducer, boundary)
         transition = self.owner.note_request_failure(
             request_id=request_id,
-            boundary=self._boundary(reducer, boundary),
+            boundary=downstream,
             terminal_status=terminal_status,
         )
-        return self._consume_transition(transition, ())
+        return self._consume_ordinary_post_close_terminal(
+            reducer=reducer,
+            request_id=request_id,
+            boundary=downstream,
+            transition=transition,
+        )
 
     def on_rpc_response(
         self,
@@ -306,7 +463,12 @@ class FixedContractShadowRuntimeAdapter:
                 boundary=accepted_boundary,
                 terminal_status=PostCloseAttemptStatus.ERROR,
             )
-            return self._consume_transition(transition, ())
+            return self._consume_ordinary_post_close_terminal(
+                reducer=reducer,
+                request_id=request_id,
+                boundary=accepted_boundary,
+                transition=transition,
+            )
         combo = self._combo_sources.get(context.instrument_name)
         combo_identity = combo.semantic_identity if combo is not None else None
         if combo_identity is None:
@@ -315,7 +477,12 @@ class FixedContractShadowRuntimeAdapter:
                 boundary=accepted_boundary,
                 terminal_status=PostCloseAttemptStatus.ERROR,
             )
-            return self._consume_transition(transition, ())
+            return self._consume_ordinary_post_close_terminal(
+                reducer=reducer,
+                request_id=request_id,
+                boundary=accepted_boundary,
+                transition=transition,
+            )
         frontier = reducer.accepted_book_receipts.get(context.instrument_name)
         frontier_book = reducer.combo_books.get(context.instrument_name)
         frontier_depth_matches = (
@@ -403,7 +570,7 @@ class FixedContractShadowRuntimeAdapter:
             self._discover_anchors()
             return result_intents
 
-        anchor = self._anchors.get(context.owner_identity)
+        anchor = self._anchor_for_owner_identity(context.owner_identity)
         if anchor is None:
             return ()
         facts = self._project_position(
@@ -741,11 +908,18 @@ class FixedContractShadowRuntimeAdapter:
                 continue
             if prior.active_episode_identity in by_episode:
                 continue
+            trusted = self._trusted_interval(
+                reducer,
+                boundary,
+                budget_ms=self.owner.policies.underwriting.clock_currentness_budget_ms,
+            )
             current[scope] = replace(
                 prior,
                 boundary=boundary,
                 active_episode_identity=None,
                 atomic_state=PublicAtomicQuoteState.NOT_EVALUATED.value,
+                trusted_time_lower_ms=(trusted.lower_ms if trusted is not None else None),
+                trusted_time_upper_ms=(trusted.upper_ms if trusted is not None else None),
                 quote_refresh_witness=None,
                 unknown_reasons=("RADAR_EPISODE_NOT_ACTIVE",),
             )
@@ -1041,12 +1215,23 @@ class FixedContractShadowRuntimeAdapter:
             boundary,
             budget_ms=self.owner.policies.position.clock_currentness_budget_ms,
         )
+        natural_terminal_boundary_reached = any(
+            member is not None
+            and member.instrument.lifecycle_state.value in {"settlement", "delivered", "archivized"}
+            for member in (short_live, long_live)
+        ) or (
+            trusted is not None
+            and any(
+                member is not None and trusted.lower_ms >= member.instrument.expiration_timestamp_ms
+                for member in (short, long)
+            )
+        )
         index, index_source = self._current_index(
             reducer,
             trusted,
             budget_ms=self.owner.policies.position.index_currentness_budget_ms,
         )
-        ticker, _ticker_source = self._current_ticker(
+        ticker, ticker_source = self._current_ticker(
             short.instrument.instrument_name if short is not None else "",
             trusted,
             budget_ms=self.owner.policies.position.option_ticker_currentness_budget_ms,
@@ -1129,6 +1314,11 @@ class FixedContractShadowRuntimeAdapter:
             long=long_live,
             combo=combo_live,
             witness=retained_witness,
+            atomic_availability=atomic_availability,
+            previously_accepted_combo_quote=True,
+            previously_accepted_index=True,
+            previously_accepted_ticker=True,
+            natural_terminal_boundary_reached=natural_terminal_boundary_reached,
         )
         return PositionFacts(
             boundary=boundary,
@@ -1169,6 +1359,7 @@ class FixedContractShadowRuntimeAdapter:
             short_commission_source=(short_live.source if short_live is not None else None),
             long_commission_source=(long_live.source if long_live is not None else None),
             index_source=index_source,
+            ticker_source=ticker_source,
             current_combo_subscription_witness=retained_witness,
             lifecycle_short_source=(
                 short_live.source
@@ -1189,6 +1380,18 @@ class FixedContractShadowRuntimeAdapter:
         transition: OwnerTransition,
         facts: Sequence[UnderwritingFacts],
     ) -> tuple[ShadowRpcIntent, ...]:
+        reducer = self._require_reducer()
+        for retirement in transition.rpc_retirements:
+            reducer.retire_shadow_rpc(
+                request_id=retirement.request_id,
+                boundary=FactBoundary(
+                    session_epoch=retirement.boundary.session_epoch,
+                    ingress_seq=retirement.boundary.ingress_seq,
+                    received_monotonic_ms=retirement.boundary.received_monotonic_ms,
+                    causal_seq=retirement.boundary.causal_seq,
+                ),
+            )
+            self._requests.pop(retirement.request_id, None)
         facts_by_slot = {
             canonical_identity(
                 "UnderwritingPositionSlotKeyIdentity",
@@ -1225,6 +1428,50 @@ class FixedContractShadowRuntimeAdapter:
             self._requests[intent.request_id] = context
             result.append(self._shadow_intent(intent))
         return tuple(result)
+
+    def _consume_ordinary_post_close_terminal(
+        self,
+        *,
+        reducer: RadarReducer,
+        request_id: int,
+        boundary: DownstreamFactBoundary,
+        transition: OwnerTransition,
+    ) -> tuple[ShadowRpcIntent, ...]:
+        intents = list(self._consume_transition(transition, ()))
+        context = self._requests.get(request_id)
+        if (
+            context is None
+            or context.purpose != "POST_CLOSE_QUOTE"
+            or not any(
+                emitted.object_kind
+                in {
+                    "POST_CLOSE_ATTEMPT_TERMINAL",
+                    "REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION",
+                }
+                for emitted in transition.emitted
+            )
+        ):
+            return tuple(intents)
+        anchor = self._anchor_for_owner_identity(context.owner_identity)
+        if anchor is None:
+            return tuple(intents)
+        self._refresh_sources(reducer, boundary)
+        facts = self._project_position(
+            reducer=reducer,
+            anchor=anchor,
+            boundary=boundary,
+        )
+
+        def reject_second_attempt() -> int:
+            raise RuntimeError("ordinary post-CLOSE terminal cannot schedule another attempt")
+
+        settlement = self.owner.settle_position(
+            anchor_identity=anchor.anchor_identity,
+            facts=facts,
+            allocate_request_id=reject_second_attempt,
+        )
+        intents.extend(self._consume_transition(settlement, ()))
+        return tuple(intents)
 
     def _shadow_intent(self, intent: RpcRequestIntent) -> ShadowRpcIntent:
         if intent.purpose == "ADMISSION_REFRESH":
@@ -1276,6 +1523,26 @@ class FixedContractShadowRuntimeAdapter:
                 entry_direction=str(payload["entry_direction"]),
                 target_quantity_btc=_decimal(payload["full_quantity_btc"]),
             )
+        for value in self.owner.writer.objects:
+            if value["object_kind"] not in {
+                "SHADOW_OUTCOME_OBSERVATION",
+                "REJECTED_COUNTERFACTUAL_OBSERVATION",
+            }:
+                continue
+            payload = value["payload"]
+            if not isinstance(payload, Mapping):
+                raise RuntimeError("observation payload must be a mapping")
+            anchor_field = (
+                "rejected_anchor_identity"
+                if value["object_kind"] == "REJECTED_COUNTERFACTUAL_OBSERVATION"
+                else "shadow_entry_identity"
+            )
+            anchor = self._anchors.get(str(payload[anchor_field]))
+            if anchor is not None:
+                self._anchors_by_observation[str(value["object_identity"])] = anchor
+
+    def _anchor_for_owner_identity(self, owner_identity: str) -> _Anchor | None:
+        return self._anchors.get(owner_identity) or self._anchors_by_observation.get(owner_identity)
 
     def _subscription_witness(
         self,
@@ -1409,7 +1676,7 @@ class FixedContractShadowRuntimeAdapter:
                 "ask" if facts.entry_direction == "BUY" else "bid",
                 facts.target_quantity_btc,
             )
-        anchor = self._anchors.get(context.owner_identity)
+        anchor = self._anchor_for_owner_identity(context.owner_identity)
         if anchor is None:
             return "ask", self.owner.policies.position.target_base_quantity_btc
         close_direction = "BUY" if anchor.entry_direction == "SELL" else "SELL"
@@ -1569,8 +1836,12 @@ def _option_availability(
     if short is None or long is None:
         return CloseOptionAvailability.UNKNOWN
     for member in (short.instrument, long.instrument):
-        if member.lifecycle_state.value != "open" or not member.is_active or member.amount is None:
+        if member.lifecycle_state.value != "open" or not member.is_active:
             return CloseOptionAvailability.UNEXECUTABLE
+    if short.instrument.amount is None or long.instrument.amount is None:
+        return CloseOptionAvailability.UNKNOWN
+    for member in (short.instrument, long.instrument):
+        assert member.amount is not None
         if check_target_amount(target, member.amount).state is AmountState.INELIGIBLE:
             return CloseOptionAvailability.UNEXECUTABLE
     return CloseOptionAvailability.TRADEABLE
@@ -1588,10 +1859,20 @@ def _atomic_availability(
             if reducer.combo_catalog.complete
             else CloseAtomicAvailability.UNKNOWN
         )
-    if (
-        combo.instrument.amount is not None
-        and check_target_amount(target, combo.instrument.amount).state is AmountState.INELIGIBLE
-    ):
+    if combo.instrument.state in {
+        "inactive",
+        "settlement",
+        "delivered",
+        "archivized",
+        "locked",
+        "halted",
+    }:
+        return CloseAtomicAvailability.KNOWN_UNAVAILABLE
+    if combo.instrument.state != "active":
+        return CloseAtomicAvailability.UNKNOWN
+    if combo.instrument.amount is None:
+        return CloseAtomicAvailability.UNKNOWN
+    if check_target_amount(target, combo.instrument.amount).state is AmountState.INELIGIBLE:
         return CloseAtomicAvailability.KNOWN_UNAVAILABLE
     if witness is None:
         return CloseAtomicAvailability.UNKNOWN
@@ -1631,8 +1912,17 @@ def _required_sources_continuous(
     long: _OptionSource | None,
     combo: _ComboSource | None,
     witness: SubscriptionAdmissionRefreshWitness | None,
+    atomic_availability: CloseAtomicAvailability,
+    previously_accepted_combo_quote: bool,
+    previously_accepted_index: bool,
+    previously_accepted_ticker: bool,
+    natural_terminal_boundary_reached: bool = False,
 ) -> bool | None:
     if platform_current is False:
+        return False
+    if index is None and previously_accepted_index:
+        return False
+    if ticker is None and previously_accepted_ticker:
         return False
     if (
         platform_current is None
@@ -1641,11 +1931,132 @@ def _required_sources_continuous(
         or ticker is None
         or short is None
         or long is None
-        or combo is None
-        or witness is None
     ):
+        if not natural_terminal_boundary_reached:
+            return None
+    if combo is not None and combo.instrument.state in {"locked", "halted"}:
+        return False
+    if atomic_availability is CloseAtomicAvailability.KNOWN_UNAVAILABLE:
+        return True
+    if (
+        atomic_availability is CloseAtomicAvailability.ACTIVE
+        and combo is not None
+        and witness is not None
+    ):
+        return True
+    if previously_accepted_combo_quote and combo is not None:
+        return False
+    if natural_terminal_boundary_reached:
+        if platform_current is None or short is None or long is None:
+            return None
+        return True
+    return None
+
+
+def _first_trusted_time_crossing(
+    *,
+    clock: TrustedClock,
+    market_time_ms: int,
+    bound: str,
+    clock_currentness_budget_ms: int,
+    after_monotonic_ms: int,
+) -> int | None:
+    if bound not in {"LOWER", "UPPER"}:
+        raise ValueError("trusted-time crossing requires LOWER or UPPER")
+    if after_monotonic_ms < clock.base_monotonic_ms:
         return None
-    return True
+    try:
+        current = clock.interval_at(after_monotonic_ms)
+    except ContinuityGap:
+        return None
+    current_value = current.lower_ms if bound == "LOWER" else current.upper_ms
+    if current_value >= market_time_ms:
+        return None
+    latest_monotonic_ms = min(
+        clock.last_refresh_monotonic_ms + clock_currentness_budget_ms,
+        clock.last_refresh_monotonic_ms + clock.stale_deadline_ms - 1,
+    )
+    first_monotonic_ms = after_monotonic_ms + 1
+    if first_monotonic_ms > latest_monotonic_ms:
+        return None
+    latest = clock.interval_at(latest_monotonic_ms)
+    latest_value = latest.lower_ms if bound == "LOWER" else latest.upper_ms
+    if latest_value < market_time_ms:
+        return None
+    low = first_monotonic_ms
+    high = latest_monotonic_ms
+    while low < high:
+        middle = (low + high) // 2
+        interval = clock.interval_at(middle)
+        value = interval.lower_ms if bound == "LOWER" else interval.upper_ms
+        if value >= market_time_ms:
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
+def _first_clock_currentness_expiry(
+    *,
+    clock: TrustedClock,
+    clock_currentness_budget_ms: int,
+    after_monotonic_ms: int,
+) -> int | None:
+    if after_monotonic_ms < clock.base_monotonic_ms:
+        return None
+    age_ms = after_monotonic_ms - clock.last_refresh_monotonic_ms
+    if age_ms < 0 or age_ms > clock_currentness_budget_ms:
+        return None
+    try:
+        clock.interval_at(after_monotonic_ms)
+    except ContinuityGap:
+        return None
+    crossing = min(
+        clock.last_refresh_monotonic_ms + clock_currentness_budget_ms + 1,
+        clock.last_refresh_monotonic_ms + clock.stale_deadline_ms,
+    )
+    return crossing if crossing > after_monotonic_ms else None
+
+
+def _first_platform_currentness_expiry(
+    *,
+    session_epoch: int | None,
+    platform_usable: bool,
+    receipt: FactBoundary | None,
+    platform_currentness_budget_ms: int,
+    after_monotonic_ms: int,
+) -> int | None:
+    if not platform_usable or receipt is None or receipt.session_epoch != session_epoch:
+        return None
+    age_ms = after_monotonic_ms - receipt.received_monotonic_ms
+    if age_ms < 0 or age_ms > platform_currentness_budget_ms:
+        return None
+    crossing = receipt.received_monotonic_ms + platform_currentness_budget_ms + 1
+    return crossing if crossing > after_monotonic_ms else None
+
+
+def _first_source_currentness_expiry(
+    *,
+    clock: TrustedClock,
+    source_timestamp_ms: int,
+    source_currentness_budget_ms: int,
+    clock_currentness_budget_ms: int,
+    after_monotonic_ms: int,
+) -> int | None:
+    try:
+        current = clock.interval_at(after_monotonic_ms)
+    except (ContinuityGap, ValueError):
+        return None
+    source_deadline_ms = source_timestamp_ms + source_currentness_budget_ms
+    if not source_timestamp_ms <= current.upper_ms <= source_deadline_ms:
+        return None
+    return _first_trusted_time_crossing(
+        clock=clock,
+        market_time_ms=source_deadline_ms + 1,
+        bound="UPPER",
+        clock_currentness_budget_ms=clock_currentness_budget_ms,
+        after_monotonic_ms=after_monotonic_ms,
+    )
 
 
 def _parse_rest_book(

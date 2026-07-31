@@ -54,6 +54,15 @@ class RecordingShadowAdapter:
         self.settled.append(commit)
         return ()
 
+    def next_time_boundary_monotonic_ms(
+        self,
+        *,
+        reducer: RadarReducer,
+        after_monotonic_ms: int,
+    ) -> int | None:
+        del reducer, after_monotonic_ms
+        return None
+
     def realize_runtime_start(
         self,
         *,
@@ -145,6 +154,7 @@ def _schedule_shadow_request(
     reducer: RadarReducer,
     *,
     monotonic_ms: int,
+    purpose: RpcPurpose = RpcPurpose.ADMISSION_REFRESH,
 ) -> int:
     session_epoch = reducer._session_epoch
     assert session_epoch is not None
@@ -159,10 +169,14 @@ def _schedule_shadow_request(
         (
             ShadowRpcIntent(
                 request_id=request_id,
-                purpose=RpcPurpose.ADMISSION_REFRESH,
+                purpose=purpose,
                 method="public/get_order_book",
                 params={"instrument_name": "BTC-COMBO", "depth": 10000},
-                scope="CANDIDATE:candidate",
+                scope=(
+                    "CANDIDATE:candidate"
+                    if purpose is RpcPurpose.ADMISSION_REFRESH
+                    else "POSITION:position"
+                ),
                 origin_boundary=boundary,
                 send_budget_ms=100,
                 response_budget_ms=100,
@@ -327,6 +341,59 @@ def test_recoverable_reconnect_drains_without_terminalizing_and_next_session_wor
 
     assert adapter.responses == [request_id]
     assert adapter.terminals == []
+
+
+@pytest.mark.parametrize(
+    "purpose",
+    (RpcPurpose.ADMISSION_REFRESH, RpcPurpose.POST_CLOSE_REFRESH),
+)
+def test_pre_sent_shadow_response_is_orphan_and_request_expires_normally(
+    tmp_path: Path,
+    policy_factory: Any,
+    purpose: RpcPurpose,
+) -> None:
+    adapter = RecordingShadowAdapter()
+    runtime = _runtime(tmp_path, policy_factory, adapter)
+    runtime.reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    request_id = _schedule_shadow_request(
+        runtime.reducer,
+        monotonic_ms=1_000,
+        purpose=purpose,
+    )
+    early_response = InboundEnvelope(
+        {"jsonrpc": "2.0", "id": request_id, "result": {"change_id": 1}},
+        session_epoch=1,
+        ingress_seq=1,
+        received_monotonic_ms=1_001,
+    )
+
+    runtime.reducer.reduce(early_response, processed_monotonic_ms=1_001)
+    runtime.reducer.reduce(
+        InboundEnvelope(
+            {},
+            session_epoch=1,
+            ingress_seq=2,
+            received_monotonic_ms=1_002,
+            control_event=SendControlEvent(
+                kind=SendControlKind.SEND_COMPLETED,
+                request_id=request_id,
+                boundary_monotonic_ms=1_002,
+            ),
+        ),
+        processed_monotonic_ms=1_002,
+    )
+
+    assert early_response.ingress_seq == 1
+    assert early_response.received_monotonic_ms == 1_001
+    assert runtime.reducer._rpc_lifecycles[request_id].state is RpcState.SENT
+    assert adapter.responses == []
+    assert runtime.reducer.diagnostics.rpc_orphan_late_wire_count == 1
+
+    runtime.reducer.advance_time(1_102)
+    assert runtime.reducer._rpc_lifecycles[request_id].state is RpcState.SENT
+    runtime.reducer.advance_time(1_103)
+    assert runtime.reducer._rpc_lifecycles[request_id].state is RpcState.DEADLINE_LATE
+    assert [state for _, state, _ in adapter.failures] == [RpcState.DEADLINE_LATE]
 
 
 def test_barrier_cancellation_is_not_an_ordinary_error_and_retires_typed(

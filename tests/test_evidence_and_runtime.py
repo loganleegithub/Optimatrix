@@ -2519,16 +2519,22 @@ def test_sustained_ingress_heartbeat_round_trip_seals_one_conserved_directory(
         ) -> None:
             del params, responding_to_test_request
             self.sent_methods.append(method)
-            self._enqueue_wire_message(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"version": "test"} if method == "public/test" else "ok",
-                },
-                received_monotonic_ms=runtime_module._monotonic_ms(),
-            )
-            if method == "public/test":
-                stop_event.set()
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {"version": "test"} if method == "public/test" else "ok",
+            }
+            received_monotonic_ms = runtime_module._monotonic_ms()
+
+            def enqueue_after_send_receipt() -> None:
+                self._enqueue_wire_message(
+                    response,
+                    received_monotonic_ms=received_monotonic_ms,
+                )
+                if method == "public/test":
+                    stop_event.set()
+
+            asyncio.get_running_loop().call_soon(enqueue_after_send_receipt)
 
     client = IngressAndHeartbeatClient()
     for _ in range(64):
