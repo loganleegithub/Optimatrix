@@ -17,10 +17,9 @@
 [`SHORT_VOL_UNDERWRITING_POSITION`](../docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md), and
 [`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](../docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
 
-**Base commit:** `07d035c5ee798cfd11de9bcc75592071652e232d`
+**Base commit:** `967e82ea36a7fcae13c6c8a8b07108af5b21a633`
 
-**Target branch/PR:** `chatgpt/persistent-radar-shadow-web-workbench` / stacked Draft PR
-against `codex/short-vol-fixed-contract-public-shadow-runtime`
+**Target branch/PR:** `chatgpt/persistent-radar-shadow-web-workbench` / Draft PR against `main`
 
 ## Business closure
 
@@ -47,9 +46,10 @@ Positions, or only `UNKNOWN` rows is valid operating truth. It neither extends p
 changes thresholds. Empty panels display no settled object; `UNKNOWN` is never rendered as zero or
 calm.
 
-**Upstream prerequisite:** the exact accepted Radar runtime, fixed-contract Shadow owner/adapter,
-and immutable three-Policy chain at the base commit. This task does not re-open their economics,
-identity, or evidence semantics.
+**Upstream prerequisite:** exact main commit `967e82ea36a7fcae13c6c8a8b07108af5b21a633`,
+which records the accepted Radar runtime, fixed-contract Shadow owner/adapter, immutable
+three-Policy chain, and the completed two-layer public integration evidence. This task does not
+re-open their economics, identity, or evidence semantics.
 
 ## Change declarations
 
@@ -63,10 +63,11 @@ construction and are not watched or reloaded.
 its manifest, cutoff, final-stop, summary, and acceptance semantics. The persistent service does
 not impersonate a forward cohort and emits no cohort summary.
 
-**Stage/authorization change:** NONE. This branch is an offline implementation candidate only. It
-does not authorize a production-public invocation, persistent deployment, private/account access,
-orders, fills, capital, qualification, promotion, or execution. A later explicit authority and
-live-run task is required before invocation.
+**Stage/authorization change:** APPROVED — this user-authorized branch may implement and test the
+persistent service and read-only workbench offline. Production-public invocation, persistent
+deployment, private/account access, orders, fills, capital, qualification, promotion, execution,
+and supervisor installation remain forbidden. A later explicit authority task is required before
+invocation or deployment.
 
 ## Product operating behavior
 
@@ -134,7 +135,8 @@ profitability, fill quality, actual fees, private-account truth, or execution au
 **In:** process lease; persistent runtime composition; reconnect loop using the existing runtime;
 new runtime identity per start; immutable Policy chain; lifecycle/health/ready/stale projection;
 minimal append-only service records; loopback read-only HTTP/API; trader-flow HTML; focused tests;
-architecture documentation.
+architecture documentation; the narrow CLI composition needed to expose the capability while its
+invocation remains unauthorized.
 
 **Out:** changing existing contracts or Policies; a second market client/reducer; database; queue;
 microservice split; full order-book storage; replay; fixed process duration; automatic calibration;
@@ -143,7 +145,8 @@ write APIs; authentication exposed beyond loopback; public Internet binding; ord
 
 **Owning module/artifact:** `apps/radar_runtime/src/radar_runtime/service.py`,
 `apps/radar_runtime/src/radar_runtime/workbench.py`, the existing CLI entry point, direct tests, this
-task, and `docs/architecture/PERSISTENT_RUNTIME_TRADER_WORKBENCH.md`.
+task, `docs/architecture/PERSISTENT_RUNTIME_TRADER_WORKBENCH.md`, and the narrow authority record
+that keeps live invocation and deployment disabled.
 
 ## Contract
 
