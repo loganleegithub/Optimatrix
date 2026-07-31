@@ -2016,6 +2016,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "Exact repair commit",
         "evidence-integrity acceptance does not prove",
         "maker/order/fill",
+        "current active task's exact manifest authorizes its one bounded production-public process",
         "Every other invocation remains forbidden",
     ):
         assert invariant in readme

@@ -77,9 +77,9 @@ It also implements Candidate invalidation and the strictly later full-quantity c
 The implemented Outcome/cohort reducer follows the frozen causal-first counterfactual exit and
 terminal `MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one bounded
 rejected counterfactual per slot, cohort-aligned `NO_TRADE`, exact public-quote PnL equations, and
-honest conservation/null denominators. A public quote remains not a fill, and the implemented
-runtime remains unauthorized to run production-public until a separate evidence task opens that
-gate.
+honest conservation/null denominators. A public quote remains not a fill. The runtime was
+unauthorized before this evidence closure; now the current active task's exact manifest authorizes
+its one bounded production-public process, and no other invocation or trading capability follows.
 
 ## Authority
 
