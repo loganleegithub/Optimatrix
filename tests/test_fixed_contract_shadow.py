@@ -522,7 +522,7 @@ def test_atomic_scope_rejects_unbound_radar_episode_before_economic_action(
         "runtime": exact.replace(reducer.runtime_identity, "sha256:" + "c" * 64, 1),
         "policy": exact.replace(reducer.policy.identity, "sha256:" + "d" * 64, 1),
         "instrument": exact.replace("BTC-SHORT", "BTC-OTHER", 1),
-        "activation_seq": exact.rsplit(":", 1)[0] + ":3",
+        "activation_seq": exact.rsplit(":", 1)[0] + ":1",
         "truncated": exact[:-1],
     }
     tracker.episode_id = replacements[variant]

@@ -38,6 +38,7 @@ from radar_runtime.shadow import (
 from short_vol_underwriting import (
     ManifestError,
     canonical_identity,
+    read_current_evidence,
 )
 from short_vol_underwriting.constants import (
     OUTCOME_CONTRACT_DIGEST,
@@ -45,6 +46,7 @@ from short_vol_underwriting.constants import (
     RADAR_POLICY_IDENTITY,
     UNDERWRITING_POLICY_IDENTITY,
 )
+from short_vol_underwriting.evidence import _read_complete_evidence_with_git_reader
 
 ROOT = Path(__file__).resolve().parents[1]
 TASK_REF = "refs/heads/codex/short-vol-fixed-contract-public-shadow-runtime"
@@ -508,6 +510,150 @@ def test_observe_shadow_creates_client_last_and_passes_exact_supervisor_triggers
 
     assert result == summary_path
     assert events == ["client-factory", "client-enter", "runtime", "client-exit"]
+
+
+def test_observe_shadow_evidence_integrity_failure_terminalizes_once_without_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    startup = _startup(tmp_path)
+    composition = build_shadow_composition(startup)
+    client_count = 0
+    run_count = 0
+
+    class FakeClient:
+        session_epoch = 1
+
+    class FakeClientContext:
+        async def __aenter__(self) -> PublicClient:
+            return FakeClient()  # type: ignore[return-value]
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def client_factory(
+        *,
+        session_epoch: int,
+        rpc_deadline_ms: int,
+    ) -> FakeClientContext:
+        nonlocal client_count
+        client_count += 1
+        assert session_epoch == 1
+        assert rpc_deadline_ms > 0
+        return FakeClientContext()
+
+    async def fail_with_evidence_integrity(
+        client: PublicClient,
+        stop_event: asyncio.Event,
+        *,
+        shadow_supervisor_triggers: ShadowSupervisorTriggers | None = None,
+        shadow_terminal_gate: Callable[[int], None] | None = None,
+    ) -> Path:
+        nonlocal run_count
+        del stop_event, shadow_terminal_gate
+        run_count += 1
+        assert shadow_supervisor_triggers is not None
+        composition.runtime.reducer.begin_session(
+            session_epoch=client.session_epoch,
+            monotonic_ms=1,
+        )
+        composition.runtime.commit_shadow_supervisor_control(
+            ShadowSupervisorControlKind.RUNTIME_START,
+            monotonic_ms=1,
+        )
+        raise ShadowRuntimeIntegrityError("injected downstream identity failure")
+
+    async def wait_until_cancelled(_seconds: float) -> None:
+        task = asyncio.current_task()
+        if task is None or task.get_name() != "fixed-contract-shadow-supervisor":
+            raise AssertionError("fatal integrity failure must not retry")
+        await asyncio.Event().wait()
+
+    def fake_manifest_git_reader(repository: Path, arguments: Sequence[str]) -> bytes:
+        assert repository == ROOT
+        command = tuple(arguments)
+        if command == ("rev-parse", "--show-toplevel"):
+            return f"{ROOT}\n".encode()
+        if command == ("cat-file", "-e", f"{CANDIDATE}^{{commit}}"):
+            return b""
+        if command == ("rev-parse", f"{CANDIDATE}^{{tree}}"):
+            return f"{TREE}\n".encode()
+        if command == ("cat-file", "-e", f"{TREE}^{{tree}}"):
+            return b""
+        prefix = f"{CANDIDATE}:"
+        if (
+            len(command) == 3
+            and command[:2] == ("cat-file", "blob")
+            and command[2].startswith(prefix)
+        ):
+            return (ROOT / command[2].removeprefix(prefix)).read_bytes()
+        raise AssertionError(f"unexpected Git object command: {command}")
+
+    monkeypatch.setattr(composition.runtime, "run", fail_with_evidence_integrity)
+
+    with pytest.raises(
+        ShadowRuntimeIntegrityError,
+        match="downstream identity failure",
+    ):
+        asyncio.run(
+            observe_shadow(
+                composition,
+                client_factory=client_factory,
+                monotonic_ms=lambda: 2,
+                signal_registrar=lambda _signum, _callback: None,
+                sleep=wait_until_cancelled,
+            )
+        )
+
+    assert client_count == 1
+    assert run_count == 1
+    assert composition.runtime.shadow_terminalized
+    current = read_current_evidence(
+        startup.downstream_evidence_directory,
+        bindings=startup.bindings,
+    )
+    complete = _read_complete_evidence_with_git_reader(
+        startup.downstream_evidence_directory,
+        bindings=startup.bindings,
+        git_object_reader=fake_manifest_git_reader,
+    )
+    assert complete == current
+    summaries = {str(value["object_kind"]): value["payload"] for value in complete.values()}
+    assert set(summaries) == {
+        "UNDERWRITING_POSITION_SUMMARY",
+        "SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY",
+    }
+    assert all(
+        isinstance(payload, dict) and payload["conservation_status"] == "MET"
+        for payload in summaries.values()
+    )
+    cohort = summaries["SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY"]
+    assert isinstance(cohort, dict)
+    assert cohort["terminal_disposition"] == "PROCESS_FAILURE"
+    terminal_source = cohort["terminal_source"]
+    assert isinstance(terminal_source, dict)
+    assert terminal_source["control_kind"] == "PROCESS_FAILURE"
+    assert terminal_source["failure_kind"] == "FATAL_EVIDENCE_INTEGRITY"
+    assert not (startup.radar_evidence_directory / "radar-run-summary.json").exists()
+
+    files_before = {
+        path.relative_to(startup.downstream_evidence_directory): path.read_bytes()
+        for path in startup.downstream_evidence_directory.rglob("*")
+        if path.is_file()
+    }
+    composition.runtime.finalize_shadow_failure(3)
+    assert {
+        path.relative_to(startup.downstream_evidence_directory): path.read_bytes()
+        for path in startup.downstream_evidence_directory.rglob("*")
+        if path.is_file()
+    } == files_before
+    assert client_count == 1
+    assert run_count == 1
 
 
 def test_observe_shadow_reconnect_is_not_terminal_and_first_signal_stops_second_session(

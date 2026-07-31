@@ -149,6 +149,7 @@ tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md
 tasks/SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md
 tests/test_authority_and_architecture.py
 tests/test_fixed_contract_shadow.py
+tests/test_shadow_cli_preflight.py
 tests/test_short_vol_underwriting.py
 ```
 
