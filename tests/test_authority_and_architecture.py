@@ -191,84 +191,86 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_opens_only_one_bounded_shadow_forward_run() -> None:
+def test_current_stage_closes_consumed_shadow_run_and_authorizes_only_repair() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
     assert current.count(marker) == 1
-    assert f"{marker} `SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE`" in flat
+    assert f"{marker} `SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
     assert (
-        "**Fixed-contract public Shadow runtime:** `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`"
+        "**Fixed-contract public Shadow runtime:** `LIVE_INTEGRITY_DEFECT_REPAIR_REQUIRED`"
     ) in flat
-    assert "**Evidence gate:** `OPEN_FOR_ONE_BOUNDED_FORWARD_RUN`" in current
-    assert "**Live commands:** `REQUIRED_ONCE`" in current
+    assert "**Evidence gate:** `CLOSED_AFTER_FAILED_SINGLE_ATTEMPT`" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
     assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
-    assert "6207d59763e1aab7c455854169cd9dde6b0f940f" in current
-    assert "explicit immediate-start authorization" in flat
-    assert "no calendar, market-session, or fee-date clock gate remains" in flat
-    assert "2026-08-01T00:00:00Z" not in current
-    assert "effective-time" not in current
-    assert "one result-independent production-public invocation" in flat
-    assert "Outside the active task's one exact manifest and bounded process" in flat
-    assert "does not authorize a private/account/order/fill capability" in flat
+    assert "4b225ee1f199523fb052611d84612ec75c7abf78" in current
+    assert "9e53c6233949348c5805e96ea1eefb5998bf4c49" in current
+    assert "CONSUMED_FAILED_NO_RETRY" in current
+    assert "PROCESS_FAILURE" in current
+    assert "FATAL_EVIDENCE_INTEGRITY" in current
+    assert "Underwriting semantic identity must be sha256:<64 lowercase hex>" in current
+    assert "Five anomaly artifacts" in flat
+    assert "downstream complete-reader and conservation checks passed" in flat
+    assert "Radar run summary is absent" in flat
+    assert "overall forward evidence remains `INCOMPLETE` and `NOT_ACCEPTED`" in flat
+    assert "No second production-public invocation is authorized" in flat
+    assert (
+        "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json"
+    ) in current
+    assert "1090b3d9b643c621721e59552fc0ca1e7b6a7616d9b6ec136c0660c936d62e45" in current
     assert "labels record the state when the immutable contract content was accepted" in flat
     assert "SHORT_VOL_PUBLIC_SHADOW_TERMINAL_GOAL_DELEGATION" in current
     assert "## Queued sequence — not authorized" in current
 
 
-def test_forward_evidence_is_the_single_active_task() -> None:
+def test_shadow_attempt_integrity_repair_is_the_single_active_task() -> None:
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
-    assert not (ROOT / "tasks/SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md").exists()
+    assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").exists()
     assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md",
+        "SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md",
         "TEMPLATE.md",
     ]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert (
         "**Sole authorized next product-capability closure:**\n"
-        "`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE`"
+        "`SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`"
     ) in current
 
 
-def test_forward_evidence_task_freezes_candidate_window_scope_and_identities() -> None:
-    task = (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").read_text(
+def test_shadow_attempt_integrity_repair_freezes_failure_scope_and_identities() -> None:
+    task = (ROOT / "tasks/SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md").read_text(
         encoding="utf-8"
     )
     flat = " ".join(task.split())
     for invariant in (
         "**Status:** ACTIVE",
-        "**Task kind:** `EVIDENCE_ONLY`",
-        "**Runtime implementation:** FORBIDDEN",
-        "**Live commands:** REQUIRED",
-        "**Base commit:** `6207d59763e1aab7c455854169cd9dde6b0f940f`",
-        "**Base tree:** `31406d7cf3762ac286677497b52d0d0bbf463332`",
+        "**Task kind:** `IMPLEMENTATION`",
+        "**Runtime implementation:** REQUIRED",
+        "**Live commands:** FORBIDDEN",
+        "**Base commit:** `4b225ee1f199523fb052611d84612ec75c7abf78`",
+        "**Base tree:** `9e53c6233949348c5805e96ea1eefb5998bf4c49`",
         "`codex/short-vol-fixed-contract-public-shadow-runtime`; Draft PR #5",
         "**Market/Decision input contract change:** `NONE`",
         "**Decision Policy change:** `NONE`",
         "**Outcome/evaluation contract change:** `NONE`",
         "**Stage/authorization change:** `APPROVED`",
-        "explicit immediate-start authorization",
-        "no calendar, market-session, or fee-date clock gate",
-        "30 minutes after runtime start",
-        "60 minutes after runtime start",
-        "/Users/logan/Optimatrix-shadow/evidence/public-shadow-forward-001-downstream",
-        "/Users/logan/Optimatrix-shadow/evidence/public-shadow-forward-001-radar",
-        "All five exact targets must be absent when preparation begins",
-        "Codex creates and validates the manifest before the one process invocation",
-        "the terminal record only after the process reaches a terminal",
+        "CONSUMED_FAILED_NO_RETRY",
+        "Underwriting semantic identity must be sha256:<64 lowercase hex>",
+        "exact accepted upstream Radar episode identity",
+        "Radar run summary",
+        "No production-public command is permitted",
+        "a second live invocation remains forbidden",
+        "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json",
+        "1090b3d9b643c621721e59552fc0ca1e7b6a7616d9b6ec136c0660c936d62e45",
         "remote branch tip must equal that publication's expected parent",
         "create_blob` / `create_tree` / `create_commit` / `update_ref(force=false)`",
         "exact commit, tree, parent, remote branch tip, full compare range, and tests",
-        "result-independent",
-        "zero natural anomaly/Candidate/Entry/Position/Outcome",
         "Private API:** FORBIDDEN",
     ):
         assert invariant in flat
-    assert "2026-08-01T00:00:00Z" not in task
-    assert "effective-time" not in task
 
     expected_digests = (
         "sha256:b9733ad0c90837338b88fb5b6eb66ad8eed448cce6372a3f527988395087b3fe",
@@ -283,11 +285,14 @@ def test_forward_evidence_task_freezes_candidate_window_scope_and_identities() -
     scope = task.split("**Exact allowed files:**", maxsplit=1)[1].split("```", maxsplit=2)[1]
     assert set(scope.strip().removeprefix("text\n").splitlines()) == {
         "README.md",
+        "apps/radar_runtime/src/radar_runtime/fixed_contract_shadow.py",
         "docs/authority/CURRENT_STAGE.md",
-        "docs/authority/SYSTEM_ARCHITECTURE.md",
+        "packages/short_vol_underwriting/src/short_vol_underwriting/owner.py",
         "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md",
         "tasks/SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md",
         "tests/test_authority_and_architecture.py",
+        "tests/test_fixed_contract_shadow.py",
+        "tests/test_short_vol_underwriting.py",
     }
 
 
@@ -1918,8 +1923,11 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "private/account data",
         "orders, fills, capital",
         "fixed-contract Shadow implementation adds",
-        "`IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`",
-        "one result-independent production-public invocation",
+        "`LIVE_INTEGRITY_DEFECT_REPAIR_REQUIRED`",
+        "`CLOSED_AFTER_FAILED_SINGLE_ATTEMPT`",
+        "`SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`",
+        "Radar run summary is absent",
+        "No second production-public invocation is authorized",
     ):
         assert invariant in current_stage
 
@@ -2016,15 +2024,14 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`",
         "SHORT_VOL_UNDERWRITING_POSITION",
         "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT",
-        "`IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`",
+        "`LIVE_INTEGRITY_DEFECT_REPAIR_REQUIRED`",
         "`observe-shadow`",
-        "one result-independent 60-minute",
+        "single authorized production-public attempt is consumed",
         "Exact repair commit",
         "evidence-integrity acceptance does not prove",
         "maker/order/fill",
-        "current active task's exact manifest authorizes its one bounded production-public process",
-        "no calendar-time gate",
-        "Every other invocation remains forbidden",
+        "current active repair task authorizes offline implementation work only",
+        "No second production-public invocation is authorized",
     ):
         assert invariant in readme
     assert "effective-time" not in readme

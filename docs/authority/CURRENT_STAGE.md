@@ -9,14 +9,14 @@
 **Production Short Vol Radar:** `ESTABLISHED`
 
 **Sole authorized next product-capability closure:**
-`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE`
+`SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`
 
 **Fixed-contract public Shadow runtime:**
-`IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`
+`LIVE_INTEGRITY_DEFECT_REPAIR_REQUIRED`
 
-**Evidence gate:** `OPEN_FOR_ONE_BOUNDED_FORWARD_RUN`
+**Evidence gate:** `CLOSED_AFTER_FAILED_SINGLE_ATTEMPT`
 
-**Live commands:** `REQUIRED_ONCE`
+**Live commands:** `FORBIDDEN`
 
 ## Authority
 
@@ -26,12 +26,11 @@ architecture, detector parameters, or evidence mechanics. Code presence, green t
 receipts, run duration, contract presence, or roadmap order grant no stage.
 
 The current boundary retains the already established, guarded production-public Short Vol Radar
-defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md) and additionally authorizes only
-the fixed-contract public Shadow implementation's single bounded evidence process defined below.
-Outside the active task's one exact manifest and bounded process, no downstream production-public
-Shadow operation is authorized. The same boundary keeps private/account data, orders, fills,
-capital, qualification, Challenger automation, promotion, execution, and persistent service
-deployment unauthorized.
+defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md) and authorizes only the active
+fixed-contract Shadow implementation-integrity repair defined below. The sole live attempt is
+consumed and failed; no production-public Shadow process is now authorized. The same boundary keeps
+private/account data, orders, fills, capital, qualification, Challenger automation, promotion,
+execution, and persistent service deployment unauthorized.
 
 The accepted
 [`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) implementation
@@ -45,13 +44,12 @@ strict downstream evidence semantics. Exact commit
 `31406d7cf3762ac286677497b52d0d0bbf463332`, independently repaired and accepted the strict
 attempt writer/current/complete-reader boundary without changing a contract, Policy, source,
 owner, sender, economics, dependency, or lock. The active
-[`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE`](../../tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md)
-task now authorizes one result-independent production-public invocation only after its exact
-post-publication candidate, manifest, directories, and start/cutoff/final-stop controls match. It
-does not authorize a private/account/order/fill capability, qualification, or persistent
-deployment.
+[`SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`](../../tasks/SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md)
+task now authorizes only the observed live-identity and fatal-terminal implementation repair. It
+does not authorize a market command, private/account/order/fill capability, qualification, or
+persistent deployment.
 
-### Terminal-goal delegation for the downstream public Shadow closure
+### Terminal-goal delegation and consumed downstream public Shadow attempt
 
 `SHORT_VOL_PUBLIC_SHADOW_TERMINAL_GOAL_DELEGATION` records the user's 2026-07-30 authorization for
 the controller to complete one bounded sequence: accept the missing Outcome/cohort prerequisite;
@@ -60,20 +58,38 @@ pre-bound production-public evidence after exact-candidate gates; and record onl
 independent evidence proves.
 
 The authority-only prerequisite, bounded fixed-contract implementation, and strict attempt-evidence
-repair are accepted. Permission remains `PUBLIC_SHADOW`, the top implemented capability remains
-`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`, and Radar remains `ESTABLISHED`. The sole next closure is
-`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE`; its gate is open for exactly one
-bounded run and its live command is required immediately after every exact preflight passes under
-the user's explicit immediate-start authorization; no calendar, market-session, or fee-date clock
-gate remains. The external manifest must bind the post-publication activation commit/tree/ref,
-exact three-Policy chain, two distinct new external directories, actual argv/cwd, and
-start/cutoff/final-stop controls before any Deribit I/O. The immutable fee-schedule label remains
-Policy provenance and does not claim an account tier or an exact venue switch time. Access to
-private/account data, credentials, margin, orders, fills, capital, actual execution Outcome,
-qualification, promotion, persistent deployment, force-push, history rewriting, direct edits to
-`main`, a second run, and every command outside that manifest remain forbidden.
+repair remain accepted. Permission remains `PUBLIC_SHADOW`, the top implemented capability remains
+`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`, and Radar remains `ESTABLISHED`. Candidate
+`4b225ee1f199523fb052611d84612ec75c7abf78`, tree
+`9e53c6233949348c5805e96ea1eefb5998bf4c49`, ran the one authorized manifest-bound process from
+`2026-07-31T14:14:24Z` until process exit `1` at `2026-07-31T14:21:31Z`. That attempt is
+`CONSUMED_FAILED_NO_RETRY`.
 
-### Fixed-contract Shadow implementation and active forward evidence
+The runtime recorded `PROCESS_FAILURE` / `FATAL_EVIDENCE_INTEGRITY`. Its root exception was
+`Underwriting semantic identity must be sha256:<64 lowercase hex>` after a real composite Radar
+episode identity reached the downstream no-combo projection. Five anomaly artifacts exist. Both
+downstream terminal summaries are `COMPLETE`; downstream complete-reader and conservation checks
+passed, conservation is `MET`, and their persisted Candidate, Entry, Position, Outcome, and aligned
+pair counts are zero. The Radar run summary is absent: the Radar contract writes that summary only
+on a clean operator/supervisor stop, so a process failure truthfully leaves partial Radar evidence.
+The exact full interval cannot satisfy the strict Radar reader and the overall forward evidence
+remains `INCOMPLETE` and `NOT_ACCEPTED`. Those five files are occurrence artifacts, not a complete
+Radar denominator, and the business result is `NOT_EVALUABLE` rather than an accepted numeric-zero
+result.
+
+The failed manifest, Radar directory, downstream directory, process log, and terminal record are
+sealed append-only evidence. They may not be edited, completed retroactively, deleted, migrated,
+relabelled, or reused. No second production-public invocation is authorized. Access to
+private/account data, credentials, margin, orders, fills, capital, actual execution Outcome,
+qualification, promotion, persistent deployment, force-push, history rewriting, and direct edits
+to `main` remain forbidden.
+
+The controller terminal record is
+`/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json`, SHA-256
+`1090b3d9b643c621721e59552fc0ca1e7b6a7616d9b6ec136c0660c936d62e45`, 26,919 bytes. It records
+the failed evidence result and cannot grant a retry or stage advance.
+
+### Fixed-contract Shadow implementation and active integrity repair
 
 The implementation adds one pure `short_vol_underwriting` owner and one guarded
 `radar_runtime observe-shadow` composition. Offline deterministic tests cover Underwriting,
@@ -82,10 +98,12 @@ rejected-counterfactual, aligned `NO_TRADE`, terminal censoring, strict provenan
 `UNKNOWN` handling, conservation, runtime barriers, and existing Radar regressions. It adds no
 second client, queue, service, database, replay calculator, third-party dependency, or lock-file
 change. No production-public run, private/account access, Candidate, Entry, Position, Outcome, or
-business evidence was created while accepting the implementation. The accepted repair makes the
-repository-owned writer/current reader/complete reader independently reject malformed or
-incomplete attempt evidence after identity recomputation. The active evidence task changes no
-runtime byte; it owns only one bounded public observation and its strict terminal record.
+business evidence was created while accepting the implementation. The later single public attempt
+proved that the offline fixtures had substituted a canonical hash for the real composite Radar
+episode identity. The missing Radar summary is honest process-failure semantics, not a second
+implementation gap. The accepted earlier repair still makes the downstream
+writer/current reader/complete reader reject malformed or incomplete attempt evidence after
+identity recomputation; the active task now repairs only the newly proven identity mismatch.
 
 The two downstream contracts retain their freeze-time
 `CONTRACT_FROZEN_RUNTIME_NOT_IMPLEMENTED` / `RUNTIME_NOT_IMPLEMENTED` labels byte-for-byte. Those
@@ -148,11 +166,12 @@ or authority to run it.
 ## Root blocker
 
 The Underwriting, Shadow-admission, Position, Shadow Outcome, rejected-counterfactual, aligned
-`NO_TRADE`, and forward-cohort semantics and exact three-Policy chain are frozen, implemented, and
-strictly repaired. The root blocker is now the absence of one remotely bound production-public
-forward interval. The active evidence task must bind and verify the post-publication candidate,
-directories, controls, explicit immediate-start authorization, and non-claims, then run once. Zero
-natural business objects is an honest result and does not establish a usable cohort.
+`NO_TRADE`, and forward-cohort semantics and exact three-Policy chain remain frozen. The root
+blocker is the live-proven mismatch between the exact accepted upstream Radar episode identity and
+the downstream canonical-only validator. The active implementation task must repair that one
+existing-contract path, retain the current legal downstream failure terminal and partial-Radar
+failure semantics, and pass exact-commit independent acceptance without any market command. A green
+repair still does not authorize another forward interval.
 
 The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
 the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
@@ -225,17 +244,19 @@ profitability, or fill evidence.
 
 ## Queued sequence — not authorized
 
-Only `SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE` is active, and it authorizes the
-one bounded public run described above. The following successor closures remain queued and
-unauthorized:
+Only `SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY` is active, and it authorizes offline
+implementation repair only. The following successor closures remain queued and unauthorized:
 
-1. **Challenger research and qualification:** authorize only after a usable frozen-Policy cohort
+1. **Fresh production-public Shadow evidence:** requires an independently accepted repair, a new
+   explicit `EVIDENCE_ONLY` task, separate live-run authorization, a new manifest, and new empty
+   external paths. Nothing carries forward from the consumed attempt.
+2. **Challenger research and qualification:** authorize only after a usable frozen-Policy cohort
    and pre-registered qualification contract.
-2. **Promotion and execution:** authorize separately after independent qualification. Account,
+3. **Promotion and execution:** authorize separately after independent qualification. Account,
    capital, order, and fill authority remain distinct.
 
-A queued product-capability closure is not active. Exactly one may replace the current evidence
-task only by an explicitly approved change after its prerequisite is accepted.
+A queued product-capability closure is not active. Exactly one may replace the current
+implementation task only by an explicitly approved change after its prerequisite is accepted.
 
 ## Forbidden under the current boundary
 
@@ -246,8 +267,9 @@ task only by an explicitly approved change after its prerequisite is accepted.
 - full-market persistence, per-update no-anomaly receipts, replay, or offline recomputation as a
   prerequisite for this Radar;
 - any production-public Candidate, Shadow admission, Shadow Entry, Position, Outcome,
-  rejected-counterfactual, or forward-cohort operation outside the active task's single exact
-  manifest and bounded process;
+  rejected-counterfactual, or forward-cohort operation;
+- any `radar_runtime observe-shadow` invocation, retry, second process, new live manifest, or reuse,
+  mutation, deletion, completion, migration, or relabeling of the consumed attempt's artifacts;
 - automatic training, Policy selection, qualification, promotion, or evolution;
 - generic databases, feature stores, registries, workflow engines, services, markets, or
   strategies;

@@ -8,9 +8,8 @@ production-public Shadow only: no private API, account, margin, order, fill, or 
 
 The top implemented capability is `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`: one guarded
 production-public Radar runtime and its `observe` command. The fixed-contract public Shadow
-implementation is separately `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`; its `observe-shadow`
-composition is authorized for exactly one pre-bound production-public evidence run after the
-immediate-start authorization and exact-candidate gates, not for trading or persistent deployment.
+implementation is separately `LIVE_INTEGRITY_DEFECT_REPAIR_REQUIRED`. Its single authorized
+production-public attempt is consumed and failed; `observe-shadow` is not currently authorized.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
@@ -22,12 +21,16 @@ Underwriting, Candidate/admission, Shadow Entry, Position, close-opportunity, Ou
 rejected-counterfactual, aligned-pair, conservation, and strict evidence path. Exact repair commit
 `6207d59763e1aab7c455854169cd9dde6b0f940f` independently closed the writer/current/complete-reader
 attempt-integrity gap. The sole active closure is now
-`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE`: one result-independent 60-minute
-production-public interval with a 30-minute enrollment cutoff, starting immediately after the
-post-publication exact preflight under the user's explicit authorization and using two new external
-evidence directories. There is no calendar-time gate. No private/account/order/fill/capital
-capability, replay, retry, second run, Policy change, qualification, or persistent service is
-authorized.
+`SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`: an offline repair of the real Radar episode-identity
+boundary while preserving the existing failure terminal. Exact candidate
+`4b225ee1f199523fb052611d84612ec75c7abf78` exited `1` after five anomaly artifacts and a fatal
+Underwriting identity error. Its downstream failure summaries are complete and conserved with zero
+persisted Candidate/Entry/Position/Outcome counts, but the Radar run summary is absent; the full
+forward result is `INCOMPLETE`, `NOT_ACCEPTED`, and business-`NOT_EVALUABLE`. Radar writes its run
+summary only on clean stop, so partial Radar evidence is truthful on this process failure rather
+than a second implementation defect. No second
+production-public invocation is authorized. No private/account/order/fill/capital capability,
+replay, Policy change, qualification, or persistent service is authorized.
 Establishment means the bounded public Radar met its frozen reachability and operating predicates;
 it does not mean the Radar is persistently deployed, always running, indefinitely stable,
 profitable, or authorized to trade. Offline Shadow implementation or evidence-integrity
@@ -79,8 +82,8 @@ The implemented Outcome/cohort reducer follows the frozen causal-first counterfa
 terminal `MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one bounded
 rejected counterfactual per slot, cohort-aligned `NO_TRADE`, exact public-quote PnL equations, and
 honest conservation/null denominators. A public quote remains not a fill. The runtime was
-unauthorized before this evidence closure; now the current active task's exact manifest authorizes
-its one bounded production-public process, and no other invocation or trading capability follows.
+unauthorized before the consumed evidence attempt; the current active repair task authorizes
+offline implementation work only, and no live invocation or trading capability follows.
 
 ## Authority
 
@@ -129,9 +132,10 @@ The guarded `python -m radar_runtime observe` command is the public-only runtime
 evidence directory and preserves clean-stop and strict-validation behavior. The accepted Smoke and
 Soak establish only their exact pre-bound observation windows; they do not authorize persistent
 service deployment, private/account access, orders, fills, capital, execution, or any queued
-product closure. `python -m radar_runtime observe-shadow` is implemented and the active
-`EVIDENCE_ONLY` task requires exactly one production-public invocation after it binds the remotely
-published activation candidate, three Policy identities, two fresh external evidence directories,
-the explicit immediate-start authorization, and pre-bound start/cutoff/stop controls. The frozen
-fee schedule label remains provenance rather than an account-fee or exact venue-switch-time claim.
-Every other invocation remains forbidden.
+product closure. `python -m radar_runtime observe-shadow` remains implemented, but the active
+`IMPLEMENTATION` task permits only offline tests for the proven identity mismatch and regression
+checks for the existing legal downstream failure terminal.
+
+The failed manifest, evidence directories, log, and terminal record are sealed and cannot be
+edited, deleted, completed retroactively, migrated, relabelled, or reused. A future live attempt
+requires a new `EVIDENCE_ONLY` task, new external paths, and separate explicit authorization.
