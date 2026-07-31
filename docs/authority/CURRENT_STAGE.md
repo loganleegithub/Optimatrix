@@ -242,12 +242,16 @@ or authority to run it.
 The Underwriting, Shadow-admission, Position, Shadow Outcome, rejected-counterfactual, aligned
 `NO_TRADE`, and forward-cohort semantics and exact three-Policy chain remain frozen. The proven
 implementation-integrity blocker is closed at exact tip
-`6eaaddfecf4c59a19c8029682a80fc52b7896a64`. The required fresh `EVIDENCE_ONLY` authority is now
-active, but acceptance remains pending its exact activation publication, deterministic checks, one
-new manifest-bound production-public interval, strict readers, and conservation. The consumed
-failed interval remains `INCOMPLETE`, `NOT_ACCEPTED`, and `NOT_EVALUABLE`; no new evidence can
-complete or relabel it. Natural Candidate, Entry, or Outcome occurrence is not a blocker for this
-engineering closure.
+`6eaaddfecf4c59a19c8029682a80fc52b7896a64`, and the later two-layer engineering gate is accepted
+and closed. No `EVIDENCE_ONLY` authority, live command, retry, or additional production-public
+Shadow interval remains active. The consumed failed interval remains `INCOMPLETE`, `NOT_ACCEPTED`,
+and `NOT_EVALUABLE`; no new evidence can complete or relabel it. Natural Candidate, Entry, or
+Outcome occurrence was not a blocker for the accepted engineering closure.
+
+The next business prerequisite for estimating opportunity frequency, strategy quality, or PnL is
+a separately authorized persistent public-only service and long-running sample closure. Until an
+exact task activates that closure, persistent deployment and any additional public Shadow process
+remain forbidden.
 
 The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
 the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.

@@ -205,6 +205,11 @@ def test_current_stage_records_accepted_two_layer_shadow_engineering_evidence() 
     ) in flat
     assert "**Evidence gate:** `CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
+    assert current.count("**Evidence gate:**") == 1
+    assert current.count("**Live commands:**") == 1
+    assert "required fresh `EVIDENCE_ONLY` authority is now" not in current
+    assert "acceptance remains pending its exact activation publication" not in current
+    assert "No `EVIDENCE_ONLY` authority, live command, retry" in flat
     assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
     assert "4b225ee1f199523fb052611d84612ec75c7abf78" in current
     assert "9e53c6233949348c5805e96ea1eefb5998bf4c49" in current
@@ -249,7 +254,10 @@ def test_two_layer_shadow_engineering_task_is_closed_without_an_active_task() ->
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md").exists()
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
+        "CLOSE_STALE_SHADOW_EVIDENCE_AUTHORITY.md",
+        "TEMPLATE.md",
+    ]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Sole authorized next product-capability closure:**\n`NONE`" in current
 
