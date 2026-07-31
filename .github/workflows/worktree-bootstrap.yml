@@ -73,11 +73,11 @@ jobs:
           echo "5887d707f2b67510b3e4dfeae1ccaa58f3b44c348e2cb5ede7bc421a83a8ed02  /tmp/final.patch" | sha256sum --check --strict
           git apply --index /tmp/final.patch
           git rm .github/final-patch.part00 \
-                 .github/final-patch.part01 \
                  .github/final-patch.part02 \
                  .github/final-patch.part03 \
                  .github/final-patch.part04 \
                  .github/workflows/worktree-bootstrap.yml
+          git rm -f .github/final-patch.part01
 
       - name: Verify exact scope and immutable inputs
         shell: bash
