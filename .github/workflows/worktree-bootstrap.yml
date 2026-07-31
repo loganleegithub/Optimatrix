@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - chatgpt/persistent-radar-shadow-web-workbench
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
