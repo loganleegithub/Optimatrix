@@ -878,6 +878,7 @@ class FixedContractShadowRuntimeAdapter:
         for tracker in reducer.trackers.values():
             snapshot = reducer._freeze_atomic_scope_snapshot(tracker, commit=commit)
             if snapshot is not None:
+                self._require_episode_snapshot_binding(reducer, snapshot)
                 snapshots.append(snapshot)
         by_episode = {snapshot.episode_identity: snapshot for snapshot in snapshots}
         for snapshot in snapshots:
@@ -1061,9 +1062,7 @@ class FixedContractShadowRuntimeAdapter:
             long_instrument_source=(long.source if long is not None else None),
             index_source=index_source,
             ticker_source=ticker_source,
-            short_leg_instrument_name=(
-                short_instrument.instrument_name if short_instrument is not None else None
-            ),
+            short_leg_instrument_name=(snapshot.short_leg.instrument_name),
             long_leg_instrument_name=(
                 long_instrument.instrument_name if long_instrument is not None else None
             ),
@@ -1132,13 +1131,23 @@ class FixedContractShadowRuntimeAdapter:
             long_instrument_source=None,
             index_source=None,
             ticker_source=None,
-            short_leg_instrument_name=(
-                short.instrument.instrument_name if short is not None else None
-            ),
+            short_leg_instrument_name=(snapshot.short_leg.instrument_name),
             long_leg_instrument_name=None,
             unknown_reasons=tuple(snapshot.result.unknown_reasons)
             or ("ATOMIC_SCOPE_NOT_EVALUABLE",),
         )
+
+    @staticmethod
+    def _require_episode_snapshot_binding(
+        reducer: RadarReducer,
+        snapshot: AtomicScopeSnapshot,
+    ) -> None:
+        expected = (
+            f"{reducer.runtime_identity}:{reducer.policy.identity}:"
+            f"{snapshot.short_leg.instrument_name}:{snapshot.anomaly_activation_seq}"
+        )
+        if snapshot.episode_identity != expected:
+            raise ValueError("Radar episode identity is not bound to its atomic scope snapshot")
 
     def _replace_unknown_underwriting(
         self,

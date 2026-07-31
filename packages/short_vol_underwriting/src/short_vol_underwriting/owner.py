@@ -63,7 +63,7 @@ from short_vol_underwriting.evidence import (
     DownstreamEvidenceWriter,
     RuntimeBindings,
 )
-from short_vol_underwriting.identity import canonical_identity, require_identity
+from short_vol_underwriting.identity import IdentityError, canonical_identity, require_identity
 from short_vol_underwriting.manifest import ValidatedManifest
 from short_vol_underwriting.model import (
     FactBoundary,
@@ -88,6 +88,34 @@ class SourceFact:
             "source_identity": self.source_identity,
             "receipt_fact_boundary": self.boundary.as_object(),
         }
+
+
+def _radar_episode_identity_components(value: object) -> tuple[str, str, str, int]:
+    if not isinstance(value, str):
+        raise IdentityError("active_episode_identity must be a Radar episode identity")
+    digest_length = len("sha256:") + 64
+    if len(value) <= digest_length * 2 + 3:
+        raise IdentityError("active_episode_identity must be a Radar episode identity")
+    runtime_identity = value[:digest_length]
+    first_separator = digest_length
+    policy_start = first_separator + 1
+    policy_end = policy_start + digest_length
+    if value[first_separator : first_separator + 1] != ":":
+        raise IdentityError("active_episode_identity must be a Radar episode identity")
+    policy_identity = value[policy_start:policy_end]
+    if value[policy_end : policy_end + 1] != ":":
+        raise IdentityError("active_episode_identity must be a Radar episode identity")
+    instrument_name, separator, causal_seq_text = value[policy_end + 1 :].rpartition(":")
+    require_identity(runtime_identity, "Radar episode runtime identity")
+    require_identity(policy_identity, "Radar episode Policy identity")
+    if (
+        not separator
+        or not instrument_name
+        or not causal_seq_text.isdigit()
+        or str(int(causal_seq_text)) != causal_seq_text
+    ):
+        raise IdentityError("active_episode_identity must be a Radar episode identity")
+    return runtime_identity, policy_identity, instrument_name, int(causal_seq_text)
 
 
 @dataclass(frozen=True)
@@ -137,8 +165,9 @@ class UnderwritingFacts:
 
     def __post_init__(self) -> None:
         require_identity(self.radar_scope_identity, "radar_scope_identity")
+        if self.active_episode_identity is not None:
+            _radar_episode_identity_components(self.active_episode_identity)
         for identity in (
-            self.active_episode_identity,
             self.short_leg_identity,
             self.long_leg_identity,
             self.canonical_combo_identity,
@@ -401,6 +430,7 @@ class FixedContractShadowOwner:
     ) -> OwnerTransition:
         for member in facts:
             self._require_target_quantity_integrity(member)
+            self._require_radar_episode_binding(member)
         self._begin_transition()
         if not facts or not self._accepting_new_work:
             return self._finish_transition()
@@ -528,6 +558,7 @@ class FixedContractShadowOwner:
         refresh_witness: AdmissionRefreshWitness,
     ) -> OwnerTransition:
         self._require_target_quantity_integrity(refreshed_facts)
+        self._require_radar_episode_binding(refreshed_facts)
         self._begin_transition()
         record = self._candidates.get(candidate_identity)
         if record is None or record.state.lifecycle.value != "VALID":
@@ -1330,6 +1361,22 @@ class FixedContractShadowOwner:
         ):
             raise ValueError("terminal source does not create the terminal boundary")
         return source, identity
+
+    def _require_radar_episode_binding(self, facts: UnderwritingFacts) -> None:
+        episode_identity = facts.active_episode_identity
+        if episode_identity is None:
+            return
+        runtime_identity, policy_identity, instrument_name, activation_causal_seq = (
+            _radar_episode_identity_components(episode_identity)
+        )
+        if (
+            facts.boundary.runtime_identity != self.bindings.runtime_identity
+            or runtime_identity != self.bindings.runtime_identity
+            or policy_identity != self.bindings.radar_policy_identity
+            or instrument_name != facts.short_leg_instrument_name
+            or activation_causal_seq > facts.boundary.causal_seq
+        ):
+            raise IdentityError("Radar episode identity is not bound to its Underwriting facts")
 
     def _evaluate_underwriting(self, facts: UnderwritingFacts) -> _UnderwritingEvaluation:
         self._require_target_quantity_integrity(facts)

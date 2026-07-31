@@ -113,6 +113,16 @@ def _boundary(causal_seq: int, monotonic_ms: int | None = None) -> FactBoundary:
     )
 
 
+def _radar_episode_identity(
+    *,
+    runtime_identity: str = "sha256:" + "b" * 64,
+    policy_identity: str = RADAR_POLICY_IDENTITY,
+    instrument_name: str = "BTC-SHORT",
+    activation_causal_seq: int = 1,
+) -> str:
+    return f"{runtime_identity}:{policy_identity}:{instrument_name}:{activation_causal_seq}"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     (
@@ -181,7 +191,7 @@ def _underwriting_facts(
     return UnderwritingFacts(
         boundary=boundary,
         radar_scope_identity="sha256:" + "4" * 64,
-        active_episode_identity="sha256:" + "5" * 64,
+        active_episode_identity=_radar_episode_identity(runtime_identity=boundary.runtime_identity),
         short_leg_identity="sha256:" + "6" * 64,
         long_leg_identity="sha256:" + "7" * 64,
         canonical_combo_identity=combo_identity,
@@ -218,6 +228,8 @@ def _underwriting_facts(
         long_instrument_source=SourceFact("sha256:" + "9" * 64, boundary),
         index_source=SourceFact("sha256:" + "a" * 64, boundary),
         ticker_source=SourceFact("sha256:" + "b" * 64, boundary),
+        short_leg_instrument_name="BTC-SHORT",
+        long_leg_instrument_name="BTC-LONG",
     )
 
 
@@ -252,6 +264,87 @@ def _owner(
     if close_enrollment:
         owner.close_enrollment(_boundary(100, 200))
     return owner, bindings
+
+
+@pytest.mark.parametrize(
+    "episode_identity",
+    (
+        "",
+        "sha256:" + "5" * 64,
+        _radar_episode_identity()[:-1],
+        _radar_episode_identity(runtime_identity="SHA256:" + "b" * 64),
+        _radar_episode_identity(instrument_name=""),
+        _radar_episode_identity()[:-1] + "x",
+        _radar_episode_identity()[:-1] + "-1",
+        _radar_episode_identity()[:-1] + "01",
+    ),
+)
+def test_underwriting_facts_reject_malformed_radar_episode_identity(
+    episode_identity: str,
+) -> None:
+    facts = _underwriting_facts(
+        boundary=_boundary(2, 120),
+        change_id=10,
+        previous_change_id=None,
+        snapshot_kind="snapshot",
+    )
+
+    with pytest.raises(ValueError):
+        replace(facts, active_episode_identity=episode_identity)
+
+    assert replace(facts, active_episode_identity=None).active_episode_identity is None
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("short_leg_identity", "long_leg_identity", "canonical_combo_identity"),
+)
+def test_radar_episode_identity_does_not_weaken_downstream_owned_identities(
+    field: str,
+) -> None:
+    facts = _underwriting_facts(
+        boundary=_boundary(2, 120),
+        change_id=10,
+        previous_change_id=None,
+        snapshot_kind="snapshot",
+    )
+
+    with pytest.raises(ValueError, match="must be sha256"):
+        if field == "short_leg_identity":
+            replace(facts, short_leg_identity=_radar_episode_identity())
+        elif field == "long_leg_identity":
+            replace(facts, long_leg_identity=_radar_episode_identity())
+        else:
+            replace(facts, canonical_combo_identity=_radar_episode_identity())
+
+
+@pytest.mark.parametrize(
+    "episode_identity",
+    (
+        _radar_episode_identity(runtime_identity="sha256:" + "c" * 64),
+        _radar_episode_identity(policy_identity="sha256:" + "d" * 64),
+        _radar_episode_identity(instrument_name="BTC-OTHER"),
+        _radar_episode_identity(activation_causal_seq=3),
+    ),
+)
+def test_owner_rejects_unbound_radar_episode_before_emission(
+    tmp_path: Path,
+    episode_identity: str,
+) -> None:
+    owner, _bindings = _owner(tmp_path)
+    facts = replace(
+        _underwriting_facts(
+            boundary=_boundary(2, 120),
+            change_id=10,
+            previous_change_id=None,
+            snapshot_kind="snapshot",
+        ),
+        active_episode_identity=episode_identity,
+    )
+
+    with pytest.raises(ValueError, match="not bound"):
+        owner.settle_underwriting((facts,), allocate_request_id=lambda: 41)
+    assert owner.writer.objects == ()
 
 
 def _manifest_for_owner(tmp_path: Path) -> tuple[ValidatedManifest, dict[str, object]]:

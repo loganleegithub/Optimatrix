@@ -45,7 +45,8 @@ from radar_runtime.runtime import (
     RpcState,
     ShadowRpcIntent,
 )
-from short_vol_radar.detector import EpisodeTracker, TrackerState
+from short_vol_radar.black import DecimalInterval
+from short_vol_radar.detector import DetectorObservation, EpisodeTracker, TrackerState
 from short_vol_radar.evidence import EvidenceWriter
 from short_vol_radar.policy import load_policy_bytes
 from short_vol_radar.radar import TickerState
@@ -418,7 +419,7 @@ def _shadow_system(
         instrument_name="BTC-SHORT",
     )
     tracker.state = TrackerState.ACTIVE
-    tracker.episode_id = "sha256:" + "e" * 64
+    tracker.episode_id = f"{runtime_identity}:{RADAR_POLICY_IDENTITY}:BTC-SHORT:1"
     tracker.activation_band_id = policies.radar.tte_bands[0].band_id
     tracker.activation_causal_seq = 1
     reducer.trackers["BTC-SHORT"] = tracker
@@ -427,6 +428,115 @@ def _shadow_system(
         "BTC-LONG": ContinuousOrderBook("BTC-LONG"),
     }
     return reducer, adapter, owner
+
+
+def _activate_real_episode(reducer: RadarReducer) -> str:
+    instrument_name = "BTC-SHORT"
+    rule = reducer.policy.tte_bands[0].option_rules[OptionType.CALL]
+    tracker = EpisodeTracker(
+        runtime_identity=reducer.runtime_identity,
+        policy_identity=reducer.policy.identity,
+        instrument_name=instrument_name,
+    )
+    separation_ms = max(rule.minimum_separation_ms, 1)
+    activated: str | None = None
+    for index in range(rule.activation_observation_count):
+        causal_seq = index + 1
+        trusted_ms = 1_000_000 + index * separation_ms
+        transition = tracker.observe(
+            DetectorObservation(
+                causal_seq=causal_seq,
+                trusted_time=TimeInterval(trusted_ms, trusted_ms),
+                band_id=reducer.policy.tte_bands[0].band_id,
+                richness=DecimalInterval(rule.activation_ratio, rule.activation_ratio),
+            ),
+            rule,
+        )
+        activated = transition.activated_episode_id or activated
+    assert activated is not None
+    assert tracker.episode_id == (
+        f"{reducer.runtime_identity}:{reducer.policy.identity}:"
+        f"{instrument_name}:{rule.activation_observation_count}"
+    )
+    reducer.trackers[instrument_name] = tracker
+    return activated
+
+
+@pytest.mark.parametrize(
+    ("projection", "expected_atomic_state"),
+    (
+        ("no_combo", "NO_ACTIVE_COMBO"),
+        ("quoted_unknown", "PUBLIC_ATOMIC_QUOTE_AVAILABLE"),
+    ),
+)
+def test_real_episode_identity_round_trips_without_economic_action(
+    tmp_path: Path,
+    projection: str,
+    expected_atomic_state: str,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    reducer.trackers.clear()
+    episode_identity = _activate_real_episode(reducer)
+    if projection == "no_combo":
+        reducer.combos.clear()
+        reducer.combo_books.clear()
+        reducer.accepted_book_receipts.clear()
+    else:
+        reducer.tickers.clear()
+
+    activation_seq = (
+        reducer.policy.tte_bands[0].option_rules[OptionType.CALL].activation_observation_count
+    )
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=activation_seq,
+            monotonic_ms=120,
+            cause=CausalCause.COMBO_BOOK_CHANGED,
+        ),
+    )
+
+    assert intents == ()
+    (facts,) = adapter._underwriting_by_scope.values()
+    assert facts.active_episode_identity == episode_identity
+    assert facts.short_leg_instrument_name == "BTC-SHORT"
+    assert facts.atomic_state == expected_atomic_state
+    assert [value["object_kind"] for value in owner.writer.objects] == [
+        "UNDERWRITING_AVAILABILITY_EVALUATION"
+    ]
+
+
+@pytest.mark.parametrize(
+    "variant",
+    ("runtime", "policy", "instrument", "activation_seq", "truncated"),
+)
+def test_atomic_scope_rejects_unbound_radar_episode_before_economic_action(
+    tmp_path: Path,
+    variant: str,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    reducer.trackers.clear()
+    exact = _activate_real_episode(reducer)
+    tracker = reducer.trackers["BTC-SHORT"]
+    replacements = {
+        "runtime": exact.replace(reducer.runtime_identity, "sha256:" + "c" * 64, 1),
+        "policy": exact.replace(reducer.policy.identity, "sha256:" + "d" * 64, 1),
+        "instrument": exact.replace("BTC-SHORT", "BTC-OTHER", 1),
+        "activation_seq": exact.rsplit(":", 1)[0] + ":3",
+        "truncated": exact[:-1],
+    }
+    tracker.episode_id = replacements[variant]
+
+    with pytest.raises(ValueError):
+        adapter.on_settled_transaction(
+            reducer=reducer,
+            commit=_commit(
+                causal_seq=2,
+                monotonic_ms=120,
+                cause=CausalCause.COMBO_BOOK_CHANGED,
+            ),
+        )
+    assert owner.writer.objects == ()
 
 
 def _downstream_source(seed: str) -> SourceFact:
