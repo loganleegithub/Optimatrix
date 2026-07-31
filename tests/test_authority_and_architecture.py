@@ -191,63 +191,75 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_records_fixed_contract_runtime_terminal_matrix() -> None:
+def test_current_stage_opens_only_one_bounded_shadow_forward_run() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
     assert current.count(marker) == 1
-    assert f"{marker} `SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`" in flat
+    assert f"{marker} `SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
     assert (
-        "**Fixed-contract public Shadow runtime:** "
-        "`IMPLEMENTED_AWAITING_ATTEMPT_EVIDENCE_INTEGRITY_REPAIR`"
+        "**Fixed-contract public Shadow runtime:** `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`"
     ) in flat
-    assert "**Evidence gate:** `CLOSED`" in current
-    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "**Evidence gate:** `OPEN_FOR_ONE_BOUNDED_FORWARD_RUN`" in current
+    assert "**Live commands:** `REQUIRED_ONCE`" in current
     assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
-    assert "offline attempt-evidence integrity repair" in flat
-    assert "does not establish a live cohort" in flat
-    assert "no live command is authorized" in flat.lower()
+    assert "6207d59763e1aab7c455854169cd9dde6b0f940f" in current
+    assert "2026-08-01T00:00:00Z" in current
+    assert "one result-independent production-public invocation" in flat
+    assert "Outside the active task's one exact manifest and bounded process" in flat
+    assert "does not authorize a private/account/order/fill capability" in flat
     assert "labels record the state when the immutable contract content was accepted" in flat
     assert "SHORT_VOL_PUBLIC_SHADOW_TERMINAL_GOAL_DELEGATION" in current
     assert "## Queued sequence — not authorized" in current
 
 
-def test_attempt_integrity_repair_is_the_single_active_task() -> None:
+def test_forward_evidence_is_the_single_active_task() -> None:
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
+    assert not (ROOT / "tasks/SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md").exists()
     assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md",
+        "SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md",
         "TEMPLATE.md",
     ]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert (
         "**Sole authorized next product-capability closure:**\n"
-        "`SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`"
+        "`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE`"
     ) in current
 
 
-def test_attempt_integrity_task_freezes_scope_and_immutable_identities() -> None:
-    task = (ROOT / "tasks/SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md").read_text(
+def test_forward_evidence_task_freezes_candidate_window_scope_and_identities() -> None:
+    task = (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").read_text(
         encoding="utf-8"
     )
     flat = " ".join(task.split())
     for invariant in (
         "**Status:** ACTIVE",
-        "**Task kind:** `IMPLEMENTATION`",
-        "**Runtime implementation:** REQUIRED",
-        "**Live commands:** FORBIDDEN",
-        "**Base commit:** `a7bb495a391cbf76377356c9b31b0360667104dd`",
-        "**Base tree:** `3d4eba9e3ec5dd2bb103da7e60463fe4ce6baee7`",
+        "**Task kind:** `EVIDENCE_ONLY`",
+        "**Runtime implementation:** FORBIDDEN",
+        "**Live commands:** REQUIRED",
+        "**Base commit:** `6207d59763e1aab7c455854169cd9dde6b0f940f`",
+        "**Base tree:** `31406d7cf3762ac286677497b52d0d0bbf463332`",
         "`codex/short-vol-fixed-contract-public-shadow-runtime`; Draft PR #5",
         "**Market/Decision input contract change:** `NONE`",
         "**Decision Policy change:** `NONE`",
         "**Outcome/evaluation contract change:** `NONE`",
         "**Stage/authorization change:** `APPROVED`",
-        "evidence gate remains `CLOSED`",
-        "upstream market-catalog preimage",
-        "outside reader authentication",
+        "2026-08-01T00:00:00Z",
+        "30 minutes after runtime start",
+        "60 minutes after runtime start",
+        "/Users/logan/Optimatrix-shadow/evidence/public-shadow-forward-001-downstream",
+        "/Users/logan/Optimatrix-shadow/evidence/public-shadow-forward-001-radar",
+        "All five exact targets must be absent when preparation begins",
+        "Codex creates and validates the manifest before the one process invocation",
+        "the terminal record only after the process reaches a terminal",
+        "remote branch tip must equal that publication's expected parent",
+        "create_blob` / `create_tree` / `create_commit` / `update_ref(force=false)`",
+        "exact commit, tree, parent, remote branch tip, full compare range, and tests",
+        "result-independent",
+        "zero natural anomaly/Candidate/Entry/Position/Outcome",
         "Private API:** FORBIDDEN",
     ):
         assert invariant in flat
@@ -266,12 +278,10 @@ def test_attempt_integrity_task_freezes_scope_and_immutable_identities() -> None
     assert set(scope.strip().removeprefix("text\n").splitlines()) == {
         "README.md",
         "docs/authority/CURRENT_STAGE.md",
-        "packages/short_vol_underwriting/src/short_vol_underwriting/evidence.py",
-        "packages/short_vol_underwriting/src/short_vol_underwriting/validation.py",
+        "docs/authority/SYSTEM_ARCHITECTURE.md",
+        "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md",
         "tasks/SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY.md",
         "tests/test_authority_and_architecture.py",
-        "tests/test_complete_downstream_evidence.py",
-        "tests/test_short_vol_underwriting.py",
     }
 
 
@@ -1903,7 +1913,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "orders, fills, capital",
         "fixed-contract Shadow implementation adds",
         "`IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`",
-        "no live command is authorized",
+        "one result-independent production-public invocation",
     ):
         assert invariant in current_stage
 
@@ -1918,7 +1928,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "no preselected holding duration",
         "### `short_vol_underwriting`",
         "The pure downstream owner `short_vol_underwriting`",
-        "production-public evidence gate remains closed",
+        "permission to run those downstream arrows comes only from `CURRENT_STAGE`",
     ):
         assert invariant in architecture
 
@@ -2000,12 +2010,13 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`",
         "SHORT_VOL_UNDERWRITING_POSITION",
         "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT",
-        "`IMPLEMENTED_AWAITING_ATTEMPT_EVIDENCE_INTEGRITY_REPAIR`",
+        "`IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`",
         "`observe-shadow`",
-        "live commands remain forbidden",
-        "attempt-evidence integrity repair",
+        "one result-independent 60-minute",
+        "Exact repair commit",
         "evidence-integrity acceptance does not prove",
         "maker/order/fill",
+        "Every other invocation remains forbidden",
     ):
         assert invariant in readme
 

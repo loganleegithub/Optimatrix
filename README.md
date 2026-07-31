@@ -8,8 +8,9 @@ production-public Shadow only: no private API, account, margin, order, fill, or 
 
 The top implemented capability is `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`: one guarded
 production-public Radar runtime and its `observe` command. The fixed-contract public Shadow
-implementation is separately `IMPLEMENTED_AWAITING_ATTEMPT_EVIDENCE_INTEGRITY_REPAIR`; its
-`observe-shadow` composition is present but no production-public invocation is authorized.
+implementation is separately `IMPLEMENTED_AWAITING_FORWARD_EVIDENCE`; its `observe-shadow`
+composition is authorized for exactly one pre-bound production-public evidence run after the
+effective-time and exact-candidate gates, not for trading or persistent deployment.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
@@ -18,14 +19,14 @@ Soak evidence. The downstream
 contracts are frozen. The fixed-contract implementation binds one exact three-Policy chain and
 provides the pure
 Underwriting, Candidate/admission, Shadow Entry, Position, close-opportunity, Outcome,
-rejected-counterfactual, aligned-pair, conservation, and strict evidence path. Its evidence gate is
-closed, the sole authorized next closure is `SHORT_VOL_SHADOW_ATTEMPT_EVIDENCE_INTEGRITY`, and
-live commands remain forbidden. That active offline repair makes the writer/current
-reader/complete reader enforce the already frozen attempt method/id/marker/params shape, terminal
-source projection, causal-boundary, provenance consistency, atomic Entry, and
-terminal-to-opportunity relations. The compatible one-hop schema cannot authenticate an arbitrary
-syntactically valid upstream source or instrument-name preimage that it does not persist. The
-repair does not change the public-only owner, contracts, Policies, or market behavior.
+rejected-counterfactual, aligned-pair, conservation, and strict evidence path. Exact repair commit
+`6207d59763e1aab7c455854169cd9dde6b0f940f` independently closed the writer/current/complete-reader
+attempt-integrity gap. The sole active closure is now
+`SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE`: one result-independent 60-minute
+production-public interval with a 30-minute enrollment cutoff, no earlier than
+`2026-08-01T00:00:00Z`, using one post-publication exact manifest and two new external evidence
+directories. No private/account/order/fill/capital capability, replay, retry, second run, Policy
+change, qualification, or persistent service is authorized.
 Establishment means the bounded public Radar met its frozen reachability and operating predicates;
 it does not mean the Radar is persistently deployed, always running, indefinitely stable,
 profitable, or authorized to trade. Offline Shadow implementation or evidence-integrity
@@ -127,8 +128,8 @@ The guarded `python -m radar_runtime observe` command is the public-only runtime
 evidence directory and preserves clean-stop and strict-validation behavior. The accepted Smoke and
 Soak establish only their exact pre-bound observation windows; they do not authorize persistent
 service deployment, private/account access, orders, fills, capital, execution, or any queued
-product closure. `python -m radar_runtime observe-shadow` is implemented but its production-public
-use remains `FORBIDDEN` while the active attempt-evidence integrity repair is unaccepted. After
-that task is closed, a separate `EVIDENCE_ONLY` task must bind the repaired exact candidate, the
-three Policy identities, two fresh external evidence directories, the frozen fee schedule's
-effective-time gate, and pre-bound start/cutoff/stop controls before it may run.
+product closure. `python -m radar_runtime observe-shadow` is implemented and the active
+`EVIDENCE_ONLY` task requires exactly one production-public invocation after it binds the remotely
+published activation candidate, three Policy identities, two fresh external evidence directories,
+the frozen fee schedule's effective-time gate, and pre-bound start/cutoff/stop controls. Every
+other invocation remains forbidden.

@@ -24,7 +24,7 @@ The market-state, detector, and public atomic-availability arrows are one event-
 Monitor and Short Vol Radar flow. There is no
 capture job followed by a scan job, and no scanner that repeatedly rereads an unchanged local
 dataset. The downstream arrows are implemented in the same process, but their production-public
-evidence gate remains closed.
+permission to run those downstream arrows comes only from `CURRENT_STAGE` and the one active task.
 
 ## Data lifecycles
 
