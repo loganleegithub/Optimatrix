@@ -1,0 +1,33 @@
+name: Worktree bootstrap
+
+on:
+  push:
+    branches:
+      - chatgpt/persistent-radar-shadow-web-workbench
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    name: Archive exact worktree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out exact branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create credential-free Git worktree archive
+        run: tar -C "$GITHUB_WORKSPACE" -czf /tmp/optimatrix-worktree.tgz .
+
+      - name: Upload exact worktree
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimatrix-exact-worktree
+          path: /tmp/optimatrix-worktree.tgz
+          if-no-files-found: error
+          retention-days: 1
