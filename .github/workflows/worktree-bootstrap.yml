@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   publish:
-    name: Apply, validate, and publish exact implementation
+    name: Repair archive, validate, and publish exact implementation
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -34,6 +34,27 @@ jobs:
           cache-dependency-glob: requirements-dev.lock
           python-version: "3.13.5"
 
+      - name: Verify remote parts and repair the one corrupted byte
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "a7267fadb30d34bb84dc2cb535a7149963e1b33fa8625d839be91c8fb90c7e4e  .github/final-patch.part00" | sha256sum --check --strict
+          echo "cc0eb1fa1e5b0ee8dec10a811fc0a0a75e0dd1d34341743e65a70f57b669c71e  .github/final-patch.part01" | sha256sum --check --strict
+          echo "bdc817a0348ad9ee0c0224dd90f0bfb8b2d057474ca89ff6aa4f7cb51d7d35ab  .github/final-patch.part02" | sha256sum --check --strict
+          echo "bd79aebb7840d59fdd68554c82b7e62d92ff71b1bba33b2a959bdc7ed7554619  .github/final-patch.part03" | sha256sum --check --strict
+          echo "117881b174fa2433a19c42000100c3dea8976039e4e050829b03d3ffbff8cf94  .github/final-patch.part04" | sha256sum --check --strict
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/final-patch.part01')
+          value = bytearray(path.read_bytes())
+          assert len(value) == 16000
+          assert value[8210:8211] == b'b'
+          value[8210:8211] = b'p'
+          path.write_bytes(value)
+          PY
+          echo "ddbb8e793285a89d22090e356bcf5dac39750fff459867a7b042c058c7e69d1e  .github/final-patch.part01" | sha256sum --check --strict
+
       - name: Reconstruct and verify exact patch
         shell: bash
         run: |
@@ -43,8 +64,12 @@ jobs:
               .github/final-patch.part02 \
               .github/final-patch.part03 \
               .github/final-patch.part04 > /tmp/final-patch.b64
-          echo "0d5b9585cf7568b9fd98615b4c6933c2f3f5b70c2f6ee42327427d5bf8c2ed3f  /tmp/final-patch.b64" | sha256sum --check --strict
-          base64 --decode /tmp/final-patch.b64 | gzip --decompress > /tmp/final.patch
+          test "$(wc -c < /tmp/final-patch.b64)" = "78020"
+          echo "2bfe917f5aca7e86decc4ec1b47dda2f67b853d04e0a14d1a9e47e543c3ce4cb  /tmp/final-patch.b64" | sha256sum --check --strict
+          base64 --decode /tmp/final-patch.b64 > /tmp/final-implementation.patch.gz
+          echo "bf7e7567d3897206e6971078d5b3354a4100a6eaef0b18ae81492c634e5c3ddb  /tmp/final-implementation.patch.gz" | sha256sum --check --strict
+          gzip --test /tmp/final-implementation.patch.gz
+          gzip --decompress --stdout /tmp/final-implementation.patch.gz > /tmp/final.patch
           echo "5887d707f2b67510b3e4dfeae1ccaa58f3b44c348e2cb5ede7bc421a83a8ed02  /tmp/final.patch" | sha256sum --check --strict
           git apply --index /tmp/final.patch
           git rm .github/final-patch.part00 \
@@ -102,7 +127,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -z "$(git status --porcelain --untracked-files=all | grep -v '^M  ' || true)" || git status --short
           EXPECTED_TREE=a4128bc2162e0a0f535e7fb0e6b1ec2edb04283b
           STAGED_TREE=$(git write-tree)
           echo "STAGED_TREE=$STAGED_TREE"
