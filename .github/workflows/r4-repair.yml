@@ -42,21 +42,23 @@ jobs:
             .github/r4_apply.part01 \
             .github/r4_apply.part02 \
             .github/r4_apply.part03 \
-            .github/r4_apply.part04
+            .github/r4_apply.part04 \
+            .github/r4_apply.hotfix.py
           test "$(sha256sum .github/r4_apply.part00 | awk '{print $1}')" = "7aedcbf9c2a068d9c003d9bdd868f33e5db3b6ceeb2726bec7533d8a8cead208"
           test "$(sha256sum .github/r4_apply.part01 | awk '{print $1}')" = "884c2fcb945bcbfbc2ef2a789e3c41272fe5311536c3fca5bb3c428b0bd2bab3"
           test "$(sha256sum .github/r4_apply.part02 | awk '{print $1}')" = "5862dd6c9ac2aa6e08588f454072436d425892a77eb40a824a3ff4743cc99314"
           test "$(sha256sum .github/r4_apply.part03 | awk '{print $1}')" = "b1957b50fc7d73cd6da1f0264cbbc7c5950aac230f3d755e56e672642adb447e"
           test "$(sha256sum .github/r4_apply.part04 | awk '{print $1}')" = "593a14b457789ad4129bd02f38dc70df9c570e4c8cc3d24768f93959776906b5"
+          test "$(sha256sum .github/r4_apply.hotfix.py | awk '{print $1}')" = "3643546cf1e258e4bacb11ea2252218803b40bdbafa1fa6abedc92375cc384a7"
           cat .github/r4_apply.part00 .github/r4_apply.part01 .github/r4_apply.part02 .github/r4_apply.part03 .github/r4_apply.part04 > .github/r4_apply.py.gz.b64
-          sha256sum .github/r4_apply.py.gz.b64
           test "$(sha256sum .github/r4_apply.py.gz.b64 | awk '{print $1}')" = "2aeb087e51fba12e31f91882ec2b849821f63ed44a3767d0a1c7d5b386f46385"
           base64 --decode .github/r4_apply.py.gz.b64 > /tmp/r4_apply.py.gz
           gzip --test --verbose /tmp/r4_apply.py.gz
           gzip --decompress --stdout /tmp/r4_apply.py.gz > .github/r4_apply.py
-          sha256sum .github/r4_apply.py
           test "$(sha256sum .github/r4_apply.py | awk '{print $1}')" = "711e5d9e4742874154310e5789cef52b6ccc766b1d4552ecffeb8aaefaa53a8d"
-          python -m py_compile .github/r4_apply.py
+          python .github/r4_apply.hotfix.py
+          test "$(sha256sum .github/r4_apply.py | awk '{print $1}')" = "f6fe4ad36d6800e156f127f02f5aa84b0df16b2f793c26b624153be0ad7dc178"
+          python -m py_compile .github/r4_apply.py .github/r4_apply.hotfix.py
 
       - name: Configure append-only commit author
         shell: bash
@@ -73,13 +75,11 @@ jobs:
           set +e
           .venv/bin/python -m pytest \
             tests/test_persistent_service_commissioning.py::test_schema_2_workbench_accepts_every_valid_zero_claim_shape \
-            -q
-          red_status=$?
+            -q 2>&1 | tee /tmp/r4-semantic-red.log
+          red_status=${PIPESTATUS[0]}
           set -e
-          if [ "$red_status" -eq 0 ]; then
-            echo "R4 regression was not red against the pre-repair controller" >&2
-            exit 1
-          fi
+          test "$red_status" -eq 1
+          grep -F "workbench zero claim" /tmp/r4-semantic-red.log
           git add README.md docs/authority tests
           git commit -m "Record consumed R3 and add R4 regression tests"
 
@@ -113,6 +113,6 @@ jobs:
         shell: bash
         run: |
           rm -f .github/r4_apply.py .github/r4_apply.py.gz.b64
-          git rm .github/r4_apply.part00 .github/r4_apply.part01 .github/r4_apply.part02 .github/r4_apply.part03 .github/r4_apply.part04 .github/workflows/r4-repair.yml
+          git rm .github/r4_apply.hotfix.py .github/r4_apply.part00 .github/r4_apply.part01 .github/r4_apply.part02 .github/r4_apply.part03 .github/r4_apply.part04 .github/workflows/r4-repair.yml
           git commit -m "Remove temporary R4 repair harness"
           git push origin HEAD:agent/r4-commissioning-integrity-repair
