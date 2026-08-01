@@ -1,0 +1,96 @@
+name: Bounded R4 commissioning repair
+
+on:
+  push:
+    branches:
+      - agent/r4-commissioning-integrity-repair
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out exact task branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: agent/r4-commissioning-integrity-repair
+          fetch-depth: 0
+
+      - name: Install pinned uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.10.0"
+          enable-cache: true
+          cache-dependency-glob: requirements-dev.lock
+          python-version: "3.13.5"
+
+      - name: Materialize exact temporary patcher
+        shell: bash
+        run: |
+          base64 --decode .github/r4_apply.py.gz.b64 | gzip --decompress > .github/r4_apply.py
+          test "$(sha256sum .github/r4_apply.py | awk '{print $1}')" = "fda1d9786b4903e085c13c543dee186d5155daf602fd1e605f889886607440d2"
+          python -m py_compile .github/r4_apply.py
+
+      - name: Configure append-only commit author
+        shell: bash
+        run: |
+          git config user.name "optimatrix-r4-bot"
+          git config user.email "optimatrix-r4-bot@users.noreply.github.com"
+
+      - name: Establish authority and stable red tests
+        shell: bash
+        run: |
+          python .github/r4_apply.py authority
+          git diff --check
+          make sync
+          set +e
+          .venv/bin/python -m pytest \
+            tests/test_persistent_service_commissioning.py::test_schema_2_workbench_accepts_every_valid_zero_claim_shape \
+            -q
+          red_status=$?
+          set -e
+          if [ "$red_status" -eq 0 ]; then
+            echo "R4 regression was not red against the pre-repair controller" >&2
+            exit 1
+          fi
+          git add README.md docs/authority tests
+          git commit -m "Record consumed R3 and add R4 regression tests"
+
+      - name: Apply minimal controller repair
+        shell: bash
+        run: |
+          python .github/r4_apply.py implementation
+          git diff --check
+
+      - name: Run focused R4 verification
+        shell: bash
+        run: |
+          .venv/bin/python -m pytest \
+            tests/test_persistent_service_commissioning.py \
+            tests/test_authority_and_architecture.py \
+            tests/test_trader_workbench.py \
+            -q
+
+      - name: Run full repository gate
+        shell: bash
+        run: make check
+
+      - name: Commit verified implementation
+        shell: bash
+        run: |
+          git add apps/radar_runtime/src/radar_runtime/commissioning.py
+          git commit -m "Repair R4 commissioning integrity"
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Remove temporary repair harness and publish
+        shell: bash
+        run: |
+          rm -f .github/r4_apply.py
+          git rm .github/r4_apply.py.gz.b64 .github/workflows/r4-repair.yml
+          git commit -m "Remove temporary R4 repair harness"
+          git push origin HEAD:agent/r4-commissioning-integrity-repair
