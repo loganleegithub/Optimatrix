@@ -145,6 +145,19 @@ class FixedContractShadowRuntimeAdapter:
     def required_option_instrument_names(self) -> tuple[str, ...]:
         return self.owner.required_option_instrument_names
 
+    def workbench_option_metadata(self) -> tuple[Mapping[str, object], ...]:
+        """Copy settled option identity metadata for the in-process read-only projection."""
+        return tuple(
+            {
+                "semantic_identity": identity,
+                "instrument_name": source.instrument.instrument_name,
+                "expiration_timestamp_ms": source.instrument.expiration_timestamp_ms,
+                "option_type": source.instrument.option_type.value,
+                "strike_usdc_per_btc": str(source.instrument.strike),
+            }
+            for identity, source in sorted(self._options_by_identity.items())
+        )
+
     def next_time_boundary_monotonic_ms(
         self,
         *,

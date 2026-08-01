@@ -554,6 +554,15 @@ class ShadowRpcIntent:
                 raise ValueError(f"{field_name} must be a positive integer")
 
 
+class SettledSnapshotPublisher(Protocol):
+    def publish_settled(
+        self,
+        *,
+        reducer: RadarReducer,
+        commit: CausalCommit,
+    ) -> None: ...
+
+
 class ShadowRuntimeAdapter(Protocol):
     @property
     def required_combo_instrument_names(self) -> tuple[str, ...]: ...
@@ -781,12 +790,18 @@ class RadarReducer:
         evidence_writer: EvidenceWriter,
         runtime_identity: str,
         shadow_adapter: ShadowRuntimeAdapter | None = None,
+        snapshot_publisher: SettledSnapshotPublisher | None = None,
+        allow_service_leading_zero_duration_restarts: bool = False,
     ) -> None:
         self.policy = policy
         self.code_identity = code_identity
         self.writer = evidence_writer
         self.runtime_identity = runtime_identity
         self.shadow_adapter = shadow_adapter
+        self.snapshot_publisher = snapshot_publisher
+        self._allow_service_leading_zero_duration_restarts = (
+            allow_service_leading_zero_duration_restarts
+        )
         self.platform = PlatformReadiness()
         self.option_catalog = CatalogBootstrap()
         self.combo_catalog = CatalogBootstrap()
@@ -5031,6 +5046,14 @@ class RadarReducer:
         )
         if sync_combo_subscriptions:
             self._sync_combo_subscriptions(commit.boundary)
+        publisher = self.snapshot_publisher
+        if publisher is not None:
+            try:
+                publisher.publish_settled(reducer=self, commit=commit)
+            except Exception as exc:
+                raise ShadowRuntimeIntegrityError(
+                    "settled workbench snapshot publication failed"
+                ) from exc
 
     def _settle_fact_transaction(
         self,
@@ -6687,6 +6710,52 @@ class RadarReducer:
     def platform_reason(self) -> str:
         return self.platform.reason
 
+    @property
+    def current_session_epoch(self) -> int | None:
+        return self._session_epoch
+
+    @property
+    def last_boundary_monotonic_ms(self) -> int:
+        return self._last_boundary_monotonic_ms
+
+    @property
+    def last_wire_received_monotonic_ms(self) -> int:
+        return self._last_wire_received_ms
+
+    @property
+    def current_coverage_state(self) -> CoverageState:
+        return self._coverage.current_state
+
+    @property
+    def current_coverage_blocking_reason(self) -> str:
+        return self._coverage.current_blocking_reason
+
+    @property
+    def current_coverage_affected_scopes(self) -> tuple[str, ...]:
+        return self._coverage.current_affected_scopes
+
+    @property
+    def current_global_continuity_epoch(self) -> int:
+        return self._global_continuity_epoch
+
+    def episode_started_monotonic_ms(self, episode_identity: str) -> int | None:
+        return self._episode_started_ms.get(episode_identity)
+
+    def episode_active_duration_ms(
+        self,
+        episode_identity: str,
+        *,
+        observed_monotonic_ms: int,
+    ) -> int | None:
+        started = self._episode_started_ms.get(episode_identity)
+        if started is None:
+            return None
+        paused = self._episode_paused_duration_ms[episode_identity]
+        pause_started = self._episode_pause_started_ms.get(episode_identity)
+        if pause_started is not None:
+            paused += max(0, observed_monotonic_ms - pause_started)
+        return max(0, observed_monotonic_ms - started - paused)
+
     def advance_time(self, monotonic_ms: int) -> tuple[PendingRpc, ...]:
         self._commands = []
         if self._session_epoch is None:
@@ -6920,6 +6989,9 @@ class RadarReducer:
             known_active_duration_ms_sum_by_end_reason=self._known_active_duration_ms,
             public_atomic_quote_state_transition_count=self._atomic_transition_counts,
             operational_diagnostics=self._operational_diagnostics(observation_ms),
+            allow_service_leading_zero_duration_restarts=(
+                self._allow_service_leading_zero_duration_restarts
+            ),
         )
         try:
             summary_path = self.writer.write_summary(summary)
@@ -7407,6 +7479,18 @@ class CoverageLedger:
         self._current_global_continuity_epoch = 1
         self._segments: list[CoverageSegment] = []
 
+    @property
+    def current_state(self) -> CoverageState:
+        return self._current_state
+
+    @property
+    def current_blocking_reason(self) -> str:
+        return self._current_blocking_reason
+
+    @property
+    def current_affected_scopes(self) -> tuple[str, ...]:
+        return self._current_affected_scopes
+
     def transition(
         self,
         state: CoverageState,
@@ -7553,6 +7637,8 @@ class LiveRadarRuntime:
         evidence_writer: EvidenceWriter,
         runtime_identity: str | None = None,
         shadow_adapter: ShadowRuntimeAdapter | None = None,
+        snapshot_publisher: SettledSnapshotPublisher | None = None,
+        allow_service_leading_zero_duration_restarts: bool = False,
     ) -> None:
         identity = runtime_identity or str(uuid.uuid4())
         self.reducer = RadarReducer(
@@ -7561,6 +7647,10 @@ class LiveRadarRuntime:
             evidence_writer=evidence_writer,
             runtime_identity=identity,
             shadow_adapter=shadow_adapter,
+            snapshot_publisher=snapshot_publisher,
+            allow_service_leading_zero_duration_restarts=(
+                allow_service_leading_zero_duration_restarts
+            ),
         )
 
     @property

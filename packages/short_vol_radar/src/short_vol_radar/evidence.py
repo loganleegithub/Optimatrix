@@ -554,6 +554,7 @@ def project_run_summary(
     known_active_duration_ms_sum_by_end_reason: Mapping[EpisodeEndReason | str, int],
     public_atomic_quote_state_transition_count: Mapping[str, int],
     operational_diagnostics: Mapping[str, object],
+    allow_service_leading_zero_duration_restarts: bool = False,
 ) -> dict[str, object]:
     if not coverage_segments:
         raise EvidenceError("run summary requires at least one coverage segment")
@@ -605,7 +606,11 @@ def project_run_summary(
         ),
         "non_claims": list(SUMMARY_NON_CLAIMS),
     }
-    validate_run_summary(summary)
+    _validate_run_summary(
+        summary,
+        required_diagnostics_version=6,
+        allow_service_leading_zero_duration_restarts=(allow_service_leading_zero_duration_restarts),
+    )
     return summary
 
 
@@ -617,11 +622,15 @@ class EvidenceWriter:
         code_identity: str,
         runtime_identity: str,
         policy_identity: str,
+        allow_service_leading_zero_duration_restarts: bool = False,
     ) -> None:
         self.directory = directory
         self.code_identity = code_identity
         self.runtime_identity = runtime_identity
         self.policy_identity = policy_identity
+        self.allow_service_leading_zero_duration_restarts = (
+            allow_service_leading_zero_duration_restarts
+        )
 
     def write_anomaly(self, event: Mapping[str, object]) -> Path | None:
         validate_anomaly_event(event)
@@ -647,7 +656,10 @@ class EvidenceWriter:
         )
 
     def write_summary(self, summary: Mapping[str, object]) -> Path:
-        validate_run_summary(summary)
+        if self.allow_service_leading_zero_duration_restarts:
+            validate_persistent_service_run_summary(summary)
+        else:
+            validate_run_summary(summary)
         self._validate_identity(summary)
         path = self._write_exclusive("radar-run-summary.json", summary)
         if path is None:
@@ -883,6 +895,15 @@ def validate_run_summary(value: Mapping[str, object]) -> None:
     _validate_run_summary(value, required_diagnostics_version=6)
 
 
+def validate_persistent_service_run_summary(value: Mapping[str, object]) -> None:
+    """Validate a current Radar summary under the service-only zero-duration rule."""
+    _validate_run_summary(
+        value,
+        required_diagnostics_version=6,
+        allow_service_leading_zero_duration_restarts=True,
+    )
+
+
 def validate_sealed_version_five_run_summary(value: Mapping[str, object]) -> None:
     """Validate immutable sealed diagnostics schema 5 evidence through the explicit sealed path."""
     _validate_run_summary(value, required_diagnostics_version=5)
@@ -907,6 +928,7 @@ def _validate_run_summary(
     value: Mapping[str, object],
     *,
     required_diagnostics_version: int,
+    allow_service_leading_zero_duration_restarts: bool = False,
 ) -> None:
     _exact_keys(
         value,
@@ -977,6 +999,7 @@ def _validate_run_summary(
         coverage_segments=segments,
         counts_by_scope=_array(value["counts_by_scope"], "counts_by_scope"),
         policy_identity=_required_string(value, "policy_identity"),
+        allow_service_leading_zero_duration_restarts=(allow_service_leading_zero_duration_restarts),
     )
     _non_negative_integer(value["band_suspended_duration_ms"], "band_suspended_duration_ms")
     for field in (
@@ -1033,6 +1056,83 @@ def _validate_run_summary(
 
 def validate_evidence_directory(directory: Path) -> tuple[dict[str, object], ...]:
     return _validate_evidence_directory(directory, diagnostics_version=6)
+
+
+def validate_persistent_service_evidence_directory(
+    directory: Path,
+) -> tuple[dict[str, object], ...]:
+    """Validate service-owned Radar evidence without changing the standard reader."""
+    return _validate_evidence_directory(
+        directory,
+        diagnostics_version=6,
+        allow_service_leading_zero_duration_restarts=True,
+    )
+
+
+def validate_radar_object_relationships(
+    *,
+    anomalies: Sequence[Mapping[str, object]],
+    atomic_events: Sequence[Mapping[str, object]],
+) -> None:
+    """Validate Radar object uniqueness and cross-object bindings without a run summary."""
+    anomalies_by_episode: dict[str, Mapping[str, object]] = {}
+    for anomaly in anomalies:
+        validate_anomaly_event(anomaly)
+        episode_identity = _required_string(anomaly, "episode_identity")
+        if episode_identity in anomalies_by_episode:
+            raise EvidenceError("evidence directory duplicates an anomaly episode identity")
+        anomalies_by_episode[episode_identity] = anomaly
+
+    atomic_identities: set[tuple[str, str]] = set()
+    for atomic in atomic_events:
+        validate_atomic_event(atomic)
+        episode_identity = _required_string(atomic, "episode_identity")
+        atomic_identity = (
+            episode_identity,
+            _required_string(atomic, "combo_instrument_name"),
+        )
+        if atomic_identity in atomic_identities:
+            raise EvidenceError("evidence directory duplicates an atomic quote identity")
+        atomic_identities.add(atomic_identity)
+
+        owning_anomaly = anomalies_by_episode.get(episode_identity)
+        if owning_anomaly is None:
+            raise EvidenceError("atomic evidence references an absent anomaly episode")
+        if any(
+            atomic[field] != owning_anomaly[field]
+            for field in (
+                "code_identity",
+                "runtime_identity",
+                "policy_identity",
+                "target_base_quantity_btc",
+            )
+        ):
+            raise EvidenceError(
+                "atomic and anomaly evidence identity, Policy, runtime, or target mismatch"
+            )
+        anomaly_instrument = _mapping(
+            owning_anomaly["instrument"],
+            "anomaly instrument",
+        )
+        if atomic["short_instrument_name"] != anomaly_instrument["instrument_name"]:
+            raise EvidenceError("atomic short leg does not match its anomaly instrument")
+        detector_causal_seq = _non_negative_integer(
+            atomic["detector_causal_seq"],
+            "atomic detector_causal_seq",
+        )
+        anomaly_causal_seq = _non_negative_integer(
+            owning_anomaly["causal_seq"],
+            "anomaly causal_seq",
+        )
+        quote_causal_seq = _non_negative_integer(
+            atomic["quote_causal_seq"],
+            "atomic quote_causal_seq",
+        )
+        validate_atomic_causal_invariant(
+            anomaly_activation_seq=anomaly_causal_seq,
+            detector_causal_seq=detector_causal_seq,
+            quote_causal_seq=quote_causal_seq,
+        )
 
 
 def validate_sealed_version_five_evidence_directory(
@@ -1234,6 +1334,7 @@ def _validate_evidence_directory(
     directory: Path,
     *,
     diagnostics_version: int,
+    allow_service_leading_zero_duration_restarts: bool = False,
 ) -> tuple[dict[str, object], ...]:
     objects: list[dict[str, object]] = []
     identities: set[tuple[object, object, object]] = set()
@@ -1289,7 +1390,10 @@ def _validate_evidence_directory(
             elif diagnostics_version == 5:
                 validate_sealed_version_five_run_summary(value)
             elif diagnostics_version == 6:
-                validate_run_summary(value)
+                if allow_service_leading_zero_duration_restarts:
+                    validate_persistent_service_run_summary(value)
+                else:
+                    validate_run_summary(value)
             else:
                 raise EvidenceError("unsupported evidence diagnostics version")
             summaries.append(value)
@@ -1312,46 +1416,10 @@ def _validate_evidence_directory(
         raise EvidenceError("evidence directory contains more than one run summary")
     if diagnostics_version == 6 and summary_paths[0].name != "radar-run-summary.json":
         raise EvidenceError("current run summary must be named radar-run-summary.json")
-    for atomic in atomic_events:
-        episode_identity = _required_string(atomic, "episode_identity")
-        anomaly = anomalies_by_episode.get(episode_identity)
-        if anomaly is None:
-            raise EvidenceError("atomic evidence references an absent anomaly episode")
-        if any(
-            atomic[field] != anomaly[field]
-            for field in (
-                "code_identity",
-                "runtime_identity",
-                "policy_identity",
-                "target_base_quantity_btc",
-            )
-        ):
-            raise EvidenceError(
-                "atomic and anomaly evidence identity, Policy, runtime, or target mismatch"
-            )
-        anomaly_instrument = _mapping(
-            anomaly["instrument"],
-            "anomaly instrument",
-        )
-        if atomic["short_instrument_name"] != anomaly_instrument["instrument_name"]:
-            raise EvidenceError("atomic short leg does not match its anomaly instrument")
-        detector_causal_seq = _non_negative_integer(
-            atomic["detector_causal_seq"],
-            "atomic detector_causal_seq",
-        )
-        anomaly_causal_seq = _non_negative_integer(
-            anomaly["causal_seq"],
-            "anomaly causal_seq",
-        )
-        quote_causal_seq = _non_negative_integer(
-            atomic["quote_causal_seq"],
-            "atomic quote_causal_seq",
-        )
-        validate_atomic_causal_invariant(
-            anomaly_activation_seq=anomaly_causal_seq,
-            detector_causal_seq=detector_causal_seq,
-            quote_causal_seq=quote_causal_seq,
-        )
+    validate_radar_object_relationships(
+        anomalies=tuple(anomalies_by_episode.values()),
+        atomic_events=atomic_events,
+    )
     if summaries:
         counts = _array(summaries[0]["counts_by_scope"], "counts_by_scope")
         declared_by_scope: Counter[tuple[str, str, str]] = Counter()
@@ -1694,6 +1762,7 @@ def _validate_operational_diagnostics(
     coverage_segments: tuple[CoverageSegment, ...],
     counts_by_scope: list[object],
     policy_identity: str,
+    allow_service_leading_zero_duration_restarts: bool = False,
 ) -> None:
     diagnostics = _mapping(value, "operational_diagnostics")
     version = diagnostics.get("operational_diagnostics_schema_version")
@@ -1868,6 +1937,9 @@ def _validate_operational_diagnostics(
             recovery_edges=recovery_edges,
             diagnostics_version=version,
             clean_stop_monotonic_ms=clean_stop_monotonic_ms,
+            allow_service_leading_zero_duration_restarts=(
+                allow_service_leading_zero_duration_restarts
+            ),
         )
         if version == 6:
             _validate_index_baseline_publication(
@@ -3656,6 +3728,7 @@ def _validate_version_three_coverage(
     recovery_edges: Mapping[int, Mapping[str, object]],
     diagnostics_version: int,
     clean_stop_monotonic_ms: int,
+    allow_service_leading_zero_duration_restarts: bool = False,
 ) -> None:
     epochs = [segment.global_continuity_epoch for segment in segments]
     terminal_restart = (
@@ -3675,8 +3748,45 @@ def _validate_version_three_coverage(
     represented_restart_edges = (
         restart_edges[:-1] if terminal_restart is not None else restart_edges
     )
+    leading_unrepresented: tuple[Mapping[str, object], ...] = ()
+    if allow_service_leading_zero_duration_restarts:
+        leading_unrepresented_count = epochs[0] - 1
+        if leading_unrepresented_count < 0 or leading_unrepresented_count > len(
+            represented_restart_edges
+        ):
+            raise EvidenceError("coverage continuity epoch does not match global continuity")
+        leading_unrepresented = represented_restart_edges[:leading_unrepresented_count]
+        for expected_from_epoch, restart in enumerate(leading_unrepresented, start=1):
+            boundary = _mapping(
+                restart["boundary"],
+                "leading zero-duration global continuity restart boundary",
+            )
+            if (
+                boundary["received_monotonic_ms"] != segments[0].start_monotonic_ms
+                or restart["from_epoch"] != expected_from_epoch
+                or restart["to_epoch"] != expected_from_epoch + 1
+            ):
+                raise EvidenceError("unrepresented leading continuity restart is not zero-duration")
+        represented_restart_edges = represented_restart_edges[leading_unrepresented_count:]
+        if leading_unrepresented:
+            leading_restart = leading_unrepresented[-1]
+            leading_scopes = _validate_affected_scopes(leading_restart["affected_scopes"])
+            first_segment = segments[0]
+            if (
+                first_segment.global_continuity_epoch != leading_restart["to_epoch"]
+                or first_segment.reason != leading_restart["trigger_cause"]
+                or first_segment.blocking_reason != leading_restart["reason"]
+                or first_segment.affected_scopes != leading_scopes
+                or first_segment.blocking_groups
+                != (CoverageBlockingGroup(str(leading_restart["reason"]), leading_scopes),)
+            ):
+                raise EvidenceError(
+                    "leading coverage segment does not match its zero-duration restart"
+                )
     expected_final_epoch = current_epoch - 1 if terminal_restart is not None else current_epoch
-    if epochs[0] != 1 or epochs[-1] != expected_final_epoch:
+    if (not allow_service_leading_zero_duration_restarts and epochs[0] != 1) or epochs[
+        -1
+    ] != expected_final_epoch:
         raise EvidenceError("coverage continuity epoch does not match global continuity")
     if epochs != sorted(epochs):
         raise EvidenceError("coverage continuity epoch moved backward")
@@ -3745,7 +3855,12 @@ def _validate_version_three_coverage(
         )
         if not invalidating_groups:
             continue
-        if index == 0 or segment.global_continuity_epoch == 1:
+        if index == 0:
+            if not leading_unrepresented:
+                raise EvidenceError(
+                    "global currentness blocker requires an earlier matching epoch edge"
+                )
+        elif segment.global_continuity_epoch == 1:
             raise EvidenceError(
                 "global currentness blocker requires an earlier matching epoch edge"
             )

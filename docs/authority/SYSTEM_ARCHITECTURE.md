@@ -5,8 +5,10 @@
 ## Architectural position
 
 Optimatrix is a modular monolith with one continuous live data path. The architecture separates
-pure domain responsibilities without turning them into separate business runs, services, queues,
-or databases.
+pure domain responsibilities without turning them into separate business runs, networked
+microservices, queues, or databases. The accepted offline implementation adds one long-running
+process host and one in-process loopback read-only workbench; that is process lifecycle and
+projection, not a service topology split or deployment authorization.
 
 ```text
 Deribit public WebSocket
@@ -17,14 +19,18 @@ Deribit public WebSocket
 → optional minimal PUBLIC_ATOMIC_QUOTE_EVENT
 → fixed-contract Underwriting Decision
 → deterministic Shadow admission and Position Policy
-→ strictly future Outcome and aligned forward-cohort evidence
+→ strictly future Outcome and aligned evidence
+→ atomic immutable trader snapshot after the settled Radar-plus-Shadow transaction
+→ loopback GET/HEAD-only workbench
 ```
 
 The market-state, detector, and public atomic-availability arrows are one event-driven Market
 Monitor and Short Vol Radar flow. There is no
 capture job followed by a scan job, and no scanner that repeatedly rereads an unchanged local
-dataset. The downstream arrows are implemented in the same process, but their production-public
-permission to run those downstream arrows comes only from `CURRENT_STAGE` and the one active task.
+dataset. The downstream arrows are implemented in the same process. Their production-public permission,
+and any permission to invoke or deploy the persistent host, comes only from `CURRENT_STAGE` and an
+exact later live task. The accepted offline task authorized only implementation and deterministic
+tests; it is complete and deleted, and no live task is active.
 
 ## Data lifecycles
 
@@ -261,9 +267,38 @@ composer; no lower layer imports that owner.
 ### `radar_runtime`
 
 Composes the Deribit public adapter, bounded current state, detector, domain construction,
-fixed-contract Shadow adapter, health metrics, and permitted artifact sinks in one continuously
-running process. It owns client/queue/request identity, lifecycle, stop/reconnect barriers, and the
-guarded CLI, not downstream economic Policy.
+fixed-contract Shadow adapter, health metrics, permitted artifact sinks, persistent process host,
+exact service-evidence writer/reader, settled snapshot publisher, and loopback read-only HTTP
+surface in one continuously running process. It owns client/queue/request identity, lease, runtime
+identity, lifecycle, stop/reconnect barriers, atomic projection publication, and guarded CLI, not
+downstream economic Policy. `observe` and manifest-bound `observe-shadow` remain separate bounded
+commands with unchanged semantics.
+
+## Persistent process and read-only projection boundary
+
+[`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`](../contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md)
+owns the run-segment evidence and projection boundary. One external state root holds one advisory
+lease, one runtime identity, one reducer, one downstream owner, and one public client at a time. A
+reconnect retires the old session epoch and reuses the same owner; a process restart creates a new
+runtime identity and cannot continue prior state. An immediate zero-duration transport generation
+remains an exact diagnostics restart chain and never becomes fabricated elapsed coverage.
+
+After one reducer fact transaction settles Radar truth and the same transaction's Shadow owner
+transition, `runtime.py` invokes one publisher. The publisher serializes a complete immutable
+snapshot before replacing the published reference. HTTP handlers read only that reference. They do
+not call detector/Policy/classification functions, freeze mutable state, traverse owner private
+containers, or connect to Deribit. Lifecycle-only publications reuse the last immutable business
+projection.
+
+Service lifecycle/terminal evidence is separate from Radar and downstream object directories. The
+service terminal independently recomputes current downstream object relationships, inventory,
+Underwriting conservation, and logical non-enrolled Outcome conservation. It emits no manifest and
+no forward-cohort summary; every service-created pair is non-enrolled. Existing bounded complete
+readers remain manifest/cohort-specific and are not reused for the service.
+
+The loopback server exposes only static assets, immutable snapshot JSON, health, and readiness over
+GET/HEAD. Other methods are 405. It has no Policy mutation, account, credential, order, fill, or
+execution route.
 
 ## Dependency direction
 
@@ -428,11 +463,16 @@ position: Shadow Entries or opening fills and their separate mature / unknown Ou
 close opportunity: known CLOSE actions and strictly later full-quantity atomic opportunities
 outcome: admitted or rejected observations partitioned into pending, mature, or censored state
 aligned cohort: one policy/no-trade pair per admitted or rejected anchor
+workbench panel: settled-object presence, independent from every business denominator
+workbench zero anomaly: only a complete known non-empty monitor denominator
+workbench zero Candidate: only a strictly positive Underwriting-evaluable denominator
 ```
 
 `UNKNOWN` is excluded from economic action, PnL, win/loss, and aligned-comparison denominators.
 `MATURE_UNKNOWN` enters only the known-maturity availability denominator. A zero rate requires a
-known nonzero denominator; a zero or unknown denominator serializes `null`.
+known nonzero denominator; a zero or unknown denominator serializes `null`. An empty workbench
+panel is not a zero claim. Unknown monitor coverage or a zero Underwriting-evaluable denominator
+remains `UNKNOWN / null`, never calm or no opportunity.
 
 Market messages, detector calculations, quote updates, legs, schema checks, and elapsed runtime
 are neither Radar-episode nor Candidate-opportunity denominators. Source generations, request ids,
@@ -446,7 +486,8 @@ files, and elapsed runtime are not Outcomes or cohort units.
 - persisting every evaluation or theoretical structure;
 - replay, an offline second calculator, or provenance machinery for the first Radar closure;
 - maker, order, fill, fee, margin, or maximum-loss machinery inside public availability;
-- services split before a business closure requires them;
+- networked service splits before a business closure requires them; the one bounded in-process
+  persistent host/workbench is not a microservice split;
 - account, delivery-price, or settlement-price machinery under public Shadow;
 - an Outcome or Cohort Policy beyond the three accepted strategy Policy identities;
 - hindsight, best-quote, last-quote, mark, midpoint, or settlement-payoff exits;
