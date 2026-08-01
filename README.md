@@ -15,11 +15,13 @@ service-operability and trader-workbench repair is accepted. Its one fresh resta
 consumed: commissioning missed the mandatory first-probe deadline, the process was cleanly sealed,
 and 24-hour acceptance is `NOT_MET`. The later R3 commissioning attempt is also consumed: it ran
 `181274` ms, recorded one contract-valid probe row and two failed-probe markers, sealed with
-`PASS_COMPLETE_CLEAN_STOP`, and left 24-hour acceptance `NOT_MET`. One R4 closure is active: repair
-only the commissioning verifier, asynchronous launchd/quiescence convergence, and temporally
-correct failure receipts, then conditionally start one entirely fresh service. No live command is
-allowed before the exact controller candidate passes review, full checks, CI, merge, and fresh
-detached deployment preflight.
+`PASS_COMPLETE_CLEAN_STOP`, and left 24-hour acceptance `NOT_MET`. R4 attempt 001 is also consumed
+and terminally quiescent: it exposed a controller-only mismatch with real macOS `lsof` `p/f/n`
+output before any probe or operability gate, and therefore did not establish an online runtime.
+The user's 2026-08-02 amendment keeps R4 as the active closure and authorizes minimal observed-bug
+repair, exact gates and merge, then one fresh recommission attempt at a time until one reaches
+`COMMISSIONED`. No live command is allowed from unmerged code or without a fresh detached
+deployment preflight.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream

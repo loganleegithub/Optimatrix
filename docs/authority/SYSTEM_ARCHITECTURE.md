@@ -36,9 +36,12 @@ attempt is also consumed after a projection-verifier failure and independent com
 audit. All three persistent-observation roots are immutable. The sole active R4 task changes only
 the isolated repo-owned commissioning/stop controller's projection validation, bounded launchd and
 host-quiescence convergence, temporally ordered failure receipts, and fresh R4 bindings; the service
-hot path does not import it. Only after its exact candidate is independently accepted, passes CI,
-and is merged may it invoke one fresh R4 root/label/process/probe boundary. This changes no service
-topology, market data path, business owner, service retry loop, contract, or Policy.
+hot path does not import it. R4 attempt 001 closed terminally quiescent after the listener parser
+rejected macOS `lsof`'s always-selected `f` field. Under the 2026-08-02 Authority amendment, each
+observed implementation defect receives one minimal exact candidate and merged repair before one
+fresh R4 recommission attempt; failed attempts are preserved and this repeats only until one attempt
+is commissioned. This changes no service topology, market data path, business owner, unattended
+service retry loop, contract, or Policy.
 
 ## Data lifecycles
 

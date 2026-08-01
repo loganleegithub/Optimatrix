@@ -2197,7 +2197,7 @@ def test_listener_inventory_binds_each_listener_to_its_pid(
         return subprocess.CompletedProcess(
             [],
             0,
-            "p123\nn127.0.0.1:8765\np456\nn*:8765\n",
+            "p123\nf17\nn127.0.0.1:8765\np456\nf8\nn*:8765\n",
             "",
         )
 
@@ -2214,6 +2214,7 @@ def test_listener_inventory_binds_each_listener_to_its_pid(
         (0, ""),
         (1, "p123\n"),
         (0, "n127.0.0.1:8765\n"),
+        (0, "f17\nn127.0.0.1:8765\n"),
         (0, "pnope\nn127.0.0.1:8765\n"),
         (0, "xunexpected\n"),
     ],

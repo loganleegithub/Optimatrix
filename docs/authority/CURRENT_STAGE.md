@@ -15,14 +15,15 @@
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
 **Persistent public Shadow service/workbench:**
-`R3_CONSUMED_CLEAN_STOP_R4_CONTROLLER_REPAIR_AUTHORIZED`
+`R4_ATTEMPT_001_TERMINAL_QUIESCENT_ITERATIVE_REPAIR_AUTHORIZED`
 
-**Evidence gate:** `ACTIVE_R4_CONTROLLER_REPAIR_THEN_CONDITIONAL_FRESH_DEPLOYMENT`
+**Evidence gate:** `ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED`
 
 **Live commands:**
-`CONDITIONALLY_AUTHORIZED_AFTER_EXACT_R4_ACCEPTANCE_ONE_FRESH_SERVE_SHADOW_AND_RESULT_INDEPENDENT_STOP`
+`AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED`
 
-**Persistent deployment / 24x7 acceptance:** `R3_NOT_MET_R4_DEPLOYMENT_CONDITIONAL_NOT_STARTED`
+**Persistent deployment / 24x7 acceptance:**
+`R3_NOT_MET_R4_ATTEMPT_001_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`
 
 ## Authority
 
@@ -45,6 +46,39 @@ Challenger automation, promotion, and execution remain unchanged and unauthorize
 
 The prior `CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED` evidence result remains immutable accepted
 history; the failed persistent observation neither reopens nor extends it.
+
+### 2026-08-02 R4 iterative recovery amendment
+
+The user's direct 2026-08-02 instruction supersedes every earlier R4 clause in this document or
+the active R4 task that limited R4 to one commissioning invocation, prohibited an R4 repair after a
+failed invocation, or required a new R-number. R4 remains the sole active closure. An observed
+implementation bug may be repaired minimally in its owning module with a direct red/green
+regression, repository checks, exact-candidate review, CI, merge, and a fresh preflight; the same
+R4 root and labels may then be rematerialized and commissioned again. Each failed attempt is still
+single-invocation, must reach audited terminal quiescence before the next repair, and must be
+preserved byte-for-byte under a numbered R4 archive before the canonical R4 root is reused. This is
+iterative defect recovery, not an unattended restart loop.
+
+R4 attempt 001 ran from merged commit `572e43f5d87173e7cbbe49cb84dc51311c0a72a5`, envelope
+identity `sha256:631c5f35df43a5960adb0d9c5a2d98d10097333e2bec1fba14fb8f2144f57f2c`,
+and runtime identity `sha256:f3bac5c19ea32ec00813a2f3cc48b67460e890debec274d2db77ff2cf6e856bd`.
+Its immutable primary receipt SHA-256 is
+`55b78cf3b4474949747efdd2b021ff7e039b5cc578afa5ea5b9357faca1e8f8f`; its immutable final
+closure receipt SHA-256 is `214ad3e29b3b66bffa54e5eb277a1ae4db0632b34dee72f590040a06b2d1c848`
+with status `COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT`; and its terminal-audit SHA-256 is
+`7c8c7696a2150a57ef6ca772ff0d2bcab6bd88421270332f334fd418eda249d6`. It covered `1772` ms,
+recorded zero probe rows, did not start the operability gate, and has 24-hour result `NOT_MET`.
+All R4 and consumed labels, PID `80619`, matching service processes, and the loopback listener were
+independently absent after closure.
+
+The attempt-001 defect is exact and non-economic: macOS `lsof -F` always emits an `f` file-
+descriptor field, while the controller listener parser and its test double accepted only `p` and
+`n`. The current repair may accept the real `p/f/n` grammar and add its direct regression. No
+Policy, contract, market/Decision rule, private/account boundary, order, fill, capital,
+qualification, promotion, public binding, or reboot auto-start permission changes. After one R4
+attempt reaches `COMMISSIONED`, the service remains online for read-only observation and iterative
+commissioning authority ends; 24-hour acceptance remains `PENDING` until its full denominator is
+actually observed.
 
 ### Consumed R3 commissioning and authorized R4 repair
 
@@ -602,9 +636,10 @@ profitability, or fill evidence.
 ## Active and queued sequence
 
 `SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure. It owns only the
-isolated repo-owned controller repair, direct regression tests, and exact-candidate acceptance. Its
-one fresh live R4 sequence becomes executable only after the exact candidate and resulting remote
-`main` satisfy every conditional gate above; no R4 live invocation has occurred.
+minimal owning-module repair, direct regression tests, exact-candidate acceptance, and the
+iterative R4 recommissioning amendment above. Attempt 001 is terminally quiescent and `NOT_MET`.
+After each observed implementation defect is fixed and the resulting remote `main` satisfies the
+same gates, one fresh R4 attempt may run; this repeats only until one attempt is `COMMISSIONED`.
 
 The accepted two-layer smoke and all three consumed persistent observations cannot be extended,
 retried, reused, or relabelled. These later closures remain queued and unauthorized:
