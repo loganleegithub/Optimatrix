@@ -2064,6 +2064,39 @@ def test_verify_quiescent_requires_all_predicates_absent_in_the_same_round(
     assert clock.now == 1_100
 
 
+def test_verify_quiescent_waits_through_transient_service_and_probe_labels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+    clock = FakeClock()
+    host = MacOSHost(envelope, clock)
+    label_states = iter(("service loaded", None, None, "probe loaded", None, None))
+    observed_targets: list[str] = []
+
+    def launchd(target: str) -> str | None:
+        observed_targets.append(target)
+        return next(label_states)
+
+    monkeypatch.setattr(host, "_launchd", launchd)
+    monkeypatch.setattr(host, "_listener_inventory", lambda: ())
+    monkeypatch.setattr(host, "_matching_process_pids", lambda: ())
+
+    host.verify_quiescent(expected_pid=None)
+
+    assert observed_targets == [
+        envelope.service_target,
+        envelope.probe_target,
+        envelope.service_target,
+        envelope.probe_target,
+        envelope.service_target,
+        envelope.probe_target,
+    ]
+    assert clock.now == 1_100
+
+
 def test_verify_quiescent_fails_closed_at_one_bounded_deadline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
