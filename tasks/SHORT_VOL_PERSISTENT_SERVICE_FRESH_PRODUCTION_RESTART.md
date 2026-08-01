@@ -158,8 +158,10 @@ task. The immutable endpoint projection uses version 2 while external probe/audi
 schema 1; neither substitutes for durable business evidence. Old and new observation roots are
 distinct and never combined.
 
-**Business denominators:** continuous-service duration is terminal
-`recorded_monotonic_ms - lifecycle-sequence-1 recorded_monotonic_ms` for exactly one runtime.
+**Business denominators:** continuous-service duration is
+`terminal.terminal_fact_boundary.received_monotonic_ms - lifecycle-sequence-1 recorded_monotonic_ms`
+for exactly one runtime; the complete reader proves that terminal boundary equals the final
+lifecycle event's recorded monotonic time.
 Probe continuity requires sequence 1 within 120,000 ms of lifecycle start, contiguous ledger
 sequence, no unledgered failure marker, no consecutive monotonic gap above 180,000 ms, and the
 single final-online row within 180,000 ms before a user-request terminal. Endpoint success is

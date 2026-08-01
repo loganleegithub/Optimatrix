@@ -331,6 +331,10 @@ def test_fresh_production_restart_task_is_exactly_active() -> None:
     assert "498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439" in task
     assert "no consecutive monotonic gap above 180,000 ms" in task_flat
     assert "The terminal audit is outside the probe denominator" in task_flat
+    assert (
+        "terminal.terminal_fact_boundary.received_monotonic_ms - lifecycle-sequence-1 "
+        "recorded_monotonic_ms"
+    ) in task_flat
     assert "Private API:** FORBIDDEN" in task
 
 
