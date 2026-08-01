@@ -18,6 +18,9 @@ and 24-hour acceptance is `NOT_MET`. The later R3 commissioning attempt is also 
 `PASS_COMPLETE_CLEAN_STOP`, and left 24-hour acceptance `NOT_MET`. R4 attempt 001 is also consumed
 and terminally quiescent: it exposed a controller-only mismatch with real macOS `lsof` `p/f/n`
 output before any probe or operability gate, and therefore did not establish an online runtime.
+R4 attempt 002 is likewise consumed and terminally quiescent: four valid operational probe rows
+were recorded, but a normal RunningBoard `resource coalition id` message was misclassified as a
+CPU resource exception, so the operability gate failed and runtime was cleanly stopped.
 The user's 2026-08-02 amendment keeps R4 as the active closure and authorizes minimal observed-bug
 repair, exact gates and merge, then one fresh recommission attempt at a time until one reaches
 `COMMISSIONED`. No live command is allowed from unmerged code or without a fresh detached
