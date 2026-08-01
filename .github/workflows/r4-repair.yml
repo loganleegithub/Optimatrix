@@ -49,7 +49,7 @@ jobs:
           test "$(sha256sum .github/r4_apply.part02 | awk '{print $1}')" = "5862dd6c9ac2aa6e08588f454072436d425892a77eb40a824a3ff4743cc99314"
           test "$(sha256sum .github/r4_apply.part03 | awk '{print $1}')" = "b1957b50fc7d73cd6da1f0264cbbc7c5950aac230f3d755e56e672642adb447e"
           test "$(sha256sum .github/r4_apply.part04 | awk '{print $1}')" = "593a14b457789ad4129bd02f38dc70df9c570e4c8cc3d24768f93959776906b5"
-          test "$(sha256sum .github/r4_apply.hotfix.py | awk '{print $1}')" = "1211a9416e23d3ad6a5d8125406a90ee1b1b11e701f718ff7b2a7d1ff3c921c1"
+          test "$(sha256sum .github/r4_apply.hotfix.py | awk '{print $1}')" = "9218673740b3fa88aa64aff1a7fe7b0f72835959085cad57d83ae25e2352d72e"
           cat .github/r4_apply.part00 .github/r4_apply.part01 .github/r4_apply.part02 .github/r4_apply.part03 .github/r4_apply.part04 > .github/r4_apply.py.gz.b64
           test "$(sha256sum .github/r4_apply.py.gz.b64 | awk '{print $1}')" = "2aeb087e51fba12e31f91882ec2b849821f63ed44a3767d0a1c7d5b386f46385"
           base64 --decode .github/r4_apply.py.gz.b64 > /tmp/r4_apply.py.gz
@@ -57,7 +57,7 @@ jobs:
           gzip --decompress --stdout /tmp/r4_apply.py.gz > .github/r4_apply.py
           test "$(sha256sum .github/r4_apply.py | awk '{print $1}')" = "711e5d9e4742874154310e5789cef52b6ccc766b1d4552ecffeb8aaefaa53a8d"
           python .github/r4_apply.hotfix.py
-          test "$(sha256sum .github/r4_apply.py | awk '{print $1}')" = "c0904cab0bee6f13d53bd915441ef8e22019e085441934b28df04e4da1ff4fee"
+          test "$(sha256sum .github/r4_apply.py | awk '{print $1}')" = "03c1223c00996f5234adcaf99a364666425f02cfd5d3dcd69fcab29b57c30d4f"
           python -m py_compile .github/r4_apply.py .github/r4_apply.hotfix.py
 
       - name: Configure append-only commit author
