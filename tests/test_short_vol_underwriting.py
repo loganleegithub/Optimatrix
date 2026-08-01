@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
 import pytest
+import short_vol_underwriting.evidence as evidence_module
 from short_vol_underwriting import (
     CANDIDATE_INVALIDATION_REASONS,
     COHORT_COUNT_KEYS,
@@ -67,6 +68,7 @@ from short_vol_underwriting.evidence import (
     _read_complete_evidence_with_git_reader,
     validate_downstream_object,
 )
+from short_vol_underwriting.validation import validate_attempt_relationships
 
 ROOT = Path(__file__).resolve().parents[1]
 RADAR_POLICY_IDENTITY = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
@@ -3404,6 +3406,7 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
         outcome_contract_digest=OUTCOME_CONTRACT_DIGEST,
     )
     writer = DownstreamEvidenceWriter(tmp_path, bindings=bindings)
+    assert writer.revision == 0
     identity = canonical_identity(
         "CANDIDATE_INVALIDATION",
         "sha256:" + "c" * 64,
@@ -3426,6 +3429,7 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
         source_provenance=(),
     )
     assert path is not None
+    assert writer.revision == 1
     assert (
         writer.write(
             object_kind="CANDIDATE_INVALIDATION",
@@ -3436,6 +3440,7 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
         )
         is None
     )
+    assert writer.revision == 1
 
     objects = read_current_evidence(tmp_path, bindings=bindings)
     assert tuple(objects) == (identity,)
@@ -3455,6 +3460,48 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
                 },
             ),
         )
+    assert writer.revision == 1
+
+    with pytest.raises(DownstreamEvidenceError, match="identity mismatch"):
+        writer.write(
+            object_kind="CANDIDATE_INVALIDATION",
+            object_identity="sha256:" + "1" * 64,
+            fact_boundary=_boundary(2),
+            payload=payload,
+            source_provenance=(),
+        )
+    assert writer.revision == 1
+
+    missing_candidate = "sha256:" + "2" * 64
+    attempt = AdmissionAttempt.schedule(
+        candidate_identity=missing_candidate,
+        canonical_combo_identity="sha256:" + "3" * 64,
+        request_id=41,
+        boundary=_boundary(3),
+        request_instrument_name="BTC-TEST-COMBO",
+    )
+    with pytest.raises(DownstreamEvidenceError, match="missing its atomic Candidate"):
+        writer.write(
+            object_kind="ADMISSION_ATTEMPT_SCHEDULED",
+            object_identity=attempt.scheduled_identity,
+            fact_boundary=_boundary(3),
+            payload={
+                "scheduled_admission_attempt_identity": attempt.scheduled_identity,
+                "candidate_identity": missing_candidate,
+                "request_id": 41,
+                "request_method": "public/get_order_book",
+                "request_params": {"instrument_name": "BTC-TEST-COMBO", "depth": 10000},
+                "schedule_fact_boundary": _boundary(3).as_object(),
+            },
+            source_provenance=(
+                {
+                    "source_role": "ANCHOR",
+                    "source_identity": missing_candidate,
+                    "receipt_fact_boundary": _boundary(3).as_object(),
+                },
+            ),
+        )
+    assert writer.revision == 1
 
     raw = json.loads(path.read_text(encoding="utf-8"))
     raw["unknown_member"] = True
@@ -3464,6 +3511,87 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
     )
     with pytest.raises(DownstreamEvidenceError, match=r"unknown|exact"):
         read_current_evidence(tmp_path, bindings=bindings)
+
+
+def test_availability_write_keeps_local_validation_and_skips_attempt_graph_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_calls = 0
+    graph_calls = 0
+    original_local = evidence_module.validate_downstream_object
+    original_graph = validate_attempt_relationships
+
+    def count_local(value: Mapping[str, object], *, bindings: RuntimeBindings) -> None:
+        nonlocal local_calls
+        local_calls += 1
+        original_local(value, bindings=bindings)
+
+    def count_graph(
+        objects: Mapping[str, Mapping[str, object]],
+        *,
+        require_complete: bool,
+    ) -> None:
+        nonlocal graph_calls
+        graph_calls += 1
+        original_graph(objects, require_complete=require_complete)
+
+    monkeypatch.setattr(evidence_module, "validate_downstream_object", count_local)
+    monkeypatch.setattr(evidence_module, "validate_attempt_relationships", count_graph)
+
+    owner, bindings = _owner(tmp_path)
+    transition = owner.settle_underwriting(
+        (
+            replace(
+                _underwriting_facts(
+                    boundary=_boundary(1, 110),
+                    change_id=10,
+                    previous_change_id=None,
+                    snapshot_kind="snapshot",
+                ),
+                active_episode_identity=None,
+                atomic_state="NOT_EVALUATED",
+                quote_refresh_witness=None,
+            ),
+        ),
+        allocate_request_id=lambda: 41,
+    )
+
+    assert [value.object_kind for value in transition.emitted] == [
+        "UNDERWRITING_AVAILABILITY_EVALUATION"
+    ]
+    assert local_calls == 1
+    assert graph_calls == 0
+    assert owner.writer.revision == 1
+    assert read_current_evidence(tmp_path, bindings=bindings)
+    local_calls_after_reader = local_calls
+
+    boundary = _boundary(2, 120)
+    candidate_identity = "sha256:" + "c" * 64
+    identity = canonical_identity(
+        "CANDIDATE_INVALIDATION",
+        candidate_identity,
+        "RUNTIME_OR_CODE_IDENTITY_CHANGED",
+        ["RUNTIME_OR_CODE_IDENTITY_CHANGED"],
+        boundary.as_object(),
+    )
+    owner.writer.write(
+        object_kind="CANDIDATE_INVALIDATION",
+        object_identity=identity,
+        fact_boundary=boundary,
+        payload={
+            "candidate_invalidation_identity": identity,
+            "candidate_identity": candidate_identity,
+            "primary_reason": "RUNTIME_OR_CODE_IDENTITY_CHANGED",
+            "ordered_applicable_reason_vector": ["RUNTIME_OR_CODE_IDENTITY_CHANGED"],
+            "terminal_fact_boundary": boundary.as_object(),
+        },
+        source_provenance=(),
+    )
+
+    assert local_calls == local_calls_after_reader + 1
+    assert graph_calls == 1
+    assert owner.writer.revision == 2
 
 
 def test_manifest_normative_serializer_vector_and_closed_identity_graph(tmp_path: Path) -> None:

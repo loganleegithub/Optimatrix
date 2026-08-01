@@ -31,7 +31,7 @@ from radar_runtime.service_evidence import (
     ServiceStatus,
 )
 
-WORKBENCH_SCHEMA_VERSION = 1
+WORKBENCH_SCHEMA_VERSION = 2
 SIMULATION_LABEL = "模拟入场, 不是订单或成交"
 EMPTY_PANEL_LABEL = "无已结算对象; 这不是业务零值"
 UNKNOWN_DENOMINATOR_LABEL = "UNKNOWN (分母未知或为零)"
@@ -103,8 +103,19 @@ class PublishedSnapshot:
     ready: bool
 
 
+@dataclass(frozen=True)
+class _DownstreamProjection:
+    kinds: Mapping[str, Sequence[Mapping[str, object]]]
+    underwriting_rows: Sequence[Mapping[str, object]]
+    shadow_rows: Sequence[Mapping[str, object]]
+    outcome_rows: Sequence[Mapping[str, object]]
+    underwriting_counts: Mapping[str, int]
+
+
 class ShadowMetadataSource(Protocol):
     def workbench_option_metadata(self) -> tuple[Mapping[str, object], ...]: ...
+
+    def workbench_underwriting_metadata(self) -> tuple[Mapping[str, object], ...]: ...
 
 
 StatusSink = Callable[[ServiceStatus], object]
@@ -260,6 +271,9 @@ class WorkbenchPublisher:
         )
         self._last_status_key: tuple[object, ...] | None = None
         self._last_business: Mapping[str, object] = MappingProxyType(_empty_business_projection())
+        self._cached_downstream_revision: int | None = None
+        self._cached_underwriting_metadata: tuple[Mapping[str, object], ...] | None = None
+        self._cached_downstream_projection: _DownstreamProjection | None = None
 
     @property
     def status(self) -> ServiceStatus:
@@ -287,12 +301,27 @@ class WorkbenchPublisher:
                 self._status.recorded_monotonic_ms,
             ),
         )
-        objects = tuple(self.downstream_writer.objects)
         metadata = self.shadow_metadata.workbench_option_metadata()
+        underwriting_metadata = tuple(
+            dict(value) for value in self.shadow_metadata.workbench_underwriting_metadata()
+        )
+        downstream_revision = self.downstream_writer.revision
+        if (
+            self._cached_downstream_projection is None
+            or downstream_revision != self._cached_downstream_revision
+            or underwriting_metadata != self._cached_underwriting_metadata
+        ):
+            self._cached_downstream_projection = _build_downstream_projection(
+                objects=self.downstream_writer.objects,
+                policies=self.policies,
+                underwriting_metadata=underwriting_metadata,
+            )
+            self._cached_downstream_revision = downstream_revision
+            self._cached_underwriting_metadata = underwriting_metadata
         business = _build_business_projection(
             reducer=reducer,
             commit=commit,
-            objects=objects,
+            downstream=self._cached_downstream_projection,
             policies=self.policies,
             option_metadata=metadata,
         )
@@ -361,22 +390,18 @@ def _build_business_projection(
     *,
     reducer: RadarReducer,
     commit: CausalCommit,
-    objects: Sequence[Mapping[str, object]],
+    downstream: _DownstreamProjection,
     policies: PolicyChain,
     option_metadata: Sequence[Mapping[str, object]],
 ) -> dict[str, object]:
     trusted = _trusted_interval(reducer, commit.boundary.received_monotonic_ms)
     radar_rows = _radar_rows(reducer, commit, trusted)
-    kinds = _objects_by_kind(objects)
-    underwriting_rows = _underwriting_rows(kinds, policies)
-    shadow_rows = _shadow_rows(kinds, policies)
     position_rows = _position_rows(
-        kinds,
+        downstream.kinds,
         policies,
         trusted_time=trusted,
         option_metadata=option_metadata,
     )
-    outcome_rows = _outcome_rows(kinds)
 
     monitored_count = len(reducer.options)
     known_count = sum(
@@ -394,11 +419,10 @@ def _build_business_projection(
         monitor_denominator=(monitored_count if monitored_count > 0 else None),
         monitor_complete=monitor_complete,
     )
-    underwriting_counts = derive_underwriting_counts(objects)
     candidate_zero = zero_candidate_claim(
-        candidate_count=underwriting_counts["candidate_count"],
+        candidate_count=downstream.underwriting_counts["candidate_count"],
         underwriting_evaluable_denominator=(
-            underwriting_counts["underwriting_availability_evaluable_count"] or None
+            downstream.underwriting_counts["underwriting_availability_evaluable_count"] or None
         ),
     )
     latest_source_ms = _latest_market_timestamp(reducer)
@@ -445,15 +469,15 @@ def _build_business_projection(
             "rows": radar_rows,
         },
         "underwriting": {
-            "panel_state": panel_state(underwriting_rows).value,
-            "empty_label": EMPTY_PANEL_LABEL if not underwriting_rows else None,
-            "rows": underwriting_rows,
+            "panel_state": panel_state(downstream.underwriting_rows).value,
+            "empty_label": EMPTY_PANEL_LABEL if not downstream.underwriting_rows else None,
+            "rows": downstream.underwriting_rows,
         },
         "shadow_entries": {
-            "panel_state": panel_state(shadow_rows).value,
-            "empty_label": EMPTY_PANEL_LABEL if not shadow_rows else None,
+            "panel_state": panel_state(downstream.shadow_rows).value,
+            "empty_label": EMPTY_PANEL_LABEL if not downstream.shadow_rows else None,
             "simulation_label": SIMULATION_LABEL,
-            "rows": shadow_rows,
+            "rows": downstream.shadow_rows,
         },
         "positions": {
             "panel_state": panel_state(position_rows).value,
@@ -461,11 +485,31 @@ def _build_business_projection(
             "rows": position_rows,
         },
         "outcomes": {
-            "panel_state": panel_state(outcome_rows).value,
-            "empty_label": EMPTY_PANEL_LABEL if not outcome_rows else None,
-            "rows": outcome_rows,
+            "panel_state": panel_state(downstream.outcome_rows).value,
+            "empty_label": EMPTY_PANEL_LABEL if not downstream.outcome_rows else None,
+            "rows": downstream.outcome_rows,
         },
     }
+
+
+def _build_downstream_projection(
+    *,
+    objects: Sequence[Mapping[str, object]],
+    policies: PolicyChain,
+    underwriting_metadata: Sequence[Mapping[str, object]],
+) -> _DownstreamProjection:
+    kinds = _objects_by_kind(objects)
+    return _DownstreamProjection(
+        kinds=kinds,
+        underwriting_rows=_underwriting_rows(
+            kinds,
+            policies,
+            display_metadata=underwriting_metadata,
+        ),
+        shadow_rows=_shadow_rows(kinds, policies),
+        outcome_rows=_outcome_rows(kinds),
+        underwriting_counts=derive_underwriting_counts(objects),
+    )
 
 
 def _radar_rows(
@@ -566,7 +610,17 @@ def _public_atomic_quote_state(
 def _underwriting_rows(
     kinds: Mapping[str, Sequence[Mapping[str, object]]],
     policies: PolicyChain,
+    *,
+    display_metadata: Sequence[Mapping[str, object]] = (),
 ) -> list[dict[str, object]]:
+    display_by_scope: dict[str, Mapping[str, object]] = {}
+    for value in display_metadata:
+        scope_identity = value.get("radar_scope_identity")
+        if not isinstance(scope_identity, str):
+            raise TypeError("workbench Underwriting display scope identity must be a string")
+        if scope_identity in display_by_scope:
+            raise ValueError("duplicate workbench Underwriting display scope identity")
+        display_by_scope[scope_identity] = value
     actions_by_availability: dict[str, list[Mapping[str, object]]] = {}
     for value in kinds.get("UNDERWRITING_ACTION", ()):
         availability_identity = _payload(value).get("underwriting_availability_evaluation_identity")
@@ -590,6 +644,8 @@ def _underwriting_rows(
         "radar_scope_or_short_leg_identity",
     ):
         availability_payload = _payload(availability_value)
+        scope_identity = availability_payload.get("radar_scope_or_short_leg_identity")
+        display = display_by_scope.get(str(scope_identity), {})
         availability_identity = str(availability_value["object_identity"])
         action = _latest(actions_by_availability.get(availability_identity, ()))
         payload = _payload(action) if action is not None else {}
@@ -610,9 +666,15 @@ def _underwriting_rows(
         unknown_reasons = availability_payload.get("unknown_reasons", [])
         rows.append(
             {
-                "radar_scope_or_short_leg_identity": availability_payload.get(
-                    "radar_scope_or_short_leg_identity"
-                ),
+                "radar_scope_or_short_leg_identity": scope_identity,
+                "short_leg_instrument_name": display.get("short_leg_instrument_name"),
+                "long_leg_instrument_name": display.get("long_leg_instrument_name"),
+                "combo_instrument_name": display.get("combo_instrument_name"),
+                "expiry_timestamp_ms": display.get("expiry_timestamp_ms"),
+                "option_type": display.get("option_type"),
+                "short_strike_usdc_per_btc": display.get("short_strike_usdc_per_btc"),
+                "long_strike_usdc_per_btc": display.get("long_strike_usdc_per_btc"),
+                "target_quantity_btc": display.get("target_quantity_btc"),
                 "underwriting_availability_evaluation_identity": availability_identity,
                 "underwriting_action_identity": action_identity,
                 "availability": availability,
@@ -1206,7 +1268,7 @@ HTML = """<!doctype html>
 <body>
   <header><h1>Optimatrix 只读交易员工作台</h1><p id="runtime"></p><p id="connection" class="warning" role="alert" hidden></p></header>
   <main>
-    <section><h2>系统状态</h2><div id="system" class="grid"></div></section>
+    <section><h2>交易摘要</h2><div id="system" class="grid"></div></section>
     <section><h2>业务零值证明</h2><div id="zero" class="grid"></div></section>
     <section><h2>Radar</h2><div id="radar"></div></section>
     <section><h2>承保详情</h2><div id="underwriting"></div></section>
@@ -1220,41 +1282,259 @@ HTML = """<!doctype html>
 </html>
 """
 
-CSS = """*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3}header,footer{padding:20px 5vw;background:#161b22}main{padding:20px 5vw}section{margin:0 0 24px;padding:18px;background:#161b22;border:1px solid #30363d;border-radius:10px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.card{padding:12px;background:#0d1117;border:1px solid #30363d;border-radius:8px;overflow-wrap:anywhere}.label{color:#8b949e;font-size:.85rem}.value{font-weight:650;margin-top:4px}.warning{padding:10px;border:1px solid #d29922;background:#2d2308;border-radius:8px}table{width:100%;border-collapse:collapse;font-size:.88rem}th,td{padding:8px;border-bottom:1px solid #30363d;text-align:left;vertical-align:top}th{color:#8b949e}.empty{color:#d29922}.UNKNOWN,.STALE,.INTERRUPTED{color:#f0883e}.CURRENT,.PROVEN_ZERO{color:#3fb950}.DEGRADED{color:#d29922}@media(max-width:800px){table{display:block;overflow-x:auto}}"""
+CSS = """*{box-sizing:border-box}[hidden]{display:none!important}html,body{max-width:100%;overflow-x:hidden}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3}header,footer{padding:20px 5vw;background:#161b22}main{max-width:1600px;margin:0 auto;padding:20px 5vw}section{min-width:0;margin:0 0 24px;padding:18px;background:#161b22;border:1px solid #30363d;border-radius:10px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.card{min-width:0;padding:12px;background:#0d1117;border:1px solid #30363d;border-radius:8px;overflow-wrap:anywhere}.label{color:#8b949e;font-size:.85rem}.value{font-weight:650;margin-top:4px}.warning{padding:10px;border:1px solid #d29922;background:#2d2308;border-radius:8px}.system-details{margin-top:12px}.system-details>summary{cursor:pointer;color:#58a6ff}.system-details>.grid{margin-top:10px}.panel-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px}.panel-toolbar label{color:#8b949e}.panel-toolbar select{margin-left:8px;padding:6px 8px;color:#e6edf3;background:#0d1117;border:1px solid #30363d;border-radius:6px}.table-scroll{max-width:100%;overflow-x:auto}.table-scroll table{min-width:900px;width:100%;border-collapse:collapse;font-size:.88rem}th,td{padding:8px;border-bottom:1px solid #30363d;text-align:left;vertical-align:top}th{position:sticky;top:0;color:#8b949e;background:#161b22;z-index:1}.empty{color:#d29922}.UNKNOWN,.STALE,.INTERRUPTED,.state-unknown{color:#f0883e}.CURRENT,.PROVEN_ZERO,.ANOMALY_ACTIVE,.EVALUABLE{color:#3fb950}.DEGRADED,.NOT_EVALUATED{color:#d29922}.na{color:#8b949e}.raw-details{max-width:360px}.raw-details summary{cursor:pointer;color:#58a6ff}.raw-details dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 8px}.raw-details dt{color:#8b949e}.raw-details dd{margin:0;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem}@media(max-width:800px){header,footer,main{padding-left:16px;padding-right:16px}.grid{grid-template-columns:1fr}}"""
 
-JS = r"""const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
+JS = r"""const SUPPORTED_SCHEMA_VERSION = 2;
+const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;',
   '<': '&lt;',
   '>': '&gt;',
   '"': '&quot;',
   "'": '&#39;'
 })[character]);
+const isMissing = value => value === null || value === undefined || value === '';
 const displayText = value => {
   if (value === null || value === undefined || value === '') return 'UNKNOWN';
   return typeof value === 'object' ? JSON.stringify(value) : String(value);
 };
 const safeText = value => escapeHtml(displayText(value));
+const rawText = value => isMissing(value)
+  ? 'null'
+  : (typeof value === 'object' ? JSON.stringify(value) : String(value));
 const card = (label, value) =>
   `<div class="card"><div class="label">${escapeHtml(label)}</div>` +
   `<div class="value">${safeText(value)}</div></div>`;
-const table = (panel, columns) => {
+const reasonLabels = {
+  QUEUE_LAG_CURRENTNESS: '处理队列延迟, 行情时效性不可确认',
+  CLOCK_GAP: '可信时间不连续',
+  INDEX_CONTINUITY_GAP: '指数行情连续性中断',
+  SESSION_GAP: '公共行情会话中断',
+  SESSION_RPC_FAILURE: '公共接口响应超时',
+  COMBO_QUOTE_RECEIPT_UNKNOWN: '组合报价回执不可确认',
+  NO_ACTIVE_COMBO: '无活跃组合可供承保评估',
+  NO_TARGET_SIZE_CREDIT_QUOTE: '目标数量的组合权利金报价不可用',
+  POSITION_SLOT_CONSUMED_BY_SHADOW_ENTRY: '该承保槽位已被 Shadow Entry 使用',
+  RADAR_EPISODE_NOT_ACTIVE: '当前无活跃 Radar 异常, 承保尚未评估',
+  NOT_STARTED: '服务尚未启动'
+};
+const reasonText = value => reasonLabels[value] || String(value);
+const formatEpochMs = value => {
+  if (isMissing(value) || !Number.isFinite(Number(value))) return 'UNKNOWN';
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+  }).format(new Date(Number(value)));
+};
+const formatDurationMs = value => {
+  if (isMissing(value) || !Number.isFinite(Number(value))) return 'UNKNOWN';
+  const milliseconds = Math.max(0, Number(value));
+  if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
+  if (milliseconds < 60000) return `${(milliseconds / 1000).toFixed(1)} 秒`;
+  if (milliseconds < 3600000) return `${(milliseconds / 60000).toFixed(1)} 分钟`;
+  return `${(milliseconds / 3600000).toFixed(2)} 小时`;
+};
+const formatDurationInterval = value => {
+  if (!value || !Number.isFinite(Number(value.lower_ms)) ||
+      !Number.isFinite(Number(value.upper_ms))) return 'UNKNOWN';
+  const lower = formatDurationMs(value.lower_ms);
+  const upper = formatDurationMs(value.upper_ms);
+  return lower === upper ? lower : `${lower} - ${upper}`;
+};
+const formatDecimal = value => {
+  if (isMissing(value)) return 'UNKNOWN';
+  const text = String(value);
+  const match = text.match(/^(-?)(\d+)(\.\d+)?$/);
+  if (!match) return text;
+  return `${match[1]}${match[2].replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${match[3] || ''}`;
+};
+const formatPercent = value => {
+  if (isMissing(value) || !Number.isFinite(Number(value))) return 'UNKNOWN';
+  return `${(Number(value) * 100).toFixed(2)}%`;
+};
+const formatInterval = (value, formatter) => {
+  if (!value || isMissing(value.lower) || isMissing(value.upper)) return 'UNKNOWN';
+  const lower = formatter(value.lower);
+  const upper = formatter(value.upper);
+  return lower === upper ? lower : `${lower} - ${upper}`;
+};
+const shortIdentity = value => {
+  if (isMissing(value)) return 'UNKNOWN';
+  const text = String(value);
+  return text.length <= 24 ? text : `${text.slice(0, 14)}…${text.slice(-6)}`;
+};
+const unavailableRadarCalculation = row =>
+  row.detector_state === 'NO_ANOMALY' && row.known_evaluation ? 'N/A' : 'UNKNOWN';
+const radarCellValue = (row, field, value) => {
+  if (field === 'expiration_timestamp_ms') return formatEpochMs(value);
+  if (field === 'tte_interval_ms') return formatDurationInterval(value);
+  if (field === 'strike_usdc_per_btc') {
+    return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
+  }
+  if (field === 'executable_sell_price_usdc_per_btc') {
+    return isMissing(value) ? unavailableRadarCalculation(row) : formatDecimal(value);
+  }
+  if (field === 'executable_iv_interval') {
+    return isMissing(value) ? unavailableRadarCalculation(row)
+      : formatInterval(value, formatPercent);
+  }
+  if (field === 'baseline_annualized_volatility') {
+    return isMissing(value) ? unavailableRadarCalculation(row) : formatPercent(value);
+  }
+  if (field === 'richness_ratio_interval') {
+    return isMissing(value) ? unavailableRadarCalculation(row)
+      : formatInterval(value, formatDecimal);
+  }
+  if (field === 'detector_reason') {
+    return isMissing(value) ? unavailableRadarCalculation(row) : reasonText(value);
+  }
+  if (field === 'active_episode_identity' || field === 'anomaly_started_monotonic_ms') {
+    return isMissing(value)
+      ? (row.detector_state === 'ANOMALY_ACTIVE' ? 'UNKNOWN' : 'N/A')
+      : shortIdentity(value);
+  }
+  if (field === 'anomaly_active_duration_ms') {
+    return isMissing(value)
+      ? (row.detector_state === 'ANOMALY_ACTIVE' ? 'UNKNOWN' : 'N/A')
+      : formatDurationMs(value);
+  }
+  if (field === 'option_type') return value === 'call' ? 'Call' : (value === 'put' ? 'Put' : displayText(value));
+  return displayText(value);
+};
+const underwritingReasonText = (row, value) => {
+  if (row.availability === 'NOT_EVALUATED') {
+    const reasons = Array.isArray(row.unknown_reasons) ? row.unknown_reasons : [];
+    if (reasons.includes('RADAR_EPISODE_NOT_ACTIVE')) {
+      return reasonText('RADAR_EPISODE_NOT_ACTIVE');
+    }
+    return reasons.length
+      ? reasons.map(reasonText).join('; ')
+      : '已知前置条件未满足, 承保未评估';
+  }
+  if (row.availability === 'UNKNOWN') {
+    const reasons = Array.isArray(row.unknown_reasons) ? row.unknown_reasons : [];
+    return reasons.length
+      ? reasons.map(reasonText).join('; ')
+      : '承保所需事实不可确认';
+  }
+  if (row.availability === 'EVALUABLE' && !isMissing(row.action)) {
+    return `已结算承保动作: ${row.action}`;
+  }
+  return isMissing(value) ? 'N/A' : reasonText(value);
+};
+const underwritingCellValue = (row, field, value) => {
+  if (field === 'expiry_timestamp_ms') return isMissing(value) ? 'UNKNOWN' : formatEpochMs(value);
+  if (field.endsWith('_strike_usdc_per_btc') || field === 'target_quantity_btc') {
+    return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
+  }
+  if (field === 'radar_scope_or_short_leg_identity' || field.endsWith('_identity')) {
+    return isMissing(value) ? 'UNKNOWN' : shortIdentity(value);
+  }
+  if (field === 'decision_reason') return underwritingReasonText(row, value);
+  const unavailableFields = new Set([
+    'action', 'gross_entry_credit_usdc', 'entry_fee_reserve_usdc',
+    'net_entry_credit_usdc', 'contractual_payoff_max_loss_ex_fees_usdc',
+    'future_cost_reserve_usdc', 'underwriting_reserved_loss_usdc',
+    'candidate_lifecycle', 'candidate_still_valid', 'candidate_invalidation_reason'
+  ]);
+  if (unavailableFields.has(field) && isMissing(value)) {
+    return row.availability === 'EVALUABLE' ? 'UNKNOWN' : 'N/A';
+  }
+  return displayText(value);
+};
+const shadowCellValue = (row, field, value) => {
+  if (field.endsWith('_identity')) return isMissing(value) ? 'N/A' : shortIdentity(value);
+  if (field === 'target_quantity_btc') return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
+  if (field === 'simulated_entry_price_usdc_per_btc' ||
+      field === 'simulated_entry_credit_usdc') {
+    return isMissing(value)
+      ? (isMissing(row.shadow_entry_identity) ? 'N/A' : 'UNKNOWN')
+      : formatDecimal(value);
+  }
+  if (field === 'no_entry_reason') {
+    return isMissing(value) ? (isMissing(row.shadow_entry_identity) ? 'UNKNOWN' : 'N/A')
+      : reasonText(value);
+  }
+  return displayText(value);
+};
+const positionCellValue = (row, field, value) => {
+  if (field.endsWith('_identity')) return isMissing(value) ? 'N/A' : shortIdentity(value);
+  if (field === 'hard_close_countdown_interval_ms') return formatDurationInterval(value);
+  if (field.endsWith('_usdc')) return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
+  return displayText(value);
+};
+const outcomeCellValue = (row, field, value) => {
+  if (field.endsWith('_identity')) return isMissing(value) ? 'N/A' : shortIdentity(value);
+  if (field === 'actual_pnl_usdc' && isMissing(value)) {
+    return 'N/A — public Shadow 无订单、成交或实际持仓';
+  }
+  if (field.endsWith('_usdc')) return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
+  return displayText(value);
+};
+const radarPriority = {ANOMALY_ACTIVE: 0, UNKNOWN: 1, NO_ANOMALY: 2};
+const underwritingPriority = {EVALUABLE: 0, UNKNOWN: 1, NOT_EVALUATED: 2};
+const underwritingActionPriority = {CANDIDATE: 0, WATCH: 1, ABSTAIN: 2};
+const orderedRadarRows = rows => [...rows].sort((left, right) =>
+  (radarPriority[left.detector_state] ?? 9) - (radarPriority[right.detector_state] ?? 9) ||
+  Number(left.expiration_timestamp_ms || 0) - Number(right.expiration_timestamp_ms || 0) ||
+  String(left.option_type || '').localeCompare(String(right.option_type || '')) ||
+  String(left.strike_usdc_per_btc || '').localeCompare(String(right.strike_usdc_per_btc || ''), undefined, {numeric: true}) ||
+  String(left.instrument_name || '').localeCompare(String(right.instrument_name || ''))
+);
+const orderedUnderwritingRows = rows => [...rows].sort((left, right) =>
+  (underwritingPriority[left.availability] ?? 9) -
+    (underwritingPriority[right.availability] ?? 9) ||
+  (underwritingActionPriority[left.action] ?? 9) -
+    (underwritingActionPriority[right.action] ?? 9) ||
+  Number(left.expiry_timestamp_ms || 0) - Number(right.expiry_timestamp_ms || 0) ||
+  String(left.short_leg_instrument_name || left.radar_scope_or_short_leg_identity || '').localeCompare(
+    String(right.short_leg_instrument_name || right.radar_scope_or_short_leg_identity || '')
+  )
+);
+const filterRows = (rows, field, selected) => selected === 'ALL'
+  ? [...rows]
+  : rows.filter(row => row[field] === selected);
+const details = (row, fields) => {
+  const body = fields.map(([label, key]) =>
+    `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(rawText(row[key]))}</dd>`
+  ).join('');
+  return `<details class="raw-details"><summary>原始详情</summary><dl>${body}</dl></details>`;
+};
+const table = (panel, columns, rows = panel.rows, detailFields = []) => {
   if (panel.panel_state === 'EMPTY_NO_SETTLED_OBJECT') {
     return `<p class="empty">${safeText(panel.empty_label)}</p>`;
   }
   const header = columns.map(column => `<th>${escapeHtml(column[0])}</th>`).join('');
-  const rows = panel.rows.map(row => {
-    const cells = columns.map(column => `<td>${safeText(row[column[1]])}</td>`).join('');
-    return `<tr>${cells}</tr>`;
+  const detailHeader = detailFields.length ? '<th>详情</th>' : '';
+  const body = rows.map(row => {
+    const cells = columns.map(column => {
+      const rendered = column[2]
+        ? column[2](row, column[1], row[column[1]])
+        : displayText(row[column[1]]);
+      const renderedText = String(rendered);
+      const className = renderedText.startsWith('N/A')
+        ? ' class="na"'
+        : (['UNKNOWN', 'STALE', 'INTERRUPTED', 'CURRENT', 'PROVEN_ZERO',
+          'ANOMALY_ACTIVE', 'EVALUABLE', 'DEGRADED', 'NOT_EVALUATED'].includes(renderedText)
+          ? ` class="${renderedText}"` : '');
+      return `<td${className}>${safeText(rendered)}</td>`;
+    }).join('');
+    const detailCell = detailFields.length ? `<td>${details(row, detailFields)}</td>` : '';
+    return `<tr>${cells}${detailCell}</tr>`;
   }).join('');
-  return `<table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+  return `<div class="table-scroll"><table><thead><tr>${header}${detailHeader}</tr></thead>` +
+    `<tbody>${body}</tbody></table></div>`;
 };
 const businessPanelIds = ['zero', 'radar', 'underwriting', 'shadow', 'positions', 'outcomes'];
 let lastSuccessfulFetchAtMs = null;
 let lastPublicationRuntimeIdentity = null;
 let lastPublicationSequence = null;
 let lastPublicationChangeAtMs = null;
+let radarFilterValue = 'ALL';
+let underwritingFilterValue = 'ALL';
+let lastRenderedDocument = null;
 const ageMs = timestamp => timestamp === null ? 'UNKNOWN' : Math.max(0, Date.now() - timestamp);
 function renderUnavailable() {
+  lastRenderedDocument = null;
   const connection = document.getElementById('connection');
   connection.hidden = false;
   connection.textContent = '工作台连接中断: 旧业务数据已隐藏, 当前状态 UNKNOWN。';
@@ -1268,35 +1548,113 @@ function renderUnavailable() {
   const unavailable = '<p class="warning UNKNOWN">工作台连接中断; 旧业务数据已隐藏。</p>';
   businessPanelIds.forEach(id => { document.getElementById(id).innerHTML = unavailable; });
 }
+const zeroClaimText = (claim, noun) => claim.state === 'PROVEN_ZERO'
+  ? `已证明当前 0 ${noun}`
+  : (claim.state === 'NOT_ZERO' ? `当前 ${claim.value} ${noun}` : `无法证明当前为 0 ${noun}`);
+const toolbar = (label, id, selected, choices, shown, total) =>
+  `<div class="panel-toolbar"><label>${escapeHtml(label)}<select id="${escapeHtml(id)}">` +
+  choices.map(choice => `<option value="${escapeHtml(choice)}"${choice === selected ? ' selected' : ''}>${escapeHtml(choice)}</option>`).join('') +
+  `</select></label><span>显示 ${shown} / ${total}</span></div>`;
+function renderRadarPanel(documentValue) {
+  const ordered = orderedRadarRows(documentValue.radar.rows);
+  const rows = filterRows(ordered, 'detector_state', radarFilterValue);
+  document.getElementById('radar').innerHTML =
+    toolbar('状态筛选', 'radar-filter', radarFilterValue,
+      ['ALL', 'ANOMALY_ACTIVE', 'UNKNOWN', 'NO_ANOMALY'], rows.length, ordered.length) +
+    table(documentValue.radar, [
+      ['合约', 'instrument_name'], ['到期(北京时间)', 'expiration_timestamp_ms', radarCellValue],
+      ['TTE', 'tte_interval_ms', radarCellValue], ['类型', 'option_type', radarCellValue],
+      ['Strike', 'strike_usdc_per_btc', radarCellValue],
+      ['Executable IV', 'executable_iv_interval', radarCellValue],
+      ['基准波动率', 'baseline_annualized_volatility', radarCellValue],
+      ['Richness', 'richness_ratio_interval', radarCellValue],
+      ['Radar', 'detector_state', radarCellValue], ['原因', 'detector_reason', radarCellValue],
+      ['Atomic combo', 'public_atomic_quote_state', radarCellValue]
+    ], rows, [['episode identity', 'active_episode_identity'],
+      ['expiration timestamp ms', 'expiration_timestamp_ms'],
+      ['TTE interval ms', 'tte_interval_ms'], ['strike exact', 'strike_usdc_per_btc'],
+      ['executable sell price exact', 'executable_sell_price_usdc_per_btc'],
+      ['executable IV exact', 'executable_iv_interval'],
+      ['baseline volatility exact', 'baseline_annualized_volatility'],
+      ['richness exact', 'richness_ratio_interval'], ['detector reason enum', 'detector_reason'],
+      ['episode start monotonic ms', 'anomaly_started_monotonic_ms'],
+      ['episode duration ms', 'anomaly_active_duration_ms']]);
+}
+function renderUnderwritingPanel(documentValue) {
+  const ordered = orderedUnderwritingRows(documentValue.underwriting.rows);
+  const rows = filterRows(ordered, 'availability', underwritingFilterValue);
+  document.getElementById('underwriting').innerHTML =
+    toolbar('可用性筛选', 'underwriting-filter', underwritingFilterValue,
+      ['ALL', 'EVALUABLE', 'UNKNOWN', 'NOT_EVALUATED'], rows.length, ordered.length) +
+    table(documentValue.underwriting, [
+      ['Short leg', 'short_leg_instrument_name', underwritingCellValue],
+      ['Long leg', 'long_leg_instrument_name', underwritingCellValue],
+      ['Combo', 'combo_instrument_name', underwritingCellValue],
+      ['到期(北京时间)', 'expiry_timestamp_ms', underwritingCellValue],
+      ['Availability', 'availability', underwritingCellValue],
+      ['Action', 'action', underwritingCellValue],
+      ['净权利金', 'net_entry_credit_usdc', underwritingCellValue],
+      ['承保准备损失', 'underwriting_reserved_loss_usdc', underwritingCellValue],
+      ['Candidate 状态', 'candidate_lifecycle', underwritingCellValue],
+      ['原因', 'decision_reason', underwritingCellValue]
+    ], rows, [['radar scope', 'radar_scope_or_short_leg_identity'],
+      ['option type', 'option_type'], ['short strike exact', 'short_strike_usdc_per_btc'],
+      ['long strike exact', 'long_strike_usdc_per_btc'],
+      ['target quantity exact', 'target_quantity_btc'],
+      ['availability identity', 'underwriting_availability_evaluation_identity'],
+      ['action identity', 'underwriting_action_identity'], ['availability enum', 'availability'],
+      ['decision reason enum', 'decision_reason'], ['unknown reasons', 'unknown_reasons'],
+      ['gross entry credit exact', 'gross_entry_credit_usdc'],
+      ['entry fee reserve exact', 'entry_fee_reserve_usdc'],
+      ['net entry credit exact', 'net_entry_credit_usdc'],
+      ['max loss ex fees exact', 'contractual_payoff_max_loss_ex_fees_usdc'],
+      ['future cost reserve exact', 'future_cost_reserve_usdc'],
+      ['reserved loss exact', 'underwriting_reserved_loss_usdc'],
+      ['reserve breakdown', 'reserve_breakdown_usdc'],
+      ['evaluation fact boundary', 'evaluation_fact_boundary']]);
+}
 function render(documentValue) {
+  if (!documentValue || documentValue.schema_version !== SUPPORTED_SCHEMA_VERSION) {
+    throw new Error('unsupported workbench projection schema');
+  }
   const connection = document.getElementById('connection');
   connection.hidden = true;
   connection.textContent = '';
   document.body.dataset.workbenchState = 'CURRENT_FETCH';
-  document.getElementById('runtime').textContent = `runtime ${documentValue.runtime_identity}`;
+  document.getElementById('runtime').textContent = `runtime ${shortIdentity(documentValue.runtime_identity)}`;
   const service = documentValue.service;
   const system = documentValue.system;
   document.getElementById('system').innerHTML =
-    card('Radar', service.phase) +
+    card('服务阶段', service.phase) +
     card('数据状态', service.data_state) +
+    card('当前行情判定', service.ready ? '可用于当前判定' : '不可用于当前判定') +
+    card('主阻塞原因', reasonText(service.reason)) +
+    card('Coverage 已知/监控', `${system.known_current_instrument_evaluation_count}/${system.monitored_instrument_count}`) +
+    card('Radar 结论', zeroClaimText(documentValue.zero_claims.anomaly, '异常')) +
+    card('Candidate 结论', zeroClaimText(documentValue.zero_claims.candidate, 'Candidate')) +
+    card('数据延迟', isMissing(system.data_delay_ms) ? 'UNKNOWN' : formatDurationMs(system.data_delay_ms)) +
+    '<details class="system-details"><summary>运行与 Policy 详情</summary><div class="grid">' +
     card('Ready', service.ready) +
+    card('Publication sequence', documentValue.publication_sequence) +
+    card('最近成功获取 age', formatDurationMs(ageMs(lastSuccessfulFetchAtMs))) +
+    card('Publication 未变化 age', formatDurationMs(ageMs(lastPublicationChangeAtMs))) +
+    card('Session epoch', system.session_epoch) +
+    card('Platform', reasonText(system.platform_reason)) +
+    card('最近行情时间', isMissing(system.latest_market_timestamp_ms) ? 'UNKNOWN' : formatEpochMs(system.latest_market_timestamp_ms)) +
+    card('Last-wire age', isMissing(system.last_wire_age_ms) ? 'UNKNOWN' : formatDurationMs(system.last_wire_age_ms)) +
+    card('Coverage', system.coverage_state) +
+    card('Coverage blocker', system.coverage_blocking_reason) +
+    card('覆盖率', isMissing(system.coverage_ratio_percent) ? 'UNKNOWN' : `${formatDecimal(system.coverage_ratio_percent)}%`) +
+    card('断线/重连', system.reconnect_count) +
+    card('Session gaps', system.session_gap_count) +
+    card('最近断线记录', system.disconnect_records.slice(-1)[0]) +
+    card('Runtime identity', documentValue.runtime_identity) +
+    card('Code identity', documentValue.code_identity) +
+    card('Published fact boundary', documentValue.published_fact_boundary) +
     card('Policy / Radar', documentValue.policy_identities.radar) +
     card('Policy / Underwriting', documentValue.policy_identities.underwriting) +
     card('Policy / Position', documentValue.policy_identities.position) +
-    card('Publication sequence', documentValue.publication_sequence) +
-    card('最近成功获取 age ms', ageMs(lastSuccessfulFetchAtMs)) +
-    card('Publication 未变化 age ms', ageMs(lastPublicationChangeAtMs)) +
-    card('Session epoch', system.session_epoch) +
-    card('Platform', system.platform_reason) +
-    card('最近行情时间', system.latest_market_timestamp_ms) +
-    card('数据延迟 ms', system.data_delay_ms) +
-    card('Last-wire age ms', system.last_wire_age_ms) +
-    card('Coverage', system.coverage_state) +
-    card('Coverage blocker', system.coverage_blocking_reason) +
-    card('覆盖率 %', system.coverage_ratio_percent) +
-    card('断线/重连', system.reconnect_count) +
-    card('Session gaps', system.session_gap_count) +
-    card('最近断线记录', system.disconnect_records.slice(-1)[0]);
+    '</div></details>';
   const zero = documentValue.zero_claims;
   document.getElementById('zero').innerHTML =
     card('零异常', zero.anomaly.value === null
@@ -1307,62 +1665,68 @@ function render(documentValue) {
       ? zero.candidate.explanation
       : `${zero.candidate.value} (${zero.candidate.state})`) +
     card('Underwriting-evaluable 分母', zero.candidate.denominator);
-  document.getElementById('radar').innerHTML = table(documentValue.radar, [
-    ['合约', 'instrument_name'], ['到期时间', 'expiration_timestamp_ms'],
-    ['TTE', 'tte_interval_ms'], ['类型', 'option_type'],
-    ['Strike', 'strike_usdc_per_btc'], ['Executable IV', 'executable_iv_interval'],
-    ['基准波动率', 'baseline_annualized_volatility'], ['Richness', 'richness_ratio_interval'],
-    ['Radar', 'detector_state'], ['原因', 'detector_reason'],
-    ['Atomic combo', 'public_atomic_quote_state'],
-    ['异常 identity', 'active_episode_identity'],
-    ['异常开始', 'anomaly_started_monotonic_ms'],
-    ['异常持续 ms', 'anomaly_active_duration_ms']
-  ]);
-  document.getElementById('underwriting').innerHTML = table(documentValue.underwriting, [
-    ['Radar scope', 'radar_scope_or_short_leg_identity'],
-    ['Availability', 'availability'], ['Action', 'action'],
-    ['总权利金', 'gross_entry_credit_usdc'], ['净权利金', 'net_entry_credit_usdc'],
-    ['最大损失', 'contractual_payoff_max_loss_ex_fees_usdc'],
-    ['费用', 'entry_fee_reserve_usdc'], ['未来准备', 'future_cost_reserve_usdc'],
-    ['准备金明细', 'reserve_breakdown_usdc'],
-    ['承保准备损失', 'underwriting_reserved_loss_usdc'],
-    ['Candidate 状态', 'candidate_lifecycle'],
-    ['Candidate 有效', 'candidate_still_valid'],
-    ['失效原因', 'candidate_invalidation_reason'], ['原因', 'decision_reason']
-  ]);
+  renderRadarPanel(documentValue);
+  renderUnderwritingPanel(documentValue);
   document.getElementById('shadow').innerHTML = table(documentValue.shadow_entries, [
-    ['Candidate', 'candidate_identity'], ['形成边界', 'candidate_formed_fact_boundary'],
-    ['刷新结果', 'admission_refresh_terminal_outcome'],
-    ['刷新报价来源', 'matched_refresh_source_identity'],
-    ['Shadow Entry', 'shadow_entry_identity'], ['目标数量', 'target_quantity_btc'],
-    ['模拟入场价', 'simulated_entry_price_usdc_per_btc'],
+    ['刷新结果', 'admission_refresh_terminal_outcome', shadowCellValue],
+    ['目标数量 (BTC)', 'target_quantity_btc', shadowCellValue],
+    ['模拟入场价 (USDC/BTC)', 'simulated_entry_price_usdc_per_btc', shadowCellValue],
     ['模拟入场价状态', 'simulated_entry_price_availability'],
-    ['模拟权利金', 'simulated_entry_credit_usdc'],
-    ['消耗组合报价', 'entry_consumed_levels'],
-    ['未入场原因', 'no_entry_reason'], ['声明', 'simulation_label']
+    ['模拟权利金 (USDC)', 'simulated_entry_credit_usdc', shadowCellValue],
+    ['未入场原因', 'no_entry_reason', shadowCellValue], ['声明', 'simulation_label']
+  ], documentValue.shadow_entries.rows, [
+    ['candidate identity', 'candidate_identity'], ['formed boundary', 'candidate_formed_fact_boundary'],
+    ['refresh source identity', 'matched_refresh_source_identity'],
+    ['shadow entry identity', 'shadow_entry_identity'], ['target quantity exact', 'target_quantity_btc'],
+    ['simulated entry price exact', 'simulated_entry_price_usdc_per_btc'],
+    ['simulated entry credit exact', 'simulated_entry_credit_usdc'],
+    ['consumed levels', 'entry_consumed_levels']
   ]);
   document.getElementById('positions').innerHTML = table(documentValue.positions, [
-    ['Shadow Entry', 'shadow_entry_identity'], ['Action', 'position_action'],
-    ['剩余权利金', 'remaining_premium_usdc'],
+    ['Action', 'position_action'],
+    ['剩余权利金 (USDC)', 'remaining_premium_usdc', positionCellValue],
     ['剩余权利金状态', 'remaining_premium_availability'],
-    ['剩余权利金口径', 'remaining_premium_basis'],
     ['Atomic close', 'atomic_close_quote_state'],
-    ['Close debit', 'current_atomic_close_debit_usdc'],
-    ['Shadow PnL', 'projected_shadow_pnl_usdc'],
-    ['Hard-close 倒计时', 'hard_close_countdown_interval_ms'],
-    ['退出规则', 'ordered_latched_exit_rules'],
+    ['Close debit (USDC)', 'current_atomic_close_debit_usdc', positionCellValue],
+    ['Shadow PnL (USDC)', 'projected_shadow_pnl_usdc', positionCellValue],
+    ['Hard-close 倒计时', 'hard_close_countdown_interval_ms', positionCellValue],
     ['首要退出规则', 'primary_exit_rule'],
     ['Close eligibility', 'close_opportunity_eligibility'],
     ['Close 原因', 'close_opportunity_reason'],
     ['有效 close opportunity', 'valid_shadow_close_opportunity'],
     ['Outcome', 'outcome_state']
+  ], documentValue.positions.rows, [
+    ['shadow entry identity', 'shadow_entry_identity'],
+    ['remaining premium exact', 'remaining_premium_usdc'],
+    ['close debit exact', 'current_atomic_close_debit_usdc'],
+    ['projected Shadow PnL exact', 'projected_shadow_pnl_usdc'],
+    ['hard-close interval ms', 'hard_close_countdown_interval_ms'],
+    ['remaining premium basis', 'remaining_premium_basis'],
+    ['ordered exit rules', 'ordered_latched_exit_rules']
   ]);
   document.getElementById('outcomes').innerHTML = table(documentValue.outcomes, [
-    ['Observation', 'shadow_observation_identity'], ['状态', 'state'],
-    ['成熟度', 'maturity'], ['Selected exit', 'selected_exit_identity'],
-    ['Public-quote PnL', 'net_pnl_after_public_standard_fee_reserve_usdc'],
-    ['Actual PnL', 'actual_pnl_usdc']
+    ['状态', 'state'], ['成熟度', 'maturity'],
+    ['Public-quote PnL (USDC)', 'net_pnl_after_public_standard_fee_reserve_usdc', outcomeCellValue],
+    ['Actual PnL', 'actual_pnl_usdc', outcomeCellValue]
+  ], documentValue.outcomes.rows, [
+    ['observation identity', 'shadow_observation_identity'],
+    ['selected exit identity', 'selected_exit_identity'],
+    ['public-quote PnL exact', 'net_pnl_after_public_standard_fee_reserve_usdc'],
+    ['actual PnL exact', 'actual_pnl_usdc']
   ]);
+  lastRenderedDocument = documentValue;
+}
+if (typeof document.addEventListener === 'function') {
+  document.addEventListener('change', event => {
+    if (!lastRenderedDocument || !event.target) return;
+    if (event.target.id === 'radar-filter') {
+      radarFilterValue = event.target.value;
+      renderRadarPanel(lastRenderedDocument);
+    } else if (event.target.id === 'underwriting-filter') {
+      underwritingFilterValue = event.target.value;
+      renderUnderwritingPanel(lastRenderedDocument);
+    }
+  });
 }
 async function refresh() {
   try {

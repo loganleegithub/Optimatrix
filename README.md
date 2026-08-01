@@ -9,7 +9,10 @@ production-public Shadow only: no private API, account, margin, order, fill, or 
 The top implemented capability is `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`: one guarded
 production-public Radar runtime and its `observe` command. The fixed-contract public Shadow
 implementation is separately `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`. The two-layer
-engineering closure is consumed and closed; no product-capability task or live command is active.
+engineering closure is consumed and closed. The later persistent-service observation is also
+consumed: it sealed complete `PROCESS_FAILURE` evidence and did not satisfy the 24-hour gate. One
+offline service-operability and trader-workbench repair task is active; live commands and
+deployment are forbidden.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
@@ -53,13 +56,38 @@ Candidate, Shadow Entry, admitted Outcome, and rejected Outcome counts were all 
 terminal record is
 `/Users/logan/Optimatrix-shadow/receipts/public-shadow-engineering-smoke-002-terminal-record.json`,
 SHA-256 `a4b7a66c51133cef08a4d0420943b6fe5464a78cc10d5a8f2169c0c9d9d4db3c`.
-No private/account/order/fill/capital capability, replay, Policy change, qualification, retry,
-persistent service, or further live invocation is authorized.
+That bounded smoke by itself authorized no private/account/order/fill/capital capability, replay,
+Policy change, qualification, retry, persistent service, or further live invocation.
 Establishment means the bounded public Radar met its frozen reachability and operating predicates;
 it does not mean the Radar is persistently deployed, always running, indefinitely stable,
 profitable, or authorized to trade. Offline Shadow implementation or evidence-integrity
 acceptance does not prove a natural Candidate, Entry, Position, Outcome, forward cohort, Policy
 quality, or business success.
+
+### Consumed persistent observation and active repair
+
+The separately accepted persistent service/workbench implementation at commit
+`67085248fffb1b20bae1c9512ae1191d166a6509` was later deployed under one exact observation
+authority. On the user's `停止并修复`, the controller stopped the periodic probe, recorded one final
+online probe, sent one label-bound `SIGINT`, and sent no retry or second signal. The service entered
+`STOPPING / USER_REQUEST`, then truthfully sealed as `PROCESS_FAILURE` when an already-pending
+heartbeat deadline failed 9 ms later.
+
+The independent terminal audit records 190 contiguous probe rows, `11,909,685` ms of continuous
+service, complete downstream/service evidence, `MET` Underwriting and cohort conservation, and
+`INCOMPLETE_PROCESS_FAILURE` Radar evidence with no invented run summary. The 24-hour result is
+`NOT_MET`. It observed 56 Radar anomaly objects and 6,442 Underwriting-availability objects, with
+zero Candidate, atomic quote, Shadow Entry, close opportunity, or Outcome. Those natural zeros are
+`NOT_OBSERVED`, not Policy-quality or performance evidence. The consumed state root cannot be
+restarted, repaired, relabelled, or reused.
+
+The sole active task is the bounded offline
+[`SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR`](tasks/SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR.md).
+It owns only the redundant whole-history work, revision-keyed projection cache, settled display
+metadata, and truthful trader-facing version-2 presentation. It changes no Radar formula or state
+machine, Policy, Underwriting/Position/Outcome economics, durable business identity, account
+boundary, or execution permission. A fresh production validation requires a later explicit
+authority, new state root, and new process.
 
 ## Intended first business flow
 
@@ -120,7 +148,9 @@ Start with [`AGENTS.md`](AGENTS.md). The
 [`SHORT_VOL_UNDERWRITING_POSITION`](docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md) defines the
 accepted downstream Underwriting, admission, and Shadow Position semantics, and
 [`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
-defines the accepted downstream Outcome and forward-cohort semantics.
+defines the accepted downstream Outcome and forward-cohort semantics. The
+[`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`](docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md)
+contract owns the offline-repairable service evidence and immutable read-only workbench boundary.
 
 ## Repository shape
 
@@ -151,16 +181,13 @@ make sync
 make check
 ```
 
-The guarded `python -m radar_runtime observe` command is the public-only runtime entry point under
-`PUBLIC_SHADOW`. Each bounded observation still uses one immutable Policy identity and a fresh
-evidence directory and preserves clean-stop and strict-validation behavior. The accepted Smoke and
-Soak establish only their exact pre-bound observation windows; they do not authorize persistent
-service deployment, private/account access, orders, fills, capital, execution, or any queued
-product closure. `python -m radar_runtime observe-shadow` remains guarded and may be invoked only
-under a separately active exact task. No such task is active now.
+The `observe`, `observe-shadow`, and `serve-shadow` commands remain guarded implementation
+surfaces, but the active repair authorizes none of them. The accepted Smoke, Soak, two-layer smoke,
+and consumed persistent observation establish only their exact pre-bound intervals; they grant no
+new service invocation, private/account access, orders, fills, capital, execution, or queued
+product closure. This task permits deterministic offline tests and one Draft PR only.
 
-Both the failed attempt and the accepted smoke's manifest, evidence directories, log, and terminal
-record are sealed and cannot be edited, deleted, completed retroactively, migrated, relabelled,
-retried, or reused. A future long-running sample requires separate explicit authorization and
-cannot carry this bounded interval forward as evidence of Policy quality, opportunity frequency,
-or PnL.
+The failed fixed-contract attempt, accepted smoke, and failed persistent observation artifacts are
+sealed and cannot be edited, deleted, completed retroactively, migrated, relabelled, retried, or
+reused. A future long-running sample requires separate explicit authorization and cannot carry any
+of these intervals forward as evidence of Policy quality, opportunity frequency, or PnL.
