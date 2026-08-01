@@ -13,10 +13,13 @@ engineering closure is consumed and closed. The later persistent-service observa
 consumed: it sealed complete `PROCESS_FAILURE` evidence and did not satisfy the 24-hour gate. One
 service-operability and trader-workbench repair is accepted. Its one fresh restart is now also
 consumed: commissioning missed the mandatory first-probe deadline, the process was cleanly sealed,
-and 24-hour acceptance is `NOT_MET`. One r3 closure is now active: first accept a repo-owned,
-deadline-safe commissioning/stop controller, then conditionally start one entirely fresh service
-under a frozen root/label/probe/stop boundary. No live command is allowed before the exact
-controller candidate passes review, full checks, CI, merge, and fresh deployment preflight.
+and 24-hour acceptance is `NOT_MET`. The later R3 commissioning attempt is also consumed: it ran
+`181274` ms, recorded one contract-valid probe row and two failed-probe markers, sealed with
+`PASS_COMPLETE_CLEAN_STOP`, and left 24-hour acceptance `NOT_MET`. One R4 closure is active: repair
+only the commissioning verifier, asynchronous launchd/quiescence convergence, and temporally
+correct failure receipts, then conditionally start one entirely fresh service. No live command is
+allowed before the exact controller candidate passes review, full checks, CI, merge, and fresh
+detached deployment preflight.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
@@ -115,14 +118,20 @@ evidence. The fresh root and both launchd identities are consumed and cannot be 
 repaired. The installed r2 plist files remain inert consumed assets and may not be bootstrapped or
 reused.
 
-The active r3 task adds only an isolated repo-owned commissioning/stop controller and direct tests;
-the accepted `serve-shadow` market/service hot path, contracts, three Policies, dependencies, and
-workbench schema stay unchanged. If that exact candidate is independently accepted and merged,
-one new root `/Users/logan/Optimatrix-public-shadow-observation-003` and labels
-`com.optimatrix.public-shadow.r3` / `com.optimatrix.public-shadow.r3.probe` may be bound and started
-once. The first manual probe must pass within the single 120-second lifecycle deadline, followed by
-a full 180-second host-operability gate measured only after periodic-probe bootstrap, with at least
-two successful periodic rows and a final bounded resource-event audit. Successful commissioning
+The later R3 attempt under `/Users/logan/Optimatrix-public-shadow-observation-003` is immutable and
+consumed. Its primary receipt was correctly written before cleanup but used the final-sounding
+status `COMMISSION_FAILED_CLEANUP_REQUIRED`; the independent terminal audit is the durable proof
+that cleanup in fact converged. R3 cannot be retried, extended, relabelled, or reused.
+
+The active R4 task changes only the isolated repo-owned commissioning/stop controller, direct
+tests, and governance truth; the accepted `serve-shadow` market/service hot path, contracts, three
+Policies, dependencies, and workbench schema stay unchanged. If the exact candidate is
+independently accepted and merged, one fresh root
+`/Users/logan/Optimatrix-public-shadow-observation-004` and labels
+`com.optimatrix.public-shadow.r4` / `com.optimatrix.public-shadow.r4.probe` may be bound and started
+once. The existing 120-second first-probe and 180-second post-bootstrap operability gates remain.
+Teardown now has one 30-second monotonic convergence boundary, and each failure has an immutable
+pre-cleanup receipt plus a distinct immutable final closure receipt. Successful commissioning
 begins read-only observation and leaves 24x7 `PENDING`; it does not establish 24x7 stability,
 Policy quality, opportunity frequency, fillability, or PnL.
 
@@ -219,12 +228,15 @@ make check
 ```
 
 The `observe`, `observe-shadow`, and `serve-shadow` commands remain guarded implementation
-surfaces. No task currently authorizes any live command or deployment; `observe`, `observe-shadow`,
-`serve-shadow`, every service restart, and every private/account/order/fill/capital surface remain
-forbidden. The accepted Smoke, Soak, two-layer smoke, and consumed persistent observations
-establish only their exact pre-bound intervals and grant no authority to reuse them.
+surfaces. The R4 branch and PR authorize no live mutation. Only after exact-candidate acceptance,
+remote equality, GitHub CI, merge to remote `main`, and fresh detached preflight may exactly one
+fresh R4 `serve-shadow` commissioning and its result-independent close boundary run. Every private,
+account, order, fill, and capital surface remains forbidden. The accepted Smoke, Soak, two-layer
+smoke, and consumed persistent observations establish only their exact pre-bound intervals and
+grant no authority to reuse them.
 
-The failed fixed-contract attempt, accepted smoke, and both persistent-observation artifact roots
+The failed fixed-contract attempt, accepted smoke, and all three consumed persistent-observation
+artifact roots
 are sealed and cannot be edited, deleted, completed retroactively, migrated, relabelled, retried,
 or reused. None of these intervals can be carried forward as evidence of Policy quality,
 opportunity frequency, or PnL.

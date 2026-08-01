@@ -40,17 +40,17 @@ from .workbench import EMPTY_PANEL_LABEL, SIMULATION_LABEL, WORKBENCH_NON_CLAIMS
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CODE_RE = re.compile(r"^[0-9a-f]{40}$")
-_SERVICE_LABEL = "com.optimatrix.public-shadow.r3"
+_SERVICE_LABEL = "com.optimatrix.public-shadow.r4"
 _PROBE_LABEL = f"{_SERVICE_LABEL}.probe"
 _LOOPBACK_HOST = "127.0.0.1"
 _LOOPBACK_PORT = 8765
 _UID = 501
-_PRODUCTION_ROOT = Path("/Users/logan/Optimatrix-public-shadow-observation-003")
+_PRODUCTION_ROOT = Path("/Users/logan/Optimatrix-public-shadow-observation-004")
 _PRODUCTION_SERVICE_PLIST = Path(
-    "/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r3.plist"
+    "/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r4.plist"
 )
 _PRODUCTION_PROBE_PLIST = Path(
-    "/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r3.probe.plist"
+    "/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r4.probe.plist"
 )
 _PRODUCTION_ENVELOPE = _PRODUCTION_ROOT / "deployment/deployment-envelope.json"
 _LIFECYCLE_WAIT_MS = 30_000
@@ -62,6 +62,8 @@ _OPERABILITY_MS = 180_000
 _MAX_PERIODIC_GAP_MS = 90_000
 _RESOURCE_GRACE_MS = 30_000
 _TERMINAL_WAIT_MS = 120_000
+_TEARDOWN_CONVERGENCE_MS = 30_000
+_TEARDOWN_POLL_MS = 100
 
 
 class CommissioningError(RuntimeError):
@@ -427,28 +429,28 @@ def _validate_http_documents(
         value = claim.get("value")
         numerator = claim.get("numerator")
         denominator = claim.get("denominator")
-        if not (
-            type(numerator) is int
-            and numerator >= 0
-            and (denominator is None or (type(denominator) is int and denominator > 0))
-            and isinstance(claim.get("explanation"), str)
-            and (
-                (state == "UNKNOWN" and value is None and denominator is None)
-                or (
-                    state == "PROVEN_ZERO"
-                    and value == 0
-                    and numerator == 0
-                    and type(denominator) is int
-                )
-                or (
-                    state == "NOT_ZERO"
-                    and type(value) is int
-                    and value > 0
-                    and value == numerator
-                    and type(denominator) is int
-                )
+        denominator_valid = denominator is None or (type(denominator) is int and denominator >= 0)
+        claim_valid = (
+            (state == "UNKNOWN" and value is None and numerator == 0 and type(numerator) is int)
+            or (
+                state == "PROVEN_ZERO"
+                and type(value) is int
+                and value == 0
+                and type(numerator) is int
+                and numerator == 0
+                and type(denominator) is int
+                and denominator > 0
             )
-        ):
+            or (
+                state == "NOT_ZERO"
+                and type(value) is int
+                and value > 0
+                and type(numerator) is int
+                and numerator == value
+                and (denominator is None or denominator >= numerator)
+            )
+        )
+        if not (denominator_valid and isinstance(claim.get("explanation"), str) and claim_valid):
             raise CommissioningError(f"workbench zero claim {name} value mismatch")
     for name in ("radar", "underwriting", "shadow_entries", "positions", "outcomes"):
         panel = workbench.get(name)
@@ -642,6 +644,7 @@ class CommissioningEnvelope:
     journal_directory: Path
     receipt_path: Path
     stop_receipt_path: Path
+    failure_closure_receipt_path: Path
     probe_ledger_path: Path
     service_label: str
     probe_label: str
@@ -696,6 +699,7 @@ class CommissioningEnvelope:
             "journal_directory",
             "receipt_path",
             "stop_receipt_path",
+            "failure_closure_receipt_path",
             "probe_ledger_path",
             "service_label",
             "probe_label",
@@ -758,6 +762,9 @@ class CommissioningEnvelope:
         journal = _absolute_path(value["journal_directory"], "journal_directory")
         receipt = _absolute_path(value["receipt_path"], "receipt_path")
         stop_receipt = _absolute_path(value["stop_receipt_path"], "stop_receipt_path")
+        failure_closure_receipt = _absolute_path(
+            value["failure_closure_receipt_path"], "failure_closure_receipt_path"
+        )
         ledger = _absolute_path(value["probe_ledger_path"], "probe_ledger_path")
         for path, label in (
             (repository, "repository"),
@@ -765,20 +772,24 @@ class CommissioningEnvelope:
             (journal, "journal_directory"),
             (receipt, "receipt_path"),
             (stop_receipt, "stop_receipt_path"),
+            (failure_closure_receipt, "failure_closure_receipt_path"),
             (ledger, "probe_ledger_path"),
         ):
             if not path.is_relative_to(root):
                 raise CommissioningError(f"{label} must remain inside deployment_root")
+        receipt_paths = (receipt, stop_receipt, failure_closure_receipt)
+        if len(set(receipt_paths)) != len(receipt_paths):
+            raise CommissioningError("receipt paths must be distinct")
 
         uid = _integer(value["uid"], "uid")
         if uid != _UID:
-            raise CommissioningError("r3 uid must be 501")
+            raise CommissioningError("r4 uid must be 501")
         service_label = _string(value["service_label"], "service_label")
         probe_label = _string(value["probe_label"], "probe_label")
         service_target = _string(value["service_target"], "service_target")
         probe_target = _string(value["probe_target"], "probe_target")
         if service_label != _SERVICE_LABEL or probe_label != _PROBE_LABEL:
-            raise CommissioningError("r3 launchd labels are not exact")
+            raise CommissioningError("r4 launchd labels are not exact")
         if service_target != f"gui/{uid}/{service_label}":
             raise CommissioningError("service target mismatch")
         if probe_target != f"gui/{uid}/{probe_label}":
@@ -797,7 +808,7 @@ class CommissioningEnvelope:
             or service_plist != _PRODUCTION_SERVICE_PLIST
             or probe_plist != _PRODUCTION_PROBE_PLIST
         ):
-            raise CommissioningError("r3 production root/plist boundary mismatch")
+            raise CommissioningError("r4 production root/plist boundary mismatch")
         cwd = _absolute_path(value["expected_service_cwd"], "expected_service_cwd")
         expected_service_argv = _argv(value["expected_service_argv"], "expected_service_argv")
         expected_runtime_argv = (
@@ -919,11 +930,12 @@ class CommissioningEnvelope:
             raise CommissioningError("old_root_inventory_identities must be an object")
         _require_exact_keys(
             cast(Mapping[str, object], old_inventory),
-            frozenset({"r1", "r2"}),
+            frozenset({"r1", "r2", "r3"}),
             "old_root_inventory_identities",
         )
         old_inventory_identities = {
-            name: _identity(old_inventory[name], f"old inventory {name}") for name in ("r1", "r2")
+            name: _identity(old_inventory[name], f"old inventory {name}")
+            for name in ("r1", "r2", "r3")
         }
         raw_preflight = value["preflight_facts"]
         if not isinstance(raw_preflight, Mapping):
@@ -932,9 +944,10 @@ class CommissioningEnvelope:
             {
                 "r1_no_writer",
                 "r2_no_writer",
+                "r3_no_writer",
                 "old_labels_absent",
-                "r3_root_absent_before_materialization",
-                "r3_labels_absent_at_binding",
+                "r4_root_absent_before_materialization",
+                "r4_labels_absent_at_binding",
                 "listener_free_at_binding",
                 "installed_plists_absent_before_install",
             }
@@ -952,6 +965,7 @@ class CommissioningEnvelope:
             journal_directory=journal,
             receipt_path=receipt,
             stop_receipt_path=stop_receipt,
+            failure_closure_receipt_path=failure_closure_receipt,
             probe_ledger_path=ledger,
             service_label=service_label,
             probe_label=probe_label,
@@ -1258,7 +1272,7 @@ class CommissioningController:
         try:
             descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError as exc:
-            raise CommissioningError(f"receipt already exists: {path}") from exc
+            raise CommissioningError(f"output already exists: {path}") from exc
         with os.fdopen(descriptor, "wb", closefd=True) as stream:
             stream.write(payload)
             stream.flush()
@@ -1527,7 +1541,7 @@ class CommissioningController:
             ),
         }
 
-    def _bootout_and_verify(self, *, reason: str, expected_pid: int | None) -> None:
+    def _bootout_and_verify(self, *, reason: str, expected_pid: int | None) -> tuple[str, ...]:
         errors: list[str] = []
         try:
             self._journal("PROBE_BOOTOUT_INTENT", {"reason": reason})
@@ -1543,8 +1557,7 @@ class CommissioningController:
             self.host.verify_quiescent(expected_pid=expected_pid)
         except Exception as exc:
             errors.append(f"quiescence: {exc}")
-        if errors:
-            raise CommissioningError("; ".join(errors))
+        return tuple(errors)
 
     def _failure_with_runtime(
         self,
@@ -1555,7 +1568,7 @@ class CommissioningController:
         error: Exception,
     ) -> None:
         receipt = CommissioningReceipt(
-            status="COMMISSION_FAILED_CLEANUP_REQUIRED",
+            status="COMMISSION_FAILED_CLEANUP_PENDING",
             runtime_identity=runtime_identity,
             pid=pid,
             run_directory=str(run_directory),
@@ -1653,21 +1666,41 @@ class CommissioningController:
             )
             if message is not None
         ] + cleanup_errors
-        if not closure_errors:
+        closure = CommissioningReceipt(
+            status=(
+                "COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT"
+                if not closure_errors
+                else "COMMISSION_FAILED_CLEANUP_BLOCKED"
+            ),
+            runtime_identity=runtime_identity,
+            pid=bound_pid,
+            run_directory=str(run_directory),
+            gate_start_monotonic_ms=None,
+            gate_end_monotonic_ms=None,
+            envelope_identity=self.envelope.envelope_identity,
+            failure_reason=(str(error) if not closure_errors else "; ".join(closure_errors)),
+        )
+        self._write_receipt(self.envelope.failure_closure_receipt_path, closure)
+        if closure_errors:
             self._journal(
-                "FAILURE_CLOSURE_COMPLETE",
+                "FAILURE_CLOSURE_BLOCKED",
                 {
                     "runtime_identity": runtime_identity,
-                    "terminal_audit_status": "PASS" if audit_error is None else "FAIL",
-                    "terminal_business_status": (
-                        terminal.get("terminal_business_status") if terminal is not None else None
-                    ),
+                    "failure_closure_status": closure.status,
+                    "errors": closure_errors,
                 },
             )
         else:
             self._journal(
-                "FAILURE_CLOSURE_BLOCKED",
-                {"runtime_identity": runtime_identity, "errors": closure_errors},
+                "FAILURE_CLOSURE_COMPLETE",
+                {
+                    "runtime_identity": runtime_identity,
+                    "failure_closure_status": closure.status,
+                    "terminal_audit_status": "PASS",
+                    "terminal_business_status": (
+                        terminal.get("terminal_business_status") if terminal is not None else None
+                    ),
+                },
             )
         if closure_errors:
             raise CommissioningError("; ".join(closure_errors))
@@ -1676,7 +1709,7 @@ class CommissioningController:
         self._write_receipt(
             self.envelope.receipt_path,
             CommissioningReceipt(
-                status="STARTUP_FAILED_NO_RUNTIME_TERMINAL",
+                status="STARTUP_FAILED_NO_RUNTIME_CLEANUP_PENDING",
                 runtime_identity=None,
                 pid=None,
                 run_directory=None,
@@ -1686,9 +1719,33 @@ class CommissioningController:
                 failure_reason=str(error),
             ),
         )
-        self._journal("STARTUP_FAILED_NO_RUNTIME_TERMINAL", {"error": str(error)})
-        self._bootout_and_verify(reason="NO_RUNTIME", expected_pid=None)
-        self._journal("NO_RUNTIME_CLOSURE_COMPLETE", {})
+        self._journal("STARTUP_FAILED_NO_RUNTIME_CLEANUP_PENDING", {"error": str(error)})
+        cleanup_errors = self._bootout_and_verify(reason="NO_RUNTIME", expected_pid=None)
+        closure = CommissioningReceipt(
+            status=(
+                "STARTUP_FAILED_NO_RUNTIME_QUIESCENT"
+                if not cleanup_errors
+                else "STARTUP_FAILED_NO_RUNTIME_CLEANUP_BLOCKED"
+            ),
+            runtime_identity=None,
+            pid=None,
+            run_directory=None,
+            gate_start_monotonic_ms=None,
+            gate_end_monotonic_ms=None,
+            envelope_identity=self.envelope.envelope_identity,
+            failure_reason=(str(error) if not cleanup_errors else "; ".join(cleanup_errors)),
+        )
+        self._write_receipt(self.envelope.failure_closure_receipt_path, closure)
+        if cleanup_errors:
+            self._journal(
+                "NO_RUNTIME_CLOSURE_BLOCKED",
+                {"failure_closure_status": closure.status, "errors": cleanup_errors},
+            )
+            raise CommissioningError("; ".join(cleanup_errors))
+        self._journal(
+            "NO_RUNTIME_CLOSURE_COMPLETE",
+            {"failure_closure_status": closure.status},
+        )
 
     def commission(self) -> CommissioningReceipt:
         if self.envelope.journal_directory.exists():
@@ -2127,7 +2184,7 @@ class MacOSHost:
                 "--end",
                 log_end,
                 "--predicate",
-                "eventMessage CONTAINS '__OPTIMATRIX_R3_PREFLIGHT_UNMATCHABLE__'",
+                "eventMessage CONTAINS '__OPTIMATRIX_R4_PREFLIGHT_UNMATCHABLE__'",
             ),
             timeout=30,
         )
@@ -2160,6 +2217,8 @@ class MacOSHost:
     def _launchd(self, target: str) -> str | None:
         completed = self._run(("/bin/launchctl", "print", target))
         if completed.returncode == 0:
+            if not completed.stdout.strip() or completed.stderr.strip():
+                raise CommissioningError("launchd inventory is malformed")
             return completed.stdout
         if _known_absent_launchctl(completed):
             return None
@@ -2178,17 +2237,30 @@ class MacOSHost:
                 "-Fn",
             )
         )
-        if completed.returncode not in {0, 1}:
+        if completed.returncode == 1:
+            if completed.stdout or completed.stderr:
+                raise CommissioningError("listener inventory is indeterminate")
+            return ()
+        if completed.returncode != 0 or not completed.stdout.strip() or completed.stderr.strip():
             raise CommissioningError("listener inventory failed")
         result: list[tuple[int, str]] = []
         current_pid: int | None = None
+        current_pid_has_listener = False
         for line in completed.stdout.splitlines():
-            if line.startswith("p") and line[1:].isdigit():
+            if re.fullmatch(r"p[1-9][0-9]*", line):
+                if current_pid is not None and not current_pid_has_listener:
+                    raise CommissioningError("listener inventory is malformed")
                 current_pid = int(line[1:])
-            elif line.startswith("n"):
+                current_pid_has_listener = False
+            elif line.startswith("n") and len(line) > 1:
                 if current_pid is None:
-                    raise CommissioningError("listener owner PID is unavailable")
+                    raise CommissioningError("listener inventory is malformed")
                 result.append((current_pid, line[1:]))
+                current_pid_has_listener = True
+            else:
+                raise CommissioningError("listener inventory is malformed")
+        if current_pid is None or not current_pid_has_listener or not result:
+            raise CommissioningError("listener inventory is malformed")
         return tuple(result)
 
     def preflight(self) -> None:
@@ -2198,6 +2270,8 @@ class MacOSHost:
             raise CommissioningError("probe label already loaded")
         if self._listener_inventory():
             raise CommissioningError("loopback port already has a listener")
+        if self._matching_process_pids():
+            raise CommissioningError("service process already exists")
         if self.envelope.state_root.exists():
             raise CommissioningError("state root must be absent before start")
         git_checks = {
@@ -2232,7 +2306,7 @@ class MacOSHost:
                 self.envelope.authority_digest,
             ),
             (
-                self.envelope.repository / "tasks/SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE.md",
+                self.envelope.repository / "tasks/SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR.md",
                 self.envelope.task_digest,
             ),
             (controller_path, self.envelope.controller_digest),
@@ -2284,6 +2358,7 @@ class MacOSHost:
             self.envelope.journal_directory,
             self.envelope.receipt_path,
             self.envelope.stop_receipt_path,
+            self.envelope.failure_closure_receipt_path,
             self.envelope.probe_ledger_path,
             *(
                 Path(command[command.index("--output") + 1])
@@ -2315,6 +2390,7 @@ class MacOSHost:
         old_roots = {
             "r1": Path("/Users/logan/Optimatrix-public-shadow-observation"),
             "r2": Path("/Users/logan/Optimatrix-public-shadow-observation-002"),
+            "r3": Path("/Users/logan/Optimatrix-public-shadow-observation-003"),
         }
         for name, root in old_roots.items():
             if (
@@ -2330,6 +2406,8 @@ class MacOSHost:
             "com.optimatrix.public-shadow.probe",
             "com.optimatrix.public-shadow.r2",
             "com.optimatrix.public-shadow.r2.probe",
+            "com.optimatrix.public-shadow.r3",
+            "com.optimatrix.public-shadow.r3.probe",
         ):
             if self._launchd(f"gui/{self.envelope.uid}/{label}") is not None:
                 raise CommissioningError(f"old launchd label remains loaded: {label}")
@@ -2433,27 +2511,41 @@ class MacOSHost:
             return False
         pid_match = re.search(r"(?m)^\s*pid = ([1-9][0-9]*)\s*$", output)
         if pid_match is None:
-            return False
+            raise CommissioningError("service launchd PID inventory is malformed")
         observed_pid = int(pid_match.group(1))
         if observed_pid != expected_pid:
             raise CommissioningError("service PID changed before terminal closure")
         completed = self._run(("/bin/ps", "-p", str(expected_pid), "-o", "pid="))
-        if completed.returncode == 1 and not completed.stdout.strip():
+        if (
+            completed.returncode == 1
+            and not completed.stdout.strip()
+            and not completed.stderr.strip()
+        ):
             return False
-        if completed.returncode != 0 or completed.stdout.strip() != str(expected_pid):
+        if (
+            completed.returncode != 0
+            or completed.stdout.strip() != str(expected_pid)
+            or completed.stderr.strip()
+        ):
             raise CommissioningError("service PID liveness query failed")
         return True
 
     def _matching_process_pids(self) -> tuple[int, ...]:
         completed = self._run(("/bin/ps", "-axo", "pid=,command="))
-        if completed.returncode != 0:
+        if completed.returncode != 0 or not completed.stdout.strip() or completed.stderr.strip():
             raise CommissioningError("service process inventory failed")
         expected = " ".join(self.envelope.expected_service_argv)
         result: list[int] = []
         for line in completed.stdout.splitlines():
             stripped = line.strip()
             pid_text, separator, command = stripped.partition(" ")
-            if separator and pid_text.isdigit() and " ".join(command.split()) == expected:
+            if (
+                not separator
+                or re.fullmatch(r"[1-9][0-9]*", pid_text) is None
+                or not command.strip()
+            ):
+                raise CommissioningError("service process inventory is malformed")
+            if " ".join(command.split()) == expected:
                 result.append(int(pid_text))
         return tuple(result)
 
@@ -2805,10 +2897,25 @@ class MacOSHost:
             new_exact_pid_cpu_resource_event_count=exact_pid_events,
         )
 
+    def _wait_for_launchd_absence(self, *, target: str, label: str) -> None:
+        deadline_ms = self.clock.monotonic_ms() + _TEARDOWN_CONVERGENCE_MS
+        while True:
+            inventory = self._launchd(target)
+            observed_ms = self.clock.monotonic_ms()
+            if observed_ms > deadline_ms:
+                raise CommissioningError(f"{label} did not unload before deadline")
+            if inventory is None:
+                return
+            if observed_ms >= deadline_ms:
+                raise CommissioningError(f"{label} did not unload before deadline")
+            self.clock.sleep_until(min(deadline_ms, observed_ms + _TEARDOWN_POLL_MS))
+
     def bootout_periodic_probe(self) -> None:
         self._effect(self.envelope.probe_bootout_argv, "probe bootout", allow_absent=True)
-        if self._launchd(self.envelope.probe_target) is not None:
-            raise CommissioningError("probe label remains loaded after bootout")
+        self._wait_for_launchd_absence(
+            target=self.envelope.probe_target,
+            label="probe label",
+        )
 
     def sigint_service(self) -> None:
         self._effect(self.envelope.service_sigint_argv, "service SIGINT")
@@ -2823,24 +2930,45 @@ class MacOSHost:
 
     def bootout_service(self) -> None:
         self._effect(self.envelope.service_bootout_argv, "service bootout", allow_absent=True)
-        if self._launchd(self.envelope.service_target) is not None:
-            raise CommissioningError("service label remains loaded after bootout")
+        self._wait_for_launchd_absence(
+            target=self.envelope.service_target,
+            label="service label",
+        )
+
+    def _original_pid_present(self, expected_pid: int) -> bool:
+        completed = self._run(("/bin/ps", "-p", str(expected_pid), "-o", "pid="))
+        stdout = completed.stdout.strip()
+        stderr = completed.stderr.strip()
+        if completed.returncode == 0 and stdout == str(expected_pid) and not stderr:
+            return True
+        if completed.returncode == 1 and not stdout and not stderr:
+            return False
+        raise CommissioningError("original PID absence query is malformed or indeterminate")
 
     def verify_quiescent(self, *, expected_pid: int | None) -> None:
-        if self._launchd(self.envelope.service_target) is not None:
-            raise CommissioningError("service label remains loaded")
-        if self._launchd(self.envelope.probe_target) is not None:
-            raise CommissioningError("probe label remains loaded")
-        if self._listener_inventory():
-            raise CommissioningError("listener remains after stop")
-        if self._matching_process_pids():
-            raise CommissioningError("service process remains after stop")
-        if expected_pid is not None:
-            completed = self._run(("/bin/ps", "-p", str(expected_pid), "-o", "pid="))
-            if completed.returncode not in {0, 1}:
-                raise CommissioningError("original PID absence query failed")
-            if completed.stdout.strip():
-                raise CommissioningError("original service PID remains after stop")
+        deadline_ms = self.clock.monotonic_ms() + _TEARDOWN_CONVERGENCE_MS
+        while True:
+            service_loaded = self._launchd(self.envelope.service_target) is not None
+            probe_loaded = self._launchd(self.envelope.probe_target) is not None
+            listeners = self._listener_inventory()
+            matching_processes = self._matching_process_pids()
+            original_pid_present = (
+                self._original_pid_present(expected_pid) if expected_pid is not None else False
+            )
+            observed_ms = self.clock.monotonic_ms()
+            if observed_ms > deadline_ms:
+                raise CommissioningError("quiescence did not converge before deadline")
+            if not (
+                service_loaded
+                or probe_loaded
+                or listeners
+                or matching_processes
+                or original_pid_present
+            ):
+                return
+            if observed_ms >= deadline_ms:
+                raise CommissioningError("quiescence did not converge before deadline")
+            self.clock.sleep_until(min(deadline_ms, observed_ms + _TEARDOWN_POLL_MS))
 
 
 def _write_exclusive_mapping(path: Path, value: Mapping[str, object]) -> None:
@@ -2973,7 +3101,7 @@ def production_probe_main(
     *,
     envelope_path: Path = _PRODUCTION_ENVELOPE,
 ) -> int:
-    parser = argparse.ArgumentParser(description="Read-only r3 persistent-service probe")
+    parser = argparse.ArgumentParser(description="Read-only r4 persistent-service probe")
     parser.add_argument("--mode", choices=("periodic", "final-online"), required=True)
     arguments = parser.parse_args(argv)
     try:
@@ -3262,7 +3390,7 @@ def production_audit_main(
     *,
     envelope_path: Path = _PRODUCTION_ENVELOPE,
 ) -> int:
-    parser = argparse.ArgumentParser(description="Independent r3 persistent-service audit")
+    parser = argparse.ArgumentParser(description="Independent r4 persistent-service audit")
     parser.add_argument("--mode", choices=("current", "complete"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args(argv)
@@ -3469,7 +3597,7 @@ def _load_envelope(path: Path, *, expected_identity: str) -> CommissioningEnvelo
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Deadline-safe r3 service controller")
+    parser = argparse.ArgumentParser(description="Deadline-safe r4 service controller")
     parser.add_argument("--envelope", type=Path, required=True)
     parser.add_argument("--expected-envelope-identity", required=True)
     parser.add_argument("--mode", choices=("commission", "stop"), default="commission")

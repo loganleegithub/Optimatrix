@@ -193,12 +193,12 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_records_accepted_repair_and_consumed_fresh_restart() -> None:
+def test_current_stage_records_consumed_r3_and_active_r4_repair() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
     assert current.count(marker) == 1
-    assert f"{marker} `SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE`" in flat
+    assert f"{marker} `SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
@@ -206,20 +206,24 @@ def test_current_stage_records_accepted_repair_and_consumed_fresh_restart() -> N
         "**Fixed-contract public Shadow runtime:** `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`"
     ) in flat
     assert (
-        "**Evidence gate:** `ACTIVE_R3_CONTROLLER_IMPLEMENTATION_THEN_PRODUCTION_DEPLOYMENT`"
+        "**Evidence gate:** `ACTIVE_R4_CONTROLLER_REPAIR_THEN_CONDITIONAL_FRESH_DEPLOYMENT`"
         in current
     )
-    assert "CONDITIONALLY_AUTHORIZED_AFTER_EXACT_CONTROLLER_ACCEPTANCE" in current
     assert (
-        "**Persistent public Shadow service/workbench:** "
-        "`R3_DEADLINE_SAFE_CONTROLLER_IMPLEMENTATION_AND_DEPLOYMENT_AUTHORIZED`"
+        "CONDITIONALLY_AUTHORIZED_AFTER_EXACT_R4_ACCEPTANCE_ONE_FRESH_SERVE_SHADOW_"
+        "AND_RESULT_INDEPENDENT_STOP"
     ) in flat
     assert (
-        "**Persistent deployment / 24x7 acceptance:** `R3_DEPLOYMENT_AUTHORIZED_ACCEPTANCE_PENDING`"
+        "**Persistent public Shadow service/workbench:** "
+        "`R3_CONSUMED_CLEAN_STOP_R4_CONTROLLER_REPAIR_AUTHORIZED`"
+    ) in flat
+    assert (
+        "**Persistent deployment / 24x7 acceptance:** "
+        "`R3_NOT_MET_R4_DEPLOYMENT_CONDITIONAL_NOT_STARTED`"
     ) in current
     assert current.count("**Evidence gate:**") == 1
     assert current.count("**Live commands:**") == 1
-    assert "`SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE` is the sole active closure" in flat
+    assert "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure" in flat
     assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
     assert "4b225ee1f199523fb052611d84612ec75c7abf78" in current
     assert "9e53c6233949348c5805e96ea1eefb5998bf4c49" in current
@@ -231,12 +235,17 @@ def test_current_stage_records_accepted_repair_and_consumed_fresh_restart() -> N
     assert "downstream complete-reader and conservation checks passed" in flat
     assert "Radar run summary is absent" in flat
     assert "overall forward evidence remains `INCOMPLETE` and `NOT_ACCEPTED`" in flat
-    assert "historical failed attempt, accepted smoke, and both persistent-service attempts" in flat
+    assert (
+        "historical failed attempt, accepted smoke, and all three persistent-service attempts"
+        in flat
+    )
     assert "6eaaddfecf4c59a19c8029682a80fc52b7896a64" in current
     assert "f9ce7f98623ed7249160ee29c940c9c026fc4173" in current
     assert "21af26c71ef625889d29c4d7e00ebeae92f8a15d" in current
     assert "11b8a42d920e6be9eff7a56f45fd3c02c8ef6bed" in current
-    assert "The user said `上线` on 2026-08-01" in current
+    assert "The user's 2026-08-01 instruction" in current
+    assert "部署上线" in current
+    assert "开始观察" in current
     assert "67085248fffb1b20bae1c9512ae1191d166a6509" in current
     assert "9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa" in current
     assert "9c3b46eae8b646d2c86f38df35cfcf962605c0b670385376d7c2ebef3a771778" in current
@@ -305,37 +314,37 @@ def test_current_stage_records_accepted_repair_and_consumed_fresh_restart() -> N
     assert "c7d8eb4e6bdc9953716892376c26935089d384e5460aa11073544b7521b96cf3" in current
 
 
-def test_r3_deadline_safe_persistent_service_deployment_is_exactly_authorized() -> None:
+def test_r4_commissioning_integrity_repair_is_exactly_authorized() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
-    task_path = ROOT / "tasks/SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE.md"
+    task_path = ROOT / "tasks/SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR.md"
     task = task_path.read_text(encoding="utf-8")
     task_flat = " ".join(task.split())
 
     assert (
         "**Sole authorized next product-capability closure:** "
-        "`SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE`"
+        "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR`"
     ) in flat
     assert (
         "**Persistent public Shadow service/workbench:** "
-        "`R3_DEADLINE_SAFE_CONTROLLER_IMPLEMENTATION_AND_DEPLOYMENT_AUTHORIZED`"
+        "`R3_CONSUMED_CLEAN_STOP_R4_CONTROLLER_REPAIR_AUTHORIZED`"
     ) in flat
     assert (
-        "**Evidence gate:** `ACTIVE_R3_CONTROLLER_IMPLEMENTATION_THEN_PRODUCTION_DEPLOYMENT`"
+        "**Evidence gate:** `ACTIVE_R4_CONTROLLER_REPAIR_THEN_CONDITIONAL_FRESH_DEPLOYMENT`"
         in current
     )
     assert (
         "**Live commands:** "
-        "`CONDITIONALLY_AUTHORIZED_AFTER_EXACT_CONTROLLER_ACCEPTANCE_ONE_R3_SERVE_SHADOW_"
+        "`CONDITIONALLY_AUTHORIZED_AFTER_EXACT_R4_ACCEPTANCE_ONE_FRESH_SERVE_SHADOW_"
         "AND_RESULT_INDEPENDENT_STOP`"
     ) in flat
     assert (
-        "**Persistent deployment / 24x7 acceptance:** `R3_DEPLOYMENT_AUTHORIZED_ACCEPTANCE_PENDING`"
+        "**Persistent deployment / 24x7 acceptance:** "
+        "`R3_NOT_MET_R4_DEPLOYMENT_CONDITIONAL_NOT_STARTED`"
     ) in flat
-    assert "The user said `上线` on 2026-08-01" in current
-    assert "one bounded r3 sequence" in flat
-    assert "ce1fbb48417f2b44ae3a69900d0b71c3e55c7565" in current
-    assert "Commissioning success is not 24x7 acceptance" in current
+    assert "The user authorized R4 repair on 2026-08-01" in current
+    assert "one fresh live R4 sequence becomes executable only after" in flat
+    assert "no R4 live invocation has occurred" in flat
 
     for exact in (
         "**Status:** ACTIVE",
@@ -346,78 +355,107 @@ def test_r3_deadline_safe_persistent_service_deployment_is_exactly_authorized() 
         "**Decision Policy change:** NONE",
         "**Outcome/evaluation contract change:** NONE",
         "**Stage/authorization change:** APPROVED",
-        "/Users/logan/Optimatrix-public-shadow-observation-003",
-        "com.optimatrix.public-shadow.r3",
-        "com.optimatrix.public-shadow.r3.probe",
+        "f66fa97b66487cf593d5265a8ac79d013adda104",
+        "agent/r4-commissioning-integrity-repair",
+        "/Users/logan/Optimatrix-public-shadow-observation-004",
+        "com.optimatrix.public-shadow.r4",
+        "com.optimatrix.public-shadow.r4.probe",
         "127.0.0.1:8765",
         "KeepAlive=false",
         "RunAtLoad=false",
         "LaunchOnlyOnce=true",
-        "persistent_service_contract_identity",
+        "failure_closure_receipt_path",
+        "r1_no_writer",
+        "r2_no_writer",
+        "r3_no_writer",
+        "r4_root_absent_before_materialization",
+        "r4_labels_absent_at_binding",
         "120,000 ms",
         "HOST_OPERABILITY_GATE_START",
-        "86,400,000 ms",
+        "30,000 ms",
+        "100 ms",
     ):
         assert exact in task, exact
 
-    assert "one `commission` invocation" in task_flat
-    assert "at most one start-incapable `stop`/close invocation" in task_flat
-    assert "one kickstart" in task_flat
-    assert "no retry" in task_flat
-    assert "exactly one label-bound `SIGINT`" in task_flat
-    assert "no new exact-PID host `cpu_resource` event" in task_flat
-    assert "Honest `ready=false`/HTTP 503" in task_flat
-    assert "at least two successful periodic rows" in task_flat
-    assert "each adjacent periodic-row pair" in task_flat
+    for exact in (
+        "1fbe3b4daacdc26d6ca0a0ec2f46108fa355c7b8d62f698e09e7c85a7b5d25cd",
+        "sha256:41806d81ea9182f288f0a78925887c898a4cf2ee15420affb44d5e4934cd3e5c",
+        "sha256:a5a6571345b161fbad37f594626cee921614ae84ffdd776e58ae360d279f9be1",
+        "COMMISSION_FAILED_CLEANUP_REQUIRED",
+        "8c78722020b3e8b6c54140bb1a54ca30e2c86719e1ae9ef5e3f01a89625e08a1",
+        "PASS_COMPLETE_CLEAN_STOP",
+        "CLEAN_STOP_COMPLETE",
+        "181274",
+        "OPERATIONAL_24H_GATE_NOT_MET",
+    ):
+        assert exact in current, exact
+        assert exact in task, exact
+
+    assert "exactly one newly materialized R4 deployment may invoke `commission` once" in task_flat
+    assert (
+        "one conditional fresh R4 production-public service start plus its result-independent"
+        in task_flat
+    )
+    assert (
+        "No live or launchd mutation is allowed from the implementation branch or PR" in task_flat
+    )
+    assert "non-force remote branch equality and GitHub CI pass" in task_flat
+    assert "merge to remote `main` occurs only after those gates" in task_flat
     assert "full 180,000 ms gate" in task_flat
-    assert "30,000 ms resource-event publication grace" in task_flat
-    assert "UNKNOWN_OPERABILITY_RESOURCE_GATE" in task
-    assert "STARTUP_FAILED_NO_RUNTIME_TERMINAL" in task
-    assert "service `bootout`" in task_flat
-    assert "While the run is live its 24-hour result is `PENDING`" in task_flat
-    assert "orders, fills, actual positions, realized PnL" in task_flat
+    assert "at least two successful post-manual periodic rows" in task_flat
+    assert "fixed 30,000 ms resource-event publication grace" in task_flat
+    assert "actual fills, positions, fees, PnL, or capital safety" in task_flat
 
 
-def test_r3_authority_freezes_two_stage_identity_and_result_independent_close() -> None:
+def test_r4_authority_freezes_projection_convergence_receipt_time_and_close() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    task = (ROOT / "tasks/SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE.md").read_text(encoding="utf-8")
+    task = (ROOT / "tasks/SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR.md").read_text(
+        encoding="utf-8"
+    )
     current_flat = " ".join(current.split())
     task_flat = " ".join(task.split())
 
     for exact in (
         "`--expected-envelope-identity`",
-        "every intent journal and success, failure, or stop receipt",
-        "resolved fresh-checkout `.venv/bin/python` executable digest and exact version",
-        "`apps/radar_runtime/src/radar_runtime/service.py` hot-path digest",
-        "dynamic runtime identity cannot exist before start",
-        "second-stage binding",
-        "independently recomputed by an external preflight",
-        "does not claim that an already materialized r3 root can re-prove its own earlier absence",
-        "failure receipt before the first cleanup mutation",
-        "natural-terminal branch makes no final-online probe and sends no `SIGINT`",
+        "`UNKNOWN/value=null/numerator=0`",
+        "`NOT_ZERO` requires a positive value equal to the positive numerator",
+        "`PROVEN_ZERO` requires value and numerator zero plus a positive denominator",
+        "fixed 30,000 ms maximum with bounded 100 ms polling",
+        "COMMISSION_FAILED_CLEANUP_PENDING",
+        "STARTUP_FAILED_NO_RUNTIME_CLEANUP_PENDING",
+        "COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT",
+        "STARTUP_FAILED_NO_RUNTIME_QUIESCENT",
+        "COMMISSION_FAILED_CLEANUP_BLOCKED",
+        "STARTUP_FAILED_NO_RUNTIME_CLEANUP_BLOCKED",
+        "The primary and final paths are distinct and neither is rewritten",
+        "r1/r2/r3",
     ):
         assert exact in task_flat, exact
 
     for exact in (
-        "`--expected-envelope-identity`",
-        "Every intent journal and success, failure, or stop receipt",
-        "resolved fresh-checkout `.venv/bin/python` executable digest and exact version",
-        "`apps/radar_runtime/src/radar_runtime/service.py` hot-path digest",
-        "second-stage binding",
-        "independent external preflight",
-        "does not claim that the already materialized r3 root can reconstruct or re-prove",
-        "failure receipt before the first cleanup mutation",
-        "natural-terminal branch makes no final-online probe and sends no `SIGINT`",
+        "`failure_closure_receipt_path`",
+        "`r1_no_writer`, `r2_no_writer`, and `r3_no_writer`",
+        "30,000 ms convergence deadline with bounded 100 ms polling",
+        "Inventory errors, malformed output, PID substitution, or any indeterminate state fail immediately",
+        "COMMISSION_FAILED_CLEANUP_PENDING",
+        "STARTUP_FAILED_NO_RUNTIME_CLEANUP_PENDING",
+        "COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT",
+        "STARTUP_FAILED_NO_RUNTIME_QUIESCENT",
+        "COMMISSION_FAILED_CLEANUP_BLOCKED",
+        "STARTUP_FAILED_NO_RUNTIME_CLEANUP_BLOCKED",
+        "Neither receipt is rewritten",
+        "result-independent close trigger",
+        "at most one start-incapable `stop`/close invocation",
     ):
         assert exact in current_flat, exact
 
-    assert "same terminal-goal delegation" in task_flat
-    assert "same terminal-goal delegation" in current_flat
-    assert "one separate start-incapable `stop`/close invocation" in task_flat
-    assert "one separate start-incapable `stop`/close invocation" in current_flat
+    assert "projection-integrity rules, not a Decision or economic change" in current_flat
+    assert "projection-integrity rules, not a change to Radar" in task_flat
+    assert "candidate authorship is not independent verification" in current_flat.lower()
+    assert "independent reviewer accepts the exact commit" in task_flat
 
 
-def test_fresh_production_restart_is_consumed_and_only_r3_task_is_active() -> None:
+def test_r3_is_consumed_and_only_r4_task_is_active() -> None:
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md").exists()
@@ -426,31 +464,34 @@ def test_fresh_production_restart_is_consumed_and_only_r3_task_is_active() -> No
         ROOT / "tasks/SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR.md"
     ).exists()
     assert not (ROOT / "tasks/SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART.md").exists()
+    assert not (ROOT / "tasks/SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE.md").exists()
     assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE.md",
+        "SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR.md",
         "TEMPLATE.md",
     ]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert (
         "**Sole authorized next product-capability closure:** "
-        "`SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE`"
+        "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR`"
     ) in " ".join(current.split())
     assert "**Persistent public Shadow service/workbench:**" in current
-    assert "`R3_DEADLINE_SAFE_CONTROLLER_IMPLEMENTATION_AND_DEPLOYMENT_AUTHORIZED`" in current
-    assert "CONDITIONALLY_AUTHORIZED_AFTER_EXACT_CONTROLLER_ACCEPTANCE" in current
-    assert "`R3_DEPLOYMENT_AUTHORIZED_ACCEPTANCE_PENDING`" in current
+    assert "`R3_CONSUMED_CLEAN_STOP_R4_CONTROLLER_REPAIR_AUTHORIZED`" in current
+    assert "CONDITIONALLY_AUTHORIZED_AFTER_EXACT_R4_ACCEPTANCE" in current
+    assert "`R3_NOT_MET_R4_DEPLOYMENT_CONDITIONAL_NOT_STARTED`" in current
     assert "FIRST_PERIODIC_PROBE_DEADLINE_MISSED_BEFORE_PROBE_LOAD" in current
     assert "The probe was never loaded and its ledger contains zero rows" in " ".join(
         current.split()
     )
-    assert "sole active closure" in current
+    assert "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure" in " ".join(
+        current.split()
+    )
 
 
 def test_shadow_attempt_integrity_acceptance_preserves_failure_scope_and_identities() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     for invariant in (
-        "conditional r3 authority",
+        "conditional R4 authority",
         "CONSUMED_FAILED_NO_RETRY",
         "Underwriting semantic identity must be sha256:<64 lowercase hex>",
         "Radar run summary",
@@ -2100,9 +2141,9 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "fixed-contract Shadow implementation adds",
         "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
         "`CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`",
-        "`SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE` is the sole active closure",
-        "R3_DEADLINE_SAFE_CONTROLLER_IMPLEMENTATION_AND_DEPLOYMENT_AUTHORIZED",
-        "ACTIVE_R3_CONTROLLER_IMPLEMENTATION_THEN_PRODUCTION_DEPLOYMENT",
+        "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure",
+        "R3_CONSUMED_CLEAN_STOP_R4_CONTROLLER_REPAIR_AUTHORIZED",
+        "ACTIVE_R4_CONTROLLER_REPAIR_THEN_CONDITIONAL_FRESH_DEPLOYMENT",
         "PASS_COMPLETE_PROCESS_FAILURE_EVIDENCE_ONLY",
         "NOT_ACCEPTED_PROCESS_FAILURE",
         "Accepted operability repair and consumed fresh-restart attempt",
@@ -2337,11 +2378,11 @@ def test_persistent_service_contract_and_fresh_restart_close_exact_governance_ch
     assert "The version-1 snapshot" not in contract
     assert "`NO_LIVE_OR_DEPLOYMENT_AUTHORITY`" not in flat
     assert "SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART" not in current
-    assert "R3_DEADLINE_SAFE_CONTROLLER_IMPLEMENTATION_AND_DEPLOYMENT_AUTHORIZED" in current
+    assert "R3_CONSUMED_CLEAN_STOP_R4_CONTROLLER_REPAIR_AUTHORIZED" in current
     assert "67085248fffb1b20bae1c9512ae1191d166a6509" in current
     assert "9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa" in current
-    assert "CONDITIONALLY_AUTHORIZED_AFTER_EXACT_CONTROLLER_ACCEPTANCE" in current
-    assert "`R3_DEPLOYMENT_AUTHORIZED_ACCEPTANCE_PENDING`" in current
+    assert "CONDITIONALLY_AUTHORIZED_AFTER_EXACT_R4_ACCEPTANCE" in current
+    assert "`R3_NOT_MET_R4_DEPLOYMENT_CONDITIONAL_NOT_STARTED`" in current
     assert "d4740d6a181efebc8dad6d1091a78fa44d885957" in current
     assert "d5776f4f7c30763d095e36c7ea8b67209ec76448" in current
     assert "sha256:4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7" in current
@@ -2376,27 +2417,44 @@ def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
             assert "**Runtime implementation:** REQUIRED" in text
             if "**Live commands:** REQUIRED" in text:
                 flat = " ".join(text.split())
-                assert path.name == "SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE.md"
+                assert path.name == "SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR.md"
                 assert "conditional terminal-goal delegation" in flat
-                assert "No live or launchd mutation is allowed unless" in flat
-                assert "exact controller candidate" in flat
+                assert (
+                    "No live or launchd mutation is allowed from the implementation branch or PR"
+                    in flat
+                )
+                assert "exact R4 candidate" in flat
                 assert "remote `main`" in flat
-                assert "one `commission` invocation" in flat
-                assert "at most one start-incapable `stop`/close invocation" in flat
-                assert "persistent_service_contract_identity" in flat
+                assert (
+                    "exactly one newly materialized R4 deployment may invoke `commission` once"
+                    in flat
+                )
+                assert "result-independent stop/terminal closure" in flat
+                assert (
+                    "prove no service-hot-path, contract, Policy, dependency, or business-schema change"
+                    in flat
+                )
                 assert "full 180,000 ms gate" in flat
-                assert "at least two successful periodic rows" in flat
-                assert "UNKNOWN_OPERABILITY_RESOURCE_GATE" in flat
-                assert "STARTUP_FAILED_NO_RUNTIME_TERMINAL" in flat
+                assert "at least two successful post-manual periodic rows" in flat
+                assert "fixed 30,000 ms maximum with bounded 100 ms polling" in flat
+                assert "failure_closure_receipt_path" in flat
+                assert "r1_no_writer" in flat
+                assert "r2_no_writer" in flat
+                assert "r3_no_writer" in flat
+                assert "COMMISSION_FAILED_CLEANUP_PENDING" in flat
+                assert "COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT" in flat
+                assert "COMMISSION_FAILED_CLEANUP_BLOCKED" in flat
+                assert "non-force remote branch equality and GitHub CI pass" in flat
+                assert "merge to remote `main` occurs only after those gates" in flat
                 current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
                 assert (
                     "**Live commands:** "
-                    "`CONDITIONALLY_AUTHORIZED_AFTER_EXACT_CONTROLLER_ACCEPTANCE_ONE_R3_"
+                    "`CONDITIONALLY_AUTHORIZED_AFTER_EXACT_R4_ACCEPTANCE_ONE_FRESH_"
                     "SERVE_SHADOW_AND_RESULT_INDEPENDENT_STOP`"
                 ) in current
                 assert (
                     "**Sole authorized next product-capability closure:** "
-                    "`SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE`"
+                    "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR`"
                 ) in current
             else:
                 assert "**Live commands:** FORBIDDEN" in text

@@ -1,0 +1,267 @@
+# Task — R4 commissioning integrity repair and fresh service boundary
+
+**Status:** ACTIVE
+
+**Task kind:** IMPLEMENTATION
+
+**Runtime implementation:** REQUIRED — repo-owned commissioning/stop controller and its direct
+tests only; the accepted `serve-shadow` hot path, market/runtime behavior, contracts, dependencies,
+and three Policies remain unchanged
+
+**Live commands:** REQUIRED — conditional terminal-goal delegation only after exact-candidate
+acceptance, remote equality, GitHub CI, merge to remote `main`, and a fresh independently verified
+R4 deployment preflight
+
+**Product/stage:**
+[`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md) /
+[`CURRENT_STAGE`](../docs/authority/CURRENT_STAGE.md)
+
+**Implementation contract(s):**
+[`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`](../docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md)
+
+**Base commit:** `f66fa97b66487cf593d5265a8ac79d013adda104`
+
+**Target branch/PR:** `agent/r4-commissioning-integrity-repair` / one Draft PR; no force push,
+history rewrite, main merge into the task branch, or live mutation before exact-candidate acceptance
+
+## Business closure
+
+**Given:** the sole R3 commissioning attempt is consumed. Its immutable primary receipt has SHA-256
+`1fbe3b4daacdc26d6ca0a0ec2f46108fa355c7b8d62f698e09e7c85a7b5d25cd`, envelope identity
+`sha256:41806d81ea9182f288f0a78925887c898a4cf2ee15420affb44d5e4934cd3e5c`, runtime identity
+`sha256:a5a6571345b161fbad37f594626cee921614ae84ffdd776e58ae360d279f9be1`, and the pre-cleanup
+status `COMMISSION_FAILED_CLEANUP_REQUIRED`. Its immutable complete terminal audit has SHA-256
+`8c78722020b3e8b6c54140bb1a54ca30e2c86719e1ae9ef5e3f01a89625e08a1`; it records
+`PASS_COMPLETE_CLEAN_STOP`, `CLEAN_STOP_COMPLETE`, `181274` ms of covered service, one valid
+contiguous probe row, two explicit failed-probe markers, and
+`OPERATIONAL_24H_GATE_NOT_MET`. Independent host inspection records both R3 labels absent, no
+matching process, and no listener on `127.0.0.1:8765`. The R3 root, labels, plists, journals,
+receipts, probe evidence, runtime, and attempt are sealed and may not be edited, restarted,
+relabelled, repaired in place, or reused.
+
+**When:** one bounded R4 implementation repairs the verifier's legal zero/unknown projection
+semantics, replaces immediate launchd post-`bootout` assertions with bounded monotonic convergence,
+separates the durable pre-cleanup failure fact from an immutable final cleanup conclusion, migrates
+the controller to an entirely fresh R4 root/label/envelope boundary, passes focused tests and full
+`make check`, receives independent exact-candidate review, reaches remote equality and passing
+GitHub CI, and is merged to remote `main`.
+
+**Then:** exactly one newly materialized R4 deployment may invoke `commission` once. A legitimate
+schema-2 workbench projection cannot fail commissioning merely because an honest `UNKNOWN` claim
+preserves a known zero or positive denominator, or because a positive numerator has an unavailable
+denominator. A `launchctl bootout` success is followed by bounded observation of label and host
+quiescence rather than an instantaneous assumption. Every post-start failure first writes an
+immutable pre-cleanup receipt and later writes exactly one distinct final closure receipt proving
+either audited quiescence or a specific blocked cleanup; neither receipt is rewritten. Successful
+commissioning establishes only the same bounded 180,000 ms operability gate and begins read-only
+observation; it does not establish 24x7 stability, Policy quality, opportunity frequency,
+fillability, or PnL.
+
+**Independent verification:** review the exact R4 candidate and its parent/tree; recompute every
+changed-file digest; prove no service-hot-path, contract, Policy, dependency, or business-schema
+change; run focused tests and `make check`; verify remote branch equality and GitHub CI; after merge,
+independently recompute the detached deployment checkout, fresh envelope, plists, wrapper bytes,
+old-root inventories, label/listener absence, and exact R4 output freshness before any live command.
+The verifier must not rely on the controller's own receipt as its sole source of truth.
+
+**Valid zero/no-hit/UNKNOWN result:** `UNKNOWN/value=null/numerator=0` with denominator `null`, `0`,
+or a positive integer is valid when the producer cannot prove numeric zero. `NOT_ZERO` requires a
+positive value equal to the positive numerator but permits an unavailable denominator; when a
+denominator is known it must be positive and not smaller than the numerator. `PROVEN_ZERO` requires
+value and numerator zero plus a positive denominator. These are projection-integrity rules, not a
+change to Radar, Underwriting, Candidate, or Outcome economics. Zero natural Candidate, Entry,
+close-opportunity, or Outcome remains valid and does not fail commissioning.
+
+## Change declarations
+
+**Market/Decision input contract change:** NONE
+
+**Decision Policy change:** NONE
+
+**Outcome/evaluation contract change:** NONE
+
+**Stage/authorization change:** APPROVED — consume and close R3; authorize only this bounded R4
+controller repair, exact-candidate acceptance sequence, and one conditional fresh R4
+production-public service start plus its result-independent stop/terminal closure. No private,
+account, margin, order, fill, capital, execution, qualification, promotion, retry, reboot auto-start,
+or alternate root/label/port authority is granted.
+
+## Product operating behavior
+
+The accepted `serve-shadow` market/service hot path remains byte-for-byte outside this task's code
+scope and does not import the commissioning controller. It continues to consume production-public
+Deribit data, write append-only public Shadow evidence, and expose immutable GET/HEAD-only loopback
+projections. The controller remains sibling deployment tooling: it validates bound artifacts and
+host facts, controls one exact launchd lifecycle, records attempt-scoped evidence, and never
+recomputes strategy decisions or mutates service evidence.
+
+The fresh production boundary is exact:
+
+- root: `/Users/logan/Optimatrix-public-shadow-observation-004`
+- service label: `com.optimatrix.public-shadow.r4`
+- probe label: `com.optimatrix.public-shadow.r4.probe`
+- installed service plist:
+  `/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r4.plist`
+- installed probe plist:
+  `/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r4.probe.plist`
+- listener: exactly `127.0.0.1:8765`
+- service: `KeepAlive=false`, `RunAtLoad=false`, `LaunchOnlyOnce=true`
+- probe: read-only, `RunAtLoad=false`, 60-second interval, no service-control capability
+
+The R4 envelope adds one fresh, distinct `failure_closure_receipt_path` inside the deployment root.
+It also binds inventory identities for all consumed roots `r1`, `r2`, and `r3`; freezes
+`r1_no_writer`, `r2_no_writer`, and `r3_no_writer`; freezes absence of all old labels; and records
+the earlier observable facts `r4_root_absent_before_materialization`,
+`r4_labels_absent_at_binding`, listener freedom, and installed-plist absence. The controller binds
+the sole active R4 task rather than the deleted R3 task. All R3-specific executable constants,
+production paths, error labels, wrapper sentinels, and CLI descriptions are replaced by R4 values;
+historical prose remains historical only.
+
+## Validation harness
+
+The implementation must establish stable red tests before the minimal repair and retain them in the
+final candidate. At minimum the direct suite proves:
+
+1. The verifier accepts all producer-valid zero-claim shapes: honest `UNKNOWN` with denominator
+   `null`, `0`, or positive; `NOT_ZERO` with a positive numerator/value and either unavailable or
+   sufficient known denominator; and `PROVEN_ZERO` only with a positive denominator.
+2. It rejects contradictions: `UNKNOWN` with a numeric value, negative or non-integer members,
+   `PROVEN_ZERO` with zero/unavailable denominator, `NOT_ZERO` with mismatched value/numerator, and a
+   known denominator smaller than the numerator.
+3. Both probe and service `bootout` paths wait through transient loaded states until absence, use a
+   single monotonic bounded deadline, and fail closed on timeout or an indeterminate inventory.
+4. Final quiescence waits through transient label, listener, matching-process, and original-PID
+   presence; succeeds only when all predicates are absent together; and fails closed at its bounded
+   deadline without issuing another signal, start, or retry.
+5. A failure receipt exists before the first cleanup mutation with status
+   `COMMISSION_FAILED_CLEANUP_PENDING` or `STARTUP_FAILED_NO_RUNTIME_CLEANUP_PENDING`. A successful
+   cleanup writes one exclusive final receipt with status
+   `COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT` or
+   `STARTUP_FAILED_NO_RUNTIME_QUIESCENT`; a blocked closure writes one exclusive final receipt with
+   status `COMMISSION_FAILED_CLEANUP_BLOCKED` or `STARTUP_FAILED_NO_RUNTIME_CLEANUP_BLOCKED` and the
+   exact accumulated errors. The primary and final paths are distinct and neither is rewritten.
+6. The exact envelope accepts only R4 root/labels/plists, includes the final closure receipt path,
+   includes `r1/r2/r3` consumed-root identities and writer-absence facts, rejects R3 as a fresh
+   production boundary, and keeps the loopback/one-start/no-`-k` constraints.
+7. All existing absolute commissioning deadlines, exactly-once start/stop behavior, manual probe,
+   periodic gate, resource audit, terminal audit, and stop semantics continue to pass unchanged.
+8. Authority tests prove exactly one active task, consumed R3 truth, the sole conditional R4
+   boundary, and no stale executable R3 authorization.
+
+The controller's convergence waits are operational control waits, not business evidence. Each wait
+uses its injected monotonic clock and a fixed 30,000 ms maximum with bounded 100 ms polling. A known
+present state is retryable only until that deadline. An inventory command error, malformed output,
+PID substitution, or any unknown state fails immediately. A later absence cannot repair a recorded
+deadline miss.
+
+The unchanged commissioning schedule remains one absolute lifecycle clock: lifecycle by 30,000 ms;
+HTTP/current-reader commissioning by +60,000 ms; manual probe sequence 1 by +90,000 ms; current
+audit and periodic-probe bootstrap by +110,000 ms; hard first-probe contract by +120,000 ms. After
+bootstrap, `HOST_OPERABILITY_GATE_START` owns the full 180,000 ms gate, at least two successful
+post-manual periodic rows, every complete-partition gap no greater than 90,000 ms, and a fixed
+30,000 ms resource-event publication grace. Failure consumes the sole R4 attempt.
+
+No live or launchd mutation is allowed from the implementation branch or PR. The eventual live
+invocation requires the exact merged remote `main`, a detached clean checkout, an independently
+created envelope and attempt-specific plists/wrappers, exact artifact digests, fresh output paths,
+all three old-root inventories unchanged, no old or R4 label/process/listener, and readable frozen
+resource sources. The controller receives the independently calculated envelope identity through
+`--expected-envelope-identity` and refuses mismatch.
+
+## Evidence boundary
+
+**Proves:** the R3 attempt is truthfully consumed and closed; the R4 controller accepts the actual
+version-2 projection semantics, observes asynchronous launchd teardown safely, records temporally
+correct failure/closure evidence, and is bound to a fresh one-shot R4 deployment boundary.
+
+**Does not prove:** that R4 has already been launched; 24x7 service stability; complete market
+coverage; strategy edge; opportunity frequency; qualification; execution; actual fills, positions,
+fees, PnL, or capital safety.
+
+| Evidence class | Requirement |
+|---|---|
+| Direct behavior | REQUIRED |
+| Production-public Radar | CONDITIONAL_AFTER_MERGE_AND_FRESH_PREFLIGHT |
+| Minimal-hit recomputation | NOT_APPLICABLE |
+| Bounded stream reconstruction | NOT_APPLICABLE |
+| Shadow forward Outcome | NOT_APPLICABLE |
+| Qualification | NOT_APPLICABLE |
+| Execution | NOT_APPLICABLE |
+
+## Scope
+
+**In:** `apps/radar_runtime/src/radar_runtime/commissioning.py`; its direct tests; R4 envelope,
+failure-closure receipt, bootout/quiescence semantics, and fresh-boundary constants;
+`docs/authority/CURRENT_STAGE.md`; `docs/authority/SYSTEM_ARCHITECTURE.md`; `README.md`; authority
+tests; this sole active task; exact-candidate review/CI/merge; and one conditional future R4 live
+commission/close sequence.
+
+**Out:** `service.py` or any `serve-shadow` hot-path behavior; workbench producer/schema changes;
+market adapters; Radar/Underwriting/Position/Outcome formulas or state machines; contracts;
+Policies; dependencies or lockfiles; private/account APIs; orders, fills, capital, execution;
+qualification; automatic restart; reuse of R1/R2/R3 assets; alternate root/label/port; or any
+retroactive edit to R3 evidence.
+
+**Owning module/artifact:** `apps/radar_runtime/src/radar_runtime/commissioning.py`,
+`tests/test_persistent_service_commissioning.py`, `tests/test_authority_and_architecture.py`, and the
+fresh R4 validation/deployment evidence root.
+
+## Contract
+
+**Inputs and known-at rule:** immutable merged Git/authority/task/contract/Policy/controller/plist/
+wrapper bytes; public service evidence known at each lifecycle/probe boundary; and current
+launchd/process/listener facts. A later host observation may establish convergence only within the
+same declared wait deadline. It never rewrites an earlier receipt, probe row, deadline result, or
+R3 artifact.
+
+**Durable output and identity:** one content-addressed R4 deployment envelope; exactly-once intent
+journals; one primary commission receipt; on failure, one distinct final closure receipt; one
+probe ledger; runtime-bound audits; and one stop receipt. Every artifact binds the envelope identity;
+runtime-bearing artifacts additionally bind the actual lifecycle runtime identity.
+
+**Missing/invalid/UNKNOWN semantics:** missing or malformed zero-claim members, host inventory,
+identity, lifecycle, current-reader, endpoint, label/PID/listener, terminal, or output evidence fails
+closed. Honest business `UNKNOWN` remains valid projection content and is never coerced to zero.
+Known transient launchd presence is neither success nor an immediate permanent failure; it becomes
+success only on observed absence before the bound deadline and failure at or before the deadline
+otherwise.
+
+**Persisted meaning and compatibility:** service and workbench schemas remain `COMPATIBLE` and
+unchanged. R4 controller receipts are new attempt-scoped evidence and are `NOT_COMPARABLE` to R3 as
+a continuation. The primary failure receipt means cleanup is pending at its write boundary; only
+the separate final closure receipt claims quiescence or a cleanup blocker.
+
+**Business denominators:** unchanged from the persistent-service contract. The commissioning
+verifier validates projection shape; it does not invent a business denominator or turn an unknown
+rate into zero. The probe denominator is every append attempt. The 24-hour denominator is one
+continuous valid runtime interval and cannot be met by the bounded 180,000 ms operability gate.
+
+## Acceptance
+
+Acceptance requires all of the following on one exact candidate:
+
+- focused commissioning, workbench, and authority tests pass;
+- full `make check` passes without weakening existing assertions;
+- diff review proves no out-of-scope hot-path, contract, Policy, dependency, or schema change;
+- exact parent, commit, tree, and changed-file digests are recorded;
+- an independent reviewer accepts the exact commit rather than only prose or a moving branch;
+- non-force remote branch equality and GitHub CI pass;
+- no live command was issued from the branch or PR;
+- merge to remote `main` occurs only after those gates.
+
+The later live result is separately accepted only from recomputed host evidence. A code/CI pass does
+not authorize claiming that commissioning or 24x7 observation has already occurred.
+
+## Definition of done
+
+- R3 is recorded as consumed with its exact receipt and terminal-audit facts.
+- The deleted R3 task is not retained as an active or complete task file.
+- Exactly one active R4 task and one bounded implementation branch/PR exist.
+- Stable regression tests cover every diagnosed defect and adversarial boundary above.
+- The minimal controller repair passes focused tests, `make check`, exact-candidate review, remote
+  equality, and GitHub CI.
+- The final candidate contains no temporary patch workflow, generated cache, test artifact, or
+  unrelated formatting churn.
+- The accepted code is merged before any R4 deployment materialization or launchd mutation.
+- If a later R4 invocation occurs, exactly one attempt is made under the fresh root/labels and its
+  success, failure, stop, or blocked cleanup is reported without retry or semantic inflation.
