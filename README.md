@@ -11,9 +11,9 @@ production-public Radar runtime and its `observe` command. The fixed-contract pu
 implementation is separately `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`. The two-layer
 engineering closure is consumed and closed. The later persistent-service observation is also
 consumed: it sealed complete `PROCESS_FAILURE` evidence and did not satisfy the 24-hour gate. One
-service-operability and trader-workbench repair is accepted. One fresh production restart is now
-authorized under a new root, new labels, exactly one public-only process, and one read-only probe;
-24-hour acceptance remains pending.
+service-operability and trader-workbench repair is accepted. Its one fresh restart is now also
+consumed: commissioning missed the mandatory first-probe deadline, the process was cleanly sealed,
+and 24-hour acceptance is `NOT_MET`. Live commands are forbidden and no task is active.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
@@ -65,7 +65,7 @@ profitable, or authorized to trade. Offline Shadow implementation or evidence-in
 acceptance does not prove a natural Candidate, Entry, Position, Outcome, forward cohort, Policy
 quality, or business success.
 
-### Consumed persistent observation and active fresh restart
+### Consumed persistent observations and accepted repair
 
 The separately accepted persistent service/workbench implementation at commit
 `67085248fffb1b20bae1c9512ae1191d166a6509` was later deployed under one exact observation
@@ -91,17 +91,26 @@ metadata, and truthful trader-facing version-2 presentation. It changes no Radar
 machine, Policy, Underwriting/Position/Outcome economics, durable business identity, account
 boundary, or execution permission.
 
-The sole active task is the
-[`SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART`](tasks/SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART.md).
-It authorizes PR #9 activation and merge, then exactly one `serve-shadow` invocation under
-`/Users/logan/Optimatrix-public-shadow-observation-002`, labels
-`com.optimatrix.public-shadow.r2` and `com.optimatrix.public-shadow.r2.probe`, and loopback-only
-`127.0.0.1:8765`. The service must pass exact commissioning before the fresh 60-second probe is
-loaded. The consumed root remains sealed; a startup or process failure consumes the new attempt
-without retry. Startup health does not establish 24-hour continuity, Policy quality, opportunity
-frequency, fillability, or PnL. The task remains active throughout observation and closes only
-after explicit stop or terminal failure is sealed, audited, and followed by a live-disabled stage
-transition.
+PR #9 subsequently merged as remote `main` commit
+`636088528a9375099e8531e30546842aa9cd8f82`, tree
+`10e352c954474fd3b27b005f6d8845d4d5b0f38f`, and exactly one r2 service started under
+`/Users/logan/Optimatrix-public-shadow-observation-002`. Transient controller checks saw its
+schema-2 health and read-only workbench respond while readiness was truthfully `false`; no current
+audit or probe row was published, so those checks are not accepted commissioning evidence.
+Commissioning failed because the controller verifier expected a nonexistent lifecycle field and
+missed the required first successful probe within 120 seconds. The probe was never loaded and has
+zero ledger rows. Durable lifecycle and terminal evidence separately record real market
+`UNKNOWN` coverage, including `INDEX_WARMUP`.
+
+The controller recorded the failure, sent one label-bound `SIGINT`, and sent no second signal or
+retry. The same runtime sealed `CLEAN_STOP`; its terminal reader and conservation checks pass, but
+the independent terminal audit records only `266,887` ms and
+`OPERATIONAL_24H_GATE_NOT_MET`. It observed 29 Radar anomalies and 116 Underwriting-availability
+objects, with zero public atomic quote, Candidate, Shadow Entry, close opportunity, or Outcome.
+Those zeros are `NOT_OBSERVED`, not Policy-quality, opportunity-frequency, fillability, or PnL
+evidence. The fresh root and both launchd identities are consumed and cannot be restarted or
+repaired. The installed r2 plist files remain inert consumed assets and may not be bootstrapped or
+reused. No product-capability task is active and live commands are forbidden.
 
 ## Intended first business flow
 
@@ -196,13 +205,12 @@ make check
 ```
 
 The `observe`, `observe-shadow`, and `serve-shadow` commands remain guarded implementation
-surfaces. The active task authorizes only one exact fresh `serve-shadow` invocation after its
-authority activation is merged and every deployment binding passes; `observe`, `observe-shadow`,
-any second service invocation, and every private/account/order/fill/capital surface remain
-forbidden. The accepted Smoke, Soak, two-layer smoke, and consumed persistent observation establish
-only their exact pre-bound intervals and grant no authority to reuse them.
+surfaces. No task currently authorizes any live command or deployment; `observe`, `observe-shadow`,
+`serve-shadow`, every service restart, and every private/account/order/fill/capital surface remain
+forbidden. The accepted Smoke, Soak, two-layer smoke, and consumed persistent observations
+establish only their exact pre-bound intervals and grant no authority to reuse them.
 
-The failed fixed-contract attempt, accepted smoke, and failed persistent observation artifacts are
-sealed and cannot be edited, deleted, completed retroactively, migrated, relabelled, retried, or
-reused. The active fresh sample begins only at its own lifecycle sequence 1 and cannot carry any of
-these intervals forward as evidence of Policy quality, opportunity frequency, or PnL.
+The failed fixed-contract attempt, accepted smoke, and both persistent-observation artifact roots
+are sealed and cannot be edited, deleted, completed retroactively, migrated, relabelled, retried,
+or reused. None of these intervals can be carried forward as evidence of Policy quality,
+opportunity frequency, or PnL.
