@@ -2857,6 +2857,41 @@ def test_unified_resource_events_match_exact_pid_in_message_not_emitter_pid(
             "processID": 123,
             "eventMessage": "cpu resource event for process 1234",
         },
+        {
+            "timestamp": timestamp,
+            "processID": 57134,
+            "processImagePath": "/usr/bin/log",
+            "sender": "/usr/bin/log",
+            "subsystem": "com.apple.log",
+            "eventMessage": (
+                "log run noninteractively, args: log show predicate exact PID 123 "
+                "burning cpu cpu resource"
+            ),
+        },
+        {
+            "timestamp": timestamp,
+            "processID": 57135,
+            "processImagePath": "/usr/bin/not-log",
+            "sender": "/usr/bin/log",
+            "subsystem": "com.apple.log",
+            "eventMessage": "cpu resource event for process 123",
+        },
+        {
+            "timestamp": timestamp,
+            "processID": 57136,
+            "processImagePath": "/usr/bin/log",
+            "sender": "/usr/bin/not-log",
+            "subsystem": "com.apple.log",
+            "eventMessage": "cpu resource event for process 123",
+        },
+        {
+            "timestamp": timestamp,
+            "processID": 57137,
+            "processImagePath": "/usr/bin/log",
+            "sender": "/usr/bin/log",
+            "subsystem": "com.example.resource",
+            "eventMessage": "cpu resource event for process 123",
+        },
     ]
 
     def log_show(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -2871,9 +2906,9 @@ def test_unified_resource_events_match_exact_pid_in_message_not_emitter_pid(
     )
 
     assert observation.sources_readable is True
-    assert observation.exact_pid_event_count == 1
+    assert observation.exact_pid_event_count == 4
     assert observation.diagnostic_report_count_examined == 0
-    assert observation.unified_log_row_count_examined == 4
+    assert observation.unified_log_row_count_examined == 8
 
 
 def test_resource_audit_excludes_events_after_exact_frozen_wall_cutoff(

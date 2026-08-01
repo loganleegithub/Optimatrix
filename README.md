@@ -24,6 +24,10 @@ CPU resource exception, so the operability gate failed and runtime was cleanly s
 R4 attempt 003 commissioned and produced 23 successful probe rows, but continuous observation found
 an exact-PID macOS CPU resource violation caused by redundant inactive-scope projection and
 unchanged workbench member encoding; it too was cleanly stopped and its 24-hour result is `NOT_MET`.
+R4 attempt 004 confirmed the CPU repair at 28.216667% over the commissioning gate and remained
+healthy through 24 probe rows. It was cleanly stopped only because a manual `/usr/bin/log show`
+query self-record was falsely counted as a runtime resource event; no new CPU diagnostic or real
+runtime violation existed, and the exact observer classifier is the next minimal R4 repair.
 The user's 2026-08-02 amendment keeps R4 as the active closure and authorizes minimal observed-bug
 repair, exact gates and merge, then one fresh recommission attempt at a time until one reaches
 `COMMISSIONED`. No live command is allowed from unmerged code or without a fresh detached
