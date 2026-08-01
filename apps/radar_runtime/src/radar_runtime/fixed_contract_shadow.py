@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
 
 from market_monitor import BookState, ContinuityGap, PriceLevel, TimeInterval, TrustedClock
 from options_domain import (
@@ -120,6 +121,8 @@ class FixedContractShadowRuntimeAdapter:
         self._combos_by_identity: dict[str, _ComboSource] = {}
         self._ticker_sources: dict[str, _TickerSource] = {}
         self._underwriting_by_scope: dict[str, UnderwritingFacts] = {}
+        self._workbench_underwriting_metadata_by_scope: dict[str, Mapping[str, object]] = {}
+        self._workbench_underwriting_metadata: tuple[Mapping[str, object], ...] = ()
         self._candidate_origins: dict[str, UnderwritingFacts] = {}
         self._anchors: dict[str, _Anchor] = {}
         self._anchors_by_observation: dict[str, _Anchor] = {}
@@ -160,7 +163,14 @@ class FixedContractShadowRuntimeAdapter:
 
     def workbench_underwriting_metadata(self) -> tuple[Mapping[str, object], ...]:
         """Copy display-only structure facts from the settled Underwriting projection."""
-        return tuple(
+        return self._workbench_underwriting_metadata
+
+    @staticmethod
+    def _underwriting_display_metadata(
+        scope_identity: str,
+        facts: UnderwritingFacts,
+    ) -> Mapping[str, object]:
+        return MappingProxyType(
             {
                 "radar_scope_identity": scope_identity,
                 "short_leg_instrument_name": facts.short_leg_instrument_name,
@@ -180,7 +190,6 @@ class FixedContractShadowRuntimeAdapter:
                 ),
                 "target_quantity_btc": str(facts.target_quantity_btc),
             }
-            for scope_identity, facts in sorted(self._underwriting_by_scope.items())
         )
 
     def next_time_boundary_monotonic_ms(
@@ -947,6 +956,8 @@ class FixedContractShadowRuntimeAdapter:
                 continue
             if prior.active_episode_identity in by_episode:
                 continue
+            if prior.active_episode_identity is None:
+                continue
             trusted = self._trusted_interval(
                 reducer,
                 boundary,
@@ -962,7 +973,18 @@ class FixedContractShadowRuntimeAdapter:
                 quote_refresh_witness=None,
                 unknown_reasons=("RADAR_EPISODE_NOT_ACTIVE",),
             )
-        self._underwriting_by_scope.update(current)
+        metadata_changed = False
+        for scope, facts in current.items():
+            self._underwriting_by_scope[scope] = facts
+            metadata = self._underwriting_display_metadata(scope, facts)
+            if self._workbench_underwriting_metadata_by_scope.get(scope) != metadata:
+                self._workbench_underwriting_metadata_by_scope[scope] = metadata
+                metadata_changed = True
+        if metadata_changed:
+            self._workbench_underwriting_metadata = tuple(
+                self._workbench_underwriting_metadata_by_scope[key]
+                for key in sorted(self._workbench_underwriting_metadata_by_scope)
+            )
         return tuple(current[key] for key in sorted(current))
 
     def _underwriting_quote(

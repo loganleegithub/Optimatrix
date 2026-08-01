@@ -4,9 +4,9 @@
 
 **Task kind:** IMPLEMENTATION
 
-**Runtime implementation:** REQUIRED — repo-owned commissioning/stop controller and its direct
-tests only; the accepted `serve-shadow` hot path, market/runtime behavior, contracts, dependencies,
-and three Policies remain unchanged
+**Runtime implementation:** REQUIRED — repo-owned commissioning/stop controller plus the exact
+R4 CPU hot-path repair declared below; market inputs, decision/runtime semantics, contracts,
+dependencies, and three Policies remain unchanged
 
 **Live commands:** REQUIRED — conditional terminal-goal delegation only after exact-candidate
 acceptance, remote equality, GitHub CI, merge to remote `main`, and a fresh independently verified
@@ -23,8 +23,9 @@ R4 deployment preflight
 
 **Target branch/PR:** one bounded branch/PR at a time; initial repair
 `agent/r4-commissioning-integrity-repair`, iterative repairs `agent/r4-lsof-field-repair` and
-`agent/r4-resource-log-classification-repair`; no force push, history rewrite, main merge into a
-task branch, or live mutation before exact-candidate acceptance
+`agent/r4-resource-log-classification-repair`, and current CPU repair
+`codex/r4-workbench-publication-cpu-repair`; no force push, history rewrite, main merge into a task
+branch, or live mutation before exact-candidate acceptance
 
 ## 2026-08-02 R4 iterative recovery amendment
 
@@ -58,6 +59,23 @@ only until one R4 attempt reaches `COMMISSIONED`; leave that process online for 
 observation. This authorizes no blind retry, parallel attempt, Policy or business-semantic change,
 private/account access, order, fill, capital, qualification, promotion, public binding, or reboot
 auto-start.
+
+## 2026-08-02 R4 continuous-observation CPU amendment
+
+The user's direct instruction also authorizes stopping, repairing, and recommissioning R4 when
+continuous read-only observation finds an implementation defect after the bounded commissioning
+gate. Attempt 003 was cleanly stopped and terminally sealed after macOS generated an exact-PID
+`cpu_resource` diagnostic for PID 18470: 90 CPU seconds over 160 seconds, 56% average, above the
+50%/180-second system threshold. This is an operational failure even though health, readiness,
+Coverage, API projection, and browser rendering remained internally consistent.
+
+The minimal repair may change only redundant runtime work. An Underwriting scope that already made
+its one active-to-inactive transition is not reevaluated on every later unrelated fact; its settled
+facts remain retained for evidence and display. Structurally unchanged workbench metadata and
+top-level JSON members may reuse immutable cached bytes, while every settled fact still produces
+one complete, byte-immutable, schema-2 snapshot with an advancing publication sequence. The repair
+must not coalesce facts, change publication cadence, alter a fact boundary, remove settled evidence,
+change a business enum/value/order, or amend a Policy, input, Outcome, HTTP, or stage contract.
 
 ## Business closure
 
@@ -95,8 +113,9 @@ observation; it does not establish 24x7 stability, Policy quality, opportunity f
 fillability, or PnL.
 
 **Independent verification:** review the exact R4 candidate and its parent/tree; recompute every
-changed-file digest; prove no service-hot-path, contract, Policy, dependency, or business-schema
-change; run focused tests and `make check`; verify remote branch equality and GitHub CI; after merge,
+changed-file digest; prove the exact CPU hot-path repair preserves publication cadence, contracts,
+Policies, dependencies, and business schema/values; run focused tests and `make check`; verify
+remote branch equality and GitHub CI; after merge,
 independently recompute the detached deployment checkout, fresh envelope, plists, wrapper bytes,
 old-root inventories, label/listener absence, and exact R4 output freshness before any live command.
 The verifier must not rely on the controller's own receipt as its sole source of truth.
@@ -125,12 +144,12 @@ promotion, unattended retry, reboot auto-start, or alternate label/port authorit
 
 ## Product operating behavior
 
-The accepted `serve-shadow` market/service hot path remains byte-for-byte outside this task's code
-scope and does not import the commissioning controller. It continues to consume production-public
-Deribit data, write append-only public Shadow evidence, and expose immutable GET/HEAD-only loopback
-projections. The controller remains sibling deployment tooling: it validates bound artifacts and
-host facts, controls one exact launchd lifecycle, records attempt-scoped evidence, and never
-recomputes strategy decisions or mutates service evidence.
+The `serve-shadow` market/service hot path changes only by the exact redundant-work repair declared
+above and still does not import the commissioning controller. It continues to consume every
+production-public Deribit fact, write append-only public Shadow evidence, and publish one immutable
+GET/HEAD-only loopback projection per settled fact. The controller remains sibling deployment
+tooling: it validates bound artifacts and host facts, controls one exact launchd lifecycle, records
+attempt-scoped evidence, and never recomputes strategy decisions or mutates service evidence.
 
 The fresh production boundary is exact:
 
@@ -230,14 +249,16 @@ fees, PnL, or capital safety.
 
 ## Scope
 
-**In:** `apps/radar_runtime/src/radar_runtime/commissioning.py`; its direct tests; R4 envelope,
+**In:** `apps/radar_runtime/src/radar_runtime/commissioning.py`; the exact redundant-work repair in
+`apps/radar_runtime/src/radar_runtime/fixed_contract_shadow.py` and
+`apps/radar_runtime/src/radar_runtime/workbench.py`; their direct tests; R4 envelope,
 failure-closure receipt, bootout/quiescence semantics, and fresh-boundary constants;
 `docs/authority/CURRENT_STAGE.md`; `docs/authority/SYSTEM_ARCHITECTURE.md`; `README.md`; authority
 tests; this sole active task; exact-candidate review/CI/merge; and iterative single-invocation R4
 commission/close attempts until one is commissioned.
 
-**Out:** `service.py` or any `serve-shadow` hot-path behavior; workbench producer/schema changes;
-market adapters; Radar/Underwriting/Position/Outcome formulas or state machines; contracts;
+**Out:** `service.py`; workbench schema or publication-cadence changes; market adapters;
+Radar/Underwriting/Position/Outcome formulas or state machines; contracts;
 Policies; dependencies or lockfiles; private/account APIs; orders, fills, capital, execution;
 qualification; automatic restart; reuse of R1/R2/R3 assets; alternate root/label/port; or any
 retroactive edit to R3 evidence.
@@ -298,7 +319,7 @@ not authorize claiming that commissioning or 24x7 observation has already occurr
 - The deleted R3 task is not retained as an active or complete task file.
 - Exactly one active R4 task and at most one bounded implementation branch/PR at a time exist.
 - Stable regression tests cover every diagnosed defect and adversarial boundary above.
-- The minimal controller repair passes focused tests, `make check`, exact-candidate review, remote
+- The minimal exact R4 repair passes focused tests, `make check`, exact-candidate review, remote
   equality, and GitHub CI.
 - The final candidate contains no temporary patch workflow, generated cache, test artifact, or
   unrelated formatting churn.

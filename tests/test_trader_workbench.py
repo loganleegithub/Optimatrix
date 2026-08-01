@@ -441,6 +441,37 @@ def test_snapshot_store_serializes_before_publication_and_does_not_retain_mutabl
     assert value["radar"]["rows"][0]["instrument_name"] == "BTC-TEST"
 
 
+def test_snapshot_store_preencoded_members_preserve_exact_snapshot_bytes() -> None:
+    bindings = _bindings()
+    document = initial_workbench_document(bindings)
+    document["underwriting"] = {
+        "panel_state": "HAS_SETTLED_OBJECTS",
+        "empty_label": None,
+        "rows": [
+            {
+                "radar_scope_or_short_leg_identity": "sha256:" + "1" * 64,
+                "availability": "NOT_EVALUATED",
+                "decision_reason": "UNDERWRITING_NOT_EVALUATED:RADAR_EPISODE_NOT_ACTIVE",
+            }
+        ],
+    }
+    expected_store = SnapshotStore(initial_workbench_document(bindings))
+    actual_store = SnapshotStore(initial_workbench_document(bindings))
+
+    expected = expected_store.publish(document)
+    actual = actual_store.publish_preencoded_members(
+        document,
+        preencoded_members={
+            "underwriting": workbench_module._json_value_bytes(document["underwriting"])
+        },
+    )
+
+    assert actual.sequence == expected.sequence
+    assert actual.workbench_body == expected.workbench_body
+    assert actual.health_body == expected.health_body
+    assert actual.ready_body == expected.ready_body
+
+
 def test_http_is_loopback_get_head_only_with_security_headers() -> None:
     store = SnapshotStore(initial_workbench_document(_bindings()))
     server = LoopbackWorkbenchServer(host="127.0.0.1", port=0, store=store)

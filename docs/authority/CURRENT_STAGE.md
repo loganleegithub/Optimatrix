@@ -15,7 +15,7 @@
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
 **Persistent public Shadow service/workbench:**
-`R4_ATTEMPT_002_TERMINAL_QUIESCENT_ITERATIVE_REPAIR_AUTHORIZED`
+`R4_ATTEMPT_003_TERMINAL_QUIESCENT_CPU_REPAIR_AUTHORIZED`
 
 **Evidence gate:** `ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED`
 
@@ -23,7 +23,7 @@
 `AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED`
 
 **Persistent deployment / 24x7 acceptance:**
-`R3_NOT_MET_R4_ATTEMPT_002_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`
+`R3_NOT_MET_R4_ATTEMPT_003_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`
 
 ## Authority
 
@@ -37,12 +37,12 @@ defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md), records the 
 accepted fixed-contract Shadow implementation-integrity repair and two-layer engineering evidence
 defined below, preserves every consumed persistent observation exactly, accepts the bounded
 service-operability and trader-workbench repair, records the consumed R3 commissioning failure and
-clean stop exactly, and activates one bounded R4 controller-integrity repair. The historical failed
+clean stop exactly, and activates one bounded R4 integrity repair. The historical failed
 attempt, accepted smoke, and all three persistent-service attempts remain sealed and are not
-retried. Only the repo-owned commissioning/stop controller repair and the conditional sequence
-below are authorized. The accepted `serve-shadow` hot path, dependencies, contracts, three
-Policies, service/workbench schemas, private/account data, orders, fills, capital, qualification,
-Challenger automation, promotion, and execution remain unchanged and unauthorized.
+retried. Only the active task's observed, minimal owning-module repairs and the conditional
+sequence below are authorized. The market/Decision behavior, dependencies, contracts, three
+Policies, service/workbench schemas and cadence, private/account data, orders, fills, capital,
+qualification, Challenger automation, promotion, and execution remain unchanged and unauthorized.
 
 The prior `CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED` evidence result remains immutable accepted
 history; the failed persistent observation neither reopens nor extends it.
@@ -101,6 +101,27 @@ explicit phrase `burning cpu`, before an exact-PID unified-log row counts. The z
 diagnostic-report check, query boundary, and every economic and deployment boundary remain
 unchanged.
 
+R4 attempt 003 ran from merged commit `f2124806b47b3ff8d6cf63eea89e378a4eb112cb`, envelope
+identity `sha256:67bae4f3b6eb6a7b2a7cf0fdf60da1c0e40ea395863bd699eb6f7c7f0e1c383e`,
+and runtime identity `sha256:b20917cb344b8b7bab15f8e17734f670f422d5c15634bc86afc817d529fd57b1`.
+It commissioned successfully, then ran for `1332282` ms with 23 contiguous successful probe rows,
+health/readiness and projection evidence consistent, and no probe failure. Continuous observation
+found an exact-PID macOS `cpu_resource` diagnostic for PID 18470: 90 CPU seconds over 160 seconds,
+56% average, above the 50%/180-second system threshold. It was therefore cleanly stopped rather
+than accepted as normal. Its commissioning receipt SHA-256 is
+`4e21ae1217a04e631493eb471cb2d6fdfd071bb9100a591c2dd47ac59f7434b8`; stop receipt SHA-256 is
+`fbd27b448cc704186773279f7340cace90b3fc8d5930022bc3cbdd996888c169`; terminal-audit SHA-256 is
+`10cfee29355706de3a9c848c0a110802f9f2f3dcd73637a26fee13d619c5c88a`, with
+`PASS_COMPLETE_CLEAN_STOP`, `CLEAN_STOP_COMPLETE`, and 24-hour result `NOT_MET`. Both labels, the
+exact PID, matching processes, and the loopback listener were absent after closure.
+
+The attempt-003 defect is exact and non-economic. Every settled fact redundantly reprojected all
+already inactive Underwriting scopes and re-encoded unchanged, growing workbench members. The
+current repair may retain the one durable active-to-inactive transition and reuse immutable
+display metadata and top-level JSON member bytes. Every settled fact must still publish one full
+immutable schema-2 snapshot with an advancing sequence. Publication cadence, evidence retention,
+business values and order, Policy, input, Outcome, HTTP, and stage semantics remain unchanged.
+
 ### Consumed R3 commissioning and authorized R4 repair
 
 The sole R3 commissioning attempt is consumed and grants no retry. It ran from the merged
@@ -137,11 +158,11 @@ remained hard-bound to R3 paths and identities.
 
 The user authorized R4 repair on 2026-08-01. `SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the
 sole active closure, rooted at base commit `f66fa97b66487cf593d5265a8ac79d013adda104`. It permits one
-bounded branch and Draft PR to change only the repo-owned commissioning controller, its direct
-tests, Authority, architecture/README truth, and the active task. The accepted `serve-shadow` hot
-path, market/runtime behavior, workbench producer and schema, contracts, three Policies,
-dependencies, private/account boundary, orders, fills, capital, qualification, promotion, and
-execution remain unchanged and unauthorized.
+bounded branch and Draft PR at a time. The later direct 2026-08-02 iterative-recovery instructions
+also permit each observed defect's minimal owning-module repair, its direct tests, Authority,
+architecture/README truth, and the active task. Market/Decision behavior, workbench schema and
+cadence, contracts, three Policies, dependencies, private/account boundary, orders, fills,
+capital, qualification, promotion, and execution remain unchanged and unauthorized.
 
 No `launchctl`, service, probe, listener, or live-market mutation is allowed from the implementation
 branch or PR. Live commands become conditionally executable only after the exact R4 candidate has
