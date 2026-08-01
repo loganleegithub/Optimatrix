@@ -22,9 +22,9 @@ R4 deployment preflight
 **Base commit:** `f66fa97b66487cf593d5265a8ac79d013adda104`
 
 **Target branch/PR:** one bounded branch/PR at a time; initial repair
-`agent/r4-commissioning-integrity-repair`, iterative repair `agent/r4-lsof-field-repair`; no force
-push, history rewrite, main merge into a task branch, or live mutation before exact-candidate
-acceptance
+`agent/r4-commissioning-integrity-repair`, iterative repairs `agent/r4-lsof-field-repair` and
+`agent/r4-resource-log-classification-repair`; no force push, history rewrite, main merge into a
+task branch, or live mutation before exact-candidate acceptance
 
 ## 2026-08-02 R4 iterative recovery amendment
 
@@ -36,6 +36,19 @@ R-number. R4 attempt 001 is immutable and terminally quiescent: primary receipt 
 `7c8c7696a2150a57ef6ca772ff0d2bcab6bd88421270332f334fd418eda249d6`, and status
 `COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT`. It failed because real macOS `lsof -F` emits the
 always-selected `f` field while the listener parser and test fixture modeled only `p/n`.
+
+R4 attempt 002 is also immutable and terminally quiescent: primary receipt SHA-256
+`1104318b552b3fd2878ca5b3d81ae7d835aac448ba8240a620a41bcc1e18c6c5`, final closure SHA-256
+`a95824e3a633750a903395bf3cf4da61544fa7a87244f34ab2e5c21080ff9696`, terminal audit SHA-256
+`68a798c7e9558c3a82a1e5c2043a4582729af20506e0bacbbff3c8423d44a2c2`, and status
+`COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT`. It used envelope identity
+`sha256:1f143560025fd03adbcf44c8c0df795d9595b568051b4adedac4f1562d7c6199` and runtime identity
+`sha256:1711deeac5701ee996c63529e4e6b770a0212ac6375dfb7be1c81f66364cb126`. Its four
+contract-valid operational probe rows were falsely assigned one CPU resource event each because a
+normal RunningBoard message contained the exact service PID and `resource coalition id`, but no
+CPU-resource condition. The minimal repair requires an exact-PID unified-log row to contain both
+`cpu` and `resource`, or the explicit phrase `burning cpu`; real CPU-resource messages and
+diagnostic reports remain gating.
 
 For each observed R4 implementation defect: preserve the failed attempt byte-for-byte under a
 numbered R4 archive; add the smallest direct red/green fix in the owning module; run focused and

@@ -15,7 +15,7 @@
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
 **Persistent public Shadow service/workbench:**
-`R4_ATTEMPT_001_TERMINAL_QUIESCENT_ITERATIVE_REPAIR_AUTHORIZED`
+`R4_ATTEMPT_002_TERMINAL_QUIESCENT_ITERATIVE_REPAIR_AUTHORIZED`
 
 **Evidence gate:** `ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED`
 
@@ -23,7 +23,7 @@
 `AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED`
 
 **Persistent deployment / 24x7 acceptance:**
-`R3_NOT_MET_R4_ATTEMPT_001_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`
+`R3_NOT_MET_R4_ATTEMPT_002_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`
 
 ## Authority
 
@@ -79,6 +79,27 @@ qualification, promotion, public binding, or reboot auto-start permission change
 attempt reaches `COMMISSIONED`, the service remains online for read-only observation and iterative
 commissioning authority ends; 24-hour acceptance remains `PENDING` until its full denominator is
 actually observed.
+
+R4 attempt 002 ran from merged commit `3a0d58a07aab29c1341964b9427920d6a74c25b0`, envelope
+identity `sha256:1f143560025fd03adbcf44c8c0df795d9595b568051b4adedac4f1562d7c6199`,
+and runtime identity `sha256:1711deeac5701ee996c63529e4e6b770a0212ac6375dfb7be1c81f66364cb126`.
+Its immutable primary receipt SHA-256 is
+`1104318b552b3fd2878ca5b3d81ae7d835aac448ba8240a620a41bcc1e18c6c5`; its immutable final
+closure receipt SHA-256 is `a95824e3a633750a903395bf3cf4da61544fa7a87244f34ab2e5c21080ff9696`
+with status `COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT`; and its terminal-audit SHA-256 is
+`68a798c7e9558c3a82a1e5c2043a4582729af20506e0bacbbff3c8423d44a2c2`. It covered `212245` ms,
+recorded four contiguous contract-valid operational probe rows with no failure markers and a
+maximum gap of `61770` ms, and has 24-hour result `NOT_MET`. All R4 labels, PID `96300`, matching
+service processes, and the loopback listener were absent after closure.
+
+The attempt-002 defect is exact and non-economic: the unified-log classifier treated any message
+containing `resource` and the exact PID as a CPU resource exception. A normal RunningBoard
+coalition lookup for PID `96300` contained `resource coalition id` but no CPU-resource condition,
+so each cumulative probe row reported one false event and the operability validator correctly
+rejected the non-zero count. The current repair may require both `cpu` and `resource`, or the
+explicit phrase `burning cpu`, before an exact-PID unified-log row counts. The zero-event gate,
+diagnostic-report check, query boundary, and every economic and deployment boundary remain
+unchanged.
 
 ### Consumed R3 commissioning and authorized R4 repair
 

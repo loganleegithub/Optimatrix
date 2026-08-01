@@ -2741,7 +2741,9 @@ class MacOSHost:
                         if not isinstance(message, str):
                             continue
                         lowered = message.lower()
-                        resource_event = "resource" in lowered or "burning cpu" in lowered
+                        resource_event = (
+                            "cpu" in lowered and "resource" in lowered
+                        ) or "burning cpu" in lowered
                         if resource_event and pid_pattern.search(message):
                             exact_pid_events += 1
                         elif resource_event and self.envelope.service_label in message:

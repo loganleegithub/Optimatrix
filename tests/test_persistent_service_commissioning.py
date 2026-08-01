@@ -2836,6 +2836,14 @@ def test_unified_resource_events_match_exact_pid_in_message_not_emitter_pid(
     unified_rows = [
         {
             "timestamp": timestamp,
+            "processID": 603,
+            "eventMessage": (
+                "Kernel call to get coalition roles for PID 123, resource coalition id: 268642, "
+                "jetsam coalition id: 268643, failed: ret -1, errno 2."
+            ),
+        },
+        {
+            "timestamp": timestamp,
             "processID": 123,
             "eventMessage": "cpu resource event for process 999",
         },
@@ -2865,7 +2873,7 @@ def test_unified_resource_events_match_exact_pid_in_message_not_emitter_pid(
     assert observation.sources_readable is True
     assert observation.exact_pid_event_count == 1
     assert observation.diagnostic_report_count_examined == 0
-    assert observation.unified_log_row_count_examined == 3
+    assert observation.unified_log_row_count_examined == 4
 
 
 def test_resource_audit_excludes_events_after_exact_frozen_wall_cutoff(
