@@ -257,6 +257,8 @@ def test_current_stage_records_accepted_repair_and_active_fresh_restart() -> Non
     assert "/Users/logan/Optimatrix-public-shadow-observation-002" in current
     assert "com.optimatrix.public-shadow.r2" in current
     assert "The old `/Users/logan/Optimatrix-public-shadow-observation` tree remains sealed" in flat
+    assert "This task remains `ACTIVE` throughout a successful live observation" in flat
+    assert "If commissioning fails after process start, the probe is not loaded" in flat
     assert (
         "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json"
     ) in current
@@ -316,6 +318,19 @@ def test_fresh_production_restart_task_is_exactly_active() -> None:
     assert "com.optimatrix.public-shadow.r2" in task
     assert "Probe-ledger schema remains 1 and is distinct from endpoint schema 2" in task_flat
     assert "Exactly one r2 service starts" in task_flat
+    assert "This task remains `ACTIVE` for the full observation" in task_flat
+    assert (
+        "If commissioning fails after the service has started, the probe is not loaded" in task_flat
+    )
+    assert "## Contract" in task
+    assert "## Artifacts and delivery report" in task
+    assert "/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r2.plist" in task
+    assert "/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r2.probe.plist" in task
+    assert "2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4" in task
+    assert "be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af" in task
+    assert "498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439" in task
+    assert "no consecutive monotonic gap above 180,000 ms" in task_flat
+    assert "The terminal audit is outside the probe denominator" in task_flat
     assert "Private API:** FORBIDDEN" in task
 
 

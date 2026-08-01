@@ -39,8 +39,16 @@ On a later explicit `停止`, the controller first unloads and confirms the peri
 makes exactly one final-online probe attempt, then sends exactly one label-bound `SIGINT`, waits at
 most 120 seconds for terminal publication, and performs one separate terminal audit. Probe failure
 never delays or retries the stop. A seal timeout is reported as a blocker and never causes a second
+signal. If commissioning fails after the service has started, the probe is not loaded: the
+controller records the failed commission, sends exactly one label-bound `SIGINT` to the r2 service,
+waits at most 120 seconds, and performs one terminal audit without a final-online probe or second
 signal. A startup, commission, or process failure consumes this attempt and authorizes no automatic
 or manual retry, alternate root, second invocation, or repaired evidence interval.
+
+This task remains `ACTIVE` for the full observation. Successful deployment and commissioning are
+an online milestone, not task completion. The task may be completed and removed only after an
+explicit stop or terminal failure is sealed, the terminal audit is published, and `CURRENT_STAGE`
+records the exact result and returns live commands to disabled.
 
 This delegation does not authorize runtime/package/contract/Policy changes, result-dependent
 extension, private/account access, credentials, orders, fills, capital, execution, Internet
@@ -104,10 +112,17 @@ probe be bootstrapped. Probe-ledger schema remains 1 and is distinct from endpoi
 
 Before startup, publish one external deployment envelope under
 `/Users/logan/Optimatrix-public-shadow-observation-002/deployment/`. It binds the exact merged
-remote-main commit/tree, clean detached checkout, service contract and three Policy digests,
-absolute argv/cwd/state root, launchd plist and script digests, port, labels, first-start predicate,
-probe ordering, and stop boundary. The state path must be absent before the sole invocation,
-absolute, repo-external, non-symlinked, and owned by this attempt.
+remote-main commit/tree, clean detached checkout, service contract digest
+`sha256:4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7`, Radar Policy digest
+`sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4`, Underwriting Policy
+digest `sha256:be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af`, and Position Policy
+digest `sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439`.
+It also binds absolute argv/cwd/state root, script digests, port, labels, first-start predicate,
+probe ordering, stop boundary, and the exact installed plist paths
+`/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r2.plist` and
+`/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r2.probe.plist` plus their digests,
+mode, and owner. The state path must be absent before the sole invocation, absolute, repo-external,
+non-symlinked, and owned by this attempt.
 
 Preflight requires both new labels absent, both new installed plist paths absent, port 8765 free,
 zero matching service processes, no fresh ledger/failure markers, and exact remote-main equality.
@@ -119,6 +134,39 @@ The observation does not stop automatically at 24 hours. The user stop remains t
 24-hour gate can be `MET` only after the same runtime spans at least `86,400,000` ms with a complete
 successful probe ledger, clean terminal, complete readers, and conservation. Until then it is
 `PENDING`; stopping early or any predicate failure yields `NOT_MET`, never a retry.
+
+## Contract
+
+**Inputs and known-at rule:** before the first invocation, the deployment envelope freezes the
+actual merged remote-main commit/tree, clean checkout, absolute command/cwd/state root, contract and
+Policy byte digests, r2 labels/plists/scripts, free loopback port, absent state, absent labels, and
+zero matching processes. Later observations never rewrite these bindings.
+
+**Durable output and identity:** service evidence remains the frozen
+`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE` identity. External deployment envelope, schema-1 probe
+ledger, explicit probe-failure markers, logs, current audit, and terminal audit are validation
+records, not business objects. The first lifecycle event creates one runtime identity that every
+service, Radar, downstream, HTTP, probe, and audit fact must match.
+
+**Missing/invalid/UNKNOWN semantics:** identity mismatch, dirty checkout, unexpected listener,
+duplicate process, redirected state, malformed endpoint, evidence corruption, private endpoint, or
+commission failure fails closed. `ready=false`, `UNKNOWN`, `NOT_EVALUATED`, `N/A`, and zero natural
+opportunities remain truthful distinct states and never become a deployment or business success.
+
+**Persisted meaning and compatibility:** no persisted business schema or contract changes in this
+task. The immutable endpoint projection uses version 2 while external probe/audit records use
+schema 1; neither substitutes for durable business evidence. Old and new observation roots are
+distinct and never combined.
+
+**Business denominators:** continuous-service duration is terminal
+`recorded_monotonic_ms - lifecycle-sequence-1 recorded_monotonic_ms` for exactly one runtime.
+Probe continuity requires sequence 1 within 120,000 ms of lifecycle start, contiguous ledger
+sequence, no unledgered failure marker, no consecutive monotonic gap above 180,000 ms, and the
+single final-online row within 180,000 ms before a user-request terminal. Endpoint success is
+successful responses divided by recorded probe rows; a failed row or failure marker is never
+silently omitted. The terminal audit is outside the probe denominator. Any failed predicate makes
+the 24-hour gate `NOT_MET`; before terminal it remains `PENDING`. Business-object counts retain
+their contract-owned denominators, and probe rows or elapsed time are never market opportunities.
 
 ## Evidence boundary
 
@@ -176,7 +224,9 @@ launchd plist paths. Runtime source is immutable relative to the accepted repair
 6. The first periodic schema-1 probe is successful and identity-bound. A current audit reports
    `reader_verdict=PASS`, `PASS_CURRENT_INCOMPLETE`, `LIVE_INCOMPLETE_NO_TERMINAL`, and
    `business_acceptance=PENDING_LIVE` without treating that as 24-hour acceptance.
-7. A startup, commission, or process failure is terminal for this attempt and authorizes no retry.
+7. A commission failure never loads the probe and triggers exactly one r2 `SIGINT`, at most 120
+   seconds of seal wait, and one terminal audit; a startup, commission, or process failure is
+   terminal for this attempt and authorizes no retry or second signal.
 
 ### Required commands
 
@@ -199,9 +249,32 @@ acceptance threshold, not an automatic stop or opportunity condition.
 
 **Private API:** FORBIDDEN
 
+## Artifacts and delivery report
+
+**Artifact paths and digests:** report the exact deployment envelope, service/probe scripts and
+plists, preflight receipt, probe ledger and failure-marker inventory, logs, current audit, and all
+SHA-256 digests under `/Users/logan/Optimatrix-public-shadow-observation-002`; report the installed
+r2 plist paths, owner, mode, and byte equality separately. Do not copy or modify an old artifact.
+
+**Policy/contract identities:** report the exact service-contract and three Policy digests frozen
+above, the merged commit/tree, runtime identity, lifecycle sequence, HTTP projection version, and
+probe-record schema independently.
+
+**Commit/PR:** report the activation commit/tree, PR #9 CI and merge state, resolved remote `main`
+commit/tree, clean detached deployment checkout, and proof that runtime/package/contract/Policy
+bytes equal the accepted repair.
+
+**Unknowns and non-claims:** report readiness, currentness blockers, `UNKNOWN`, `NOT_EVALUATED`,
+`N/A`, natural zeros, covered probe interval, and 24-hour `PENDING` without inferring Policy
+quality, opportunity frequency, fillability, private/account truth, actual exposure, fees, PnL,
+qualification, promotion, or execution safety.
+
 ## Definition of done
 
-The activation is merged and exactly bound; the fresh r2 service is commissioned once; the first
-probe and current audit pass; the workbench is reloaded and independently verified read-only; no
-old artifact or private/order/fill surface is touched; and observation remains live without a
-business, 24-hour, Policy-quality, opportunity-frequency, or PnL claim.
+Deployment commissioning is complete when the activation is merged and exactly bound, the fresh r2
+service is commissioned once, the first probe and current audit pass, the workbench is reloaded and
+independently verified read-only, and no old artifact or private/order/fill surface is touched. The
+task nevertheless remains `ACTIVE` while observation is live. Final task completion requires an
+explicit stop or terminal failure, one sealed terminal audit, exact covered-interval and 24-hour
+result reporting, and a same-change `CURRENT_STAGE` transition that disables live commands; no
+business, Policy-quality, opportunity-frequency, fillability, or PnL claim follows.

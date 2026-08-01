@@ -99,7 +99,9 @@ It authorizes PR #9 activation and merge, then exactly one `serve-shadow` invoca
 `127.0.0.1:8765`. The service must pass exact commissioning before the fresh 60-second probe is
 loaded. The consumed root remains sealed; a startup or process failure consumes the new attempt
 without retry. Startup health does not establish 24-hour continuity, Policy quality, opportunity
-frequency, fillability, or PnL.
+frequency, fillability, or PnL. The task remains active throughout observation and closes only
+after explicit stop or terminal failure is sealed, audited, and followed by a live-disabled stage
+transition.
 
 ## Intended first business flow
 

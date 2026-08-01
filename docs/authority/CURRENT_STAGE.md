@@ -177,6 +177,13 @@ fresh schema-1 periodic probe is loaded, so a startup race cannot create a false
 The first probe must be successful within 120 seconds of lifecycle start. There is no second start,
 automatic restart, manual retry, alternate root, or result-dependent extension.
 
+If commissioning fails after process start, the probe is not loaded. The controller records the
+failed commission, sends exactly one label-bound `SIGINT` to the r2 service, waits at most 120
+seconds, and performs one terminal audit without a final-online probe, second signal, or retry.
+This task remains `ACTIVE` throughout a successful live observation; deployment commissioning is
+only a milestone. The task closes only after explicit stop or terminal failure is sealed and
+audited and this authority records the result while returning live commands to disabled.
+
 The restart establishes only the actually observed production and trader-observability facts.
 Twenty-four-hour acceptance remains `PENDING` until the same runtime is stopped under the task's
 single-signal protocol and a terminal audit proves at least `86,400,000` ms plus every integrity and
