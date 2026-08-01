@@ -2119,7 +2119,7 @@ def test_persistent_service_contract_and_task_close_exact_governance_change() ->
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     digest = f"sha256:{hashlib.sha256(contract_path.read_bytes()).hexdigest()}"
 
-    assert digest == ("sha256:cd141d34cc1e0a9ac1470cda94c924d8929e1d9e6f1af9efbfbdfdf6d0cc0d90")
+    assert digest == ("sha256:9c3b46eae8b646d2c86f38df35cfcf962605c0b670385376d7c2ebef3a771778")
     assert "**Base commit:** `967e82ea36a7fcae13c6c8a8b07108af5b21a633`" in task
     assert "Draft PR against `main`" in task
     assert "**Outcome/evaluation contract change:** APPROVED" in task
@@ -2136,10 +2136,12 @@ def test_persistent_service_contract_and_task_close_exact_governance_change() ->
         "NOT_COMPARABLE",
         "PersistentServiceTerminalIdentity",
         "Atomic read-only workbench projection",
+        "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY",
         "zero_anomaly_state = PROVEN_ZERO | NOT_ZERO | UNKNOWN",
         "zero_candidate_state = PROVEN_ZERO | NOT_ZERO | UNKNOWN",
     ):
         assert invariant in flat
+    assert "`NO_LIVE_OR_DEPLOYMENT_AUTHORITY`" not in flat
     assert "SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH" in current
     assert "OFFLINE_IMPLEMENTATION_AUTHORIZED" in current
     assert "**Live commands:** `FORBIDDEN`" in current

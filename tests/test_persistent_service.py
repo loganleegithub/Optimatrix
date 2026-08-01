@@ -266,6 +266,14 @@ def test_pre_latched_stop_opens_no_client_and_writes_exact_terminal(
         assert evidence.events[0]["recorded_monotonic_ms"] == 100
         assert evidence.terminal["terminal_disposition"] == "CLEAN_STOP"
         assert evidence.terminal["radar_evidence_status"] == "COMPLETE_CLEAN_STOP"
+        event_non_claims = evidence.events[0]["non_claims"]
+        terminal_non_claims = evidence.terminal["non_claims"]
+        assert isinstance(event_non_claims, list)
+        assert isinstance(terminal_non_claims, list)
+        assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in event_non_claims
+        assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in event_non_claims
+        assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in terminal_non_claims
+        assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in terminal_non_claims
         assert evidence.terminal["forward_cohort_summary_emitted"] is False
         assert evidence.terminal["radar_object_count"] == 1
         assert evidence.terminal["downstream_object_count"] == 0

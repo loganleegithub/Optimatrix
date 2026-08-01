@@ -4,6 +4,7 @@ import http.client
 import inspect
 import json
 import socket
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -234,6 +235,8 @@ def test_initial_snapshot_keeps_empty_panels_separate_from_unknown_zero_claims()
     assert value["system"]["coverage_ratio_percent"] is None
     assert value["shadow_entries"]["simulation_label"] == SIMULATION_LABEL
     assert value["service"]["data_state"] == "UNKNOWN"
+    assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in value["non_claims"]
+    assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in value["non_claims"]
 
 
 def test_shadow_projection_derives_exact_entry_vwap_only_from_persisted_atomic_levels() -> None:
@@ -503,6 +506,134 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "&lt;" in JS and "&gt;" in JS and "&amp;" in JS
     assert "safeText(row[column[1]])" in JS
     assert 'class="value ${' not in JS
+    assert 'id="connection"' in HTML
+    assert 'role="alert"' in HTML
+    assert "function renderUnavailable" in JS
+    assert "businessPanelIds" in JS
+    assert "lastSuccessfulFetchAtMs" in JS
+    assert "lastPublicationRuntimeIdentity" in JS
+    assert "lastPublicationChangeAtMs" in JS
+    assert "documentValue.publication_sequence" in JS
+    assert "if (!response.ok) throw" in JS
+    assert "renderUnavailable();" in JS
+
+
+def test_browser_executes_fail_closed_and_recovery_paths() -> None:
+    document = initial_workbench_document(_bindings())
+    document["publication_sequence"] = 1
+    restarted_document = json.loads(json.dumps(document))
+    restarted_document["runtime_identity"] = "sha256:" + "f" * 64
+    malformed_document = json.loads(json.dumps(document))
+    malformed_document["runtime_identity"] = "sha256:" + "9" * 64
+    malformed_document["publication_sequence"] = 9
+    malformed_document["radar"] = None
+
+    test_js = JS.replace(
+        "refresh();\nsetInterval(refresh, 2000);",
+        "globalThis.__workbenchRefresh = refresh;",
+    )
+    assert test_js != JS
+    harness = f"""
+const assert = require('node:assert/strict');
+const panelIds = ['zero', 'radar', 'underwriting', 'shadow', 'positions', 'outcomes'];
+const elementIds = ['connection', 'runtime', 'system', ...panelIds];
+const elements = Object.fromEntries(elementIds.map(id => [id, {{
+  hidden: id === 'connection', textContent: '', innerHTML: ''
+}}]));
+globalThis.document = {{
+  body: {{dataset: {{}}}},
+  getElementById(id) {{
+    assert.ok(elements[id], `unexpected element ${{id}}`);
+    return elements[id];
+  }}
+}};
+globalThis.setInterval = () => 1;
+let nowMs = 0;
+Date.now = () => nowMs;
+const fetchQueue = [];
+globalThis.fetch = async () => {{
+  const item = fetchQueue.shift();
+  assert.ok(item, 'unexpected fetch');
+  if (item.kind === 'fetch-error') throw new Error('offline');
+  if (item.kind === 'http-error') return {{ok: false, status: 503}};
+  if (item.kind === 'json-error') return {{
+    ok: true, status: 200, json: async () => {{ throw new Error('bad json'); }}
+  }};
+  return {{ok: true, status: 200, json: async () => structuredClone(item.value)}};
+}};
+eval({json.dumps(test_js)});
+const refreshAt = async (timestamp, item) => {{
+  nowMs = timestamp;
+  fetchQueue.push(item);
+  await globalThis.__workbenchRefresh();
+}};
+const systemHas = (label, value) => elements.system.innerHTML.includes(
+  `<div class="label">${{label}}</div><div class="value">${{value}}</div>`
+);
+const assertUnavailable = (successfulFetchAge, publicationAge) => {{
+  assert.equal(document.body.dataset.workbenchState, 'UNKNOWN');
+  assert.equal(elements.connection.hidden, false);
+  assert.equal(elements.runtime.textContent, 'runtime UNKNOWN');
+  assert.ok(systemHas('最近成功获取 age ms', successfulFetchAge));
+  assert.ok(systemHas('最后 publication sequence', 1));
+  assert.ok(systemHas('Publication 未变化 age ms', publicationAge));
+  for (const id of panelIds) {{
+    assert.match(elements[id].innerHTML, /旧业务数据已隐藏/);
+    assert.doesNotMatch(elements[id].innerHTML, /STALE SENTINEL/);
+  }}
+}};
+const markStalePanels = () => {{
+  for (const id of panelIds) elements[id].innerHTML = 'STALE SENTINEL';
+}};
+
+(async () => {{
+  await refreshAt(1000, {{kind: 'ok', value: {json.dumps(document)}}});
+  assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
+  assert.equal(elements.connection.hidden, true);
+  assert.ok(systemHas('最近成功获取 age ms', 0));
+  assert.ok(systemHas('Publication 未变化 age ms', 0));
+
+  markStalePanels();
+  await refreshAt(2000, {{kind: 'fetch-error'}});
+  assertUnavailable(1000, 1000);
+
+  await refreshAt(3000, {{kind: 'ok', value: {json.dumps(document)}}});
+  assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
+  assert.ok(systemHas('最近成功获取 age ms', 0));
+  assert.ok(systemHas('Publication 未变化 age ms', 2000));
+
+  markStalePanels();
+  await refreshAt(4000, {{kind: 'http-error'}});
+  assertUnavailable(1000, 3000);
+  markStalePanels();
+  await refreshAt(5000, {{kind: 'json-error'}});
+  assertUnavailable(2000, 4000);
+  markStalePanels();
+  await refreshAt(6000, {{kind: 'ok', value: {json.dumps(malformed_document)}}});
+  assertUnavailable(3000, 5000);
+  assert.ok(!systemHas('最后 publication sequence', 9));
+
+  await refreshAt(7000, {{kind: 'ok', value: {json.dumps(restarted_document)}}});
+  assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
+  assert.equal(elements.connection.hidden, true);
+  assert.match(elements.runtime.textContent, /f{{64}}$/);
+  assert.ok(systemHas('最近成功获取 age ms', 0));
+  assert.ok(systemHas('Publication 未变化 age ms', 0));
+  for (const id of panelIds) {{
+    assert.doesNotMatch(elements[id].innerHTML, /旧业务数据已隐藏|STALE SENTINEL/);
+  }}
+}})().catch(error => {{
+  console.error(error.stack || error);
+  process.exitCode = 1;
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_service_status_rejects_false_ready_or_stale_semantics() -> None:

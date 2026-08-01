@@ -65,7 +65,7 @@ no-opportunity extension surface is added.
 
 **Outcome/evaluation contract change:** APPROVED — add exact semantic identity
 `SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`, contract digest
-`sha256:cd141d34cc1e0a9ac1470cda94c924d8929e1d9e6f1af9efbfbdfdf6d0cc0d90`, and its non-cohort
+`sha256:9c3b46eae8b646d2c86f38df35cfcf962605c0b670385376d7c2ebef3a771778`, and its non-cohort
 run-segment lifecycle/terminal/conservation/writer/reader semantics. A service-only Radar summary
 writer/reader compatibility path accepts a real transport generation retired at its coverage-start
 instant only with an exact zero-duration restart chain and matching first segment; standard Radar
@@ -211,7 +211,13 @@ No value is an opportunity-frequency or profitability claim.
    forward-cohort summary, and repeated finalization creates no second terminal.
 8. Empty-panel fixtures remain separate from zero claims; zero or unknown denominators display
    `null / UNKNOWN` and never calm/no-opportunity text.
-9. Existing `observe` and `observe-shadow` behavior and bounded evidence semantics remain green.
+9. Service evidence and workbench projections state that the artifact itself cannot grant live or
+   deployment authority; they do not contradict a future explicit `CURRENT_STAGE` authorization.
+10. A browser fetch/status/JSON/render failure marks the whole page `UNKNOWN`, hides all cached
+    business rows, and exposes last-success/publication age instead of leaving stale rows current.
+    Executable JS/DOM regression covers recovery, render-failure rollback, and a new runtime reusing
+    the prior process-local publication sequence.
+11. Existing `observe` and `observe-shadow` behavior and bounded evidence semantics remain green.
 
 ### Required commands
 
@@ -240,7 +246,7 @@ items.
 
 **Policy/contract identities:** existing three contracts and three Policies unchanged; new service
 contract digest exactly
-`sha256:cd141d34cc1e0a9ac1470cda94c924d8929e1d9e6f1af9efbfbdfdf6d0cc0d90`.
+`sha256:9c3b46eae8b646d2c86f38df35cfcf962605c0b670385376d7c2ebef3a771778`.
 
 **Commit/PR:** append-only non-force commits on the named branch and Draft PR against `main`.
 

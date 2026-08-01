@@ -35,6 +35,12 @@ WORKBENCH_SCHEMA_VERSION = 1
 SIMULATION_LABEL = "模拟入场, 不是订单或成交"
 EMPTY_PANEL_LABEL = "无已结算对象; 这不是业务零值"
 UNKNOWN_DENOMINATOR_LABEL = "UNKNOWN (分母未知或为零)"
+WORKBENCH_NON_CLAIMS = (
+    "READ_ONLY_OPERATIONAL_PROJECTION",
+    "PUBLIC_QUOTE_NOT_FILL",
+    "NO_PRIVATE_ACCOUNT_OR_ORDER_ACCESS",
+    "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY",
+)
 
 _STALE_REASONS = frozenset(
     {
@@ -318,12 +324,7 @@ class WorkbenchPublisher:
             },
             "service": _status_object(status),
             **dict(business),
-            "non_claims": [
-                "READ_ONLY_OPERATIONAL_PROJECTION",
-                "PUBLIC_QUOTE_NOT_FILL",
-                "NO_PRIVATE_ACCOUNT_OR_ORDER_ACCESS",
-                "NO_LIVE_OR_DEPLOYMENT_AUTHORITY",
-            ],
+            "non_claims": list(WORKBENCH_NON_CLAIMS),
         }
 
 
@@ -352,12 +353,7 @@ def initial_workbench_document(
         },
         "service": _status_object(status),
         **_empty_business_projection(),
-        "non_claims": [
-            "READ_ONLY_OPERATIONAL_PROJECTION",
-            "PUBLIC_QUOTE_NOT_FILL",
-            "NO_PRIVATE_ACCOUNT_OR_ORDER_ACCESS",
-            "NO_LIVE_OR_DEPLOYMENT_AUTHORITY",
-        ],
+        "non_claims": list(WORKBENCH_NON_CLAIMS),
     }
 
 
@@ -1208,7 +1204,7 @@ HTML = """<!doctype html>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header><h1>Optimatrix 只读交易员工作台</h1><p id="runtime"></p></header>
+  <header><h1>Optimatrix 只读交易员工作台</h1><p id="runtime"></p><p id="connection" class="warning" role="alert" hidden></p></header>
   <main>
     <section><h2>系统状态</h2><div id="system" class="grid"></div></section>
     <section><h2>业务零值证明</h2><div id="zero" class="grid"></div></section>
@@ -1224,7 +1220,7 @@ HTML = """<!doctype html>
 </html>
 """
 
-CSS = """*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3}header,footer{padding:20px 5vw;background:#161b22}main{padding:20px 5vw}section{margin:0 0 24px;padding:18px;background:#161b22;border:1px solid #30363d;border-radius:10px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.card{padding:12px;background:#0d1117;border:1px solid #30363d;border-radius:8px;overflow-wrap:anywhere}.label{color:#8b949e;font-size:.85rem}.value{font-weight:650;margin-top:4px}.warning{padding:10px;border:1px solid #d29922;background:#2d2308;border-radius:8px}table{width:100%;border-collapse:collapse;font-size:.88rem}th,td{padding:8px;border-bottom:1px solid #30363d;text-align:left;vertical-align:top}th{color:#8b949e}.empty{color:#d29922}.UNKNOWN,.STALE,.INTERRUPTED{color:#f0883e}.CURRENT,.PROVEN_ZERO{color:#3fb950}.DEGRADED{color:#d29922}@media(max-width:800px){table{display:block;overflow-x:auto}}"""
+CSS = """*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3}header,footer{padding:20px 5vw;background:#161b22}main{padding:20px 5vw}section{margin:0 0 24px;padding:18px;background:#161b22;border:1px solid #30363d;border-radius:10px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.card{padding:12px;background:#0d1117;border:1px solid #30363d;border-radius:8px;overflow-wrap:anywhere}.label{color:#8b949e;font-size:.85rem}.value{font-weight:650;margin-top:4px}.warning{padding:10px;border:1px solid #d29922;background:#2d2308;border-radius:8px}table{width:100%;border-collapse:collapse;font-size:.88rem}th,td{padding:8px;border-bottom:1px solid #30363d;text-align:left;vertical-align:top}th{color:#8b949e}.empty{color:#d29922}.UNKNOWN,.STALE,.INTERRUPTED{color:#f0883e}.CURRENT,.PROVEN_ZERO{color:#3fb950}.DEGRADED{color:#d29922}@media(max-width:800px){table{display:block;overflow-x:auto}}"""
 
 JS = r"""const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;',
@@ -1252,7 +1248,31 @@ const table = (panel, columns) => {
   }).join('');
   return `<table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
 };
+const businessPanelIds = ['zero', 'radar', 'underwriting', 'shadow', 'positions', 'outcomes'];
+let lastSuccessfulFetchAtMs = null;
+let lastPublicationRuntimeIdentity = null;
+let lastPublicationSequence = null;
+let lastPublicationChangeAtMs = null;
+const ageMs = timestamp => timestamp === null ? 'UNKNOWN' : Math.max(0, Date.now() - timestamp);
+function renderUnavailable() {
+  const connection = document.getElementById('connection');
+  connection.hidden = false;
+  connection.textContent = '工作台连接中断: 旧业务数据已隐藏, 当前状态 UNKNOWN。';
+  document.body.dataset.workbenchState = 'UNKNOWN';
+  document.getElementById('runtime').textContent = 'runtime UNKNOWN';
+  document.getElementById('system').innerHTML =
+    card('工作台连接', 'UNKNOWN') +
+    card('最近成功获取 age ms', ageMs(lastSuccessfulFetchAtMs)) +
+    card('最后 publication sequence', lastPublicationSequence) +
+    card('Publication 未变化 age ms', ageMs(lastPublicationChangeAtMs));
+  const unavailable = '<p class="warning UNKNOWN">工作台连接中断; 旧业务数据已隐藏。</p>';
+  businessPanelIds.forEach(id => { document.getElementById(id).innerHTML = unavailable; });
+}
 function render(documentValue) {
+  const connection = document.getElementById('connection');
+  connection.hidden = true;
+  connection.textContent = '';
+  document.body.dataset.workbenchState = 'CURRENT_FETCH';
   document.getElementById('runtime').textContent = `runtime ${documentValue.runtime_identity}`;
   const service = documentValue.service;
   const system = documentValue.system;
@@ -1263,6 +1283,9 @@ function render(documentValue) {
     card('Policy / Radar', documentValue.policy_identities.radar) +
     card('Policy / Underwriting', documentValue.policy_identities.underwriting) +
     card('Policy / Position', documentValue.policy_identities.position) +
+    card('Publication sequence', documentValue.publication_sequence) +
+    card('最近成功获取 age ms', ageMs(lastSuccessfulFetchAtMs)) +
+    card('Publication 未变化 age ms', ageMs(lastPublicationChangeAtMs)) +
     card('Session epoch', system.session_epoch) +
     card('Platform', system.platform_reason) +
     card('最近行情时间', system.latest_market_timestamp_ms) +
@@ -1344,9 +1367,33 @@ function render(documentValue) {
 async function refresh() {
   try {
     const response = await fetch('/api/workbench/current', {cache: 'no-store'});
-    render(await response.json());
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const documentValue = await response.json();
+    const fetchedAtMs = Date.now();
+    const previousSuccessfulFetchAtMs = lastSuccessfulFetchAtMs;
+    const previousPublicationRuntimeIdentity = lastPublicationRuntimeIdentity;
+    const previousPublicationSequence = lastPublicationSequence;
+    const previousPublicationChangeAtMs = lastPublicationChangeAtMs;
+    lastSuccessfulFetchAtMs = fetchedAtMs;
+    if (
+      documentValue.runtime_identity !== lastPublicationRuntimeIdentity ||
+      documentValue.publication_sequence !== lastPublicationSequence
+    ) {
+      lastPublicationRuntimeIdentity = documentValue.runtime_identity;
+      lastPublicationSequence = documentValue.publication_sequence;
+      lastPublicationChangeAtMs = fetchedAtMs;
+    }
+    try {
+      render(documentValue);
+    } catch (error) {
+      lastSuccessfulFetchAtMs = previousSuccessfulFetchAtMs;
+      lastPublicationRuntimeIdentity = previousPublicationRuntimeIdentity;
+      lastPublicationSequence = previousPublicationSequence;
+      lastPublicationChangeAtMs = previousPublicationChangeAtMs;
+      throw error;
+    }
   } catch (_error) {
-    document.getElementById('system').innerHTML = card('工作台', 'UNKNOWN');
+    renderUnavailable();
   }
 }
 refresh();

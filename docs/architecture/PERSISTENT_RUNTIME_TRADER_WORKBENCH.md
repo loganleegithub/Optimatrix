@@ -172,6 +172,12 @@ The browser receives one versioned JSON projection and renders it. It does not c
 baseline, richness, fees, reserves, Candidate validity, entry economics, close economics, PnL,
 hard-close rules, or Outcome maturity. Unit/date formatting is presentation, not a decision.
 
+If snapshot fetch, HTTP status, JSON decoding, or rendering fails, the browser hides every cached
+business table and displays one global `UNKNOWN` alert with last-success and publication ages.
+Previously rendered Radar, Shadow, Position, or Outcome rows never remain visible as if current.
+Publication age is keyed by runtime identity plus process-local publication sequence, and a failed
+render cannot advance the last-success bookkeeping shown in the unavailable view.
+
 ### HTTP surface
 
 | Method/path | Behavior |

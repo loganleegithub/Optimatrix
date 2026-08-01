@@ -128,6 +128,16 @@ The browser performs display formatting only. It never computes IV, baseline, ri
 Underwriting action, Candidate validity, entry or close economics, PnL, hard-close state, or Outcome
 maturity. It opens no Deribit connection.
 
+Any fetch, non-success HTTP, JSON decode, or render failure fails the entire trader page closed. A
+global alert marks the workbench `UNKNOWN`, every cached Radar/Underwriting/Shadow/Position/Outcome
+table is hidden, and the page shows the last successful fetch age plus the last publication
+sequence and its unchanged age. A successful later fetch may replace that unavailable view with one
+complete current snapshot; stale cached business rows are never left looking current. Publication
+freshness is keyed by `(runtime_identity, publication_sequence)`, so a restarted runtime resets the
+age even when its process-local sequence equals the prior runtime's sequence. Fetch-success and
+publication bookkeeping commit only after the complete snapshot renders; a render failure preserves
+the prior successful values shown by the unavailable view.
+
 The HTTP server binds only to an explicit loopback address. It accepts only `GET` and `HEAD` for:
 
 ```text
@@ -364,12 +374,19 @@ private/account facts, orders, fills, and actual exposure are not persisted.
 
 ## Direct verification and non-claims
 
+Every lifecycle event, service terminal, and workbench snapshot carries
+`THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY`. This means the artifact cannot grant or
+widen permission; it does not assert that `CURRENT_STAGE` forbids an otherwise explicitly
+authorized invocation. Stage authority remains external to evidence and projection bytes.
+
 Direct deterministic tests must cover lease exclusivity/release, new runtime identity per start,
 Policy-chain immutability, reconnect/session continuity, health/readiness/currentness separation,
 first-stop-boundary latching, pre-latched no-client stop, exactly-once downstream and service
 terminalization, writer/reader identity recomputation, corruption/missing/mixed/incomplete failure,
 partial-Radar corruption failure, atomic snapshot publication after Shadow settlement,
-loopback-only read-only HTTP, escaped browser rendering, and truthful empty/zero/null UI fixtures.
+loopback-only read-only HTTP, escaped and executable fail-closed browser rendering across fetch,
+HTTP, JSON, render-failure, recovery, and same-sequence new-runtime cases, artifact-versus-stage
+authority wording, and truthful empty/zero/null UI fixtures.
 
 This offline implementation proves none of indefinite uptime, production deployment safety,
 natural opportunity frequency, Policy quality, forecast skill, fillability, actual fees, actual
