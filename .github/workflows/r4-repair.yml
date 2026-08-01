@@ -1,4 +1,4 @@
-name: Bounded R4 commissioning repair
+name: Diagnose R4 repair payload
 
 on:
   pull_request:
@@ -10,13 +10,12 @@ on:
       - reopened
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair:
-    if: github.actor != 'github-actions[bot]'
+  diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
 
     steps:
       - name: Check out exact task branch
@@ -25,83 +24,36 @@ jobs:
           ref: agent/r4-commissioning-integrity-repair
           fetch-depth: 0
 
-      - name: Install pinned uv and Python
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          version: "0.10.0"
-          enable-cache: true
-          cache-dependency-glob: requirements-dev.lock
-          python-version: "3.13.5"
-
-      - name: Materialize exact temporary patcher
+      - name: Print every materialization identity
         shell: bash
         run: |
-          test "$(sha256sum .github/r4_apply.part00 | awk '{print $1}')" = "7aedcbf9c2a068d9c003d9bdd868f33e5db3b6ceeb2726bec7533d8a8cead208"
-          test "$(sha256sum .github/r4_apply.part01 | awk '{print $1}')" = "884c2fcb945bcbfbc2ef2a789e3c41272fe5311536c3fca5bb3c428b0bd2bab3"
-          test "$(sha256sum .github/r4_apply.part02 | awk '{print $1}')" = "5862dd6c9ac2aa6e08588f454072436d425892a77eb40a824a3ff4743cc99314"
-          test "$(sha256sum .github/r4_apply.part03 | awk '{print $1}')" = "b1957b50fc7d73cd6da1f0264cbbc7c5950aac230f3d755e56e672642adb447e"
-          test "$(sha256sum .github/r4_apply.part04 | awk '{print $1}')" = "593a14b457789ad4129bd02f38dc70df9c570e4c8cc3d24768f93959776906b5"
-          cat .github/r4_apply.part00 .github/r4_apply.part01 .github/r4_apply.part02 .github/r4_apply.part03 .github/r4_apply.part04 > .github/r4_apply.py.gz.b64
-          test "$(sha256sum .github/r4_apply.py.gz.b64 | awk '{print $1}')" = "2aeb087e51fba12e31f91882ec2b849821f63ed44a3767d0a1c7d5b386f46385"
-          base64 --decode .github/r4_apply.py.gz.b64 | gzip --decompress > .github/r4_apply.py
-          test "$(sha256sum .github/r4_apply.py | awk '{print $1}')" = "711e5d9e4742874154310e5789cef52b6ccc766b1d4552ecffeb8aaefaa53a8d"
+          set -euxo pipefail
+          sha256sum \
+            .github/r4_apply.part00 \
+            .github/r4_apply.part01 \
+            .github/r4_apply.part02 \
+            .github/r4_apply.part03 \
+            .github/r4_apply.part04
+          wc -c \
+            .github/r4_apply.part00 \
+            .github/r4_apply.part01 \
+            .github/r4_apply.part02 \
+            .github/r4_apply.part03 \
+            .github/r4_apply.part04
+          cat \
+            .github/r4_apply.part00 \
+            .github/r4_apply.part01 \
+            .github/r4_apply.part02 \
+            .github/r4_apply.part03 \
+            .github/r4_apply.part04 \
+            > .github/r4_apply.py.gz.b64
+          sha256sum .github/r4_apply.py.gz.b64
+          wc -c .github/r4_apply.py.gz.b64
+          base64 --decode .github/r4_apply.py.gz.b64 > /tmp/r4_apply.py.gz
+          sha256sum /tmp/r4_apply.py.gz
+          wc -c /tmp/r4_apply.py.gz
+          gzip --test --verbose /tmp/r4_apply.py.gz
+          gzip --decompress --stdout /tmp/r4_apply.py.gz > .github/r4_apply.py
+          sha256sum .github/r4_apply.py
+          wc -c .github/r4_apply.py
           python -m py_compile .github/r4_apply.py
-
-      - name: Configure append-only commit author
-        shell: bash
-        run: |
-          git config user.name "optimatrix-r4-bot"
-          git config user.email "optimatrix-r4-bot@users.noreply.github.com"
-
-      - name: Establish authority and stable red tests
-        shell: bash
-        run: |
-          python .github/r4_apply.py authority
-          git diff --check
-          make sync
-          set +e
-          .venv/bin/python -m pytest \
-            tests/test_persistent_service_commissioning.py::test_schema_2_workbench_accepts_every_valid_zero_claim_shape \
-            -q
-          red_status=$?
-          set -e
-          if [ "$red_status" -eq 0 ]; then
-            echo "R4 regression was not red against the pre-repair controller" >&2
-            exit 1
-          fi
-          git add README.md docs/authority tests
-          git commit -m "Record consumed R3 and add R4 regression tests"
-
-      - name: Apply minimal controller repair
-        shell: bash
-        run: |
-          python .github/r4_apply.py implementation
-          git diff --check
-
-      - name: Run focused R4 verification
-        shell: bash
-        run: |
-          .venv/bin/python -m pytest \
-            tests/test_persistent_service_commissioning.py \
-            tests/test_authority_and_architecture.py \
-            tests/test_trader_workbench.py \
-            -q
-
-      - name: Run full repository gate
-        shell: bash
-        run: make check
-
-      - name: Commit verified implementation
-        shell: bash
-        run: |
-          git add apps/radar_runtime/src/radar_runtime/commissioning.py
-          git commit -m "Repair R4 commissioning integrity"
-          test -z "$(git status --porcelain --untracked-files=no)"
-
-      - name: Remove temporary repair harness and publish
-        shell: bash
-        run: |
-          rm -f .github/r4_apply.py .github/r4_apply.py.gz.b64
-          git rm .github/r4_apply.part00 .github/r4_apply.part01 .github/r4_apply.part02 .github/r4_apply.part03 .github/r4_apply.part04 .github/workflows/r4-repair.yml
-          git commit -m "Remove temporary R4 repair harness"
-          git push origin HEAD:agent/r4-commissioning-integrity-repair
