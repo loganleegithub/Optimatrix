@@ -30,6 +30,32 @@ _PRODUCTION_ENVELOPE = _PRODUCTION_ROOT / "deployment/deployment-envelope.json"
 _LIFECYCLE_WAIT_MS = 30_000''',
     ),
 )
+
+zero_start = text.index("    zero_tests = '''")
+zero_end = text.index("\n    text = replace_once(text, test_marker", zero_start)
+zero_block = text[zero_start:zero_end]
+old_zero_envelope = '''    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+'''
+new_zero_envelope = '''    envelope_mapping = _envelope_mapping(tmp_path)
+    envelope = CommissioningEnvelope.from_mapping(
+        {
+            key: value
+            for key, value in envelope_mapping.items()
+            if key in CommissioningEnvelope._KEYS
+        },
+        allow_test_boundary=True,
+    )
+'''
+if zero_block.count(old_zero_envelope) != 2:
+    raise SystemExit(
+        f'zero-test envelope hotfix expected two matches, found '
+        f'{zero_block.count(old_zero_envelope)}'
+    )
+zero_block = zero_block.replace(old_zero_envelope, new_zero_envelope)
+text = text[:zero_start] + zero_block + text[zero_end:]
+
 for old, new in replacements:
     count = text.count(old)
     if count != 1:
