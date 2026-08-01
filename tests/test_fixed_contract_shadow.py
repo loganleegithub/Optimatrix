@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -509,49 +510,92 @@ def test_real_episode_identity_round_trips_without_economic_action(
 def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
     tmp_path: Path,
 ) -> None:
-    reducer, adapter, _owner = _shadow_system(tmp_path)
-    reducer.trackers.clear()
-    _activate_real_episode(reducer)
+    reducer, adapter, owner = _shadow_system(tmp_path)
     active_commit = _commit(
-        causal_seq=2,
-        monotonic_ms=120,
+        causal_seq=1,
+        monotonic_ms=110,
         cause=CausalCause.COMBO_BOOK_CHANGED,
     )
-    active = adapter._project_underwriting(
-        reducer,
-        active_commit,
-        adapter._boundary(reducer, active_commit.boundary),
+    (admission_intent,) = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=active_commit,
     )
-    assert len(active) == 1
-    assert active[0].active_episode_identity is not None
+    assert admission_intent.request_id > 0
+    (active,) = adapter._underwriting_by_scope.values()
+    assert active.active_episode_identity is not None
 
     reducer.trackers.clear()
     inactive_commit = _commit(
+        causal_seq=2,
+        monotonic_ms=120,
+        cause=CausalCause.TICKER_APPLIED,
+    )
+    assert (
+        adapter.on_settled_transaction(
+            reducer=reducer,
+            commit=inactive_commit,
+        )
+        == ()
+    )
+    (inactive,) = adapter._underwriting_by_scope.values()
+    assert inactive.active_episode_identity is None
+    inactive_availability: list[Mapping[str, object]] = []
+    for value in owner.writer.objects:
+        payload = value["payload"]
+        assert isinstance(payload, dict)
+        if value["object_kind"] == "UNDERWRITING_AVAILABILITY_EVALUATION" and payload[
+            "unknown_reasons"
+        ] == ["RADAR_EPISODE_NOT_ACTIVE"]:
+            inactive_availability.append(value)
+    assert len(inactive_availability) == 1
+    assert (
+        len(
+            [
+                value
+                for value in owner.writer.objects
+                if value["object_kind"] == "CANDIDATE_INVALIDATION"
+            ]
+        )
+        == 1
+    )
+    inactive_revision = owner.writer.revision
+    inactive_objects = tuple(owner.writer.objects)
+    inactive_paths = tuple(sorted((tmp_path / "downstream" / "objects").rglob("*.json")))
+
+    unrelated_commit = _commit(
         causal_seq=3,
         monotonic_ms=130,
         cause=CausalCause.TICKER_APPLIED,
     )
-    (inactive,) = adapter._project_underwriting(
-        reducer,
-        inactive_commit,
-        adapter._boundary(reducer, inactive_commit.boundary),
-    )
-    assert inactive.active_episode_identity is None
-
-    unrelated_commit = _commit(
-        causal_seq=4,
-        monotonic_ms=140,
-        cause=CausalCause.TICKER_APPLIED,
-    )
-    assert (
-        adapter._project_underwriting(
-            reducer,
-            unrelated_commit,
-            adapter._boundary(reducer, unrelated_commit.boundary),
-        )
-        == ()
-    )
+    assert adapter.on_settled_transaction(reducer=reducer, commit=unrelated_commit) == ()
     assert adapter._underwriting_by_scope[inactive.radar_scope_identity] is inactive
+    assert owner.writer.revision == inactive_revision
+    assert tuple(owner.writer.objects) == inactive_objects
+    assert tuple(sorted((tmp_path / "downstream" / "objects").rglob("*.json"))) == inactive_paths
+
+    next_tracker = EpisodeTracker(
+        runtime_identity=reducer.runtime_identity,
+        policy_identity=reducer.policy.identity,
+        instrument_name="BTC-SHORT",
+    )
+    next_tracker.state = TrackerState.ACTIVE
+    next_tracker.episode_id = f"{reducer.runtime_identity}:{reducer.policy.identity}:BTC-SHORT:4"
+    next_tracker.activation_band_id = reducer.policy.tte_bands[0].band_id
+    next_tracker.activation_causal_seq = 4
+    reducer.trackers["BTC-SHORT"] = next_tracker
+    adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=4,
+            monotonic_ms=140,
+            cause=CausalCause.COMBO_BOOK_CHANGED,
+        ),
+    )
+    assert owner.writer.revision > inactive_revision
+    assert any(
+        facts.active_episode_identity == next_tracker.episode_id
+        for facts in adapter._underwriting_by_scope.values()
+    )
 
 
 def test_workbench_underwriting_metadata_reuses_unchanged_snapshot(
@@ -565,11 +609,7 @@ def test_workbench_underwriting_metadata_reuses_unchanged_snapshot(
         monotonic_ms=120,
         cause=CausalCause.COMBO_BOOK_CHANGED,
     )
-    adapter._project_underwriting(
-        reducer,
-        commit,
-        adapter._boundary(reducer, commit.boundary),
-    )
+    adapter.on_settled_transaction(reducer=reducer, commit=commit)
 
     first = adapter.workbench_underwriting_metadata()
     second = adapter.workbench_underwriting_metadata()

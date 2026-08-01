@@ -21,6 +21,9 @@ output before any probe or operability gate, and therefore did not establish an 
 R4 attempt 002 is likewise consumed and terminally quiescent: four valid operational probe rows
 were recorded, but a normal RunningBoard `resource coalition id` message was misclassified as a
 CPU resource exception, so the operability gate failed and runtime was cleanly stopped.
+R4 attempt 003 commissioned and produced 23 successful probe rows, but continuous observation found
+an exact-PID macOS CPU resource violation caused by redundant inactive-scope projection and
+unchanged workbench member encoding; it too was cleanly stopped and its 24-hour result is `NOT_MET`.
 The user's 2026-08-02 amendment keeps R4 as the active closure and authorizes minimal observed-bug
 repair, exact gates and merge, then one fresh recommission attempt at a time until one reaches
 `COMMISSIONED`. No live command is allowed from unmerged code or without a fresh detached
@@ -128,9 +131,11 @@ consumed. Its primary receipt was correctly written before cleanup but used the 
 status `COMMISSION_FAILED_CLEANUP_REQUIRED`; the independent terminal audit is the durable proof
 that cleanup in fact converged. R3 cannot be retried, extended, relabelled, or reused.
 
-The active R4 task changes only the isolated repo-owned commissioning/stop controller, direct
-tests, and governance truth; the accepted `serve-shadow` market/service hot path, contracts, three
-Policies, dependencies, and workbench schema stay unchanged. If the exact candidate is
+The active R4 task owns the isolated repo-owned commissioning/stop controller plus each exact
+observed minimal owning-module repair, direct tests, and governance truth. The current repair only
+removes redundant inactive-scope projection and unchanged workbench-member encoding; market and
+Decision semantics, publication cadence, contracts, three Policies, dependencies, and workbench
+schema stay unchanged. If the exact candidate is
 independently accepted and merged, one fresh root
 `/Users/logan/Optimatrix-public-shadow-observation-004` and labels
 `com.optimatrix.public-shadow.r4` / `com.optimatrix.public-shadow.r4.probe` may be bound and started

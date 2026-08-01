@@ -846,7 +846,33 @@ def test_workbench_reuses_downstream_projection_until_writer_revision_changes(
     monkeypatch.setattr(workbench_module, "_build_downstream_projection", counted_downstream)
     monkeypatch.setattr(workbench_module, "_position_rows", counted_position)
 
+    def assert_exact_snapshot() -> dict[str, object]:
+        snapshot = composition.snapshot_store.read()
+        expected = composition.publisher._document(
+            composition.publisher._last_business,
+            status=composition.publisher.status,
+        )
+        expected["publication_sequence"] = snapshot.sequence
+        assert snapshot.workbench_body == workbench_module._json_bytes(expected)
+        value = json.loads(snapshot.workbench_body)
+        assert isinstance(value, dict)
+        return value
+
     try:
+        composition.publisher.update_status(
+            ServiceStatus(
+                ServicePhase.RUNNING,
+                DataState.UNKNOWN,
+                True,
+                False,
+                False,
+                "TEST_STATUS_ONLY",
+                1_000,
+            ),
+            persist=False,
+        )
+        assert_exact_snapshot()
+
         for causal_seq in (1, 2):
             composition.publisher.publish_settled(
                 reducer=reducer,
@@ -857,6 +883,7 @@ def test_workbench_reuses_downstream_projection_until_writer_revision_changes(
                     affected_scopes=("GLOBAL",),
                 ),
             )
+            assert_exact_snapshot()
 
         second = json.loads(composition.snapshot_store.read().workbench_body)
         assert downstream_builds == 1
@@ -904,10 +931,92 @@ def test_workbench_reuses_downstream_projection_until_writer_revision_changes(
         )
 
         third = json.loads(composition.snapshot_store.read().workbench_body)
+        assert_exact_snapshot()
         assert downstream_builds == 2
         assert position_builds == 3
         assert third["publication_sequence"] == second["publication_sequence"] + 1
         assert third["published_fact_boundary"]["causal_seq"] == 3
+
+        scope_identity = "sha256:" + "8" * 64
+        availability_identity = "sha256:" + "9" * 64
+        composition.downstream_writer._objects[
+            ("UNDERWRITING_AVAILABILITY_EVALUATION", availability_identity)
+        ] = {
+            "object_kind": "UNDERWRITING_AVAILABILITY_EVALUATION",
+            "object_identity": availability_identity,
+            "fact_boundary": {
+                "code_identity": composition.downstream_writer.bindings.code_identity,
+                "runtime_identity": composition.downstream_writer.bindings.runtime_identity,
+                "session_epoch": 1,
+                "ingress_seq": 4,
+                "received_monotonic_ms": 1_004,
+                "causal_seq": 4,
+            },
+            "payload": {
+                "radar_scope_or_short_leg_identity": scope_identity,
+                "availability": "NOT_EVALUATED",
+                "unknown_reasons": ["RADAR_EPISODE_NOT_ACTIVE"],
+                "availability_evaluation_fact_boundary": {"causal_seq": 4},
+            },
+        }
+        composition.downstream_writer._revision += 1
+        composition.publisher.publish_settled(
+            reducer=reducer,
+            commit=CausalCommit(
+                boundary=FactBoundary(1, 4, 1_004, 4),
+                cause=CausalCause.TIME_BOUNDARY,
+                failure_domain=FailureScope.CLOCK_INDEX,
+                affected_scopes=("GLOBAL",),
+            ),
+        )
+        writer_changed = assert_exact_snapshot()
+        assert downstream_builds == 3
+        writer_panel = cast(dict[str, object], writer_changed["underwriting"])
+        writer_rows = cast(list[dict[str, object]], writer_panel["rows"])
+        assert writer_rows[0]["short_leg_instrument_name"] is None
+
+        composition.adapter._workbench_underwriting_metadata = (
+            {
+                "radar_scope_identity": scope_identity,
+                "short_leg_instrument_name": "BTC-TEST-SHORT",
+                "long_leg_instrument_name": "BTC-TEST-LONG",
+                "combo_instrument_name": "BTC-TEST-COMBO",
+                "expiry_timestamp_ms": 10_000,
+                "option_type": "call",
+                "short_strike_usdc_per_btc": "100",
+                "long_strike_usdc_per_btc": "110",
+                "target_quantity_btc": "0.1",
+            },
+        )
+        composition.publisher.publish_settled(
+            reducer=reducer,
+            commit=CausalCommit(
+                boundary=FactBoundary(1, 5, 1_005, 5),
+                cause=CausalCause.TIME_BOUNDARY,
+                failure_domain=FailureScope.CLOCK_INDEX,
+                affected_scopes=("GLOBAL",),
+            ),
+        )
+        metadata_changed = assert_exact_snapshot()
+        assert downstream_builds == 4
+        metadata_panel = cast(dict[str, object], metadata_changed["underwriting"])
+        metadata_rows = cast(list[dict[str, object]], metadata_panel["rows"])
+        assert metadata_rows[0]["short_leg_instrument_name"] == "BTC-TEST-SHORT"
+
+        composition.publisher.update_status(
+            ServiceStatus(
+                ServicePhase.RUNNING,
+                DataState.CURRENT,
+                True,
+                True,
+                False,
+                "CURRENT",
+                1_006,
+            ),
+            persist=False,
+        )
+        assert_exact_snapshot()
+        assert downstream_builds == 4
     finally:
         composition.workbench.close()
 

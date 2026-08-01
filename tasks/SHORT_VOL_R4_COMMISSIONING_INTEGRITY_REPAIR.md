@@ -23,8 +23,9 @@ R4 deployment preflight
 
 **Target branch/PR:** one bounded branch/PR at a time; initial repair
 `agent/r4-commissioning-integrity-repair`, iterative repairs `agent/r4-lsof-field-repair` and
-`agent/r4-resource-log-classification-repair`; no force push, history rewrite, main merge into a
-task branch, or live mutation before exact-candidate acceptance
+`agent/r4-resource-log-classification-repair`, and current CPU repair
+`codex/r4-workbench-publication-cpu-repair`; no force push, history rewrite, main merge into a task
+branch, or live mutation before exact-candidate acceptance
 
 ## 2026-08-02 R4 iterative recovery amendment
 
@@ -112,8 +113,9 @@ observation; it does not establish 24x7 stability, Policy quality, opportunity f
 fillability, or PnL.
 
 **Independent verification:** review the exact R4 candidate and its parent/tree; recompute every
-changed-file digest; prove no service-hot-path, contract, Policy, dependency, or business-schema
-change; run focused tests and `make check`; verify remote branch equality and GitHub CI; after merge,
+changed-file digest; prove the exact CPU hot-path repair preserves publication cadence, contracts,
+Policies, dependencies, and business schema/values; run focused tests and `make check`; verify
+remote branch equality and GitHub CI; after merge,
 independently recompute the detached deployment checkout, fresh envelope, plists, wrapper bytes,
 old-root inventories, label/listener absence, and exact R4 output freshness before any live command.
 The verifier must not rely on the controller's own receipt as its sole source of truth.
@@ -142,12 +144,12 @@ promotion, unattended retry, reboot auto-start, or alternate label/port authorit
 
 ## Product operating behavior
 
-The accepted `serve-shadow` market/service hot path remains byte-for-byte outside this task's code
-scope and does not import the commissioning controller. It continues to consume production-public
-Deribit data, write append-only public Shadow evidence, and expose immutable GET/HEAD-only loopback
-projections. The controller remains sibling deployment tooling: it validates bound artifacts and
-host facts, controls one exact launchd lifecycle, records attempt-scoped evidence, and never
-recomputes strategy decisions or mutates service evidence.
+The `serve-shadow` market/service hot path changes only by the exact redundant-work repair declared
+above and still does not import the commissioning controller. It continues to consume every
+production-public Deribit fact, write append-only public Shadow evidence, and publish one immutable
+GET/HEAD-only loopback projection per settled fact. The controller remains sibling deployment
+tooling: it validates bound artifacts and host facts, controls one exact launchd lifecycle, records
+attempt-scoped evidence, and never recomputes strategy decisions or mutates service evidence.
 
 The fresh production boundary is exact:
 
@@ -317,7 +319,7 @@ not authorize claiming that commissioning or 24x7 observation has already occurr
 - The deleted R3 task is not retained as an active or complete task file.
 - Exactly one active R4 task and at most one bounded implementation branch/PR at a time exist.
 - Stable regression tests cover every diagnosed defect and adversarial boundary above.
-- The minimal controller repair passes focused tests, `make check`, exact-candidate review, remote
+- The minimal exact R4 repair passes focused tests, `make check`, exact-candidate review, remote
   equality, and GitHub CI.
 - The final candidate contains no temporary patch workflow, generated cache, test artifact, or
   unrelated formatting churn.

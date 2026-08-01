@@ -33,16 +33,19 @@ permission, and any permission to invoke or deploy the persistent host, comes on
 accepted at exact commit `d4740d6a181efebc8dad6d1091a78fa44d885957`. Its one authorized fresh
 restart is consumed after a commission-deadline failure and clean seal. The later R3 commissioning
 attempt is also consumed after a projection-verifier failure and independent complete clean-stop
-audit. All three persistent-observation roots are immutable. The sole active R4 task changes only
-the isolated repo-owned commissioning/stop controller's projection validation, bounded launchd and
-host-quiescence convergence, temporally ordered failure receipts, and fresh R4 bindings; the service
-hot path does not import it. R4 attempt 001 closed terminally quiescent after the listener parser
+audit. All three persistent-observation roots are immutable. The sole active R4 task owns the
+isolated repo-owned commissioning/stop controller and any exact observed minimal owning-module
+repair allowed by `CURRENT_STAGE`. R4 attempt 001 closed terminally quiescent after the listener parser
 rejected macOS `lsof`'s always-selected `f` field; attempt 002 closed terminally quiescent after a
-normal RunningBoard `resource coalition id` row was misclassified as a CPU resource exception.
+normal RunningBoard `resource coalition id` row was misclassified as a CPU resource exception;
+attempt 003 commissioned and then cleanly stopped after continuous observation found an exact-PID
+macOS CPU resource violation caused by redundant inactive-scope projection and unchanged workbench
+member encoding.
 Under the 2026-08-02 Authority amendment, each observed implementation defect receives one minimal
 exact candidate and merged repair before one fresh R4 recommission attempt; failed attempts are
 preserved and this repeats only until one attempt is commissioned. This changes no service
-topology, market data path, business owner, unattended service retry loop, contract, or Policy.
+topology, market/Decision semantics, business owner, publication cadence, unattended service retry
+loop, contract, or Policy.
 
 ## Data lifecycles
 
