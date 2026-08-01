@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 import radar_runtime.commissioning as commissioning
@@ -45,7 +46,7 @@ def _envelope_mapping(tmp_path: Path) -> dict[str, object]:
     repository = root / "repo"
     state_root = root / "state"
     python = repository / ".venv/bin/python"
-    service_label = "com.optimatrix.public-shadow.r3"
+    service_label = "com.optimatrix.public-shadow.r4"
     probe_label = f"{service_label}.probe"
     service_target = f"gui/501/{service_label}"
     probe_target = f"gui/501/{probe_label}"
@@ -61,6 +62,7 @@ def _envelope_mapping(tmp_path: Path) -> dict[str, object]:
         "journal_directory": str(root / "controller/journal"),
         "receipt_path": str(root / "controller/receipt.json"),
         "stop_receipt_path": str(root / "controller/stop-receipt.json"),
+        "failure_closure_receipt_path": str(root / "controller/failure-closure-receipt.json"),
         "probe_ledger_path": str(root / "probe/probes.jsonl"),
         "service_label": service_label,
         "probe_label": probe_label,
@@ -156,13 +158,18 @@ def _envelope_mapping(tmp_path: Path) -> dict[str, object]:
         "python_executable_digest": BOUND_DIGEST,
         "python_version": "Python 3.13.5",
         "service_hot_path_digest": BOUND_DIGEST,
-        "old_root_inventory_identities": {"r1": BOUND_DIGEST, "r2": BOUND_DIGEST},
+        "old_root_inventory_identities": {
+            "r1": BOUND_DIGEST,
+            "r2": BOUND_DIGEST,
+            "r3": BOUND_DIGEST,
+        },
         "preflight_facts": {
             "r1_no_writer": True,
             "r2_no_writer": True,
+            "r3_no_writer": True,
             "old_labels_absent": True,
-            "r3_root_absent_before_materialization": True,
-            "r3_labels_absent_at_binding": True,
+            "r4_root_absent_before_materialization": True,
+            "r4_labels_absent_at_binding": True,
             "listener_free_at_binding": True,
             "installed_plists_absent_before_install": True,
         },
@@ -289,6 +296,46 @@ def _workbench_document(*, ready: bool = False, data_state: str = "UNKNOWN") -> 
         "non_claims": list(WORKBENCH_NON_CLAIMS),
         "publication_sequence": 1,
     }
+
+
+def _projection_envelope() -> CommissioningEnvelope:
+    envelope = object.__new__(CommissioningEnvelope)
+    for name, value in (
+        ("code_identity", CODE),
+        ("radar_policy_identity", RADAR_POLICY),
+        ("underwriting_policy_identity", UNDERWRITING_POLICY),
+        ("position_policy_identity", POSITION_POLICY),
+    ):
+        object.__setattr__(envelope, name, value)
+    return envelope
+
+
+def _validate_workbench_document(workbench: Mapping[str, object]) -> None:
+    commissioning._validate_http_documents(
+        _projection_envelope(),
+        runtime_identity=RUNTIME,
+        health={
+            "status": 200,
+            "schema_version": 2,
+            "health": True,
+            "runtime_identity": RUNTIME,
+        },
+        ready={
+            "status": 503,
+            "schema_version": 2,
+            "ready": False,
+            "runtime_identity": RUNTIME,
+        },
+        workbench=workbench,
+        observed_monotonic_ms=2_000,
+    )
+
+
+def _failure_closure(controller: CommissioningController) -> dict[str, object]:
+    return cast(
+        dict[str, object],
+        json.loads(controller.envelope.failure_closure_receipt_path.read_text(encoding="utf-8")),
+    )
 
 
 def _probe_row(
@@ -483,6 +530,7 @@ class FakeHost:
     observed_resource_boundary_ms: int | None = None
     service_is_running: bool = True
     receipt_existed_at_cleanup_start: bool | None = None
+    receipt_bytes_at_cleanup_start: bytes | None = None
 
     def preflight(self) -> None:
         self.calls.append("preflight")
@@ -600,6 +648,8 @@ class FakeHost:
         self.calls.append("bootout_periodic_probe")
         if self.receipt_existed_at_cleanup_start is None:
             self.receipt_existed_at_cleanup_start = self.envelope.receipt_path.is_file()
+            if self.receipt_existed_at_cleanup_start:
+                self.receipt_bytes_at_cleanup_start = self.envelope.receipt_path.read_bytes()
 
     def sigint_service(self) -> None:
         self.calls.append("sigint_service")
@@ -863,6 +913,72 @@ def test_envelope_is_exact_and_forbids_kickstart_replace(tmp_path: Path) -> None
         CommissioningEnvelope.from_mapping(value)
     with pytest.raises(CommissioningError, match="uid must be 501"):
         CommissioningEnvelope.from_mapping({**value, "uid": 502}, allow_test_boundary=True)
+    with pytest.raises(CommissioningError, match="receipt paths must be distinct"):
+        CommissioningEnvelope.from_mapping(
+            {**value, "failure_closure_receipt_path": value["receipt_path"]},
+            allow_test_boundary=True,
+        )
+    with pytest.raises(CommissioningError, match="must remain inside deployment_root"):
+        CommissioningEnvelope.from_mapping(
+            {**value, "failure_closure_receipt_path": str(tmp_path / "outside.json")},
+            allow_test_boundary=True,
+        )
+    with pytest.raises(CommissioningError, match="r4 launchd labels are not exact"):
+        CommissioningEnvelope.from_mapping(
+            {
+                **value,
+                "service_label": "com.optimatrix.public-shadow.r3",
+                "probe_label": "com.optimatrix.public-shadow.r3.probe",
+            },
+            allow_test_boundary=True,
+        )
+    with pytest.raises(CommissioningError, match="old_root_inventory_identities"):
+        CommissioningEnvelope.from_mapping(
+            {
+                **value,
+                "old_root_inventory_identities": {
+                    "r1": BOUND_DIGEST,
+                    "r2": BOUND_DIGEST,
+                },
+            },
+            allow_test_boundary=True,
+        )
+    preflight_facts = value["preflight_facts"]
+    assert isinstance(preflight_facts, dict)
+    missing_r3_writer = dict(preflight_facts)
+    del missing_r3_writer["r3_no_writer"]
+    with pytest.raises(CommissioningError, match="preflight_facts"):
+        CommissioningEnvelope.from_mapping(
+            {**value, "preflight_facts": missing_r3_writer},
+            allow_test_boundary=True,
+        )
+
+
+def test_all_executable_controller_vocabulary_is_bound_to_r4() -> None:
+    source = Path(commissioning.__file__).read_text(encoding="utf-8")
+    for stale in (
+        "__OPTIMATRIX_R3_PREFLIGHT_UNMATCHABLE__",
+        "Read-only r3 persistent-service probe",
+        "Independent r3 persistent-service audit",
+        "Deadline-safe r3 service controller",
+        "SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE.md",
+        "r3 uid must be 501",
+        "r3 launchd labels are not exact",
+        "r3 production root/plist boundary mismatch",
+        "r3_root_absent_before_materialization",
+        "r3_labels_absent_at_binding",
+    ):
+        assert stale not in source
+    for current in (
+        "__OPTIMATRIX_R4_PREFLIGHT_UNMATCHABLE__",
+        "Read-only r4 persistent-service probe",
+        "Independent r4 persistent-service audit",
+        "Deadline-safe r4 service controller",
+        "SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR.md",
+        "r4_root_absent_before_materialization",
+        "r4_labels_absent_at_binding",
+    ):
+        assert current in source
 
 
 @pytest.mark.parametrize(
@@ -916,6 +1032,89 @@ def test_schema_2_workbench_system_time_fields_reject_negative_and_non_integer_v
         )
 
 
+@pytest.mark.parametrize(
+    ("state", "value", "numerator", "denominator"),
+    [
+        ("UNKNOWN", None, 0, None),
+        ("UNKNOWN", None, 0, 0),
+        ("UNKNOWN", None, 0, 7),
+        ("PROVEN_ZERO", 0, 0, 7),
+        ("NOT_ZERO", 2, 2, None),
+        ("NOT_ZERO", 2, 2, 2),
+        ("NOT_ZERO", 2, 2, 7),
+    ],
+)
+def test_schema_2_workbench_accepts_every_valid_zero_claim_shape(
+    state: str,
+    value: int | None,
+    numerator: int,
+    denominator: int | None,
+) -> None:
+    for name in ("anomaly", "candidate"):
+        workbench = _workbench_document()
+        zero_claims = workbench["zero_claims"]
+        assert isinstance(zero_claims, dict)
+        claim = zero_claims[name]
+        assert isinstance(claim, dict)
+        claim.update(
+            {
+                "state": state,
+                "value": value,
+                "numerator": numerator,
+                "denominator": denominator,
+            }
+        )
+        _validate_workbench_document(workbench)
+
+
+@pytest.mark.parametrize(
+    ("state", "value", "numerator", "denominator"),
+    [
+        ("UNKNOWN", 0, 0, None),
+        ("UNKNOWN", None, 1, 7),
+        ("UNKNOWN", None, -1, 7),
+        ("UNKNOWN", None, True, 1),
+        ("UNKNOWN", None, 0.0, 1),
+        ("UNKNOWN", None, 0, -1),
+        ("UNKNOWN", None, 0, True),
+        ("UNKNOWN", None, 0, 1.0),
+        ("PROVEN_ZERO", 0, 0, None),
+        ("PROVEN_ZERO", 0, 0, 0),
+        ("PROVEN_ZERO", 1, 0, 1),
+        ("PROVEN_ZERO", False, 0, 1),
+        ("NOT_ZERO", 2, 1, None),
+        ("NOT_ZERO", 0, 0, None),
+        ("NOT_ZERO", True, 1, None),
+        ("NOT_ZERO", 2.0, 2, None),
+        ("NOT_ZERO", 2, 2, 1),
+        ("NOT_ZERO", 2, 2, 0),
+        ("NOT_ZERO", 2, 2, True),
+        ("NOT_ZERO", 2, 2, 2.0),
+    ],
+)
+def test_schema_2_workbench_rejects_contradictory_zero_claim_shapes(
+    state: str,
+    value: object,
+    numerator: object,
+    denominator: object,
+) -> None:
+    workbench = _workbench_document()
+    zero_claims = workbench["zero_claims"]
+    assert isinstance(zero_claims, dict)
+    claim = zero_claims["anomaly"]
+    assert isinstance(claim, dict)
+    claim.update(
+        {
+            "state": state,
+            "value": value,
+            "numerator": numerator,
+            "denominator": denominator,
+        }
+    )
+    with pytest.raises(CommissioningError, match="workbench zero claim anomaly value mismatch"):
+        _validate_workbench_document(workbench)
+
+
 def test_commissioning_accepts_actual_lifecycle_field_and_orders_effects(tmp_path: Path) -> None:
     controller, host, probe, audit = _controller(tmp_path)
 
@@ -935,6 +1134,7 @@ def test_commissioning_accepts_actual_lifecycle_field_and_orders_effects(tmp_pat
     assert probe.calls == [("periodic", 91_000)]
     assert audit.calls == ["current", "current"]
     assert "sigint_service" not in host.calls
+    assert not controller.envelope.failure_closure_receipt_path.exists()
 
 
 def test_fabricated_contract_digest_field_fails_before_probe_and_stops_once(
@@ -1069,7 +1269,10 @@ def test_startup_without_runtime_records_no_terminal_failure_and_never_signals(
         controller.commission()
 
     receipt = json.loads(controller.envelope.receipt_path.read_text(encoding="utf-8"))
-    assert receipt["status"] == "STARTUP_FAILED_NO_RUNTIME_TERMINAL"
+    assert receipt["status"] == "STARTUP_FAILED_NO_RUNTIME_CLEANUP_PENDING"
+    closure = _failure_closure(controller)
+    assert closure["status"] == "STARTUP_FAILED_NO_RUNTIME_QUIESCENT"
+    assert closure["envelope_identity"] == controller.envelope.envelope_identity
     assert "sigint_service" not in host.calls
     assert "wait_for_terminal" not in host.calls
     assert audit.calls == []
@@ -1095,10 +1298,16 @@ def test_lifecycle_bound_failure_binds_pid_then_naturally_terminates_and_fully_c
         controller.commission()
 
     receipt = json.loads(controller.envelope.receipt_path.read_text(encoding="utf-8"))
-    assert receipt["status"] == "COMMISSION_FAILED_CLEANUP_REQUIRED"
+    assert receipt["status"] == "COMMISSION_FAILED_CLEANUP_PENDING"
     assert receipt["runtime_identity"] == RUNTIME
     assert receipt["pid"] == 123
+    closure = _failure_closure(controller)
+    assert closure["status"] == "COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT"
+    assert closure["runtime_identity"] == RUNTIME
+    assert closure["pid"] == 123
+    assert controller.envelope.receipt_path != controller.envelope.failure_closure_receipt_path
     assert host.receipt_existed_at_cleanup_start is True
+    assert host.receipt_bytes_at_cleanup_start == controller.envelope.receipt_path.read_bytes()
     assert probe.calls == []
     assert audit.calls == ["complete"]
     assert "sigint_service" not in host.calls
@@ -1129,9 +1338,12 @@ def test_lifecycle_bound_failure_with_unknown_pid_cleans_up_but_remains_blocked(
         controller.commission()
 
     receipt = json.loads(controller.envelope.receipt_path.read_text(encoding="utf-8"))
-    assert receipt["status"] == "COMMISSION_FAILED_CLEANUP_REQUIRED"
+    assert receipt["status"] == "COMMISSION_FAILED_CLEANUP_PENDING"
     assert receipt["runtime_identity"] == RUNTIME
     assert receipt["pid"] is None
+    closure = _failure_closure(controller)
+    assert closure["status"] == "COMMISSION_FAILED_CLEANUP_BLOCKED"
+    assert "runtime PID binding failed" in str(closure["failure_reason"])
     assert host.receipt_existed_at_cleanup_start is True
     assert probe.calls == []
     assert "sigint_service" not in host.calls
@@ -1264,9 +1476,12 @@ def test_partial_service_bootstrap_writes_failure_receipt_before_cleanup(
         controller.commission()
 
     receipt = json.loads(controller.envelope.receipt_path.read_text(encoding="utf-8"))
-    assert receipt["status"] == "STARTUP_FAILED_NO_RUNTIME_TERMINAL"
+    assert receipt["status"] == "STARTUP_FAILED_NO_RUNTIME_CLEANUP_PENDING"
     assert receipt["failure_reason"] == "bootstrap failed after partial mutation"
+    closure = _failure_closure(controller)
+    assert closure["status"] == "STARTUP_FAILED_NO_RUNTIME_QUIESCENT"
     assert host.receipt_existed_at_cleanup_start is True
+    assert host.receipt_bytes_at_cleanup_start == controller.envelope.receipt_path.read_bytes()
     assert probe.calls == []
     assert audit.calls == []
     assert host.calls == [
@@ -1276,6 +1491,92 @@ def test_partial_service_bootstrap_writes_failure_receipt_before_cleanup(
         "bootout_service",
         "verify_quiescent",
     ]
+
+
+@pytest.mark.parametrize("runtime_bound", [False, True])
+def test_final_failure_receipt_precedes_its_closure_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_bound: bool,
+) -> None:
+    controller, _host, _probe, _audit = _controller(
+        tmp_path,
+        host_overrides=(
+            {"fail_commissioning": True, "service_is_running": False}
+            if runtime_bound
+            else {"fail_bootstrap": True}
+        ),
+    )
+    original_journal = controller._journal
+    observed_closure_journals: list[str] = []
+
+    def journal(intent: str, facts: Mapping[str, object]) -> None:
+        if intent in {"FAILURE_CLOSURE_COMPLETE", "NO_RUNTIME_CLOSURE_COMPLETE"}:
+            assert controller.envelope.failure_closure_receipt_path.is_file()
+            observed_closure_journals.append(intent)
+        return original_journal(intent, facts)
+
+    monkeypatch.setattr(controller, "_journal", journal)
+
+    with pytest.raises(CommissioningError):
+        controller.commission()
+
+    assert observed_closure_journals == [
+        "FAILURE_CLOSURE_COMPLETE" if runtime_bound else "NO_RUNTIME_CLOSURE_COMPLETE"
+    ]
+
+
+def test_no_runtime_failure_records_blocked_final_closure_after_all_cleanup_attempts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller, host, _probe, _audit = _controller(
+        tmp_path,
+        host_overrides={"fail_bootstrap": True},
+    )
+
+    def fail_service_bootout() -> None:
+        host.calls.append("bootout_service")
+        raise CommissioningError("service inventory unavailable")
+
+    def fail_quiescence(*, expected_pid: int | None) -> None:
+        assert expected_pid is None
+        host.calls.append("verify_quiescent")
+        raise CommissioningError("listener inventory malformed")
+
+    monkeypatch.setattr(host, "bootout_service", fail_service_bootout)
+    monkeypatch.setattr(host, "verify_quiescent", fail_quiescence)
+
+    with pytest.raises(CommissioningError, match="service inventory unavailable"):
+        controller.commission()
+
+    primary = json.loads(controller.envelope.receipt_path.read_text(encoding="utf-8"))
+    closure = _failure_closure(controller)
+    assert primary["status"] == "STARTUP_FAILED_NO_RUNTIME_CLEANUP_PENDING"
+    assert closure["status"] == "STARTUP_FAILED_NO_RUNTIME_CLEANUP_BLOCKED"
+    assert "service bootout: service inventory unavailable" in str(closure["failure_reason"])
+    assert "quiescence: listener inventory malformed" in str(closure["failure_reason"])
+    assert host.receipt_bytes_at_cleanup_start == controller.envelope.receipt_path.read_bytes()
+    assert host.calls.count("bootstrap_service") == 1
+    assert "kickstart_service" not in host.calls
+    assert "sigint_service" not in host.calls
+
+
+def test_existing_failure_closure_receipt_is_never_rewritten(
+    tmp_path: Path,
+) -> None:
+    controller, _host, _probe, _audit = _controller(
+        tmp_path,
+        host_overrides={"fail_bootstrap": True},
+    )
+    controller.envelope.failure_closure_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    original = b'{"sealed":"original"}\n'
+    controller.envelope.failure_closure_receipt_path.write_bytes(original)
+
+    with pytest.raises(CommissioningError, match="output already exists"):
+        controller.commission()
+
+    assert controller.envelope.failure_closure_receipt_path.read_bytes() == original
 
 
 def test_invalid_terminal_audit_fails_failure_closure_but_preserves_receipt(
@@ -1294,8 +1595,11 @@ def test_invalid_terminal_audit_fails_failure_closure_but_preserves_receipt(
         controller.commission()
 
     receipt = json.loads(controller.envelope.receipt_path.read_text(encoding="utf-8"))
-    assert receipt["status"] == "COMMISSION_FAILED_CLEANUP_REQUIRED"
+    assert receipt["status"] == "COMMISSION_FAILED_CLEANUP_PENDING"
     assert "lifecycle" in receipt["failure_reason"]
+    closure = _failure_closure(controller)
+    assert closure["status"] == "COMMISSION_FAILED_CLEANUP_BLOCKED"
+    assert "terminal audit" in str(closure["failure_reason"])
     assert host.receipt_existed_at_cleanup_start is True
     assert host.calls.count("sigint_service") == 1
     assert host.calls.count("bootout_service") == 1
@@ -1317,9 +1621,12 @@ def test_commission_failure_terminal_timeout_blocks_before_audit_or_service_boot
         controller.commission()
 
     receipt = json.loads(controller.envelope.receipt_path.read_text(encoding="utf-8"))
-    assert receipt["status"] == "COMMISSION_FAILED_CLEANUP_REQUIRED"
+    assert receipt["status"] == "COMMISSION_FAILED_CLEANUP_PENDING"
     assert receipt["runtime_identity"] == RUNTIME
     assert receipt["pid"] == 123
+    closure = _failure_closure(controller)
+    assert closure["status"] == "COMMISSION_FAILED_CLEANUP_BLOCKED"
+    assert "terminal wait" in str(closure["failure_reason"])
     assert host.receipt_existed_at_cleanup_start is True
     assert probe.calls == []
     assert audit.calls == []
@@ -1383,7 +1690,9 @@ def test_lifecycle_must_be_causally_after_kickstart_and_within_one_deadline(
         controller.commission()
 
     receipt = json.loads(controller.envelope.receipt_path.read_text(encoding="utf-8"))
-    assert receipt["status"] == "STARTUP_FAILED_NO_RUNTIME_TERMINAL"
+    assert receipt["status"] == "STARTUP_FAILED_NO_RUNTIME_CLEANUP_PENDING"
+    closure = _failure_closure(controller)
+    assert closure["status"] == "STARTUP_FAILED_NO_RUNTIME_QUIESCENT"
     assert host.calls.count("kickstart_service") == 1
     assert "sigint_service" not in host.calls
     assert probe.calls == []
@@ -1630,6 +1939,218 @@ def test_launchd_inventory_distinguishes_known_absence_from_unknown_error(
             host._launchd(envelope.service_target)
 
 
+def test_launchd_inventory_rejects_success_without_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+    host = MacOSHost(envelope, FakeClock())
+    monkeypatch.setattr(
+        host,
+        "_run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    with pytest.raises(CommissioningError, match="launchd inventory is malformed"):
+        host._launchd(envelope.service_target)
+
+
+@pytest.mark.parametrize(
+    ("method_name", "target_name"),
+    [
+        ("bootout_periodic_probe", "probe_target"),
+        ("bootout_service", "service_target"),
+    ],
+)
+def test_bootout_waits_for_asynchronous_launchd_absence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    target_name: str,
+) -> None:
+    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+    clock = FakeClock()
+    host = MacOSHost(envelope, clock)
+    states = iter(("loaded", "loaded", None))
+    effects: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        host,
+        "_effect",
+        lambda argv, _label, **_kwargs: effects.append(tuple(argv)),
+    )
+    monkeypatch.setattr(host, "_launchd", lambda _target: next(states))
+
+    getattr(host, method_name)()
+
+    assert effects
+    assert clock.now == 1_100
+    assert getattr(envelope, target_name) in effects[0]
+
+
+@pytest.mark.parametrize("method_name", ["bootout_periodic_probe", "bootout_service"])
+def test_bootout_fails_closed_when_launchd_absence_does_not_converge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+) -> None:
+    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+    clock = FakeClock()
+    host = MacOSHost(envelope, clock)
+    monkeypatch.setattr(host, "_effect", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(host, "_launchd", lambda _target: "still loaded")
+
+    with pytest.raises(CommissioningError, match="did not unload before deadline"):
+        getattr(host, method_name)()
+
+    assert clock.now == 30_900
+
+
+@pytest.mark.parametrize("method_name", ["bootout_periodic_probe", "bootout_service"])
+def test_bootout_rejects_absence_observed_after_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+) -> None:
+    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+    clock = FakeClock()
+    host = MacOSHost(envelope, clock)
+    monkeypatch.setattr(host, "_effect", lambda *_args, **_kwargs: None)
+
+    def late_absence(_target: str) -> None:
+        clock.now = 30_901
+        return None
+
+    monkeypatch.setattr(host, "_launchd", late_absence)
+
+    with pytest.raises(CommissioningError, match="did not unload before deadline"):
+        getattr(host, method_name)()
+
+
+def test_verify_quiescent_requires_all_predicates_absent_in_the_same_round(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+    clock = FakeClock()
+    host = MacOSHost(envelope, clock)
+    listener_states = iter((((123, "127.0.0.1:8765"),), (), ()))
+    process_states = iter(((), (123,), ()))
+    pid_states = iter(((0, "123\n"), (0, "123\n"), (1, "")))
+
+    monkeypatch.setattr(host, "_launchd", lambda _target: None)
+    monkeypatch.setattr(host, "_listener_inventory", lambda: next(listener_states))
+    monkeypatch.setattr(host, "_matching_process_pids", lambda: next(process_states))
+
+    def run(argv: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert tuple(argv[:3]) == ("/bin/ps", "-p", "123")
+        returncode, output = next(pid_states)
+        return subprocess.CompletedProcess(argv, returncode, output, "")
+
+    monkeypatch.setattr(host, "_run", run)
+
+    host.verify_quiescent(expected_pid=123)
+
+    assert clock.now == 1_100
+
+
+def test_verify_quiescent_fails_closed_at_one_bounded_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+    clock = FakeClock()
+    host = MacOSHost(envelope, clock)
+    monkeypatch.setattr(host, "_launchd", lambda _target: None)
+    monkeypatch.setattr(
+        host,
+        "_listener_inventory",
+        lambda: ((123, "127.0.0.1:8765"),),
+    )
+    monkeypatch.setattr(host, "_matching_process_pids", lambda: ())
+    monkeypatch.setattr(
+        host,
+        "_run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 1, "", ""),
+    )
+
+    with pytest.raises(CommissioningError, match="quiescence did not converge"):
+        host.verify_quiescent(expected_pid=123)
+
+    assert clock.now == 30_900
+
+
+def test_verify_quiescent_rejects_all_absent_observed_after_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+    clock = FakeClock()
+    host = MacOSHost(envelope, clock)
+    monkeypatch.setattr(host, "_launchd", lambda _target: None)
+    monkeypatch.setattr(host, "_listener_inventory", lambda: ())
+
+    def late_process_absence() -> tuple[int, ...]:
+        clock.now = 30_901
+        return ()
+
+    monkeypatch.setattr(host, "_matching_process_pids", late_process_absence)
+    monkeypatch.setattr(
+        host,
+        "_run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 1, "", ""),
+    )
+
+    with pytest.raises(CommissioningError, match="quiescence did not converge"):
+        host.verify_quiescent(expected_pid=123)
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout"),
+    [
+        (0, ""),
+        (0, "456\n"),
+        (1, "123\n"),
+        (2, ""),
+    ],
+)
+def test_verify_quiescent_rejects_malformed_or_substituted_original_pid_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    stdout: str,
+) -> None:
+    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+    host = MacOSHost(envelope, FakeClock())
+    monkeypatch.setattr(host, "_launchd", lambda _target: None)
+    monkeypatch.setattr(host, "_listener_inventory", lambda: ())
+    monkeypatch.setattr(host, "_matching_process_pids", lambda: ())
+    monkeypatch.setattr(
+        host,
+        "_run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(argv, returncode, stdout, ""),
+    )
+
+    with pytest.raises(CommissioningError, match="original PID absence query"):
+        host.verify_quiescent(expected_pid=123)
+
+
 def test_listener_inventory_binds_each_listener_to_its_pid(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1652,6 +2173,72 @@ def test_listener_inventory_binds_each_listener_to_its_pid(
         (123, "127.0.0.1:8765"),
         (456, "*:8765"),
     )
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout"),
+    [
+        (0, ""),
+        (1, "p123\n"),
+        (0, "n127.0.0.1:8765\n"),
+        (0, "pnope\nn127.0.0.1:8765\n"),
+        (0, "xunexpected\n"),
+    ],
+)
+def test_listener_inventory_rejects_malformed_or_indeterminate_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    stdout: str,
+) -> None:
+    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+    host = MacOSHost(envelope, FakeClock())
+    monkeypatch.setattr(
+        host,
+        "_run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], returncode, stdout, ""),
+    )
+
+    with pytest.raises(CommissioningError, match="listener inventory"):
+        host._listener_inventory()
+
+
+@pytest.mark.parametrize("stdout", ["not-a-pid command\n", "123\n", "garbage\n"])
+def test_matching_process_inventory_rejects_malformed_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stdout: str,
+) -> None:
+    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+    host = MacOSHost(envelope, FakeClock())
+    monkeypatch.setattr(
+        host,
+        "_run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, stdout, ""),
+    )
+
+    with pytest.raises(CommissioningError, match="service process inventory is malformed"):
+        host._matching_process_pids()
+
+
+def test_preflight_rejects_an_existing_r4_service_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope = CommissioningEnvelope.from_mapping(
+        _envelope_mapping(tmp_path), allow_test_boundary=True
+    )
+    host = MacOSHost(envelope, FakeClock())
+    monkeypatch.setattr(host, "_launchd", lambda _target: None)
+    monkeypatch.setattr(host, "_listener_inventory", lambda: ())
+    monkeypatch.setattr(host, "_matching_process_pids", lambda: (123,))
+
+    with pytest.raises(CommissioningError, match="service process already exists"):
+        host.preflight()
 
 
 def test_preflight_runs_every_git_query_in_bound_repository(
@@ -1687,6 +2274,7 @@ def test_preflight_runs_every_git_query_in_bound_repository(
 
     monkeypatch.setattr(host, "_launchd", lambda _target: None)
     monkeypatch.setattr(host, "_listener_inventory", lambda: ())
+    monkeypatch.setattr(host, "_matching_process_pids", lambda: ())
     monkeypatch.setattr(host, "_run", run)
 
     def stop_after_git(_path: Path) -> str:

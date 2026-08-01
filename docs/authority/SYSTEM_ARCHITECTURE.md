@@ -31,11 +31,14 @@ dataset. The downstream arrows are implemented in the same process. Their produc
 permission, and any permission to invoke or deploy the persistent host, comes only from
 `CURRENT_STAGE` and an exact live task. The operability and version-2 trader-workbench repair is
 accepted at exact commit `d4740d6a181efebc8dad6d1091a78fa44d885957`. Its one authorized fresh
-restart is consumed after a commission-deadline failure and clean seal. Both observation roots are
-immutable. The sole active r3 task adds one isolated repo-owned commissioning/stop controller that
-the service hot path does not import; only after its exact candidate is accepted and merged may it
-invoke one fresh root/label/process/probe boundary. This changes no service topology, market data
-path, business owner, service retry loop, contract, or Policy.
+restart is consumed after a commission-deadline failure and clean seal. The later R3 commissioning
+attempt is also consumed after a projection-verifier failure and independent complete clean-stop
+audit. All three persistent-observation roots are immutable. The sole active R4 task changes only
+the isolated repo-owned commissioning/stop controller's projection validation, bounded launchd and
+host-quiescence convergence, temporally ordered failure receipts, and fresh R4 bindings; the service
+hot path does not import it. Only after its exact candidate is independently accepted, passes CI,
+and is merged may it invoke one fresh R4 root/label/process/probe boundary. This changes no service
+topology, market data path, business owner, service retry loop, contract, or Policy.
 
 ## Data lifecycles
 

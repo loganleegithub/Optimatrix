@@ -9,20 +9,20 @@
 **Production Short Vol Radar:** `ESTABLISHED`
 
 **Sole authorized next product-capability closure:**
-`SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE`
+`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR`
 
 **Fixed-contract public Shadow runtime:**
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
 **Persistent public Shadow service/workbench:**
-`R3_DEADLINE_SAFE_CONTROLLER_IMPLEMENTATION_AND_DEPLOYMENT_AUTHORIZED`
+`R3_CONSUMED_CLEAN_STOP_R4_CONTROLLER_REPAIR_AUTHORIZED`
 
-**Evidence gate:** `ACTIVE_R3_CONTROLLER_IMPLEMENTATION_THEN_PRODUCTION_DEPLOYMENT`
+**Evidence gate:** `ACTIVE_R4_CONTROLLER_REPAIR_THEN_CONDITIONAL_FRESH_DEPLOYMENT`
 
 **Live commands:**
-`CONDITIONALLY_AUTHORIZED_AFTER_EXACT_CONTROLLER_ACCEPTANCE_ONE_R3_SERVE_SHADOW_AND_RESULT_INDEPENDENT_STOP`
+`CONDITIONALLY_AUTHORIZED_AFTER_EXACT_R4_ACCEPTANCE_ONE_FRESH_SERVE_SHADOW_AND_RESULT_INDEPENDENT_STOP`
 
-**Persistent deployment / 24x7 acceptance:** `R3_DEPLOYMENT_AUTHORIZED_ACCEPTANCE_PENDING`
+**Persistent deployment / 24x7 acceptance:** `R3_NOT_MET_R4_DEPLOYMENT_CONDITIONAL_NOT_STARTED`
 
 ## Authority
 
@@ -34,120 +34,121 @@ receipts, run duration, contract presence, or roadmap order grant no stage.
 The current boundary retains the already established, guarded production-public Short Vol Radar
 defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md), records the independently
 accepted fixed-contract Shadow implementation-integrity repair and two-layer engineering evidence
-defined below, preserves the consumed persistent observation exactly, accepts the bounded
-service-operability and trader-workbench repair, records the consumed fresh restart exactly, and
-activates one bounded r3 controller-and-deployment closure. The historical failed attempt,
-accepted smoke, and both persistent-service attempts remain sealed and are not retried. Only the
-repo-owned commissioning/stop controller and the conditional sequence below are authorized. The
-accepted `serve-shadow` hot path, dependencies, contracts, three Policies, service/workbench
-schemas, private/account data, orders, fills, capital, qualification, Challenger automation,
-promotion, and execution remain unchanged and unauthorized.
+defined below, preserves every consumed persistent observation exactly, accepts the bounded
+service-operability and trader-workbench repair, records the consumed R3 commissioning failure and
+clean stop exactly, and activates one bounded R4 controller-integrity repair. The historical failed
+attempt, accepted smoke, and all three persistent-service attempts remain sealed and are not
+retried. Only the repo-owned commissioning/stop controller repair and the conditional sequence
+below are authorized. The accepted `serve-shadow` hot path, dependencies, contracts, three
+Policies, service/workbench schemas, private/account data, orders, fills, capital, qualification,
+Challenger automation, promotion, and execution remain unchanged and unauthorized.
 
 The prior `CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED` evidence result remains immutable accepted
 history; the failed persistent observation neither reopens nor extends it.
 
-### Active r3 controller and deployment delegation
+### Consumed R3 commissioning and authorized R4 repair
 
-The user said `上线` on 2026-08-01. This grants the controller one bounded r3 sequence rooted at
-base commit `ce1fbb48417f2b44ae3a69900d0b71c3e55c7565`: implement and directly test one isolated
-repo-owned deadline-safe commissioning/stop controller; obtain independent exact-candidate review;
-non-force push one bounded branch; require remote equality and GitHub CI; merge only that accepted
-candidate; bind the resulting remote `main` commit/tree and unchanged service-hot-path,
-contract, and Policy bytes into a fresh deployment envelope; then start and observe exactly one
-production-public r3 persistent service. Commissioning success is not 24x7 acceptance.
+The sole R3 commissioning attempt is consumed and grants no retry. It ran from the merged
+`main` commit `f66fa97b66487cf593d5265a8ac79d013adda104` under root
+`/Users/logan/Optimatrix-public-shadow-observation-003`, service label
+`com.optimatrix.public-shadow.r3`, and probe label
+`com.optimatrix.public-shadow.r3.probe`. Its immutable primary receipt has SHA-256
+`1fbe3b4daacdc26d6ca0a0ec2f46108fa355c7b8d62f698e09e7c85a7b5d25cd`, envelope identity
+`sha256:41806d81ea9182f288f0a78925887c898a4cf2ee15420affb44d5e4934cd3e5c`, runtime identity
+`sha256:a5a6571345b161fbad37f594626cee921614ae84ffdd776e58ae360d279f9be1`, and historical status
+`COMMISSION_FAILED_CLEANUP_REQUIRED`. That status was written before cleanup and therefore records
+only the pre-cleanup boundary; it is not a truthful final cleanup verdict.
 
-No `launchctl`, service, probe, listener, or live-market mutation is allowed until the exact
-controller candidate has passed its focused tests, `make check`, independent read-only review,
-remote equality, CI, and merge, and the fresh detached deployment checkout has independently
-recomputed every bound identity. Failure of an implementation or preflight gate leaves live
-commands forbidden. The controller module may not be imported by the `serve-shadow` hot path or
-change market, Decision, Underwriting, Position, Outcome, service schema, workbench schema,
-dependency, contract, or Policy behavior.
+The independent complete terminal audit has SHA-256
+`8c78722020b3e8b6c54140bb1a54ca30e2c86719e1ae9ef5e3f01a89625e08a1`. It records
+`PASS_COMPLETE_CLEAN_STOP`, `CLEAN_STOP_COMPLETE`, `181274` ms of covered service, one contiguous
+contract-valid successful probe row, two failed-probe markers,
+`OPERATIONAL_24H_GATE_NOT_MET`, and a 24-hour sample of `NOT_MET`. Independent host inspection
+records both R3 labels absent, no matching process, and no listener on `127.0.0.1:8765`. The R3
+root, plists, journals, receipts, ledgers, audit files, runtime, labels, and attempt are sealed,
+`CONSUMED_FAILED_NO_RETRY`, and may not be edited, deleted, extended, restarted, relabelled, or
+reused.
 
-The entirely new boundary is root
-`/Users/logan/Optimatrix-public-shadow-observation-003`, labels
-`com.optimatrix.public-shadow.r3` and `com.optimatrix.public-shadow.r3.probe`, installed plists
-`/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r3.plist` and
-`/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r3.probe.plist`, and exactly
-`127.0.0.1:8765`. The service has `KeepAlive=false`, `RunAtLoad=false`, and
-`LaunchOnlyOnce=true`; the read-only probe has `RunAtLoad=false` and a 60-second interval. The r1
-and r2 roots, labels, processes, ledgers, plists, and stop boundaries remain consumed. Bytes from
-an r1/r2 state directory, ledger, log, receipt, plist, or evidence artifact may not be copied,
-extended, relabelled, bootstrapped, or treated as r3 evidence. Historical source patterns may be
-studied, but every r3 attempt asset is newly authored, independently hashed, and separately bound.
+The failure had five coupled causes at the controller/authority boundary. First, the commissioning
+verifier rejected producer-valid version-2 workbench zero-claim shapes, including honest
+`UNKNOWN / value=null` with a known zero or positive denominator and `NOT_ZERO` with an unavailable
+denominator. Second, probe and service `launchctl bootout` success was followed by an immediate
+single inventory check even though launchd unloading converges asynchronously. Third, final
+quiescence was also a one-shot label/listener/process/PID check rather than one bounded monotonic
+convergence. Fourth, the immutable primary failure receipt used a final-sounding
+`CLEANUP_REQUIRED` status before cleanup and had no separate immutable final closure receipt.
+Fifth, this Authority still described the already consumed R3 attempt as pending and the controller
+remained hard-bound to R3 paths and identities.
 
-Before any mutation, the fresh canonical-JSON deployment envelope has one independently computed
-`sha256:<64 lowercase hex>` content identity supplied to the controller CLI as
-`--expected-envelope-identity`; mismatch leaves live commands forbidden. The envelope binds the
-resolved fresh-checkout `.venv/bin/python` executable digest and exact version, the unchanged
-`apps/radar_runtime/src/radar_runtime/service.py` hot-path digest, and every Git/authority/contract/
-Policy/controller/plist/probe/audit byte declared by the active task. Every intent journal and
-success, failure, or stop receipt references that pre-start envelope identity. The dynamic runtime
-identity is not fabricated before start: it is validated from lifecycle sequence 1 and then frozen
-as a second-stage binding in every later runtime-bound journal, probe, audit, and receipt.
+The user authorized R4 repair on 2026-08-01. `SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the
+sole active closure, rooted at base commit `f66fa97b66487cf593d5265a8ac79d013adda104`. It permits one
+bounded branch and Draft PR to change only the repo-owned commissioning controller, its direct
+tests, Authority, architecture/README truth, and the active task. The accepted `serve-shadow` hot
+path, market/runtime behavior, workbench producer and schema, contracts, three Policies,
+dependencies, private/account boundary, orders, fills, capital, qualification, promotion, and
+execution remain unchanged and unauthorized.
 
-Historical r1/r2 inventory hashes, absence of their writers and labels, and the earlier absence of
-the r3 root and installed plists are recomputed by an independent external preflight while those
-facts remain observable, then frozen into the envelope. The controller validates their exact
-envelope shape and all facts still observable at invocation—current Git/artifact/plist bindings,
-labels/listener, fresh outputs, and source readability. It does not claim that the already
-materialized r3 root can reconstruct or re-prove its own earlier absence.
+No `launchctl`, service, probe, listener, or live-market mutation is allowed from the implementation
+branch or PR. Live commands become conditionally executable only after the exact R4 candidate has
+passed focused tests, full `make check`, independent exact-commit review, non-force remote equality,
+GitHub CI, merge to remote `main`, and a fresh detached deployment preflight that independently
+recomputes every bound identity and absence fact. Candidate authorship is not independent
+verification.
 
-The repo-owned controller uses a durable fsynced intent journal. After `KICKSTART_INTENT`, every
-later invocation refuses a second start. It issues exactly one
-`launchctl kickstart gui/501/com.optimatrix.public-shadow.r3` without `-k`. Lifecycle sequence 1
-must appear within 30,000 ms of kickstart. From its actual `recorded_monotonic_ms`, one absolute
-deadline requires actual-schema and `persistent_service_contract_identity` validation plus
-process/listener/current-reader/schema-2 HTTP commissioning by +60,000 ms, manual successful probe
-ledger sequence 1 by +90,000 ms, and one independent current audit plus periodic-probe bootstrap
-by +110,000 ms. The mandatory first probe remains bounded by +120,000 ms; no stage resets the
-clock. Honest `ready=false`/HTTP 503 and business `UNKNOWN` are valid when health, schema, identity,
-and projection invariants pass.
+The entirely fresh R4 production boundary is root
+`/Users/logan/Optimatrix-public-shadow-observation-004`, labels
+`com.optimatrix.public-shadow.r4` and `com.optimatrix.public-shadow.r4.probe`, installed plists
+`/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r4.plist` and
+`/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r4.probe.plist`, and exactly
+`127.0.0.1:8765`. The service remains `KeepAlive=false`, `RunAtLoad=false`, and
+`LaunchOnlyOnce=true`; the probe remains read-only with `RunAtLoad=false` and a 60-second interval.
+The envelope binds unchanged inventories and writer absence for consumed roots R1, R2, and R3,
+including exact `r1_no_writer`, `r2_no_writer`, and `r3_no_writer` facts; absence of all consumed
+labels; the earlier observable `r4_root_absent_before_materialization` and
+`r4_labels_absent_at_binding` facts; listener freedom; installed-plist absence; the detached Git
+commit/tree; and the active Authority/task, controller, wrappers, Python executable/version,
+service hot path, contract, and three Policy bytes. It also binds one fresh, distinct
+`failure_closure_receipt_path` inside the R4 deployment root, separate from the intent, primary
+failure, success, and stop receipts.
 
-After periodic-probe bootstrap, `commission` records `HOST_OPERABILITY_GATE_START` and the same PID
-must pass a full 180,000 ms interval from that boundary: launchd `runs=1`, at least two successful
-post-manual periodic rows, and every gap in the complete partition—gate start to first row, each
-adjacent pair of periodic rows, and latest row to gate end—must be at most 90,000 ms. Required
-endpoint/probe attempts remain operational, with recorded CPU-time delta/RSS/HTTP latency using
-exact units and denominators. Preflight must prove that the host unified-log source and
-DiagnosticReports inventory are readable and freeze their cursors/inventory. After gate end, the
-controller waits a fixed 30,000 ms resource-event publication grace, then performs one final query
-through that exact audit boundary. A source/read/query failure is
-`UNKNOWN_OPERABILITY_RESOURCE_GATE` and fails closed; a pass proves only that no new exact-PID
-`cpu_resource` event was observable as of that boundary, never that none can be emitted later.
-CPU/RSS values without such a host event are diagnostics, not a Policy or business threshold.
-Failure consumes the one attempt and invokes the result-independent stop boundary. Success
-establishes only this bounded operability interval; while the process remains live, 24x7 is
-`PENDING`.
+The controller keeps the existing one-start/no-`-k` and absolute deadline schedule: lifecycle by
+30,000 ms; current-reader/process/listener/schema-2 HTTP commissioning by +60,000 ms; manual probe
+sequence 1 by +90,000 ms; current audit and periodic-probe bootstrap by +110,000 ms; and the hard
+first-probe boundary by +120,000 ms. Honest `ready=false`/HTTP 503, business `UNKNOWN`, and zero
+natural Candidate/Entry/Outcome remain valid when identities and projection invariants pass.
+After periodic-probe bootstrap, one `HOST_OPERABILITY_GATE_START` owns the full 180,000 ms gate,
+at least two successful post-manual periodic rows, every complete-partition gap no greater than
+90,000 ms, and a fixed 30,000 ms resource-event publication grace. Commissioning success begins
+read-only observation but leaves 24x7 acceptance `PENDING`.
 
-Every post-lifecycle commissioning or operability failure is handled inside the sole `commission`
-invocation: first write a durable failure receipt before the first cleanup mutation, then unload
-and confirm the probe. If the bound process remains live, record `SIGINT_INTENT` and send exactly
-one label-bound `SIGINT`; if it has already terminated naturally, record the natural-terminal branch
-and send no `SIGINT`. Both branches wait at most 120 seconds for the bound terminal, run one terminal
-audit, perform one non-signal service `bootout`, and verify service/probe labels, PID, and listener
-are absent. Neither sends a final-online probe, second signal, or start, and neither performs retry,
-alternate-root start, or repair.
+The corrected zero-claim verifier accepts `UNKNOWN` only with `value=null`, numerator zero, and an
+unavailable, zero, or positive denominator; accepts `PROVEN_ZERO` only with value and numerator zero
+plus a positive denominator; and accepts `NOT_ZERO` only with a positive value equal to the positive
+numerator and either an unavailable denominator or a positive known denominator no smaller than the
+numerator. It rejects negative, boolean, fractional, contradictory, or impossible members. These are
+projection-integrity rules, not a Decision or economic change.
 
-If `KICKSTART_INTENT` is consumed but no lifecycle/run identity exists by 30,000 ms, the controller
-must not send SIGINT to an unbound PID or fabricate service terminal evidence. It writes durable
-`STARTUP_FAILED_NO_RUNTIME_TERMINAL`, performs one non-signal bootout of any loaded service label,
-and verifies both labels, matching PID, and listener absent. That independently auditable failure
-state consumes the attempt, grants no retry, and permits Authority closure without a service
-terminal that never existed.
+After a successful `launchctl bootout`, probe/service label absence and complete host quiescence are
+observed through one injected monotonic 30,000 ms convergence deadline with bounded 100 ms polling.
+Known presence is transient only before the deadline. Inventory errors, malformed output, PID
+substitution, or any indeterminate state fail immediately; a deadline miss cannot be repaired by a
+later observation and authorizes no retry.
 
-After successful commissioning and the full operability gate, the service remains under read-only
-observation until explicit user `停止` or terminal process failure. The same terminal-goal delegation
-authorizes at most one separate start-incapable `stop`/close invocation for either trigger. It first
-records `STOP_INTENT` and unloads and confirms the probe. The explicit-stop/live-process branch
-makes at most one final-online probe attempt and sends exactly one label-bound `SIGINT`; the
-natural-terminal branch makes no final-online probe and sends no `SIGINT`. Both branches bind the
-existing runtime and terminal, run one terminal audit outside the probe denominator, then perform
-one non-signal service bootout and verify both labels, PID, and listener absent. Duplicate
-`commission` or `stop`/close invocations fail closed. The active task remains present while the
-service is observing. A clean audited terminal at or after 86,400,000 ms with all predicates
-passing is `MET`; an earlier, failed, or no-runtime startup terminal state is `NOT_MET`; closure
-records only that independently proved state.
+Every post-start failure writes an immutable primary receipt before the first cleanup mutation with
+status `COMMISSION_FAILED_CLEANUP_PENDING` or
+`STARTUP_FAILED_NO_RUNTIME_CLEANUP_PENDING`. It then writes exactly one distinct immutable final
+closure receipt. Successful audited cleanup uses
+`COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT` or
+`STARTUP_FAILED_NO_RUNTIME_QUIESCENT`; blocked cleanup uses
+`COMMISSION_FAILED_CLEANUP_BLOCKED` or
+`STARTUP_FAILED_NO_RUNTIME_CLEANUP_BLOCKED` with the exact accumulated errors. Neither receipt is
+rewritten. After successful commissioning, explicit user `停止` or terminal process failure is the
+result-independent close trigger. The same terminal-goal delegation authorizes at most one
+start-incapable `stop`/close invocation: it records intent, stops and confirms the probe, binds the
+existing runtime and terminal, performs the authorized single-signal or natural-terminal branch,
+runs one terminal audit, converges through service bootout to complete quiescence, and records the
+24-hour result. No failure, cleanup, or stop path sends a second signal, starts another service,
+changes root/label, or retries.
 
 The accepted
 [`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) implementation
@@ -522,9 +523,12 @@ service-evidence reader, and read-only workbench is closed at commit
 consumed as complete process-failure evidence and not accepted. The smallest offline owning-module
 repair is accepted at `d4740d6a181efebc8dad6d1091a78fa44d885957`. Its one fresh r2 restart is
 now consumed after the commissioning controller missed the first-probe deadline. The terminal
-reader passed, but `24_HOUR_CONTINUOUS_PUBLIC_SERVICE_SAMPLE = NOT_MET`; there is no active
-closure. Any successor requires an explicitly authorized, pre-bound deadline-safe commissioning
-controller and entirely new root, labels, process, probe ledger, and stop boundary.
+reader passed, but `24_HOUR_CONTINUOUS_PUBLIC_SERVICE_SAMPLE = NOT_MET`. The later sole R3
+commissioning attempt is also consumed after one valid probe row and two verifier-rejected probe
+attempts; its independent terminal audit passed clean-stop integrity, both R3 labels and the
+listener are absent, and its 24-hour sample is `NOT_MET`. The active R4 closure owns only the
+explicitly authorized controller-integrity repair and one conditional, pre-bound fresh root,
+labels, process, probe ledger, and stop boundary after every exact-candidate gate passes.
 
 The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
 the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
@@ -597,11 +601,12 @@ profitability, or fill evidence.
 
 ## Active and queued sequence
 
-`SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE` is the sole active closure. It first owns only the
-isolated repo-owned controller and direct acceptance; its one live r3 sequence becomes executable
-only after the exact candidate and resulting remote `main` satisfy every conditional gate above.
+`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure. It owns only the
+isolated repo-owned controller repair, direct regression tests, and exact-candidate acceptance. Its
+one fresh live R4 sequence becomes executable only after the exact candidate and resulting remote
+`main` satisfy every conditional gate above; no R4 live invocation has occurred.
 
-The accepted two-layer smoke and both consumed persistent observations cannot be extended,
+The accepted two-layer smoke and all three consumed persistent observations cannot be extended,
 retried, reused, or relabelled. These later closures remain queued and unauthorized:
 
 1. **Challenger research and qualification:** authorize only after a usable frozen-Policy cohort
@@ -620,10 +625,10 @@ No later queued closure is active.
 - full-market persistence, per-update no-anomaly receipts, replay, or offline recomputation as a
   prerequisite for this Radar;
 - any production-public service invocation, probe, or loopback commissioning outside the exact
-  conditional r3 authority above;
-- any second invocation or repair of the consumed r2 attempt, automatic restart, manual retry,
+  conditional R4 authority above;
+- any second invocation or repair of a consumed R1/R2/R3 attempt, automatic restart, manual retry,
   alternate state root or label, public Internet binding, or private browser surface;
-- bootstrapping, loading, editing, deleting, reusing, or relabelling either consumed r2 plist;
+- bootstrapping, loading, editing, deleting, reusing, or relabelling any consumed R1/R2/R3 plist;
 - any reuse, mutation, deletion, completion, migration, or relabeling of a consumed Shadow or
   persistent-service attempt's artifacts;
 - automatic training, Policy selection, qualification, promotion, or evolution;
