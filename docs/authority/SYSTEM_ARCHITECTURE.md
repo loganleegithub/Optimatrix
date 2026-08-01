@@ -6,9 +6,9 @@
 
 Optimatrix is a modular monolith with one continuous live data path. The architecture separates
 pure domain responsibilities without turning them into separate business runs, networked
-microservices, queues, or databases. The active offline implementation closure may add one
-long-running process host and one in-process loopback read-only workbench; that is process
-lifecycle and projection, not a service topology split or deployment authorization.
+microservices, queues, or databases. The accepted offline implementation adds one long-running
+process host and one in-process loopback read-only workbench; that is process lifecycle and
+projection, not a service topology split or deployment authorization.
 
 ```text
 Deribit public WebSocket
@@ -29,8 +29,8 @@ Monitor and Short Vol Radar flow. There is no
 capture job followed by a scan job, and no scanner that repeatedly rereads an unchanged local
 dataset. The downstream arrows are implemented in the same process. Their production-public permission,
 and any permission to invoke or deploy the persistent host, comes only from `CURRENT_STAGE` and an
-exact later live task. The current task authorizes offline implementation and deterministic tests
-only.
+exact later live task. The accepted offline task authorized only implementation and deterministic
+tests; it is complete and deleted, and no live task is active.
 
 ## Data lifecycles
 

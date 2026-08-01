@@ -198,7 +198,7 @@ def test_current_stage_records_accepted_two_layer_shadow_engineering_evidence() 
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
     assert current.count(marker) == 1
-    assert f"{marker} `SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH`" in flat
+    assert f"{marker} `NONE`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
@@ -228,8 +228,12 @@ def test_current_stage_records_accepted_two_layer_shadow_engineering_evidence() 
     assert "f9ce7f98623ed7249160ee29c940c9c026fc4173" in current
     assert "21af26c71ef625889d29c4d7e00ebeae92f8a15d" in current
     assert "11b8a42d920e6be9eff7a56f45fd3c02c8ef6bed" in current
-    assert "Exactly one product-capability closure is active" in current
-    assert "`OFFLINE_IMPLEMENTATION_AUTHORIZED`" in current
+    assert "No product-capability closure is active" in current
+    assert "`OFFLINE_IMPLEMENTATION_ACCEPTED`" in current
+    assert "67085248fffb1b20bae1c9512ae1191d166a6509" in current
+    assert "9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa" in current
+    assert "9c3b46eae8b646d2c86f38df35cfcf962605c0b670385376d7c2ebef3a771778" in current
+    assert "records its frozen pre-acceptance state" in flat
     assert "**Persistent deployment / 24x7 acceptance:** `FORBIDDEN`" in current
     assert (
         "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json"
@@ -254,19 +258,16 @@ def test_current_stage_records_accepted_two_layer_shadow_engineering_evidence() 
     assert "c7d8eb4e6bdc9953716892376c26935089d384e5460aa11073544b7521b96cf3" in current
 
 
-def test_two_layer_engineering_is_closed_and_persistent_offline_task_is_active() -> None:
+def test_two_layer_and_persistent_offline_implementation_are_closed() -> None:
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md").exists()
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH.md",
-        "TEMPLATE.md",
-    ]
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    assert (
-        "**Sole authorized next product-capability closure:**\n"
-        "`SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH`"
-    ) in current
+    assert "**Sole authorized next product-capability closure:** `NONE`" in current
+    assert "**Persistent public Shadow service/workbench:** `OFFLINE_IMPLEMENTATION_ACCEPTED`" in (
+        " ".join(current.split())
+    )
     assert "**Live commands:** `FORBIDDEN`" in current
     assert "**Persistent deployment / 24x7 acceptance:** `FORBIDDEN`" in current
 
@@ -1925,8 +1926,8 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "fixed-contract Shadow implementation adds",
         "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
         "`CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`",
-        "Exactly one product-capability closure is active",
-        "OFFLINE_IMPLEMENTATION_AUTHORIZED",
+        "No product-capability closure is active",
+        "OFFLINE_IMPLEMENTATION_ACCEPTED",
         "Radar run summary is absent",
         "one result-independent production-public process",
         "natural_shadow_opportunity = NOT_OBSERVED",
@@ -2109,26 +2110,15 @@ def test_radar_contract_keeps_market_signal_execution_and_decision_distinct() ->
     assert "keep `LEGGED_CLOSE_REFERENCE` diagnostic" in radar_flat
 
 
-def test_persistent_service_contract_and_task_close_exact_governance_change() -> None:
+def test_persistent_service_contract_and_acceptance_close_exact_governance_change() -> None:
     contract_path = ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md"
     contract = contract_path.read_text(encoding="utf-8")
     flat = " ".join(contract.split())
-    task = (ROOT / "tasks/SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH.md").read_text(
-        encoding="utf-8"
-    )
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     digest = f"sha256:{hashlib.sha256(contract_path.read_bytes()).hexdigest()}"
 
     assert digest == ("sha256:9c3b46eae8b646d2c86f38df35cfcf962605c0b670385376d7c2ebef3a771778")
-    assert "**Base commit:** `967e82ea36a7fcae13c6c8a8b07108af5b21a633`" in task
-    assert "Draft PR against `main`" in task
-    assert "**Outcome/evaluation contract change:** APPROVED" in task
-    assert digest in task
-    assert "**Stage/authorization change:** APPROVED" in task
-    assert "production-public invocation" in task
-    assert "24x7 acceptance" in task
-    assert "zero-anomaly claim" in task
-    assert "Underwriting-evaluable" in task
+    assert not (ROOT / "tasks/SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH.md").exists()
     for invariant in (
         "DISABLED_NON_COHORT_SERVICE",
         "forward_cohort_summary_emitted",
@@ -2142,8 +2132,11 @@ def test_persistent_service_contract_and_task_close_exact_governance_change() ->
     ):
         assert invariant in flat
     assert "`NO_LIVE_OR_DEPLOYMENT_AUTHORITY`" not in flat
-    assert "SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH" in current
-    assert "OFFLINE_IMPLEMENTATION_AUTHORIZED" in current
+    assert "**Sole authorized next product-capability closure:** `NONE`" in current
+    assert "OFFLINE_IMPLEMENTATION_ACCEPTED" in current
+    assert "67085248fffb1b20bae1c9512ae1191d166a6509" in current
+    assert "9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa" in current
+    assert digest in current
     assert "**Live commands:** `FORBIDDEN`" in current
     assert "**Persistent deployment / 24x7 acceptance:** `FORBIDDEN`" in current
 

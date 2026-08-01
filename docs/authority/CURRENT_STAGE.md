@@ -8,14 +8,13 @@
 
 **Production Short Vol Radar:** `ESTABLISHED`
 
-**Sole authorized next product-capability closure:**
-`SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH`
+**Sole authorized next product-capability closure:** `NONE`
 
 **Fixed-contract public Shadow runtime:**
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
 **Persistent public Shadow service/workbench:**
-`OFFLINE_IMPLEMENTATION_AUTHORIZED`
+`OFFLINE_IMPLEMENTATION_ACCEPTED`
 
 **Evidence gate:** `CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`
 
@@ -33,13 +32,12 @@ receipts, run duration, contract presence, or roadmap order grant no stage.
 The current boundary retains the already established, guarded production-public Short Vol Radar
 defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md), records the independently
 accepted fixed-contract Shadow implementation-integrity repair and two-layer engineering evidence
-defined below, and authorizes the active
-[`SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH`](../../tasks/SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH.md)
-closure for offline implementation and deterministic tests only. The failed attempt and the later
-accepted smoke are both consumed and sealed. Production-public persistent service deployment is
-unauthorized; no service invocation, persistent deployment, or 24x7 acceptance is authorized.
-Private/account data, orders, fills, capital,
-qualification, Challenger automation, promotion, and execution remain unauthorized.
+defined below, and accepts the persistent runtime and trader-workbench offline implementation at
+the exact identity recorded below. The failed attempt and the later accepted smoke are both
+consumed and sealed. No product-capability closure or live task is active. Production-public
+persistent service deployment is unauthorized; no service invocation, persistent deployment, or
+24x7 acceptance is authorized. Private/account data, orders, fills, capital, qualification,
+Challenger automation, promotion, and execution remain unauthorized.
 
 The accepted
 [`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) implementation
@@ -61,13 +59,26 @@ missing fatal coordinator regression. It changes no contract, Policy, schema, ec
 dependency, or lock and authorizes no market command, private/account/order/fill capability,
 qualification, or persistent deployment.
 
-The active
+The accepted
 [`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`](../contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md)
 implementation/evidence contract adds only a persistent-service run-segment identity, exact
 lifecycle/terminal evidence, non-cohort conservation/reader semantics, and an immutable loopback
 read-only workbench projection. It keeps every service-created pair `cohort_enrolled=false`, emits
 no forward-cohort summary, and leaves `observe-shadow` manifest/cutoff/final-stop semantics
 unchanged. Contract and code presence grant no live command or deployment permission.
+
+The offline service/workbench implementation is independently accepted at exact commit
+`67085248fffb1b20bae1c9512ae1191d166a6509`, tree
+`9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa`, parent
+`fc0719b94101dbfae765a9e56be8f93b9d63cc93`, with exact service-contract digest
+`sha256:9c3b46eae8b646d2c86f38df35cfcf962605c0b670385376d7c2ebef3a771778`.
+Its direct deterministic acceptance includes persistent lifecycle/evidence integrity, single-root
+lease safety, real reconnect and fatal paths, immutable projection ordering, loopback-only HTTP,
+and executable browser fail-closed/recovery semantics. The exact candidate passed `937` repository
+tests and GitHub CI run `30682879756`. No live command, Deribit connection, supervisor install, or
+deployment occurred during this acceptance. The contract header's
+`OFFLINE_IMPLEMENTATION_AUTHORIZED` label records its frozen pre-acceptance state; it does not
+override this authority's current `OFFLINE_IMPLEMENTATION_ACCEPTED` record.
 
 ### Accepted two-layer engineering evidence
 
@@ -264,12 +275,13 @@ Shadow interval remains active. The consumed failed interval remains `INCOMPLETE
 and `NOT_EVALUABLE`; no new evidence can complete or relabel it. Natural Candidate, Entry, or
 Outcome occurrence was not a blocker for the accepted engineering closure.
 
-The active business prerequisite is now the offline implementation of the exact persistent
-public-only service, service-evidence reader, and read-only workbench named above. This task may
-change authority, contract, runtime code, and direct tests only inside its declared scope. It may
-not invoke the service, connect it to Deribit, install a supervisor, deploy persistently, or run a
-24x7 sample. A later explicit `EVIDENCE_ONLY` or deployment task remains required for every such
-action and cannot reuse either consumed bounded Shadow interval.
+The offline implementation prerequisite for the exact persistent public-only service,
+service-evidence reader, and read-only workbench is closed at commit
+`67085248fffb1b20bae1c9512ae1191d166a6509` and tree
+`9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa`. No `EVIDENCE_ONLY` authority, live command,
+supervisor installation, persistent deployment, or 24x7 sample is active. A later explicit
+`EVIDENCE_ONLY` deployment task remains required for every such action and cannot reuse either
+consumed bounded Shadow interval.
 
 The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
 the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
@@ -342,14 +354,13 @@ profitability, or fill evidence.
 
 ## Active and queued sequence
 
-Exactly one product-capability closure is active:
-
-1. **Persistent runtime and read-only workbench — offline implementation only:** implement and
-   directly test the exact service/terminal/reader/projection contract. Live commands, supervisor
-   installation, persistent deployment, and 24x7 evidence remain forbidden.
+No product-capability closure is active. The persistent runtime and read-only workbench offline
+implementation is accepted at the exact identity recorded above; its completed task is deleted.
+Live commands, supervisor installation, persistent deployment, and 24x7 evidence remain forbidden.
 
 The accepted two-layer smoke cannot be extended, retried, reused, or relabelled. After independent
-acceptance of the active implementation, these successor closures remain queued and unauthorized:
+acceptance of the persistent implementation, these successor closures remain queued and
+unauthorized:
 
 1. **Long-running frozen-Policy sample:** separately authorize a new production-public service
    invocation, external deployment envelope, result-independent stop/retention rules, and new empty
@@ -370,13 +381,13 @@ No queued closure is active.
 - full-market persistence, per-update no-anomaly receipts, replay, or offline recomputation as a
   prerequisite for this Radar;
 - any production-public service invocation, Candidate, Shadow admission, Shadow Entry, Position,
-  Outcome, rejected-counterfactual, or forward-cohort operation; the active task is offline-only;
+  Outcome, rejected-counterfactual, or forward-cohort operation; no live task is active;
 - any second invocation, retry, alternate manifest, reuse, mutation, deletion, completion,
   migration, or relabeling of either consumed Shadow attempt's artifacts;
 - automatic training, Policy selection, qualification, promotion, or evolution;
 - generic databases, feature stores, registries, workflow engines, reusable service platforms,
-  markets, or strategies; only the one bounded offline process host named by the active task is
-  authorized;
+  markets, or strategies; the accepted process host remains unauthorized to run until a separate
+  exact live task is active;
 - private/account APIs, test-environment market sources, credentials, balances, margin, positions,
   orders, fills, settlement, execution gateways, maker behavior, or money; production
   `public/test` is allowed only as the protocol-required response to an established heartbeat
