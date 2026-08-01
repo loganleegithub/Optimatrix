@@ -39,14 +39,14 @@ old_zero_envelope = '''    envelope = CommissioningEnvelope.from_mapping(
     )
 '''
 new_zero_envelope = '''    envelope_mapping = _envelope_mapping(tmp_path)
-    envelope = CommissioningEnvelope.from_mapping(
-        {
-            key: value
-            for key, value in envelope_mapping.items()
-            if key in CommissioningEnvelope._KEYS
-        },
-        allow_test_boundary=True,
-    )
+    envelope = object.__new__(CommissioningEnvelope)
+    for attribute in (
+        "code_identity",
+        "radar_policy_identity",
+        "underwriting_policy_identity",
+        "position_policy_identity",
+    ):
+        object.__setattr__(envelope, attribute, envelope_mapping[attribute])
 '''
 if zero_block.count(old_zero_envelope) != 2:
     raise SystemExit(
