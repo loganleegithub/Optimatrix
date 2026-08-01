@@ -193,30 +193,30 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_records_accepted_repair_and_active_fresh_restart() -> None:
+def test_current_stage_records_accepted_repair_and_consumed_fresh_restart() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
     assert current.count(marker) == 1
-    assert f"{marker} `SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART`" in flat
+    assert f"{marker} `NONE`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
     assert (
         "**Fixed-contract public Shadow runtime:** `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`"
     ) in flat
-    assert "**Evidence gate:** `ACTIVE_FRESH_PERSISTENT_SERVICE_PRODUCTION_RESTART`" in current
-    assert "**Live commands:** `AUTHORIZED_EXACT_ONE_FRESH_SERVE_SHADOW`" in current
+    assert "**Evidence gate:** `CLOSED_COMMISSION_FAILED_NO_RETRY`" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
     assert (
         "**Persistent public Shadow service/workbench:** "
-        "`REPAIR_ACCEPTED_FRESH_PRODUCTION_RESTART_AUTHORIZED`"
+        "`REPAIR_ACCEPTED_FRESH_RESTART_COMMISSION_FAILED_CONSUMED`"
     ) in flat
     assert (
-        "**Persistent deployment / 24x7 acceptance:** `RESTART_AUTHORIZED_ACCEPTANCE_PENDING`"
+        "**Persistent deployment / 24x7 acceptance:** `NOT_ACCEPTED_COMMISSION_FAILED_NO_RETRY`"
     ) in current
     assert current.count("**Evidence gate:**") == 1
     assert current.count("**Live commands:**") == 1
-    assert "`EVIDENCE_ONLY` authority" in flat
+    assert "No product-capability closure is active" in flat
     assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
     assert "4b225ee1f199523fb052611d84612ec75c7abf78" in current
     assert "9e53c6233949348c5805e96ea1eefb5998bf4c49" in current
@@ -228,12 +228,12 @@ def test_current_stage_records_accepted_repair_and_active_fresh_restart() -> Non
     assert "downstream complete-reader and conservation checks passed" in flat
     assert "Radar run summary is absent" in flat
     assert "overall forward evidence remains `INCOMPLETE` and `NOT_ACCEPTED`" in flat
-    assert "historical failed attempt, accepted smoke, and consumed persistent observation" in flat
+    assert "historical failed attempt, accepted smoke, and both persistent-service attempts" in flat
     assert "6eaaddfecf4c59a19c8029682a80fc52b7896a64" in current
     assert "f9ce7f98623ed7249160ee29c940c9c026fc4173" in current
     assert "21af26c71ef625889d29c4d7e00ebeae92f8a15d" in current
     assert "11b8a42d920e6be9eff7a56f45fd3c02c8ef6bed" in current
-    assert "Exactly one product-capability closure is active" in current
+    assert "No product-capability closure is active" in current
     assert "67085248fffb1b20bae1c9512ae1191d166a6509" in current
     assert "9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa" in current
     assert "9c3b46eae8b646d2c86f38df35cfcf962605c0b670385376d7c2ebef3a771778" in current
@@ -249,16 +249,36 @@ def test_current_stage_records_accepted_repair_and_active_fresh_restart() -> Non
     assert "3891e6520f533ded0e73c4f5c55b6741d250477f" in current
     assert "6,442 Underwriting availability objects" in flat
     assert "This attempt is consumed and authorizes no restart" in flat
-    assert "### Accepted operability repair and active fresh-restart delegation" in current
+    assert "### Accepted operability repair and consumed fresh-restart attempt" in current
     assert "d4740d6a181efebc8dad6d1091a78fa44d885957" in current
     assert "d5776f4f7c30763d095e36c7ea8b67209ec76448" in current
     assert "4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7" in current
     assert "GitHub CI run `30694275628`" in current
     assert "/Users/logan/Optimatrix-public-shadow-observation-002" in current
     assert "com.optimatrix.public-shadow.r2" in current
-    assert "The old `/Users/logan/Optimatrix-public-shadow-observation` tree remains sealed" in flat
-    assert "This task remains `ACTIVE` throughout a successful live observation" in flat
-    assert "If commissioning fails after process start, the probe is not loaded" in flat
+    assert (
+        "The old `/Users/logan/Optimatrix-public-shadow-observation` tree remained sealed" in flat
+    )
+    assert "The probe was never loaded and its ledger contains zero rows" in flat
+    assert "controller commission verifier expected a nonexistent `contract_digest` field" in flat
+    assert "`266,887` ms" in current
+    assert "PASS_COMPLETE_CLEAN_STOP" in current
+    assert "OPERATIONAL_24H_GATE_NOT_MET" in current
+    assert "5ac602eaef943c6d0f778d5469af3c1aaf004cf30cc188f46ff88c0d2401b2ca" in current
+    assert "5abd68de06aa29c002904dc5e150da69236286ff369f4a137149d0ebc1343de8" in current
+    assert "0bba76ffae80ec920544f22699cbcbf0eaae06a6a718832afc41f422a1dc4d30" in current
+    assert "c77ed48feade03b44c6a439af8d15b8463e79c8e7a809d80bbc4272b8da550dc" in current
+    assert "636088528a9375099e8531e30546842aa9cd8f82" in current
+    assert "10e352c954474fd3b27b005f6d8845d4d5b0f38f" in current
+    assert "29 Radar anomaly objects" in flat
+    assert "116 Underwriting availability objects" in flat
+    assert (
+        "The two installed r2 plist files remain only as consumed inert deployment assets" in flat
+    )
+    assert "8edb70de5b72ada67297af8d58fbbc372d31cd5e45d6cb65583e065389d440a3" in current
+    assert "82f93f80f4c531ee0d7f434ed965b9af1da0f4442c4c6ffe3961f12566577f89" in current
+    assert "Its one fresh r2 restart is now consumed" in flat
+    assert "Its 24-hour result remains pending" not in current
     assert (
         "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json"
     ) in current
@@ -282,7 +302,7 @@ def test_current_stage_records_accepted_repair_and_active_fresh_restart() -> Non
     assert "c7d8eb4e6bdc9953716892376c26935089d384e5460aa11073544b7521b96cf3" in current
 
 
-def test_fresh_production_restart_task_is_exactly_active() -> None:
+def test_fresh_production_restart_is_consumed_and_no_task_is_active() -> None:
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md").exists()
@@ -290,59 +310,28 @@ def test_fresh_production_restart_task_is_exactly_active() -> None:
     assert not (
         ROOT / "tasks/SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR.md"
     ).exists()
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART.md",
-        "TEMPLATE.md",
-    ]
+    assert not (ROOT / "tasks/SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART.md").exists()
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    task = (ROOT / "tasks/SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART.md").read_text(
-        encoding="utf-8"
+    assert ("**Sole authorized next product-capability closure:** `NONE`") in " ".join(
+        current.split()
     )
-    task_flat = " ".join(task.split())
-    assert (
-        "**Sole authorized next product-capability closure:** "
-        "`SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART`"
-    ) in " ".join(current.split())
     assert "**Persistent public Shadow service/workbench:**" in current
-    assert "`REPAIR_ACCEPTED_FRESH_PRODUCTION_RESTART_AUTHORIZED`" in current
-    assert "**Live commands:** `AUTHORIZED_EXACT_ONE_FRESH_SERVE_SHADOW`" in current
-    assert "`RESTART_AUTHORIZED_ACCEPTANCE_PENDING`" in current
-    assert "**Task kind:** EVIDENCE_ONLY" in task
-    assert "**Runtime implementation:** FORBIDDEN" in task
-    assert "**Live commands:** REQUIRED" in task
-    assert "2026-08-01 instruction `部署重启上线`" in task
-    assert "d4740d6a181efebc8dad6d1091a78fa44d885957" in task
-    assert "d5776f4f7c30763d095e36c7ea8b67209ec76448" in task
-    assert "4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7" in task
-    assert "/Users/logan/Optimatrix-public-shadow-observation-002" in task
-    assert "com.optimatrix.public-shadow.r2" in task
-    assert "Probe-ledger schema remains 1 and is distinct from endpoint schema 2" in task_flat
-    assert "Exactly one r2 service starts" in task_flat
-    assert "This task remains `ACTIVE` for the full observation" in task_flat
-    assert (
-        "If commissioning fails after the service has started, the probe is not loaded" in task_flat
+    assert "`REPAIR_ACCEPTED_FRESH_RESTART_COMMISSION_FAILED_CONSUMED`" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "`NOT_ACCEPTED_COMMISSION_FAILED_NO_RETRY`" in current
+    assert "FIRST_PERIODIC_PROBE_DEADLINE_MISSED_BEFORE_PROBE_LOAD" in current
+    assert "The probe was never loaded and its ledger contains zero rows" in " ".join(
+        current.split()
     )
-    assert "## Contract" in task
-    assert "## Artifacts and delivery report" in task
-    assert "/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r2.plist" in task
-    assert "/Users/logan/Library/LaunchAgents/com.optimatrix.public-shadow.r2.probe.plist" in task
-    assert "2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4" in task
-    assert "be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af" in task
-    assert "498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439" in task
-    assert "no consecutive monotonic gap above 180,000 ms" in task_flat
-    assert "The terminal audit is outside the probe denominator" in task_flat
-    assert (
-        "terminal.terminal_fact_boundary.received_monotonic_ms - lifecycle-sequence-1 "
-        "recorded_monotonic_ms"
-    ) in task_flat
-    assert "Private API:** FORBIDDEN" in task
+    assert "No product-capability closure is active" in current
 
 
 def test_shadow_attempt_integrity_acceptance_preserves_failure_scope_and_identities() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     for invariant in (
-        "**Live commands:** `AUTHORIZED_EXACT_ONE_FRESH_SERVE_SHADOW`",
+        "**Live commands:** `FORBIDDEN`",
         "CONSUMED_FAILED_NO_RETRY",
         "Underwriting semantic identity must be sha256:<64 lowercase hex>",
         "Radar run summary",
@@ -1986,18 +1975,18 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`",
         "The two gates remain semantically independent",
         "does not prove indefinite uptime",
-        "`EVIDENCE_ONLY` authority",
+        "`EVIDENCE_ONLY` attempt",
         "private/account data",
         "orders, fills, capital",
         "fixed-contract Shadow implementation adds",
         "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
         "`CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`",
-        "Exactly one product-capability closure is active",
-        "REPAIR_ACCEPTED_FRESH_PRODUCTION_RESTART_AUTHORIZED",
-        "ACTIVE_FRESH_PERSISTENT_SERVICE_PRODUCTION_RESTART",
+        "No product-capability closure is active",
+        "REPAIR_ACCEPTED_FRESH_RESTART_COMMISSION_FAILED_CONSUMED",
+        "CLOSED_COMMISSION_FAILED_NO_RETRY",
         "PASS_COMPLETE_PROCESS_FAILURE_EVIDENCE_ONLY",
         "NOT_ACCEPTED_PROCESS_FAILURE",
-        "Fresh persistent-service production restart",
+        "Accepted operability repair and consumed fresh-restart attempt",
         "Radar run summary is absent",
         "one result-independent production-public process",
         "natural_shadow_opportunity = NOT_OBSERVED",
@@ -2107,7 +2096,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "natural_shadow_opportunity = NOT_OBSERVED",
         "persistent observation",
         "PROCESS_FAILURE",
-        "one exact fresh `serve-shadow` invocation",
+        "exactly one r2 service started",
         "offline-repairable",
     ):
         assert invariant in readme
@@ -2228,12 +2217,12 @@ def test_persistent_service_contract_and_fresh_restart_close_exact_governance_ch
         assert invariant in flat
     assert "The version-1 snapshot" not in contract
     assert "`NO_LIVE_OR_DEPLOYMENT_AUTHORITY`" not in flat
-    assert "SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART" in current
-    assert "REPAIR_ACCEPTED_FRESH_PRODUCTION_RESTART_AUTHORIZED" in current
+    assert "SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART" not in current
+    assert "REPAIR_ACCEPTED_FRESH_RESTART_COMMISSION_FAILED_CONSUMED" in current
     assert "67085248fffb1b20bae1c9512ae1191d166a6509" in current
     assert "9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa" in current
-    assert "**Live commands:** `AUTHORIZED_EXACT_ONE_FRESH_SERVE_SHADOW`" in current
-    assert "`RESTART_AUTHORIZED_ACCEPTANCE_PENDING`" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "`NOT_ACCEPTED_COMMISSION_FAILED_NO_RETRY`" in current
     assert "d4740d6a181efebc8dad6d1091a78fa44d885957" in current
     assert "d5776f4f7c30763d095e36c7ea8b67209ec76448" in current
     assert "sha256:4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7" in current

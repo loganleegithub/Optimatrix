@@ -30,11 +30,10 @@ capture job followed by a scan job, and no scanner that repeatedly rereads an un
 dataset. The downstream arrows are implemented in the same process. Their production-public
 permission, and any permission to invoke or deploy the persistent host, comes only from
 `CURRENT_STAGE` and an exact live task. The operability and version-2 trader-workbench repair is
-accepted at exact commit `d4740d6a181efebc8dad6d1091a78fa44d885957`. The active fresh-restart
-`EVIDENCE_ONLY` task authorizes one public-only invocation under a new external root and
-`KeepAlive=false` local process host, one loopback workbench, and one external read-only probe. The
-consumed root is never reused. This changes no service topology, data path, business owner, or retry
-loop.
+accepted at exact commit `d4740d6a181efebc8dad6d1091a78fa44d885957`. Its one authorized fresh
+restart is consumed after a commission-deadline failure and clean seal. Both observation roots are
+immutable, no live task is active, and no new invocation, probe, or workbench deployment is
+authorized. This changes no service topology, data path, business owner, or retry loop.
 
 ## Data lifecycles
 

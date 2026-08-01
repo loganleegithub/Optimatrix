@@ -9,19 +9,19 @@
 **Production Short Vol Radar:** `ESTABLISHED`
 
 **Sole authorized next product-capability closure:**
-`SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART`
+`NONE`
 
 **Fixed-contract public Shadow runtime:**
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
 **Persistent public Shadow service/workbench:**
-`REPAIR_ACCEPTED_FRESH_PRODUCTION_RESTART_AUTHORIZED`
+`REPAIR_ACCEPTED_FRESH_RESTART_COMMISSION_FAILED_CONSUMED`
 
-**Evidence gate:** `ACTIVE_FRESH_PERSISTENT_SERVICE_PRODUCTION_RESTART`
+**Evidence gate:** `CLOSED_COMMISSION_FAILED_NO_RETRY`
 
-**Live commands:** `AUTHORIZED_EXACT_ONE_FRESH_SERVE_SHADOW`
+**Live commands:** `FORBIDDEN`
 
-**Persistent deployment / 24x7 acceptance:** `RESTART_AUTHORIZED_ACCEPTANCE_PENDING`
+**Persistent deployment / 24x7 acceptance:** `NOT_ACCEPTED_COMMISSION_FAILED_NO_RETRY`
 
 ## Authority
 
@@ -34,14 +34,11 @@ The current boundary retains the already established, guarded production-public 
 defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md), records the independently
 accepted fixed-contract Shadow implementation-integrity repair and two-layer engineering evidence
 defined below, preserves the consumed persistent observation exactly, accepts the bounded
-service-operability and trader-workbench repair, and activates one
-[`SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART`](../../tasks/SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART.md)
-`EVIDENCE_ONLY` authority. The historical failed attempt, accepted smoke, and consumed persistent
-observation remain sealed and are not retried. The active authority permits only the authority
-activation and merge, one fresh public-only persistent service, one loopback workbench, one
-read-only external probe, read-only observation, and the exact result-independent stop protocol.
-Runtime/package/contract/Policy changes, private/account data, orders, fills, capital,
-qualification, Challenger automation, promotion, and execution remain unauthorized.
+service-operability and trader-workbench repair, and records the consumed fresh restart exactly.
+The historical failed attempt, accepted smoke, and both persistent-service attempts remain sealed
+and are not retried. No product-capability closure is active. Live and deployment commands,
+runtime/package/contract/Policy changes, private/account data, orders, fills, capital,
+qualification, Challenger automation, promotion, and execution are unauthorized.
 
 The prior `CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED` evidence result remains immutable accepted
 history; the failed persistent observation neither reopens nor extends it.
@@ -94,8 +91,8 @@ The bounded operability and trader-workbench repair is independently accepted at
 It passed `942` repository tests, independent exact-commit review, remote branch equality, and
 GitHub CI run `30694275628` with conclusion `SUCCESS` on PR #9. The contract header's
 `OFFLINE_REPAIR_AUTHORIZED` label records the state when these exact frozen bytes were accepted;
-changing that label would change the contract identity. Permission for the one invocation below
-comes only from this stage and its active task, never from the contract header or code presence.
+changing that label would change the contract identity. Permission for the now-consumed invocation
+came only from the then-active stage and task, never from the contract header or code presence.
 
 ### Consumed persistent service observation
 
@@ -149,7 +146,7 @@ Underwriting and cohort conservation are `MET`; downstream/service evidence is c
 opportunity, or Outcome. Those zero natural occurrences are `NOT_OBSERVED`, not performance proof.
 This attempt is consumed and authorizes no restart, alternate root, or evidence repair.
 
-### Accepted operability repair and active fresh-restart delegation
+### Accepted operability repair and consumed fresh-restart attempt
 
 The user's `停止并修复` instruction authorized the now-accepted exact repair at
 `d4740d6a181efebc8dad6d1091a78fa44d885957`. It removes redundant whole-history validation for
@@ -159,36 +156,64 @@ workbench projection to version 2, and fixes display semantics and information h
 changes no Policy, Radar formula/state machine, Underwriting/Position/Outcome economics, persisted
 business identity, account boundary, or execution permission.
 
-The user's later `部署重启上线` instruction activates the fresh `EVIDENCE_ONLY` task. An
-authority-only descendant of the accepted repair may update PR #9 without force, pass focused and
-repository checks, receive independent exact-commit review, become ready, and merge. The
-deployment must then resolve and bind the actual remote `main` merge commit/tree and prove its
-runtime/package/contract/Policy bytes equal the accepted repair; the pre-merge branch identity is
-not the deployment identity.
+The user's later `部署重启上线` instruction activated one fresh `EVIDENCE_ONLY` attempt. PR #9 passed
+`942` tests in GitHub CI run `30695255187`, became ready, and merged without force as remote `main`
+commit `636088528a9375099e8531e30546842aa9cd8f82`, tree
+`10e352c954474fd3b27b005f6d8845d4d5b0f38f`. Runtime, packages, service contract, and all three
+Policy files in that merge are byte-identical to the accepted repair. The fresh deployment
+envelope is 11,064 bytes at
+`/Users/logan/Optimatrix-public-shadow-observation-002/deployment/deployment-envelope.json`,
+SHA-256 `ae1db557e6af8dda9ef30fdf079c38804d9d0945cc4f4cdaa4bf952ee6d77536`.
+It bound the merged commit/tree, clean detached checkout, exact command/cwd/state root, service and
+Policy bytes, r2 labels, loopback port, scripts, plists, and absent first-start predicates before
+the state root existed. The old `/Users/logan/Optimatrix-public-shadow-observation` tree remained
+sealed and immutable.
 
-Exactly one service invocation is authorized under the new external root
-`/Users/logan/Optimatrix-public-shadow-observation-002`, labels
-`com.optimatrix.public-shadow.r2` and `com.optimatrix.public-shadow.r2.probe`, and loopback address
-`127.0.0.1:8765`. The old `/Users/logan/Optimatrix-public-shadow-observation` tree remains sealed
-and immutable. The new service uses `KeepAlive=false`, `RunAtLoad=false`, and
-`LaunchOnlyOnce=true`; after exact preflight it receives one `launchctl kickstart` without `-k`.
-It must pass single-PID/argv/cwd/listener/lifecycle/schema-2/current-reader commissioning before the
-fresh schema-1 periodic probe is loaded, so a startup race cannot create a false failed first row.
-The first probe must be successful within 120 seconds of lifecycle start. There is no second start,
-automatic restart, manual retry, alternate root, or result-dependent extension.
+Exactly one `launchctl kickstart` without `-k` started PID `73072` under label
+`com.optimatrix.public-shadow.r2`, runtime identity
+`sha256:adbfe80d4941d798c5c49f7d5b8a50377826464c2f46b8cb809f4a4e3c898f2b`, and the exact fresh
+state root. Controller checks transiently observed one matching process, one listener on
+`127.0.0.1:8765`, and launchd `runs = 1`. They also transiently observed schema-2 `/healthz` at
+HTTP 200 with `health=true`, schema-2 `/readyz` at HTTP 503 with `ready=false`, and the schema-2
+workbench at HTTP 200 with the exact runtime/code/Policy identities. No current audit or probe row
+was published, so these transient checks are not accepted commissioning evidence. Durable
+lifecycle and terminal evidence record real market `UNKNOWN` coverage, including `INDEX_WARMUP`;
+that was not the earlier browser-rendering defect and does not establish service commissioning.
 
-If commissioning fails after process start, the probe is not loaded. The controller records the
-failed commission, sends exactly one label-bound `SIGINT` to the r2 service, waits at most 120
-seconds, and performs one terminal audit without a final-online probe, second signal, or retry.
-This task remains `ACTIVE` throughout a successful live observation; deployment commissioning is
-only a milestone. The task closes only after explicit stop or terminal failure is sealed and
-audited and this authority records the result while returning live commands to disabled.
+Commissioning nevertheless failed closed. The controller commission verifier expected a
+nonexistent `contract_digest` field on lifecycle sequence 1 instead of validating the actual
+`persistent_service_contract_identity` field and frozen contract bytes. By the time that verifier
+error was isolated, `208,560` ms had elapsed from lifecycle start, so the required first successful
+periodic probe within `120,000` ms was impossible. The failure code is
+`FIRST_PERIODIC_PROBE_DEADLINE_MISSED_BEFORE_PROBE_LOAD`. The probe was never loaded and its ledger
+contains zero rows. The 1,015-byte commission-failure record is
+`/Users/logan/Optimatrix-public-shadow-observation-002/deployment/commission-failure.json`, SHA-256
+`5ac602eaef943c6d0f778d5469af3c1aaf004cf30cc188f46ff88c0d2401b2ca`.
 
-The restart establishes only the actually observed production and trader-observability facts.
-Twenty-four-hour acceptance remains `PENDING` until the same runtime is stopped under the task's
-single-signal protocol and a terminal audit proves at least `86,400,000` ms plus every integrity and
-continuity predicate. A healthy service with `ready=false` or truthful business `UNKNOWN` remains
-online but is not known-current market coverage.
+The controller then sent exactly one label-bound `SIGINT`, with exit status 0, and sent no second
+signal, final-online probe, retry, alternate-root start, or second invocation. The service recorded
+`STOPPING / USER_REQUEST` and sealed `CLEAN_STOP` under the same runtime; the process and both r2
+labels are gone and port 8765 has no listener. The two installed r2 plist files remain only as
+consumed inert deployment assets, with SHA-256
+`8edb70de5b72ada67297af8d58fbbc372d31cd5e45d6cb65583e065389d440a3` and
+`82f93f80f4c531ee0d7f434ed965b9af1da0f4442c4c6ffe3961f12566577f89`; they may not be
+bootstrapped, reused, or relabelled. The service's 5,722-byte terminal is SHA-256
+`c77ed48feade03b44c6a439af8d15b8463e79c8e7a809d80bbc4272b8da550dc`, object identity
+`sha256:d63cc65451700f88c698fe3954b3af7fa8212ef5fdb9fabba3d85ea0c16af893`.
+The 1,734-byte controller disposition has SHA-256
+`5abd68de06aa29c002904dc5e150da69236286ff369f4a137149d0ebc1343de8`.
+
+The independent 3,729-byte terminal audit is
+`/Users/logan/Optimatrix-public-shadow-observation-002/deployment/terminal-audit.json`, SHA-256
+`0bba76ffae80ec920544f22699cbcbf0eaae06a6a718832afc41f422a1dc4d30`. It reports
+`reader_verdict=PASS`, `PASS_COMPLETE_CLEAN_STOP`, `OPERATIONAL_24H_GATE_NOT_MET`, exact continuous
+duration `266,887` ms, complete clean-stop Radar evidence, complete downstream/service evidence,
+and `MET` Underwriting and cohort conservation. It records 29 Radar anomaly objects and 116
+Underwriting availability objects, all 116 `NOT_EVALUATED`, with zero public atomic quote,
+Candidate, Shadow Entry, close opportunity, or Outcome. Those zeros are `NOT_OBSERVED`; the
+`244,995` ms of business-`UNKNOWN` coverage is not known-current coverage. This attempt is consumed,
+the active task is removed, live commands are forbidden, and no restart, evidence repair, or 24x7
+claim is authorized.
 
 ### Accepted two-layer engineering evidence
 
@@ -389,10 +414,11 @@ service-evidence reader, and read-only workbench is closed at commit
 `67085248fffb1b20bae1c9512ae1191d166a6509` and tree
 `9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa`. Its one authorized persistent observation is now
 consumed as complete process-failure evidence and not accepted. The smallest offline owning-module
-repair is accepted at `d4740d6a181efebc8dad6d1091a78fa44d885957`. The current closure is no
-longer an implementation blocker: it is one fresh production restart and commissioning interval
-under a new root, labels, deployment envelope, process, verifier, probe ledger, and stop boundary.
-Its 24-hour result remains pending and cannot be inferred from startup health or prior evidence.
+repair is accepted at `d4740d6a181efebc8dad6d1091a78fa44d885957`. Its one fresh r2 restart is
+now consumed after the commissioning controller missed the first-probe deadline. The terminal
+reader passed, but `24_HOUR_CONTINUOUS_PUBLIC_SERVICE_SAMPLE = NOT_MET`; there is no active
+closure. Any successor requires an explicitly authorized, pre-bound deadline-safe commissioning
+controller and entirely new root, labels, process, probe ledger, and stop boundary.
 
 The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
 the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
@@ -465,18 +491,14 @@ profitability, or fill evidence.
 
 ## Active and queued sequence
 
-Exactly one product-capability closure is active:
+No product-capability closure is active.
 
-1. **Fresh persistent-service production restart:** accept the exact frozen repair, publish and
-   merge one authority-only activation, bind the resulting remote-main identity into a new
-   deployment envelope, start exactly one public-only r2 service, commission its version-2
-   loopback workbench, then start one read-only 60-second probe and observe without retry.
+The accepted two-layer smoke and both consumed persistent observations cannot be extended,
+retried, reused, or relabelled. These successor closures remain queued and unauthorized:
 
-The accepted two-layer smoke and consumed persistent observation cannot be extended, retried,
-reused, or relabelled. These successor closures remain queued and unauthorized:
-
-1. **Terminal 24x7 service acceptance:** after explicit human stop or terminal failure, apply the
-   active task's one-signal stop and complete-audit rules to only the actually covered fresh run.
+1. **Commissioning-controller hardening and successor service validation:** an explicit new
+   authority must pre-bind a deadline-safe verifier and entirely new root, labels, process, probe,
+   and stop boundary; the consumed r2 attempt grants none.
 2. **Challenger research and qualification:** authorize only after a usable frozen-Policy cohort
    and pre-registered qualification contract.
 3. **Promotion and execution:** authorize separately after independent qualification. Account,
@@ -492,12 +514,13 @@ No queued closure is active.
 - treating component-leg quotes as an atomic structure or any public quote as a fill;
 - full-market persistence, per-update no-anomaly receipts, replay, or offline recomputation as a
   prerequisite for this Radar;
-- any production-public service invocation except the one exact r2 `serve-shadow` invocation,
-  probe, and loopback commissioning authorized by the active task;
-- any second invocation, automatic restart, manual retry, alternate state root or label, public
-  Internet binding, or private browser surface;
-- any reuse, mutation, deletion, completion, migration, or relabeling of either consumed Shadow
-  attempt's artifacts;
+- any production-public service invocation, probe, or loopback commissioning without a new exact
+  authority;
+- any second invocation or repair of the consumed r2 attempt, automatic restart, manual retry,
+  alternate state root or label, public Internet binding, or private browser surface;
+- bootstrapping, loading, editing, deleting, reusing, or relabelling either consumed r2 plist;
+- any reuse, mutation, deletion, completion, migration, or relabeling of a consumed Shadow or
+  persistent-service attempt's artifacts;
 - automatic training, Policy selection, qualification, promotion, or evolution;
 - generic databases, feature stores, registries, workflow engines, reusable service platforms,
   markets, or strategies;
