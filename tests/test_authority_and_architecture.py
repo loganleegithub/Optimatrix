@@ -193,32 +193,30 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_records_consumed_observation_and_active_offline_repair() -> None:
+def test_current_stage_records_accepted_repair_and_active_fresh_restart() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
     assert current.count(marker) == 1
-    assert (
-        f"{marker} `SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR`" in flat
-    )
+    assert f"{marker} `SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
     assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
     assert (
         "**Fixed-contract public Shadow runtime:** `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`"
     ) in flat
-    assert "**Evidence gate:** `CLOSED_PROCESS_FAILURE_REPAIR_REQUIRED`" in current
-    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "**Evidence gate:** `ACTIVE_FRESH_PERSISTENT_SERVICE_PRODUCTION_RESTART`" in current
+    assert "**Live commands:** `AUTHORIZED_EXACT_ONE_FRESH_SERVE_SHADOW`" in current
     assert (
         "**Persistent public Shadow service/workbench:** "
-        "`PRODUCTION_OBSERVATION_FAILED_REPAIR_AUTHORIZED`"
+        "`REPAIR_ACCEPTED_FRESH_PRODUCTION_RESTART_AUTHORIZED`"
     ) in flat
-    assert "**Persistent deployment / 24x7 acceptance:** `NOT_ACCEPTED_REPAIR_REQUIRED`" in current
+    assert (
+        "**Persistent deployment / 24x7 acceptance:** `RESTART_AUTHORIZED_ACCEPTANCE_PENDING`"
+    ) in current
     assert current.count("**Evidence gate:**") == 1
     assert current.count("**Live commands:**") == 1
-    assert "required fresh `EVIDENCE_ONLY` authority is now" not in current
-    assert "acceptance remains pending its exact activation publication" not in current
-    assert "offline `IMPLEMENTATION` authority" in flat
+    assert "`EVIDENCE_ONLY` authority" in flat
     assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
     assert "4b225ee1f199523fb052611d84612ec75c7abf78" in current
     assert "9e53c6233949348c5805e96ea1eefb5998bf4c49" in current
@@ -251,8 +249,14 @@ def test_current_stage_records_consumed_observation_and_active_offline_repair() 
     assert "3891e6520f533ded0e73c4f5c55b6741d250477f" in current
     assert "6,442 Underwriting availability objects" in flat
     assert "This attempt is consumed and authorizes no restart" in flat
-    assert "### Active operability and trader-workbench repair delegation" in current
-    assert "Live commands and deployment remain forbidden" in flat
+    assert "### Accepted operability repair and active fresh-restart delegation" in current
+    assert "d4740d6a181efebc8dad6d1091a78fa44d885957" in current
+    assert "d5776f4f7c30763d095e36c7ea8b67209ec76448" in current
+    assert "4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7" in current
+    assert "GitHub CI run `30694275628`" in current
+    assert "/Users/logan/Optimatrix-public-shadow-observation-002" in current
+    assert "com.optimatrix.public-shadow.r2" in current
+    assert "The old `/Users/logan/Optimatrix-public-shadow-observation` tree remains sealed" in flat
     assert (
         "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json"
     ) in current
@@ -276,39 +280,42 @@ def test_current_stage_records_consumed_observation_and_active_offline_repair() 
     assert "c7d8eb4e6bdc9953716892376c26935089d384e5460aa11073544b7521b96cf3" in current
 
 
-def test_consumed_observation_and_offline_repair_task_is_exactly_active() -> None:
+def test_fresh_production_restart_task_is_exactly_active() -> None:
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_OBSERVATION.md").exists()
+    assert not (
+        ROOT / "tasks/SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR.md"
+    ).exists()
     assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR.md",
+        "SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART.md",
         "TEMPLATE.md",
     ]
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    task = (
-        ROOT / "tasks/SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR.md"
-    ).read_text(encoding="utf-8")
+    task = (ROOT / "tasks/SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART.md").read_text(
+        encoding="utf-8"
+    )
     task_flat = " ".join(task.split())
     assert (
         "**Sole authorized next product-capability closure:** "
-        "`SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR`"
+        "`SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART`"
     ) in " ".join(current.split())
     assert "**Persistent public Shadow service/workbench:**" in current
-    assert "`PRODUCTION_OBSERVATION_FAILED_REPAIR_AUTHORIZED`" in current
-    assert "**Live commands:** `FORBIDDEN`" in current
-    assert "`NOT_ACCEPTED_REPAIR_REQUIRED`" in current
-    assert "**Task kind:** IMPLEMENTATION" in task
-    assert "**Runtime implementation:** REQUIRED" in task
-    assert "**Live commands:** FORBIDDEN" in task
-    assert "2026-08-01 instruction `停止并修复`" in task
-    assert "`PASS_COMPLETE_PROCESS_FAILURE_EVIDENCE_ONLY`" in task
-    assert "`NOT_ACCEPTED_PROCESS_FAILURE`" in task
-    assert "Cached downstream projection data is reused only while that exact revision" in task_flat
-    assert "Graph-independent availability objects" in task_flat
-    assert "true `UNKNOWN`, `NOT_EVALUATED`, `N/A`" in task_flat
-    assert "A 1,214-pixel viewport has no document-level horizontal overflow" in task_flat
-    assert "production-public command: `NOT_APPLICABLE — live commands forbidden`" in task_flat
+    assert "`REPAIR_ACCEPTED_FRESH_PRODUCTION_RESTART_AUTHORIZED`" in current
+    assert "**Live commands:** `AUTHORIZED_EXACT_ONE_FRESH_SERVE_SHADOW`" in current
+    assert "`RESTART_AUTHORIZED_ACCEPTANCE_PENDING`" in current
+    assert "**Task kind:** EVIDENCE_ONLY" in task
+    assert "**Runtime implementation:** FORBIDDEN" in task
+    assert "**Live commands:** REQUIRED" in task
+    assert "2026-08-01 instruction `部署重启上线`" in task
+    assert "d4740d6a181efebc8dad6d1091a78fa44d885957" in task
+    assert "d5776f4f7c30763d095e36c7ea8b67209ec76448" in task
+    assert "4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7" in task
+    assert "/Users/logan/Optimatrix-public-shadow-observation-002" in task
+    assert "com.optimatrix.public-shadow.r2" in task
+    assert "Probe-ledger schema remains 1 and is distinct from endpoint schema 2" in task_flat
+    assert "Exactly one r2 service starts" in task_flat
     assert "Private API:** FORBIDDEN" in task
 
 
@@ -316,7 +323,7 @@ def test_shadow_attempt_integrity_acceptance_preserves_failure_scope_and_identit
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     for invariant in (
-        "**Live commands:** `FORBIDDEN`",
+        "**Live commands:** `AUTHORIZED_EXACT_ONE_FRESH_SERVE_SHADOW`",
         "CONSUMED_FAILED_NO_RETRY",
         "Underwriting semantic identity must be sha256:<64 lowercase hex>",
         "Radar run summary",
@@ -1960,18 +1967,18 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`",
         "The two gates remain semantically independent",
         "does not prove indefinite uptime",
-        "offline `IMPLEMENTATION` authority",
+        "`EVIDENCE_ONLY` authority",
         "private/account data",
         "orders, fills, capital",
         "fixed-contract Shadow implementation adds",
         "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
         "`CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`",
         "Exactly one product-capability closure is active",
-        "PRODUCTION_OBSERVATION_FAILED_REPAIR_AUTHORIZED",
-        "CLOSED_PROCESS_FAILURE_REPAIR_REQUIRED",
+        "REPAIR_ACCEPTED_FRESH_PRODUCTION_RESTART_AUTHORIZED",
+        "ACTIVE_FRESH_PERSISTENT_SERVICE_PRODUCTION_RESTART",
         "PASS_COMPLETE_PROCESS_FAILURE_EVIDENCE_ONLY",
         "NOT_ACCEPTED_PROCESS_FAILURE",
-        "Persistent service operability and trader-workbench repair",
+        "Fresh persistent-service production restart",
         "Radar run summary is absent",
         "one result-independent production-public process",
         "natural_shadow_opportunity = NOT_OBSERVED",
@@ -2081,7 +2088,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "natural_shadow_opportunity = NOT_OBSERVED",
         "persistent observation",
         "PROCESS_FAILURE",
-        "live commands and deployment are forbidden",
+        "one exact fresh `serve-shadow` invocation",
         "offline-repairable",
     ):
         assert invariant in readme
@@ -2158,7 +2165,7 @@ def test_radar_contract_keeps_market_signal_execution_and_decision_distinct() ->
     assert "keep `LEGGED_CLOSE_REFERENCE` diagnostic" in radar_flat
 
 
-def test_persistent_service_contract_and_active_repair_close_exact_governance_change() -> None:
+def test_persistent_service_contract_and_fresh_restart_close_exact_governance_change() -> None:
     contract_path = ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md"
     contract = contract_path.read_text(encoding="utf-8")
     flat = " ".join(contract.split())
@@ -2174,6 +2181,7 @@ def test_persistent_service_contract_and_active_repair_close_exact_governance_ch
 
     assert constant_match is not None
     assert digest == constant_match.group(1)
+    assert digest == "sha256:4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7"
     assert digest != "sha256:9c3b46eae8b646d2c86f38df35cfcf962605c0b670385376d7c2ebef3a771778"
     assert not (ROOT / "tasks/SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH.md").exists()
     for invariant in (
@@ -2201,12 +2209,15 @@ def test_persistent_service_contract_and_active_repair_close_exact_governance_ch
         assert invariant in flat
     assert "The version-1 snapshot" not in contract
     assert "`NO_LIVE_OR_DEPLOYMENT_AUTHORITY`" not in flat
-    assert "SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR" in current
-    assert "PRODUCTION_OBSERVATION_FAILED_REPAIR_AUTHORIZED" in current
+    assert "SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART" in current
+    assert "REPAIR_ACCEPTED_FRESH_PRODUCTION_RESTART_AUTHORIZED" in current
     assert "67085248fffb1b20bae1c9512ae1191d166a6509" in current
     assert "9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa" in current
-    assert "**Live commands:** `FORBIDDEN`" in current
-    assert "`NOT_ACCEPTED_REPAIR_REQUIRED`" in current
+    assert "**Live commands:** `AUTHORIZED_EXACT_ONE_FRESH_SERVE_SHADOW`" in current
+    assert "`RESTART_AUTHORIZED_ACCEPTANCE_PENDING`" in current
+    assert "d4740d6a181efebc8dad6d1091a78fa44d885957" in current
+    assert "d5776f4f7c30763d095e36c7ea8b67209ec76448" in current
+    assert "sha256:4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7" in current
 
 
 def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:

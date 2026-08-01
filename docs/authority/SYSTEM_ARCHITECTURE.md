@@ -27,12 +27,14 @@ Deribit public WebSocket
 The market-state, detector, and public atomic-availability arrows are one event-driven Market
 Monitor and Short Vol Radar flow. There is no
 capture job followed by a scan job, and no scanner that repeatedly rereads an unchanged local
-dataset. The downstream arrows are implemented in the same process. Their production-public permission,
-and any permission to invoke or deploy the persistent host, comes only from `CURRENT_STAGE` and an
-exact live task. The accepted offline task authorized only implementation and deterministic tests
-and is complete. The active `EVIDENCE_ONLY` task authorizes one public-only invocation under a
-`KeepAlive=false` local process host, one loopback workbench, and one external read-only probe; it
-does not add a second product service, data path, business owner, or retry loop.
+dataset. The downstream arrows are implemented in the same process. Their production-public
+permission, and any permission to invoke or deploy the persistent host, comes only from
+`CURRENT_STAGE` and an exact live task. The operability and version-2 trader-workbench repair is
+accepted at exact commit `d4740d6a181efebc8dad6d1091a78fa44d885957`. The active fresh-restart
+`EVIDENCE_ONLY` task authorizes one public-only invocation under a new external root and
+`KeepAlive=false` local process host, one loopback workbench, and one external read-only probe. The
+consumed root is never reused. This changes no service topology, data path, business owner, or retry
+loop.
 
 ## Data lifecycles
 

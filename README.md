@@ -11,8 +11,9 @@ production-public Radar runtime and its `observe` command. The fixed-contract pu
 implementation is separately `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`. The two-layer
 engineering closure is consumed and closed. The later persistent-service observation is also
 consumed: it sealed complete `PROCESS_FAILURE` evidence and did not satisfy the 24-hour gate. One
-offline service-operability and trader-workbench repair task is active; live commands and
-deployment are forbidden.
+service-operability and trader-workbench repair is accepted. One fresh production restart is now
+authorized under a new root, new labels, exactly one public-only process, and one read-only probe;
+24-hour acceptance remains pending.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
@@ -64,7 +65,7 @@ profitable, or authorized to trade. Offline Shadow implementation or evidence-in
 acceptance does not prove a natural Candidate, Entry, Position, Outcome, forward cohort, Policy
 quality, or business success.
 
-### Consumed persistent observation and active repair
+### Consumed persistent observation and active fresh restart
 
 The separately accepted persistent service/workbench implementation at commit
 `67085248fffb1b20bae1c9512ae1191d166a6509` was later deployed under one exact observation
@@ -81,13 +82,24 @@ zero Candidate, atomic quote, Shadow Entry, close opportunity, or Outcome. Those
 `NOT_OBSERVED`, not Policy-quality or performance evidence. The consumed state root cannot be
 restarted, repaired, relabelled, or reused.
 
-The sole active task is the bounded offline
-[`SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR`](tasks/SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR.md).
+The bounded repair is independently accepted at exact commit
+`d4740d6a181efebc8dad6d1091a78fa44d885957`, tree
+`d5776f4f7c30763d095e36c7ea8b67209ec76448`, under service-contract digest
+`sha256:4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7`.
 It owns only the redundant whole-history work, revision-keyed projection cache, settled display
 metadata, and truthful trader-facing version-2 presentation. It changes no Radar formula or state
 machine, Policy, Underwriting/Position/Outcome economics, durable business identity, account
-boundary, or execution permission. A fresh production validation requires a later explicit
-authority, new state root, and new process.
+boundary, or execution permission.
+
+The sole active task is the
+[`SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART`](tasks/SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART.md).
+It authorizes PR #9 activation and merge, then exactly one `serve-shadow` invocation under
+`/Users/logan/Optimatrix-public-shadow-observation-002`, labels
+`com.optimatrix.public-shadow.r2` and `com.optimatrix.public-shadow.r2.probe`, and loopback-only
+`127.0.0.1:8765`. The service must pass exact commissioning before the fresh 60-second probe is
+loaded. The consumed root remains sealed; a startup or process failure consumes the new attempt
+without retry. Startup health does not establish 24-hour continuity, Policy quality, opportunity
+frequency, fillability, or PnL.
 
 ## Intended first business flow
 
@@ -182,12 +194,13 @@ make check
 ```
 
 The `observe`, `observe-shadow`, and `serve-shadow` commands remain guarded implementation
-surfaces, but the active repair authorizes none of them. The accepted Smoke, Soak, two-layer smoke,
-and consumed persistent observation establish only their exact pre-bound intervals; they grant no
-new service invocation, private/account access, orders, fills, capital, execution, or queued
-product closure. This task permits deterministic offline tests and one Draft PR only.
+surfaces. The active task authorizes only one exact fresh `serve-shadow` invocation after its
+authority activation is merged and every deployment binding passes; `observe`, `observe-shadow`,
+any second service invocation, and every private/account/order/fill/capital surface remain
+forbidden. The accepted Smoke, Soak, two-layer smoke, and consumed persistent observation establish
+only their exact pre-bound intervals and grant no authority to reuse them.
 
 The failed fixed-contract attempt, accepted smoke, and failed persistent observation artifacts are
 sealed and cannot be edited, deleted, completed retroactively, migrated, relabelled, retried, or
-reused. A future long-running sample requires separate explicit authorization and cannot carry any
-of these intervals forward as evidence of Policy quality, opportunity frequency, or PnL.
+reused. The active fresh sample begins only at its own lifecycle sequence 1 and cannot carry any of
+these intervals forward as evidence of Policy quality, opportunity frequency, or PnL.
