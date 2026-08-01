@@ -208,6 +208,22 @@ class SnapshotStore:
             self._snapshot = self._build_snapshot(sequence, document)
             return self._snapshot
 
+    def publish_preencoded_members(
+        self,
+        document: Mapping[str, object],
+        *,
+        preencoded_members: Mapping[str, bytes],
+    ) -> PublishedSnapshot:
+        """Publish exact bytes while reusing trusted immutable top-level JSON members."""
+        with self._lock:
+            sequence = self._snapshot.sequence + 1
+            self._snapshot = self._build_snapshot(
+                sequence,
+                document,
+                preencoded_members=dict(preencoded_members),
+            )
+            return self._snapshot
+
     def read(self) -> PublishedSnapshot:
         with self._lock:
             return self._snapshot
@@ -216,10 +232,16 @@ class SnapshotStore:
     def _build_snapshot(
         sequence: int,
         document: Mapping[str, object],
+        *,
+        preencoded_members: Mapping[str, bytes] | None = None,
     ) -> PublishedSnapshot:
         value = dict(document)
         value["publication_sequence"] = sequence
-        body = _json_bytes(value)
+        body = (
+            _json_bytes(value)
+            if preencoded_members is None
+            else _json_bytes_with_preencoded_members(value, preencoded_members)
+        )
         service = _mapping(value.get("service"), "service")
         health = _boolean(service.get("health"), "service.health")
         ready = _boolean(service.get("ready"), "service.ready")
@@ -274,6 +296,20 @@ class WorkbenchPublisher:
         self._cached_downstream_revision: int | None = None
         self._cached_underwriting_metadata: tuple[Mapping[str, object], ...] | None = None
         self._cached_downstream_projection: _DownstreamProjection | None = None
+        initial_document = self._document(self._last_business, status=self._status)
+        self._preencoded_members = {
+            key: _json_value_bytes(initial_document[key])
+            for key in (
+                "schema_version",
+                "runtime_identity",
+                "code_identity",
+                "policy_identities",
+                "non_claims",
+                "underwriting",
+                "shadow_entries",
+                "outcomes",
+            )
+        }
 
     @property
     def status(self) -> ServiceStatus:
@@ -285,7 +321,7 @@ class WorkbenchPublisher:
             self.status_sink(status)
         self._last_status_key = status_key
         self._status = status
-        self.store.publish(self._document(self._last_business, status=status))
+        self._publish(status=status)
 
     def publish_settled(
         self,
@@ -302,15 +338,14 @@ class WorkbenchPublisher:
             ),
         )
         metadata = self.shadow_metadata.workbench_option_metadata()
-        underwriting_metadata = tuple(
-            dict(value) for value in self.shadow_metadata.workbench_underwriting_metadata()
-        )
+        underwriting_metadata = self.shadow_metadata.workbench_underwriting_metadata()
         downstream_revision = self.downstream_writer.revision
-        if (
+        downstream_changed = (
             self._cached_downstream_projection is None
             or downstream_revision != self._cached_downstream_revision
             or underwriting_metadata != self._cached_underwriting_metadata
-        ):
+        )
+        if downstream_changed:
             self._cached_downstream_projection = _build_downstream_projection(
                 objects=self.downstream_writer.objects,
                 policies=self.policies,
@@ -318,23 +353,32 @@ class WorkbenchPublisher:
             )
             self._cached_downstream_revision = downstream_revision
             self._cached_underwriting_metadata = underwriting_metadata
+        downstream = self._cached_downstream_projection
+        if downstream is None:
+            raise RuntimeError("workbench downstream projection cache was not initialized")
         business = _build_business_projection(
             reducer=reducer,
             commit=commit,
-            downstream=self._cached_downstream_projection,
+            downstream=downstream,
             policies=self.policies,
             option_metadata=metadata,
         )
-        normalized = canonical_value(business)
-        if not isinstance(normalized, dict):
-            raise TypeError("workbench business projection must be an object")
-        self._last_business = MappingProxyType(normalized)
+        self._last_business = MappingProxyType(business)
+        if downstream_changed:
+            for key in ("underwriting", "shadow_entries", "outcomes"):
+                self._preencoded_members[key] = _json_value_bytes(business[key])
         status_key = _status_key(status)
         if status_key != self._last_status_key and self.status_sink is not None:
             self.status_sink(status)
         self._last_status_key = status_key
         self._status = status
-        self.store.publish(self._document(self._last_business, status=status))
+        self._publish(status=status)
+
+    def _publish(self, *, status: ServiceStatus) -> None:
+        self.store.publish_preencoded_members(
+            self._document(self._last_business, status=status),
+            preencoded_members=self._preencoded_members,
+        )
 
     def _document(
         self,
@@ -1220,18 +1264,38 @@ def _runtime_boundary_object(commit: CausalCommit) -> dict[str, object]:
     }
 
 
-def _json_bytes(value: Mapping[str, object]) -> bytes:
-    normalized = canonical_value(value)
-    return (
-        json.dumps(
-            normalized,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        )
-        + "\n"
+def _json_value_bytes(value: object) -> bytes:
+    return json.dumps(
+        canonical_value(value),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8")
+
+
+def _json_bytes(value: Mapping[str, object]) -> bytes:
+    return _json_value_bytes(value) + b"\n"
+
+
+def _json_bytes_with_preencoded_members(
+    value: Mapping[str, object],
+    preencoded_members: Mapping[str, bytes],
+) -> bytes:
+    unknown = set(preencoded_members) - set(value)
+    if unknown:
+        raise ValueError(f"preencoded JSON members are absent from document: {sorted(unknown)!r}")
+    members: list[bytes] = []
+    for key in sorted(value):
+        if not isinstance(key, str):
+            raise TypeError("workbench JSON object keys must be strings")
+        encoded = preencoded_members.get(key)
+        if encoded is None:
+            encoded = _json_value_bytes(value[key])
+        elif not isinstance(encoded, bytes) or not encoded:
+            raise TypeError("preencoded JSON member must be nonempty bytes")
+        members.append(_json_value_bytes(key) + b":" + encoded)
+    return b"{" + b",".join(members) + b"}\n"
 
 
 def _mapping(value: object, field: str) -> Mapping[str, object]:

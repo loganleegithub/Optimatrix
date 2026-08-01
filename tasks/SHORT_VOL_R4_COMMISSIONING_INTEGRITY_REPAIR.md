@@ -4,9 +4,9 @@
 
 **Task kind:** IMPLEMENTATION
 
-**Runtime implementation:** REQUIRED — repo-owned commissioning/stop controller and its direct
-tests only; the accepted `serve-shadow` hot path, market/runtime behavior, contracts, dependencies,
-and three Policies remain unchanged
+**Runtime implementation:** REQUIRED — repo-owned commissioning/stop controller plus the exact
+R4 CPU hot-path repair declared below; market inputs, decision/runtime semantics, contracts,
+dependencies, and three Policies remain unchanged
 
 **Live commands:** REQUIRED — conditional terminal-goal delegation only after exact-candidate
 acceptance, remote equality, GitHub CI, merge to remote `main`, and a fresh independently verified
@@ -58,6 +58,23 @@ only until one R4 attempt reaches `COMMISSIONED`; leave that process online for 
 observation. This authorizes no blind retry, parallel attempt, Policy or business-semantic change,
 private/account access, order, fill, capital, qualification, promotion, public binding, or reboot
 auto-start.
+
+## 2026-08-02 R4 continuous-observation CPU amendment
+
+The user's direct instruction also authorizes stopping, repairing, and recommissioning R4 when
+continuous read-only observation finds an implementation defect after the bounded commissioning
+gate. Attempt 003 was cleanly stopped and terminally sealed after macOS generated an exact-PID
+`cpu_resource` diagnostic for PID 18470: 90 CPU seconds over 160 seconds, 56% average, above the
+50%/180-second system threshold. This is an operational failure even though health, readiness,
+Coverage, API projection, and browser rendering remained internally consistent.
+
+The minimal repair may change only redundant runtime work. An Underwriting scope that already made
+its one active-to-inactive transition is not reevaluated on every later unrelated fact; its settled
+facts remain retained for evidence and display. Structurally unchanged workbench metadata and
+top-level JSON members may reuse immutable cached bytes, while every settled fact still produces
+one complete, byte-immutable, schema-2 snapshot with an advancing publication sequence. The repair
+must not coalesce facts, change publication cadence, alter a fact boundary, remove settled evidence,
+change a business enum/value/order, or amend a Policy, input, Outcome, HTTP, or stage contract.
 
 ## Business closure
 
@@ -230,14 +247,16 @@ fees, PnL, or capital safety.
 
 ## Scope
 
-**In:** `apps/radar_runtime/src/radar_runtime/commissioning.py`; its direct tests; R4 envelope,
+**In:** `apps/radar_runtime/src/radar_runtime/commissioning.py`; the exact redundant-work repair in
+`apps/radar_runtime/src/radar_runtime/fixed_contract_shadow.py` and
+`apps/radar_runtime/src/radar_runtime/workbench.py`; their direct tests; R4 envelope,
 failure-closure receipt, bootout/quiescence semantics, and fresh-boundary constants;
 `docs/authority/CURRENT_STAGE.md`; `docs/authority/SYSTEM_ARCHITECTURE.md`; `README.md`; authority
 tests; this sole active task; exact-candidate review/CI/merge; and iterative single-invocation R4
 commission/close attempts until one is commissioned.
 
-**Out:** `service.py` or any `serve-shadow` hot-path behavior; workbench producer/schema changes;
-market adapters; Radar/Underwriting/Position/Outcome formulas or state machines; contracts;
+**Out:** `service.py`; workbench schema or publication-cadence changes; market adapters;
+Radar/Underwriting/Position/Outcome formulas or state machines; contracts;
 Policies; dependencies or lockfiles; private/account APIs; orders, fills, capital, execution;
 qualification; automatic restart; reuse of R1/R2/R3 assets; alternate root/label/port; or any
 retroactive edit to R3 evidence.

@@ -506,6 +506,78 @@ def test_real_episode_identity_round_trips_without_economic_action(
     ]
 
 
+def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, _owner = _shadow_system(tmp_path)
+    reducer.trackers.clear()
+    _activate_real_episode(reducer)
+    active_commit = _commit(
+        causal_seq=2,
+        monotonic_ms=120,
+        cause=CausalCause.COMBO_BOOK_CHANGED,
+    )
+    active = adapter._project_underwriting(
+        reducer,
+        active_commit,
+        adapter._boundary(reducer, active_commit.boundary),
+    )
+    assert len(active) == 1
+    assert active[0].active_episode_identity is not None
+
+    reducer.trackers.clear()
+    inactive_commit = _commit(
+        causal_seq=3,
+        monotonic_ms=130,
+        cause=CausalCause.TICKER_APPLIED,
+    )
+    (inactive,) = adapter._project_underwriting(
+        reducer,
+        inactive_commit,
+        adapter._boundary(reducer, inactive_commit.boundary),
+    )
+    assert inactive.active_episode_identity is None
+
+    unrelated_commit = _commit(
+        causal_seq=4,
+        monotonic_ms=140,
+        cause=CausalCause.TICKER_APPLIED,
+    )
+    assert (
+        adapter._project_underwriting(
+            reducer,
+            unrelated_commit,
+            adapter._boundary(reducer, unrelated_commit.boundary),
+        )
+        == ()
+    )
+    assert adapter._underwriting_by_scope[inactive.radar_scope_identity] is inactive
+
+
+def test_workbench_underwriting_metadata_reuses_unchanged_snapshot(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, _owner = _shadow_system(tmp_path)
+    reducer.trackers.clear()
+    _activate_real_episode(reducer)
+    commit = _commit(
+        causal_seq=2,
+        monotonic_ms=120,
+        cause=CausalCause.COMBO_BOOK_CHANGED,
+    )
+    adapter._project_underwriting(
+        reducer,
+        commit,
+        adapter._boundary(reducer, commit.boundary),
+    )
+
+    first = adapter.workbench_underwriting_metadata()
+    second = adapter.workbench_underwriting_metadata()
+
+    assert first
+    assert second is first
+
+
 @pytest.mark.parametrize(
     "variant",
     ("runtime", "policy", "instrument", "activation_seq", "truncated"),
