@@ -32,8 +32,10 @@ permission, and any permission to invoke or deploy the persistent host, comes on
 `CURRENT_STAGE` and an exact live task. The operability and version-2 trader-workbench repair is
 accepted at exact commit `d4740d6a181efebc8dad6d1091a78fa44d885957`. Its one authorized fresh
 restart is consumed after a commission-deadline failure and clean seal. Both observation roots are
-immutable, no live task is active, and no new invocation, probe, or workbench deployment is
-authorized. This changes no service topology, data path, business owner, or retry loop.
+immutable. The sole active r3 task adds one isolated repo-owned commissioning/stop controller that
+the service hot path does not import; only after its exact candidate is accepted and merged may it
+invoke one fresh root/label/process/probe boundary. This changes no service topology, market data
+path, business owner, service retry loop, contract, or Policy.
 
 ## Data lifecycles
 

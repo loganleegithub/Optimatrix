@@ -13,7 +13,10 @@ engineering closure is consumed and closed. The later persistent-service observa
 consumed: it sealed complete `PROCESS_FAILURE` evidence and did not satisfy the 24-hour gate. One
 service-operability and trader-workbench repair is accepted. Its one fresh restart is now also
 consumed: commissioning missed the mandatory first-probe deadline, the process was cleanly sealed,
-and 24-hour acceptance is `NOT_MET`. Live commands are forbidden and no task is active.
+and 24-hour acceptance is `NOT_MET`. One r3 closure is now active: first accept a repo-owned,
+deadline-safe commissioning/stop controller, then conditionally start one entirely fresh service
+under a frozen root/label/probe/stop boundary. No live command is allowed before the exact
+controller candidate passes review, full checks, CI, merge, and fresh deployment preflight.
 
 The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
 Soak evidence. The downstream
@@ -110,7 +113,18 @@ objects, with zero public atomic quote, Candidate, Shadow Entry, close opportuni
 Those zeros are `NOT_OBSERVED`, not Policy-quality, opportunity-frequency, fillability, or PnL
 evidence. The fresh root and both launchd identities are consumed and cannot be restarted or
 repaired. The installed r2 plist files remain inert consumed assets and may not be bootstrapped or
-reused. No product-capability task is active and live commands are forbidden.
+reused.
+
+The active r3 task adds only an isolated repo-owned commissioning/stop controller and direct tests;
+the accepted `serve-shadow` market/service hot path, contracts, three Policies, dependencies, and
+workbench schema stay unchanged. If that exact candidate is independently accepted and merged,
+one new root `/Users/logan/Optimatrix-public-shadow-observation-003` and labels
+`com.optimatrix.public-shadow.r3` / `com.optimatrix.public-shadow.r3.probe` may be bound and started
+once. The first manual probe must pass within the single 120-second lifecycle deadline, followed by
+a full 180-second host-operability gate measured only after periodic-probe bootstrap, with at least
+two successful periodic rows and a final bounded resource-event audit. Successful commissioning
+begins read-only observation and leaves 24x7 `PENDING`; it does not establish 24x7 stability,
+Policy quality, opportunity frequency, fillability, or PnL.
 
 ## Intended first business flow
 
