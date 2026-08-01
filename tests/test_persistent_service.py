@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from copy import deepcopy
 from dataclasses import FrozenInstanceError, dataclass, field, replace
@@ -12,7 +12,9 @@ from typing import NoReturn, cast
 
 import pytest
 import radar_runtime.service as service_module
+import radar_runtime.workbench as workbench_module
 from conftest import PolicyFactory
+from market_monitor import TimeInterval
 from radar_runtime.deribit_public import (
     InboundEnvelope,
     PublicProtocolIncompatibility,
@@ -63,6 +65,9 @@ from short_vol_radar.evidence import (
     validate_persistent_service_run_summary,
 )
 from short_vol_radar.policy import load_policy_bytes
+from short_vol_underwriting import FactBoundary as DownstreamFactBoundary
+from short_vol_underwriting import canonical_identity
+from short_vol_underwriting.policy import PolicyChain
 from test_evidence_and_runtime import anomaly_evidence, atomic_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -791,6 +796,118 @@ def test_post_stop_drain_snapshot_cannot_move_lifecycle_time_backward(tmp_path: 
         assert recorded == sorted(recorded)
         assert recorded[-1] == 2_000
         assert composition.publisher.status.phase is ServicePhase.STOPPING
+    finally:
+        composition.workbench.close()
+
+
+def test_workbench_reuses_downstream_projection_until_writer_revision_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    startup = _startup(tmp_path)
+    composition = build_persistent_service_composition(startup)
+    reducer = composition.runtime.reducer
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    downstream_builds = 0
+    position_builds = 0
+    original_downstream = workbench_module._build_downstream_projection
+    original_position = workbench_module._position_rows
+
+    def counted_downstream(
+        *,
+        objects: Sequence[Mapping[str, object]],
+        policies: PolicyChain,
+        underwriting_metadata: Sequence[Mapping[str, object]],
+    ) -> workbench_module._DownstreamProjection:
+        nonlocal downstream_builds
+        downstream_builds += 1
+        return original_downstream(
+            objects=objects,
+            policies=policies,
+            underwriting_metadata=underwriting_metadata,
+        )
+
+    def counted_position(
+        kinds: Mapping[str, Sequence[Mapping[str, object]]],
+        policies: PolicyChain,
+        *,
+        trusted_time: TimeInterval | None,
+        option_metadata: Sequence[Mapping[str, object]],
+    ) -> list[dict[str, object]]:
+        nonlocal position_builds
+        position_builds += 1
+        return original_position(
+            kinds,
+            policies,
+            trusted_time=trusted_time,
+            option_metadata=option_metadata,
+        )
+
+    monkeypatch.setattr(workbench_module, "_build_downstream_projection", counted_downstream)
+    monkeypatch.setattr(workbench_module, "_position_rows", counted_position)
+
+    try:
+        for causal_seq in (1, 2):
+            composition.publisher.publish_settled(
+                reducer=reducer,
+                commit=CausalCommit(
+                    boundary=FactBoundary(1, causal_seq, 1_000 + causal_seq, causal_seq),
+                    cause=CausalCause.TIME_BOUNDARY,
+                    failure_domain=FailureScope.CLOCK_INDEX,
+                    affected_scopes=("GLOBAL",),
+                ),
+            )
+
+        second = json.loads(composition.snapshot_store.read().workbench_body)
+        assert downstream_builds == 1
+        assert position_builds == 2
+        assert second["published_fact_boundary"]["causal_seq"] == 2
+
+        downstream_boundary = DownstreamFactBoundary(
+            code_identity=composition.downstream_writer.bindings.code_identity,
+            runtime_identity=composition.downstream_writer.bindings.runtime_identity,
+            session_epoch=1,
+            ingress_seq=3,
+            received_monotonic_ms=1_003,
+            causal_seq=3,
+        )
+        candidate_identity = "sha256:" + "7" * 64
+        reason = "RUNTIME_OR_CODE_IDENTITY_CHANGED"
+        invalidation_identity = canonical_identity(
+            "CANDIDATE_INVALIDATION",
+            candidate_identity,
+            reason,
+            [reason],
+            downstream_boundary.as_object(),
+        )
+        composition.downstream_writer.write(
+            object_kind="CANDIDATE_INVALIDATION",
+            object_identity=invalidation_identity,
+            fact_boundary=downstream_boundary,
+            payload={
+                "candidate_invalidation_identity": invalidation_identity,
+                "candidate_identity": candidate_identity,
+                "primary_reason": reason,
+                "ordered_applicable_reason_vector": [reason],
+                "terminal_fact_boundary": downstream_boundary.as_object(),
+            },
+            source_provenance=(),
+        )
+        composition.publisher.publish_settled(
+            reducer=reducer,
+            commit=CausalCommit(
+                boundary=FactBoundary(1, 3, 1_003, 3),
+                cause=CausalCause.TIME_BOUNDARY,
+                failure_domain=FailureScope.CLOCK_INDEX,
+                affected_scopes=("GLOBAL",),
+            ),
+        )
+
+        third = json.loads(composition.snapshot_store.read().workbench_body)
+        assert downstream_builds == 2
+        assert position_builds == 3
+        assert third["publication_sequence"] == second["publication_sequence"] + 1
+        assert third["published_fact_boundary"]["causal_seq"] == 3
     finally:
         composition.workbench.close()
 

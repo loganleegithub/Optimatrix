@@ -25,6 +25,7 @@ from radar_runtime.service_evidence import (
     ServiceStatus,
 )
 from radar_runtime.workbench import (
+    CSS,
     EMPTY_PANEL_LABEL,
     HTML,
     JS,
@@ -235,6 +236,7 @@ def test_initial_snapshot_keeps_empty_panels_separate_from_unknown_zero_claims()
     assert value["system"]["coverage_ratio_percent"] is None
     assert value["shadow_entries"]["simulation_label"] == SIMULATION_LABEL
     assert value["service"]["data_state"] == "UNKNOWN"
+    assert value["schema_version"] == 2
     assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in value["non_claims"]
     assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in value["non_claims"]
 
@@ -318,6 +320,58 @@ def test_underwriting_projection_keeps_unknown_availability_without_an_action() 
     assert row["action"] is None
     assert row["candidate_identity"] is None
     assert row["decision_reason"] == ("UNDERWRITING_UNKNOWN:COMBO_QUOTE_RECEIPT_UNKNOWN")
+
+
+def test_underwriting_projection_joins_only_settled_display_metadata() -> None:
+    availability_identity = "sha256:" + "7" * 64
+    scope_identity = "sha256:" + "8" * 64
+    kinds: dict[str, list[dict[str, object]]] = {
+        "UNDERWRITING_AVAILABILITY_EVALUATION": [
+            {
+                "object_identity": availability_identity,
+                "fact_boundary": {
+                    "code_identity": "a" * 40,
+                    "runtime_identity": "sha256:" + "b" * 64,
+                    "session_epoch": 1,
+                    "ingress_seq": 1,
+                    "received_monotonic_ms": 2,
+                    "causal_seq": 3,
+                },
+                "payload": {
+                    "radar_scope_or_short_leg_identity": scope_identity,
+                    "availability": "NOT_EVALUATED",
+                    "unknown_reasons": ["RADAR_EPISODE_NOT_ACTIVE"],
+                    "availability_evaluation_fact_boundary": {"causal_seq": 3},
+                },
+            }
+        ]
+    }
+    display_metadata = (
+        {
+            "radar_scope_identity": scope_identity,
+            "short_leg_instrument_name": "BTC-8AUG26-100000-C",
+            "long_leg_instrument_name": "BTC-8AUG26-105000-C",
+            "combo_instrument_name": "BTC-CS-8AUG26-100000_105000",
+            "expiry_timestamp_ms": 1_786_150_800_000,
+            "option_type": "call",
+            "short_strike_usdc_per_btc": "100000",
+            "long_strike_usdc_per_btc": "105000",
+            "target_quantity_btc": "0.1",
+        },
+    )
+
+    (row,) = workbench_module._underwriting_rows(
+        kinds,
+        _policies(),
+        display_metadata=display_metadata,
+    )
+
+    assert row["short_leg_instrument_name"] == "BTC-8AUG26-100000-C"
+    assert row["long_leg_instrument_name"] == "BTC-8AUG26-105000-C"
+    assert row["combo_instrument_name"] == "BTC-CS-8AUG26-100000_105000"
+    assert row["expiry_timestamp_ms"] == 1_786_150_800_000
+    assert row["short_strike_usdc_per_btc"] == "100000"
+    assert row["target_quantity_btc"] == "0.1"
 
 
 def test_position_projection_separates_gross_remaining_premium_from_net_close_debit() -> None:
@@ -504,7 +558,7 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "submit_order" not in JS.lower()
     assert "escapeHtml" in JS
     assert "&lt;" in JS and "&gt;" in JS and "&amp;" in JS
-    assert "safeText(row[column[1]])" in JS
+    assert "safeText(rendered)" in JS
     assert 'class="value ${' not in JS
     assert 'id="connection"' in HTML
     assert 'role="alert"' in HTML
@@ -516,11 +570,137 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "documentValue.publication_sequence" in JS
     assert "if (!response.ok) throw" in JS
     assert "renderUnavailable();" in JS
+    assert "SUPPORTED_SCHEMA_VERSION = 2" in JS
+    assert ".table-scroll" in CSS
+    assert "overflow-x:auto" in CSS
+    assert 'class="system-details"' in JS
+
+
+def test_browser_formats_business_states_and_orders_rows_without_recomputing() -> None:
+    test_js = JS.replace(
+        "refresh();\nsetInterval(refresh, 2000);",
+        "globalThis.__workbenchTest = { radarCellValue, underwritingCellValue, "
+        "shadowCellValue, positionCellValue, outcomeCellValue, "
+        "orderedRadarRows, orderedUnderwritingRows, filterRows };",
+    )
+    assert test_js != JS
+    harness = f"""
+const assert = require('node:assert/strict');
+globalThis.document = {{getElementById() {{ return {{}}; }}}};
+globalThis.setInterval = () => 1;
+eval({json.dumps(test_js)});
+const api = globalThis.__workbenchTest;
+
+assert.equal(api.radarCellValue({{
+  detector_state: 'UNKNOWN', known_evaluation: false
+}}, 'expiration_timestamp_ms', null), 'UNKNOWN');
+assert.equal(api.radarCellValue({{
+  detector_state: 'UNKNOWN', known_evaluation: false
+}}, 'executable_iv_interval', null), 'UNKNOWN');
+assert.equal(api.radarCellValue({{
+  detector_state: 'NO_ANOMALY', known_evaluation: true
+}}, 'executable_iv_interval', null), 'N/A');
+assert.equal(api.radarCellValue({{
+  detector_state: 'ANOMALY_ACTIVE', known_evaluation: true
+}}, 'executable_iv_interval', null), 'UNKNOWN');
+assert.equal(api.radarCellValue({{
+  detector_state: 'NO_ANOMALY', known_evaluation: true
+}}, 'active_episode_identity', null), 'N/A');
+assert.equal(api.radarCellValue({{
+  detector_state: 'UNKNOWN', known_evaluation: false
+}}, 'detector_reason', 'QUEUE_LAG_CURRENTNESS'),
+  '处理队列延迟, 行情时效性不可确认');
+
+assert.equal(api.underwritingCellValue({{
+  availability: 'NOT_EVALUATED', action: null
+}}, 'action', null), 'N/A');
+assert.equal(api.underwritingCellValue({{
+  availability: 'NOT_EVALUATED', gross_entry_credit_usdc: null
+}}, 'gross_entry_credit_usdc', null), 'N/A');
+assert.equal(api.underwritingCellValue({{
+  availability: 'UNKNOWN', action: null
+}}, 'availability', 'UNKNOWN'), 'UNKNOWN');
+assert.equal(api.underwritingCellValue({{
+  availability: 'UNKNOWN', action: null,
+  unknown_reasons: ['COMBO_QUOTE_RECEIPT_UNKNOWN']
+}}, 'decision_reason', 'UNDERWRITING_UNKNOWN:COMBO_QUOTE_RECEIPT_UNKNOWN'),
+  '组合报价回执不可确认');
+assert.equal(api.underwritingCellValue({{
+  availability: 'NOT_EVALUATED', action: null,
+  unknown_reasons: ['RADAR_EPISODE_NOT_ACTIVE']
+}}, 'decision_reason', 'UNDERWRITING_NOT_EVALUATED:RADAR_EPISODE_NOT_ACTIVE'),
+  '当前无活跃 Radar 异常, 承保尚未评估');
+assert.equal(api.underwritingCellValue({{
+  availability: 'NOT_EVALUATED', action: null,
+  unknown_reasons: ['NO_ACTIVE_COMBO']
+}}, 'decision_reason', 'UNDERWRITING_NOT_EVALUATED:NO_ACTIVE_COMBO'),
+  '无活跃组合可供承保评估');
+assert.equal(api.underwritingCellValue({{
+  availability: 'NOT_EVALUATED', action: null, unknown_reasons: []
+}}, 'decision_reason', 'UNDERWRITING_NOT_EVALUATED:NO_ADDITIONAL_REASON_PERSISTED'),
+  '已知前置条件未满足, 承保未评估');
+assert.equal(api.outcomeCellValue({{
+  state: 'MATURED'
+}}, 'actual_pnl_usdc', null), 'N/A — public Shadow 无订单、成交或实际持仓');
+assert.equal(api.shadowCellValue({{
+  shadow_entry_identity: null
+}}, 'simulated_entry_price_usdc_per_btc', null), 'N/A');
+assert.equal(api.positionCellValue({{}}, 'hard_close_countdown_interval_ms', {{
+  lower_ms: 60000, upper_ms: 120000
+}}), '1.0 分钟 - 2.0 分钟');
+
+const radar = api.orderedRadarRows([
+  {{instrument_name:'N', detector_state:'NO_ANOMALY', expiration_timestamp_ms:2, strike_usdc_per_btc:'2'}},
+  {{instrument_name:'U', detector_state:'UNKNOWN', expiration_timestamp_ms:1, strike_usdc_per_btc:'1'}},
+  {{instrument_name:'A', detector_state:'ANOMALY_ACTIVE', expiration_timestamp_ms:3, strike_usdc_per_btc:'3'}}
+]);
+assert.deepEqual(radar.map(row => row.instrument_name), ['A', 'U', 'N']);
+assert.deepEqual(api.filterRows(radar, 'detector_state', 'UNKNOWN').map(row => row.instrument_name), ['U']);
+
+const underwriting = api.orderedUnderwritingRows([
+  {{radar_scope_or_short_leg_identity:'n', availability:'NOT_EVALUATED'}},
+  {{radar_scope_or_short_leg_identity:'u', availability:'UNKNOWN'}},
+  {{radar_scope_or_short_leg_identity:'a', availability:'EVALUABLE', action:'ABSTAIN'}},
+  {{radar_scope_or_short_leg_identity:'w', availability:'EVALUABLE', action:'WATCH'}},
+  {{radar_scope_or_short_leg_identity:'e', availability:'EVALUABLE', action:'CANDIDATE'}}
+]);
+assert.deepEqual(
+  underwriting.map(row => row.radar_scope_or_short_leg_identity),
+  ['e', 'w', 'a', 'u', 'n']
+);
+"""
+    completed = subprocess.run(
+        ["node", "-e", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_browser_keeps_formatted_exact_facts_in_collapsed_details() -> None:
+    for exact_field in (
+        "executable IV exact",
+        "baseline volatility exact",
+        "richness exact",
+        "short strike exact",
+        "long strike exact",
+        "target quantity exact",
+        "decision reason enum",
+        "evaluation fact boundary",
+        "public-quote PnL exact",
+        "actual PnL exact",
+    ):
+        assert exact_field in JS
 
 
 def test_browser_executes_fail_closed_and_recovery_paths() -> None:
     document = initial_workbench_document(_bindings())
     document["publication_sequence"] = 1
+    document["published_fact_boundary"] = {
+        "causal_seq": 42,
+        "received_monotonic_ms": 1_234,
+    }
     restarted_document = json.loads(json.dumps(document))
     restarted_document["runtime_identity"] = "sha256:" + "f" * 64
     malformed_document = json.loads(json.dumps(document))
@@ -590,8 +770,12 @@ const markStalePanels = () => {{
   await refreshAt(1000, {{kind: 'ok', value: {json.dumps(document)}}});
   assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
   assert.equal(elements.connection.hidden, true);
-  assert.ok(systemHas('最近成功获取 age ms', 0));
-  assert.ok(systemHas('Publication 未变化 age ms', 0));
+  assert.ok(systemHas('Runtime identity', {json.dumps(document["runtime_identity"])}));
+  assert.match(elements.system.innerHTML, /Published fact boundary/);
+  assert.match(elements.system.innerHTML, /causal_seq/);
+  assert.match(elements.system.innerHTML, /received_monotonic_ms/);
+  assert.ok(systemHas('最近成功获取 age', '0 ms'));
+  assert.ok(systemHas('Publication 未变化 age', '0 ms'));
 
   markStalePanels();
   await refreshAt(2000, {{kind: 'fetch-error'}});
@@ -599,8 +783,8 @@ const markStalePanels = () => {{
 
   await refreshAt(3000, {{kind: 'ok', value: {json.dumps(document)}}});
   assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
-  assert.ok(systemHas('最近成功获取 age ms', 0));
-  assert.ok(systemHas('Publication 未变化 age ms', 2000));
+  assert.ok(systemHas('最近成功获取 age', '0 ms'));
+  assert.ok(systemHas('Publication 未变化 age', '2.0 秒'));
 
   markStalePanels();
   await refreshAt(4000, {{kind: 'http-error'}});
@@ -616,9 +800,9 @@ const markStalePanels = () => {{
   await refreshAt(7000, {{kind: 'ok', value: {json.dumps(restarted_document)}}});
   assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
   assert.equal(elements.connection.hidden, true);
-  assert.match(elements.runtime.textContent, /f{{64}}$/);
-  assert.ok(systemHas('最近成功获取 age ms', 0));
-  assert.ok(systemHas('Publication 未变化 age ms', 0));
+  assert.match(elements.runtime.textContent, /…f{{6}}$/);
+  assert.ok(systemHas('最近成功获取 age', '0 ms'));
+  assert.ok(systemHas('Publication 未变化 age', '0 ms'));
   for (const id of panelIds) {{
     assert.doesNotMatch(elements[id].innerHTML, /旧业务数据已隐藏|STALE SENTINEL/);
   }}

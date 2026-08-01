@@ -4,7 +4,7 @@
 
 **Owning semantic identity:** `SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`
 
-**Current implementation state:** `OFFLINE_IMPLEMENTATION_AUTHORIZED`
+**Current implementation state:** `OFFLINE_REPAIR_AUTHORIZED`
 
 ## Purpose and authority boundary
 
@@ -112,11 +112,25 @@ continuity, clock/index/ticker currentness, queue lag, catalog reconciliation, a
 
 ## Atomic read-only workbench projection
 
-The workbench snapshot is an immutable version-1 operational projection, not a new trading
+The workbench snapshot is an immutable version-2 operational projection, not a new trading
 Decision or durable business object. After each runtime fact transaction completes both Radar
 settlement and the fixed-contract Shadow owner transition, `radar_runtime.runtime` invokes exactly
 one configured snapshot publisher. The publisher constructs a complete JSON body and atomically
 replaces one immutable byte reference.
+
+Version 2 adds only settled display metadata: human-readable short/long option names, combo name,
+expiry, option type, strikes, and target quantity keyed by the exact existing Underwriting scope.
+The adapter copies that metadata from the same settled `UnderwritingFacts` already consumed by the
+owner. It does not change or duplicate an economic input, persisted payload, object identity,
+Policy output, or business enum. Missing joins remain JSON `null`; the publisher and browser never
+guess a structure from a hash.
+
+The publisher may cache downstream-derived grouping, Underwriting rows, Shadow rows, Outcome rows,
+and counts only under an exact monotonic downstream-writer revision. A successful durable object-set
+change advances that revision; an identical no-op, rejected write, or failed write does not. Radar,
+system status, published fact boundary, and time-sensitive Position projection remain current on
+every settled transaction. A revision change invalidates the cache before the next complete atomic
+publication. This optimization changes neither publication cadence nor snapshot completeness.
 
 HTTP handlers read only that immutable reference. They may not call detector freeze methods,
 Policy/classification functions, market adapters, writers, or owner methods; they may not traverse
@@ -127,6 +141,28 @@ mutable business state.
 The browser performs display formatting only. It never computes IV, baseline, richness,
 Underwriting action, Candidate validity, entry or close economics, PnL, hard-close state, or Outcome
 maturity. It opens no Deribit connection.
+
+The version-2 browser accepts only the exact supported projection version and fails closed on a
+missing, mixed, or unsupported version. It preserves the owning business enum and distinguishes:
+
+- `UNKNOWN`: a required fact is not currently knowable;
+- `NOT_EVALUATED`: the declared prerequisite has not activated that layer;
+- `N/A`: a display field is semantically inapplicable, while the JSON value remains `null`;
+- empty panel: no matching settled object exists; and
+- proven numeric zero: only the independently conditioned nonzero denominator permits it.
+
+Known-ineligible Radar early exits render unavailable formula fields as `N/A`, while a true unknown
+detector evaluation renders its unavailable required calculations as `UNKNOWN`. Inactive episode
+fields and unavailable Underwriting action/economics are `N/A`, not additional unknown facts.
+Actual PnL under public Shadow is `N/A` with the explicit no-order/no-fill/no-position meaning. Raw
+identities, exact decimals, enum reasons, and monotonic boundaries remain inspectable in read-only
+details but do not dominate the trader summary.
+
+The first view states service/data usability, known-versus-monitored coverage, the owning blocker,
+and the separately conditioned Radar/Candidate zero claims. Radar and Underwriting rows use stable
+actionability-first ordering and optional local-only filters. A filter transforms only the fetched
+immutable array, sends no request, and is not a Policy or execution control. Tables own their
+horizontal scrolling; the page itself must not overflow a 1,214-pixel viewport.
 
 Any fetch, non-success HTTP, JSON decode, or render failure fails the entire trader page closed. A
 global alert marks the workbench `UNKNOWN`, every cached Radar/Underwriting/Shadow/Position/Outcome
@@ -167,7 +203,7 @@ A numeric zero-Candidate claim additionally requires a strictly positive
 value is `null`. Zero or unknown denominators never serialize or render as `0`, calm, or no
 opportunity.
 
-The version-1 snapshot therefore carries both panel emptiness and independently conditioned zero
+The version-2 snapshot therefore carries both panel emptiness and independently conditioned zero
 claims:
 
 ```text
@@ -372,6 +408,13 @@ Durable service output is limited to:
 Full option/combo books, ordinary no-anomaly updates, browser state, HTTP requests, credentials,
 private/account facts, orders, fills, and actual exposure are not persisted.
 
+`UNDERWRITING_AVAILABILITY_EVALUATION` is graph-independent in the accepted downstream attempt
+relationship validator. Its write still runs complete per-object schema, identity, binding,
+boundary, provenance, and semantic validation before exclusive publication, but it need not scan
+the whole attempt graph whose rules do not consume that kind. Every other downstream object kind
+retains the existing prospective whole-graph validation. This is an implementation optimization,
+not a persisted compatibility or evidence-strength change.
+
 ## Direct verification and non-claims
 
 Every lifecycle event, service terminal, and workbench snapshot carries
@@ -384,9 +427,12 @@ Policy-chain immutability, reconnect/session continuity, health/readiness/curren
 first-stop-boundary latching, pre-latched no-client stop, exactly-once downstream and service
 terminalization, writer/reader identity recomputation, corruption/missing/mixed/incomplete failure,
 partial-Radar corruption failure, atomic snapshot publication after Shadow settlement,
-loopback-only read-only HTTP, escaped and executable fail-closed browser rendering across fetch,
-HTTP, JSON, render-failure, recovery, and same-sequence new-runtime cases, artifact-versus-stage
-authority wording, and truthful empty/zero/null UI fixtures.
+revision-keyed downstream projection cache invalidation, graph-independent availability validation,
+settled structure display joins, loopback-only read-only HTTP, escaped and executable fail-closed
+browser rendering across fetch, HTTP, JSON, schema, render-failure, recovery, and same-sequence
+new-runtime cases, trader-state formatting/sorting/local-filter behavior, artifact-versus-stage
+authority wording, truthful empty/zero/null UI fixtures, and document-level overflow at the declared
+viewport.
 
 This offline implementation proves none of indefinite uptime, production deployment safety,
 natural opportunity frequency, Policy quality, forecast skill, fillability, actual fees, actual

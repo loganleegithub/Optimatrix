@@ -121,10 +121,15 @@ class DownstreamEvidenceWriter:
         except OSError as exc:
             raise DownstreamEvidenceError("cannot create downstream objects directory") from exc
         self._objects: dict[tuple[str, str], dict[str, object]] = {}
+        self._revision = 0
 
     @property
     def objects(self) -> tuple[Mapping[str, object], ...]:
         return tuple(self._objects[key] for key in sorted(self._objects))
+
+    @property
+    def revision(self) -> int:
+        return self._revision
 
     def write(
         self,
@@ -143,18 +148,26 @@ class DownstreamEvidenceWriter:
             source_provenance=source_provenance,
             bindings=self.bindings,
         )
-        prospective = {
-            f"{kind}:{identity}": existing for (kind, identity), existing in self._objects.items()
-        }
-        prospective[f"{object_kind}:{object_identity}"] = value
-        try:
-            validate_attempt_relationships(prospective, require_complete=False)
-        except PayloadValidationError as exc:
-            raise DownstreamEvidenceError(str(exc)) from exc
+        # Availability objects have no attempt-graph edges; the builder has already
+        # enforced their complete local schema, identity, boundary, and provenance.
+        if object_kind != "UNDERWRITING_AVAILABILITY_EVALUATION":
+            prospective = {
+                f"{kind}:{identity}": existing
+                for (kind, identity), existing in self._objects.items()
+            }
+            prospective[f"{object_kind}:{object_identity}"] = value
+            try:
+                validate_attempt_relationships(prospective, require_complete=False)
+            except PayloadValidationError as exc:
+                raise DownstreamEvidenceError(str(exc)) from exc
         serialized = _serialize(value)
         path = _object_path(self.objects_directory, object_kind, object_identity)
         published = _publish_exclusive(path, serialized)
-        self._objects[(object_kind, object_identity)] = value
+        key = (object_kind, object_identity)
+        previous = self._objects.get(key)
+        self._objects[key] = value
+        if previous != value:
+            self._revision += 1
         return published
 
 

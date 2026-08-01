@@ -158,6 +158,31 @@ class FixedContractShadowRuntimeAdapter:
             for identity, source in sorted(self._options_by_identity.items())
         )
 
+    def workbench_underwriting_metadata(self) -> tuple[Mapping[str, object], ...]:
+        """Copy display-only structure facts from the settled Underwriting projection."""
+        return tuple(
+            {
+                "radar_scope_identity": scope_identity,
+                "short_leg_instrument_name": facts.short_leg_instrument_name,
+                "long_leg_instrument_name": facts.long_leg_instrument_name,
+                "combo_instrument_name": facts.combo_instrument_name,
+                "expiry_timestamp_ms": facts.expiry_ms,
+                "option_type": facts.option_type,
+                "short_strike_usdc_per_btc": (
+                    str(facts.short_strike_usdc_per_btc)
+                    if facts.short_strike_usdc_per_btc is not None
+                    else None
+                ),
+                "long_strike_usdc_per_btc": (
+                    str(facts.long_strike_usdc_per_btc)
+                    if facts.long_strike_usdc_per_btc is not None
+                    else None
+                ),
+                "target_quantity_btc": str(facts.target_quantity_btc),
+            }
+            for scope_identity, facts in sorted(self._underwriting_by_scope.items())
+        )
+
     def next_time_boundary_monotonic_ms(
         self,
         *,
