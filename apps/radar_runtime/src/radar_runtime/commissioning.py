@@ -2252,6 +2252,9 @@ class MacOSHost:
                     raise CommissioningError("listener inventory is malformed")
                 current_pid = int(line[1:])
                 current_pid_has_listener = False
+            elif re.fullmatch(r"f[0-9]+", line):
+                if current_pid is None:
+                    raise CommissioningError("listener inventory is malformed")
             elif line.startswith("n") and len(line) > 1:
                 if current_pid is None:
                     raise CommissioningError("listener inventory is malformed")

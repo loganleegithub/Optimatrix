@@ -21,8 +21,30 @@ R4 deployment preflight
 
 **Base commit:** `f66fa97b66487cf593d5265a8ac79d013adda104`
 
-**Target branch/PR:** `agent/r4-commissioning-integrity-repair` / one Draft PR; no force push,
-history rewrite, main merge into the task branch, or live mutation before exact-candidate acceptance
+**Target branch/PR:** one bounded branch/PR at a time; initial repair
+`agent/r4-commissioning-integrity-repair`, iterative repair `agent/r4-lsof-field-repair`; no force
+push, history rewrite, main merge into a task branch, or live mutation before exact-candidate
+acceptance
+
+## 2026-08-02 R4 iterative recovery amendment
+
+The user's direct instruction supersedes every older clause in this task that limits R4 to one
+commissioning invocation, prohibits repairing R4 after a failed invocation, or requires a new
+R-number. R4 attempt 001 is immutable and terminally quiescent: primary receipt SHA-256
+`55b78cf3b4474949747efdd2b021ff7e039b5cc578afa5ea5b9357faca1e8f8f`, final closure SHA-256
+`214ad3e29b3b66bffa54e5eb277a1ae4db0632b34dee72f590040a06b2d1c848`, terminal audit SHA-256
+`7c8c7696a2150a57ef6ca772ff0d2bcab6bd88421270332f334fd418eda249d6`, and status
+`COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT`. It failed because real macOS `lsof -F` emits the
+always-selected `f` field while the listener parser and test fixture modeled only `p/n`.
+
+For each observed R4 implementation defect: preserve the failed attempt byte-for-byte under a
+numbered R4 archive; add the smallest direct red/green fix in the owning module; run focused and
+full repository gates; independently accept, push, pass CI, and merge the exact candidate; then
+rematerialize the canonical R4 root/labels with fresh outputs and invoke `commission` once. Repeat
+only until one R4 attempt reaches `COMMISSIONED`; leave that process online for read-only
+observation. This authorizes no blind retry, parallel attempt, Policy or business-semantic change,
+private/account access, order, fill, capital, qualification, promotion, public binding, or reboot
+auto-start.
 
 ## Business closure
 
@@ -46,7 +68,9 @@ the controller to an entirely fresh R4 root/label/envelope boundary, passes focu
 `make check`, receives independent exact-candidate review, reaches remote equality and passing
 GitHub CI, and is merged to remote `main`.
 
-**Then:** exactly one newly materialized R4 deployment may invoke `commission` once. A legitimate
+**Then:** each newly rematerialized R4 attempt may invoke `commission` once, and an observed
+implementation defect may follow the iterative recovery amendment above until one attempt reaches
+`COMMISSIONED`. A legitimate
 schema-2 workbench projection cannot fail commissioning merely because an honest `UNKNOWN` claim
 preserves a known zero or positive denominator, or because a positive numerator has an unavailable
 denominator. A `launchctl bootout` success is followed by bounded observation of label and host
@@ -80,11 +104,11 @@ close-opportunity, or Outcome remains valid and does not fail commissioning.
 
 **Outcome/evaluation contract change:** NONE
 
-**Stage/authorization change:** APPROVED — consume and close R3; authorize only this bounded R4
-controller repair, exact-candidate acceptance sequence, and one conditional fresh R4
-production-public service start plus its result-independent stop/terminal closure. No private,
-account, margin, order, fill, capital, execution, qualification, promotion, retry, reboot auto-start,
-or alternate root/label/port authority is granted.
+**Stage/authorization change:** APPROVED — consume and close R3; authorize this bounded R4
+controller repair, exact-candidate acceptance sequence, and iterative repair/recommission attempts
+under the 2026-08-02 amendment until one attempt is `COMMISSIONED`, plus result-independent
+stop/terminal closure. No private, account, margin, order, fill, capital, execution, qualification,
+promotion, unattended retry, reboot auto-start, or alternate label/port authority is granted.
 
 ## Product operating behavior
 
@@ -159,7 +183,9 @@ HTTP/current-reader commissioning by +60,000 ms; manual probe sequence 1 by +90,
 audit and periodic-probe bootstrap by +110,000 ms; hard first-probe contract by +120,000 ms. After
 bootstrap, `HOST_OPERABILITY_GATE_START` owns the full 180,000 ms gate, at least two successful
 post-manual periodic rows, every complete-partition gap no greater than 90,000 ms, and a fixed
-30,000 ms resource-event publication grace. Failure consumes the sole R4 attempt.
+30,000 ms resource-event publication grace. Failure consumes that exact R4 attempt; the amendment
+permits only a newly repaired, freshly materialized next R4 attempt after terminal quiescence and
+full gates.
 
 No live or launchd mutation is allowed from the implementation branch or PR. The eventual live
 invocation requires the exact merged remote `main`, a detached clean checkout, an independently
@@ -170,11 +196,12 @@ resource sources. The controller receives the independently calculated envelope 
 
 ## Evidence boundary
 
-**Proves:** the R3 attempt is truthfully consumed and closed; the R4 controller accepts the actual
+**Proves:** the R3 attempt is truthfully consumed and closed; each R4 attempt is independently
+preserved and the R4 controller accepts the actual
 version-2 projection semantics, observes asynchronous launchd teardown safely, records temporally
-correct failure/closure evidence, and is bound to a fresh one-shot R4 deployment boundary.
+correct failure/closure evidence, and is bound to a fresh single-invocation R4 attempt boundary.
 
-**Does not prove:** that R4 has already been launched; 24x7 service stability; complete market
+**Does not prove:** that any R4 attempt has been commissioned; 24x7 service stability; complete market
 coverage; strategy edge; opportunity frequency; qualification; execution; actual fills, positions,
 fees, PnL, or capital safety.
 
@@ -193,8 +220,8 @@ fees, PnL, or capital safety.
 **In:** `apps/radar_runtime/src/radar_runtime/commissioning.py`; its direct tests; R4 envelope,
 failure-closure receipt, bootout/quiescence semantics, and fresh-boundary constants;
 `docs/authority/CURRENT_STAGE.md`; `docs/authority/SYSTEM_ARCHITECTURE.md`; `README.md`; authority
-tests; this sole active task; exact-candidate review/CI/merge; and one conditional future R4 live
-commission/close sequence.
+tests; this sole active task; exact-candidate review/CI/merge; and iterative single-invocation R4
+commission/close attempts until one is commissioned.
 
 **Out:** `service.py` or any `serve-shadow` hot-path behavior; workbench producer/schema changes;
 market adapters; Radar/Underwriting/Position/Outcome formulas or state machines; contracts;
@@ -214,9 +241,9 @@ launchd/process/listener facts. A later host observation may establish convergen
 same declared wait deadline. It never rewrites an earlier receipt, probe row, deadline result, or
 R3 artifact.
 
-**Durable output and identity:** one content-addressed R4 deployment envelope; exactly-once intent
-journals; one primary commission receipt; on failure, one distinct final closure receipt; one
-probe ledger; runtime-bound audits; and one stop receipt. Every artifact binds the envelope identity;
+**Durable output and identity:** per attempt, one content-addressed R4 deployment envelope;
+exactly-once intent journals; one primary commission receipt; on failure, one distinct final closure
+receipt; one probe ledger; runtime-bound audits; and one stop receipt. Every artifact binds the envelope identity;
 runtime-bearing artifacts additionally bind the actual lifecycle runtime identity.
 
 **Missing/invalid/UNKNOWN semantics:** missing or malformed zero-claim members, host inventory,
@@ -256,12 +283,12 @@ not authorize claiming that commissioning or 24x7 observation has already occurr
 
 - R3 is recorded as consumed with its exact receipt and terminal-audit facts.
 - The deleted R3 task is not retained as an active or complete task file.
-- Exactly one active R4 task and one bounded implementation branch/PR exist.
+- Exactly one active R4 task and at most one bounded implementation branch/PR at a time exist.
 - Stable regression tests cover every diagnosed defect and adversarial boundary above.
 - The minimal controller repair passes focused tests, `make check`, exact-candidate review, remote
   equality, and GitHub CI.
 - The final candidate contains no temporary patch workflow, generated cache, test artifact, or
   unrelated formatting churn.
-- The accepted code is merged before any R4 deployment materialization or launchd mutation.
-- If a later R4 invocation occurs, exactly one attempt is made under the fresh root/labels and its
-  success, failure, stop, or blocked cleanup is reported without retry or semantic inflation.
+- The accepted code is merged before each R4 deployment materialization or launchd mutation.
+- Each R4 attempt invokes commission once under fresh outputs; a failure is terminally closed and
+  preserved before the next observed bug is repaired, with no blind retry or semantic inflation.
