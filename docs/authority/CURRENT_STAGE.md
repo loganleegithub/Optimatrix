@@ -8,19 +8,20 @@
 
 **Production Short Vol Radar:** `ESTABLISHED`
 
-**Sole authorized next product-capability closure:** `NONE`
+**Sole authorized next product-capability closure:**
+`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_OBSERVATION`
 
 **Fixed-contract public Shadow runtime:**
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
 **Persistent public Shadow service/workbench:**
-`OFFLINE_IMPLEMENTATION_ACCEPTED`
+`PRODUCTION_PUBLIC_OBSERVATION_AUTHORIZED`
 
-**Evidence gate:** `CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`
+**Evidence gate:** `ACTIVE_PERSISTENT_PUBLIC_SERVICE_OBSERVATION`
 
-**Live commands:** `FORBIDDEN`
+**Live commands:** `AUTHORIZED_EXACT_ONE_SERVE_SHADOW`
 
-**Persistent deployment / 24x7 acceptance:** `FORBIDDEN`
+**Persistent deployment / 24x7 acceptance:** `OBSERVATION_AUTHORIZED_ACCEPTANCE_PENDING`
 
 ## Authority
 
@@ -32,12 +33,19 @@ receipts, run duration, contract presence, or roadmap order grant no stage.
 The current boundary retains the already established, guarded production-public Short Vol Radar
 defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md), records the independently
 accepted fixed-contract Shadow implementation-integrity repair and two-layer engineering evidence
-defined below, and accepts the persistent runtime and trader-workbench offline implementation at
-the exact identity recorded below. The failed attempt and the later accepted smoke are both
-consumed and sealed. No product-capability closure or live task is active. Production-public
-persistent service deployment is unauthorized; no service invocation, persistent deployment, or
-24x7 acceptance is authorized. Private/account data, orders, fills, capital, qualification,
-Challenger automation, promotion, and execution remain unauthorized.
+defined below, accepts the persistent runtime and trader-workbench offline implementation at the
+exact identity recorded below, and activates one
+[`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_OBSERVATION`](../../tasks/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_OBSERVATION.md)
+`EVIDENCE_ONLY` deployment authority. The historical failed attempt and later accepted smoke remain
+consumed and sealed and are not retried. The active authority permits exactly one production-public
+`serve-shadow` invocation, one loopback-only workbench, one `KeepAlive=false` /
+`RunAtLoad=false` / `LaunchOnlyOnce=true` local process host, and one read-only probe under the
+task's exact external paths and stop boundary. Private/account data,
+orders, fills, capital, qualification, Challenger automation, promotion, and execution remain
+unauthorized.
+
+The prior `CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED` evidence result remains immutable accepted
+history; the active service observation is a new gate and does not reopen or extend it.
 
 The accepted
 [`SHORT_VOL_UNDERWRITING_POSITION`](../contracts/SHORT_VOL_UNDERWRITING_POSITION.md) implementation
@@ -78,7 +86,32 @@ and executable browser fail-closed/recovery semantics. The exact candidate passe
 tests and GitHub CI run `30682879756`. No live command, Deribit connection, supervisor install, or
 deployment occurred during this acceptance. The contract header's
 `OFFLINE_IMPLEMENTATION_AUTHORIZED` label records its frozen pre-acceptance state; it does not
-override this authority's current `OFFLINE_IMPLEMENTATION_ACCEPTED` record.
+override this authority's current `PRODUCTION_PUBLIC_OBSERVATION_AUTHORIZED` record.
+
+### Active persistent service observation delegation
+
+The user's 2026-08-01 instruction `部署上线，开始观察` authorizes the controller to publish and
+independently verify this exact activation, merge it, bind the resulting remote `main` commit/tree
+and immutable Policy/contract bytes into one external deployment envelope, install exactly one
+`com.optimatrix.public-shadow` launchd service with `KeepAlive=false`, `RunAtLoad=false`, and
+`LaunchOnlyOnce=true` plus one read-only 60-second probe, start exactly one service process through
+`launchctl kickstart` without `-k`, commission `127.0.0.1:8765`, and monitor read-only until the
+user explicitly says `停止` or the process fails terminally. A reboot does not auto-start the
+service.
+
+On `停止`, the controller first unloads the periodic probe, makes exactly one final-online probe
+attempt, sends exactly
+`launchctl kill SIGINT gui/501/com.optimatrix.public-shadow`, waits up to 120 seconds for the
+existing service writer to seal, and then runs a separate terminal audit outside the probe ledger
+and endpoint-success denominator. Probe failure makes the 24-hour gate `NOT_MET` but never delays or
+retries the stop. A timeout is a blocker and never triggers a second signal. A
+process failure consumes the one attempt and grants no restart or alternate state root. Natural
+no-opportunity and `UNKNOWN` results never change the stop boundary, Policy, or permission. A clean
+covered interval shorter than
+`86,400,000` ms reports `24_HOUR_CONTINUOUS_PUBLIC_SERVICE_SAMPLE = NOT_MET`; elapsed time never
+authorizes extension or a second invocation. This is an operational service-and-loopback-workbench
+gate: a healthy observable business `UNKNOWN` interval remains in its wall-clock duration but is
+reported separately and never becomes known-current market coverage.
 
 ### Accepted two-layer engineering evidence
 
@@ -270,18 +303,19 @@ The Underwriting, Shadow-admission, Position, Shadow Outcome, rejected-counterfa
 `NO_TRADE`, and forward-cohort semantics and exact three-Policy chain remain frozen. The proven
 implementation-integrity blocker is closed at exact tip
 `6eaaddfecf4c59a19c8029682a80fc52b7896a64`, and the later two-layer engineering gate is accepted
-and closed. No `EVIDENCE_ONLY` authority, live command, retry, or additional production-public
-Shadow interval remains active. The consumed failed interval remains `INCOMPLETE`, `NOT_ACCEPTED`,
-and `NOT_EVALUABLE`; no new evidence can complete or relabel it. Natural Candidate, Entry, or
-Outcome occurrence was not a blocker for the accepted engineering closure.
+and closed. The consumed failed interval remains `INCOMPLETE`, `NOT_ACCEPTED`, and `NOT_EVALUABLE`;
+no new evidence can complete, relabel, extend, or retry it. Natural Candidate, Entry, or Outcome
+occurrence was not a blocker for the accepted engineering closure. The active observation uses a
+new state root and creates a distinct non-cohort service run.
 
 The offline implementation prerequisite for the exact persistent public-only service,
 service-evidence reader, and read-only workbench is closed at commit
 `67085248fffb1b20bae1c9512ae1191d166a6509` and tree
-`9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa`. No `EVIDENCE_ONLY` authority, live command,
-supervisor installation, persistent deployment, or 24x7 sample is active. A later explicit
-`EVIDENCE_ONLY` deployment task remains required for every such action and cannot reuse either
-consumed bounded Shadow interval.
+`9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa`. There is now one active `EVIDENCE_ONLY` deployment
+authority for the accepted bytes. It permits only the exact service, local launchd envelope,
+loopback workbench, read-only probe, fresh state root, single invocation, and later clean-stop
+acceptance declared by the active task. Twenty-four-hour acceptance remains pending actual sealed
+evidence and cannot reuse either consumed bounded Shadow interval.
 
 The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
 the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
@@ -354,20 +388,20 @@ profitability, or fill evidence.
 
 ## Active and queued sequence
 
-No product-capability closure is active. The persistent runtime and read-only workbench offline
-implementation is accepted at the exact identity recorded above; its completed task is deleted.
-Live commands, supervisor installation, persistent deployment, and 24x7 evidence remain forbidden.
+Exactly one product-capability closure is active:
 
-The accepted two-layer smoke cannot be extended, retried, reused, or relabelled. After independent
-acceptance of the persistent implementation, these successor closures remain queued and
-unauthorized:
+1. **Persistent public Shadow service observation:** bind one exact activation merge and external
+   deployment envelope, install one `KeepAlive=false` local service plus one read-only probe, start
+   exactly one production-public service, commission the loopback trader view, observe until the
+   user's `停止` or terminal failure, then independently validate the sealed covered interval and
+   the separate 24-hour predicate.
 
-1. **Long-running frozen-Policy sample:** separately authorize a new production-public service
-   invocation, external deployment envelope, result-independent stop/retention rules, and new empty
-   evidence paths before estimating opportunity frequency, strategy quality, or PnL.
-2. **Challenger research and qualification:** authorize only after a usable frozen-Policy cohort
+The accepted two-layer smoke cannot be extended, retried, reused, or relabelled. After terminal
+acceptance of the active observation, these successor closures remain queued and unauthorized:
+
+1. **Challenger research and qualification:** authorize only after a usable frozen-Policy cohort
    and pre-registered qualification contract.
-3. **Promotion and execution:** authorize separately after independent qualification. Account,
+2. **Promotion and execution:** authorize separately after independent qualification. Account,
    capital, order, and fill authority remain distinct.
 
 No queued closure is active.
@@ -380,14 +414,13 @@ No queued closure is active.
 - treating component-leg quotes as an atomic structure or any public quote as a fill;
 - full-market persistence, per-update no-anomaly receipts, replay, or offline recomputation as a
   prerequisite for this Radar;
-- any production-public service invocation, Candidate, Shadow admission, Shadow Entry, Position,
-  Outcome, rejected-counterfactual, or forward-cohort operation; no live task is active;
+- any production-public service invocation outside the exact active task, any second invocation,
+  automatic restart, alternate state root, Internet-bound workbench, or private browser surface;
 - any second invocation, retry, alternate manifest, reuse, mutation, deletion, completion,
   migration, or relabeling of either consumed Shadow attempt's artifacts;
 - automatic training, Policy selection, qualification, promotion, or evolution;
 - generic databases, feature stores, registries, workflow engines, reusable service platforms,
-  markets, or strategies; the accepted process host remains unauthorized to run until a separate
-  exact live task is active;
+  markets, or strategies; only the task's one local launchd service and read-only probe are active;
 - private/account APIs, test-environment market sources, credentials, balances, margin, positions,
   orders, fills, settlement, execution gateways, maker behavior, or money; production
   `public/test` is allowed only as the protocol-required response to an established heartbeat
