@@ -40,7 +40,9 @@ rejected macOS `lsof`'s always-selected `f` field; attempt 002 closed terminally
 normal RunningBoard `resource coalition id` row was misclassified as a CPU resource exception;
 attempt 003 commissioned and then cleanly stopped after continuous observation found an exact-PID
 macOS CPU resource violation caused by redundant inactive-scope projection and unchanged workbench
-member encoding.
+member encoding. Attempt 004 confirmed the hot-path repair but was cleanly stopped after a manual
+`/usr/bin/log show` query self-record was falsely classified as a runtime resource event; the
+observer now excludes only the exact `com.apple.log` self-record shape.
 Under the 2026-08-02 Authority amendment, each observed implementation defect receives one minimal
 exact candidate and merged repair before one fresh R4 recommission attempt; failed attempts are
 preserved and this repeats only until one attempt is commissioned. This changes no service

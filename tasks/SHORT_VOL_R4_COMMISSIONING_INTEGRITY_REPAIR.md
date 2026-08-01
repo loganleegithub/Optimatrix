@@ -24,7 +24,8 @@ R4 deployment preflight
 **Target branch/PR:** one bounded branch/PR at a time; initial repair
 `agent/r4-commissioning-integrity-repair`, iterative repairs `agent/r4-lsof-field-repair` and
 `agent/r4-resource-log-classification-repair`, and current CPU repair
-`codex/r4-workbench-publication-cpu-repair`; no force push, history rewrite, main merge into a task
+`codex/r4-workbench-publication-cpu-repair`, followed by exact log-observer repair
+`codex/r4-log-observer-self-record-repair`; no force push, history rewrite, main merge into a task
 branch, or live mutation before exact-candidate acceptance
 
 ## 2026-08-02 R4 iterative recovery amendment
@@ -76,6 +77,13 @@ top-level JSON members may reuse immutable cached bytes, while every settled fac
 one complete, byte-immutable, schema-2 snapshot with an advancing publication sequence. The repair
 must not coalesce facts, change publication cadence, alter a fact boundary, remove settled evidence,
 change a business enum/value/order, or amend a Policy, input, Outcome, HTTP, or stage contract.
+
+The same loop also exposed one observer-only false event after attempt 004 commissioned normally.
+macOS recorded a manual `/usr/bin/log show` query as a `com.apple.log` row whose command text
+contained the exact runtime PID and CPU-resource search terms. The minimal controller repair may
+exclude only rows whose `processImagePath` and `sender` are both `/usr/bin/log` and whose subsystem
+is `com.apple.log`. It must continue counting every genuine exact-PID CPU resource message and
+diagnostic report; no runtime or resource threshold changes.
 
 ## Business closure
 

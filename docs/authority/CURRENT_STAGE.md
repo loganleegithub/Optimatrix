@@ -15,7 +15,7 @@
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
 **Persistent public Shadow service/workbench:**
-`R4_ATTEMPT_003_TERMINAL_QUIESCENT_CPU_REPAIR_AUTHORIZED`
+`R4_ATTEMPT_004_TERMINAL_QUIESCENT_LOG_OBSERVER_REPAIR_AUTHORIZED`
 
 **Evidence gate:** `ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED`
 
@@ -23,7 +23,7 @@
 `AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED`
 
 **Persistent deployment / 24x7 acceptance:**
-`R3_NOT_MET_R4_ATTEMPT_003_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`
+`R3_NOT_MET_R4_ATTEMPT_004_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`
 
 ## Authority
 
@@ -121,6 +121,27 @@ current repair may retain the one durable active-to-inactive transition and reus
 display metadata and top-level JSON member bytes. Every settled fact must still publish one full
 immutable schema-2 snapshot with an advancing sequence. Publication cadence, evidence retention,
 business values and order, Policy, input, Outcome, HTTP, and stage semantics remain unchanged.
+
+R4 attempt 004 ran from merged commit `7484b939d3c15b117aa63729193ea0978603ea8d`, envelope
+identity `sha256:3d0fb4e4e1c252c8e902f40507ded1e6309b2c34b59a78da01bbbf24e9f5be81`,
+and runtime identity `sha256:53ece78d82c4e98919a48427b24fb83fd7180d7c9ce85daf99c697d794987518`.
+It commissioned with 28.216667% one-core CPU over the 180000 ms gate, zero queue-lag transitions,
+and zero real resource events. Continuous observation reached `1388791` ms and 24 contiguous
+successful probe rows before an observer-only false event was isolated and the process was cleanly
+stopped. Its commissioning receipt SHA-256 is
+`18753c50a4e4bf6b73f146c697dee9d3d99ff18ba5c9a473797ba54d5dd3deab`; stop receipt SHA-256 is
+`c3103b354828781366f40ba4806563b68c135954b6a137aa262645235308a859`; terminal-audit SHA-256 is
+`2a9e2cb36fbf81b1684e5b619bf99bc4480bae702925e652ed1b1747c3688116`, with
+`PASS_COMPLETE_CLEAN_STOP`, `CLEAN_STOP_COMPLETE`, and 24-hour result `NOT_MET`.
+
+The attempt-004 defect is exact and confined to the resource observer. A manual read-only
+`/usr/bin/log show` query was itself recorded by macOS with `processImagePath=/usr/bin/log`,
+`sender=/usr/bin/log`, and `subsystem=com.apple.log`; its command text contained both the exact
+runtime PID and CPU-resource search terms, so the next periodic probe counted that observer row as
+one event. No Python CPU diagnostic or real runtime/RunningBoard resource violation existed. The
+current repair may exclude only that exact `log` self-observation shape before message
+classification. Genuine exact-PID resource messages, diagnostic reports, source readability, the
+zero-event gate, and every runtime, business, Policy, and deployment boundary remain unchanged.
 
 ### Consumed R3 commissioning and authorized R4 repair
 

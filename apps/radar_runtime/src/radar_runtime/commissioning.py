@@ -2737,6 +2737,12 @@ class MacOSHost:
                         if not query_start_wall <= observed_wall <= query_end_wall:
                             continue
                         unified_rows.append(raw_row)
+                        if (
+                            raw_row.get("processImagePath") == "/usr/bin/log"
+                            and raw_row.get("sender") == "/usr/bin/log"
+                            and raw_row.get("subsystem") == "com.apple.log"
+                        ):
+                            continue
                         message = raw_row.get("eventMessage")
                         if not isinstance(message, str):
                             continue
