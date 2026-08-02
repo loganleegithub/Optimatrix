@@ -26,7 +26,7 @@ from radar_runtime.runtime import (
     RpcPurpose,
 )
 from short_vol_radar.detector import DetectorState, EpisodeTracker
-from short_vol_radar.evidence import CoverageState, EvidenceWriter
+from short_vol_radar.evidence import CoverageState, RadarEventSink
 from short_vol_radar.policy import load_policy_bytes
 
 _next_application_seq_by_epoch: dict[int, int] = {}
@@ -47,8 +47,7 @@ def make_reducer(
     return RadarReducer(
         policy=load_policy_bytes(exact, digest),
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity="runtime",
             policy_identity=digest,

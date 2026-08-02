@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import json
-import os
-import uuid
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
-from pathlib import Path
 
 from market_monitor import PriceLevel, TimeInterval
 
@@ -344,44 +340,55 @@ def project_run_summary(
     }
 
 
-class EvidenceWriter:
+class RadarEventSink:
+    """Non-durable current Radar transitions and clean-stop summary."""
+
     def __init__(
         self,
-        directory: Path,
         *,
         code_identity: str,
         runtime_identity: str,
         policy_identity: str,
     ) -> None:
-        self.directory = directory
         self.code_identity = code_identity
         self.runtime_identity = runtime_identity
         self.policy_identity = policy_identity
+        self._anomalies: dict[str, dict[str, object]] = {}
+        self._atomics: dict[tuple[str, str], dict[str, object]] = {}
+        self._summary: dict[str, object] | None = None
 
-    def write_anomaly(self, event: Mapping[str, object]) -> Path | None:
-        self._require_identity(event)
-        return self._write_exclusive(
-            f"short-vol-anomaly-{_safe_name(_required_string(event, 'episode_identity'))}.json",
-            event,
-            duplicate_is_noop=True,
-        )
+    @property
+    def anomalies(self) -> tuple[Mapping[str, object], ...]:
+        return tuple(self._anomalies[key] for key in sorted(self._anomalies))
 
-    def write_atomic(self, event: Mapping[str, object]) -> Path | None:
+    @property
+    def atomics(self) -> tuple[Mapping[str, object], ...]:
+        return tuple(self._atomics[key] for key in sorted(self._atomics))
+
+    @property
+    def summary(self) -> Mapping[str, object] | None:
+        return self._summary
+
+    def record_anomaly(self, event: Mapping[str, object]) -> bool:
         self._require_identity(event)
         episode = _required_string(event, "episode_identity")
-        combo = _required_string(event, "combo_instrument_name")
-        return self._write_exclusive(
-            f"public-atomic-quote-{_safe_name(episode)}-{_safe_name(combo)}.json",
-            event,
-            duplicate_is_noop=True,
-        )
+        return self._record(self._anomalies, episode, event)
 
-    def write_summary(self, summary: Mapping[str, object]) -> Path:
+    def record_atomic(self, event: Mapping[str, object]) -> bool:
+        self._require_identity(event)
+        key = (
+            _required_string(event, "episode_identity"),
+            _required_string(event, "combo_instrument_name"),
+        )
+        return self._record(self._atomics, key, event)
+
+    def record_summary(self, summary: Mapping[str, object]) -> Mapping[str, object]:
         self._require_identity(summary)
-        path = self._write_exclusive("radar-run-summary.json", summary)
-        if path is None:
-            raise RuntimeError("exclusive summary write unexpectedly returned no path")
-        return path
+        normalized = dict(summary)
+        if self._summary is not None and self._summary != normalized:
+            raise EvidenceError("conflicting in-memory Radar summary")
+        self._summary = normalized
+        return normalized
 
     def _require_identity(self, value: Mapping[str, object]) -> None:
         for field, expected in (
@@ -390,42 +397,22 @@ class EvidenceWriter:
             ("policy_identity", self.policy_identity),
         ):
             if value.get(field) != expected:
-                raise EvidenceError(f"{field} does not match the writer")
+                raise EvidenceError(f"{field} does not match the Radar sink")
 
-    def _write_exclusive(
-        self,
-        name: str,
-        value: Mapping[str, object],
-        *,
-        duplicate_is_noop: bool = False,
-    ) -> Path | None:
-        path = self.directory / name
-        serialized = (
-            json.dumps(
-                value,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                allow_nan=False,
-            )
-            + "\n"
-        )
-        temporary = self.directory / f".evidence-{uuid.uuid4().hex}.tmp"
-        try:
-            with temporary.open("x", encoding="utf-8", newline="\n") as handle:
-                handle.write(serialized)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.link(temporary, path)
-        except FileExistsError as exc:
-            if duplicate_is_noop and path.read_text(encoding="utf-8") == serialized:
-                return None
-            raise EvidenceError(f"conflicting business object: {path}") from exc
-        except OSError as exc:
-            raise EvidenceError(f"business object publish failed: {path}") from exc
-        finally:
-            temporary.unlink(missing_ok=True)
-        return path
+    @staticmethod
+    def _record(
+        values: dict[object, dict[str, object]],
+        key: object,
+        event: Mapping[str, object],
+    ) -> bool:
+        normalized = dict(event)
+        previous = values.get(key)
+        if previous is not None and previous != normalized:
+            raise EvidenceError("conflicting in-memory Radar transition")
+        if previous == normalized:
+            return False
+        values[key] = normalized
+        return True
 
 
 def validate_atomic_causal_invariant(
@@ -518,9 +505,3 @@ def _levels(values: tuple[PriceLevel, ...]) -> list[dict[str, str]]:
         {"price": decimal_text(level.price), "amount": decimal_text(level.amount)}
         for level in values
     ]
-
-
-def _safe_name(value: str) -> str:
-    return "".join(
-        character if character.isalnum() or character in "-_" else "_" for character in value
-    )

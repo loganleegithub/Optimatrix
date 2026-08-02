@@ -25,7 +25,7 @@ from radar_runtime.runtime import (
     RpcState,
     ShadowRpcIntent,
 )
-from short_vol_radar.evidence import EvidenceWriter
+from short_vol_radar.evidence import RadarEventSink
 from short_vol_radar.policy import load_policy_bytes
 
 
@@ -126,8 +126,7 @@ def _runtime(
     return LiveRadarRuntime(
         policy=load_policy_bytes(exact, digest),
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity="runtime",
             policy_identity=digest,
@@ -448,7 +447,7 @@ def test_barrier_discards_new_shadow_intents_without_enrollment(
     assert request_id not in runtime.reducer._rpc_lifecycles
 
 
-def test_radar_summary_writer_failure_does_not_skip_downstream_terminal(
+def test_radar_summary_sink_failure_does_not_skip_downstream_terminal(
     tmp_path: Path,
     policy_factory: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -457,10 +456,10 @@ def test_radar_summary_writer_failure_does_not_skip_downstream_terminal(
     runtime = _runtime(tmp_path, policy_factory, adapter)
     runtime.reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
 
-    def fail_summary(_summary: dict[str, object]) -> Path:
+    def fail_summary(_summary: dict[str, object]) -> dict[str, object]:
         raise OSError("injected Radar summary failure")
 
-    monkeypatch.setattr(runtime.reducer.writer, "write_summary", fail_summary)
+    monkeypatch.setattr(runtime.reducer.event_sink, "record_summary", fail_summary)
 
     with pytest.raises(OSError, match="Radar summary"):
         runtime.reducer.clean_stop(1_100)

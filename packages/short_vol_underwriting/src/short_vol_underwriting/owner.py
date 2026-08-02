@@ -29,12 +29,7 @@ from short_vol_underwriting.close import (
     evaluate_close_opportunity,
     normalize_close_quote,
 )
-from short_vol_underwriting.cohort import (
-    AlignedPair,
-    Observation,
-    RejectedAnchor,
-    RejectedAnchorSelector,
-)
+from short_vol_underwriting.cohort import Observation
 from short_vol_underwriting.constants import (
     ADMISSION_CUTOFF_LEAD_MS,
     POSITION_CLOSE_REASONS,
@@ -52,7 +47,7 @@ from short_vol_underwriting.domain import (
     compute_shadow_outcome_economics,
 )
 from short_vol_underwriting.evidence import (
-    DownstreamEvidenceWriter,
+    ShadowStateStore,
     RuntimeBindings,
 )
 from short_vol_underwriting.identity import IdentityError, canonical_identity, require_identity
@@ -151,6 +146,9 @@ class UnderwritingFacts:
     ticker_source: SourceFact | None
     short_leg_instrument_name: str | None = None
     long_leg_instrument_name: str | None = None
+    radar_band_id: str | None = None
+    radar_richness_lower: Decimal | None = None
+    radar_richness_upper: Decimal | None = None
     unknown_reasons: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -278,7 +276,6 @@ class _TradeRecord:
     entry_facts: UnderwritingFacts
     entry_economics: EntryEconomics
     observation: Observation
-    pair: AlignedPair
     position_state: PositionDecisionState
     prior_index: Decimal
     prior_index_source: SourceFact
@@ -302,17 +299,17 @@ class FixedContractShadowOwner:
         *,
         policies: PolicyChain,
         bindings: RuntimeBindings,
-        writer: DownstreamEvidenceWriter,
+        state_store: ShadowStateStore,
     ) -> None:
         if policies.identities != (
             bindings.radar_policy_identity,
             bindings.underwriting_policy_identity,
             bindings.position_policy_identity,
         ):
-            raise ValueError("owner Policy chain and evidence bindings differ")
+            raise ValueError("owner Policy chain and runtime bindings differ")
         self.policies = policies
         self.bindings = bindings
-        self.writer = writer
+        self.state_store = state_store
         self._slot_consumed: set[str] = set()
         self._last_availability: dict[
             str,
@@ -325,9 +322,6 @@ class FixedContractShadowOwner:
         ] = {}
         self._candidates: dict[str, _CandidateRecord] = {}
         self._trades: dict[str, _TradeRecord] = {}
-        self._rejected_selector = RejectedAnchorSelector()
-        self._enrollment_start: FactBoundary | None = None
-        self._enrollment_end: FactBoundary | None = None
         self._emitted: list[EmittedObject] = []
         self._intents: list[RpcRequestIntent] = []
         self._retirements: list[RpcRetirementIntent] = []
@@ -398,18 +392,6 @@ class FixedContractShadowOwner:
                 )
             )
         return tuple(sorted(boundaries))
-
-    def open_enrollment(self, boundary: FactBoundary) -> None:
-        if self._enrollment_start is not None:
-            raise ValueError("enrollment start is immutable")
-        self._enrollment_start = boundary
-
-    def close_enrollment(self, boundary: FactBoundary) -> None:
-        if self._enrollment_start is None or not boundary.is_strictly_after(self._enrollment_start):
-            raise ValueError("enrollment cutoff must be strictly after runtime start")
-        if self._enrollment_end is not None:
-            raise ValueError("enrollment cutoff is immutable")
-        self._enrollment_end = boundary
 
     def settle_underwriting(
         self,
@@ -492,7 +474,6 @@ class FixedContractShadowOwner:
             for member in facts
             if member.radar_scope_identity not in handled_scopes
         )
-        rejected: list[tuple[_UnderwritingEvaluation, str]] = []
         for evaluation in evaluations:
             availability_identity = self._emit_availability(evaluation)
             if evaluation.action is None:
@@ -501,42 +482,15 @@ class FixedContractShadowOwner:
                 evaluation,
                 availability_identity=availability_identity,
             )
-            if not action_changed:
-                continue
-            if evaluation.action is UnderwritingAction.CANDIDATE:
+            if (
+                action_changed
+                and evaluation.action is UnderwritingAction.CANDIDATE
+            ):
                 self._activate_candidate(
                     evaluation,
                     action_identity=action_identity,
                     allocate_request_id=allocate_request_id,
                 )
-            else:
-                rejected.append((evaluation, action_identity))
-        for slot in sorted(
-            {
-                evaluation.slot_identity
-                for evaluation, _ in rejected
-                if evaluation.slot_identity is not None
-            }
-        ):
-            candidates = tuple(
-                RejectedAnchor(
-                    slot_identity=slot,
-                    underwriting_action_identity=action_identity,
-                    action=evaluation.action.value,
-                    boundary=evaluation.facts.boundary,
-                )
-                for evaluation, action_identity in rejected
-                if evaluation.slot_identity == slot and evaluation.action is not None
-            )
-            selected = self._rejected_selector.select_boundary(candidates)
-            if selected is not None:
-                selected_item = next(
-                    (item for item in rejected if item[1] == selected.underwriting_action_identity),
-                    None,
-                )
-                if selected_item is not None:
-                    evaluation, action_identity = selected_item
-                    self._create_rejected_trade(evaluation, action_identity)
         return self._finish_transition()
 
     def settle_admission(
@@ -1628,7 +1582,27 @@ class FixedContractShadowOwner:
             "admission_attempt_terminal_identity": attempt.terminal_identity,
             "underwriting_position_slot_key_identity": candidate.slot_identity,
             "entry_fact_boundary": facts.boundary.as_object(),
+            "active_episode_identity": facts.active_episode_identity,
+            "radar_scope_identity": facts.radar_scope_identity,
+            "atomic_state": facts.atomic_state,
+            "radar_band_id": facts.radar_band_id,
+            "radar_richness_interval": (
+                {
+                    "lower": facts.radar_richness_lower,
+                    "upper": facts.radar_richness_upper,
+                }
+                if facts.radar_richness_lower is not None
+                and facts.radar_richness_upper is not None
+                else None
+            ),
             "canonical_combo_identity": facts.canonical_combo_identity,
+            "combo_instrument_name": facts.combo_instrument_name,
+            "short_leg_instrument_name": facts.short_leg_instrument_name,
+            "long_leg_instrument_name": facts.long_leg_instrument_name,
+            "expiry_ms": facts.expiry_ms,
+            "option_type": facts.option_type,
+            "short_strike_usdc_per_btc": facts.short_strike_usdc_per_btc,
+            "long_strike_usdc_per_btc": facts.long_strike_usdc_per_btc,
             "canonical_leg_identities": [
                 facts.short_leg_identity,
                 facts.long_leg_identity,
@@ -1645,6 +1619,7 @@ class FixedContractShadowOwner:
             "gross_entry_credit_usdc": economics.gross_entry_credit_usdc,
             "entry_fee_reserve_usdc": economics.entry_fee_reserve_usdc,
             "net_entry_credit_usdc": economics.net_entry_credit_usdc,
+            "payoff_cap_usdc": economics.payoff_cap_usdc,
             "contractual_payoff_max_loss_ex_fees_usdc": (
                 economics.contractual_payoff_max_loss_ex_fees_usdc
             ),
@@ -1697,33 +1672,19 @@ class FixedContractShadowOwner:
     ) -> None:
         if facts.index_usdc_per_btc is None or facts.index_source is None:
             raise RuntimeError("trade anchor requires a known entry index")
-        enrolled = self._is_enrolled(facts.boundary)
         observation = (
             Observation.rejected_counterfactual(
                 outcome_contract_identity=self.bindings.outcome_contract_identity,
                 rejected_anchor_identity=anchor_identity,
                 entry_boundary=facts.boundary,
-                cohort_enrolled=enrolled,
+                cohort_enrolled=False,
             )
             if rejected
             else Observation.admitted(
                 outcome_contract_identity=self.bindings.outcome_contract_identity,
                 shadow_entry_identity=anchor_identity,
                 entry_boundary=facts.boundary,
-                cohort_enrolled=enrolled,
-            )
-        )
-        pair = (
-            AlignedPair.for_rejected(
-                outcome_contract_identity=self.bindings.outcome_contract_identity,
-                rejected_anchor_identity=anchor_identity,
-                cohort_enrolled=enrolled,
-            )
-            if rejected
-            else AlignedPair.for_admitted(
-                outcome_contract_identity=self.bindings.outcome_contract_identity,
-                shadow_entry_identity=anchor_identity,
-                cohort_enrolled=enrolled,
+                cohort_enrolled=False,
             )
         )
         record = _TradeRecord(
@@ -1734,7 +1695,6 @@ class FixedContractShadowOwner:
             entry_facts=facts,
             entry_economics=economics,
             observation=observation,
-            pair=pair,
             position_state=PositionDecisionState(
                 shadow_entry_identity=observation.observation_identity
                 if rejected
@@ -1764,8 +1724,6 @@ class FixedContractShadowOwner:
                 "rejected_observation_identity": observation.observation_identity,
                 "rejected_anchor_identity": anchor_identity,
                 "start_fact_boundary": facts.boundary.as_object(),
-                "aligned_pair_identity": pair.pair_identity,
-                "cohort_enrolled": enrolled,
                 "lifecycle_state": "PENDING",
             }
             if rejected
@@ -1773,8 +1731,6 @@ class FixedContractShadowOwner:
                 "shadow_observation_identity": observation.observation_identity,
                 "shadow_entry_identity": anchor_identity,
                 "start_fact_boundary": facts.boundary.as_object(),
-                "aligned_pair_identity": pair.pair_identity,
-                "cohort_enrolled": enrolled,
                 "lifecycle_state": "PENDING",
             }
         )
@@ -2120,6 +2076,7 @@ class FixedContractShadowOwner:
             else {
                 "position_action_identity": decision.position_action_identity,
                 "position_evaluation_identity": decision.position_evaluation_identity,
+                "shadow_entry_identity": trade.anchor_identity,
                 "serialized_action": decision.serialized_action,
                 "ordered_predicate_truth_vector": list(decision.ordered_predicate_truth_vector),
                 "ordered_latched_close_reason_vector": list(
@@ -2685,58 +2642,7 @@ class FixedContractShadowOwner:
             boundary,
             payload,
         )
-        trade.pair.terminalize(
-            state=state,
-            terminal_boundary=boundary,
-            trade_outcome_identity=trade.observation.terminal_outcome_identity,
-            trade_net_pnl_usdc=(
-                known_economics.net_pnl_after_public_standard_fee_reserve_usdc
-                if known_economics is not None
-                else None
-            ),
-        )
-        self._emit_aligned_pair(trade)
         trade.terminal_written = True
-
-    def _emit_aligned_pair(self, trade: _TradeRecord) -> None:
-        pair = trade.pair
-        if (
-            pair.terminal_state is None
-            or pair.terminal_boundary is None
-            or pair.trade_outcome_identity is None
-        ):
-            raise RuntimeError("aligned pair is not terminal")
-        payload = {
-            "aligned_pair_identity": pair.pair_identity,
-            "pair_family": "REJECTED" if trade.rejected else "ADMITTED",
-            "cohort_enrolled": pair.cohort_enrolled,
-            "pair_anchor_identity": pair.pair_anchor_identity,
-            "policy_arm": pair.policy_arm,
-            "alternative_arm": pair.alternative_arm,
-            "trade_observation_identity": trade.observation.observation_identity,
-            "trade_outcome_identity": pair.trade_outcome_identity,
-            "terminal_state": pair.terminal_state.value,
-            "terminal_fact_boundary": pair.terminal_boundary.as_object(),
-            "censor_mask": (
-                ["STOP"]
-                if pair.terminal_state is OutcomeState.CENSORED_AT_STOP
-                else ["FAILURE"]
-                if pair.terminal_state is OutcomeState.CENSORED_AT_FAILURE
-                else []
-            ),
-            "no_trade_cashflow_usdc": Decimal(0),
-            "trade_net_pnl_after_public_standard_fee_reserve_usdc": (pair.trade_net_pnl_usdc),
-            "policy_advantage_usdc": pair.policy_advantage_usdc,
-            "comparison_availability": (
-                "KNOWN" if pair.terminal_state is OutcomeState.MATURE_KNOWN else "UNKNOWN"
-            ),
-        }
-        self._emit(
-            "ALIGNED_POLICY_NO_TRADE_PAIR",
-            pair.pair_identity,
-            pair.terminal_boundary,
-            payload,
-        )
 
     def _shadow_close_opportunity_payload(
         self,
@@ -3468,7 +3374,7 @@ class FixedContractShadowOwner:
         emitted_key = (kind, identity)
         if emitted_key in self._emitted_identities:
             return
-        self.writer.write(
+        self.state_store.record(
             object_kind=kind,
             object_identity=identity,
             fact_boundary=boundary,
@@ -3517,13 +3423,6 @@ class FixedContractShadowOwner:
             )
             if source is not None
         ]
-
-    def _is_enrolled(self, boundary: FactBoundary) -> bool:
-        return (
-            self._enrollment_start is not None
-            and boundary.is_strictly_after(self._enrollment_start)
-            and (self._enrollment_end is None or self._enrollment_end.is_strictly_after(boundary))
-        )
 
     @staticmethod
     def _quote_count_suffix(state: CloseQuoteState) -> str:

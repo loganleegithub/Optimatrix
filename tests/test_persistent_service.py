@@ -38,7 +38,7 @@ from radar_runtime.service import (
     run_persistent_service_composition,
 )
 from radar_runtime.workbench import DataState, ServicePhase, ServiceStatus
-from short_vol_radar.evidence import EvidenceWriter
+from short_vol_radar.evidence import RadarEventSink
 from short_vol_radar.policy import load_policy_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,13 +77,12 @@ def test_startup_builds_one_business_owner_graph_without_service_ledger(tmp_path
     startup = _startup(tmp_path)
     composition = build_persistent_service_composition(startup)
     try:
-        assert startup.radar_directory.is_dir()
-        assert startup.downstream_directory.is_dir()
-        assert not (startup.run_directory / "service").exists()
+        assert startup.cases_directory.is_dir()
+        assert sorted(path.name for path in startup.run_directory.iterdir()) == ["cases"]
         assert composition.owner.policies is startup.policies
         assert composition.runtime.policy is startup.policies.radar
         assert composition.adapter.owner is composition.owner
-        assert composition.publisher.bindings is startup.downstream_bindings
+        assert composition.publisher.bindings is startup.runtime_bindings
         with pytest.raises(FrozenInstanceError):
             startup.policies.radar.identity = "sha256:" + "f" * 64  # type: ignore[misc]
     finally:
@@ -195,11 +194,12 @@ def test_pre_latched_stop_opens_no_client_and_writes_radar_summary(tmp_path: Pat
                 start_workbench=False,
             )
         )
-        assert summary == startup.radar_directory / "radar-run-summary.json"
-        assert summary.is_file()
+        assert summary["object_kind"] == "RADAR_RUN_SUMMARY"
+        assert composition.radar_sink.summary == summary
+        assert list(startup.cases_directory.iterdir()) == []
         assert composition.runtime.shadow_terminalized is True
         assert composition.publisher.status.phase is ServicePhase.STOPPED
-        assert not (startup.run_directory / "service").exists()
+        assert sorted(path.name for path in startup.run_directory.iterdir()) == ["cases"]
     finally:
         composition.workbench.close()
 
@@ -251,7 +251,9 @@ def test_outer_loop_reconnects_without_replacing_business_owner(tmp_path: Path) 
 
     try:
         summary = asyncio.run(scenario())
-        assert summary.is_file()
+        assert summary["object_kind"] == "RADAR_RUN_SUMMARY"
+        assert composition.radar_sink.summary == summary
+        assert list(composition.startup.cases_directory.iterdir()) == []
         assert epochs == [1, 2]
         assert composition.owner is owner
         assert composition.runtime.reducer.diagnostics.reconnect_count == 1
@@ -281,7 +283,8 @@ def test_fatal_protocol_failure_terminalizes_owner_and_status(tmp_path: Path) ->
             )
         assert composition.runtime.shadow_terminalized is True
         assert composition.publisher.status.phase is ServicePhase.FAILED
-        assert not (composition.startup.radar_directory / "radar-run-summary.json").exists()
+        assert composition.radar_sink.summary is None
+        assert list(composition.startup.cases_directory.iterdir()) == []
     finally:
         composition.workbench.close()
 
@@ -436,8 +439,7 @@ def test_runtime_publishes_snapshot_only_after_shadow_settlement(
     reducer = RadarReducer(
         policy=load_policy_bytes(exact, digest),
         code_identity=CODE,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity=CODE,
             runtime_identity="runtime",
             policy_identity=digest,
@@ -473,8 +475,7 @@ def test_runtime_flushes_before_clean_stop_and_reconnect(
     clean_runtime = LiveRadarRuntime(
         policy=policy,
         code_identity=CODE,
-        evidence_writer=EvidenceWriter(
-            clean_evidence,
+        event_sink=RadarEventSink(
             code_identity=CODE,
             runtime_identity="clean-runtime",
             policy_identity=digest,
@@ -500,8 +501,7 @@ def test_runtime_flushes_before_clean_stop_and_reconnect(
     reconnect_runtime = LiveRadarRuntime(
         policy=policy,
         code_identity=CODE,
-        evidence_writer=EvidenceWriter(
-            reconnect_evidence,
+        event_sink=RadarEventSink(
             code_identity=CODE,
             runtime_identity="reconnect-runtime",
             policy_identity=digest,

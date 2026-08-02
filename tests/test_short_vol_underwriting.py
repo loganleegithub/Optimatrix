@@ -22,8 +22,10 @@ from short_vol_underwriting import (
     CloseOptionAvailability,
     CloseQuoteFacts,
     CloseQuoteState,
-    DownstreamEvidenceError,
-    DownstreamEvidenceWriter,
+    ShadowCaseReadStatus,
+    ShadowCaseStore,
+    ShadowStateError,
+    ShadowStateStore,
     FactBoundary,
     FixedContractShadowOwner,
     Observation,
@@ -54,11 +56,6 @@ from short_vol_underwriting import (
     load_policy_chain,
     ordered_candidate_invalidation,
 )
-from short_vol_underwriting.constants import (
-    OUTCOME_CONTRACT_DIGEST,
-    UNDERWRITING_POSITION_CONTRACT_DIGEST,
-)
-
 ROOT = Path(__file__).resolve().parents[1]
 RADAR_POLICY_IDENTITY = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
 UNDERWRITING_POLICY_IDENTITY = (
@@ -72,19 +69,21 @@ def _object(value: object) -> dict[str, object]:
     return value
 
 
+_STATE_BY_DIRECTORY: dict[Path, ShadowStateStore] = {}
+
+
 def _written_objects(
     directory: Path,
     *,
     bindings: RuntimeBindings,
 ) -> dict[str, dict[str, object]]:
     del bindings
+    state = _STATE_BY_DIRECTORY[directory.resolve()]
     result: dict[str, dict[str, object]] = {}
-    for path in sorted((directory / "objects").glob("*/*.json")):
-        value = json.loads(path.read_text(encoding="utf-8"))
-        assert isinstance(value, dict)
+    for value in state.objects:
         identity = value["object_identity"]
         assert isinstance(identity, str)
-        result[identity] = value
+        result[identity] = dict(value)
     return result
 
 
@@ -224,6 +223,7 @@ def _owner(
     *,
     close_enrollment: bool = True,
 ) -> tuple[FixedContractShadowOwner, RuntimeBindings]:
+    del close_enrollment
     policies = load_policy_chain(
         radar_path=ROOT / "policies/short-vol-fixed-public-shadow-radar.json",
         underwriting_path=ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json",
@@ -238,17 +238,14 @@ def _owner(
         radar_policy_identity=RADAR_POLICY_IDENTITY,
         underwriting_policy_identity=UNDERWRITING_POLICY_IDENTITY,
         position_policy_identity=POSITION_POLICY_IDENTITY,
-        underwriting_position_contract_digest=UNDERWRITING_POSITION_CONTRACT_DIGEST,
-        outcome_contract_digest=OUTCOME_CONTRACT_DIGEST,
     )
+    state_store = ShadowStateStore(bindings=bindings)
     owner = FixedContractShadowOwner(
         policies=policies,
         bindings=bindings,
-        writer=DownstreamEvidenceWriter(tmp_path, bindings=bindings),
+        state_store=state_store,
     )
-    owner.open_enrollment(_boundary(0, 100))
-    if close_enrollment:
-        owner.close_enrollment(_boundary(100, 200))
+    _STATE_BY_DIRECTORY[tmp_path.resolve()] = state_store
     return owner, bindings
 
 
@@ -330,7 +327,7 @@ def test_owner_rejects_unbound_radar_episode_before_emission(
 
     with pytest.raises(ValueError, match="not bound"):
         owner.settle_underwriting((facts,), allocate_request_id=lambda: 41)
-    assert owner.writer.objects == ()
+    assert owner.state_store.objects == ()
 
 
 def _admit_owner(owner: FixedContractShadowOwner) -> str:
@@ -1154,7 +1151,7 @@ def test_owner_rejects_initial_target_quantity_mismatch_before_any_write(
     with pytest.raises(RuntimeError, match="target quantity"):
         owner.settle_underwriting((facts,), allocate_request_id=lambda: 41)
 
-    assert owner.writer.objects == ()
+    assert owner.state_store.objects == ()
 
 
 def test_owner_rejects_refresh_target_quantity_mismatch_without_consuming_candidate(
@@ -1173,7 +1170,7 @@ def test_owner_rejects_refresh_target_quantity_mismatch_without_consuming_candid
         for item in activated.emitted
         if item.object_kind == "CANDIDATE_ACTIVATION"
     )
-    before = tuple(owner.writer.objects)
+    before = tuple(owner.state_store.objects)
     refreshed = replace(
         _underwriting_facts(
             boundary=_boundary(2, 120),
@@ -1194,7 +1191,7 @@ def test_owner_rejects_refresh_target_quantity_mismatch_without_consuming_candid
             refresh_witness=witness,
         )
 
-    assert tuple(owner.writer.objects) == before
+    assert tuple(owner.state_store.objects) == before
 
 
 def test_owner_explicit_unknown_reasons_prevent_economic_action(
@@ -1269,10 +1266,10 @@ def test_owner_unknown_refresh_invalidates_candidate_before_admission(
     )
 
 
-def test_owner_enrolls_anchor_after_start_before_cutoff_control_is_realized(
+def test_owner_opens_admitted_observation_without_online_cohort_membership(
     tmp_path: Path,
 ) -> None:
-    owner, bindings = _owner(tmp_path, close_enrollment=False)
+    owner, bindings = _owner(tmp_path)
 
     _admit_owner(owner)
 
@@ -1280,7 +1277,8 @@ def test_owner_enrolls_anchor_after_start_before_cutoff_control_is_realized(
     observation = next(
         value for value in objects.values() if value["object_kind"] == "SHADOW_OUTCOME_OBSERVATION"
     )
-    assert _object(observation["payload"])["cohort_enrolled"] is True
+    assert "cohort_enrolled" not in _object(observation["payload"])
+    assert not any(value["object_kind"] == "ALIGNED_POLICY_NO_TRADE_PAIR" for value in objects.values())
 
 
 def test_owner_emits_slot_consumed_availability_after_entry(
@@ -1348,7 +1346,6 @@ def test_owner_first_close_then_strictly_future_subscription_exit_round_trip(
         "SHADOW_CLOSE_OPPORTUNITY",
         "SHADOW_COUNTERFACTUAL_EXIT",
         "SHADOW_OUTCOME",
-        "ALIGNED_POLICY_NO_TRADE_PAIR",
     ]
     assert future.request_intents == ()
     objects = _written_objects(tmp_path, bindings=bindings)
@@ -2794,7 +2791,7 @@ def test_negative_signed_close_level_preserves_atomic_quote_and_credit(
     assert quotes[0]["gross_close_cashflow_usdc"] == "0.1"
 
 
-def test_owner_rejected_counterfactual_closes_through_same_future_quote(
+def test_watch_and_abstain_remain_current_state_without_automatic_counterfactual_cases(
     tmp_path: Path,
 ) -> None:
     owner, bindings = _owner(tmp_path)
@@ -2807,123 +2804,31 @@ def test_owner_rejected_counterfactual_closes_through_same_future_quote(
         ),
         entry_consumed_levels=((Decimal("150"), Decimal("0.1")),),
     )
-    rejected = owner.settle_underwriting(
-        (watch_facts,),
-        allocate_request_id=lambda: 41,
-    )
-    rejected_anchor = next(
-        item.object_identity
-        for item in rejected.emitted
-        if item.object_kind == "REJECTED_COUNTERFACTUAL_ANCHOR"
-    )
 
-    first_close = owner.settle_position(
-        anchor_identity=rejected_anchor,
-        facts=replace(
-            _position_facts(
+    first = owner.settle_underwriting((watch_facts,), allocate_request_id=lambda: 41)
+    repeated = owner.settle_underwriting(
+        (
+            replace(
+                watch_facts,
                 boundary=_boundary(2, 120),
-                change_id=11,
-                previous_change_id=10,
+                quote_source=SourceFact(
+                    cast(SubscriptionAdmissionRefreshWitness, watch_facts.quote_refresh_witness).source_identity,
+                    _boundary(2, 120),
+                ),
             ),
-            current_short_delta=Decimal("0.6"),
         ),
         allocate_request_id=lambda: 42,
     )
-    assert [item.object_kind for item in first_close.emitted] == [
-        "REJECTED_COUNTERFACTUAL_POSITION_EVALUATION",
-        "REJECTED_COUNTERFACTUAL_POSITION_ACTION",
-        "REJECTED_COUNTERFACTUAL_CLOSE_QUOTE_EVALUATION",
-    ]
-    assert [intent.request_id for intent in first_close.request_intents] == [42]
 
-    future = owner.settle_position(
-        anchor_identity=rejected_anchor,
-        facts=replace(
-            _position_facts(
-                boundary=_boundary(3, 130),
-                change_id=12,
-                previous_change_id=11,
-            ),
-            current_short_delta=Decimal("0.6"),
-        ),
-        allocate_request_id=lambda: 43,
-    )
-    assert [item.object_kind for item in future.emitted] == [
-        "REJECTED_COUNTERFACTUAL_CLOSE_QUOTE_EVALUATION",
-        "REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION",
-        "REJECTED_COUNTERFACTUAL_EXIT",
-        "REJECTED_COUNTERFACTUAL_OUTCOME",
-        "ALIGNED_POLICY_NO_TRADE_PAIR",
-    ]
-    assert future.request_intents == ()
+    emitted_kinds = {item.object_kind for item in (*first.emitted, *repeated.emitted)}
+    assert "UNDERWRITING_ACTION" in emitted_kinds
+    assert not any(kind.startswith("REJECTED_COUNTERFACTUAL") for kind in emitted_kinds)
+    assert "ALIGNED_POLICY_NO_TRADE_PAIR" not in emitted_kinds
     objects = _written_objects(tmp_path, bindings=bindings)
-    assert (
-        sum(value["object_kind"] == "REJECTED_COUNTERFACTUAL_OUTCOME" for value in objects.values())
-        == 1
-    )
-    assert (
-        sum(value["object_kind"] == "ALIGNED_POLICY_NO_TRADE_PAIR" for value in objects.values())
-        == 1
-    )
-    rejected_exit = next(
-        _object(value["payload"])
+    assert not any(
+        str(value["object_kind"]).startswith("REJECTED_COUNTERFACTUAL")
         for value in objects.values()
-        if value["object_kind"] == "REJECTED_COUNTERFACTUAL_EXIT"
     )
-    rejected_quote = _object(
-        objects[cast(str, rejected_exit["close_quote_evaluation_identity"])]["payload"]
-    )
-    assert (
-        rejected_exit["consumed_rule_scoped_quote_fingerprint"]
-        == (rejected_quote["consumed_rule_scoped_quote_fingerprint"])
-    )
-
-
-def test_owner_repeated_rejected_evaluation_keeps_first_anchor_without_crashing(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    first = replace(
-        _underwriting_facts(
-            boundary=_boundary(1, 110),
-            change_id=10,
-            previous_change_id=None,
-            snapshot_kind="snapshot",
-        ),
-        entry_consumed_levels=((Decimal("150"), Decimal("0.1")),),
-    )
-    first_transition = owner.settle_underwriting((first,), allocate_request_id=lambda: 41)
-    first_anchor = next(
-        item.object_identity
-        for item in first_transition.emitted
-        if item.object_kind == "REJECTED_COUNTERFACTUAL_ANCHOR"
-    )
-    repeated = replace(
-        _underwriting_facts(
-            boundary=_boundary(2, 120),
-            change_id=11,
-            previous_change_id=10,
-            snapshot_kind="change",
-        ),
-        entry_consumed_levels=((Decimal("150"), Decimal("0.1")),),
-    )
-
-    second_transition = owner.settle_underwriting(
-        (repeated,),
-        allocate_request_id=lambda: 42,
-    )
-
-    assert all(
-        item.object_kind != "REJECTED_COUNTERFACTUAL_ANCHOR" for item in second_transition.emitted
-    )
-    objects = _written_objects(tmp_path, bindings=bindings)
-    anchors = [
-        value
-        for value in objects.values()
-        if value["object_kind"] == "REJECTED_COUNTERFACTUAL_ANCHOR"
-    ]
-    assert len(anchors) == 1
-    assert anchors[0]["object_identity"] == first_anchor
 
 
 def test_owner_invalidates_broken_subscription_chain_without_replacement_candidate(
@@ -2948,17 +2853,14 @@ def test_owner_invalidates_broken_subscription_chain_without_replacement_candida
         "ADMISSION_ATTEMPT_TERMINAL",
         "CANDIDATE_INVALIDATION",
     ]
-    invalidation_path = next(
-        (
-            tmp_path
-            / "objects"
-            / "CANDIDATE_INVALIDATION"
-            / f"{item.object_identity.removeprefix('sha256:')}.json"
-        )
+    invalidation_identity = next(
+        item.object_identity
         for item in transition.emitted
         if item.object_kind == "CANDIDATE_INVALIDATION"
     )
-    payload = json.loads(invalidation_path.read_text())["payload"]
+    payload = _object(
+        _written_objects(tmp_path, bindings=_bindings)[invalidation_identity]["payload"]
+    )
     assert payload["primary_reason"] == ("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN")
     assert not any(item.object_kind == "CANDIDATE_ACTIVATION" for item in transition.emitted)
 
@@ -3031,10 +2933,9 @@ def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_p
         radar_policy_identity=RADAR_POLICY_IDENTITY,
         underwriting_policy_identity=UNDERWRITING_POLICY_IDENTITY,
         position_policy_identity=POSITION_POLICY_IDENTITY,
-        underwriting_position_contract_digest=UNDERWRITING_POSITION_CONTRACT_DIGEST,
-        outcome_contract_digest=OUTCOME_CONTRACT_DIGEST,
     )
-    writer = DownstreamEvidenceWriter(tmp_path, bindings=bindings)
+    writer = ShadowStateStore(bindings=bindings)
+    _STATE_BY_DIRECTORY[tmp_path.resolve()] = writer
     assert writer.revision == 0
     identity = canonical_identity(
         "CANDIDATE_INVALIDATION",
@@ -3050,25 +2951,21 @@ def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_p
         "ordered_applicable_reason_vector": ["RUNTIME_OR_CODE_IDENTITY_CHANGED"],
         "terminal_fact_boundary": _boundary(2).as_object(),
     }
-    path = writer.write(
+    writer.record(
         object_kind="CANDIDATE_INVALIDATION",
         object_identity=identity,
         fact_boundary=_boundary(2),
         payload=payload,
     )
-    assert path is not None
     assert writer.revision == 1
     first_snapshot = writer.objects
     assert writer.objects is first_snapshot
     assert writer.get_object("CANDIDATE_INVALIDATION", identity) is first_snapshot[0]
-    assert (
-        writer.write(
-            object_kind="CANDIDATE_INVALIDATION",
-            object_identity=identity,
-            fact_boundary=_boundary(2),
-            payload=payload,
-        )
-        is None
+    writer.record(
+        object_kind="CANDIDATE_INVALIDATION",
+        object_identity=identity,
+        fact_boundary=_boundary(2),
+        payload=payload,
     )
     assert writer.revision == 1
     assert writer.objects is first_snapshot
@@ -3077,8 +2974,8 @@ def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_p
     assert tuple(objects) == (identity,)
     assert objects[identity]["object_kind"] == "CANDIDATE_INVALIDATION"
 
-    with pytest.raises(DownstreamEvidenceError, match="conflicting"):
-        writer.write(
+    with pytest.raises(ShadowStateError, match="conflicting"):
+        writer.record(
             object_kind="CANDIDATE_INVALIDATION",
             object_identity=identity,
             fact_boundary=_boundary(2),
@@ -3094,7 +2991,7 @@ def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_p
         boundary=_boundary(3),
         request_instrument_name="BTC-TEST-COMBO",
     )
-    attempt_path = writer.write(
+    writer.record(
         object_kind="ADMISSION_ATTEMPT_SCHEDULED",
         object_identity=attempt.scheduled_identity,
         fact_boundary=_boundary(3),
@@ -3107,10 +3004,44 @@ def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_p
             "schedule_fact_boundary": _boundary(3).as_object(),
         },
     )
-    assert attempt_path is not None
     assert writer.revision == 2
     assert writer.objects is not first_snapshot
     assert attempt.scheduled_identity in _written_objects(tmp_path, bindings=bindings)
+
+
+
+def test_actual_owner_shadow_entry_opens_one_durable_case(tmp_path: Path) -> None:
+    policies = load_policy_chain(
+        radar_path=ROOT / "policies/short-vol-fixed-public-shadow-radar.json",
+        underwriting_path=ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json",
+        position_path=ROOT / "policies/short-vol-fixed-public-shadow-position.json",
+        radar_identity=RADAR_POLICY_IDENTITY,
+        underwriting_identity=UNDERWRITING_POLICY_IDENTITY,
+        position_identity=POSITION_POLICY_IDENTITY,
+    )
+    bindings = RuntimeBindings(
+        code_identity="a" * 40,
+        runtime_identity="sha256:" + "b" * 64,
+        radar_policy_identity=RADAR_POLICY_IDENTITY,
+        underwriting_policy_identity=UNDERWRITING_POLICY_IDENTITY,
+        position_policy_identity=POSITION_POLICY_IDENTITY,
+    )
+    cases = tmp_path / "cases"
+    cases.mkdir()
+    case_store = ShadowCaseStore(cases, bindings=bindings, policies=policies)
+    state_store = ShadowStateStore(bindings=bindings, observer=case_store)
+    owner = FixedContractShadowOwner(
+        policies=policies,
+        bindings=bindings,
+        state_store=state_store,
+    )
+
+    entry_identity = _admit_owner(owner)
+    case_id = case_store.case_id_for_entry(entry_identity)
+
+    assert case_id is not None
+    assert case_store.case_count == 1
+    assert case_store.read_case(case_id, runtime_active=True).status is ShadowCaseReadStatus.OPEN
 
 
 def test_close_quote_classifier_follows_the_frozen_first_match_order() -> None:

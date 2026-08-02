@@ -181,9 +181,20 @@ def test_task_template_measures_product_progress_not_proof_volume() -> None:
     assert "Tests alone do not satisfy the task" in template
 
 
-def test_no_completed_task_accumulates_on_main_candidate() -> None:
-    task_names = sorted(path.name for path in (ROOT / "tasks").glob("*.md"))
-    assert task_names == ["TEMPLATE.md"]
+def test_tasks_hold_only_template_and_at_most_one_active_closure() -> None:
+    task_paths = sorted((ROOT / "tasks").glob("*.md"))
+    assert any(path.name == "TEMPLATE.md" for path in task_paths)
+    active = [
+        path
+        for path in task_paths
+        if path.name != "TEMPLATE.md"
+        and "**Status:** ACTIVE" in "\n".join(path.read_text(encoding="utf-8").splitlines()[:8])
+    ]
+    assert len(active) <= 1
+    assert all(
+        path.name == "TEMPLATE.md" or path in active
+        for path in task_paths
+    ), "completed or inactive task files must not accumulate"
 
 
 def test_internal_package_dependency_direction() -> None:

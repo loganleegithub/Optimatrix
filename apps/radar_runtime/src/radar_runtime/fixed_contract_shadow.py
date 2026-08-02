@@ -1042,6 +1042,19 @@ class FixedContractShadowRuntimeAdapter:
             long_leg_instrument_name=(
                 long_instrument.instrument_name if long_instrument is not None else None
             ),
+            radar_band_id=snapshot.activation_band_id,
+            radar_richness_lower=(
+                snapshot.short_current.calculation.richness.lower
+                if snapshot.short_current is not None
+                and snapshot.short_current.calculation is not None
+                else None
+            ),
+            radar_richness_upper=(
+                snapshot.short_current.calculation.richness.upper
+                if snapshot.short_current is not None
+                and snapshot.short_current.calculation is not None
+                else None
+            ),
             unknown_reasons=tuple(sorted(unknown)),
         )
 
@@ -1109,6 +1122,19 @@ class FixedContractShadowRuntimeAdapter:
             ticker_source=None,
             short_leg_instrument_name=(snapshot.short_leg.instrument_name),
             long_leg_instrument_name=None,
+            radar_band_id=snapshot.activation_band_id,
+            radar_richness_lower=(
+                snapshot.short_current.calculation.richness.lower
+                if snapshot.short_current is not None
+                and snapshot.short_current.calculation is not None
+                else None
+            ),
+            radar_richness_upper=(
+                snapshot.short_current.calculation.richness.upper
+                if snapshot.short_current is not None
+                and snapshot.short_current.calculation is not None
+                else None
+            ),
             unknown_reasons=tuple(snapshot.result.unknown_reasons)
             or ("ATOMIC_SCOPE_NOT_EVALUABLE",),
         )
@@ -1392,7 +1418,7 @@ class FixedContractShadowRuntimeAdapter:
         for emitted in transition.emitted:
             if emitted.object_kind != "CANDIDATE_ACTIVATION":
                 continue
-            value = self.owner.writer.get_object(emitted.object_kind, emitted.object_identity)
+            value = self.owner.state_store.get_object(emitted.object_kind, emitted.object_identity)
             payload = value.get("payload") if value is not None else None
             if isinstance(payload, Mapping):
                 slot = payload.get("underwriting_position_slot_key_identity")
@@ -1482,10 +1508,10 @@ class FixedContractShadowRuntimeAdapter:
         )
 
     def _discover_anchors(self) -> None:
-        revision = self.owner.writer.revision
+        revision = self.owner.state_store.revision
         if revision == self._anchor_writer_revision:
             return
-        objects = self.owner.writer.objects
+        objects = self.owner.state_store.objects
         for value in objects:
             kind = value["object_kind"]
             if kind not in {"SHADOW_ENTRY", "REJECTED_COUNTERFACTUAL_ANCHOR"}:

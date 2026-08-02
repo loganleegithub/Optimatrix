@@ -39,11 +39,9 @@ from radar_runtime.workbench import (
 from short_vol_radar.atomic import PublicAtomicQuoteState
 from short_vol_radar.detector import DetectorState
 from short_vol_underwriting.constants import (
-    OUTCOME_CONTRACT_DIGEST,
     POSITION_POLICY_IDENTITY,
     RADAR_POLICY_IDENTITY,
     UNDERWRITING_POLICY_IDENTITY,
-    UNDERWRITING_POSITION_CONTRACT_DIGEST,
 )
 from short_vol_underwriting.evidence import RuntimeBindings
 from short_vol_underwriting.policy import PolicyChain, load_policy_chain
@@ -69,8 +67,6 @@ def _bindings() -> RuntimeBindings:
         radar_policy_identity="sha256:" + "c" * 64,
         underwriting_policy_identity="sha256:" + "d" * 64,
         position_policy_identity="sha256:" + "e" * 64,
-        underwriting_position_contract_digest=UNDERWRITING_POSITION_CONTRACT_DIGEST,
-        outcome_contract_digest=OUTCOME_CONTRACT_DIGEST,
     )
 
 

@@ -55,7 +55,7 @@ from short_vol_radar.evidence import (
     CoverageSegment,
     CoverageState,
     EvidenceError,
-    EvidenceWriter,
+    RadarEventSink,
     project_anomaly_event,
     project_atomic_event,
     project_run_summary,
@@ -227,16 +227,15 @@ def test_evidence_writer_deduplicates_business_objects(
 ) -> None:
     anomaly = project_anomaly_event(anomaly_evidence())
     atomic = project_atomic_event(atomic_evidence())
-    writer = EvidenceWriter(
-        tmp_path,
+    writer = RadarEventSink(
         code_identity="a" * 40,
         runtime_identity="runtime",
         policy_identity="sha256:" + "b" * 64,
     )
-    assert writer.write_anomaly(anomaly) is not None
-    assert writer.write_anomaly(anomaly) is None
-    assert writer.write_atomic(atomic) is not None
-    assert writer.write_atomic(atomic) is None
+    assert writer.record_anomaly(anomaly) is True
+    assert writer.record_anomaly(anomaly) is False
+    assert writer.record_atomic(atomic) is True
+    assert writer.record_atomic(atomic) is False
     scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
     scope.applicable_instrument_count = 1
     scope.distinct_anomaly_episode_count = 1
@@ -258,11 +257,14 @@ def test_evidence_writer_deduplicates_business_objects(
     summary["public_atomic_quote_state_transition_count"] = {
         PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE.value: 1
     }
-    writer.write_summary(summary)
-    assert len(tuple(tmp_path.glob("*.json"))) == 3
+    writer.record_summary(summary)
+    assert writer.anomalies == (anomaly,)
+    assert writer.atomics == (atomic,)
+    assert writer.summary == summary
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_evidence_writer_uses_short_temporary_name_for_long_atomic_identity(
+def test_radar_sink_accepts_long_atomic_identity_without_filesystem_names(
     tmp_path: Path,
 ) -> None:
     runtime_identity = "sha256:" + "0" * 64
@@ -291,45 +293,30 @@ def test_evidence_writer_uses_short_temporary_name_for_long_atomic_identity(
             ),
         )
     )
-    writer = EvidenceWriter(
-        tmp_path,
+    sink = RadarEventSink(
         code_identity=source.code_identity,
         runtime_identity=runtime_identity,
         policy_identity=policy_identity,
     )
 
-    path = writer.write_atomic(event)
-
-    assert path is not None
-    assert len(path.name.encode()) == 230
-    assert (
-        path.read_text(encoding="utf-8")
-        == json.dumps(
-            event,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        )
-        + "\n"
-    )
-    assert not tuple(tmp_path.glob(".*.tmp"))
+    assert sink.record_atomic(event) is True
+    assert sink.atomics == (event,)
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_evidence_writer_rejects_conflicting_duplicate_identity(tmp_path: Path) -> None:
     event = project_anomaly_event(anomaly_evidence())
-    writer = EvidenceWriter(
-        tmp_path,
+    writer = RadarEventSink(
         code_identity="a" * 40,
         runtime_identity="runtime",
         policy_identity="sha256:" + "b" * 64,
     )
-    assert writer.write_anomaly(event) is not None
+    assert writer.record_anomaly(event) is not None
     conflicting = dict(event)
     conflicting["causal_seq"] = 11
 
     with pytest.raises(EvidenceError, match="conflicting"):
-        writer.write_anomaly(conflicting)
+        writer.record_anomaly(conflicting)
 
 
 def test_coverage_segments_reject_overlap_gap_negative_and_mismatched_totals() -> None:
@@ -598,25 +585,23 @@ def test_git_startup_guard_requires_one_clean_commit() -> None:
         validate_clean_git_outputs(head_output="short", status_output="")
 
 
-def test_evidence_publish_failure_leaves_no_partial_final_or_temp_file(
+def test_radar_sink_is_independent_of_filesystem_publish_primitives(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     evidence = anomaly_evidence()
-    writer = EvidenceWriter(
-        tmp_path,
+    sink = RadarEventSink(
         code_identity=evidence.code_identity,
         runtime_identity=evidence.runtime_identity,
         policy_identity=evidence.policy_identity,
     )
 
     def fail_publish(_source: object, _target: object) -> None:
-        raise OSError("injected atomic publish failure")
+        raise OSError("filesystem publishing must not be reached")
 
     monkeypatch.setattr(os, "link", fail_publish)
-    with pytest.raises(EvidenceError, match="publish"):
-        writer.write_anomaly(project_anomaly_event(evidence))
-
+    assert sink.record_anomaly(project_anomaly_event(evidence)) is True
+    assert len(sink.anomalies) == 1
     assert list(tmp_path.iterdir()) == []
 
 
@@ -630,8 +615,7 @@ def test_continuous_inbound_flow_cannot_starve_absolute_time_boundaries(
     runtime = LiveRadarRuntime(
         policy=policy,
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity="runtime",
             policy_identity=digest,
@@ -713,8 +697,7 @@ def test_sender_reports_transport_completion_without_mutating_reducer(
     runtime = LiveRadarRuntime(
         policy=load_policy_bytes(exact, digest),
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity="runtime",
             policy_identity=digest,
@@ -781,8 +764,7 @@ def test_transport_metrics_finalize_before_sender_exception_propagates(
     runtime = LiveRadarRuntime(
         policy=load_policy_bytes(exact, digest),
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity="runtime",
             policy_identity=digest,
@@ -808,8 +790,7 @@ def test_send_failure_is_reduced_before_session_failure_propagates(
     runtime = LiveRadarRuntime(
         policy=load_policy_bytes(exact, digest),
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity="runtime",
             policy_identity=digest,
@@ -838,8 +819,7 @@ def test_failure_barrier_drains_every_already_accepted_application_event(
     runtime = LiveRadarRuntime(
         policy=load_policy_bytes(exact, digest),
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity="runtime",
             policy_identity=digest,
@@ -884,8 +864,7 @@ def test_blocked_send_clean_stop_drains_cancellation_then_censors_scheduled(
     runtime = LiveRadarRuntime(
         policy=load_policy_bytes(exact, digest),
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity="runtime",
             policy_identity=digest,
@@ -962,8 +941,7 @@ def test_unexpected_sender_cancellation_fails_closed(
     runtime = LiveRadarRuntime(
         policy=load_policy_bytes(exact, digest),
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity="runtime",
             policy_identity=digest,
@@ -1033,8 +1011,7 @@ def test_atomic_causal_invariant_allows_later_quote_only_when_detector_is_same_b
 def test_complete_writer_directory_accepts_anomaly_then_later_normalized_atomic_boundary(
     tmp_path: Path,
 ) -> None:
-    writer = EvidenceWriter(
-        tmp_path,
+    writer = RadarEventSink(
         code_identity="a" * 40,
         runtime_identity="runtime",
         policy_identity="sha256:" + "b" * 64,
@@ -1048,8 +1025,8 @@ def test_complete_writer_directory_accepts_anomaly_then_later_normalized_atomic_
         )
     )
 
-    writer.write_anomaly(anomaly)
-    writer.write_atomic(later_atomic)
+    writer.record_anomaly(anomaly)
+    writer.record_atomic(later_atomic)
     scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
     scope.applicable_instrument_count = 1
     scope.distinct_anomaly_episode_count = 1
@@ -1071,6 +1048,9 @@ def test_complete_writer_directory_accepts_anomaly_then_later_normalized_atomic_
     summary["public_atomic_quote_state_transition_count"] = {
         PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE.value: 1
     }
-    writer.write_summary(summary)
+    writer.record_summary(summary)
 
-    assert len(tuple(tmp_path.glob("*.json"))) == 3
+    assert len(writer.anomalies) == 1
+    assert len(writer.atomics) == 1
+    assert writer.summary == summary
+    assert list(tmp_path.iterdir()) == []

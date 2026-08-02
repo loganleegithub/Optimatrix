@@ -52,11 +52,17 @@ from short_vol_underwriting.domain import (
     compute_shadow_outcome_economics,
     ordered_candidate_invalidation,
 )
+from short_vol_underwriting.case_store import (
+    ShadowCaseRead,
+    ShadowCaseReadStatus,
+    ShadowCaseStore,
+    ShadowCaseStoreError,
+)
 from short_vol_underwriting.evidence import (
-    DownstreamEvidenceError,
-    DownstreamEvidenceWriter,
     RuntimeBindings,
-    build_downstream_object,
+    ShadowStateError,
+    ShadowStateStore,
+    build_current_shadow_object,
 )
 from short_vol_underwriting.identity import (
     IdentityError,
@@ -105,8 +111,12 @@ __all__ = [
     "CloseOptionAvailability",
     "CloseQuoteFacts",
     "CloseQuoteState",
-    "DownstreamEvidenceError",
-    "DownstreamEvidenceWriter",
+    "ShadowCaseRead",
+    "ShadowCaseReadStatus",
+    "ShadowCaseStore",
+    "ShadowCaseStoreError",
+    "ShadowStateError",
+    "ShadowStateStore",
     "EntryEconomics",
     "FactBoundary",
     "FixedContractShadowOwner",
@@ -141,7 +151,7 @@ __all__ = [
     "UnderwritingAvailability",
     "UnderwritingFacts",
     "UnderwritingPolicy",
-    "build_downstream_object",
+    "build_current_shadow_object",
     "canonical_decimal",
     "canonical_identity",
     "classify_close_quote",

@@ -7,7 +7,7 @@ import signal
 import stat
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,15 +15,14 @@ from typing import Protocol, cast
 
 from market_monitor import ContinuityGap
 from market_monitor.types import SourceDataError
-from short_vol_radar.evidence import EvidenceWriter
+from short_vol_radar.evidence import RadarEventSink
 from short_vol_underwriting.constants import (
-    OUTCOME_CONTRACT_DIGEST,
     POSITION_POLICY_IDENTITY,
     RADAR_POLICY_IDENTITY,
     UNDERWRITING_POLICY_IDENTITY,
-    UNDERWRITING_POSITION_CONTRACT_DIGEST,
 )
-from short_vol_underwriting.evidence import DownstreamEvidenceWriter, RuntimeBindings
+from short_vol_underwriting.case_store import ShadowCaseStore
+from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
 from short_vol_underwriting.identity import canonical_identity, require_code_identity
 from short_vol_underwriting.owner import FixedContractShadowOwner
 from short_vol_underwriting.policy import PolicyChain, load_policy_chain
@@ -183,13 +182,12 @@ class PersistentServiceStartup:
     repository: Path
     state_root: Path
     run_directory: Path
-    radar_directory: Path
-    downstream_directory: Path
+    cases_directory: Path
     code_identity: str
     runtime_identity: str
     startup_monotonic_ms: int
     policies: PolicyChain
-    downstream_bindings: RuntimeBindings
+    runtime_bindings: RuntimeBindings
     workbench_host: str
     workbench_port: int
 
@@ -197,10 +195,11 @@ class PersistentServiceStartup:
 @dataclass(frozen=True)
 class PersistentServiceComposition:
     startup: PersistentServiceStartup
-    downstream_writer: DownstreamEvidenceWriter
+    shadow_state: ShadowStateStore
+    case_store: ShadowCaseStore
     owner: FixedContractShadowOwner
     adapter: FixedContractShadowRuntimeAdapter
-    radar_writer: EvidenceWriter
+    radar_sink: RadarEventSink
     snapshot_store: SnapshotStore
     publisher: WorkbenchPublisher
     runtime: LiveRadarRuntime
@@ -267,34 +266,29 @@ def prepare_persistent_service_startup(
     run_directory = resolved_state_root / "runs" / runtime_identity.removeprefix("sha256:")
     try:
         run_directory.mkdir(parents=True, exist_ok=False)
-        radar_directory = run_directory / "radar"
-        downstream_directory = run_directory / "downstream"
-        radar_directory.mkdir()
-        downstream_directory.mkdir()
+        cases_directory = run_directory / "cases"
+        cases_directory.mkdir()
     except OSError as exc:
         raise PersistentServiceStartupError(
             "cannot create a new persistent runtime directory"
         ) from exc
-    downstream_bindings = RuntimeBindings(
+    runtime_bindings = RuntimeBindings(
         code_identity=resolved_code_identity,
         runtime_identity=runtime_identity,
         radar_policy_identity=policies.radar.identity,
         underwriting_policy_identity=policies.underwriting.identity,
         position_policy_identity=policies.position.identity,
-        underwriting_position_contract_digest=UNDERWRITING_POSITION_CONTRACT_DIGEST,
-        outcome_contract_digest=OUTCOME_CONTRACT_DIGEST,
     )
     return PersistentServiceStartup(
         repository=repository,
         state_root=resolved_state_root,
         run_directory=run_directory,
-        radar_directory=radar_directory,
-        downstream_directory=downstream_directory,
+        cases_directory=cases_directory,
         code_identity=resolved_code_identity,
         runtime_identity=runtime_identity,
         startup_monotonic_ms=start_ms,
         policies=policies,
-        downstream_bindings=downstream_bindings,
+        runtime_bindings=runtime_bindings,
         workbench_host=validated_host,
         workbench_port=validated_port,
     )
@@ -303,32 +297,36 @@ def prepare_persistent_service_startup(
 def build_persistent_service_composition(
     startup: PersistentServiceStartup,
 ) -> PersistentServiceComposition:
-    downstream_writer = DownstreamEvidenceWriter(
-        startup.downstream_directory,
-        bindings=startup.downstream_bindings,
+    case_store = ShadowCaseStore(
+        startup.cases_directory,
+        bindings=startup.runtime_bindings,
+        policies=startup.policies,
+    )
+    shadow_state = ShadowStateStore(
+        bindings=startup.runtime_bindings,
+        observer=case_store,
     )
     owner = FixedContractShadowOwner(
         policies=startup.policies,
-        bindings=startup.downstream_bindings,
-        writer=downstream_writer,
+        bindings=startup.runtime_bindings,
+        state_store=shadow_state,
     )
     adapter = FixedContractShadowRuntimeAdapter(owner=owner)
     snapshot_store = SnapshotStore(
         initial_workbench_document(
-            startup.downstream_bindings,
+            startup.runtime_bindings,
             recorded_monotonic_ms=startup.startup_monotonic_ms,
         )
     )
     publisher = WorkbenchPublisher(
         store=snapshot_store,
-        bindings=startup.downstream_bindings,
+        bindings=startup.runtime_bindings,
         policies=startup.policies,
-        downstream_writer=downstream_writer,
+        shadow_state=shadow_state,
         shadow_metadata=adapter,
         initial_recorded_monotonic_ms=startup.startup_monotonic_ms,
     )
-    radar_writer = EvidenceWriter(
-        startup.radar_directory,
+    radar_sink = RadarEventSink(
         code_identity=startup.code_identity,
         runtime_identity=startup.runtime_identity,
         policy_identity=startup.policies.radar.identity,
@@ -336,7 +334,7 @@ def build_persistent_service_composition(
     runtime = LiveRadarRuntime(
         policy=startup.policies.radar,
         code_identity=startup.code_identity,
-        evidence_writer=radar_writer,
+        event_sink=radar_sink,
         runtime_identity=startup.runtime_identity,
         shadow_adapter=adapter,
         snapshot_publisher=publisher,
@@ -360,10 +358,11 @@ def build_persistent_service_composition(
     )
     return PersistentServiceComposition(
         startup=startup,
-        downstream_writer=downstream_writer,
+        shadow_state=shadow_state,
+        case_store=case_store,
         owner=owner,
         adapter=adapter,
-        radar_writer=radar_writer,
+        radar_sink=radar_sink,
         snapshot_store=snapshot_store,
         publisher=publisher,
         runtime=runtime,
@@ -407,7 +406,7 @@ async def run_persistent_service_composition(
     signal_registrar: SignalRegistrar | None = None,
     sleep: AsyncSleep = asyncio.sleep,
     start_workbench: bool = True,
-) -> Path:
+) -> Mapping[str, object]:
     clock = monotonic_ms or _monotonic_ms
     event = stop_event or PersistentStopEvent()
     install_persistent_signal_handlers(
@@ -456,7 +455,7 @@ async def run_persistent_service_composition(
                     clock(),
                 )
             )
-            completed_summary_path: Path | None = None
+            completed_summary: Mapping[str, object] | None = None
             try:
                 session_epoch += 1
                 async with create_client(
@@ -476,7 +475,7 @@ async def run_persistent_service_composition(
                             clock(),
                         )
                     )
-                    completed_summary_path = await composition.runtime.run(client, event)
+                    completed_summary = await composition.runtime.run(client, event)
                 composition.publisher.update_status(
                     ServiceStatus(
                         ServicePhase.STOPPED,
@@ -488,7 +487,7 @@ async def run_persistent_service_composition(
                         _terminal_ms(event, clock()),
                     ),
                 )
-                return completed_summary_path
+                return completed_summary
             except (
                 ContinuityGap,
                 SourceDataError,
@@ -498,8 +497,8 @@ async def run_persistent_service_composition(
                 PublicSessionError,
                 WebSocketException,
             ) as exc:
-                if completed_summary_path is not None and event.is_set():
-                    return completed_summary_path
+                if completed_summary is not None and event.is_set():
+                    return completed_summary
                 if event.is_set():
                     _finalize_failure(composition, failure=exc, monotonic_ms=clock())
                     raise
@@ -547,7 +546,7 @@ async def run_persistent_service(
     process_cwd: Path,
     workbench_host: str,
     workbench_port: int,
-) -> tuple[PersistentServiceStartup, Path]:
+) -> tuple[PersistentServiceStartup, Mapping[str, object]]:
     repository = git_repository_root(process_cwd)
     resolved_state_root = _prepare_state_root(state_root, repository)
     lease = SingleInstanceLease(resolved_state_root)
@@ -568,7 +567,7 @@ def _stop_without_client(
     *,
     event: PersistentStopEvent,
     monotonic_ms: MonotonicClock,
-) -> Path:
+) -> Mapping[str, object]:
     terminal_ms = _terminal_ms(event, monotonic_ms())
     composition.publisher.update_status(
         ServiceStatus(

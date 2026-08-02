@@ -17,7 +17,7 @@ from market_monitor import ContinuityGap, TimeInterval
 from short_vol_radar.black import DecimalInterval
 from short_vol_radar.detector import DetectorState
 from short_vol_radar.evidence import CoverageBlockingReason, CoverageState
-from short_vol_underwriting.evidence import DownstreamEvidenceWriter, RuntimeBindings
+from short_vol_underwriting.evidence import ShadowStateStore, RuntimeBindings
 from short_vol_underwriting.identity import canonical_decimal, canonical_value
 from short_vol_underwriting.policy import PolicyChain
 
@@ -310,14 +310,14 @@ class WorkbenchPublisher:
         store: SnapshotStore,
         bindings: RuntimeBindings,
         policies: PolicyChain,
-        downstream_writer: DownstreamEvidenceWriter,
+        shadow_state: ShadowStateStore,
         shadow_metadata: ShadowMetadataSource,
         initial_recorded_monotonic_ms: int = 0,
     ) -> None:
         self.store = store
         self.bindings = bindings
         self.policies = policies
-        self.downstream_writer = downstream_writer
+        self.shadow_state = shadow_state
         self.shadow_metadata = shadow_metadata
         self._status = ServiceStatus(
             ServicePhase.STARTING,
@@ -407,7 +407,7 @@ class WorkbenchPublisher:
                 raise RuntimeError("pending workbench business state is incomplete")
             option_metadata = self.shadow_metadata.workbench_option_metadata()
             latest_underwriting_metadata = self.shadow_metadata.workbench_underwriting_metadata()
-            latest_downstream_revision = self.downstream_writer.revision
+            latest_downstream_revision = self.shadow_state.revision
             downstream_changed = (
                 downstream_projection is None
                 or latest_downstream_revision != downstream_revision
@@ -415,7 +415,7 @@ class WorkbenchPublisher:
             )
             if downstream_changed:
                 downstream_projection = _build_downstream_projection(
-                    objects=self.downstream_writer.objects,
+                    objects=self.shadow_state.objects,
                     policies=self.policies,
                     underwriting_metadata=latest_underwriting_metadata,
                 )

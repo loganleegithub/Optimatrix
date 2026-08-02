@@ -15,7 +15,7 @@ from radar_runtime.deribit_public import (
 from radar_runtime.runtime import PendingRpc, RadarReducer, RpcPurpose
 from short_vol_radar.black import black_price
 from short_vol_radar.detector import DetectorState
-from short_vol_radar.evidence import EvidenceWriter
+from short_vol_radar.evidence import RadarEventSink
 from short_vol_radar.policy import load_policy_bytes
 
 _next_application_seq = 1
@@ -122,15 +122,15 @@ def run_nonempty_scenario(
     limits["clock_stale_deadline_ms"] = 600_000
     exact, digest = encode_policy(document)
     policy = load_policy_bytes(exact, digest)
+    sink = RadarEventSink(
+        code_identity="a" * 40,
+        runtime_identity="runtime",
+        policy_identity=digest,
+    )
     reducer = RadarReducer(
         policy=policy,
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
-            code_identity="a" * 40,
-            runtime_identity="runtime",
-            policy_identity=digest,
-        ),
+        event_sink=sink,
         runtime_identity="runtime",
     )
     short_name = "BTC_USDC-TEST-10001-C"
@@ -387,8 +387,9 @@ def run_nonempty_scenario(
     assert scope.complete_aggregate_with_full_formula_evaluation_count == 1
     assert reducer.combo_catalog.complete
     assert tuple(reducer.combos) == ("COMBO",)
-    summary_path = reducer.clean_stop(final_ms + 100)
-    assert summary_path.name == "radar-run-summary.json"
+    terminal_summary = reducer.clean_stop(final_ms + 100)
+    assert terminal_summary["object_kind"] == "RADAR_RUN_SUMMARY"
+    assert sink.summary == terminal_summary
     return (
         tuple(
             sorted(
@@ -426,7 +427,15 @@ def run_nonempty_scenario(
                 for request in reducer.pending_rpcs.values()
             )
         ),
-        tuple((path.name, path.read_bytes()) for path in sorted(tmp_path.glob("*.json"))),
+        tuple(sorted((value["episode_identity"], value["causal_seq"]) for value in sink.anomalies)),
+        tuple(
+            sorted(
+                (value["episode_identity"], value["combo_instrument_name"])
+                for value in sink.atomics
+            )
+        ),
+        sink.summary,
+        tuple(tmp_path.iterdir()),
     )
 
 
