@@ -26,10 +26,11 @@ offline from Shadow Cases.
 
 ## Current stage
 
-The active permission remains `PUBLIC_SHADOW`, but live commands and deployment are forbidden. The
-existing offline implementation is temporarily disabled because its old persistence model writes
-pre-Shadow objects. The sole next closure is to replace that model with the minimal Shadow Case
-boundary while keeping all three Policy files and public-market semantics unchanged.
+The active permission remains `PUBLIC_SHADOW`. The minimal Shadow Case data boundary is implemented
+offline: pre-Shadow state is memory-only and only an admitted Case can create durable files. The
+sole active closure is to expose and measure the primary funnel blocker. Persistent deployment
+remains forbidden; exactly one bounded public-only funnel smoke is conditionally authorized after
+the exact candidate passes repository checks.
 
 See:
 
