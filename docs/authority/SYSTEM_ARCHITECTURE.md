@@ -29,8 +29,8 @@ Monitor and Short Vol Radar flow. There is no capture job followed by a scan job
 that repeatedly rereads an unchanged local dataset. The downstream owners run in the same process.
 Production-public invocation and deployment authority comes only from `CURRENT_STAGE`.
 
-No runtime is currently deployed and no historical online result is accepted. The active
-implementation removes the obsolete commissioning controller and service-level evidence ledger;
+No runtime is currently deployed and no historical online result is accepted. The merged offline
+implementation removed the obsolete commissioning controller and service-level evidence ledger;
 it changes no market/Decision semantics, business owner, Policy, Workbench schema, or deployment
 permission.
 ## Data lifecycles

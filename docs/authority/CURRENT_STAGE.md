@@ -8,7 +8,7 @@
 
 **Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`
 
-**Sole authorized closure:** `SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`
+**Sole authorized closure:** `NONE`
 
 **Persistent service:** `STOPPED_NO_DEPLOYMENT`
 
@@ -26,12 +26,13 @@ Underwriting, Shadow admission, Position management, Outcome projection, and a l
 Workbench. This implementation fact does not prove production correctness, 24-hour stability,
 Policy quality, fillability, profitability, actual exposure, or PnL.
 
-## Authorized closure
+## Current implementation
 
-The one active task removes the obsolete macOS commissioning controller and the separate service
-lifecycle evidence/terminal-manifest system. It simplifies `serve-shadow` to the business runtime
-itself: one public client, reducer, downstream owner, minimal business persistence, reconnect loop,
-signal stop, coalesced Workbench publisher, and loopback health/readiness HTTP.
+The merged offline implementation removed the obsolete macOS commissioning controller and the
+separate service lifecycle evidence/terminal-manifest system. It simplified `serve-shadow` to the
+business runtime itself: one public client, reducer, downstream owner, minimal business
+persistence, reconnect loop, signal stop, coalesced Workbench publisher, and loopback
+health/readiness HTTP.
 It also removes accumulated whole-graph rescans from the downstream writer hot path while retaining
 direct per-object validation and offline reader graph validation.
 The service-only run-summary path may accept a contiguous omitted zero-duration leading restart
@@ -46,18 +47,15 @@ separation, and GET/HEAD-only Workbench behavior.
 1. **Market/Decision input contract:** `NONE`
 2. **Decision Policy:** `NONE`
 3. **Outcome/evaluation contract:** `NONE`
-4. **Stage/authorization:** `APPROVED` only for offline implementation and deterministic tests
+4. **Stage/authorization:** `NONE`
 
 ## Permission boundary
 
 Allowed:
 
-- delete commissioning, launchd/lsof/unified-log/probe logic and its tests;
-- delete service lifecycle evidence, terminal manifests, inventories, hash receipts, and readers;
-- simplify service composition, Workbench bindings/status, CLI, docs, and direct tests;
-- remove repeated accumulated downstream graph scans from the online write path;
-- retain only minimal Radar and downstream business persistence;
-- run offline tests, lint, type checks, and builds on one non-`main` branch.
+- read-only inspection and deterministic offline tests of the merged implementation.
+- create a new task before any further product, authority, contract, code, or durable-artifact
+  change.
 
 Forbidden:
 

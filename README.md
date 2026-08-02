@@ -15,11 +15,10 @@ outputs were rejected as unreliable, and its runtime/evidence history is no long
 current authority. There is no deployed process, launchd service, loopback listener, 24-hour claim,
 private/account access, order, fill, actual position, or PnL authority.
 
-The sole active task is
-[`SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`](tasks/SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION.md).
-It removes the macOS commissioning controller and the separate service lifecycle evidence ledger,
-while keeping the complete Radar-to-Outcome transaction, reconnect loop, signal stop, minimal
-business persistence, coalesced Workbench publication, health/readiness, and loopback-only HTTP.
+The merged offline runtime removed the macOS commissioning controller and the separate service
+lifecycle evidence ledger while keeping the complete Radar-to-Outcome transaction, reconnect loop,
+signal stop, minimal business persistence, coalesced Workbench publication, health/readiness, and
+loopback-only HTTP. No implementation or evidence task is currently active.
 
 The application no longer runs `launchd`, `lsof`, unified-log, resource probes, 24-hour acceptance,
 service-manifest, inventory-hash, or lifecycle-receipt logic. Process supervision and host resource

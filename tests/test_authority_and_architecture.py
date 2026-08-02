@@ -193,20 +193,20 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_authorizes_one_runtime_simplification() -> None:
+def test_current_stage_records_merged_runtime_without_an_active_closure() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized closure:**"
 
     assert current.count(marker) == 1
-    assert f"{marker} `SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`" in flat
+    assert f"{marker} `NONE`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`" in current
     assert "**Persistent service:** `STOPPED_NO_DEPLOYMENT`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
     assert "rejected its Radar results as unreliable" in flat
     assert "Deleted history is not a business premise" in flat
-    assert "removes the obsolete macOS commissioning controller" in flat
+    assert "removed the obsolete macOS commissioning controller" in flat
     assert "service lifecycle evidence/terminal-manifest system" in flat
     for stale_claim in (
         "R4_COMMISSIONED",
@@ -219,48 +219,10 @@ def test_current_stage_authorizes_one_runtime_simplification() -> None:
         assert stale_claim not in current
 
 
-def test_runtime_simplification_is_exactly_authorized() -> None:
+def test_no_completed_runtime_task_accumulates_on_main() -> None:
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
     current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
-    task_path = ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION.md"
-    task = task_path.read_text(encoding="utf-8")
-    task_flat = " ".join(task.split())
-
-    assert (
-        "**Sole authorized closure:** `SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`"
-    ) in current
-    for exact in (
-        "**Status:** ACTIVE",
-        "**Task kind:** IMPLEMENTATION",
-        "**Runtime implementation:** REQUIRED",
-        "**Live commands:** FORBIDDEN",
-        "**Market/Decision input contract change:** NONE",
-        "**Decision Policy change:** NONE",
-        "**Outcome/evaluation contract change:** NONE",
-        "**Stage/authorization change:** APPROVED",
-        "macOS commissioning controller",
-        "service lifecycle evidence ledger",
-        "minimal business writers",
-        "`serve-shadow` owns one process",
-        "service-manifest",
-        "commissioning, `launchd`, `lsof`, unified-log, probe",
-        "radar_runtime.service",
-        "radar_runtime.workbench",
-        "Direct behavior | REQUIRED",
-        "Production-public Radar | NOT_APPLICABLE",
-    ):
-        assert exact in task_flat, exact
-    assert "Decision Policy change:** NONE" in task_flat
-
-
-def test_only_runtime_simplification_task_is_active() -> None:
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION.md",
-        "TEMPLATE.md",
-    ]
-    current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
-    assert (
-        "**Sole authorized closure:** `SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`"
-    ) in current
+    assert "**Sole authorized closure:** `NONE`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
 
 
@@ -1889,7 +1851,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "## Current truth",
         "`OFFLINE_PUBLIC_SHADOW_RUNTIME`",
         "`NOT_ACCEPTED_PENDING_REVALIDATION`",
-        "`SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`",
+        "**Sole authorized closure:** `NONE`",
         "`STOPPED_NO_DEPLOYMENT`",
         "**Live commands:** `FORBIDDEN`",
         "Deleted history is not a business premise",
@@ -1997,7 +1959,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "SHORT_VOL_UNDERWRITING_POSITION",
         "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT",
         "No production result is currently accepted",
-        "`SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`",
+        "No implementation or evidence task is currently active",
         "coalesced Workbench publication",
         "commissioning controller",
         "maker/order/fill",
@@ -2109,7 +2071,7 @@ def test_persistent_service_contract_is_minimal_and_has_no_service_ledger() -> N
         assert removed not in contract
     assert "`STOPPED_NO_DEPLOYMENT`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
-    assert "`SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     assert "Deleted history is not a business premise" in " ".join(current.split())
 
 
