@@ -1,304 +1,177 @@
 # Optimatrix Delivery Contract
 
-**Status:** ACTIVE DEVELOPMENT AND EVIDENCE AUTHORITY
+**Status:** ACTIVE DEVELOPMENT AUTHORITY
 
 ## Purpose
 
-Deliver one explicitly approved business closure as the smallest coherent change. Evidence must
-prove that closure directly. Do not add capture, replay, storage, reports, schemas, abstractions,
-or defensive branches merely to make an unreachable business loop look complete.
+Deliver the smallest product change that moves one measured business-funnel node, reduces its
+largest measured blocker, or deletes a proven non-product obstacle. Verification is proportional
+to the claim. Tests, receipts, object counts, document counts, runtime duration, and operational
+proof are never substitutes for product progress.
 
-## Authority and task route
+## Task route
 
-Before any task, read the Product Constitution, Current Stage, this contract, the System
-Architecture when implementation may change, the owning implementation contract, and exactly one
-active semantic task.
-
-If the request has no active task, create one from `tasks/TEMPLATE.md` before changing product
-behavior, authority, contracts, code, or durable artifacts. A task names a business closure, not a
-work sequence.
+Every change has exactly one active semantic task created from [`tasks/TEMPLATE.md`](../../tasks/TEMPLATE.md).
+The task is read after the Product Constitution, Current Stage, this contract, the System
+Architecture when structure changes, and the owning implementation contract.
 
 Task kinds:
 
-- `AUTHORITY_ONLY`: may change authority, contracts, task template, README, and direct authority
-  tests; runtime edits and live commands are forbidden.
-- `IMPLEMENTATION`: changes one authorized runtime behavior and verifies it directly.
-- `EVIDENCE_ONLY`: runs an already accepted immutable implementation to collect the exact evidence
-  required by the active task; code and Policy changes are forbidden.
+- `AUTHORITY_ONLY`: authority, contracts, task template, README, and direct authority tests only;
+- `IMPLEMENTATION`: one bounded runtime or domain behavior;
+- `VALIDATION_ONLY`: one already-implemented public-only observation or qualification evaluation,
+  with no code or Policy changes.
 
-### Terminal business-goal delegation
+Completed tasks are removed from the final tree. Git and the PR provide engineering history;
+product runtime files do not archive development process.
 
-One explicit human terminal business goal may conditionally authorize a bounded sequence of
-authority amendment, implementation, evidence, and stage recording inside the same semantic
-closure. The owning authority and active task must record the delegation before its first runtime
-or remote action. The record freezes the permission boundary, allowed terminal state, change
-axes, acceptance predicates, forbidden capabilities, branch scope, and role separation.
+## Required task statement
 
-Exact technical identities are not separate product decisions. Before a non-force push, the
-controller binds the candidate commit/tree, required checks, and intended bounded remote ref. A
-candidate author cannot be its sole verifier; the independent verifier is read-only for that
-candidate and issues a pre-push independent exact-commit pass receipt with `PASS | FAIL`. After the
-push, the controller resolves the remote ref again and requires that the verified remote ref value
-equals the exact commit in the receipt. Only the post-push binding may add the verified remote
-value, immutable Policy path/digest, new empty absolute evidence directory, deterministic
-result-independent stop predicate, exact execution facts, and live required checks. Code changes
-invalidate the receipt and every later binding. Evidence is append-only, an unsuccessful retry
-uses a new manifest and new empty directory, and old evidence is never retroactively authorized.
+Every task declares:
 
-Evidence does not create stage permission. It proves whether the predicates of a prior human
-conditional stage decision were met. A stage record may change only when the exact delegation and
-an independent pass receipt both say that all frozen predicates passed.
+1. observable Given / When / Then;
+2. current funnel node and baseline;
+3. largest measured blocker and its denominator;
+4. expected user-visible or funnel delta;
+5. exact source/known-at boundary;
+6. durable-data effect, including why any new record cannot be derived;
+7. direct verification and non-claims;
+8. bounded files and one owning module;
+9. all four change axes: input, Decision Policy, Outcome/evaluation, authorization;
+10. complexity added and complexity deleted.
 
-## Business closure contract
+If the upstream prerequisite is absent, that prerequisite is the task. Do not build reporting,
+storage, replay, schemas, or later-stage objects around an unreachable path.
 
-Every task states:
+## Product progress gate
 
-1. `Given / When / Then` in observable business terms;
-2. the smallest upstream prerequisite whose absence would make the closure unreachable;
-3. exact known-at inputs and the durable output, if any;
-4. truthful zero, no-hit, unavailable, and `UNKNOWN` behavior;
-5. the unit and denominator of each reported count or rate;
-6. exact evidence that proves the assertion and explicit non-claims;
-7. owning module and bounded file scope;
-8. current permission and the one semantic identity changed.
+A task is complete only when at least one is true:
 
-If the upstream prerequisite is not established, make it the closure. Do not work around it by
-building later-stage reporting or by running the same unavailable path for longer.
+- one funnel stage becomes reachable or measurably improves;
+- the largest measured blocker is reduced or made precisely attributable;
+- the trader receives a materially better current opportunity explanation;
+- a non-product subsystem that blocked progress is removed with no loss of product truth.
 
-## Change integrity
+Green tests alone never satisfy this gate.
 
-Declare each axis independently as `NONE` or `APPROVED`, then name the exact identity and
-behavioral delta:
+## Data boundary
 
-1. **Market/Decision input contract** — sources, universe, timing, continuity, freshness,
-   missingness, executable quote inputs, or persisted consumed facts.
-2. **Decision Policy** — Short Vol detector, structure authorization, formula, thresholds,
-   confirmations, persistence, clear/re-arm, Underwriting action, Shadow admission, executed
-   entry, or Position action.
-3. **Outcome/evaluation contract** — strictly future facts, close-opportunity semantics,
-   actual-versus-counterfactual status, scoring, cohort, comparator, or qualification.
-4. **Stage/authorization** — public/private data, account, capital, execution, research,
-   qualification, promotion, or product capability.
+Pre-Shadow persistence is forbidden by default.
 
-Changing capture, storage, replay, provenance, or reporting does not hide an effect on these
-axes. A code change cannot silently amend an authority or immutable Policy identity.
+Before `SHADOW_CASE_OPENED`, durable business writes are forbidden by default. Market facts,
+Radar, anomalies, atomic availability, Underwriting, Candidate, admission attempts, Workbench,
+funnel metrics, service state, and run summaries remain non-durable.
 
-## Product behavior versus validation harness
+A new durable record is permitted only when both answers are explicit:
 
-The task separately describes:
+1. Which already-open Shadow Case owns it?
+2. Which trader/AI research or qualification computation consumes it directly and why can it not be
+   derived from existing Case records?
 
-- **Product operating behavior:** what the continuously running product does.
-- **Validation harness:** the smallest fixture, live observation, sealed sample, or independent
-  calculation needed to prove the task.
+No answer means no record.
 
-A duration, cutoff, file, archive, replay command, or process lifetime used by the harness never
-becomes a product cadence, opportunity definition, or holding rule.
+Current permitted durable kinds are only:
 
-For the first Short Vol Radar, normal product behavior is an event-driven in-memory monitor that
-persists one minimal anomaly event on activation, a separate minimal official atomic-quote event
-when available, and one run summary. A bounded full-stream capture is permitted only when a task
-proves why that evidence is necessary; it is never the default response to uncertainty.
+```text
+SHADOW_CASE_OPENED
+SHADOW_CASE_TRANSITION / FIRST_CLOSE_LATCHED
+SHADOW_CASE_OUTCOME
+```
 
-## Evidence classes
+Qualification Cohorts, aligned pairs, comparison tables, Challenger features, and denominators are
+offline derived views, not Online Runtime records.
 
-Mark every class `REQUIRED` or `NOT_APPLICABLE`:
+## Unknown and blocker semantics
 
-| Evidence class | What it can prove | What it cannot prove |
-|---|---|---|
-| Direct behavior | deterministic formula, boundary, state transition, fail-closed behavior | natural production reachability |
-| Production-public Radar | real connectivity, coverage, usable detector evaluation, and any anomaly or atomic quote actually observed | unobserved event reachability, fill, edge, Candidate quality |
-| Minimal-hit recomputation | the hit follows from its frozen consumed inputs | completeness of the unselected market |
-| Bounded stream reconstruction | deterministic reconstruction of the exact sealed sample | live lifecycle, data completeness, profitability |
-| Shadow forward Outcome | future public executable-close observations under a frozen contract | actual execution or fill |
-| Qualification | pre-registered incumbent-versus-Challenger criteria on an accepted cohort | execution permission |
-| Execution | authorized orders, fills, positions, and capital facts | out-of-sample strategy value by itself |
+`UNKNOWN` remains a truthful current state, never zero, calm, WATCH, ABSTAIN, or a Candidate.
+However, `UNKNOWN` is not a delivery outcome. The task must attribute the largest funnel loss,
+which may instead be known absence or ineligibility.
 
-Synthetic and production-public evidence remain separate. A visible quote is not a fill.
-Matching calculations prove reconstruction only. A long run proves only what occurred inside its
-covered interval.
+Keep these distinct:
 
-## Assertion-proportional verification
+- source/currentness `UNKNOWN`: repair or expose the source blocker;
+- model/forecast uncertainty: lower confidence without erasing a reviewable opportunity;
+- executable-quote `UNKNOWN`: block Shadow admission, not trader display;
+- post-enrollment unknown/censoring: valid durable research result.
 
-Use the cheapest independent path that can falsify the business claim:
+## Validation proportionality
 
-- a pure formula or state rule: direct unit/property tests;
-- a public connectivity or observed-natural-event claim: production-public observation;
-- a minimal event recomputation claim, only when its owning task requires one: independent pure
-  calculation from that event;
-- a persisted-format change: direct fail-closed tests and an explicit compatibility decision;
-- a full-stream reconstruction claim: a fresh process over the exact sealed sample;
-- an Outcome claim: strictly future facts under the frozen Shadow-admission or opening-fill
-  boundary and Position identity.
+Use the cheapest path that can falsify the exact claim:
 
-Do not require full replay, hashes, archives, receipts, or broad reports for a claim that a direct
-test and minimal event can prove. Do not turn occurrence of a rare natural market event into a
-software-readiness prerequisite unless that occurrence is itself the exact approved claim.
+- pure formula, classifier, identity, or state rule: direct tests;
+- integration/composition: deterministic end-to-end fixture;
+- public source connectivity and current-state reachability: one bounded read-only smoke;
+- Shadow Case persistence: direct write/read/crash-incomplete tests;
+- Challenger qualification or Policy promotion: later pre-registered independent evaluation;
+- private execution: later account/order/fill reconciliation and capital controls.
 
-## Radar establishment evidence
+For public-only implementation, the normal gate is:
 
-The active [Short Vol Radar contract](../contracts/SHORT_VOL_RADAR.md) owns the detector, its
-independent public atomic-quote availability state, denominators, minimal events, and
-establishment acceptance. One process freezes one exact content-identified Policy before live
-evidence. Direct tests prove deterministic boundaries; production-public observation proves only
-the connectivity, coverage, usable evaluations, anomalies, and quotes that actually occurred.
-`REACHABILITY_SMOKE` and `OPERATIONAL_SOAK` are independent evidence gates with separately
-pre-bound exact code, Policy, evidence, and stop boundaries. A named terminal business-goal
-delegation may replace repeated per-run human commands, but authorization, completion, or
-acceptance of one never accepts the other.
+```text
+focused tests
+make check
+at most one explicitly authorized bounded read-only smoke only when natural source reachability is the claim
+```
 
-The service runs continuously until a human or a pre-registered external goal supervisor stops it,
-or the process fails. A supervisor stop predicate is frozen before startup and cannot depend on
-whether the evidence currently appears likely to pass. Predetermined elapsed time may bound a
-validation run but neither accepts nor rejects a capability and may not trigger threshold changes.
-A covered production interval with at least one real instrument, one known per-instrument
-evaluation, and a known full baseline/IV/Delta/richness calculation inside a complete non-empty
-aggregate `NO_ANOMALY` evaluation can establish runtime reachability; a natural anomaly and atomic
-quote are separately `OBSERVED | NOT_OBSERVED`. The human emergency stop remains valid.
+Public-only validation does not require a manifest, receipt chain, fresh empty evidence directory,
+commissioning controller, host probe, 24-hour Soak, replay, full-market archive, independent commit
+ceremony, or post-push acceptance ledger.
 
-Policy scope/parameter calibration is permitted only between runs through a human-approved
-successor identity and new forward interval. It cannot relabel earlier evidence. Without a
-strictly future forecast or Outcome label, such calibration can improve only operational
-coverage, frequency, and flicker behavior—not claim better prediction or trading value.
+A rare natural market event is not a software-readiness prerequisite unless the user explicitly
+makes that occurrence the product claim.
 
-Evidence stays proportional to the claim: this closure requires no full-feed archive, replay,
-independent offline calculator, provenance command, Candidate, fill, Outcome, or profitability
-proof.
+## Single-owner validation rule
 
-## Availability and zero semantics
+Each external trust boundary has one production validator and each business invariant has one
+production calculator. Tests may independently exercise pure functions, but production must not
+add:
 
-- Missing, stale, discontinuous, incomplete, or contaminated facts are `UNKNOWN` at the smallest
-  declared consumer scope.
-- `UNKNOWN` is neither numeric zero nor economic `ABSTAIN`.
-- `NO_ANOMALY` requires usable detector inputs and known coverage.
-- `ANOMALY_ACTIVE` depends only on detector inputs and its frozen activation/clear Policy.
-- Official combo availability is independently
-  `NOT_EVALUATED | UNKNOWN | NO_ACTIVE_COMBO | NO_TARGET_SIZE_CREDIT_QUOTE |
-  PUBLIC_ATOMIC_QUOTE_AVAILABLE`; it is `NOT_EVALUATED` when no anomaly is active.
-- A combo state cannot overwrite detector truth; a public quote cannot create an order or fill.
-- Negative absence states require complete relevant scope; a positive witness does not imply best
-  price or complete-market selection.
-- No current Radar event creates Shadow admission, executed entry, or an Outcome object.
-- A Shadow admission or executed entry with incomplete strictly future facts may create its own
-  `UNKNOWN` Outcome with null economics.
+- a second schema for owner-generated objects;
+- prospective whole-history relationship validation;
+- provenance/manifest graphs around typed output;
+- validator-of-validator or writer/readback proof on every transition;
+- Markdown-byte digests as runtime business identities.
 
-Serializers use null/undefined for a rate whose denominator is zero or unknown. They never replace
-an undefined rate with `0`.
+The exact three Policy artifacts remain content-identified because they change decisions. Source
+code is identified by commit. Durable record format uses an explicit schema version.
 
-## Radar summary evidence
+## Operations boundary
 
-The current Radar writer persists coverage partitions and business-transition counts only. It does
-not persist RPC, transport, source-shape, publication-cadence, host-resource, or acceptance-control
-ledgers. Those operational observations are not business denominators and do not belong in the
-market-event hot path.
+The application may expose health, readiness, current state, and funnel diagnostics. It may not:
 
-Deleted diagnostic summaries are unsupported and `NOT_COMPARABLE`. They are not migrated,
-reconstructed, replayed, recomputed, or used as acceptance input.
+- manage or inspect launchd/systemd/Docker/Kubernetes;
+- execute `lsof`, OS log queries, PID inventories, or host resource acceptance;
+- decide whether it has been online long enough;
+- generate commissioning, operability, or acceptance receipts.
 
-## Denominator integrity
+Process restart, CPU, memory, logs, and deployment are external operational concerns.
 
-Name every numerator, denominator, unit, scope, and conditioning event. Keep separate:
+## Two-strike deletion rule
 
-- monitor covered/degraded/unknown time;
-- relevant state changes;
-- distinct short-leg anomaly episodes after clear, known ineligibility, scope/membership/input
-  loss, continuity loss, or stop, separated by call/put and attributed once to their activation
-  TTE band;
-- active-anomaly combo evaluations and official target-size atomic-quote availability states;
-- Underwriting-evaluable future opportunities and Candidate/Watch/Abstain actions;
-- Candidates and Entries;
-- Entries and mature/unknown Outcomes;
-- counterfactual observations and actual exposure.
+When the same non-product control subsystem causes a second real runtime failure, the next task is
+a delete-or-externalize review. Local repair is forbidden unless the task proves that removal would
+cause an incorrect trader decision, lose an admitted Shadow Case, or expose actual account/capital
+risk.
 
-Messages, detector calculations, repeated quotes, legs, theoretical structures, elapsed runtime,
-files, receipts, replay checks, and AI explanations are not Radar episodes or Candidate
-opportunities.
+## Implementation discipline
 
-## Persisted meaning
+- preserve unrelated human work;
+- one branch and one Draft PR for the combined requested closure;
+- no speculative platform or abstraction;
+- no dependency addition when a direct function or typed state suffices;
+- no hidden Policy change inside input, persistence, reporting, or performance work;
+- profile the direct owning function before a second performance architecture;
+- stop when the declared acceptance passes.
 
-When a task changes a durable contract it must declare:
+## Public/private boundary
 
-- semantic identity and content digest;
-- required fields, units, enum meanings, nullability, and owning construction rules;
-- writer and any product-required reader;
-- compatibility as `COMPATIBLE | MIGRATION_REQUIRED | NOT_COMPARABLE`;
-- fail-closed behavior for missing or mixed identities.
-
-Do not create a new persisted identity when no durable business object is required. A Radar
-`NO_ANOMALY` does not require a receipt. The first Radar closure persists only a minimal anomaly
-event, a separate official atomic-quote event when observed, and one run summary. Their task
-requires direct schema and behavior tests, not a second persisted recomputation path.
-
-## Causality and Outcome
-
-- Decision, anomaly, and atomic-quote inputs are known at or before their bound causal sequence.
-- `SHADOW_ENTRY` starts counterfactual strictly future observation and creates no exposure.
-- Actual exposure begins with the first opening fill, including a partial or single-leg fill.
-- Shadow Outcome observations are strictly after `SHADOW_ENTRY`; actual execution Outcome facts
-  are strictly after the first opening fill and processed in causal order.
-- `CLOSE` is a Position Policy action, not proof that exposure ended.
-- `close_quote_state` is separately
-  `ATOMIC_COMBO_CLOSE_QUOTE | LEGGED_CLOSE_REFERENCE | UNEXECUTABLE | UNKNOWN`. An unavailable
-  quote cannot erase a known hard-close action.
-- A public target-size close quote is a Shadow close opportunity, not a fill.
-- A Shadow close opportunity additionally requires Position action `CLOSE`, a strictly later
-  atomic combo quote for the full remaining Shadow quantity. A legged reference is diagnostic
-  until a separate legging exit Policy is authorized.
-- Future actual exposure ends only when every leg is flat after the final closing fill or
-  authorized settlement.
-- Rejected-opportunity evaluation is separately labeled and never enters actual Outcome counts.
-
-## Implementation and testing
-
-Before editing, inspect branch, HEAD, worktree, remote refs, and task scope. Preserve unrelated
-human changes. Work only in the owning module and reuse current patterns.
-
-Implementation tasks:
-
-- add direct tests at the changed business boundary;
-- fail closed on missing and invalid facts;
-- avoid speculative abstractions and infrastructure;
-- run focused tests and `make check`;
-- run live or independent evidence only when its task class is `REQUIRED`;
-- inspect final artifacts and Git diff before claiming completion.
-
-`AUTHORITY_ONLY` tasks run link, consistency, and authority tests but no market commands.
-
-## Review questions
-
-- Does the change establish the current business prerequisite, or decorate a downstream failure?
-- Is the live product consuming changed market state, or rereading stored facts?
-- Does the Short Vol signal compare like-for-like remaining-life variance under one exact Policy
-  that cannot change during its run?
-- Are detector truth, official atomic-quote availability, future maker/order state, Candidate,
-  Shadow admission, executed entry, and fill distinct?
-- Does a successor inside the declared Policy schema receive a new identity and forward interval
-  without retroactive claims?
-- Are clear/re-arm rules preventing quote flicker from multiplying Radar episodes?
-- Does `UNKNOWN` remain outside economic denominators?
-- Is position closure driven by current risk and executable close state?
-- Are Shadow close opportunity and future actual fill duration separate?
-- Is every evidence demand necessary to falsify this exact assertion?
-- Did the change add storage, platform, or defensive complexity without a current consumer?
-
-## Git and PR contract
-
-- Protect `main`; never rewrite or delete remote state without explicit authorization.
-- Preserve unrelated human work and do not stage it.
-- Use one bounded branch and one Draft PR for the closure unless the user explicitly authorizes
-  more.
-- A recorded terminal-goal delegation may authorize a non-force push of its bounded non-`main`
-  branch after an independent exact-commit pass receipt and must verify remote equality.
-- Record base/head, checks, evidence classes, zero activity, `UNKNOWN`s, non-claims, Git state, and
-  remote state in the delivery report.
-- Green checks and a Draft PR do not accept authority, advance stage, merge, deploy, or grant
-  execution.
-- Completed task files do not accumulate on `main`; Git and accepted durable evidence are the
-  archive.
+Public-only code may use authorized Deribit public facts and public quote calls. It may not contain
+or infer credentials, balances, margin, orders, fills, actual positions, capital, or execution
+permission. Visible public quotes remain counterfactual.
 
 ## Definition of done
 
-The requested business closure exists; all four axes match authority; the direct behavior and
-every required evidence class pass; invalid and zero cases remain truthful; final diff and
-artifacts contain only the closure; limitations and non-claims are explicit; and remote state is
-reported accurately. If a required natural market fact has not occurred, the implementation may
-be ready but the business closure remains unaccepted.
+The declared funnel/product delta exists; direct and repository checks pass; invalid and
+`UNKNOWN` cases remain truthful; pre-Shadow durable writes are zero; any Case record has one direct
+consumer; the diff contains no unrelated infrastructure; complexity and remaining blocker are
+reported; and no authority is inferred from a test or commit.

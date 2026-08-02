@@ -4,52 +4,35 @@
 
 ```text
 Deribit public WebSocket
-  → one LiveRadarRuntime / RadarReducer
-  → one FixedContractShadowOwner
-  → Radar and downstream business objects
+  → one bounded application queue
+  → one RadarReducer
+  → one in-memory Underwriting/Shadow/Position owner
   → coalesced immutable Workbench snapshot
   → loopback GET/HEAD HTTP
+
+explicit Shadow admission
+  → minimal Shadow Case store
 ```
 
-This is one process and one event-driven business path. Operations and private execution are
-outside the application.
+The Workbench renders current in-memory state. It never reads durable Case files and never performs
+strategy calculations. Ordinary status-stable updates publish at most 2 Hz; readiness/currentness
+changes publish immediately; pending state flushes before reconnect or stop.
 
-## Startup and lifecycle
+## Persistence
 
-The process locks one external state root, creates a fresh runtime directory, loads one immutable
-three-Policy chain, starts the loopback HTTP surface, and connects one public Deribit client. A
-recoverable transport failure opens the next session epoch without replacing the reducer or
-Shadow/Position owner. `SIGINT` and `SIGTERM` latch one stop boundary. Protocol incompatibility or
-an unexpected runtime failure is terminal.
-
-Lifecycle is projected in memory as service phase plus independent data currentness. `ready`
-requires `RUNNING` and `CURRENT`; an open socket is insufficient. `UNKNOWN`, `STALE`, and
-`DEGRADED` remain visible business availability states rather than process failures or zero values.
-
-## Persistence boundary
-
-Each run directory has only:
+A run may create only:
 
 ```text
-radar/       minimal anomaly, atomic-quote, and clean-stop summary objects
-downstream/  Underwriting, Shadow, Position, Outcome, and aligned business objects
+runs/<runtime>/cases/<case-id>/opened.json
+runs/<runtime>/cases/<case-id>/first-close.json   # optional, at most one
+runs/<runtime>/cases/<case-id>/outcome.json       # optional, at most one
 ```
 
-The service does not persist lifecycle transitions, terminal manifests, inventories, Workbench
-JSON, full books, ordinary ticks, probes, or host-resource observations.
+No Radar event, anomaly, quote, Underwriting evaluation, Candidate, Workbench snapshot, service
+lifecycle, host metric, manifest, receipt, inventory, or full market fact is persisted.
 
-## Workbench boundary
+## Operations
 
-Business settlement completes before publication. Ordinary status-stable updates are coalesced to
-at most 2 Hz; semantic status changes publish immediately; the latest pending state flushes before
-reconnect or stop. Each publication atomically replaces one complete immutable schema-2 byte
-snapshot. HTTP handlers never traverse mutable reducer/owner state.
-
-The browser only renders the snapshot. Fetch/render failure hides stale tables and reports
-`UNKNOWN`. Empty panels remain distinct from conditioned numeric zero. Public quotes and Shadow
-entries remain explicitly not orders, fills, actual positions, or actual PnL.
-
-## Operations boundary
-
-Process restart and host CPU/memory monitoring belong to an external supervisor. Deployment
-remains separately authorized by `CURRENT_STAGE`.
+The application exposes `/healthz`, `/readyz`, and `/api/workbench/current`. Process supervision,
+restart policy, CPU, memory, and host logs are external operational concerns. The application does
+not inspect or manage them.

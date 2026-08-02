@@ -1,0 +1,167 @@
+# Short Vol Shadow Case Contract
+
+**Status:** ACTIVE IMPLEMENTATION CONTRACT
+
+**Owning capability:** `SHORT_VOL_SHADOW_CASE`
+
+## Purpose
+
+Define the only durable business boundary in the current public-only product. A Shadow Case begins
+when one admitted counterfactual trade is explicitly enrolled before its future path is known. It
+preserves the minimum admission context, a bounded first-CLOSE transition, and one terminal result
+for trader review, AI research, and later offline qualification.
+
+The Online Runtime does not persist qualification Cohorts, aligned pairs, comparison tables,
+Challenger features, Radar events, Underwriting events, or automatic no-trade counterfactuals.
+
+## Record set
+
+Exactly three record kinds are authorized:
+
+```text
+SHADOW_CASE_OPENED               exactly one per Case
+SHADOW_CASE_FIRST_CLOSE          zero or one per Case
+SHADOW_CASE_OUTCOME              zero or one per Case
+```
+
+Each Case directory is:
+
+```text
+cases/<case-id>/opened.json
+cases/<case-id>/first-close.json    # optional
+cases/<case-id>/outcome.json        # optional
+```
+
+No other durable file belongs to the product runtime.
+
+## Case identity
+
+`case_id` is a canonical SHA-256 identity derived from:
+
+```text
+"ShadowCaseIdentity"
+code_identity
+runtime_identity
+Radar Policy identity
+Underwriting Policy identity
+Position Policy identity
+SHADOW_ENTRY identity
+opened FactBoundary
+```
+
+Policy identities are exact content digests. The code identity is the exact Git commit. Markdown
+contract bytes, file paths, host identity, PID, manifest, receipt, directory inventory, and
+Workbench publication sequence do not enter the Case identity.
+
+Every record binds the same case, code, runtime, and Policy identities. Boundaries use the same
+runtime and strictly increasing causal sequence.
+
+## `SHADOW_CASE_OPENED`
+
+The opened record contains:
+
+- `record_kind`, `schema_version`, and `case_id`;
+- exact code/runtime/three-Policy identities;
+- opened/entry and Underwriting decision boundaries;
+- canonical combo and two canonical option-leg identities;
+- display instrument names, expiry, option type, strikes, entry direction, and full BTC quantity;
+- exact full-quantity official consumed entry levels;
+- gross credit, entry fee reserve, net credit, payoff cap, future-cost reserve, and reserved loss;
+- the minimal consumed Radar state: active episode identity, band, richness interval, and official
+  atomic state;
+- the Underwriting action and thresholds actually consumed;
+- explicit `PUBLIC_QUOTE_NOT_FILL`, `SIMULATED_NOT_ACTUAL_POSITION`, and
+  `UNQUALIFIED_POLICY` non-claims.
+
+Entry consumed amounts must sum exactly to the full quantity. The record may not contain the full
+option chain or unrelated market state.
+
+## `SHADOW_CASE_FIRST_CLOSE`
+
+The optional first-close record is written only when the Position owner first latches CLOSE. It
+contains:
+
+- same Case/code/runtime/Policy identities;
+- the exact first Position action identity and boundary;
+- primary and ordered latched close reasons;
+- the predicate truth vector consumed at that boundary.
+
+Later Position evaluations cannot rewrite it or create another first-close record.
+
+## `SHADOW_CASE_OUTCOME`
+
+The terminal record has one immutable state:
+
+```text
+MATURE_KNOWN
+MATURE_UNKNOWN
+CENSORED_AT_STOP
+CENSORED_AT_FAILURE
+```
+
+`MATURE_KNOWN` requires the first eligible strictly post-CLOSE full-quantity official atomic exit
+and stores its consumed levels, gross close cashflow, close fee reserve, net close cashflow, gross
+PnL, total public fee reserve, net PnL after reserve, and net loss.
+
+`MATURE_UNKNOWN` means the Case reached its natural terminal condition without an eligible public
+atomic exit under the frozen contract. Economic exit/PnL fields are null.
+
+A handled clean stop or failure that ends a still-pending Case produces the matching censored
+state with null outcome economics. Censoring is valid research data, not software success or a
+known trading result.
+
+## Unclean process loss
+
+The writer cannot guarantee a terminal record after power loss or an uncatchable process crash. A
+reader finding a valid `opened.json` and no `outcome.json` reports:
+
+```text
+INCOMPLETE_UNCLEAN_EXIT
+```
+
+It does not synthesize an Outcome, delete the Case, migrate it, or resume it in a new runtime.
+Cross-runtime recovery requires future explicit authority.
+
+## Minimal writer
+
+The Case writer:
+
+- creates the Case directory without following symlinks;
+- writes canonical UTF-8 JSON to a short same-directory temporary file;
+- flushes and `fsync`s the file;
+- publishes by exclusive hard link or another no-overwrite atomic operation;
+- `fsync`s the parent directory;
+- accepts an identical duplicate as idempotent and rejects a conflicting duplicate;
+- never scans or validates another Case as part of the write.
+
+This is durable-record integrity, not a general evidence or commissioning framework.
+
+## Minimal reader
+
+The product reader validates only the one requested Case:
+
+- exact record key/type shape;
+- identity format and same Case/code/runtime/Policy binding;
+- opened quantity and consumed-level conservation;
+- strictly later first-close/outcome boundaries;
+- state-specific null/economic requirements;
+- recomputable public-quote PnL arithmetic;
+- no conflicting duplicate files.
+
+It returns `OPEN`, `COMPLETE`, or `INCOMPLETE_UNCLEAN_EXIT`. It does not rebuild a repository graph,
+validate Git trees, inspect host state, read legacy schemas, or form a qualification Cohort.
+
+## No-trade controls and Cohorts
+
+The current implementation enrolls admitted Shadow trades only. A future no-trade control must be
+selected by an explicit pre-outcome sampling rule and use a separately authorized Case-open path.
+The system must never persist every WATCH or ABSTAIN automatically.
+
+Qualification Cohorts are later offline views over completed or honestly censored Cases under a
+pre-registered evaluator. The Online Runtime never writes Cohort or aligned-pair objects.
+
+## Required verification
+
+Direct tests prove zero pre-Shadow files, exact one-open/one-first-close/one-outcome cardinality,
+atomic publication, duplicate handling, identity/boundary binding, arithmetic, censoring, and
+unclean incomplete readback. No manifest, receipt, full graph, legacy reader, or replay is required.

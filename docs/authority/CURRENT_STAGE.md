@@ -4,68 +4,63 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Implemented runtime capability:** `OFFLINE_PUBLIC_SHADOW_RUNTIME`
+**Current implementation status:**
+`LEGACY_IMPLEMENTATION_DISABLED_PENDING_SHADOW_CASE_DATA_BOUNDARY`
 
-**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`
-
-**Sole authorized closure:** `NONE`
+**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_DATA_BOUNDARY_REPLACEMENT`
 
 **Persistent service:** `STOPPED_NO_DEPLOYMENT`
 
 **Live commands:** `FORBIDDEN`
 
+**Sole authorized closure:** `SHORT_VOL_SHADOW_CASE_DATA_BOUNDARY`
+
 ## Current truth
 
-The user stopped the previous observation on 2026-08-02 and rejected its Radar results as
-unreliable. Its active runtime, commissioning, probe, soak, and evidence roots were removed after
-the process, launchd labels, and loopback listener were confirmed absent. Deleted history is not a
-business premise, denominator, acceptance input, or permission source.
+The repository contains an offline-capable public Deribit → Radar → Underwriting → admission →
+Position → Outcome implementation. Its current persistence model does not conform to the active
+Product Constitution because it still writes pre-Shadow Radar and decision objects. That
+implementation may be edited and tested offline, but it is not accepted for a production-public
+run until the data boundary is replaced.
 
-The repository implements a public-only modular monolith: Deribit ingestion, Radar, fixed-contract
-Underwriting, Shadow admission, Position management, Outcome projection, and a loopback read-only
-Workbench. This implementation fact does not prove production correctness, 24-hour stability,
-Policy quality, fillability, profitability, actual exposure, or PnL.
+The authority rewrite itself changes no market source, Policy number, decision formula, private
+permission, or execution capability. It changes what the product considers durable data and what
+counts as engineering progress.
 
-## Current implementation
+## Authorized next closure
 
-`serve-shadow` is the sole complete product path: one public client, reducer, downstream owner,
-minimal business persistence, reconnect loop, signal stop, coalesced Workbench publisher, and
-loopback health/readiness HTTP. Typed owners calculate business state; writers serialize it.
-It must preserve market/Decision inputs, all three Policies, Radar semantics, Underwriting,
-Shadow, Position, Outcome, causal order, honest `UNKNOWN`, conditioned zero claims, public/private
-separation, and GET/HEAD-only Workbench behavior.
+`SHORT_VOL_SHADOW_CASE_DATA_BOUNDARY` must:
 
-## Change declarations
+1. keep market, Radar, atomic availability, Underwriting, Candidate, admission, and Workbench state
+   in memory before Shadow enrollment;
+2. make `SHADOW_CASE_OPENED` the first durable business record;
+3. persist only one bounded first-CLOSE transition and one terminal Shadow Case Outcome;
+4. remove automatic persisted rejected-counterfactual and online Cohort/aligned-pair records;
+5. keep Workbench on in-memory current state;
+6. provide one minimal reader that distinguishes complete, censored, and unclean incomplete Cases;
+7. preserve the exact three Policies, public-only boundary, causality, `UNKNOWN`, and full-quantity
+   official atomic entry/exit requirements.
 
-1. **Market/Decision input contract:** `NONE`
-2. **Decision Policy:** `NONE`
-3. **Outcome/evaluation contract:** `NONE`
-4. **Stage/authorization:** `NONE`
+## Allowed work
 
-## Permission boundary
+- one bounded implementation branch and Draft PR;
+- offline code changes and deterministic tests;
+- local `make check` and GitHub CI;
+- no market command until a later explicit public-read-only smoke task.
 
-Allowed:
+## Forbidden work
 
-- read-only inspection and deterministic offline tests of the completed implementation;
-- create a new task before any further product, authority, contract, code, or durable-artifact
-  change.
+- Deribit live invocation or deployment;
+- credentials, account, balance, margin, private API, order, fill, capital, or actual position;
+- Policy tuning or hot reload;
+- database, replay platform, event bus, microservice split, Docker/Kubernetes requirement;
+- application commissioning, host PID/log inspection, resource acceptance, manifest, receipt chain,
+  or 24-hour Soak controller;
+- qualification, promotion, or execution controller.
 
-Forbidden:
+## Acceptance boundary
 
-- production-public market, service, probe, commissioning, deployment, or evidence commands;
-- reconstructing or relabelling deleted historical results;
-- changing Radar, Underwriting, Shadow, Position, Outcome, coverage, or business-count meaning;
-- changing market sources, universe, continuity, missingness, detector formulas/thresholds,
-  Underwriting, Shadow admission, Position, Outcome, or cohort semantics;
-- private/account APIs, credentials, balances, margin, positions, orders, fills, settlement,
-  execution gateways, capital, qualification, promotion, or money;
-- public Internet binding, databases, full-market persistence, replay platforms, schedulers,
-  workflow engines, feature stores, registries, or new services.
-
-## Acceptance and non-claims
-
-Direct offline tests and `make check` prove the simplified composition, owner continuity,
-stop/reconnect/failure behavior, Workbench publication, health/readiness, and read-only loopback
-surface. They cannot accept the Radar, authorize deployment, or prove uptime or economics.
-
-Update this document only when capability, permission, the sole closure, or its blocker changes.
+Green tests can accept only the offline implementation. They do not establish natural opportunity
+frequency, strategy value, fillability, uptime, qualification, deployment, or execution authority.
+A later public smoke may prove connectivity and current-state reachability only; it may not restore
+pre-Shadow persistence or become a recurring evidence ritual.

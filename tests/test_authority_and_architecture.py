@@ -6,11 +6,6 @@ import json
 import re
 from pathlib import Path
 
-from short_vol_underwriting.constants import (
-    OUTCOME_CONTRACT_DIGEST,
-    UNDERWRITING_POSITION_CONTRACT_DIGEST,
-)
-
 ROOT = Path(__file__).resolve().parents[1]
 
 AUTHORITY_FILES = (
@@ -22,7 +17,7 @@ AUTHORITY_FILES = (
 IMPLEMENTATION_CONTRACTS = (
     ROOT / "docs/contracts/SHORT_VOL_RADAR.md",
     ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md",
-    ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md",
+    ROOT / "docs/contracts/SHORT_VOL_SHADOW_CASE.md",
     ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md",
 )
 INTERNAL_PACKAGES = {
@@ -36,7 +31,7 @@ PACKAGE_ROOTS = {
     "market_monitor": ROOT / "packages/market_monitor/src/market_monitor",
     "options_domain": ROOT / "packages/options_domain/src/options_domain",
     "short_vol_radar": ROOT / "packages/short_vol_radar/src/short_vol_radar",
-    "short_vol_underwriting": (ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting"),
+    "short_vol_underwriting": ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting",
     "radar_runtime": ROOT / "apps/radar_runtime/src/radar_runtime",
 }
 ALLOWED_IMPORTS = {
@@ -51,10 +46,6 @@ ALLOWED_IMPORTS = {
     },
     "radar_runtime": INTERNAL_PACKAGES,
 }
-
-
-def _flat(path: Path) -> str:
-    return " ".join(path.read_text(encoding="utf-8").split())
 
 
 def _internal_imports(path: Path) -> set[str]:
@@ -75,16 +66,7 @@ def _internal_imports(path: Path) -> set[str]:
     return values
 
 
-def test_agents_is_a_short_map_to_all_active_authority() -> None:
-    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    assert len(agents.splitlines()) <= 100
-    assert "are orthogonal; none overrides another" in agents
-    for path in AUTHORITY_FILES:
-        assert path.relative_to(ROOT).as_posix() in agents
-    assert "tasks/TEMPLATE.md" in agents
-
-
-def test_active_authority_has_explicit_status_and_no_stale_location() -> None:
+def test_active_authority_is_one_small_consistent_map() -> None:
     assert {path.name for path in (ROOT / "docs/authority").glob("*.md")} == {
         "CURRENT_STAGE.md",
         "DELIVERY_CONTRACT.md",
@@ -92,17 +74,35 @@ def test_active_authority_has_explicit_status_and_no_stale_location() -> None:
         "SYSTEM_ARCHITECTURE.md",
     }
     assert {path.name for path in (ROOT / "docs/contracts").glob("*.md")} == {
-        "SHORT_VOL_RADAR.md",
-        "SHORT_VOL_UNDERWRITING_POSITION.md",
-        "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md",
         "SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md",
+        "SHORT_VOL_RADAR.md",
+        "SHORT_VOL_SHADOW_CASE.md",
+        "SHORT_VOL_UNDERWRITING_POSITION.md",
     }
     for path in (*AUTHORITY_FILES, *IMPLEMENTATION_CONTRACTS):
         opening = "\n".join(path.read_text(encoding="utf-8").splitlines()[:8])
-        assert "**Status:** ACTIVE" in opening, f"missing active status in {path}"
-        assert "**Version:**" not in path.read_text(encoding="utf-8")
-    markdown = "\n".join(path.read_text(encoding="utf-8") for path in ROOT.rglob("*.md"))
-    assert "docs/architecture/PRODUCT_CONSTITUTION.md" not in markdown
+        assert "**Status:** ACTIVE" in opening
+    normative_line_count = sum(
+        len(path.read_text(encoding="utf-8").splitlines())
+        for path in (*AUTHORITY_FILES, *IMPLEMENTATION_CONTRACTS)
+    )
+    assert normative_line_count < 1_600
+
+
+def test_agents_routes_work_and_enforces_anti_defensive_stops() -> None:
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    agents_flat = " ".join(agents.split())
+    assert len(agents.splitlines()) <= 100
+    for path in AUTHORITY_FILES:
+        assert path.relative_to(ROOT).as_posix() in agents
+    for phrase in (
+        "Before `SHADOW_CASE_OPENED`, durable business record count is zero",
+        "fix the largest funnel loss",
+        "validator-of-validator",
+        "second real run failure",
+        "Green tests alone are insufficient",
+    ):
+        assert phrase.lower() in agents_flat.lower()
 
 
 def test_repository_relative_markdown_links_resolve() -> None:
@@ -112,6 +112,7 @@ def test_repository_relative_markdown_links_resolve() -> None:
         ROOT / "README.md",
         *AUTHORITY_FILES,
         *IMPLEMENTATION_CONTRACTS,
+        ROOT / "docs/architecture/PERSISTENT_RUNTIME_TRADER_WORKBENCH.md",
         *(ROOT / "tasks").glob("*.md"),
     )
     for path in checked:
@@ -124,6 +125,67 @@ def test_repository_relative_markdown_links_resolve() -> None:
             )
 
 
+def test_product_data_boundary_is_unambiguous() -> None:
+    product = (ROOT / "docs/authority/PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
+    architecture = (ROOT / "docs/authority/SYSTEM_ARCHITECTURE.md").read_text(encoding="utf-8")
+    delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
+    radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
+    shadow_case = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_CASE.md").read_text(encoding="utf-8")
+
+    assert "The first durable business object is `SHADOW_CASE_OPENED`" in product
+    assert "Pre-Shadow durable business record count is exactly zero" in product
+    assert "The Online Runtime does not own Cohort" in " ".join(product.split())
+    assert "No pre-Shadow component may open a file" in architecture
+    assert "Pre-Shadow persistence is forbidden by default" in " ".join(delivery.split())
+    assert "does not persist anomaly" in radar
+    assert "Exactly three record kinds are authorized" in shadow_case
+    assert "SHADOW_CASE_OPENED" in shadow_case
+    assert "SHADOW_CASE_FIRST_CLOSE" in shadow_case
+    assert "SHADOW_CASE_OUTCOME" in shadow_case
+
+
+def test_public_only_validation_does_not_recreate_commissioning() -> None:
+    delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
+    assert "at most one explicitly authorized bounded read-only smoke" in " ".join(delivery.split())
+    assert "does not require a manifest, receipt chain" in delivery
+    assert "Two-strike deletion rule" in delivery
+    persistent = (
+        ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md"
+    ).read_text(encoding="utf-8")
+    assert "Process supervision, restart policy, CPU, memory, host logs" in persistent
+    assert "No terminal manifest" in persistent
+
+
+def test_current_stage_disables_legacy_persistence_and_live_commands() -> None:
+    current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
+    assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
+    assert (
+        "`LEGACY_IMPLEMENTATION_DISABLED_PENDING_SHADOW_CASE_DATA_BOUNDARY`" in current
+    )
+    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "**Sole authorized closure:** `SHORT_VOL_SHADOW_CASE_DATA_BOUNDARY`" in current
+
+
+def test_task_template_measures_product_progress_not_proof_volume() -> None:
+    template = (ROOT / "tasks/TEMPLATE.md").read_text(encoding="utf-8")
+    for field in (
+        "**Current funnel node:**",
+        "**Baseline:**",
+        "**Primary blocker:**",
+        "**Expected user-visible delta:**",
+        "**Durable-data effect:**",
+        "**Complexity added:**",
+        "**Complexity deleted:**",
+    ):
+        assert field in template
+    assert "Tests alone do not satisfy the task" in template
+
+
+def test_no_completed_task_accumulates_on_main_candidate() -> None:
+    task_names = sorted(path.name for path in (ROOT / "tasks").glob("*.md"))
+    assert task_names == ["TEMPLATE.md"]
+
+
 def test_internal_package_dependency_direction() -> None:
     for owner, root in PACKAGE_ROOTS.items():
         for path in root.rglob("*.py"):
@@ -131,248 +193,30 @@ def test_internal_package_dependency_direction() -> None:
             assert not forbidden, f"{path} imports higher layers: {sorted(forbidden)}"
 
 
-def test_task_template_carries_business_and_evidence_contract() -> None:
-    template = (ROOT / "tasks/TEMPLATE.md").read_text(encoding="utf-8")
-    template_flat = " ".join(template.split())
-    for section in (
-        "## Business closure",
-        "## Change declarations",
-        "## Product operating behavior",
-        "## Validation harness",
-        "## Evidence boundary",
-        "## Acceptance",
-        "## Definition of done",
-    ):
-        assert section in template
-    for value in (
-        "**Task kind:** AUTHORITY_ONLY | IMPLEMENTATION | EVIDENCE_ONLY",
-        "Validation duration and files do not become product cadence",
-        "**Market/Decision input contract change:**",
-        "**Decision Policy change:**",
-        "**Outcome/evaluation contract change:**",
-        "**Stage/authorization change:**",
-    ):
-        assert value in template_flat
-
-
-def test_current_stage_records_permission_boundary() -> None:
-    current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    flat = " ".join(current.split())
-    marker = "**Sole authorized closure:**"
-
-    assert current.count(marker) == 1
-    assert f"{marker} `NONE`" in flat
-    assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`" in current
-    assert "**Persistent service:** `STOPPED_NO_DEPLOYMENT`" in current
-    assert "**Live commands:** `FORBIDDEN`" in current
-
-
-def test_no_completed_task_accumulates() -> None:
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
-    current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
-    assert "**Sole authorized closure:** `NONE`" in current
-    assert "**Live commands:** `FORBIDDEN`" in current
-
-
-def test_fixed_three_policy_chain_and_implementation_boundary_are_exact() -> None:
-    radar_path = ROOT / "policies/short-vol-fixed-public-shadow-radar.json"
-    underwriting_path = ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json"
-    position_path = ROOT / "policies/short-vol-fixed-public-shadow-position.json"
-    policy_paths = (radar_path, underwriting_path, position_path)
-
-    assert sorted(
-        path.relative_to(ROOT).as_posix() for path in (ROOT / "policies").rglob("*.json")
-    ) == [
-        "policies/short-vol-fixed-public-shadow-position.json",
-        "policies/short-vol-fixed-public-shadow-radar.json",
-        "policies/short-vol-fixed-public-shadow-underwriting.json",
-    ]
-    assert (ROOT / "packages/short_vol_underwriting").is_dir()
-    assert "short_vol_underwriting" in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-
-    declared_policy_digests = (
-        "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4",
-        "sha256:be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af",
-        "sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439",
-    )
-    declared_contract_digests = (
-        UNDERWRITING_POSITION_CONTRACT_DIGEST,
-        OUTCOME_CONTRACT_DIGEST,
-    )
-
-    radar_bytes = radar_path.read_bytes()
-    assert len(radar_bytes) == 1405
-    assert hashlib.sha256(radar_bytes).hexdigest() == (
-        declared_policy_digests[0].removeprefix("sha256:")
-    )
-    radar = json.loads(radar_bytes)
-    assert radar_bytes == (json.dumps(radar, ensure_ascii=False, indent=2).encode("utf-8") + b"\n")
-    assert radar["policy_schema_version"] == 3
-    assert radar["policy_family"] == "POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE"
-    assert radar["target_base_quantity_btc"] == 0.1
-
-    contract = (ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md").read_text(
-        encoding="utf-8"
-    )
-    key_blocks = re.findall(
-        r"The exact top-level key set is:\n\n```text\n(.*?)\n```",
-        contract,
-        flags=re.DOTALL,
-    )
-    assert len(key_blocks) == 2
-    underwriting_keys = tuple(key_blocks[0].splitlines())
-    position_keys = tuple(key_blocks[1].splitlines())
-    assert len(underwriting_keys) == 24
-    assert len(position_keys) == 23
-
-    underwriting_bytes = underwriting_path.read_bytes()
-    position_bytes = position_path.read_bytes()
-    assert hashlib.sha256(underwriting_bytes).hexdigest() == (
-        declared_policy_digests[1].removeprefix("sha256:")
-    )
-    assert hashlib.sha256(position_bytes).hexdigest() == (
-        declared_policy_digests[2].removeprefix("sha256:")
-    )
-    underwriting = json.loads(underwriting_bytes)
-    position = json.loads(position_bytes)
-    assert tuple(underwriting) == underwriting_keys
-    assert tuple(position) == position_keys
-    assert underwriting_bytes == (
-        json.dumps(underwriting, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
-    )
-    assert position_bytes == (
-        json.dumps(position, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
-    )
-
-    expected_budgets = {
-        "clock_currentness_budget_ms": 45000,
-        "platform_currentness_budget_ms": 90000,
-        "combo_snapshot_send_budget_ms": 30000,
-        "combo_snapshot_response_budget_ms": 30000,
-        "index_currentness_budget_ms": 90000,
-        "option_ticker_currentness_budget_ms": 300000,
+def test_fixed_policy_files_remain_content_identified_and_unchanged() -> None:
+    expected = {
+        "policies/short-vol-fixed-public-shadow-radar.json": (
+            "2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
+        ),
+        "policies/short-vol-fixed-public-shadow-underwriting.json": (
+            "be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af"
+        ),
+        "policies/short-vol-fixed-public-shadow-position.json": (
+            "498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439"
+        ),
     }
-    fee_metadata = (
-        "TAKER",
-        "https://support.deribit.com/hc/en-us/articles/25944746248989-Fees",
-        "2026-07-30T10:47:09Z",
-        "FEE_TIER_CHANGES_EFFECTIVE_2026-08-01",
-        0.0003,
-    )
-    assert underwriting["policy_semantic_name"] == ("SHORT_VOL_PUBLIC_SHADOW_UNDERWRITING_POLICY")
-    assert underwriting["radar_policy_identity"] == (
-        "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
-    )
-    assert position["policy_semantic_name"] == "SHORT_VOL_PUBLIC_SHADOW_POSITION_POLICY"
-    assert position["underwriting_policy_identity"] == (
-        f"sha256:{hashlib.sha256(underwriting_bytes).hexdigest()}"
-    )
-    assert (
-        underwriting["target_base_quantity_btc"]
-        == radar["target_base_quantity_btc"]
-        == (position["target_base_quantity_btc"])
-    )
-    for key, value in expected_budgets.items():
-        assert underwriting[key] == position[key] == value
-        assert type(underwriting[key]) is int
-        assert type(position[key]) is int
-    for policy in (underwriting, position):
-        assert (
-            policy["fee_role"],
-            policy["fee_schedule_source_url"],
-            policy["fee_schedule_retrieved_at_utc"],
-            policy["fee_schedule_effective_label"],
-            policy["fee_rate_index_fraction"],
-        ) == fee_metadata
-        for key, value in policy.items():
-            if key not in {
-                "policy_semantic_name",
-                "radar_policy_identity",
-                "underwriting_policy_identity",
-                "fee_role",
-                "fee_schedule_source_url",
-                "fee_schedule_retrieved_at_utc",
-                "fee_schedule_effective_label",
-            }:
-                assert type(value) in {int, float}
-
-    assert tuple(
-        underwriting[key]
-        for key in (
-            "path_risk_reserve_usdc",
-            "jump_risk_reserve_usdc",
-            "tail_risk_reserve_usdc",
-            "liquidity_cost_reserve_usdc",
-            "uncertainty_reserve_usdc",
-            "settlement_cost_reserve_usdc",
-        )
-    ) == (2, 2, 2, 2, 2, 2)
-    assert underwriting["maximum_underwriting_reserved_loss_usdc"] == 250
-    assert underwriting["minimum_net_entry_credit_usdc"] == 15
-    assert underwriting["minimum_net_credit_to_payoff_cap_fraction"] == 0.1
-    assert underwriting["maximum_entry_consumed_level_count"] == 10000
-    assert position["latest_exit_lead_ms"] == 1800000
-    assert position["maximum_projected_net_loss_usdc"] == 125
-    assert position["maximum_absolute_short_delta"] == 0.5
-    assert position["maximum_absolute_index_return_since_entry_fraction"] == 0.05
-    assert position["maximum_absolute_index_return_since_prior_evaluation_fraction"] == 0.01
-    assert position["maximum_short_mark_iv_increase_fraction"] == 0.15
-    assert position["maximum_close_consumed_level_count"] == 10000
-    assert position["minimum_take_profit_usdc"] == 10
-    assert position["maximum_remaining_premium_fraction"] == 0.5
-
-    for label in (
-        "POLICY_CHOICE_WITHOUT_PRIOR_OUTCOME_EVIDENCE",
-        "NON_QUALIFIED_FORWARD_OBSERVATION_BASELINE",
-    ):
-        assert all(label.encode("utf-8") not in path.read_bytes() for path in policy_paths)
-
-    underwriting_contract = ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md"
-    outcome_contract = ROOT / "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md"
-    assert hashlib.sha256(underwriting_contract.read_bytes()).hexdigest() == (
-        declared_contract_digests[0].removeprefix("sha256:")
-    )
-    assert hashlib.sha256(outcome_contract.read_bytes()).hexdigest() == (
-        declared_contract_digests[1].removeprefix("sha256:")
-    )
+    for relative, digest in expected.items():
+        path = ROOT / relative
+        raw = path.read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == digest
+        parsed = json.loads(raw)
+        assert raw == json.dumps(parsed, ensure_ascii=False, indent=2).encode() + b"\n"
 
 
-def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
-    task_paths = tuple(path for path in (ROOT / "tasks").glob("*.md") if path.name != "TEMPLATE.md")
-    assert len(task_paths) <= 1, f"multiple task files: {[path.name for path in task_paths]}"
-    active = tuple(
-        path
-        for path in task_paths
-        if "**Status:** ACTIVE" in "\n".join(path.read_text(encoding="utf-8").splitlines()[:8])
+def test_markdown_contract_bytes_are_not_runtime_identity_authority() -> None:
+    all_authority = "\n".join(
+        path.read_text(encoding="utf-8") for path in (*AUTHORITY_FILES, *IMPLEMENTATION_CONTRACTS)
     )
-
-    assert len(active) <= 1, f"multiple active tasks: {[path.name for path in active]}"
-    assert all(
-        "**Status:** COMPLETE" not in path.read_text(encoding="utf-8") for path in task_paths
-    )
-    for path in active:
-        text = path.read_text(encoding="utf-8")
-        task_kind_matches = re.findall(
-            r"^\*\*Task kind:\*\* (AUTHORITY_ONLY|IMPLEMENTATION|EVIDENCE_ONLY)$",
-            text,
-            flags=re.MULTILINE,
-        )
-        assert len(task_kind_matches) == 1, f"invalid or missing task kind in {path}"
-        task_kind = task_kind_matches[0]
-        if task_kind == "AUTHORITY_ONLY":
-            assert "**Runtime implementation:** FORBIDDEN" in text
-            assert "**Live commands:** FORBIDDEN" in text
-        elif task_kind == "IMPLEMENTATION":
-            assert "**Runtime implementation:** REQUIRED" in text
-            assert "**Live commands:** FORBIDDEN" in text
-        else:
-            assert "**Runtime implementation:** FORBIDDEN" in text
-            assert "**Live commands:** REQUIRED" in text
-        for declaration in (
-            "**Market/Decision input contract change:**",
-            "**Decision Policy change:**",
-            "**Outcome/evaluation contract change:**",
-            "**Stage/authorization change:**",
-        ):
-            assert declaration in text, f"missing {declaration} in {path}"
+    assert "Markdown contract bytes are not runtime business identities" in all_authority
+    assert "ContractContentDigest" not in all_authority
+    assert "OutcomeContractContentDigest" not in all_authority

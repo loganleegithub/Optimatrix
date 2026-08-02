@@ -8,76 +8,68 @@
 
 **Live commands:** REQUIRED | FORBIDDEN | NOT_APPLICABLE
 
-**Product/stage:**
-[`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md) /
-[`CURRENT_STAGE`](../docs/authority/CURRENT_STAGE.md)
-
-**Implementation contract(s):** exact link(s) | `NOT_APPLICABLE`
-
 **Base commit:** exact SHA
 
-**Target branch/PR:** exact branch and PR | `NOT_APPLICABLE`
+**Target branch/PR:** exact branch and PR
+
+**Owning authority/contract:** exact link(s)
+
+## Product movement
+
+**Current funnel node:** exact node
+
+**Baseline:** exact numerator, denominator, and unit
+
+**Primary blocker:** exact measured reason or `NOT_YET_MEASURED`
+
+**Expected user-visible delta:** exact change
+
+**Durable-data effect:** `NONE` or exact Shadow Case record change
+
+**Complexity added:** exact modules/protocols/dependencies, or `NONE`
+
+**Complexity deleted:** exact obsolete surface, or `NONE`
 
 ## Business closure
 
-**Given:** one observable precondition.
+**Given:** one observable prerequisite.
 
-**When:** one bounded authorized behavior or authority change occurs.
+**When:** one bounded behavior or authority change occurs.
 
-**Then:** one observable result or durable business object exists.
+**Then:** one observable product result exists.
 
-**Verification:** the cheapest independent path that can falsify this assertion.
+**Valid zero/UNKNOWN:** exact truthful result and whether it satisfies this closure.
 
-**Valid zero/no-hit/UNKNOWN result:** exact behavior and whether it satisfies the assertion.
-
-**Upstream prerequisite:** the smallest independently falsifiable required capability.
+**Cheapest falsification:** direct test, bounded observation, or other minimal check.
 
 ## Change declarations
 
-Declare each axis as `NONE` or name the exact approved semantic delta.
+**Market/Decision input contract change:** NONE | exact approved delta
 
-**Market/Decision input contract change:** NONE
+**Decision Policy change:** NONE | exact approved delta
 
-**Decision Policy change:** NONE
+**Outcome/evaluation contract change:** NONE | exact approved delta
 
-**Outcome/evaluation contract change:** NONE
-
-**Stage/authorization change:** NONE
-
-## Product operating behavior
-
-State the current source, bounded state, trigger, unchanged-state behavior, durable output, and
-downstream handoff. Keep observed, counterfactual, and actual execution states separate.
+**Stage/authorization change:** NONE | exact approved delta
 
 ## Scope
 
-**In:** ...
+**In:** exact files and behaviors
 
-**Out:** ...
+**Out:** exact forbidden changes
 
-**Owning module/artifact:** ...
+**Owning module:** exact owner
 
-## Validation harness
+## Validation
 
-Name only the direct tests or observations required by the closure. Validation duration and files
-do not become product cadence or business identity.
-
-## Evidence boundary
-
-**Proves:** ...
-
-**Does not prove:** ...
-
-## Acceptance
-
-- Focused tests: ...
-- Repository gate: `make check` | exact applicable gate
-- Public observation: exact command | `NOT_APPLICABLE`
-- Required artifacts/digests: ... | `NOT_APPLICABLE`
-- Honest zero/no-hit/UNKNOWN and non-claims are reported.
+- focused tests: exact command;
+- repository gate: `make check` or exact applicable gate;
+- public observation: exact command or `NOT_APPLICABLE`;
+- no manifest, receipt, commissioning, or broad evidence package unless the owning stage is
+  qualification, promotion, or execution.
 
 ## Definition of done
 
-The closure exists, all four declarations match authority, required checks pass, the diff contains
-only this closure, remote state is reported when changed, and no permission is inferred from tests
-or a commit.
+The declared user-visible or funnel delta exists, required checks pass, the diff is bounded, no
+pre-Shadow durable record was introduced, complexity is proportional to the product value, and
+remote state is reported accurately. Tests alone do not satisfy the task.
