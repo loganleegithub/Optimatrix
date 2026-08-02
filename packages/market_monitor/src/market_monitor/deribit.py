@@ -102,13 +102,6 @@ class CatalogBootstrap:
         self.source_complete = False
         self.complete = False
 
-    def invalidate(self) -> None:
-        self.lifecycle_acknowledged = False
-        self.buffering = False
-        self.complete = False
-        self.source_complete = False
-        self.buffered_events.clear()
-
 
 @dataclass
 class PlatformReadiness:

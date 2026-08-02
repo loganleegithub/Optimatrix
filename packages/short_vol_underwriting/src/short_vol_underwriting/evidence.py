@@ -77,11 +77,17 @@ class DownstreamEvidenceWriter:
         self.objects_directory = directory / "objects"
         self.objects_directory.mkdir(exist_ok=True)
         self._objects: dict[tuple[str, str], dict[str, object]] = {}
+        self._object_snapshot: tuple[Mapping[str, object], ...] | None = ()
         self._revision = 0
 
     @property
     def objects(self) -> tuple[Mapping[str, object], ...]:
-        return tuple(self._objects[key] for key in sorted(self._objects))
+        if self._object_snapshot is None:
+            self._object_snapshot = tuple(self._objects[key] for key in sorted(self._objects))
+        return self._object_snapshot
+
+    def get_object(self, object_kind: str, object_identity: str) -> Mapping[str, object] | None:
+        return self._objects.get((object_kind, object_identity))
 
     @property
     def revision(self) -> int:
@@ -110,6 +116,7 @@ class DownstreamEvidenceWriter:
         self._objects[key] = value
         if previous != value:
             self._revision += 1
+            self._object_snapshot = None
         return published
 
 

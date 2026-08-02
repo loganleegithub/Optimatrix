@@ -524,7 +524,7 @@ def test_canonical_identity_matches_all_normative_vectors() -> None:
     )
 
 
-def test_exact_policy_chain_loads_before_runtime_and_has_no_fourth_policy() -> None:
+def test_exact_policy_chain_loads_before_runtime() -> None:
     chain = load_policy_chain(
         radar_path=ROOT / "policies/short-vol-fixed-public-shadow-radar.json",
         underwriting_path=ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json",
@@ -543,8 +543,6 @@ def test_exact_policy_chain_loads_before_runtime_and_has_no_fourth_policy() -> N
     assert chain.underwriting.future_cost_reserve_usdc == Decimal("12")
     assert chain.position.latest_exit_lead_ms == 1_800_000
     assert chain.position.underwriting_policy_identity == UNDERWRITING_POLICY_IDENTITY
-    assert not hasattr(chain, "admission")
-    assert not hasattr(chain, "outcome")
 
 
 def test_policy_loader_rejects_unknown_member_and_cross_identity(tmp_path: Path) -> None:
@@ -3060,6 +3058,9 @@ def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_p
     )
     assert path is not None
     assert writer.revision == 1
+    first_snapshot = writer.objects
+    assert writer.objects is first_snapshot
+    assert writer.get_object("CANDIDATE_INVALIDATION", identity) is first_snapshot[0]
     assert (
         writer.write(
             object_kind="CANDIDATE_INVALIDATION",
@@ -3070,6 +3071,7 @@ def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_p
         is None
     )
     assert writer.revision == 1
+    assert writer.objects is first_snapshot
 
     objects = _written_objects(tmp_path, bindings=bindings)
     assert tuple(objects) == (identity,)
@@ -3107,6 +3109,7 @@ def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_p
     )
     assert attempt_path is not None
     assert writer.revision == 2
+    assert writer.objects is not first_snapshot
     assert attempt.scheduled_identity in _written_objects(tmp_path, bindings=bindings)
 
 

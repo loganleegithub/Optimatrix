@@ -1941,27 +1941,6 @@ class WorkbenchRequestHandler(BaseHTTPRequestHandler):
     def do_HEAD(self) -> None:
         self._serve(head=True)
 
-    def do_POST(self) -> None:
-        self._method_not_allowed()
-
-    def do_PUT(self) -> None:
-        self._method_not_allowed()
-
-    def do_PATCH(self) -> None:
-        self._method_not_allowed()
-
-    def do_DELETE(self) -> None:
-        self._method_not_allowed()
-
-    def do_OPTIONS(self) -> None:
-        self._method_not_allowed()
-
-    def do_CONNECT(self) -> None:
-        self._method_not_allowed()
-
-    def do_TRACE(self) -> None:
-        self._method_not_allowed()
-
     def log_message(self, format: str, *args: object) -> None:
         del format, args
 

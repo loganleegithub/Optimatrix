@@ -54,7 +54,6 @@ TEMPORARILY_UNAVAILABLE_INSTRUMENT_STATES = frozenset(
 class Applicability(StrEnum):
     APPLICABLE = "APPLICABLE"
     OUT_OF_MONITOR_SCOPE = "OUT_OF_MONITOR_SCOPE"
-    OUT_OF_BASELINE_SCOPE = "OUT_OF_BASELINE_SCOPE"
     TIME_BOUNDARY_UNKNOWN = "TIME_BOUNDARY_UNKNOWN"
 
 
@@ -92,19 +91,6 @@ class ComboInstrument:
 
 
 def parse_option_instrument(payload: object) -> OptionInstrument | None:
-    return _parse_option_instrument(payload, include_final_lifecycle=False)
-
-
-def parse_option_instrument_fact(payload: object) -> OptionInstrument | None:
-    """Parse one immutable option fact, including natural terminal lifecycle witnesses."""
-    return _parse_option_instrument(payload, include_final_lifecycle=True)
-
-
-def _parse_option_instrument(
-    payload: object,
-    *,
-    include_final_lifecycle: bool,
-) -> OptionInstrument | None:
     data = require_mapping(payload, "instrument")
     product_fields = {
         "kind": require_str(data.get("kind"), "instrument.kind"),
@@ -135,7 +121,7 @@ def _parse_option_instrument(
         state = InstrumentLifecycleState(state_raw)
     except ValueError as exc:
         raise SourceDataError("instrument.state is unsupported") from exc
-    if state.value in FINAL_INSTRUMENT_LIFECYCLE_STATES and not include_final_lifecycle:
+    if state.value in FINAL_INSTRUMENT_LIFECYCLE_STATES:
         return None
     option_type_raw = require_str(data.get("option_type"), "instrument.option_type")
     try:
@@ -267,20 +253,5 @@ def monitor_applicability(
     if upper_tte <= 0 or lower_tte > MAX_TTE_MS:
         return Applicability.OUT_OF_MONITOR_SCOPE
     if lower_tte <= 0 or upper_tte > MAX_TTE_MS:
-        return Applicability.TIME_BOUNDARY_UNKNOWN
-    return Applicability.APPLICABLE
-
-
-def detector_window_applicability(
-    expiration_timestamp_ms: int, trusted_time: TimeInterval
-) -> Applicability:
-    monitor = monitor_applicability(expiration_timestamp_ms, trusted_time)
-    if monitor is not Applicability.APPLICABLE:
-        return monitor
-    lower_tte = expiration_timestamp_ms - trusted_time.upper_ms
-    upper_tte = expiration_timestamp_ms - trusted_time.lower_ms
-    if upper_tte <= SETTLEMENT_WINDOW_MS:
-        return Applicability.OUT_OF_BASELINE_SCOPE
-    if lower_tte <= SETTLEMENT_WINDOW_MS:
         return Applicability.TIME_BOUNDARY_UNKNOWN
     return Applicability.APPLICABLE

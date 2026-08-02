@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from market_monitor import (
+    BaselinePublicationPhase,
     BookState,
     ContinuityGap,
     ContinuousOrderBook,
@@ -1259,12 +1260,6 @@ class RadarReducer:
         if self._runtime_barrier_frontier not in {None, frontier}:
             raise ValueError("runtime barrier frontier is immutable")
         self._runtime_barrier_frontier = frontier
-
-    def begin_clean_stop(self) -> None:
-        self.begin_runtime_barrier(
-            max(0, self._last_boundary_monotonic_ms),
-            terminal=True,
-        )
 
     def settle_barrier_deadlines(self, barrier_monotonic_ms: int) -> None:
         if not self._outbound_barrier_open:
@@ -4002,8 +3997,14 @@ class RadarReducer:
                     self.policy.runtime_limits.index_source_stale_deadline_ms
                 ),
             )
+            tail_state = tail.availability.value
+            if (
+                tail.availability is IndexAvailabilityState.AVAILABLE
+                and tail.publication_phase is not BaselinePublicationPhase.CURRENT
+            ):
+                tail_state = tail.publication_phase.value
             tail_identity = (
-                tail.status.value,
+                tail_state,
                 tuple((close.minute_start_ms, close.causal_seq) for close in tail.closes),
             )
         return (
@@ -6507,9 +6508,6 @@ class LiveRadarRuntime:
 
     def prepare_reconnect(self, reason: str) -> None:
         self.reducer.prepare_reconnect(reason)
-
-    async def _clean_stop(self, _client: PublicClient | None = None) -> Path:
-        return self.reducer.clean_stop(_monotonic_ms())
 
 
 def _merge_causal_scopes(*scope_groups: tuple[str, ...]) -> tuple[str, ...]:

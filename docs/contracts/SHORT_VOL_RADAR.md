@@ -605,21 +605,10 @@ WATERMARK_PENDING
 ```
 
 A newly started generation with no proven history is bootstrap `WARMUP`, not `CONTINUITY_GAP`.
-
-`IndexTailStatus` and `IndexBaselineState.status` remain current production Python projections.
-When a requested baseline is unavailable, `status` projects its per-return-count availability;
-when it is available, `status` projects `AVAILABLE | TIME_BOUNDARY_PENDING |
-WATERMARK_PENDING` from the independent publication phase. This compatibility projection does not
-make publication pending a coverage blocker or collapse the two normative axes.
-
-By contrast, `INDEX_TAIL_PENDING` was a repository-internal Python-only compatibility name. It is
-not serialized. Current coverage rejects
-`INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING` as blockers; publication pending lives
-only in `index_baseline_publication`. The current contract does not require a Python tracker,
-disposition, or other runtime state named `INDEX_TAIL_PENDING`. For one accepted index generation
-and global continuity epoch, the
-publication tracker is inactive until trusted clock, accepted watermark, and at least one
-immutable published close exist. Thereafter it observes only the immediate successor:
+Availability and publication phase remain separate runtime fields. Normal publication pending is
+not a coverage blocker or detector state. For one accepted index generation and global continuity
+epoch, the publication tracker is inactive until trusted clock, accepted watermark, and at least
+one immutable published close exist. Thereafter it observes only the immediate successor:
 `published = tail.last_start`, `target = published + 60_000`, and
 `target_end = target + 60_000`.
 
@@ -834,11 +823,6 @@ BAND_SUSPENDED
           trusted time straddles a Policy boundary while market-source continuity remains known
 ```
 
-The removed `INDEX_TAIL_PENDING` enum/disposition was Python-only compatibility surface, not a
-serialized tracker field. The current runtime never
-enters an `INDEX_TAIL_PENDING` tracker state, and generation-global publication pending is
-diagnostic only.
-
 ```text
 activation observation: iv_richness_ratio >= activation_ratio
 clear observation:      iv_richness_ratio <= clear_ratio
@@ -911,10 +895,8 @@ same-option-type band requires fresh activation. A distinct episode is attribute
 which it activated; per-band evaluation counts use the band active at each known evaluation. No
 suspended interval is counted as known-active time.
 
-Current normal index publication pending never enters the removed Python-only
-`INDEX_TAIL_PENDING` compatibility state and never resets activation or clear counts. The
-coverage projection rejects `INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING` as
-blockers; publication timing is represented only by `index_baseline_publication`.
+Normal index publication pending never resets activation or clear counts and is represented only
+by `index_baseline_publication`.
 `WARMUP`, `WINDOW_GAP`, `SOURCE_STALE`, and `CONTINUITY_GAP` remain fail-closed exactly as the
 availability table specifies.
 
@@ -1159,15 +1141,14 @@ committed current truth, never only from the newest causal effect. Segment ident
 `state + blocking_groups + global_continuity_epoch`: a change in any member splits at that
 boundary; a fact that leaves all three unchanged does not split merely to log activity.
 
-### Writer and compatibility
+### Writer
 
 `radar_runtime` is the only writer. Typed runtime projections construct the three current object
 kinds; persistence binds the run identities and serializes them without a repository reader or
 second schema/relationship pass. Required business fields may not be silently null.
 
-Every object binds exactly one Policy and runtime identity. Mixed identities fail closed. Deleted
-diagnostic summaries are unsupported and `NOT_COMPARABLE`; there is no migration or compatibility
-path. The Policy schema remains version 3, and anomaly/atomic event semantics are unchanged.
+Every object binds exactly one Policy and runtime identity. Mixed identities fail closed. The
+Policy schema remains version 3, and anomaly/atomic event semantics are unchanged.
 
 Ordinary market facts, `NO_ANOMALY`, theoretical structures, unmatched combos, and full chain
 state are transient. The objects do not contain the full option chain and cannot reconstruct the

@@ -13,11 +13,9 @@ from options_domain import (
     InstrumentLifecycleState,
     OptionType,
     check_target_amount,
-    detector_window_applicability,
     monitor_applicability,
     parse_combo_instrument,
     parse_option_instrument,
-    parse_option_instrument_fact,
 )
 from options_domain.quotes import walk_target_depth
 
@@ -134,30 +132,6 @@ def test_option_parser_excludes_final_lifecycle_states(
     assert parse_option_instrument(payload) is None
 
 
-@pytest.mark.parametrize(
-    "state",
-    [
-        InstrumentLifecycleState.DELIVERED,
-        InstrumentLifecycleState.ARCHIVIZED,
-    ],
-)
-def test_downstream_option_fact_parser_preserves_natural_terminal_witness(
-    option_payload_factory: OptionPayloadFactory,
-    state: InstrumentLifecycleState,
-) -> None:
-    payload = option_payload_factory()
-    payload["state"] = state.value
-    payload["is_active"] = False
-    payload["taker_commission"] = "0.0003"
-
-    witness = parse_option_instrument_fact(payload)
-
-    assert witness is not None
-    assert witness.lifecycle_state is state
-    assert not witness.is_active
-    assert witness.taker_commission == Decimal("0.0003")
-
-
 def test_option_parser_rejects_unknown_lifecycle_state(
     option_payload_factory: OptionPayloadFactory,
 ) -> None:
@@ -224,32 +198,6 @@ def test_monitor_tte_boundaries(lower: int, upper: int, expected: Applicability)
     expiry = 1_000
     trusted = TimeInterval(expiry + lower, expiry + upper)
     assert monitor_applicability(expiry, trusted) is expected
-
-
-def test_detector_final_delivery_window_is_explicitly_out_of_scope() -> None:
-    expiry = 10_000_000
-    thirty_minutes = 30 * 60 * 1_000
-    assert (
-        detector_window_applicability(
-            expiry,
-            TimeInterval(expiry - thirty_minutes, expiry - thirty_minutes),
-        )
-        is Applicability.OUT_OF_BASELINE_SCOPE
-    )
-    assert (
-        detector_window_applicability(
-            expiry,
-            TimeInterval(expiry - thirty_minutes - 1, expiry - thirty_minutes - 1),
-        )
-        is Applicability.APPLICABLE
-    )
-    assert (
-        detector_window_applicability(
-            expiry,
-            TimeInterval(expiry - thirty_minutes - 1, expiry - thirty_minutes + 1),
-        )
-        is Applicability.TIME_BOUNDARY_UNKNOWN
-    )
 
 
 def test_target_amount_uses_minimum_and_optional_published_grid_without_rounding() -> None:

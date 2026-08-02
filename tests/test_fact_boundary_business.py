@@ -2407,11 +2407,6 @@ def test_causal_commit_is_explicit_frozen_and_whitelisted() -> None:
     assert commit.cause is CausalCause.TICKER_APPLIED
     assert commit.failure_domain is FailureScope.OPTION
     assert commit.affected_scopes == ("OPTION:SHORT",)
-    assert not hasattr(commit, "source_currentness_causes")
-    assert not hasattr(RadarReducer, "_coverage_affected_scopes")
-    assert hasattr(RadarReducer, "_option_local_coverage_scopes")
-    assert not hasattr(runtime_module, "_current_for_index_tail")
-    assert not hasattr(runtime_module, "_index_tail_reason")
     with pytest.raises(FrozenInstanceError):
         commit.affected_scopes = ("GLOBAL",)  # type: ignore[misc]
     with pytest.raises((TypeError, ValueError), match="cause"):
@@ -3144,7 +3139,6 @@ def test_runtime_writer_validates_activation_then_later_atomic_combo_boundary(
     )
     reducer.clean_stop(1_200)
 
-    assert not hasattr(reducer, "_last_detector_causal_seq")
     objects = [json.loads(path.read_text()) for path in tmp_path.glob("*.json")]
     anomaly = next(item for item in objects if item["object_kind"] == "SHORT_VOL_ANOMALY_EVENT")
     atomic = next(item for item in objects if item["object_kind"] == "PUBLIC_ATOMIC_QUOTE_EVENT")

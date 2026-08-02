@@ -29,10 +29,8 @@ Monitor and Short Vol Radar flow. There is no capture job followed by a scan job
 that repeatedly rereads an unchanged local dataset. The downstream owners run in the same process.
 Production-public invocation and deployment authority comes only from `CURRENT_STAGE`.
 
-No runtime is currently deployed and no historical online result is accepted. The merged offline
-implementation removed the obsolete commissioning controller and service-level evidence ledger;
-it changes no market/Decision semantics, business owner, Policy, Workbench schema, or deployment
-permission.
+No runtime is currently deployed and no production result is accepted.
+
 ## Data lifecycles
 
 ### Transient live state
@@ -293,10 +291,8 @@ or connect to Deribit. There is no timer, thread, queue, partial-update protocol
 publication record.
 
 The service persists only Radar and downstream business objects. Lifecycle phase, health,
-readiness, and currentness are non-durable Workbench state. There is no service terminal manifest,
-inventory hash, lifecycle receipt, repository reader, schema mirror, provenance envelope, or
-relationship graph around the business writers. Typed owners calculate each business object once;
-writers normalize and publish that completed object.
+readiness, and currentness are non-durable Workbench state. Typed owners calculate each business
+object once; writers normalize and publish that completed object.
 
 The loopback server exposes only static assets, immutable snapshot JSON, health, and readiness over
 GET/HEAD. Other methods are 405. It has no Policy mutation, account, credential, order, fill, or
@@ -447,9 +443,9 @@ but a pair is economically comparable only when its trade arm is `MATURE_KNOWN`.
 censored trade arms cannot enter the comparison denominator.
 
 The `short_vol_underwriting` owner writes these objects to one downstream business-record directory
-separate from Radar records. Neither path has a repository reader or parallel schema layer.
-The runtime continues to maintain bounded current public state for open observations after the
-Radar episode ends; this is not full-market persistence, replay, or a workflow service.
+separate from Radar records. The runtime continues to maintain bounded current public state for
+open observations after the Radar episode ends; this is not full-market persistence, replay, or a
+workflow service.
 
 ## Denominator model
 

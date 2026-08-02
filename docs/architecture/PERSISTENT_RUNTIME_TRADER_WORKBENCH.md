@@ -11,9 +11,8 @@ Deribit public WebSocket
   → loopback GET/HEAD HTTP
 ```
 
-This is one process and one event-driven business path. There is no commissioning controller,
-service-evidence ledger, database, broker, scheduler, replay job, second reducer, browser strategy
-engine, or private execution surface.
+This is one process and one event-driven business path. Operations and private execution are
+outside the application.
 
 ## Startup and lifecycle
 
@@ -52,6 +51,5 @@ entries remain explicitly not orders, fills, actual positions, or actual PnL.
 
 ## Operations boundary
 
-Process restart and host CPU/memory monitoring belong to a standard external supervisor. The
-Python application never calls launchd, `lsof`, or operating-system log tools and contains no
-24-hour acceptance controller. Deployment remains separately authorized by `CURRENT_STAGE`.
+Process restart and host CPU/memory monitoring belong to an external supervisor. Deployment
+remains separately authorized by `CURRENT_STAGE`.

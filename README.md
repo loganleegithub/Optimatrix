@@ -11,20 +11,13 @@ market ingestion, Radar, fixed-contract Underwriting, Shadow admission, Position
 Outcome projection, and a loopback GET/HEAD-only Workbench.
 
 No production result is currently accepted. The prior online observation was stopped, its Radar
-outputs were rejected as unreliable, and its runtime/evidence history is no longer an input to
-current authority. There is no deployed process, launchd service, loopback listener, 24-hour claim,
-private/account access, order, fill, actual position, or PnL authority.
+outputs were rejected as unreliable, and no service is deployed. Private/account access, orders,
+fills, actual positions, and PnL remain outside the current permission boundary.
 
 The current offline runtime keeps the complete Radar-to-Outcome transaction, reconnect loop,
 signal stop, minimal business persistence, coalesced Workbench publication, health/readiness, and
-loopback-only HTTP. It has no commissioning controller, acceptance harness, service evidence
-ledger, compatibility reader, or duplicate persistence schema/provenance layer. Live commands
-remain forbidden.
-
-The application no longer runs `launchd`, `lsof`, unified-log, resource probes, 24-hour acceptance,
-service-manifest, inventory-hash, or lifecycle-receipt logic. Process supervision and host resource
-monitoring belong outside Python. Passing tests prove the simplified offline composition only;
-they do not accept the Radar, deployment, uptime, or strategy value.
+loopback-only HTTP. Process supervision and host resource monitoring stay outside the application.
+Live commands remain forbidden; tests prove offline behavior only.
 
 Typed owners calculate business state once. Persistence normalizes and serializes those completed
 objects without re-validating them through a second schema or relationship graph; the Workbench
@@ -103,8 +96,6 @@ contract owns the offline service boundary and immutable read-only Workbench pro
   current business-object owner
 - `radar_runtime`: guarded composition of the continuous production-public process
 
-There is no compatibility package, commissioning controller, or service-evidence ledger.
-
 The current bounded runtime separates per-band immutable index-baseline availability from
 generation-global successor publication. Normal time/watermark publication pending keeps an
 already proven `N + 1` close tuple available and does not pause detector episodes, Layer 2, known
@@ -124,4 +115,4 @@ make check
 `serve-shadow` is the sole product command. `CURRENT_STAGE` forbids live commands and deployment.
 Every private, account, order, fill, and
 capital surface remains forbidden. Any future production-public validation requires a new explicit
-task and fresh evidence boundary; no deleted history may be reused as acceptance.
+task and fresh evidence boundary.

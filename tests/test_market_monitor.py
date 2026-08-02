@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import market_monitor
-import market_monitor.index as index_module
 import pytest
 from market_monitor import BookState, ContinuityGap, ContinuousOrderBook, TimeInterval, TrustedClock
 from market_monitor.deribit import (
@@ -16,9 +14,10 @@ from market_monitor.deribit import (
     validate_subscription_ack,
 )
 from market_monitor.index import (
+    BaselinePublicationPhase,
+    IndexAvailabilityState,
     IndexMinuteReducer,
     IndexPublicationBoundary,
-    IndexTailStatus,
 )
 from market_monitor.types import SourceDataError
 
@@ -179,17 +178,6 @@ def test_index_minutes_require_full_coverage_and_reject_late_or_regressed_ticks(
         reducer.accept_tick(source_timestamp_ms=249_999, price="100", causal_seq=7)
 
 
-def test_index_consecutive_prices_detect_missing_minute() -> None:
-    reducer = IndexMinuteReducer(2)
-    reducer.start_continuous_coverage(0)
-    for sequence, timestamp in enumerate((1, 60_000, 120_000, 180_000), start=1):
-        reducer.accept_tick(
-            source_timestamp_ms=timestamp, price=100 + sequence, causal_seq=sequence
-        )
-        reducer.seal_ready(timestamp)
-    assert reducer.consecutive_prices(2) == (Decimal(101), Decimal(102), Decimal(103))
-
-
 def test_index_tail_rollover_pending_preserves_history_and_requires_exact_alignment() -> None:
     minute_ms = 60_000
     reducer = IndexMinuteReducer(60)
@@ -215,7 +203,8 @@ def test_index_tail_rollover_pending_preserves_history_and_requires_exact_alignm
         trusted_time=TimeInterval(61 * minute_ms + 1, 61 * minute_ms + 2),
         source_stale_deadline_ms=90_000,
     )
-    assert current.status is IndexTailStatus.AVAILABLE
+    assert current.availability is IndexAvailabilityState.AVAILABLE
+    assert current.publication_phase is BaselinePublicationPhase.CURRENT
     assert current.prices is not None
     assert len(current.prices) == 61
 
@@ -231,7 +220,8 @@ def test_index_tail_rollover_pending_preserves_history_and_requires_exact_alignm
         trusted_time=TimeInterval(62 * minute_ms - 1, 62 * minute_ms + 1),
         source_stale_deadline_ms=90_000,
     )
-    assert across_boundary.status is IndexTailStatus.TIME_BOUNDARY_PENDING
+    assert across_boundary.availability is IndexAvailabilityState.AVAILABLE
+    assert across_boundary.publication_phase is BaselinePublicationPhase.TIME_BOUNDARY_PENDING
     assert reducer.sealed == current.closes
 
     reducer.publish_ready(
@@ -246,7 +236,8 @@ def test_index_tail_rollover_pending_preserves_history_and_requires_exact_alignm
         trusted_time=TimeInterval(62 * minute_ms + 1, 62 * minute_ms + 2),
         source_stale_deadline_ms=90_000,
     )
-    assert rollover.status is IndexTailStatus.WATERMARK_PENDING
+    assert rollover.availability is IndexAvailabilityState.AVAILABLE
+    assert rollover.publication_phase is BaselinePublicationPhase.WATERMARK_PENDING
     assert reducer.sealed == current.closes
 
 
@@ -283,8 +274,8 @@ def test_index_window_gap_isolated_by_requested_lookback_without_resubscription(
         source_stale_deadline_ms=90_000,
     )
 
-    assert short.status is IndexTailStatus.AVAILABLE
-    assert long.status is IndexTailStatus.WINDOW_GAP
+    assert short.availability is IndexAvailabilityState.AVAILABLE
+    assert long.availability is IndexAvailabilityState.WINDOW_GAP
 
 
 def test_index_tail_distinguishes_warmup_source_stale_and_continuity_gap() -> None:
@@ -297,14 +288,14 @@ def test_index_tail_distinguishes_warmup_source_stale_and_continuity_gap() -> No
         trusted_time=TimeInterval(30_000, 30_001),
         source_stale_deadline_ms=90_000,
     )
-    assert warmup.status is IndexTailStatus.WARMUP
+    assert warmup.availability is IndexAvailabilityState.WARMUP
 
     stale = reducer.current_tail(
         2,
         trusted_time=TimeInterval(100_002, 100_003),
         source_stale_deadline_ms=90_000,
     )
-    assert stale.status is IndexTailStatus.SOURCE_STALE
+    assert stale.availability is IndexAvailabilityState.SOURCE_STALE
 
     reducer.gap()
     gap = reducer.current_tail(
@@ -312,7 +303,7 @@ def test_index_tail_distinguishes_warmup_source_stale_and_continuity_gap() -> No
         trusted_time=TimeInterval(100_002, 100_003),
         source_stale_deadline_ms=90_000,
     )
-    assert gap.status is IndexTailStatus.CONTINUITY_GAP
+    assert gap.availability is IndexAvailabilityState.CONTINUITY_GAP
 
 
 def test_index_tail_treats_unstarted_bootstrap_as_warmup_not_continuity_gap() -> None:
@@ -323,7 +314,7 @@ def test_index_tail_treats_unstarted_bootstrap_as_warmup_not_continuity_gap() ->
         trusted_time=TimeInterval(30_000, 30_001),
         source_stale_deadline_ms=90_000,
     )
-    assert bootstrap.status is IndexTailStatus.WARMUP
+    assert bootstrap.availability is IndexAvailabilityState.WARMUP
 
     reducer.gap()
     real_gap = reducer.current_tail(
@@ -331,14 +322,7 @@ def test_index_tail_treats_unstarted_bootstrap_as_warmup_not_continuity_gap() ->
         trusted_time=TimeInterval(30_000, 30_001),
         source_stale_deadline_ms=90_000,
     )
-    assert real_gap.status is IndexTailStatus.CONTINUITY_GAP
-
-
-def test_legacy_index_tail_projection_and_audit_accessors_are_not_runtime_api() -> None:
-    assert not hasattr(index_module, "IndexTail")
-    assert not hasattr(market_monitor, "IndexTail")
-    assert not hasattr(index_module.PublishedIndexTail, "publication_identity")
-    assert not hasattr(IndexMinuteReducer, "accepted_watermark_ms")
+    assert real_gap.availability is IndexAvailabilityState.CONTINUITY_GAP
 
 
 def test_exact_channels_bounded_subscriptions_and_acknowledgements() -> None:

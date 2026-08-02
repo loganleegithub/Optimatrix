@@ -44,9 +44,7 @@ adjustment, watcher, or no-opportunity extension.
 5. stop on the first `SIGINT` or `SIGTERM` boundary;
 6. terminate downstream pending state on clean stop or fatal process failure.
 
-The host does not inspect macOS logs, execute `lsof`, manage launchd, probe itself, calculate CPU
-acceptance, write commissioning receipts, or decide whether a run has been online long enough.
-Those are external operational concerns.
+Process supervision and host resource monitoring are external operational concerns.
 
 ## Persistence
 
@@ -61,9 +59,8 @@ service lifecycle events, terminal manifests, file inventories, and service acce
 are not persisted.
 
 Typed domain owners determine payloads, identities, boundaries, and arithmetic before publication.
-Writers only bind the current runtime/Policy identities, normalize JSON, and publish immutable
-business records. There is no repository reader, duplicate schema table, provenance envelope,
-relationship-graph reconstruction, service-level reader, or hash ledger around them.
+Writers bind the current runtime/Policy identities, normalize JSON, and publish immutable business
+records.
 
 ## Lifecycle and currentness
 

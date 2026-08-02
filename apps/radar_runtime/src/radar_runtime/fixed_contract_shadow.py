@@ -123,6 +123,7 @@ class FixedContractShadowRuntimeAdapter:
         self._candidate_origins: dict[str, UnderwritingFacts] = {}
         self._anchors: dict[str, _Anchor] = {}
         self._anchors_by_observation: dict[str, _Anchor] = {}
+        self._anchor_writer_revision = 0
         self._requests: dict[int, _RequestContext] = {}
         self._last_reducer: RadarReducer | None = None
 
@@ -1388,15 +1389,11 @@ class FixedContractShadowRuntimeAdapter:
             for fact in facts
             if fact.active_episode_identity is not None and fact.short_leg_identity is not None
         }
-        candidate_payloads = {
-            str(value["object_identity"]): value["payload"]
-            for value in self.owner.writer.objects
-            if value["object_kind"] == "CANDIDATE_ACTIVATION"
-        }
         for emitted in transition.emitted:
             if emitted.object_kind != "CANDIDATE_ACTIVATION":
                 continue
-            payload = candidate_payloads.get(emitted.object_identity)
+            value = self.owner.writer.get_object(emitted.object_kind, emitted.object_identity)
+            payload = value.get("payload") if value is not None else None
             if isinstance(payload, Mapping):
                 slot = payload.get("underwriting_position_slot_key_identity")
                 if isinstance(slot, str) and slot in facts_by_slot:
@@ -1485,7 +1482,11 @@ class FixedContractShadowRuntimeAdapter:
         )
 
     def _discover_anchors(self) -> None:
-        for value in self.owner.writer.objects:
+        revision = self.owner.writer.revision
+        if revision == self._anchor_writer_revision:
+            return
+        objects = self.owner.writer.objects
+        for value in objects:
             kind = value["object_kind"]
             if kind not in {"SHADOW_ENTRY", "REJECTED_COUNTERFACTUAL_ANCHOR"}:
                 continue
@@ -1507,7 +1508,7 @@ class FixedContractShadowRuntimeAdapter:
                 entry_direction=str(payload["entry_direction"]),
                 target_quantity_btc=_decimal(payload["full_quantity_btc"]),
             )
-        for value in self.owner.writer.objects:
+        for value in objects:
             if value["object_kind"] not in {
                 "SHADOW_OUTCOME_OBSERVATION",
                 "REJECTED_COUNTERFACTUAL_OBSERVATION",
@@ -1524,6 +1525,7 @@ class FixedContractShadowRuntimeAdapter:
             anchor = self._anchors.get(str(payload[anchor_field]))
             if anchor is not None:
                 self._anchors_by_observation[str(value["object_identity"])] = anchor
+        self._anchor_writer_revision = revision
 
     def _anchor_for_owner_identity(self, owner_identity: str) -> _Anchor | None:
         return self._anchors.get(owner_identity) or self._anchors_by_observation.get(owner_identity)

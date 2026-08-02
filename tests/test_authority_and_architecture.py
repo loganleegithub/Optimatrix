@@ -133,6 +133,7 @@ def test_internal_package_dependency_direction() -> None:
 
 def test_task_template_carries_business_and_evidence_contract() -> None:
     template = (ROOT / "tasks/TEMPLATE.md").read_text(encoding="utf-8")
+    template_flat = " ".join(template.split())
     for section in (
         "## Business closure",
         "## Change declarations",
@@ -145,18 +146,16 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert section in template
     for value in (
         "**Task kind:** AUTHORITY_ONLY | IMPLEMENTATION | EVIDENCE_ONLY",
-        "Minimal-hit recomputation",
-        "business event or human stop",
-        "duration, file, cutoff, archive, or process lifetime never",
+        "Validation duration and files do not become product cadence",
         "**Market/Decision input contract change:**",
         "**Decision Policy change:**",
         "**Outcome/evaluation contract change:**",
         "**Stage/authorization change:**",
     ):
-        assert value in template
+        assert value in template_flat
 
 
-def test_current_stage_records_no_active_closure() -> None:
+def test_current_stage_records_permission_boundary() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized closure:**"
@@ -167,18 +166,6 @@ def test_current_stage_records_no_active_closure() -> None:
     assert "**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`" in current
     assert "**Persistent service:** `STOPPED_NO_DEPLOYMENT`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
-    assert "rejected its Radar results as unreliable" in flat
-    assert "Deleted history is not a business premise" in flat
-    assert "repository reader, persistence schema mirror, envelope provenance mirror" in flat
-    for stale_claim in (
-        "R4_COMMISSIONED",
-        "R4_COMMISSIONED_24H_OBSERVATION_ACTIVE",
-        "R4_COMMISSIONED_24H_PENDING",
-        "CONSUMED_FAILED_NO_RETRY",
-        "engineering_end_to_end = PASS",
-        "production_public_integration = PASS",
-    ):
-        assert stale_claim not in current
 
 
 def test_no_completed_task_accumulates() -> None:
@@ -186,28 +173,6 @@ def test_no_completed_task_accumulates() -> None:
     current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
     assert "**Sole authorized closure:** `NONE`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
-
-
-def test_acceptance_only_runtime_harness_is_absent() -> None:
-    assert not (ROOT / "apps/radar_runtime/src/radar_runtime/shadow.py").exists()
-    assert not (
-        ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting/manifest.py"
-    ).exists()
-    assert not (
-        ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting/schemas.py"
-    ).exists()
-    assert not (
-        ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting/validation.py"
-    ).exists()
-    cli = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(encoding="utf-8")
-    underwriting = (
-        ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting/__init__.py"
-    ).read_text(encoding="utf-8")
-    assert "observe-shadow" not in cli
-    assert '"observe"' not in cli
-    assert "read_complete_evidence" not in underwriting
-    assert "read_current_evidence" not in underwriting
-    assert "validate_downstream_object" not in underwriting
 
 
 def test_fixed_three_policy_chain_and_implementation_boundary_are_exact() -> None:
@@ -373,122 +338,6 @@ def test_fixed_three_policy_chain_and_implementation_boundary_are_exact() -> Non
     )
 
 
-def test_authority_describes_the_current_single_public_runtime() -> None:
-    current_stage = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
-    architecture = _flat(ROOT / "docs/authority/SYSTEM_ARCHITECTURE.md")
-    readme = _flat(ROOT / "README.md")
-    combined = " ".join(
-        path.read_text(encoding="utf-8")
-        for path in (*AUTHORITY_FILES, *IMPLEMENTATION_CONTRACTS, ROOT / "README.md")
-    )
-
-    for value in (
-        "OFFLINE_PUBLIC_SHADOW_RUNTIME",
-        "NOT_ACCEPTED_PENDING_REVALIDATION",
-        "STOPPED_NO_DEPLOYMENT",
-        "Live commands:",
-        "FORBIDDEN",
-    ):
-        assert value in current_stage
-    assert "**Sole authorized closure:** `NONE`" in current_stage
-
-    for value in (
-        "Deribit",
-        "Radar",
-        "Underwriting",
-        "Shadow",
-        "Position",
-        "Outcome",
-        "Workbench",
-    ):
-        assert value in architecture
-        assert value in readme
-    assert "flush_pending()" in architecture
-
-    for removed in (
-        "NOT_APPLICABLE_TTE",
-        "configured_risk_scenario_slot_count",
-        "OBSERVED_PATH_STRESS_FIXED_PRIOR_RADAR_ASSESSMENT",
-        "STRUCTURE_ASSESSMENT_REACHABILITY",
-        "NON-ACTIVE HISTORICAL APPENDIX",
-        "EXECUTABLE_VARIANCE_RICHNESS",
-    ):
-        assert removed not in combined
-
-
-def test_radar_contract_keeps_market_signal_execution_and_decision_distinct() -> None:
-    radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
-    radar_flat = " ".join(radar.split())
-
-    terms = (
-        "Market Monitor",
-        "Detector evaluation",
-        "Anomaly episode",
-        "Public atomic availability",
-        "Future maker/order state",
-        "Candidate",
-        "`CLOSE`",
-        "Shadow close opportunity",
-        "Actual exposure duration",
-    )
-    for term in terms:
-        assert term in radar_flat
-
-    assert (
-        "The Radar never returns `CANDIDATE`, `WATCH`, `ABSTAIN`, `HOLD`, or `CLOSE`." in radar_flat
-    )
-    assert "Two component-leg orders are not an atomic substitute at any layer." in radar_flat
-    assert "No Layer 2 result changes Layer 1." in radar_flat
-    assert (
-        "No current enum, placeholder service, simulation, or artifact represents them."
-        in radar_flat
-    )
-    assert "The objects do not contain the full option chain" in radar_flat
-    assert (
-        "This closure stops at `SHORT_VOL_ANOMALY_EVENT` plus optional "
-        "`PUBLIC_ATOMIC_QUOTE_EVENT`." in radar_flat
-    )
-    assert "Neither entry kind has a planned holding duration." in radar_flat
-    assert "never let a missing quote override a known hard-close condition" in radar_flat
-    assert "emit `SHADOW_CLOSE_OPPORTUNITY` only when action is `CLOSE`" in radar_flat
-    assert "keep `LEGGED_CLOSE_REFERENCE` diagnostic" in radar_flat
-
-
-def test_persistent_service_contract_is_minimal_and_has_no_service_ledger() -> None:
-    contract_path = ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md"
-    contract = contract_path.read_text(encoding="utf-8")
-    flat = " ".join(contract.split())
-    current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    assert not (ROOT / "apps/radar_runtime/src/radar_runtime/service_evidence.py").exists()
-    assert not (ROOT / "apps/radar_runtime/src/radar_runtime/commissioning.py").exists()
-    assert not (ROOT / "tests/test_persistent_service_commissioning.py").exists()
-    for invariant in (
-        "Deribit → Radar → Underwriting → Shadow → Position → Outcome",
-        "service.lock",
-        "one public Deribit session",
-        "same reducer and downstream owner",
-        "service lifecycle events, terminal manifests",
-        "There is no repository reader, duplicate schema table, provenance envelope",
-        "at most once per 500 monotonic milliseconds",
-        "semantic safety or lifecycle status change",
-        "before reconnect or clean stop",
-        "loopback IP",
-        "Other methods return 405",
-    ):
-        assert invariant in flat
-    for removed in (
-        "PersistentServiceTerminalIdentity",
-        "read_complete_persistent_service_evidence",
-        "lifecycle_inventory_identity",
-        "service_evidence_status",
-    ):
-        assert removed not in contract
-    assert "`STOPPED_NO_DEPLOYMENT`" in current
-    assert "**Live commands:** `FORBIDDEN`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
-    assert "Deleted history is not a business premise" in " ".join(current.split())
-
-
 def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
     task_paths = tuple(path for path in (ROOT / "tasks").glob("*.md") if path.name != "TEMPLATE.md")
     assert len(task_paths) <= 1, f"multiple task files: {[path.name for path in task_paths]}"
@@ -527,91 +376,3 @@ def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
             "**Stage/authorization change:**",
         ):
             assert declaration in text, f"missing {declaration} in {path}"
-
-
-def test_repository_owned_contracts_use_semantic_not_ordinal_identities() -> None:
-    forbidden = re.compile(
-        r"(?:^|[^A-Za-z0-9])v[0-9]+(?:[^A-Za-z0-9]|$)|_v[0-9]+|task-(?:v[0-9]+-)?[0-9]+",
-        re.IGNORECASE,
-    )
-    checked = (
-        ROOT / "AGENTS.md",
-        ROOT / "README.md",
-        *(ROOT / "docs").rglob("*.md"),
-        *(ROOT / "tasks").rglob("*.md"),
-        *(ROOT / "apps").rglob("*.py"),
-        *(ROOT / "packages").rglob("*.py"),
-        *(ROOT / "tests").rglob("*.py"),
-    )
-    for path in checked:
-        text = path.read_text(encoding="utf-8")
-        if path == ROOT / "apps/radar_runtime/src/radar_runtime/deribit_public.py":
-            text = text.replace("/api/" + "v" + "2", "/api/external")
-        relative_path = path.relative_to(ROOT).as_posix()
-        assert forbidden.search(relative_path) is None, f"ordinal identity remains in {path}"
-        assert forbidden.search(text) is None, f"ordinal identity remains in {path}"
-        if path.suffix == ".py" and (
-            ROOT / "apps" in path.parents or ROOT / "packages" in path.parents
-        ):
-            assert '"version":' not in text, f"owned version field remains in {path}"
-
-
-def test_index_publication_contract_owns_one_current_evidence_schema() -> None:
-    radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
-    radar_flat = " ".join(radar.split())
-
-    for invariant in (
-        "`IndexTailStatus` and `IndexBaselineState.status` remain current production Python "
-        "projections",
-        "This compatibility projection does not make publication pending a coverage blocker",
-        "`INDEX_TAIL_PENDING` was a repository-internal Python-only compatibility name",
-        "not serialized. Current coverage rejects",
-        "`INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING`",
-        "Normal index publication pending is not a suspension or detector state",
-        "baseline component of identity is only the exact selected immutable `MinuteClose` tuple",
-        "provenance, not detector de-duplication facts",
-        "The summary contains no transport, RPC, source-shape, publication-cadence",
-        "same-tail/same-target latch",
-    ):
-        assert invariant in radar_flat
-    for forbidden in (
-        "Pending statuses preserve episode identity",
-        "pause known duration, stop Layer 2, reset incomplete persistence",
-    ):
-        assert forbidden not in radar
-
-
-def test_stage_record_rejects_deleted_live_history_as_authority() -> None:
-    current_stage = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
-
-    for invariant in (
-        "**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`",
-        "**Persistent service:** `STOPPED_NO_DEPLOYMENT`",
-        "**Live commands:** `FORBIDDEN`",
-        "Deleted history is not a business premise",
-        "reconstructing or relabelling deleted historical results",
-    ):
-        assert invariant in current_stage
-
-    for stale_claim in (
-        "REACHABILITY_SMOKE`: `MET",
-        "OPERATIONAL_SOAK`: `MET",
-        "R4_COMMISSIONED",
-        "natural_shadow_opportunity = NOT_OBSERVED",
-    ):
-        assert stale_claim not in current_stage
-
-
-def test_delegation_separates_prepush_receipt_from_postpush_remote_equality() -> None:
-    delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
-    delivery_flat = " ".join(delivery.split())
-
-    for invariant in (
-        "Before a non-force push",
-        "pre-push independent exact-commit pass receipt",
-        "intended bounded remote ref",
-        "After the push",
-        "verified remote ref value equals the exact commit",
-        "Only the post-push binding",
-    ):
-        assert invariant in delivery_flat

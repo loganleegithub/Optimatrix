@@ -28,12 +28,9 @@ Policy quality, fillability, profitability, actual exposure, or PnL.
 
 ## Current implementation
 
-The completed offline simplification keeps `serve-shadow` as the sole complete product path: one
-public client, reducer, downstream owner, minimal business persistence, reconnect loop, signal
-stop, coalesced Workbench publisher, and loopback health/readiness HTTP. It has no Radar-only
-command, repository reader, persistence schema mirror, envelope provenance mirror, acceptance
-controller, or service evidence ledger. Typed owners remain the sole business calculators; writers
-only serialize their outputs.
+`serve-shadow` is the sole complete product path: one public client, reducer, downstream owner,
+minimal business persistence, reconnect loop, signal stop, coalesced Workbench publisher, and
+loopback health/readiness HTTP. Typed owners calculate business state; writers serialize it.
 It must preserve market/Decision inputs, all three Policies, Radar semantics, Underwriting,
 Shadow, Position, Outcome, causal order, honest `UNKNOWN`, conditioned zero claims, public/private
 separation, and GET/HEAD-only Workbench behavior.

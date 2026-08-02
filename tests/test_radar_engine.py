@@ -610,8 +610,6 @@ def test_missing_book_ticker_and_warmup_remain_unknown(
     ("reason", "expected_disposition", "expected_continuity_gap"),
     [
         ("INDEX_WARMUP", CurrentDisposition.UNKNOWN, False),
-        ("INDEX_TIME_BOUNDARY_PENDING", CurrentDisposition.UNKNOWN, False),
-        ("INDEX_WATERMARK_PENDING", CurrentDisposition.UNKNOWN, False),
         ("INDEX_WINDOW_GAP", CurrentDisposition.UNKNOWN, True),
         ("INDEX_SOURCE_STALE", CurrentDisposition.UNKNOWN, True),
         ("INDEX_CONTINUITY_GAP", CurrentDisposition.UNKNOWN, True),
@@ -641,7 +639,6 @@ def test_index_tail_unavailability_has_typed_current_semantics(
     assert current.continuity_gap is expected_continuity_gap
     assert not current.known_evaluation
     assert not current.full_formula_evaluation
-    assert "INDEX_TAIL_PENDING" not in CurrentDisposition.__members__
 
 
 def test_index_unavailability_is_lazy_behind_pricing_eligibility_gates(

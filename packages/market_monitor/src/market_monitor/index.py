@@ -53,18 +53,6 @@ class BaselinePublicationPhase(StrEnum):
     WATERMARK_PENDING = "WATERMARK_PENDING"
 
 
-class IndexTailStatus(StrEnum):
-    """Current projection of baseline availability and publication phase."""
-
-    AVAILABLE = "AVAILABLE"
-    WARMUP = "WARMUP"
-    TIME_BOUNDARY_PENDING = "TIME_BOUNDARY_PENDING"
-    WATERMARK_PENDING = "WATERMARK_PENDING"
-    WINDOW_GAP = "WINDOW_GAP"
-    SOURCE_STALE = "SOURCE_STALE"
-    CONTINUITY_GAP = "CONTINUITY_GAP"
-
-
 @dataclass(frozen=True)
 class PublishedIndexTail:
     generation: int
@@ -114,16 +102,6 @@ class IndexBaselineState:
         if self.availability is not IndexAvailabilityState.AVAILABLE:
             return None
         return tuple(close.price for close in self.closes)
-
-    @property
-    def status(self) -> IndexTailStatus:
-        if self.availability is not IndexAvailabilityState.AVAILABLE:
-            return IndexTailStatus(self.availability.value)
-        if self.publication_phase is BaselinePublicationPhase.TIME_BOUNDARY_PENDING:
-            return IndexTailStatus.TIME_BOUNDARY_PENDING
-        if self.publication_phase is BaselinePublicationPhase.WATERMARK_PENDING:
-            return IndexTailStatus.WATERMARK_PENDING
-        return IndexTailStatus.AVAILABLE
 
     @property
     def economic_identity(self) -> tuple[object, ...] | None:
@@ -262,18 +240,6 @@ class IndexMinuteReducer:
                 del self._sealed[: len(self._sealed) - self._maximum_close_count]
             newly_sealed.append(close)
         return tuple(newly_sealed)
-
-    def consecutive_prices(self, return_count: int) -> tuple[Decimal, ...] | None:
-        if return_count <= 0:
-            raise ValueError("return_count must be positive")
-        required_closes = return_count + 1
-        if len(self._sealed) < required_closes:
-            return None
-        closes = self._sealed[-required_closes:]
-        for earlier, later in pairwise(closes):
-            if later.minute_start_ms - earlier.minute_start_ms != MINUTE_MS:
-                return None
-        return tuple(close.price for close in closes)
 
     def publish_ready(
         self,

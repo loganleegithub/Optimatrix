@@ -9,7 +9,6 @@ from market_monitor.index import (
     IndexMinuteReducer,
     IndexPublicationBoundary,
     IndexPublicationUpdate,
-    IndexTailStatus,
     MinuteClose,
     PublishedIndexTail,
 )
@@ -25,7 +24,6 @@ __all__ = [
     "IndexMinuteReducer",
     "IndexPublicationBoundary",
     "IndexPublicationUpdate",
-    "IndexTailStatus",
     "MinuteClose",
     "PriceLevel",
     "PublishedIndexTail",

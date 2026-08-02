@@ -145,12 +145,6 @@ def test_adjacent_band_suspend_resume_preserves_episode_identity(
     assert tracker.episode_id == episode_id
 
 
-def test_index_tail_pending_is_not_a_tracker_runtime_state() -> None:
-    assert "INDEX_TAIL_PENDING" not in TrackerState.__members__
-    assert not hasattr(EpisodeTracker, "suspend_for_index_tail")
-    assert not hasattr(EpisodeTracker, "resume_after_index_tail")
-
-
 def test_interval_boundaries_fail_closed_instead_of_selecting_a_point(
     policy_factory: PolicyFactory,
 ) -> None:

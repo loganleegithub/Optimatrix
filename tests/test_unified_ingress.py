@@ -152,7 +152,7 @@ def test_reader_bounds_unrecognized_transport_attribution() -> None:
     assert "unbounded implementation detail" not in json.dumps(frame)
 
 
-def test_client_sends_without_response_future_or_client_subscription_generation() -> None:
+def test_client_sends_public_request() -> None:
     async def scenario() -> dict[str, object]:
         client = DeribitPublicClient(session_epoch=3, rpc_deadline_ms=30_000)
         connection = IncomingConnection([])
@@ -164,9 +164,6 @@ def test_client_sends_without_response_future_or_client_subscription_generation(
             params={},
         )
 
-        assert not hasattr(client, "_pending")
-        assert not hasattr(client, "_notifications")
-        assert not hasattr(client, "_active_subscription_generations")
         assert len(connection.sent) == 1
         return cast(dict[str, object], json.loads(connection.sent[0]))
 
