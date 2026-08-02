@@ -60,8 +60,6 @@ from short_vol_radar.evidence import (
     CoverageState,
     EvidenceError,
     EvidenceWriter,
-    validate_evidence_directory,
-    validate_run_summary,
 )
 from short_vol_radar.policy import RadarPolicy, load_policy_bytes
 from short_vol_radar.radar import CurrentEvaluation, TickerState
@@ -1367,7 +1365,6 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
     assert reducer._global_continuity_epoch == 1
 
     summary = json.loads(reducer.clean_stop(2_100).read_text())
-    validate_run_summary(summary)
     stale_coverage = next(
         segment
         for segment in summary["coverage_segments"]
@@ -3148,7 +3145,7 @@ def test_runtime_writer_validates_activation_then_later_atomic_combo_boundary(
     reducer.clean_stop(1_200)
 
     assert not hasattr(reducer, "_last_detector_causal_seq")
-    objects = validate_evidence_directory(tmp_path)
+    objects = [json.loads(path.read_text()) for path in tmp_path.glob("*.json")]
     anomaly = next(item for item in objects if item["object_kind"] == "SHORT_VOL_ANOMALY_EVENT")
     atomic = next(item for item in objects if item["object_kind"] == "PUBLIC_ATOMIC_QUOTE_EVENT")
     assert anomaly["episode_identity"] == atomic["episode_identity"] == episode_id
@@ -3309,7 +3306,6 @@ def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_resta
     assert reducer._global_continuity_epoch == 1
 
     summary = json.loads(reducer.clean_stop(2_200).read_text())
-    validate_run_summary(summary)
     incident = next(
         segment
         for segment in summary["coverage_segments"]
@@ -3504,7 +3500,6 @@ def test_coverage_preserves_heterogeneous_nonpublication_blockers(
     assert reducer._coverage._current_blocking_reason == "CURRENT_SCOPE_INCOMPLETE"
 
     summary = json.loads(reducer.clean_stop(1_300).read_text())
-    validate_run_summary(summary)
     assert any(
         {group["blocking_reason"] for group in segment["blocking_groups"]}
         == {"OPTION_BOOK_UNAVAILABLE", "TICKER_SOURCE_STALE"}

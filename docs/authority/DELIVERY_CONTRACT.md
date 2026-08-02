@@ -218,8 +218,8 @@ opportunities.
 When a task changes a durable contract it must declare:
 
 - semantic identity and content digest;
-- required fields, units, enum meanings, nullability, and validation;
-- writer and every reader;
+- required fields, units, enum meanings, nullability, and owning construction rules;
+- writer and any product-required reader;
 - compatibility as `COMPATIBLE | MIGRATION_REQUIRED | NOT_COMPARABLE`;
 - fail-closed behavior for missing or mixed identities.
 

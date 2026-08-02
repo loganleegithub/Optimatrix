@@ -4,7 +4,7 @@
 
 **Owning product boundary:** `SHORT_VOL_UNDERWRITING_SHADOW_POSITION`
 
-**Current implementation state:** `CONTRACT_FROZEN_RUNTIME_NOT_IMPLEMENTED`
+**Current implementation state:** `OFFLINE_RUNTIME_IMPLEMENTED`
 
 ## Purpose
 
@@ -19,9 +19,9 @@ This contract owns the first downstream business boundary after
 - close-quote classification and strictly later `SHADOW_CLOSE_OPPORTUNITY`; and
 - exact business denominators, zero, `null`, and `UNKNOWN` meaning.
 
-It is implementation-ready authority. It is not evidence that a runtime exists or that a
-Candidate, `SHADOW_ENTRY`, Position action, close opportunity, Outcome, order, fill, exposure,
-edge, or profit has occurred.
+It defines the implemented offline owner. Implementation presence is not evidence that a Candidate,
+`SHADOW_ENTRY`, Position action, close opportunity, Outcome, order, fill, exposure, edge, or profit
+has occurred.
 
 ## Authority and current permission
 
@@ -30,8 +30,8 @@ edge, or profit has occurred.
 [`SYSTEM_ARCHITECTURE`](../authority/SYSTEM_ARCHITECTURE.md) owns dependency direction, and
 [`DELIVERY_CONTRACT`](../authority/DELIVERY_CONTRACT.md) owns evidence and delivery.
 
-This contract does not change the accepted Radar runtime, its Policy, its events, its evidence, or
-its `ESTABLISHED` record. It grants no runtime implementation or live command by itself.
+This contract does not change Radar semantics, its Policy, or its business events. It grants no
+live command by itself.
 `PUBLIC_SHADOW` still forbids private/account APIs, credentials, balances, margin, orders, fills,
 settlement acts, capital, and money.
 
@@ -1178,25 +1178,17 @@ official `change_id`, generation, request id, receipt, or equal-value repeated t
 Absence of an opportunity neither erases CLOSE nor proves a failed order, flatness, or Position
 end.
 
-## Durable future object minimum fields
+## Durable business records
 
-Any later writer must strictly validate and persist:
+The typed owner constructs each kind-specific payload and identity from one settled transaction.
+The writer adds only the object kind and identity, code/runtime and three Policy identities, the
+complete `FactBoundary`, and the applicable contract binding, then normalizes and serializes that
+completed object. Direct source references required by a business equation remain in its payload.
 
-- object semantic kind and content schema identity;
-- code/runtime and every Policy identity;
-- complete `FactBoundary` and consumed source identities;
-- Radar episode, Candidate, entry, Position-action, and prior-object identities as applicable;
-- canonical instruments, combo, signed directions, `q`, and full consumed levels;
-- availability, action, reason, quote-state, and invalidation enums;
-- all input units, gross/net economics, fee reserve, loss measures, and `null` availabilities;
-- primary and ordered secondary reasons;
-- source-currentness and completeness summary; and
-- explicit public-quote-not-fill, no-exposure, no-Outcome, no-account-fee, and no-actual-all-in-loss
-  non-claims.
-
-Unknown member, missing required member, identity mismatch, non-finite number, unit mismatch,
-non-full quantity, invalid enum, or arithmetic mismatch fails closed. Writers never overwrite a
-conflicting identity.
+There is no parallel content-schema identity, envelope provenance mirror, non-claim array,
+repository reader, or relationship-graph validator. Domain input, enum, quantity, unit, arithmetic,
+causal-order, and `UNKNOWN` rules remain in the typed owner and direct behavior tests. Writers never
+overwrite a conflicting identity.
 
 ## Denominators, zero, `null`, and `UNKNOWN`
 
@@ -1242,15 +1234,14 @@ serialized decision-availability result but never a `HOLD` or `CLOSE` instructio
 
 ## Architecture and dependency rule
 
-The future pure downstream owner consumes immutable public DTOs from `market_monitor`,
+The pure downstream owner consumes immutable public DTOs from `market_monitor`,
 `options_domain`, and `short_vol_radar`. It never imports the runtime app and never causes a lower
 layer to own economic Policy. Runtime composition may keep official public combo observation alive
 for an open Shadow Position after the Radar episode ends. That lifecycle is bounded current state,
 not a database, replay system, workflow engine, or service split.
 
-No current package implements this boundary. A separate task must name and introduce the owning
-module, strict Policy artifacts, runtime composition, writers/readers, and tests before any public
-observation.
+`short_vol_underwriting` implements this boundary with immutable Policy artifacts and is composed
+only by `radar_runtime`. Current authority still forbids public observation.
 
 ## Direct acceptance and non-claims
 
@@ -1276,8 +1267,8 @@ promotion, deployment, or execution.
 ## Explicitly prohibited scope
 
 - changing Radar Policy, detector truth, events, summaries, sealed evidence, or accepted hashes;
-- adding runtime code, package scaffolding, CLI, writer/reader, Policy instance, or evidence schema
-  without a separately active task;
+- adding another runtime path, repository reader, schema mirror, provenance graph, Policy instance,
+  or persistence protocol without a separately active task;
 - treating mark, mid, component legs, or a historical atomic event as executable economics;
 - using private/account data to repair a public inference gap;
 - defaulting fees, reserves, loss, missing facts, or denominators to zero;

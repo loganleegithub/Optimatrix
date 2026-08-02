@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-import signal
 import time
 import uuid
 from collections import Counter, deque
@@ -109,14 +108,12 @@ from short_vol_radar.radar import (
 from short_vol_radar.radar import (
     calculate_current_evaluation as calculate_current_evaluation,
 )
-from websockets.exceptions import WebSocketException
 
 from radar_runtime.deribit_public import (
     MAX_PENDING_INBOUND_FRAMES,
     TRANSPORT_CLOSE_CODE_ALLOWLIST,
     TRANSPORT_CLOSE_DISPOSITION_ALLOWLIST,
     TRANSPORT_EXCEPTION_CLASS_ALLOWLIST,
-    DeribitPublicClient,
     InboundEnvelope,
     PublicProtocolError,
     PublicProtocolIncompatibility,
@@ -6773,99 +6770,6 @@ def _is_valid_irrelevant_combo_metadata(
     )
 
 
-async def observe(
-    *,
-    policy: RadarPolicy,
-    code_identity: str,
-    evidence_directory: Path,
-    stop_event: asyncio.Event | None = None,
-) -> Path:
-    runtime_identity = str(uuid.uuid4())
-    writer = EvidenceWriter(
-        evidence_directory,
-        code_identity=code_identity,
-        runtime_identity=runtime_identity,
-        policy_identity=policy.identity,
-    )
-    runtime = LiveRadarRuntime(
-        policy=policy,
-        code_identity=code_identity,
-        evidence_writer=writer,
-        runtime_identity=runtime_identity,
-    )
-    event = stop_event or _signal_stop_event()
-    reconnect_attempt = 0
-    session_epoch = 0
-    while not event.is_set():
-        completed_summary_path: Path | None = None
-        try:
-            session_epoch += 1
-            try:
-                async with DeribitPublicClient(
-                    session_epoch=session_epoch,
-                    rpc_deadline_ms=policy.runtime_limits.rpc_deadline_ms,
-                ) as client:
-                    completed_summary_path = await runtime.run(client, event)
-                return completed_summary_path
-            except (
-                ConnectionError,
-                OSError,
-                PublicSessionError,
-                WebSocketException,
-            ):
-                if completed_summary_path is not None and event.is_set():
-                    return completed_summary_path
-                raise
-        except PublicProtocolIncompatibility:
-            runtime.prepare_reconnect("PROTOCOL_INCOMPATIBILITY")
-            raise
-        except ContinuityGap:
-            runtime.prepare_reconnect(
-                runtime.platform.reason
-                if runtime.platform.reason
-                in {
-                    "CLOCK_GAP",
-                    "INDEX_GAP",
-                    "INDEX_BASELINE_STALE",
-                    "INDEX_BASELINE_GAP",
-                }
-                else "CLOCK_OR_INDEX_GAP"
-            )
-        except (SourceDataError, TimeoutError):
-            runtime.prepare_reconnect("TRANSIENT_PUBLIC_REQUEST_FAILURE")
-        except (
-            ConnectionError,
-            OSError,
-            PublicSessionError,
-            WebSocketException,
-        ) as exc:
-            runtime.prepare_reconnect(
-                runtime.platform.reason
-                if runtime.platform.reason
-                in {
-                    "PLATFORM_MAINTENANCE",
-                    "PUBLIC_METHODS_DENIED",
-                    "RELEVANT_PLATFORM_LOCK",
-                }
-                else f"SESSION_RECONNECT:{type(exc).__name__}"
-            )
-        except PublicProtocolError:
-            runtime.prepare_reconnect("FATAL_PROTOCOL_INCOMPATIBILITY")
-            raise
-        if not event.is_set():
-            if runtime.session_established:
-                reconnect_attempt = 0
-            await asyncio.sleep(
-                reconnect_delay_seconds(
-                    reconnect_attempt,
-                    base_delay_ms=policy.runtime_limits.time_boundary_poll_interval_ms,
-                    maximum_delay_ms=policy.runtime_limits.rpc_deadline_ms,
-                )
-            )
-            reconnect_attempt += 1
-    return await runtime._clean_stop(None)
-
-
 def reconnect_delay_seconds(
     attempt: int,
     *,
@@ -6885,17 +6789,6 @@ def reconnect_delay_seconds(
         (base_delay_ms / 1_000) * float(2 ** min(attempt, 30)),
     )
     return base_seconds * (0.8 + 0.4 * jitter)
-
-
-def _signal_stop_event() -> asyncio.Event:
-    event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(signum, event.set)
-        except NotImplementedError:
-            pass
-    return event
 
 
 def _monotonic_ms() -> int:

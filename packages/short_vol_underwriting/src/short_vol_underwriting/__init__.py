@@ -57,8 +57,6 @@ from short_vol_underwriting.evidence import (
     DownstreamEvidenceWriter,
     RuntimeBindings,
     build_downstream_object,
-    read_current_evidence,
-    validate_downstream_object,
 )
 from short_vol_underwriting.identity import (
     IdentityError,
@@ -154,6 +152,4 @@ __all__ = [
     "evaluate_close_opportunity",
     "load_policy_chain",
     "ordered_candidate_invalidation",
-    "read_current_evidence",
-    "validate_downstream_object",
 ]

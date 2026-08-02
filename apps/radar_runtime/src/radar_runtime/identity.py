@@ -37,21 +37,6 @@ def git_repository_root(start: Path) -> Path:
     return root
 
 
-def prepare_evidence_directory(directory: Path, repository: Path) -> Path:
-    resolved = directory.resolve()
-    repository_resolved = repository.resolve()
-    if resolved == repository_resolved or repository_resolved in resolved.parents:
-        raise StartupGuardError("production evidence must stay outside the Git worktree")
-    if resolved.exists():
-        if not resolved.is_dir():
-            raise StartupGuardError("evidence path exists and is not a directory")
-        if any(resolved.iterdir()):
-            raise StartupGuardError("evidence directory must be empty")
-    else:
-        resolved.mkdir(parents=True)
-    return resolved
-
-
 def _git(repository: Path, *arguments: str) -> str:
     try:
         completed = subprocess.run(

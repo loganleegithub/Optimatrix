@@ -8,7 +8,7 @@
 
 **Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`
 
-**Sole authorized closure:** `SHORT_VOL_RUNTIME_EVIDENCE_SLIMDOWN`
+**Sole authorized closure:** `SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN`
 
 **Persistent service:** `STOPPED_NO_DEPLOYMENT`
 
@@ -28,14 +28,11 @@ Policy quality, fillability, profitability, actual exposure, or PnL.
 
 ## Current implementation
 
-The current offline simplification removes the obsolete macOS commissioning controller and the
-separate service lifecycle evidence/terminal-manifest system. It simplified `serve-shadow` to the
-business runtime itself: one public client, reducer, downstream owner, minimal business
-persistence, reconnect loop, signal stop, coalesced Workbench publisher, and loopback
-health/readiness HTTP.
-It also removes accumulated whole-graph rescans. Writer and reader retain one shared per-object
-schema, primary-boundary and identity check; owner arithmetic is tested directly and is not
-recomputed by persistence code.
+The current offline simplification keeps `serve-shadow` as the sole complete product path: one
+public client, reducer, downstream owner, minimal business persistence, reconnect loop, signal
+stop, coalesced Workbench publisher, and loopback health/readiness HTTP. The active task removes
+the remaining Radar-only command and the duplicate persistence reader/schema/provenance proof
+layer. Typed owners remain the sole business calculators; writers only serialize their outputs.
 It must preserve market/Decision inputs, all three Policies, Radar semantics, Underwriting,
 Shadow, Position, Outcome, causal order, honest `UNKNOWN`, conditioned zero claims, public/private
 separation, and GET/HEAD-only Workbench behavior.
@@ -44,7 +41,9 @@ separation, and GET/HEAD-only Workbench behavior.
 
 1. **Market/Decision input contract:** `NONE`
 2. **Decision Policy:** `NONE`
-3. **Outcome/evaluation contract:** `NONE`
+3. **Outcome/evaluation contract:** persistence-envelope provenance and repository readback
+   validation are removed; kind-specific business identities, payloads, arithmetic, lifecycle,
+   and denominators are unchanged
 4. **Stage/authorization:** `NONE`
 
 ## Permission boundary
@@ -52,9 +51,9 @@ separation, and GET/HEAD-only Workbench behavior.
 Allowed:
 
 - read-only inspection and deterministic offline tests of the merged implementation.
-- the bounded offline removal of acceptance-only Radar operational diagnostics, the manifest-bound
-  `observe-shadow` harness, complete downstream proof readers/summaries, duplicate terminal graph
-  validation, and dead runtime state under `SHORT_VOL_RUNTIME_EVIDENCE_SLIMDOWN`;
+- the bounded offline removal of the Radar-only command, repository evidence readers, duplicate
+  persistence validators/schema mirrors, envelope provenance mirror, and validation-only tests
+  under `SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN`;
 - deterministic offline tests and repository inspection for that task.
 
 Forbidden:

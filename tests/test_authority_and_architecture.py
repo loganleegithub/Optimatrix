@@ -162,15 +162,14 @@ def test_current_stage_records_the_only_active_offline_closure() -> None:
     marker = "**Sole authorized closure:**"
 
     assert current.count(marker) == 1
-    assert f"{marker} `SHORT_VOL_RUNTIME_EVIDENCE_SLIMDOWN`" in flat
+    assert f"{marker} `SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`" in current
     assert "**Persistent service:** `STOPPED_NO_DEPLOYMENT`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
     assert "rejected its Radar results as unreliable" in flat
     assert "Deleted history is not a business premise" in flat
-    assert "removes the obsolete macOS commissioning controller" in flat
-    assert "service lifecycle evidence/terminal-manifest system" in flat
+    assert "duplicate persistence reader/schema/provenance proof layer" in flat
     for stale_claim in (
         "R4_COMMISSIONED",
         "R4_COMMISSIONED_24H_OBSERVATION_ACTIVE",
@@ -184,11 +183,11 @@ def test_current_stage_records_the_only_active_offline_closure() -> None:
 
 def test_only_the_active_runtime_task_is_present() -> None:
     assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_RUNTIME_EVIDENCE_SLIMDOWN.md",
+        "SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN.md",
         "TEMPLATE.md",
     ]
     current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
-    assert "**Sole authorized closure:** `SHORT_VOL_RUNTIME_EVIDENCE_SLIMDOWN`" in current
+    assert "**Sole authorized closure:** `SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
 
 
@@ -197,12 +196,21 @@ def test_acceptance_only_runtime_harness_is_absent() -> None:
     assert not (
         ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting/manifest.py"
     ).exists()
+    assert not (
+        ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting/schemas.py"
+    ).exists()
+    assert not (
+        ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting/validation.py"
+    ).exists()
     cli = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(encoding="utf-8")
     underwriting = (
         ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting/__init__.py"
     ).read_text(encoding="utf-8")
     assert "observe-shadow" not in cli
+    assert '"observe"' not in cli
     assert "read_complete_evidence" not in underwriting
+    assert "read_current_evidence" not in underwriting
+    assert "validate_downstream_object" not in underwriting
 
 
 def test_fixed_three_policy_chain_and_implementation_boundary_are_exact() -> None:
@@ -380,7 +388,7 @@ def test_authority_describes_the_current_single_public_runtime() -> None:
     for value in (
         "OFFLINE_PUBLIC_SHADOW_RUNTIME",
         "NOT_ACCEPTED_PENDING_REVALIDATION",
-        "SHORT_VOL_RUNTIME_EVIDENCE_SLIMDOWN",
+        "SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN",
         "STOPPED_NO_DEPLOYMENT",
         "Live commands:",
         "FORBIDDEN",
@@ -463,7 +471,7 @@ def test_persistent_service_contract_is_minimal_and_has_no_service_ledger() -> N
         "one public Deribit session",
         "same reducer and downstream owner",
         "service lifecycle events, terminal manifests",
-        "There is no second service-level reader or hash ledger",
+        "There is no repository reader, duplicate schema table, provenance envelope",
         "at most once per 500 monotonic milliseconds",
         "semantic safety or lifecycle status change",
         "before reconnect or clean stop",
@@ -480,7 +488,7 @@ def test_persistent_service_contract_is_minimal_and_has_no_service_ledger() -> N
         assert removed not in contract
     assert "`STOPPED_NO_DEPLOYMENT`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
-    assert "**Sole authorized closure:** `SHORT_VOL_RUNTIME_EVIDENCE_SLIMDOWN`" in current
+    assert "**Sole authorized closure:** `SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN`" in current
     assert "Deleted history is not a business premise" in " ".join(current.split())
 
 
@@ -560,7 +568,7 @@ def test_index_publication_contract_owns_one_current_evidence_schema() -> None:
         "projections",
         "This compatibility projection does not make publication pending a coverage blocker",
         "`INDEX_TAIL_PENDING` was a repository-internal Python-only compatibility name",
-        "not serialized and the current reader does not consume it",
+        "not serialized. Current coverage rejects",
         "`INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING`",
         "Normal index publication pending is not a suspension or detector state",
         "baseline component of identity is only the exact selected immutable `MinuteClose` tuple",

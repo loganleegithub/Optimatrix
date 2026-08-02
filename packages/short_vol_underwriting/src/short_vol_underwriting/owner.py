@@ -1379,7 +1379,6 @@ class FixedContractShadowOwner:
             identity,
             facts.boundary,
             payload,
-            self._facts_provenance(facts),
         )
         self._counts[
             f"underwriting_availability_{evaluation.availability.value.lower()}_count"
@@ -1446,7 +1445,6 @@ class FixedContractShadowOwner:
             identity,
             facts.boundary,
             payload,
-            self._facts_provenance(facts),
         )
         self._counts[f"underwriting_action_{evaluation.action.value.lower()}_count"] += 1
         self._last_underwriting_action[evaluation.opportunity_identity] = (
@@ -1510,7 +1508,6 @@ class FixedContractShadowOwner:
                 "underwriting_position_slot_key_identity": evaluation.slot_identity,
                 "candidate_activation_fact_boundary": facts.boundary.as_object(),
             },
-            self._local_provenance("ANCHOR", action_identity, facts.boundary),
         )
         self._emit(
             "ADMISSION_ATTEMPT_SCHEDULED",
@@ -1524,7 +1521,6 @@ class FixedContractShadowOwner:
                 "request_params": dict(intent.params),
                 "schedule_fact_boundary": facts.boundary.as_object(),
             },
-            self._local_provenance("ANCHOR", candidate_identity, facts.boundary),
         )
         self._intents.append(intent)
         self._counts["candidate_count"] += 1
@@ -1595,12 +1591,6 @@ class FixedContractShadowOwner:
             anchor_identity,
             facts.boundary,
             payload,
-            self._local_provenance(
-                "ANCHOR",
-                action_identity,
-                facts.boundary,
-            )
-            + self._facts_provenance(facts),
         )
         self._create_trade_record(
             rejected=True,
@@ -1669,7 +1659,6 @@ class FixedContractShadowOwner:
             entry_identity,
             facts.boundary,
             payload,
-            self._facts_provenance(facts),
         )
         self._slot_consumed.add(candidate.slot_identity)
         self._counts["shadow_entry_count"] += 1
@@ -1794,7 +1783,6 @@ class FixedContractShadowOwner:
             observation.observation_identity,
             facts.boundary,
             payload,
-            self._local_provenance("ANCHOR", anchor_identity, facts.boundary),
         )
 
     def _position_truths(
@@ -2102,36 +2090,11 @@ class FixedContractShadowOwner:
                     facts.current_index_usdc_per_btc if current_known else trade.prior_index
                 ),
             }
-        provenance = self._local_provenance(
-            "ANCHOR",
-            trade.observation.observation_identity if rejected else trade.anchor_identity,
-            trade.entry_boundary,
-        )
-        provenance += self._local_provenance(
-            "POSITION_FACT",
-            fingerprint,
-            facts.boundary,
-        )
-        provenance += self._source_provenance(
-            "POSITION_FACT",
-            trade.entry_facts.ticker_source,
-        )
-        provenance += self._source_provenance(
-            "INDEX",
-            trade.entry_facts.index_source,
-        )
-        provenance += self._source_provenance(
-            "INDEX",
-            trade.prior_index_source,
-        )
-        if current_known:
-            provenance += self._source_provenance("INDEX", facts.index_source)
         self._emit(
             evaluation_kind,
             decision.position_evaluation_identity,
             facts.boundary,
             evaluation_payload,
-            provenance,
         )
         attempt_identity = (
             trade.post_close_attempt.scheduled_identity
@@ -2176,11 +2139,6 @@ class FixedContractShadowOwner:
             decision.position_action_identity,
             facts.boundary,
             action_payload,
-            self._local_provenance(
-                "POSITION_EVALUATION",
-                decision.position_evaluation_identity,
-                facts.boundary,
-            ),
         )
         self._counts[f"position_{decision.serialized_action.lower()}_count"] += 1
 
@@ -2279,11 +2237,6 @@ class FixedContractShadowOwner:
                 "request_params": params,
                 "schedule_fact_boundary": facts.boundary.as_object(),
             },
-            self._local_provenance(
-                "POSITION_ACTION",
-                decision.position_action_identity,
-                facts.boundary,
-            ),
         )
         if attempt.terminal_status is not None:
             self._emit_post_close_terminal(trade, attempt=attempt)
@@ -2363,24 +2316,7 @@ class FixedContractShadowOwner:
             if rejected
             else "CLOSE_QUOTE_EVALUATION"
         )
-        provenance = self._local_provenance(
-            "ANCHOR",
-            trade.observation.observation_identity if rejected else trade.anchor_identity,
-            trade.entry_boundary,
-        )
-        provenance += (
-            self._local_provenance(
-                "COMBO_QUOTE",
-                quote_fingerprint,
-                facts.boundary,
-            )
-            if rejected
-            else self._source_provenance(
-                "COMBO_QUOTE",
-                facts.quote_source,
-            )
-        )
-        self._emit(kind, identity, facts.boundary, payload, provenance)
+        self._emit(kind, identity, facts.boundary, payload)
         self._counts[f"close_quote_{self._quote_count_suffix(quote_state)}_count"] += 1
         return identity
 
@@ -2517,26 +2453,7 @@ class FixedContractShadowOwner:
             if trade.rejected
             else "CLOSE_OPPORTUNITY_EVALUATION"
         )
-        provenance = self._local_provenance(
-            "POSITION_ACTION",
-            trade.first_close_decision.position_action_identity,
-            trade.first_close_decision.action_fact_boundary,
-        ) + self._local_provenance(
-            "CLOSE_QUOTE_EVALUATION",
-            close_quote_identity,
-            trade.last_quote_facts.boundary,
-        )
-        if consumes_commissions:
-            provenance += self._source_provenance(
-                "COMMISSION",
-                facts.short_commission_source,
-            ) + self._source_provenance(
-                "COMMISSION",
-                facts.long_commission_source,
-            )
-        if consumes_index:
-            provenance += self._source_provenance("INDEX", facts.index_source)
-        self._emit(kind, identity, facts.boundary, payload, provenance)
+        self._emit(kind, identity, facts.boundary, payload)
         trade.last_opportunity_key = opportunity_key
         self._counts[f"close_opportunity_{opportunity.eligibility.value.lower()}_count"] += 1
         return identity
@@ -2578,11 +2495,6 @@ class FixedContractShadowOwner:
                     opportunity_identity,
                     opportunity,
                 ),
-                self._local_provenance(
-                    "CLOSE_OPPORTUNITY_EVALUATION",
-                    opportunity_identity,
-                    facts.boundary,
-                ),
             )
             self._counts["shadow_close_opportunity_count"] += 1
             exit_identity = trade.observation.accept_eligible_exit(
@@ -2599,56 +2511,11 @@ class FixedContractShadowOwner:
                 opportunity,
             )
             kind = "SHADOW_COUNTERFACTUAL_EXIT"
-        if trade.last_quote_facts is None:
-            raise RuntimeError("selected exit lacks its close quote root")
-        provenance = (
-            self._local_provenance(
-                "ANCHOR",
-                trade.observation.observation_identity,
-                trade.entry_boundary,
-            )
-            + self._local_provenance(
-                "POSITION_ACTION",
-                trade.first_close_decision.position_action_identity,
-                trade.first_close_decision.action_fact_boundary,
-            )
-            + self._local_provenance(
-                "CLOSE_OPPORTUNITY_EVALUATION",
-                opportunity_identity,
-                facts.boundary,
-            )
-        )
-        if trade.rejected:
-            provenance += self._local_provenance(
-                "CLOSE_QUOTE_EVALUATION",
-                close_quote_identity,
-                trade.last_quote_facts.boundary,
-            )
-            provenance += self._local_provenance(
-                "COMBO_QUOTE",
-                str(payload["consumed_rule_scoped_quote_fingerprint"]),
-                trade.last_quote_facts.boundary,
-            )
-        else:
-            provenance += self._source_provenance(
-                "COMBO_QUOTE",
-                trade.last_quote_facts.quote_source,
-            )
-        provenance += self._source_provenance(
-            "COMMISSION",
-            facts.short_commission_source,
-        )
-        provenance += self._source_provenance(
-            "COMMISSION",
-            facts.long_commission_source,
-        )
-        provenance += self._source_provenance("INDEX", facts.index_source)
         self._emit(
             kind,
             exit_identity,
             facts.boundary,
             payload,
-            provenance,
         )
         self._emit_terminal_trade(trade, facts=facts, opportunity=opportunity)
 
@@ -2812,57 +2679,11 @@ class FixedContractShadowOwner:
             },
         }
         kind = "REJECTED_COUNTERFACTUAL_OUTCOME" if trade.rejected else "SHADOW_OUTCOME"
-        provenance = self._local_provenance(
-            "ANCHOR",
-            trade.observation.observation_identity,
-            trade.entry_boundary,
-        )
-        if selected_exit is not None:
-            provenance += self._local_provenance(
-                "SELECTED_EXIT",
-                selected_exit,
-                boundary,
-            )
-        else:
-            if trade.first_close_decision is not None:
-                provenance += self._local_provenance(
-                    "POSITION_ACTION",
-                    trade.first_close_decision.position_action_identity,
-                    trade.first_close_decision.action_fact_boundary,
-                )
-            if attempt is not None:
-                provenance += self._local_provenance(
-                    "ATTEMPT_CONTROL",
-                    attempt.scheduled_identity,
-                    attempt.origin_boundary,
-                )
-                if attempt.terminal_identity is not None and attempt.terminal_boundary is not None:
-                    provenance += self._local_provenance(
-                        "ATTEMPT_CONTROL",
-                        attempt.terminal_identity,
-                        attempt.terminal_boundary,
-                    )
-            if state is OutcomeState.MATURE_UNKNOWN and facts is not None:
-                provenance += self._source_provenance(
-                    "INSTRUMENT_LIFECYCLE",
-                    facts.lifecycle_short_source,
-                )
-                provenance += self._source_provenance(
-                    "INSTRUMENT_LIFECYCLE",
-                    facts.lifecycle_long_source,
-                )
-            if terminal_source_identity is not None:
-                provenance += self._local_provenance(
-                    "SUPERVISOR_CONTROL",
-                    terminal_source_identity,
-                    boundary,
-                )
         self._emit(
             kind,
             trade.observation.terminal_outcome_identity,
             boundary,
             payload,
-            provenance,
         )
         trade.pair.terminalize(
             state=state,
@@ -2915,16 +2736,6 @@ class FixedContractShadowOwner:
             pair.pair_identity,
             pair.terminal_boundary,
             payload,
-            self._local_provenance(
-                "ANCHOR",
-                trade.observation.observation_identity,
-                trade.entry_boundary,
-            )
-            + self._local_provenance(
-                "TERMINAL_OUTCOME",
-                pair.trade_outcome_identity,
-                pair.terminal_boundary,
-            ),
         )
 
     def _shadow_close_opportunity_payload(
@@ -3093,11 +2904,6 @@ class FixedContractShadowOwner:
                     else None
                 ),
             },
-            self._local_provenance(
-                "ATTEMPT_CONTROL",
-                attempt.terminal_source_identity,
-                attempt.terminal_boundary,
-            ),
         )
         self._counts[f"admission_{attempt.terminal_outcome.value.lower()}_count"] += 1
 
@@ -3153,11 +2959,6 @@ class FixedContractShadowOwner:
                 "ordered_applicable_reason_vector": list(ordered),
                 "terminal_fact_boundary": boundary.as_object(),
             },
-            self._local_provenance(
-                "ANCHOR",
-                record.state.candidate_identity,
-                record.facts.boundary,
-            ),
         )
 
     def _candidate_invalidation_reasons(
@@ -3278,11 +3079,6 @@ class FixedContractShadowOwner:
                     "terminal_fact_boundary": attempt.terminal_boundary.as_object(),
                     "matched_response_identity": attempt.matched_response_identity,
                 },
-                self._local_provenance(
-                    "ATTEMPT_CONTROL",
-                    attempt.terminal_identity,
-                    attempt.terminal_boundary,
-                ),
             )
         if (
             attempt.terminal_owner is PostCloseAttemptOwner.ORDINARY
@@ -3386,16 +3182,6 @@ class FixedContractShadowOwner:
             identity,
             attempt.terminal_boundary,
             payload,
-            self._local_provenance(
-                "POSITION_ACTION",
-                trade.first_close_decision.position_action_identity,
-                trade.first_close_decision.action_fact_boundary,
-            )
-            + self._local_provenance(
-                "ATTEMPT_CONTROL",
-                attempt.terminal_identity,
-                attempt.terminal_boundary,
-            ),
         )
         trade.last_opportunity_key = opportunity_key
         self._counts[f"close_opportunity_{eligibility.value.lower()}_count"] += 1
@@ -3678,80 +3464,18 @@ class FixedContractShadowOwner:
         identity: str,
         boundary: FactBoundary,
         payload: Mapping[str, object],
-        provenance: Sequence[Mapping[str, object]],
     ) -> None:
         emitted_key = (kind, identity)
         if emitted_key in self._emitted_identities:
             return
-        provenance_by_key: dict[tuple[str, str], Mapping[str, object]] = {}
-        for item in provenance:
-            key = (str(item["source_role"]), str(item["source_identity"]))
-            existing = provenance_by_key.get(key)
-            if existing is not None and existing != item:
-                raise RuntimeError("one provenance root cannot carry conflicting boundaries")
-            provenance_by_key[key] = item
-        normalized_provenance = tuple(
-            sorted(
-                provenance_by_key.values(),
-                key=lambda item: (
-                    str(item["source_role"]),
-                    str(item["source_identity"]),
-                ),
-            )
-        )
         self.writer.write(
             object_kind=kind,
             object_identity=identity,
             fact_boundary=boundary,
             payload=payload,
-            source_provenance=normalized_provenance,
         )
         self._emitted_identities.add(emitted_key)
         self._emitted.append(EmittedObject(kind, identity, boundary))
-
-    def _facts_provenance(
-        self,
-        facts: UnderwritingFacts,
-    ) -> tuple[dict[str, object], ...]:
-        items: list[dict[str, object]] = []
-        for role, source in (
-            ("COMBO_QUOTE", facts.quote_source),
-            ("COMMISSION", facts.short_instrument_source),
-            ("COMMISSION", facts.long_instrument_source),
-            ("INDEX", facts.index_source),
-            ("POSITION_FACT", facts.ticker_source),
-        ):
-            items.extend(self._source_provenance(role, source))
-        return tuple(items)
-
-    @staticmethod
-    def _source_provenance(
-        role: str,
-        source: SourceFact | None,
-    ) -> tuple[dict[str, object], ...]:
-        if source is None:
-            return ()
-        return (
-            {
-                "source_role": role,
-                "source_identity": source.source_identity,
-                "receipt_fact_boundary": source.boundary.as_object(),
-            },
-        )
-
-    @staticmethod
-    def _local_provenance(
-        role: str,
-        identity: str,
-        boundary: FactBoundary,
-    ) -> tuple[dict[str, object], ...]:
-        return (
-            {
-                "source_role": role,
-                "source_identity": identity,
-                "receipt_fact_boundary": boundary.as_object(),
-            },
-        )
 
     @staticmethod
     def _levels(

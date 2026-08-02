@@ -17,7 +17,7 @@ production-public Shadow runtime and forward cohort may be implemented. It owns:
 - at most one bounded rejected-counterfactual unit per `UnderwritingPositionSlotKeyIdentity`;
 - cohort-aligned `NO_TRADE` alternatives;
 - exact public-quote economics and `null` behavior; and
-- current downstream business-object identity, writing, and reading.
+- current downstream business-object identity and writing.
 
 It does not implement a runtime, create a Candidate, admit an Entry, place an order, prove a fill,
 create exposure, settle an option, qualify a Policy, or authorize execution.
@@ -745,80 +745,29 @@ actual_fill_identity: "UNKNOWN"
 actual_settlement_cashflow_usdc: "UNKNOWN"
 ```
 
-Every `source_provenance` member is an object with exactly:
+Direct source references needed by a business equation remain in the kind-specific payload. Raw
+timestamps, subscription generations, request ids, and official `change_id` values remain inside
+their accepted source identities and are not copied into a second top-level provenance array.
 
-```text
-source_role: "ANCHOR" | "POSITION_EVALUATION" | "POSITION_ACTION" |
-             "CLOSE_QUOTE_EVALUATION" | "CLOSE_OPPORTUNITY_EVALUATION" |
-             "SELECTED_EXIT" | "TERMINAL_OUTCOME" | "POSITION_FACT" |
-             "COMBO_QUOTE" | "COMMISSION" | "INDEX" |
-             "INSTRUMENT_LIFECYCLE" | "ATTEMPT_CONTROL" | "SUPERVISOR_CONTROL"
-source_identity: Identity
-receipt_fact_boundary: FactBoundary
-```
-
-All three keys are required. Raw timestamp, subscription generation, request id, and official
-`change_id` remain inside their accepted upstream `source_identity`; they are not duplicated into
-this envelope. Policy identity binds the fee formula and compatibility threshold, but every
-actually consumed short- or long-leg commission fraction still requires its current public
-option-instrument source identity and receipt boundary under role `COMMISSION`.
-
-The owner includes only direct facts actually consumed by the object. The array is sorted by
-bytewise-ascending UTF-8 (source_role, source_identity) and contains no duplicate pair. The
-writer and reader validate member shape, identity format, boundary identity, causal order, sorting,
-and uniqueness; they do not resolve local objects or reconstruct a second relationship graph.
-Provenance never enters a normalized business fingerprint or kind-specific object identity.
-Direct owner tests verify the role assigned to each consumed source.
-
-Every object has exactly this top-level envelope:
+Every persisted object has this minimal top-level envelope:
 
 ```text
 object_kind: one exact kind above
-content_schema_identity: Identity
 object_identity: Identity
-outcome_contract_identity: OutcomeContractIdentity
 code_identity: Identity
 runtime_identity: Identity
 radar_policy_identity: Identity
 underwriting_policy_identity: Identity
 position_policy_identity: Identity
 fact_boundary: FactBoundary
-source_provenance: array[source provenance member]
 payload: exact kind-specific object below
-non_claims: exact six-element array below
 ```
 
-The required non-claim array, in this order, is:
-
-```text
-PUBLIC_QUOTE_NOT_FILL
-NO_ACTUAL_EXPOSURE
-NO_ACTUAL_PNL
-NO_ACTUAL_ACCOUNT_FEE
-NO_SETTLEMENT_PAYOFF
-NO_ACTUAL_ALL_IN_LOSS_OR_MAX_LOSS
-```
-
-For each kind:
-
-```text
-content_schema_identity =
-    CanonicalIdentity(
-        "OUTCOME_CONTENT_SCHEMA",
-        OutcomeContractContentDigest,
-        object_kind
-    )
-```
-
-The contract content digest binds every declared key, type, enum, condition, and null matrix without
-a non-executable placeholder. Code/runtime/Policy identities remain envelope data and do not create
-a different schema.
-
-The envelope `object_identity` equals the kind-specific identity field in `payload`.
-`fact_boundary` equals the payload's creation, evaluation, selection, or terminal boundary
-and every duplicated code/runtime/Policy member must be byte-identical. Unknown top-level or
-payload keys, missing keys, duplicate keys, invalid array cardinality/order, or a conditionally
-forbidden non-null value fail validation.
+Outcome kinds additionally bind `outcome_contract_identity`; upstream Underwriting/Position kinds
+bind `underwriting_position_contract_digest`. The envelope `object_identity` equals the
+kind-specific identity field in `payload`, and `fact_boundary` equals the payload's creation,
+evaluation, selection, or terminal boundary. The contract content digest binds the declared
+business meaning without creating a parallel per-kind schema identity.
 
 ### Exact payload key sets
 
@@ -867,8 +816,7 @@ The action and opportunity boundaries are their accepted upstream object boundar
 strictly after Entry in the order required above. `combo_quote_source_ref` is the accepted official
 atomic quote consumed by that opportunity. The two commission refs are `[SHORT, LONG]`, match the
 two serialized commission fractions, and `index_source_ref` matches
-`close_index_usdc_per_btc`. Their projected `source_provenance` members are therefore independently
-reconstructed from payload bytes rather than accepted as envelope-only claims.
+`close_index_usdc_per_btc`. No envelope copy of those direct references is created.
 
 `SHADOW_OUTCOME`:
 
@@ -1148,8 +1096,8 @@ must equal the resolved quote evaluation's fingerprint. Both ordered commission 
 ref must equal the resolved opportunity's direct-source refs. Every rejected-exit economic field is
 byte-identical to the corresponding selected-opportunity or resolved-quote field, including combo,
 legs, direction, full quantity, levels, both commissions, index, gross/fee/net/debit, projected PnL,
-and projected loss. Any mismatch invalidates the exit and directory; a reader never obtains these
-roots by expanding another object's `source_provenance`.
+and projected loss. Any mismatch rejects the exit at owner construction; persistence does not
+expand or reconstruct those references.
 
 `REJECTED_COUNTERFACTUAL_OUTCOME`:
 
@@ -1262,18 +1210,17 @@ For aligned pairs, `no_trade_cashflow_usdc` is always exact known `"0"`. The tra
 policy advantage are both `Decimal` with comparison availability `KNOWN` only for
 `MATURE_KNOWN`; for the other three terminal states both are `null` and availability is `UNKNOWN`.
 
-## Writer, reader, validation, and compatibility
+## Writer and compatibility
 
 `short_vol_underwriting` is the only downstream business-object owner. It consumes immutable public
 DTOs and never imports `radar_runtime`; the runtime remains the sole composer.
 
-The writer validates exact envelope and payload keys, primary boundary, object identity, source
-shape/order, and code/runtime/contract/Policy bindings before exclusive immutable publication. An
-identical duplicate is an idempotent no-op; a conflicting duplicate is a hard error. The current
-reader repeats the same per-object checks; it does not recompute owner arithmetic or reconstruct a
-second relationship graph. The typed owner is the sole calculator and its arithmetic and state
-matrices are covered by direct behavior tests. There is no manifest, terminal summary,
-complete-directory proof, compatibility reader, replay, backfill, or migration path.
+The typed owner is the sole calculator; its identity, boundary, arithmetic, state, and null matrices
+are covered by direct behavior tests. The writer binds runtime/contract/Policy identities,
+normalizes the completed payload, and publishes it exclusively. An identical duplicate is an
+idempotent no-op and a conflicting duplicate is a hard error. There is no repository reader,
+parallel schema table, provenance envelope, relationship graph, manifest, terminal summary,
+replay, backfill, or migration path.
 
 ## Direct verification and evidence boundary
 
@@ -1288,8 +1235,8 @@ Direct contract tests must prove:
 - one rejected anchor per slot, excluded inputs, and separate rejected identities;
 - aligned `NO_TRADE`, terminal/censor-mask alignment, and comparison exclusion;
 - clean-stop/failure ordering and immutable censor ownership;
-- durable object fields, full-quantity consumed-level order, owner-produced provenance,
-  writer/readers, and strict duplicate/mixed-identity behavior;
+- durable object fields, full-quantity consumed-level order, direct source references, and strict
+  duplicate/mixed-identity writer behavior;
 - natural zero, `null`, and `UNKNOWN` without a fabricated cohort rate; and
 - compatibility with unchanged Radar and Underwriting/Position contracts.
 
@@ -1301,8 +1248,8 @@ qualification, promotion, deployment, fill, or execution permission.
 ## Explicitly prohibited scope
 
 - changing Radar Policy, Underwriting Policy, Position Policy, upstream contracts, or business events;
-- adding runtime code, package scaffolding, CLI, writer/reader implementation, Policy instance, or
-  evidence schema without a separately active task;
+- adding another runtime path, repository reader, schema mirror, provenance graph, Policy instance,
+  or persistence protocol without a separately active task;
 - adding a delivery/settlement-price source or treating mark, mid, component legs, last quote, or
   historical atomic event as an exit;
 - using private/account data to repair a public inference gap;

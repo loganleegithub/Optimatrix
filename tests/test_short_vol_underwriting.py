@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
 import pytest
-import short_vol_underwriting.evidence as evidence_module
 from short_vol_underwriting import (
     CANDIDATE_INVALIDATION_REASONS,
     OUTCOME_OBJECT_KINDS,
@@ -55,13 +53,11 @@ from short_vol_underwriting import (
     evaluate_close_opportunity,
     load_policy_chain,
     ordered_candidate_invalidation,
-    read_current_evidence,
 )
 from short_vol_underwriting.constants import (
     OUTCOME_CONTRACT_DIGEST,
     UNDERWRITING_POSITION_CONTRACT_DIGEST,
 )
-from short_vol_underwriting.evidence import validate_downstream_object
 
 ROOT = Path(__file__).resolve().parents[1]
 RADAR_POLICY_IDENTITY = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
@@ -74,6 +70,22 @@ POSITION_POLICY_IDENTITY = "sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b
 def _object(value: object) -> dict[str, object]:
     assert isinstance(value, dict)
     return value
+
+
+def _written_objects(
+    directory: Path,
+    *,
+    bindings: RuntimeBindings,
+) -> dict[str, dict[str, object]]:
+    del bindings
+    result: dict[str, dict[str, object]] = {}
+    for path in sorted((directory / "objects").glob("*/*.json")):
+        value = json.loads(path.read_text(encoding="utf-8"))
+        assert isinstance(value, dict)
+        identity = value["object_identity"]
+        assert isinstance(identity, str)
+        result[identity] = value
+    return result
 
 
 def _boundary(causal_seq: int, monotonic_ms: int | None = None) -> FactBoundary:
@@ -474,7 +486,7 @@ def _position_evaluation_payload(
         for item in transition.emitted
         if item.object_kind == "POSITION_EVALUATION"
     )
-    return _object(read_current_evidence(tmp_path, bindings=bindings)[identity]["payload"])
+    return _object(_written_objects(tmp_path, bindings=bindings)[identity]["payload"])
 
 
 def test_canonical_identity_matches_all_normative_vectors() -> None:
@@ -1090,7 +1102,7 @@ def test_owner_candidate_to_subscription_admission_round_trip(tmp_path: Path) ->
         "SHADOW_OUTCOME_OBSERVATION",
     ]
     assert owner.required_combo_instrument_names == ("BTC-TEST-COMBO",)
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     assert {value["object_kind"] for value in objects.values()} == {
         "UNDERWRITING_AVAILABILITY_EVALUATION",
         "UNDERWRITING_ACTION",
@@ -1121,7 +1133,7 @@ def test_owner_treats_negative_public_commission_as_unknown(
     assert [item.object_kind for item in transition.emitted] == [
         "UNDERWRITING_AVAILABILITY_EVALUATION"
     ]
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     availability = next(iter(objects.values()))
     assert _object(availability["payload"])["availability"] == "UNKNOWN"
 
@@ -1207,7 +1219,7 @@ def test_owner_explicit_unknown_reasons_prevent_economic_action(
         "UNDERWRITING_AVAILABILITY_EVALUATION"
     ]
     assert transition.request_intents == ()
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     payload = _object(next(iter(objects.values()))["payload"])
     assert payload["availability"] == "UNKNOWN"
     assert payload["unknown_reasons"] == ["INDEX_SOURCE_UNKNOWN"]
@@ -1240,7 +1252,7 @@ def test_owner_unknown_refresh_invalidates_candidate_before_admission(
         "ADMISSION_ATTEMPT_TERMINAL",
         "CANDIDATE_INVALIDATION",
     ]
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     kinds = {value["object_kind"] for value in objects.values()}
     assert "SHADOW_ENTRY" not in kinds
     terminal = next(
@@ -1266,7 +1278,7 @@ def test_owner_enrolls_anchor_after_start_before_cutoff_control_is_realized(
 
     _admit_owner(owner)
 
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     observation = next(
         value for value in objects.values() if value["object_kind"] == "SHADOW_OUTCOME_OBSERVATION"
     )
@@ -1294,7 +1306,7 @@ def test_owner_emits_slot_consumed_availability_after_entry(
         "UNDERWRITING_AVAILABILITY_EVALUATION"
     ]
     emitted_identity = transition.emitted[0].object_identity
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     payload = _object(objects[emitted_identity]["payload"])
     assert payload["availability"] == "NOT_EVALUATED"
 
@@ -1341,7 +1353,7 @@ def test_owner_first_close_then_strictly_future_subscription_exit_round_trip(
         "ALIGNED_POLICY_NO_TRADE_PAIR",
     ]
     assert future.request_intents == ()
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     assert (
         sum(value["object_kind"] == "SHADOW_COUNTERFACTUAL_EXIT" for value in objects.values()) == 1
     )
@@ -1430,7 +1442,7 @@ def test_owner_does_not_promote_retained_first_close_quote_on_a_later_tick(
         "SHADOW_OUTCOME",
     }
     assert not forbidden.intersection(item.object_kind for item in later.emitted)
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     kinds = [value["object_kind"] for value in objects.values()]
     assert kinds.count("CLOSE_QUOTE_EVALUATION") == 1
     assert "POST_CLOSE_ATTEMPT_TERMINAL" not in kinds
@@ -1515,7 +1527,7 @@ def test_owner_does_not_promote_a_malformed_post_close_rpc_payload(
         "SHADOW_OUTCOME",
     }
     assert not forbidden.intersection(item.object_kind for item in transition.emitted)
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     terminal = next(
         _object(value["payload"])
         for value in objects.values()
@@ -1609,7 +1621,7 @@ def test_owner_rejects_unqualified_subscription_after_post_close_rpc_error(
         "SHADOW_OUTCOME",
     }
     assert not forbidden.intersection(item.object_kind for item in transition.emitted)
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     kinds = [value["object_kind"] for value in objects.values()]
     assert kinds.count("CLOSE_QUOTE_EVALUATION") == 1
     assert kinds.count("CLOSE_OPPORTUNITY_EVALUATION") == 1
@@ -1890,7 +1902,7 @@ def test_position_option_discontinuity_states_are_hard_close(
     action_identity = next(
         item.object_identity for item in transition.emitted if item.object_kind == "POSITION_ACTION"
     )
-    action = _object(read_current_evidence(tmp_path, bindings=bindings)[action_identity]["payload"])
+    action = _object(_written_objects(tmp_path, bindings=bindings)[action_identity]["payload"])
     assert action["serialized_action"] == "CLOSE"
     assert action["primary_close_reason"] == "PLATFORM_OR_SOURCE_DISCONTINUITY"
 
@@ -2068,24 +2080,6 @@ def test_owner_quiet_current_combo_schedules_post_close_rpc_when_time_latches_cl
     assert [intent.request_id for intent in closed.request_intents] == [42]
 
 
-def test_downstream_validator_rejects_provenance_from_a_future_causal_boundary(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    _admit_owner(owner)
-    objects = read_current_evidence(tmp_path, bindings=bindings)
-    entry = next(value for value in objects.values() if value["object_kind"] == "SHADOW_ENTRY")
-    tampered = json.loads(json.dumps(entry))
-    provenance = tampered["source_provenance"]
-    assert isinstance(provenance, list)
-    receipt = _object(_object(provenance[0])["receipt_fact_boundary"])
-    object_boundary = _object(tampered["fact_boundary"])
-    receipt["causal_seq"] = int(cast(int, object_boundary["causal_seq"])) + 1
-
-    with pytest.raises(DownstreamEvidenceError, match=r"future|causal"):
-        validate_downstream_object(tampered, bindings=bindings)
-
-
 def test_owner_post_close_request_failure_emits_attempt_owned_unknown_opportunity(
     tmp_path: Path,
 ) -> None:
@@ -2111,7 +2105,7 @@ def test_owner_post_close_request_failure_emits_attempt_owned_unknown_opportunit
         "POST_CLOSE_ATTEMPT_TERMINAL",
         "CLOSE_OPPORTUNITY_EVALUATION",
     ]
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     opportunity = next(
         value
         for value in objects.values()
@@ -2153,7 +2147,7 @@ def test_owner_reconnect_retirement_invalidates_pending_admission_as_source_gap(
         "ADMISSION_ATTEMPT_TERMINAL",
         "CANDIDATE_INVALIDATION",
     ]
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     terminal = next(
         _object(value["payload"])
         for value in objects.values()
@@ -2237,7 +2231,7 @@ def test_owner_close_opportunity_deduplicates_receipts_but_reacts_to_consumed_fa
         "POSITION_ACTION",
         "CLOSE_OPPORTUNITY_EVALUATION",
     ]
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     opportunities = [
         _object(value["payload"])
         for value in objects.values()
@@ -2273,7 +2267,7 @@ def test_owner_position_fingerprint_reacts_when_fee_economics_become_known(
     first_action_identity = next(
         item.object_identity for item in first.emitted if item.object_kind == "POSITION_ACTION"
     )
-    first_objects = read_current_evidence(tmp_path, bindings=bindings)
+    first_objects = _written_objects(tmp_path, bindings=bindings)
     assert (
         _object(first_objects[first_action_identity]["payload"])["serialized_action"] == "UNKNOWN"
     )
@@ -2297,7 +2291,7 @@ def test_owner_position_fingerprint_reacts_when_fee_economics_become_known(
     second_action_identity = next(
         item.object_identity for item in second.emitted if item.object_kind == "POSITION_ACTION"
     )
-    second_objects = read_current_evidence(tmp_path, bindings=bindings)
+    second_objects = _written_objects(tmp_path, bindings=bindings)
     assert (
         _object(second_objects[second_action_identity]["payload"])["serialized_action"] == "CLOSE"
     )
@@ -2396,7 +2390,7 @@ def test_position_source_less_atomic_quote_has_no_quote_economics(
     truths = cast(list[str], payload["ordered_predicate_truth_vector"])
     assert truths[POSITION_CLOSE_REASONS.index("LIQUIDITY_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
     assert truths[POSITION_CLOSE_REASONS.index("ECONOMIC_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     assert all(value["object_kind"] != "CLOSE_QUOTE_EVALUATION" for value in objects.values())
 
 
@@ -2475,7 +2469,7 @@ def test_preclose_atomic_quote_requires_exact_source_witness_and_lineage(
     truths = cast(list[str], payload["ordered_predicate_truth_vector"])
     assert truths[POSITION_CLOSE_REASONS.index("LIQUIDITY_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
     assert truths[POSITION_CLOSE_REASONS.index("ECONOMIC_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     assert all(value["object_kind"] != "CLOSE_QUOTE_EVALUATION" for value in objects.values())
 
 
@@ -2538,7 +2532,7 @@ def test_invalid_quote_lineage_does_not_mask_hard_close(
     payload = _position_evaluation_payload(tmp_path, bindings, transition)
     truths = cast(list[str], payload["ordered_predicate_truth_vector"])
     assert truths[POSITION_CLOSE_REASONS.index("LIQUIDITY_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     action = next(
         _object(value["payload"])
         for value in objects.values()
@@ -2578,7 +2572,7 @@ def test_known_position_source_loss_closes_and_still_schedules_quote_rpc(
     payload = _position_evaluation_payload(tmp_path, bindings, transition)
     truths = cast(list[str], payload["ordered_predicate_truth_vector"])
     assert truths[POSITION_CLOSE_REASONS.index("PLATFORM_OR_SOURCE_DISCONTINUITY")] == "TRUE"
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     action = next(
         _object(value["payload"])
         for value in objects.values()
@@ -2620,7 +2614,7 @@ def test_exact_expiry_has_only_settlement_primary_and_latest_exit_secondary(
         allocate_request_id=lambda: 42,
     )
 
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     action = next(
         _object(value["payload"])
         for value in objects.values()
@@ -2683,7 +2677,7 @@ def test_known_above_policy_position_fee_is_hard_discontinuity(
     assert truths[discontinuity_index] == "TRUE"
     action = next(
         _object(value["payload"])
-        for value in read_current_evidence(tmp_path, bindings=bindings).values()
+        for value in _written_objects(tmp_path, bindings=bindings).values()
         if value["object_kind"] == "POSITION_ACTION"
     )
     assert action["serialized_action"] == "CLOSE"
@@ -2711,7 +2705,7 @@ def test_initial_missing_position_fee_remains_unknown_not_hard_discontinuity(
     assert truths[POSITION_CLOSE_REASONS.index("PLATFORM_OR_SOURCE_DISCONTINUITY")] == "UNKNOWN"
     action = next(
         _object(value["payload"])
-        for value in read_current_evidence(tmp_path, bindings=bindings).values()
+        for value in _written_objects(tmp_path, bindings=bindings).values()
         if value["object_kind"] == "POSITION_ACTION"
     )
     assert action["serialized_action"] == "UNKNOWN"
@@ -2793,7 +2787,7 @@ def test_negative_signed_close_level_preserves_atomic_quote_and_credit(
     assert truths[POSITION_CLOSE_REASONS.index("LIQUIDITY_EXIT_BOUNDARY_REACHED")] == "FALSE"
     quotes = [
         _object(value["payload"])
-        for value in read_current_evidence(tmp_path, bindings=bindings).values()
+        for value in _written_objects(tmp_path, bindings=bindings).values()
         if value["object_kind"] == "CLOSE_QUOTE_EVALUATION"
     ]
     assert len(quotes) == 1
@@ -2864,7 +2858,7 @@ def test_owner_rejected_counterfactual_closes_through_same_future_quote(
         "ALIGNED_POLICY_NO_TRADE_PAIR",
     ]
     assert future.request_intents == ()
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     assert (
         sum(value["object_kind"] == "REJECTED_COUNTERFACTUAL_OUTCOME" for value in objects.values())
         == 1
@@ -2924,7 +2918,7 @@ def test_owner_repeated_rejected_evaluation_keeps_first_anchor_without_crashing(
     assert all(
         item.object_kind != "REJECTED_COUNTERFACTUAL_ANCHOR" for item in second_transition.emitted
     )
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     anchors = [
         value
         for value in objects.values()
@@ -3027,12 +3021,12 @@ def test_owner_failure_censors_pending_trade(tmp_path: Path) -> None:
         terminal_source=TerminalSource.FAILURE,
     )
 
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     outcome = next(value for value in objects.values() if value["object_kind"] == "SHADOW_OUTCOME")
     assert _object(outcome["payload"])["terminal_state"] == "CENSORED_AT_FAILURE"
 
 
-def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) -> None:
+def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_path: Path) -> None:
     bindings = RuntimeBindings(
         code_identity="a" * 40,
         runtime_identity="sha256:" + "b" * 64,
@@ -3063,7 +3057,6 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
         object_identity=identity,
         fact_boundary=_boundary(2),
         payload=payload,
-        source_provenance=(),
     )
     assert path is not None
     assert writer.revision == 1
@@ -3073,13 +3066,12 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
             object_identity=identity,
             fact_boundary=_boundary(2),
             payload=payload,
-            source_provenance=(),
         )
         is None
     )
     assert writer.revision == 1
 
-    objects = read_current_evidence(tmp_path, bindings=bindings)
+    objects = _written_objects(tmp_path, bindings=bindings)
     assert tuple(objects) == (identity,)
     assert objects[identity]["object_kind"] == "CANDIDATE_INVALIDATION"
 
@@ -3088,24 +3080,7 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
             object_kind="CANDIDATE_INVALIDATION",
             object_identity=identity,
             fact_boundary=_boundary(2),
-            payload=payload,
-            source_provenance=(
-                {
-                    "source_role": "SUPERVISOR_CONTROL",
-                    "source_identity": "sha256:" + "9" * 64,
-                    "receipt_fact_boundary": _boundary(2).as_object(),
-                },
-            ),
-        )
-    assert writer.revision == 1
-
-    with pytest.raises(DownstreamEvidenceError, match="identity mismatch"):
-        writer.write(
-            object_kind="CANDIDATE_INVALIDATION",
-            object_identity="sha256:" + "1" * 64,
-            fact_boundary=_boundary(2),
-            payload=payload,
-            source_provenance=(),
+            payload={**payload, "primary_reason": "DIFFERENT"},
         )
     assert writer.revision == 1
 
@@ -3129,94 +3104,10 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
             "request_params": {"instrument_name": "BTC-TEST-COMBO", "depth": 10000},
             "schedule_fact_boundary": _boundary(3).as_object(),
         },
-        source_provenance=(
-            {
-                "source_role": "ANCHOR",
-                "source_identity": missing_candidate,
-                "receipt_fact_boundary": _boundary(3).as_object(),
-            },
-        ),
     )
     assert attempt_path is not None
     assert writer.revision == 2
-    assert attempt.scheduled_identity in read_current_evidence(tmp_path, bindings=bindings)
-    attempt_path.unlink()
-
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    raw["unknown_member"] = True
-    path.write_text(
-        json.dumps(raw, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(DownstreamEvidenceError, match=r"unknown|exact"):
-        read_current_evidence(tmp_path, bindings=bindings)
-
-
-def test_every_write_keeps_local_validation_without_attempt_graph_scan(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    local_calls = 0
-    original_local = evidence_module.validate_downstream_object
-
-    def count_local(value: Mapping[str, object], *, bindings: RuntimeBindings) -> None:
-        nonlocal local_calls
-        local_calls += 1
-        original_local(value, bindings=bindings)
-
-    monkeypatch.setattr(evidence_module, "validate_downstream_object", count_local)
-
-    owner, bindings = _owner(tmp_path)
-    transition = owner.settle_underwriting(
-        (
-            replace(
-                _underwriting_facts(
-                    boundary=_boundary(1, 110),
-                    change_id=10,
-                    previous_change_id=None,
-                    snapshot_kind="snapshot",
-                ),
-                active_episode_identity=None,
-                atomic_state="NOT_EVALUATED",
-                quote_refresh_witness=None,
-            ),
-        ),
-        allocate_request_id=lambda: 41,
-    )
-
-    assert [value.object_kind for value in transition.emitted] == [
-        "UNDERWRITING_AVAILABILITY_EVALUATION"
-    ]
-    assert local_calls == 1
-    assert owner.writer.revision == 1
-    assert read_current_evidence(tmp_path, bindings=bindings)
-    local_calls_after_reader = local_calls
-
-    boundary = _boundary(2, 120)
-    candidate_identity = "sha256:" + "c" * 64
-    identity = canonical_identity(
-        "CANDIDATE_INVALIDATION",
-        candidate_identity,
-        "RUNTIME_OR_CODE_IDENTITY_CHANGED",
-        ["RUNTIME_OR_CODE_IDENTITY_CHANGED"],
-        boundary.as_object(),
-    )
-    owner.writer.write(
-        object_kind="CANDIDATE_INVALIDATION",
-        object_identity=identity,
-        fact_boundary=boundary,
-        payload={
-            "candidate_invalidation_identity": identity,
-            "candidate_identity": candidate_identity,
-            "primary_reason": "RUNTIME_OR_CODE_IDENTITY_CHANGED",
-            "ordered_applicable_reason_vector": ["RUNTIME_OR_CODE_IDENTITY_CHANGED"],
-            "terminal_fact_boundary": boundary.as_object(),
-        },
-        source_provenance=(),
-    )
-
-    assert local_calls == local_calls_after_reader + 1
-    assert owner.writer.revision == 2
+    assert attempt.scheduled_identity in _written_objects(tmp_path, bindings=bindings)
 
 
 def test_close_quote_classifier_follows_the_frozen_first_match_order() -> None:

@@ -255,9 +255,10 @@ Policy and no new market, delivery, or settlement-price source.
 
 The pure downstream owner `short_vol_underwriting` consumes immutable public DTOs from the existing
 lower layers and owns
-Underwriting, admission, Position, counterfactual, Outcome, aligned-pair, and downstream evidence
-semantics. Its schemas, current writer/reader, canonical identities, and `UNKNOWN` handling are
-deterministic. It is a package, not a service, client, queue, database, or authority to run live.
+Underwriting, admission, Position, counterfactual, Outcome, aligned-pair, and downstream business
+record semantics. Its typed owners, canonical identities, and `UNKNOWN` handling are deterministic;
+persistence does not repeat those calculations. It is a package, not a service, client, queue,
+database, or authority to run live.
 The Online Runtime remains the sole composer; no lower layer imports that owner.
 
 ### `radar_runtime`
@@ -267,7 +268,7 @@ fixed-contract Shadow adapter, minimal business writers, persistent process host
 publisher, and loopback read-only HTTP surface in one continuously running process. It owns
 client/queue/request identity, lease, runtime identity, in-memory lifecycle, stop/reconnect
 barriers, atomic projection publication, and guarded CLI, not downstream economic Policy. The CLI
-exposes only the Radar `observe` path and the continuous `serve-shadow` product path.
+exposes only the continuous `serve-shadow` product path.
 
 ## Persistent process and read-only projection boundary
 
@@ -293,10 +294,9 @@ publication record.
 
 The service persists only Radar and downstream business objects. Lifecycle phase, health,
 readiness, and currentness are non-durable Workbench state. There is no service terminal manifest,
-inventory hash, lifecycle receipt, or second complete evidence reader around the business writers.
-Each downstream object's schema, primary boundary and identity are validated before publication.
-The current reader repeats those checks; it does not recompute owner arithmetic or rebuild a
-relationship graph.
+inventory hash, lifecycle receipt, repository reader, schema mirror, provenance envelope, or
+relationship graph around the business writers. Typed owners calculate each business object once;
+writers normalize and publish that completed object.
 
 The loopback server exposes only static assets, immutable snapshot JSON, health, and readiness over
 GET/HEAD. Other methods are 405. It has no Policy mutation, account, credential, order, fill, or
@@ -378,8 +378,8 @@ official combo identity, signed legs, required combo order direction, target qua
 bid or ask levels, and normalized gross credit. One run summary contains coverage, state counts,
 and `UNKNOWN` reasons.
 
-Repository-owned schemas validate these objects directly. Formula, boundary, state-sequence,
-continuity, and projection tests exercise the same small pure functions used by the live path.
+Formula, boundary, state-sequence, continuity, and projection tests exercise the same small pure
+functions used by the live path.
 The first Radar closure intentionally creates no replay path, second calculator, provenance graph,
 or persisted recomputation contract.
 
@@ -446,8 +446,8 @@ as `NO_TRADE` versus `REJECTED_COUNTERFACTUAL_TRADE`. The no-trade cashflow is d
 but a pair is economically comparable only when its trade arm is `MATURE_KNOWN`. Unknown and
 censored trade arms cannot enter the comparison denominator.
 
-The `short_vol_underwriting` owner writes these objects to one downstream evidence directory
-separate from Radar evidence. Radar evidence has one current schema and reader.
+The `short_vol_underwriting` owner writes these objects to one downstream business-record directory
+separate from Radar records. Neither path has a repository reader or parallel schema layer.
 The runtime continues to maintain bounded current public state for open observations after the
 Radar episode ends; this is not full-market persistence, replay, or a workflow service.
 

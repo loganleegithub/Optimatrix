@@ -613,7 +613,7 @@ WATERMARK_PENDING` from the independent publication phase. This compatibility pr
 make publication pending a coverage blocker or collapse the two normative axes.
 
 By contrast, `INDEX_TAIL_PENDING` was a repository-internal Python-only compatibility name. It is
-not serialized and the current reader does not consume it. Current coverage rejects
+not serialized. Current coverage rejects
 `INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING` as blockers; publication pending lives
 only in `index_baseline_publication`. The current contract does not require a Python tracker,
 disposition, or other runtime state named `INDEX_TAIL_PENDING`. For one accepted index generation
@@ -835,7 +835,7 @@ BAND_SUSPENDED
 ```
 
 The removed `INDEX_TAIL_PENDING` enum/disposition was Python-only compatibility surface, not a
-serialized tracker field. The current reader does not recognize it. The current runtime never
+serialized tracker field. The current runtime never
 enters an `INDEX_TAIL_PENDING` tracker state, and generation-global publication pending is
 diagnostic only.
 
@@ -913,7 +913,7 @@ suspended interval is counted as known-active time.
 
 Current normal index publication pending never enters the removed Python-only
 `INDEX_TAIL_PENDING` compatibility state and never resets activation or clear counts. The
-current reader rejects `INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING` as coverage
+coverage projection rejects `INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING` as
 blockers; publication timing is represented only by `index_baseline_publication`.
 `WARMUP`, `WINDOW_GAP`, `SOURCE_STALE`, and `CONTINUITY_GAP` remain fail-closed exactly as the
 availability table specifies.
@@ -1123,7 +1123,7 @@ exactly one mutually exclusive global state across all current Policy-applicable
 
 Out-of-scope instruments create no scope; dynamic catalog/band transitions split the interval at
 their accepted causal boundary. `band_suspended_duration_ms` is a diagnostic subset of
-`UNKNOWN`/`KNOWN_DEGRADED`, not a fifth partition state. The summary validator enforces:
+`UNKNOWN`/`KNOWN_DEGRADED`, not a fifth partition state. Summary construction enforces:
 
 ```text
 observation_interval_ms =
@@ -1159,15 +1159,15 @@ committed current truth, never only from the newest causal effect. Segment ident
 `state + blocking_groups + global_continuity_epoch`: a change in any member splits at that
 boundary; a fact that leaves all three unchanged does not split merely to log activity.
 
-### Writer, reader, and compatibility
+### Writer and compatibility
 
-`radar_runtime` is the only writer. The repository-owned reader validates the three current
-object kinds and their direct relationships. Required business fields may not be silently null,
-and unknown fields fail validation.
+`radar_runtime` is the only writer. Typed runtime projections construct the three current object
+kinds; persistence binds the run identities and serializes them without a repository reader or
+second schema/relationship pass. Required business fields may not be silently null.
 
 Every object binds exactly one Policy and runtime identity. Mixed identities fail closed. Deleted
 diagnostic summaries are unsupported and `NOT_COMPARABLE`; there is no migration or compatibility
-reader. The Policy schema remains version 3, and anomaly/atomic event semantics are unchanged.
+path. The Policy schema remains version 3, and anomaly/atomic event semantics are unchanged.
 
 Ordinary market facts, `NO_ANOMALY`, theoretical structures, unmatched combos, and full chain
 state are transient. The objects do not contain the full option chain and cannot reconstruct the
@@ -1205,7 +1205,7 @@ cross-process episode de-duplication are not implemented.
 
 Deterministic tests cover source parsing, causal ordering, currentness and gap handling, detector
 formulas and state transitions, official atomic-combo availability, minimal object projection,
-directory validation, clean stop, and the absence of private/order/fill paths.
+immutable-write conflict behavior, clean stop, and the absence of private/order/fill paths.
 
 Any future production-public validation requires a separately authorized bounded task. A short
 public smoke may prove connectivity and one real full-formula settled scope; natural anomaly and

@@ -24,7 +24,6 @@ from radar_runtime.deribit_public import (
 )
 from radar_runtime.identity import (
     StartupGuardError,
-    prepare_evidence_directory,
     validate_clean_git_outputs,
 )
 from radar_runtime.runtime import (
@@ -61,10 +60,6 @@ from short_vol_radar.evidence import (
     project_atomic_event,
     project_run_summary,
     ratio_or_none,
-    validate_anomaly_event,
-    validate_atomic_event,
-    validate_evidence_directory,
-    validate_run_summary,
 )
 from short_vol_radar.policy import OptionRule, load_policy_bytes
 
@@ -226,25 +221,8 @@ def test_minimal_events_are_strict_unit_bearing_and_carry_non_claims() -> None:
     assert "PUBLIC_QUOTE_NOT_FILL" in atomic_non_claims
     assert "full_option_chain" not in json.dumps((anomaly, atomic))
 
-    changed = dict(anomaly)
-    changed["unknown"] = True
-    with pytest.raises(EvidenceError, match="exact"):
-        validate_anomaly_event(changed)
 
-    nested = project_anomaly_event(anomaly_evidence())
-    instrument = nested["instrument"]
-    assert isinstance(instrument, dict)
-    instrument["unknown"] = True
-    with pytest.raises(EvidenceError, match="exact"):
-        validate_anomaly_event(nested)
-
-    changed_atomic = project_atomic_event(atomic_evidence())
-    changed_atomic["gross_entry_credit_usdc"] = "0.6"
-    with pytest.raises(EvidenceError, match="gross credit"):
-        validate_atomic_event(changed_atomic)
-
-
-def test_evidence_writer_deduplicates_events_and_validates_directory(
+def test_evidence_writer_deduplicates_business_objects(
     tmp_path: Path,
 ) -> None:
     anomaly = project_anomaly_event(anomaly_evidence())
@@ -281,8 +259,7 @@ def test_evidence_writer_deduplicates_events_and_validates_directory(
         PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE.value: 1
     }
     writer.write_summary(summary)
-    objects = validate_evidence_directory(tmp_path)
-    assert len(objects) == 3
+    assert len(tuple(tmp_path.glob("*.json"))) == 3
 
 
 def test_evidence_writer_uses_short_temporary_name_for_long_atomic_identity(
@@ -355,104 +332,6 @@ def test_evidence_writer_rejects_conflicting_duplicate_identity(tmp_path: Path) 
         writer.write_anomaly(conflicting)
 
 
-def test_evidence_directory_rejects_mixed_runtime_identity(tmp_path: Path) -> None:
-    first = summary_object(runtime_identity="one")
-    second = summary_object(runtime_identity="two")
-    (tmp_path / "one.json").write_text(json.dumps(first), encoding="utf-8")
-    (tmp_path / "two.json").write_text(json.dumps(second), encoding="utf-8")
-    with pytest.raises(EvidenceError, match="mixes"):
-        validate_evidence_directory(tmp_path)
-
-
-def test_evidence_directory_rejects_duplicate_json_keys(tmp_path: Path) -> None:
-    (tmp_path / "duplicate.json").write_text(
-        '{"object_kind":"RADAR_RUN_SUMMARY","object_kind":"RADAR_RUN_SUMMARY"}',
-        encoding="utf-8",
-    )
-    with pytest.raises(EvidenceError, match="invalid evidence"):
-        validate_evidence_directory(tmp_path)
-
-
-def test_current_evidence_directory_requires_one_canonical_run_summary(
-    tmp_path: Path,
-) -> None:
-    with pytest.raises(EvidenceError, match=r"exactly one.*run summary"):
-        validate_evidence_directory(tmp_path)
-
-    anomaly = project_anomaly_event(anomaly_evidence())
-    (tmp_path / "anomaly.json").write_text(json.dumps(anomaly), encoding="utf-8")
-    with pytest.raises(EvidenceError, match=r"exactly one.*run summary"):
-        validate_evidence_directory(tmp_path)
-
-    (tmp_path / "anomaly.json").unlink()
-    (tmp_path / "summary.json").write_text(
-        json.dumps(current_summary_object()),
-        encoding="utf-8",
-    )
-    with pytest.raises(EvidenceError, match=r"radar-run-summary\.json"):
-        validate_evidence_directory(tmp_path)
-
-
-def test_current_evidence_directory_rejects_non_json_or_non_file_entries(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "radar-run-summary.json").write_text(
-        json.dumps(current_summary_object()),
-        encoding="utf-8",
-    )
-    (tmp_path / "operator-note.txt").write_text("not evidence", encoding="utf-8")
-    with pytest.raises(EvidenceError, match="unexpected evidence directory entry"):
-        validate_evidence_directory(tmp_path)
-
-    (tmp_path / "operator-note.txt").unlink()
-    (tmp_path / "nested").mkdir()
-    with pytest.raises(EvidenceError, match="unexpected evidence directory entry"):
-        validate_evidence_directory(tmp_path)
-
-
-def test_evidence_directory_cross_checks_summary_episode_count(tmp_path: Path) -> None:
-    scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
-    scope.applicable_instrument_count = 1
-    scope.distinct_anomaly_episode_count = 1
-    scope.anomaly_activation_transition_count = 1
-    scope.anomaly_end_count_by_reason[EpisodeEndReason.CENSORED_AT_STOP.value] = 1
-    summary = summary_object()
-    summary["counts_by_scope"] = [scope.as_object()]
-    summary["anomaly_end_count_by_reason"] = {
-        reason.value: int(reason is EpisodeEndReason.CENSORED_AT_STOP)
-        for reason in EpisodeEndReason
-    }
-    (tmp_path / "radar-run-summary.json").write_text(json.dumps(summary), encoding="utf-8")
-
-    with pytest.raises(EvidenceError, match="episode count"):
-        validate_evidence_directory(tmp_path)
-
-
-def test_evidence_directory_attributes_anomaly_count_to_exact_option_type_and_band(
-    tmp_path: Path,
-) -> None:
-    anomaly = project_anomaly_event(anomaly_evidence())
-    wrong_scope = ScopeCounts("sha256:" + "b" * 64, "put", "other-band")
-    wrong_scope.applicable_instrument_count = 1
-    wrong_scope.distinct_anomaly_episode_count = 1
-    wrong_scope.anomaly_activation_transition_count = 1
-    wrong_scope.anomaly_end_count_by_reason[EpisodeEndReason.CENSORED_AT_STOP.value] = 1
-    summary = current_summary_object()
-    summary["counts_by_scope"] = [wrong_scope.as_object()]
-    summary["anomaly_end_count_by_reason"] = {
-        reason.value: int(reason is EpisodeEndReason.CENSORED_AT_STOP)
-        for reason in EpisodeEndReason
-    }
-    summary["known_active_duration_ms_sum_by_end_reason"] = {
-        reason.value: 0 for reason in EpisodeEndReason
-    }
-    (tmp_path / "anomaly.json").write_text(json.dumps(anomaly), encoding="utf-8")
-    (tmp_path / "radar-run-summary.json").write_text(json.dumps(summary), encoding="utf-8")
-
-    with pytest.raises(EvidenceError, match=r"scope|option_type|band"):
-        validate_evidence_directory(tmp_path)
-
-
 def test_coverage_segments_reject_overlap_gap_negative_and_mismatched_totals() -> None:
     with pytest.raises(EvidenceError, match="overlap or contain a gap"):
         summary_object(
@@ -500,12 +379,6 @@ def test_coverage_segments_reject_overlap_gap_negative_and_mismatched_totals() -
                 ),
             )
         )
-    summary = summary_object()
-    coverage = summary["coverage"]
-    assert isinstance(coverage, dict)
-    summary["coverage"] = {**coverage, "coverage_partition_error_ms": 1}
-    with pytest.raises(EvidenceError, match="totals"):
-        validate_run_summary(summary)
 
 
 def test_coverage_ledger_splits_same_state_on_global_continuity_restart() -> None:
@@ -603,27 +476,6 @@ def test_coverage_ledger_preserves_trigger_cause_and_true_blocking_reason() -> N
     }
 
 
-def heterogeneous_blocker_summary() -> dict[str, object]:
-    summary = current_summary_object()
-    segments = summary["coverage_segments"]
-    assert isinstance(segments, list)
-    first = segments[0]
-    assert isinstance(first, dict)
-    first["blocking_reason"] = "CURRENT_SCOPE_INCOMPLETE"
-    first["affected_scopes"] = ["OPTION:A", "OPTION:B"]
-    first["blocking_groups"] = [
-        {
-            "blocking_reason": "OPTION_BOOK_UNAVAILABLE",
-            "affected_scopes": ["OPTION:A"],
-        },
-        {
-            "blocking_reason": "TICKER_SOURCE_STALE",
-            "affected_scopes": ["OPTION:B"],
-        },
-    ]
-    return summary
-
-
 def test_coverage_ledger_splits_when_reason_to_scope_assignment_changes() -> None:
     tracker = CoverageTracker(
         0,
@@ -675,7 +527,6 @@ def test_coverage_ledger_splits_when_reason_to_scope_assignment_changes() -> Non
     assert isinstance(segments, list)
     assert [segment["start_monotonic_ms"] for segment in segments] == [0, 10, 15]
     assert segments[1]["blocking_groups"] != segments[2]["blocking_groups"]
-    validate_run_summary(summary)
 
 
 @pytest.mark.parametrize(
@@ -724,111 +575,6 @@ def test_coverage_tracker_rejects_inconsistent_group_summaries_immediately(
         )
 
 
-@pytest.mark.parametrize(
-    ("mutation", "message"),
-    (
-        ("reverse", "sorted"),
-        ("duplicate_reason", "unique"),
-        ("wrong_scalar", "summarize blocking groups"),
-        ("wrong_summary_scopes", "summarize blocking groups"),
-        ("empty", "1 to 256"),
-        ("extra_field", "exact repository-owned schema"),
-        ("none_group", "synthetic or empty"),
-    ),
-)
-def test_schema_six_blocking_groups_are_strict(
-    mutation: str,
-    message: str,
-) -> None:
-    summary = heterogeneous_blocker_summary()
-    validate_run_summary(summary)
-    segments = summary["coverage_segments"]
-    assert isinstance(segments, list)
-    first = segments[0]
-    assert isinstance(first, dict)
-    groups = first["blocking_groups"]
-    assert isinstance(groups, list)
-    first_group = groups[0]
-    second_group = groups[1]
-    assert isinstance(first_group, dict)
-    assert isinstance(second_group, dict)
-    if mutation == "reverse":
-        groups.reverse()
-    elif mutation == "duplicate_reason":
-        second_group["blocking_reason"] = first_group["blocking_reason"]
-    elif mutation == "wrong_scalar":
-        first["blocking_reason"] = "OPTION_BOOK_UNAVAILABLE"
-    elif mutation == "wrong_summary_scopes":
-        first["affected_scopes"] = ["OPTION:A"]
-    elif mutation == "empty":
-        first["blocking_groups"] = []
-    elif mutation == "extra_field":
-        first_group["payload"] = {"bid": 1}
-    elif mutation == "none_group":
-        first["blocking_reason"] = "CURRENT_SCOPE_INCOMPLETE"
-        first["blocking_groups"] = [
-            {
-                "blocking_reason": "NONE",
-                "affected_scopes": ["OPTION:A"],
-            }
-        ]
-    else:
-        raise AssertionError("unhandled mutation")
-
-    with pytest.raises(EvidenceError, match=message):
-        validate_run_summary(summary)
-
-
-@pytest.mark.parametrize(
-    ("state", "blocking_reason"),
-    (
-        ("KNOWN_COMPLETE", "CLOCK_GAP"),
-        ("UNKNOWN", "NONE"),
-        ("NO_APPLICABLE_SCOPE", "CURRENT_SCOPE_INCOMPLETE"),
-    ),
-)
-def test_current_coverage_state_and_blocking_reason_cannot_contradict(
-    state: str,
-    blocking_reason: str,
-) -> None:
-    summary = current_summary_object()
-    segments = summary["coverage_segments"]
-    assert isinstance(segments, list)
-    segments[0]["state"] = state
-    segments[0]["blocking_reason"] = blocking_reason
-    coverage = summary["coverage"]
-    assert isinstance(coverage, dict)
-    duration_ms = segments[0]["end_monotonic_ms"] - segments[0]["start_monotonic_ms"]
-    coverage.update(
-        {
-            "known_complete_ms": duration_ms if state == "KNOWN_COMPLETE" else 10,
-            "known_degraded_ms": 0,
-            "unknown_ms": duration_ms if state == "UNKNOWN" else 0,
-            "no_applicable_scope_ms": (duration_ms if state == "NO_APPLICABLE_SCOPE" else 0),
-        }
-    )
-
-    with pytest.raises(EvidenceError, match="blocking reason"):
-        validate_run_summary(summary)
-
-
-def test_current_accepts_bounded_option_local_coverage_scope() -> None:
-    summary = current_summary_object()
-    coverage_segments = summary["coverage_segments"]
-    assert isinstance(coverage_segments, list)
-    first = coverage_segments[0]
-    assert isinstance(first, dict)
-    first["affected_scopes"] = ["OPTION_LOCAL"]
-    first["blocking_groups"] = [
-        {
-            "blocking_reason": "RUNTIME_START_PENDING",
-            "affected_scopes": ["OPTION_LOCAL"],
-        }
-    ]
-
-    validate_run_summary(summary)
-
-
 def test_zero_and_unknown_denominators_serialize_as_null_semantics() -> None:
     assert ratio_or_none(0, 0) is None
     assert ratio_or_none(0, None) is None
@@ -842,64 +588,14 @@ def test_run_summary_contains_business_evidence_only() -> None:
     summary = summary_object()
 
     assert "operational_diagnostics" not in summary
-    validate_run_summary(summary)
 
 
-def test_run_summary_rejects_impossible_scope_count_relationships() -> None:
-    scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
-    scope.applicable_instrument_count = 1
-    scope.known_per_instrument_detector_evaluation_count = 1
-    scope.known_full_detector_formula_evaluation_count = 2
-    summary = summary_object()
-    summary["counts_by_scope"] = [scope.as_object()]
-
-    with pytest.raises(EvidenceError, match="full-formula"):
-        validate_run_summary(summary)
-
-
-def test_run_summary_cross_checks_episode_activation_and_end_totals() -> None:
-    scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
-    scope.applicable_instrument_count = 1
-    scope.distinct_anomaly_episode_count = 1
-    scope.anomaly_activation_transition_count = 1
-    summary = summary_object()
-    summary["counts_by_scope"] = [scope.as_object()]
-
-    with pytest.raises(EvidenceError, match="episode ends"):
-        validate_run_summary(summary)
-
-
-def test_radar_evidence_exports_only_the_current_schema_reader() -> None:
-    for retired_name in (
-        "validate_legacy_run_summary",
-        "validate_sealed_operational_run_summary",
-        "validate_sealed_version_four_run_summary",
-        "validate_sealed_version_five_run_summary",
-        "validate_legacy_evidence_directory",
-        "validate_sealed_operational_evidence_directory",
-        "validate_sealed_version_four_evidence_directory",
-        "validate_sealed_version_five_evidence_directory",
-        "sealed_version_five_operational_soak_window_accounting",
-    ):
-        assert not hasattr(evidence_module, retired_name)
-
-
-def test_git_and_evidence_startup_guards_fail_before_network(tmp_path: Path) -> None:
+def test_git_startup_guard_requires_one_clean_commit() -> None:
     assert validate_clean_git_outputs(head_output="a" * 40 + "\n", status_output="") == "a" * 40
     with pytest.raises(StartupGuardError, match="clean"):
         validate_clean_git_outputs(head_output="a" * 40, status_output=" M file.py\n")
     with pytest.raises(StartupGuardError, match="commit"):
         validate_clean_git_outputs(head_output="short", status_output="")
-
-    repository = tmp_path / "repo"
-    repository.mkdir()
-    with pytest.raises(StartupGuardError, match="outside"):
-        prepare_evidence_directory(repository / "evidence", repository)
-    evidence = tmp_path / "evidence"
-    assert prepare_evidence_directory(evidence, repository) == evidence
-    (evidence / "occupied").write_text("x", encoding="utf-8")
-    with pytest.raises(StartupGuardError, match="empty"):
-        prepare_evidence_directory(evidence, repository)
 
 
 def test_evidence_publish_failure_leaves_no_partial_final_or_temp_file(
@@ -922,120 +618,6 @@ def test_evidence_publish_failure_leaves_no_partial_final_or_temp_file(
         writer.write_anomaly(project_anomaly_event(evidence))
 
     assert list(tmp_path.iterdir()) == []
-
-
-def test_evidence_oserror_is_fatal_without_reconnect(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    exact, digest = policy_factory()
-    policy = load_policy_bytes(exact, digest)
-    connection_enters = 0
-
-    class CountingClient:
-        def __init__(self, *, session_epoch: int, rpc_deadline_ms: int) -> None:
-            self.session_epoch = session_epoch
-            assert rpc_deadline_ms == policy.runtime_limits.rpc_deadline_ms
-
-        async def __aenter__(self) -> CountingClient:
-            nonlocal connection_enters
-            connection_enters += 1
-            if connection_enters > 1:
-                raise AssertionError("evidence failure attempted a reconnect")
-            return self
-
-        async def __aexit__(self, *_args: object) -> None:
-            return None
-
-    async def write_failing_evidence(
-        runtime: LiveRadarRuntime,
-        _client: object,
-        _stop_event: asyncio.Event,
-    ) -> Path:
-        evidence = anomaly_evidence()
-        event = project_anomaly_event(evidence)
-        event["code_identity"] = runtime.code_identity
-        event["runtime_identity"] = runtime.runtime_identity
-        event["policy_identity"] = runtime.policy.identity
-        path = runtime.writer.write_anomaly(event)
-        raise AssertionError(f"write unexpectedly succeeded: {path}")
-
-    def fail_publish(_source: object, _target: object) -> None:
-        raise OSError("injected evidence publish failure")
-
-    monkeypatch.setattr(runtime_module, "DeribitPublicClient", CountingClient)
-    monkeypatch.setattr(LiveRadarRuntime, "run", write_failing_evidence)
-    monkeypatch.setattr(os, "link", fail_publish)
-
-    with pytest.raises(EvidenceError, match="publish"):
-        asyncio.run(
-            runtime_module.observe(
-                policy=policy,
-                code_identity="a" * 40,
-                evidence_directory=tmp_path,
-                stop_event=asyncio.Event(),
-            )
-        )
-
-    assert connection_enters == 1
-
-
-def test_observe_does_not_rewrite_summary_after_post_stop_transport_close_failure(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    exact, digest = policy_factory()
-    policy = load_policy_bytes(exact, digest)
-    stop_event = asyncio.Event()
-    summary_path = tmp_path / "radar-run-summary.json"
-    run_count = 0
-
-    class CloseFailingClient:
-        def __init__(self, *, session_epoch: int, rpc_deadline_ms: int) -> None:
-            assert session_epoch == 1
-            assert rpc_deadline_ms == policy.runtime_limits.rpc_deadline_ms
-
-        async def __aenter__(self) -> CloseFailingClient:
-            return self
-
-        async def __aexit__(self, *_args: object) -> None:
-            raise OSError("injected post-stop socket close failure")
-
-    async def complete_clean_stop(
-        _runtime: LiveRadarRuntime,
-        _client: object,
-        event: asyncio.Event,
-    ) -> Path:
-        nonlocal run_count
-        run_count += 1
-        event.set()
-        summary_path.write_text("{}\n", encoding="utf-8")
-        return summary_path
-
-    async def reject_second_clean_stop(
-        _runtime: LiveRadarRuntime,
-        _client: object | None = None,
-    ) -> Path:
-        raise AssertionError("committed summary was rewritten after transport close")
-
-    monkeypatch.setattr(runtime_module, "DeribitPublicClient", CloseFailingClient)
-    monkeypatch.setattr(LiveRadarRuntime, "run", complete_clean_stop)
-    monkeypatch.setattr(LiveRadarRuntime, "_clean_stop", reject_second_clean_stop)
-
-    assert (
-        asyncio.run(
-            runtime_module.observe(
-                policy=policy,
-                code_identity="a" * 40,
-                evidence_directory=tmp_path,
-                stop_event=stop_event,
-            )
-        )
-        == summary_path
-    )
-    assert run_count == 1
 
 
 def test_continuous_inbound_flow_cannot_starve_absolute_time_boundaries(
@@ -1361,9 +943,7 @@ def test_blocked_send_clean_stop_drains_cancellation_then_censors_scheduled(
         stop_event.set()
         return await task
 
-    summary_path = asyncio.run(scenario())
-    summary = json.loads(summary_path.read_text())
-    validate_run_summary(summary)
+    asyncio.run(scenario())
     lifecycles = tuple(runtime.reducer._rpc_lifecycles.values())
     assert len(lifecycles) == 2
     assert {lifecycle.state for lifecycle in lifecycles} == {runtime_module.RpcState.CENSORED}
@@ -1425,71 +1005,9 @@ def test_unexpected_sender_cancellation_fails_closed(
         asyncio.run(runtime.run(WaitingClient(), asyncio.Event()))
 
 
-def test_coverage_cause_has_no_default_and_rejects_unknown_reason() -> None:
+def test_coverage_cause_has_no_default() -> None:
     with pytest.raises(TypeError):
         CoverageSegment(0, 1, CoverageState.UNKNOWN)  # type: ignore[call-arg]
-
-    summary = current_summary_object()
-    segments = summary["coverage_segments"]
-    assert isinstance(segments, list)
-    segment = segments[1]
-    assert isinstance(segment, dict)
-    segment["trigger_cause"] = "RESULT_INFERRED_UNKNOWN_REASON"
-
-    with pytest.raises(EvidenceError, match="cause whitelist"):
-        validate_run_summary(summary)
-
-
-@pytest.mark.parametrize(
-    ("mutate", "message"),
-    [
-        (
-            lambda event: event.update({"short_instrument_name": "LONG"}),
-            "short leg",
-        ),
-        (
-            lambda event: event.update({"detector_causal_seq": 9}),
-            "causal",
-        ),
-    ],
-)
-def test_evidence_directory_cross_binds_atomic_to_anomaly(
-    tmp_path: Path,
-    mutate: object,
-    message: str,
-) -> None:
-    anomaly = project_anomaly_event(anomaly_evidence())
-    atomic = project_atomic_event(atomic_evidence())
-    assert callable(mutate)
-    mutate(atomic)
-    (tmp_path / "anomaly.json").write_text(json.dumps(anomaly), encoding="utf-8")
-    (tmp_path / "atomic.json").write_text(json.dumps(atomic), encoding="utf-8")
-
-    with pytest.raises(EvidenceError, match=message):
-        validate_evidence_directory(tmp_path)
-
-
-def test_atomic_event_requires_available_transition_in_owning_summary_scope(
-    tmp_path: Path,
-) -> None:
-    anomaly = project_anomaly_event(anomaly_evidence())
-    atomic = project_atomic_event(atomic_evidence())
-    summary = current_summary_object()
-    scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
-    scope.applicable_instrument_count = 1
-    scope.distinct_anomaly_episode_count = 1
-    scope.anomaly_activation_transition_count = 1
-    scope.anomaly_end_count_by_reason[EpisodeEndReason.CENSORED_AT_STOP.value] = 1
-    summary["counts_by_scope"] = [scope.as_object()]
-    summary["anomaly_end_count_by_reason"] = {
-        EpisodeEndReason.CENSORED_AT_STOP.value: 1,
-    }
-    (tmp_path / "anomaly.json").write_text(json.dumps(anomaly), encoding="utf-8")
-    (tmp_path / "atomic.json").write_text(json.dumps(atomic), encoding="utf-8")
-    (tmp_path / "radar-run-summary.json").write_text(json.dumps(summary), encoding="utf-8")
-
-    with pytest.raises(EvidenceError, match=r"atomic|AVAILABLE|scope"):
-        validate_evidence_directory(tmp_path)
 
 
 def test_atomic_causal_invariant_allows_later_quote_only_when_detector_is_same_boundary() -> None:
@@ -1555,4 +1073,4 @@ def test_complete_writer_directory_accepts_anomaly_then_later_normalized_atomic_
     }
     writer.write_summary(summary)
 
-    assert len(validate_evidence_directory(tmp_path)) == 3
+    assert len(tuple(tmp_path.glob("*.json"))) == 3

@@ -60,10 +60,10 @@ Normal market ticks, complete books, no-anomaly updates, Workbench snapshots, HT
 service lifecycle events, terminal manifests, file inventories, and service acceptance receipts
 are not persisted.
 
-Domain writers retain their direct schema/identity validation because those checks define the
-meaning of business objects. There is no second service-level reader or hash ledger around them.
-The downstream writer does not rebuild and validate the complete accumulated relationship graph
-for every new object, and the current offline reader does not recreate that graph.
+Typed domain owners determine payloads, identities, boundaries, and arithmetic before publication.
+Writers only bind the current runtime/Policy identities, normalize JSON, and publish immutable
+business records. There is no repository reader, duplicate schema table, provenance envelope,
+relationship-graph reconstruction, service-level reader, or hash ledger around them.
 
 ## Lifecycle and currentness
 

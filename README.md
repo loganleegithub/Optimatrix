@@ -15,20 +15,21 @@ outputs were rejected as unreliable, and its runtime/evidence history is no long
 current authority. There is no deployed process, launchd service, loopback listener, 24-hour claim,
 private/account access, order, fill, actual position, or PnL authority.
 
-The current offline runtime removed the macOS commissioning controller and the separate service
-lifecycle evidence ledger while keeping the complete Radar-to-Outcome transaction, reconnect loop,
+The current offline runtime keeps the complete Radar-to-Outcome transaction, reconnect loop,
 signal stop, minimal business persistence, coalesced Workbench publication, health/readiness, and
-loopback-only HTTP. The active offline task removes the remaining acceptance-only diagnostics and
-manifest harness; live commands remain forbidden.
+loopback-only HTTP. It has no commissioning controller, acceptance harness, service evidence
+ledger, compatibility reader, or duplicate persistence schema/provenance layer. Live commands
+remain forbidden.
 
 The application no longer runs `launchd`, `lsof`, unified-log, resource probes, 24-hour acceptance,
 service-manifest, inventory-hash, or lifecycle-receipt logic. Process supervision and host resource
 monitoring belong outside Python. Passing tests prove the simplified offline composition only;
 they do not accept the Radar, deployment, uptime, or strategy value.
 
-Downstream writes validate each current business object's schema, primary boundary and identity.
-Reading the current set repeats those checks; it does not recompute owner arithmetic or rebuild a
-second relationship graph.
+Typed owners calculate business state once. Persistence normalizes and serializes those completed
+objects without re-validating them through a second schema or relationship graph; the Workbench
+uses the same in-memory current-object set.
+
 ## Intended first business flow
 
 ```text
@@ -120,7 +121,7 @@ make sync
 make check
 ```
 
-The `observe` and `serve-shadow` commands are implementation surfaces only.
-`CURRENT_STAGE` forbids all live commands and deployment. Every private, account, order, fill, and
+`serve-shadow` is the sole product command. `CURRENT_STAGE` forbids live commands and deployment.
+Every private, account, order, fill, and
 capital surface remains forbidden. Any future production-public validation requires a new explicit
 task and fresh evidence boundary; no deleted history may be reused as acceptance.
