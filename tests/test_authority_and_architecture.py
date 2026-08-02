@@ -211,11 +211,11 @@ def test_current_stage_records_consumed_r3_and_active_r4_repair() -> None:
     assert ("AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED") in flat
     assert (
         "**Persistent public Shadow service/workbench:** "
-        "`R4_ATTEMPT_004_TERMINAL_QUIESCENT_ADVISORY_RESOURCE_REPAIR_AUTHORIZED`"
+        "`R4_ATTEMPT_005_TERMINAL_QUIESCENT_EVIDENCE_FILENAME_REPAIR_AUTHORIZED`"
     ) in flat
     assert (
         "**Persistent deployment / 24x7 acceptance:** "
-        "`R3_NOT_MET_R4_ATTEMPT_004_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`"
+        "`R3_NOT_MET_R4_ATTEMPT_005_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`"
     ) in flat
     assert current.count("**Evidence gate:**") == 1
     assert current.count("**Live commands:**") == 1
@@ -323,7 +323,7 @@ def test_r4_commissioning_integrity_repair_is_exactly_authorized() -> None:
     ) in flat
     assert (
         "**Persistent public Shadow service/workbench:** "
-        "`R4_ATTEMPT_004_TERMINAL_QUIESCENT_ADVISORY_RESOURCE_REPAIR_AUTHORIZED`"
+        "`R4_ATTEMPT_005_TERMINAL_QUIESCENT_EVIDENCE_FILENAME_REPAIR_AUTHORIZED`"
     ) in flat
     assert (
         "**Evidence gate:** `ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED`" in current
@@ -334,13 +334,14 @@ def test_r4_commissioning_integrity_repair_is_exactly_authorized() -> None:
     ) in flat
     assert (
         "**Persistent deployment / 24x7 acceptance:** "
-        "`R3_NOT_MET_R4_ATTEMPT_004_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`"
+        "`R3_NOT_MET_R4_ATTEMPT_005_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`"
     ) in flat
     assert "The user authorized R4 repair on 2026-08-01" in current
     assert "The user's direct 2026-08-02 instruction supersedes" in flat
     assert "R4 attempt 001 ran from merged commit" in flat
     assert "R4 attempt 002 ran from merged commit" in flat
     assert "R4 attempt 003 ran from merged commit" in flat
+    assert "R4 attempt 005 ran from merged commit" in flat
 
     for exact in (
         "**Status:** ACTIVE",
@@ -415,6 +416,32 @@ def test_r4_commissioning_integrity_repair_is_exactly_authorized() -> None:
         "cpu_resource",
     ):
         assert exact in current, exact
+
+    for exact in (
+        "1993bc21566909310d7affea03c1c8a83d58fa9d",
+        "sha256:c33b14b6422a320c496132d6bb7281eda0a23486bd5a53c85a92dcac8e3249fa",
+        "sha256:0a9a2cceed25cd4d1d327f876104a250882c98f692a96337bb3a6de1a532ea41",
+        "2913ee29289f5e1e50431d451587be6d7342cf0f3f0d7bacc93b0e09088f5512",
+        "4f0443984597119ff850d4c024f75e1a3fc7297c16a14a2c8bdfa137d7b5a92a",
+        "8866c90f69a502de64d30b0832891fe350071d5d326cd1624985f64df7dc689c",
+        "6644024",
+        "107 contiguous contract-valid successful probe rows",
+        "NATURAL_TERMINAL_AUDITED_QUIESCENT",
+        "PASS_COMPLETE_PROCESS_FAILURE_EVIDENCE_ONLY",
+        "NOT_ACCEPTED_PROCESS_FAILURE",
+    ):
+        assert exact in current, exact
+
+    for exact in (
+        "230-byte final filename",
+        "268 bytes",
+        "NAME_MAX=255",
+        ".evidence-{uuid.hex}.tmp",
+        "without contaminating source-shape diagnostics",
+        "packages/short_vol_radar/src/short_vol_radar/evidence.py",
+        "apps/radar_runtime/src/radar_runtime/runtime.py",
+    ):
+        assert exact in task, exact
 
     for exact in (
         "1fbe3b4daacdc26d6ca0a0ec2f46108fa355c7b8d62f698e09e7c85a7b5d25cd",
@@ -522,9 +549,9 @@ def test_r3_is_consumed_and_only_r4_task_is_active() -> None:
         "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR`"
     ) in " ".join(current.split())
     assert "**Persistent public Shadow service/workbench:**" in current
-    assert "`R4_ATTEMPT_004_TERMINAL_QUIESCENT_ADVISORY_RESOURCE_REPAIR_AUTHORIZED`" in current
+    assert "`R4_ATTEMPT_005_TERMINAL_QUIESCENT_EVIDENCE_FILENAME_REPAIR_AUTHORIZED`" in current
     assert "AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED" in current
-    assert "`R3_NOT_MET_R4_ATTEMPT_004_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`" in current
+    assert "`R3_NOT_MET_R4_ATTEMPT_005_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`" in current
     assert "FIRST_PERIODIC_PROBE_DEADLINE_MISSED_BEFORE_PROBE_LOAD" in current
     assert "The probe was never loaded and its ledger contains zero rows" in " ".join(
         current.split()
@@ -2189,7 +2216,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
         "`CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`",
         "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure",
-        "R4_ATTEMPT_004_TERMINAL_QUIESCENT_ADVISORY_RESOURCE_REPAIR_AUTHORIZED",
+        "R4_ATTEMPT_005_TERMINAL_QUIESCENT_EVIDENCE_FILENAME_REPAIR_AUTHORIZED",
         "ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED",
         "PASS_COMPLETE_PROCESS_FAILURE_EVIDENCE_ONLY",
         "NOT_ACCEPTED_PROCESS_FAILURE",
@@ -2425,11 +2452,11 @@ def test_persistent_service_contract_and_fresh_restart_close_exact_governance_ch
     assert "The version-1 snapshot" not in contract
     assert "`NO_LIVE_OR_DEPLOYMENT_AUTHORITY`" not in flat
     assert "SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART" not in current
-    assert "R4_ATTEMPT_004_TERMINAL_QUIESCENT_ADVISORY_RESOURCE_REPAIR_AUTHORIZED" in current
+    assert "R4_ATTEMPT_005_TERMINAL_QUIESCENT_EVIDENCE_FILENAME_REPAIR_AUTHORIZED" in current
     assert "67085248fffb1b20bae1c9512ae1191d166a6509" in current
     assert "9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa" in current
     assert "AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED" in current
-    assert "`R3_NOT_MET_R4_ATTEMPT_004_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`" in current
+    assert "`R3_NOT_MET_R4_ATTEMPT_005_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`" in current
     assert "d4740d6a181efebc8dad6d1091a78fa44d885957" in current
     assert "d5776f4f7c30763d095e36c7ea8b67209ec76448" in current
     assert "sha256:4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7" in current

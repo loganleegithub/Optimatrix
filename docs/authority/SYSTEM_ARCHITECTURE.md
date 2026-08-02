@@ -48,6 +48,13 @@ and exact-PID `cpu_resource` DiagnosticReports as advisory evidence only. Those 
 recorded but do not decide commissioning or the 24-hour result; direct process identity,
 listener, HTTP/schema/current-reader, probe-continuity, fatal, terminal, and quiescence gates remain
 unchanged.
+Attempt 005 commissioned and ran for 110 minutes before a valid atomic-quote evidence publication
+exposed a local filesystem boundary: its legal 230-byte final name became a 268-byte temporary
+basename and exceeded macOS `NAME_MAX`. The bounded owning-module repair keeps the same final
+evidence identity and atomic hard-link publication, but uses a short same-directory UUID temporary
+name. Local `EvidenceError` also crosses subscription dispatch unchanged instead of being
+misclassified as public protocol input. This is evidence persistence and failure attribution, not
+a market adapter, business semantics, schema, cadence, process, or deployment-topology change.
 Under the 2026-08-02 Authority amendment, each observed implementation defect receives one minimal
 exact candidate and merged repair before one fresh R4 recommission attempt; failed attempts are
 preserved and this repeats only until one attempt is commissioned. This changes no service

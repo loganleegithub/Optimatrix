@@ -60,6 +60,7 @@ from short_vol_radar.evidence import (
     INDEX_BASELINE_PUBLICATION_ACCEPTANCE_WINDOW_MS,
     INDEX_BASELINE_PUBLICATION_RETAINED_INTERVAL_LIMIT,
     CoverageState,
+    EvidenceError,
     EvidenceWriter,
     validate_evidence_directory,
     validate_run_summary,
@@ -1881,6 +1882,34 @@ def test_negative_platform_guard_ends_episode_once_as_session_gap(
     assert reducer.results[instrument.instrument_name].reason == "SESSION_GAP"
     assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
     assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_DETECTOR.value] == 0
+
+
+def test_subscription_evidence_failure_is_not_reclassified_as_public_payload(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+
+    def fail_evidence_write(*_args: object) -> bool:
+        raise EvidenceError("injected local evidence failure")
+
+    monkeypatch.setattr(reducer, "_apply_book", fail_evidence_write)
+    channel = "book.BTC_USDC-2AUG26-63000-C.100ms"
+    acknowledge_channel(reducer, channel)
+
+    with pytest.raises(EvidenceError, match="local evidence failure"):
+        reducer.reduce(
+            subscription_frame(
+                channel,
+                {},
+                ingress_seq=1,
+                received_monotonic_ms=1_001,
+            ),
+            processed_monotonic_ms=1_001,
+        )
+    assert reducer.diagnostics.source_invalid_count["option_book"] == 0
 
 
 def test_final_window_time_poll_ends_whole_scope_without_market_update(

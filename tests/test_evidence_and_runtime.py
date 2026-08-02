@@ -1142,6 +1142,60 @@ def test_evidence_writer_deduplicates_events_and_validates_directory(
     assert len(objects) == 3
 
 
+def test_evidence_writer_uses_short_temporary_name_for_long_atomic_identity(
+    tmp_path: Path,
+) -> None:
+    runtime_identity = "sha256:" + "0" * 64
+    policy_identity = "sha256:" + "1" * 64
+    short_instrument_name = "BTC_USDC-2AUG26-63000-C"
+    combo_instrument_name = "BTC_USDC-CS-2AUG26-63000_64500"
+    episode_identity = f"{runtime_identity}:{policy_identity}:{short_instrument_name}:416138"
+    source = atomic_evidence()
+    event = project_atomic_event(
+        replace(
+            source,
+            runtime_identity=runtime_identity,
+            policy_identity=policy_identity,
+            episode_identity=episode_identity,
+            short_instrument_name=short_instrument_name,
+            combo_legs=(
+                (short_instrument_name, Decimal(-1)),
+                ("BTC_USDC-2AUG26-64500-C", Decimal(1)),
+            ),
+            quote=replace(
+                source.quote,
+                match=replace(
+                    source.quote.match,
+                    combo_instrument_name=combo_instrument_name,
+                ),
+            ),
+        )
+    )
+    writer = EvidenceWriter(
+        tmp_path,
+        code_identity=source.code_identity,
+        runtime_identity=runtime_identity,
+        policy_identity=policy_identity,
+    )
+
+    path = writer.write_atomic(event)
+
+    assert path is not None
+    assert len(path.name.encode()) == 230
+    assert (
+        path.read_text(encoding="utf-8")
+        == json.dumps(
+            event,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n"
+    )
+    assert not tuple(tmp_path.glob(".*.tmp"))
+
+
 def test_evidence_writer_rejects_conflicting_duplicate_identity(tmp_path: Path) -> None:
     event = project_anomaly_event(anomaly_evidence())
     writer = EvidenceWriter(

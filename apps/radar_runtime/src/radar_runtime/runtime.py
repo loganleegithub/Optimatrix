@@ -96,6 +96,7 @@ from short_vol_radar.evidence import (
     CoverageBlockingReason,
     CoverageSegment,
     CoverageState,
+    EvidenceError,
     EvidenceWriter,
     decimal_text,
     project_anomaly_event,
@@ -1281,6 +1282,8 @@ class RadarReducer:
             elif method == "subscription":
                 try:
                     self._accept_subscription_frame(envelope)
+                except EvidenceError:
+                    raise
                 except (SourceDataError, ValueError) as exc:
                     raise PublicProtocolIncompatibility(
                         "subscription routing shape is incompatible"
@@ -2886,6 +2889,8 @@ class RadarReducer:
                     data,
                     boundary,
                 )
+        except EvidenceError:
+            raise
         except (ContinuityGap, SourceDataError, ValueError) as exc:
             self._note_source_shape(source, data, valid=False)
             raise PublicProtocolIncompatibility(
