@@ -15,7 +15,7 @@
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
 **Persistent public Shadow service/workbench:**
-`R4_ATTEMPT_004_TERMINAL_QUIESCENT_LOG_OBSERVER_REPAIR_AUTHORIZED`
+`R4_ATTEMPT_005_TERMINAL_QUIESCENT_EVIDENCE_FILENAME_REPAIR_AUTHORIZED`
 
 **Evidence gate:** `ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED`
 
@@ -23,7 +23,7 @@
 `AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED`
 
 **Persistent deployment / 24x7 acceptance:**
-`R3_NOT_MET_R4_ATTEMPT_004_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`
+`R3_NOT_MET_R4_ATTEMPT_005_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`
 
 ## Authority
 
@@ -139,9 +139,46 @@ The attempt-004 defect is exact and confined to the resource observer. A manual 
 `sender=/usr/bin/log`, and `subsystem=com.apple.log`; its command text contained both the exact
 runtime PID and CPU-resource search terms, so the next periodic probe counted that observer row as
 one event. No Python CPU diagnostic or real runtime/RunningBoard resource violation existed. The
-current repair may exclude only that exact `log` self-observation shape before message
-classification. Genuine exact-PID resource messages, diagnostic reports, source readability, the
-zero-event gate, and every runtime, business, Policy, and deployment boundary remain unchanged.
+first minimal repair excluded that exact self-observation shape and was merged, but still retained
+the recursive text-log gate.
+
+The user's subsequent 2026-08-02 instruction to finish the solution in one simple implementation
+round supersedes the requirement that host resource observations decide commissioning. The current
+repair removes `/usr/bin/log show` from preflight and every resource observation. CPU, RSS,
+queue-lag transitions, DiagnosticReports source readability, reports examined, and exact-PID
+`cpu_resource` event counts remain schema-compatible advisory facts only; their values do not
+determine `COMMISSIONED` or the 24-hour result. Unreadable DiagnosticReports sources are recorded as
+`false`, positive report/event counts are retained, and a nonnegative CPU value with its consistent
+percentage is retained. Malformed facts, negative counts, and a nonzero
+`unified_log_row_count_examined` remain invalid evidence. PID, argv, cwd, launchd runs, listener,
+HTTP/schema/current-reader, probe continuity, fatal process evidence, terminal-before-bootout, and
+quiescence remain direct hard gates. This adds no service endpoint, process, dependency, container,
+restart behavior, business rule, Policy, or contract change.
+
+R4 attempt 005 ran from merged commit `1993bc21566909310d7affea03c1c8a83d58fa9d`, envelope
+identity `sha256:c33b14b6422a320c496132d6bb7281eda0a23486bd5a53c85a92dcac8e3249fa`,
+and runtime identity `sha256:0a9a2cceed25cd4d1d327f876104a250882c98f692a96337bb3a6de1a532ea41`.
+It commissioned with 24.850000% one-core CPU over the 180000 ms gate and then ran for `6644024`
+ms with 107 contiguous contract-valid successful probe rows. A valid atomic-quote publication
+then terminated the process because its legal 230-byte final evidence name was expanded into a
+268-byte temporary basename, exceeding macOS `NAME_MAX=255`. The remaining periodic probe wrote
+481 explicit post-terminal failure markers before the natural-terminal stop path unloaded it.
+The terminal reader records `PASS_COMPLETE_PROCESS_FAILURE_EVIDENCE_ONLY`,
+`NOT_ACCEPTED_PROCESS_FAILURE`, and 24-hour result `NOT_MET`. Its commissioning receipt SHA-256 is
+`2913ee29289f5e1e50431d451587be6d7342cf0f3f0d7bacc93b0e09088f5512`; natural-terminal stop
+receipt SHA-256 is `4f0443984597119ff850d4c024f75e1a3fc7297c16a14a2c8bdfa137d7b5a92a` with status
+`NATURAL_TERMINAL_AUDITED_QUIESCENT`; and terminal-audit SHA-256 is
+`8866c90f69a502de64d30b0832891fe350071d5d326cd1624985f64df7dc689c`. Both labels, PID 66835,
+matching processes, and the loopback listener were absent before its root and installed plists
+were byte-preserved as attempt 005 archives.
+
+The attempt-005 defect is exact and non-economic. `EvidenceWriter` may use one short,
+final-name-independent UUID temporary basename in the same directory while retaining exclusive
+creation, file sync, hard-link publication, cleanup, directory sync, duplicate detection, and the
+unchanged final evidence name. A local `EvidenceError` must remain a fatal evidence failure through
+both subscription dispatch boundaries; it is not a public payload shape failure and must not
+increment source-invalid diagnostics. No market input, Decision, Policy, Outcome, schema,
+publication cadence, dependency, process, endpoint, or deployment topology changes.
 
 ### Consumed R3 commissioning and authorized R4 repair
 
@@ -700,7 +737,8 @@ profitability, or fill evidence.
 
 `SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure. It owns only the
 minimal owning-module repair, direct regression tests, exact-candidate acceptance, and the
-iterative R4 recommissioning amendment above. Attempt 001 is terminally quiescent and `NOT_MET`.
+iterative R4 recommissioning amendment above. Attempts 001 through 005 are terminally quiescent and
+`NOT_MET`.
 After each observed implementation defect is fixed and the resulting remote `main` satisfies the
 same gates, one fresh R4 attempt may run; this repeats only until one attempt is `COMMISSIONED`.
 

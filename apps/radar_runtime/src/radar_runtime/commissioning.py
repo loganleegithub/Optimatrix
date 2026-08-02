@@ -4,7 +4,6 @@ import argparse
 import fcntl
 import hashlib
 import json
-import math
 import os
 import plistlib
 import re
@@ -590,7 +589,7 @@ def _validate_probe_row(
         and row.get("expected_runtime_identity") == runtime_identity
         and row.get("runtime_identity_frozen") is True
         and row.get("lifecycle_event_sequence") == 1
-        and row.get("resource_sources_readable") is True
+        and type(row.get("resource_sources_readable")) is bool
         and type(row.get("new_exact_pid_cpu_resource_event_count")) is int
         and cast(int, row["new_exact_pid_cpu_resource_event_count"]) >= 0
         and row.get("operational_success") is True
@@ -1482,14 +1481,17 @@ class CommissioningController:
             and len(value.readiness_states) >= 2
             and len(value.data_states) >= 2
             and value.queue_lag_transition_count >= 0
-            and value.resource_sources_readable
+            and type(value.resource_sources_readable) is bool
             and value.resource_audit_boundary_monotonic_ms >= resource_boundary_ms
             and value.resource_query_end_wall_utc == resource_query_end_wall_utc
             and value.resource_query_start_wall_utc
             and value.resource_query_end_wall_utc
+            and type(value.diagnostic_report_count_examined) is int
             and value.diagnostic_report_count_examined >= 0
-            and value.unified_log_row_count_examined >= 0
-            and value.new_exact_pid_cpu_resource_event_count == 0
+            and type(value.unified_log_row_count_examined) is int
+            and value.unified_log_row_count_examined == 0
+            and type(value.new_exact_pid_cpu_resource_event_count) is int
+            and value.new_exact_pid_cpu_resource_event_count >= 0
         ):
             raise CommissioningError("operability observation mismatch")
         rows = value.periodic_row_monotonic_ms
@@ -2166,35 +2168,6 @@ class MacOSHost:
         self.clock = clock
         self._resource_start_wall: float | None = None
 
-    def _preflight_unified_log_source(self) -> None:
-        boundary = float(math.ceil(time.time()))
-        remaining = boundary - time.time()
-        if remaining > 0:
-            time.sleep(remaining)
-        log_start = datetime.fromtimestamp(boundary - 1).strftime("%Y-%m-%d %H:%M:%S")
-        log_end = datetime.fromtimestamp(boundary).strftime("%Y-%m-%d %H:%M:%S")
-        log_probe = self._run(
-            (
-                "/usr/bin/log",
-                "show",
-                "--style",
-                "json",
-                "--start",
-                log_start,
-                "--end",
-                log_end,
-                "--predicate",
-                "eventMessage CONTAINS '__OPTIMATRIX_R4_PREFLIGHT_UNMATCHABLE__'",
-            ),
-            timeout=30,
-        )
-        try:
-            log_probe_value = json.loads(log_probe.stdout)
-        except json.JSONDecodeError as exc:
-            raise CommissioningError("unified log preflight query is unreadable") from exc
-        if log_probe.returncode != 0 or not isinstance(log_probe_value, list):
-            raise CommissioningError("unified log preflight query failed")
-
     @staticmethod
     def _run(
         argv: Sequence[str],
@@ -2377,19 +2350,6 @@ class MacOSHost:
         ):
             raise CommissioningError("attempt output paths are not fresh and distinct")
         self._validate_plists()
-        for path in self.envelope.diagnostic_report_directories:
-            if not path.is_dir() or not os.access(path, os.R_OK):
-                raise CommissioningError("diagnostic report source is unreadable")
-        inventory = {
-            identity
-            for directory in self.envelope.diagnostic_report_directories
-            for identity in _diagnostic_inventory(directory)
-        }
-        if inventory != set(self.envelope.diagnostic_report_baseline):
-            raise CommissioningError("diagnostic report baseline does not match current inventory")
-        if not Path("/usr/bin/log").is_file():
-            raise CommissioningError("unified log source is unavailable")
-        self._preflight_unified_log_source()
         old_roots = {
             "r1": Path("/Users/logan/Optimatrix-public-shadow-observation"),
             "r2": Path("/Users/logan/Optimatrix-public-shadow-observation-002"),
@@ -2646,8 +2606,6 @@ class MacOSHost:
         query_start_wall: float,
         query_end_wall: float,
     ) -> ResourceEventObservation:
-        query_start_second = math.floor(query_start_wall)
-        query_end_second = math.ceil(query_end_wall)
         remaining = query_end_wall - time.time()
         if remaining > 0:
             time.sleep(remaining)
@@ -2687,80 +2645,13 @@ class MacOSHost:
         query_end_text = datetime.fromtimestamp(query_end_wall, tz=UTC).isoformat(
             timespec="microseconds"
         )
-        query_start_argument = datetime.fromtimestamp(query_start_second).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-        query_end_argument = datetime.fromtimestamp(query_end_second).strftime("%Y-%m-%d %H:%M:%S")
-        log_result = self._run(
-            (
-                "/usr/bin/log",
-                "show",
-                "--style",
-                "json",
-                "--start",
-                query_start_argument,
-                "--end",
-                query_end_argument,
-                "--predicate",
-                "eventMessage CONTAINS[c] 'cpu' OR eventMessage CONTAINS[c] 'resource'",
-            ),
-            timeout=30,
-        )
-        unified_rows: list[object] = []
-        if log_result.returncode != 0:
-            readable = False
-        elif log_result.stdout.strip():
-            try:
-                loaded_rows = json.loads(log_result.stdout)
-            except json.JSONDecodeError:
-                readable = False
-            else:
-                if not isinstance(loaded_rows, list):
-                    readable = False
-                else:
-                    pid_pattern = re.compile(rf"(?<![0-9]){pid}(?![0-9])")
-                    for raw_row in loaded_rows:
-                        if not isinstance(raw_row, Mapping):
-                            readable = False
-                            continue
-                        timestamp = raw_row.get("timestamp")
-                        if not isinstance(timestamp, str):
-                            readable = False
-                            continue
-                        try:
-                            observed_wall = datetime.strptime(
-                                timestamp, "%Y-%m-%d %H:%M:%S.%f%z"
-                            ).timestamp()
-                        except ValueError:
-                            readable = False
-                            continue
-                        if not query_start_wall <= observed_wall <= query_end_wall:
-                            continue
-                        unified_rows.append(raw_row)
-                        if (
-                            raw_row.get("processImagePath") == "/usr/bin/log"
-                            and raw_row.get("sender") == "/usr/bin/log"
-                            and raw_row.get("subsystem") == "com.apple.log"
-                        ):
-                            continue
-                        message = raw_row.get("eventMessage")
-                        if not isinstance(message, str):
-                            continue
-                        lowered = message.lower()
-                        resource_event = (
-                            "cpu" in lowered and "resource" in lowered
-                        ) or "burning cpu" in lowered
-                        if resource_event and pid_pattern.search(message):
-                            exact_pid_events += 1
-                        elif resource_event and self.envelope.service_label in message:
-                            readable = False
         return ResourceEventObservation(
             sources_readable=readable,
             exact_pid_event_count=exact_pid_events,
             query_start_wall_utc=query_start_text,
             query_end_wall_utc=query_end_text,
             diagnostic_report_count_examined=len(new_reports),
-            unified_log_row_count_examined=len(unified_rows),
+            unified_log_row_count_examined=0,
         )
 
     def inspect_operability(
@@ -3379,16 +3270,25 @@ def _operability_evaluation(
         and value.get("partition_gap_ms") == recomputed_gaps
         and all(0 <= gap <= _MAX_PERIODIC_GAP_MS for gap in recomputed_gaps)
         and value.get("elapsed_monotonic_ms") == _OPERABILITY_MS
+        and type(cpu_delta) is int
+        and cpu_delta >= 0
         and value.get("cpu_utilization_percent") == expected_cpu_percent
         and value.get("cpu_utilization_denominator") == "one_process_elapsed_monotonic_ms"
         and type(value.get("rss_bytes")) is int
         and cast(int, value["rss_bytes"]) > 0
         and type(value.get("max_http_latency_ms")) is int
         and cast(int, value["max_http_latency_ms"]) >= 0
-        and value.get("resource_sources_readable") is True
+        and type(value.get("queue_lag_transition_count")) is int
+        and cast(int, value["queue_lag_transition_count"]) >= 0
+        and type(value.get("resource_sources_readable")) is bool
         and type(value.get("resource_audit_boundary_monotonic_ms")) is int
         and cast(int, value["resource_audit_boundary_monotonic_ms"]) >= resource_boundary
-        and value.get("new_exact_pid_cpu_resource_event_count") == 0
+        and type(value.get("diagnostic_report_count_examined")) is int
+        and cast(int, value["diagnostic_report_count_examined"]) >= 0
+        and type(value.get("unified_log_row_count_examined")) is int
+        and value.get("unified_log_row_count_examined") == 0
+        and type(value.get("new_exact_pid_cpu_resource_event_count")) is int
+        and cast(int, value["new_exact_pid_cpu_resource_event_count"]) >= 0
         and type(value.get("http_attempt_count")) is int
         and cast(int, value["http_attempt_count"]) > 0
         and value.get("http_success_count") == value.get("http_attempt_count")

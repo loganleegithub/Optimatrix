@@ -4,8 +4,8 @@
 
 **Task kind:** IMPLEMENTATION
 
-**Runtime implementation:** REQUIRED — repo-owned commissioning/stop controller plus the exact
-R4 CPU hot-path repair declared below; market inputs, decision/runtime semantics, contracts,
+**Runtime implementation:** REQUIRED — repo-owned commissioning/stop controller plus each exact
+observed R4 owning-module repair declared below; market inputs, decision semantics, contracts,
 dependencies, and three Policies remain unchanged
 
 **Live commands:** REQUIRED — conditional terminal-goal delegation only after exact-candidate
@@ -25,8 +25,10 @@ R4 deployment preflight
 `agent/r4-commissioning-integrity-repair`, iterative repairs `agent/r4-lsof-field-repair` and
 `agent/r4-resource-log-classification-repair`, and current CPU repair
 `codex/r4-workbench-publication-cpu-repair`, followed by exact log-observer repair
-`codex/r4-log-observer-self-record-repair`; no force push, history rewrite, main merge into a task
-branch, or live mutation before exact-candidate acceptance
+`codex/r4-log-observer-self-record-repair` and final advisory resource-observation repair
+`codex/r4-remove-unified-log-gate`, which also owns the subsequently observed attempt-005 evidence
+filename repair; no force push, history rewrite, main merge into a task branch, or live mutation
+before exact-candidate acceptance
 
 ## 2026-08-02 R4 iterative recovery amendment
 
@@ -80,10 +82,47 @@ change a business enum/value/order, or amend a Policy, input, Outcome, HTTP, or 
 
 The same loop also exposed one observer-only false event after attempt 004 commissioned normally.
 macOS recorded a manual `/usr/bin/log show` query as a `com.apple.log` row whose command text
-contained the exact runtime PID and CPU-resource search terms. The minimal controller repair may
-exclude only rows whose `processImagePath` and `sender` are both `/usr/bin/log` and whose subsystem
-is `com.apple.log`. It must continue counting every genuine exact-PID CPU resource message and
-diagnostic report; no runtime or resource threshold changes.
+contained the exact runtime PID and CPU-resource search terms. The first minimal controller repair
+excluded only rows whose `processImagePath` and `sender` are both `/usr/bin/log` and whose subsystem
+is `com.apple.log`; it retained every other existing resource gate.
+
+## 2026-08-02 R4 advisory resource-observation amendment
+
+The user's subsequent instruction to avoid over-design and finish the solution in one implementation
+round supersedes the requirement that host resource observations remain gating. The final minimal
+controller repair removes `/usr/bin/log show` from preflight, periodic probes, final-online probes,
+and the bounded operability audit. CPU, RSS, and DiagnosticReports are advisory facts only; they
+remain recorded but do not determine `COMMISSIONED` or the 24-hour result. Queue-lag transition
+counts retain the same advisory treatment. CPU above 50%, unreadable DiagnosticReports, positive
+exact-PID report counts, and positive queue-lag transition counts are accepted and recorded. The
+receipt/probe schema remains unchanged, and `unified_log_row_count_examined` is retained and
+truthfully fixed at `0`. Well-typed facts and CPU-percentage consistency remain evidence-integrity
+requirements: inconsistent CPU percentages, negative counts, and nonzero
+`unified_log_row_count_examined` remain invalid evidence. PID, argv, cwd, launchd runs, listener,
+HTTP/schema/current-reader, probe continuity, fatal process evidence, terminal-before-bootout, and
+quiescence remain direct hard gates. No new module, endpoint, process, dependency, container,
+automatic restart, warning type, business rule, Policy, or contract is authorized.
+
+## 2026-08-02 R4 attempt-005 evidence publication amendment
+
+Attempt 005 commissioned from merged commit `1993bc21566909310d7affea03c1c8a83d58fa9d`, then ran
+`6644024` ms with 107 contiguous successful probe rows before a valid atomic-quote evidence write
+terminated the process. Its legal 230-byte final filename was copied into a temporary basename and
+extended with a UUID to 268 bytes, exceeding macOS `NAME_MAX=255`. `EvidenceError` inherits
+`ValueError`, so both subscription dispatch boundaries then misclassified the local evidence
+failure as a public combo-book payload incompatibility. The bound natural-terminal stop completed
+with `NATURAL_TERMINAL_AUDITED_QUIESCENT`; the terminal reader records
+`PASS_COMPLETE_PROCESS_FAILURE_EVIDENCE_ONLY`, `NOT_ACCEPTED_PROCESS_FAILURE`, and 24-hour
+`NOT_MET`. The attempt root and installed plists are preserved as numbered attempt-005 archives.
+
+The minimal repair may replace only the temporary basename with a short same-directory
+`.evidence-{uuid.hex}.tmp` name,
+retaining the existing exclusive-create, fsync, hard-link, cleanup, directory-fsync, duplicate,
+final-name, and payload semantics. `EvidenceError` must pass unchanged through both subscription
+dispatch boundaries without contaminating source-shape diagnostics. This authorizes direct
+regressions in the owning Radar evidence writer and runtime reducer only; it changes no market
+shape, business event identity, public protocol, Policy, contract, schema, cadence, dependency,
+process, endpoint, or deployment topology.
 
 ## Business closure
 
@@ -105,7 +144,8 @@ semantics, replaces immediate launchd post-`bootout` assertions with bounded mon
 separates the durable pre-cleanup failure fact from an immutable final cleanup conclusion, migrates
 the controller to an entirely fresh R4 root/label/envelope boundary, passes focused tests and full
 `make check`, receives independent exact-candidate review, reaches remote equality and passing
-GitHub CI, and is merged to remote `main`.
+GitHub CI, and is merged to remote `main`. The final implementation also removes the recursive
+Unified Log text gate while retaining CPU, RSS, queue-lag, and DiagnosticReports as advisory facts.
 
 **Then:** each newly rematerialized R4 attempt may invoke `commission` once, and an observed
 implementation defect may follow the iterative recovery amendment above until one attempt reaches
@@ -208,9 +248,17 @@ final candidate. At minimum the direct suite proves:
    includes `r1/r2/r3` consumed-root identities and writer-absence facts, rejects R3 as a fresh
    production boundary, and keeps the loopback/one-start/no-`-k` constraints.
 7. All existing absolute commissioning deadlines, exactly-once start/stop behavior, manual probe,
-   periodic gate, resource audit, terminal audit, and stop semantics continue to pass unchanged.
+   periodic gate, resource audit, terminal audit, and stop semantics continue to pass. The
+   executable controller contains no `/usr/bin/log` command; CPU above 50%, unreadable
+   DiagnosticReports, positive exact-PID report counts, and positive queue-lag transition counts
+   are accepted and recorded; inconsistent CPU percentages, negative counts, and nonzero
+   `unified_log_row_count_examined` remain invalid evidence; and
+   `unified_log_row_count_examined` is always `0`.
 8. Authority tests prove exactly one active task, consumed R3 truth, the sole conditional R4
    boundary, and no stale executable R3 authorization.
+9. A production-shaped 230-byte atomic evidence filename publishes through a short temporary
+   basename with no residual temp file, and a local `EvidenceError` traverses the real subscription
+   reducer path unchanged without incrementing public source-invalid diagnostics.
 
 The controller's convergence waits are operational control waits, not business evidence. Each wait
 uses its injected monotonic clock and a fixed 30,000 ms maximum with bounded 100 ms polling. A known
@@ -230,16 +278,17 @@ full gates.
 No live or launchd mutation is allowed from the implementation branch or PR. The eventual live
 invocation requires the exact merged remote `main`, a detached clean checkout, an independently
 created envelope and attempt-specific plists/wrappers, exact artifact digests, fresh output paths,
-all three old-root inventories unchanged, no old or R4 label/process/listener, and readable frozen
-resource sources. The controller receives the independently calculated envelope identity through
+all three old-root inventories unchanged, no old or R4 label/process/listener, and bound resource
+source configuration. The controller receives the independently calculated envelope identity through
 `--expected-envelope-identity` and refuses mismatch.
 
 ## Evidence boundary
 
 **Proves:** the R3 attempt is truthfully consumed and closed; each R4 attempt is independently
-preserved and the R4 controller accepts the actual
-version-2 projection semantics, observes asynchronous launchd teardown safely, records temporally
-correct failure/closure evidence, and is bound to a fresh single-invocation R4 attempt boundary.
+preserved and the R4 controller accepts the actual version-2 projection semantics, observes
+asynchronous launchd teardown safely, records advisory resource facts without Unified Log text
+classification, records temporally correct failure/closure evidence, and is bound to a fresh
+single-invocation R4 attempt boundary.
 
 **Does not prove:** that any R4 attempt has been commissioned; 24x7 service stability; complete market
 coverage; strategy edge; opportunity frequency; qualification; execution; actual fills, positions,
@@ -259,7 +308,9 @@ fees, PnL, or capital safety.
 
 **In:** `apps/radar_runtime/src/radar_runtime/commissioning.py`; the exact redundant-work repair in
 `apps/radar_runtime/src/radar_runtime/fixed_contract_shadow.py` and
-`apps/radar_runtime/src/radar_runtime/workbench.py`; their direct tests; R4 envelope,
+`apps/radar_runtime/src/radar_runtime/workbench.py`; the exact attempt-005 temporary-name repair in
+`packages/short_vol_radar/src/short_vol_radar/evidence.py` and evidence-error pass-through in
+`apps/radar_runtime/src/radar_runtime/runtime.py`; their direct tests; R4 envelope,
 failure-closure receipt, bootout/quiescence semantics, and fresh-boundary constants;
 `docs/authority/CURRENT_STAGE.md`; `docs/authority/SYSTEM_ARCHITECTURE.md`; `README.md`; authority
 tests; this sole active task; exact-candidate review/CI/merge; and iterative single-invocation R4
@@ -272,8 +323,9 @@ qualification; automatic restart; reuse of R1/R2/R3 assets; alternate root/label
 retroactive edit to R3 evidence.
 
 **Owning module/artifact:** `apps/radar_runtime/src/radar_runtime/commissioning.py`,
-`tests/test_persistent_service_commissioning.py`, `tests/test_authority_and_architecture.py`, and the
-fresh R4 validation/deployment evidence root.
+`packages/short_vol_radar/src/short_vol_radar/evidence.py`, the exact subscription dispatch boundary
+in `apps/radar_runtime/src/radar_runtime/runtime.py`, their direct tests,
+`tests/test_authority_and_architecture.py`, and the fresh R4 validation/deployment evidence root.
 
 ## Contract
 

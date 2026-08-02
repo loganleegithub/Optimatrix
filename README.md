@@ -27,7 +27,19 @@ unchanged workbench member encoding; it too was cleanly stopped and its 24-hour 
 R4 attempt 004 confirmed the CPU repair at 28.216667% over the commissioning gate and remained
 healthy through 24 probe rows. It was cleanly stopped only because a manual `/usr/bin/log show`
 query self-record was falsely counted as a runtime resource event; no new CPU diagnostic or real
-runtime violation existed, and the exact observer classifier is the next minimal R4 repair.
+runtime violation existed. The final minimal R4 repair removes Unified Log from the executable
+controller. CPU, RSS, queue-lag transitions, and exact-PID `cpu_resource` DiagnosticReports remain
+recorded as advisory facts; they do not decide commissioning or the 24-hour result. The existing
+PID/argv/cwd, launchd-run, listener, HTTP/schema/current-reader, probe-continuity, fatal, terminal,
+and quiescence gates remain unchanged. The repair adds no endpoint, process, dependency, container,
+or restart behavior.
+R4 attempt 005 commissioned and remained healthy for 107 probe rows before a valid atomic-quote
+evidence filename exposed the macOS component-name limit: the 230-byte final name was expanded into
+a 268-byte temporary name and terminated the process. Its natural-terminal audit passed evidence
+integrity, but business acceptance is `NOT_ACCEPTED_PROCESS_FAILURE` and 24-hour acceptance is
+`NOT_MET`. The attempt is terminally quiescent and archived. The final repair uses a short
+same-directory UUID temporary name without changing the durable filename or atomic publication,
+and preserves local evidence failures instead of reporting them as Deribit payload errors.
 The user's 2026-08-02 amendment keeps R4 as the active closure and authorizes minimal observed-bug
 repair, exact gates and merge, then one fresh recommission attempt at a time until one reaches
 `COMMISSIONED`. No live command is allowed from unmerged code or without a fresh detached
@@ -136,10 +148,11 @@ status `COMMISSION_FAILED_CLEANUP_REQUIRED`; the independent terminal audit is t
 that cleanup in fact converged. R3 cannot be retried, extended, relabelled, or reused.
 
 The active R4 task owns the isolated repo-owned commissioning/stop controller plus each exact
-observed minimal owning-module repair, direct tests, and governance truth. The current repair only
-removes redundant inactive-scope projection and unchanged workbench-member encoding; market and
-Decision semantics, publication cadence, contracts, three Policies, dependencies, and workbench
-schema stay unchanged. If the exact candidate is
+observed minimal owning-module repair, direct tests, and governance truth. The current candidate
+removes the recursive Unified Log gate and fixes attempt 005's overlong evidence temporary name
+plus its false public-protocol attribution; market and Decision semantics, durable evidence names,
+publication cadence, contracts, three Policies, dependencies, and workbench schema stay unchanged.
+If the exact candidate is
 independently accepted and merged, one fresh root
 `/Users/logan/Optimatrix-public-shadow-observation-004` and labels
 `com.optimatrix.public-shadow.r4` / `com.optimatrix.public-shadow.r4.probe` may be bound and started

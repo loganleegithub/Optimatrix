@@ -691,7 +691,7 @@ class EvidenceWriter:
             ensure_ascii=False,
             allow_nan=False,
         )
-        temporary = self.directory / f".{name}.{uuid.uuid4().hex}.tmp"
+        temporary = self.directory / f".evidence-{uuid.uuid4().hex}.tmp"
         try:
             with temporary.open("x", encoding="utf-8", newline="\n") as handle:
                 handle.write(serialized)
