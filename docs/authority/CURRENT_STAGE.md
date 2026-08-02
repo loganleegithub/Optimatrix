@@ -15,7 +15,7 @@
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
 **Persistent public Shadow service/workbench:**
-`R4_ATTEMPT_004_TERMINAL_QUIESCENT_LOG_OBSERVER_REPAIR_AUTHORIZED`
+`R4_ATTEMPT_004_TERMINAL_QUIESCENT_DIRECT_RESOURCE_GATE_REPAIR_AUTHORIZED`
 
 **Evidence gate:** `ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED`
 
@@ -139,9 +139,19 @@ The attempt-004 defect is exact and confined to the resource observer. A manual 
 `sender=/usr/bin/log`, and `subsystem=com.apple.log`; its command text contained both the exact
 runtime PID and CPU-resource search terms, so the next periodic probe counted that observer row as
 one event. No Python CPU diagnostic or real runtime/RunningBoard resource violation existed. The
-current repair may exclude only that exact `log` self-observation shape before message
-classification. Genuine exact-PID resource messages, diagnostic reports, source readability, the
-zero-event gate, and every runtime, business, Policy, and deployment boundary remain unchanged.
+first minimal repair excluded that exact self-observation shape and was merged, but still retained
+the recursive text-log gate.
+
+The user's subsequent 2026-08-02 instruction to finish the solution in one simple implementation
+round supersedes only the requirement that Unified Log text classification remain a hard gate. The
+current repair removes `/usr/bin/log show` from preflight and every resource observation. It keeps
+the existing exact-PID `cpu_resource` DiagnosticReports check and makes the already-recorded
+180,000 ms exact-process CPU ratio pass only at or below the existing 50% one-core threshold. PID,
+argv, cwd, launchd-run, listener, RSS, HTTP, queue-lag, diagnostic-source readability, terminal,
+and quiescence checks remain unchanged. The existing receipt member
+`unified_log_row_count_examined` remains schema-compatible and is truthfully fixed at `0`. This
+adds no service endpoint, process, dependency, container, restart behavior, business rule, Policy,
+or contract change.
 
 ### Consumed R3 commissioning and authorized R4 repair
 

@@ -524,6 +524,7 @@ class FakeHost:
     resource_sources_readable: bool = True
     resource_boundary_delta_ms: int = 0
     resource_event_count: int = 0
+    cpu_time_delta_ms: int = 900
     probe_bootstrap_delay_ms: int = 0
     observed_gate_start_ms: int | None = None
     observed_gate_end_ms: int | None = None
@@ -621,9 +622,9 @@ class FakeHost:
                 gate_start_monotonic_ms + offset for offset in self.periodic_offsets_ms
             ),
             all_probe_attempts_operational=self.all_probe_attempts_operational,
-            cpu_time_delta_ms=900,
+            cpu_time_delta_ms=self.cpu_time_delta_ms,
             elapsed_monotonic_ms=180_000,
-            cpu_utilization_percent="0.500000",
+            cpu_utilization_percent=f"{(self.cpu_time_delta_ms / 1_800):.6f}",
             rss_bytes=4_096,
             max_http_latency_ms=7,
             http_attempt_count=15,
@@ -957,6 +958,8 @@ def test_envelope_is_exact_and_forbids_kickstart_replace(tmp_path: Path) -> None
 def test_all_executable_controller_vocabulary_is_bound_to_r4() -> None:
     source = Path(commissioning.__file__).read_text(encoding="utf-8")
     for stale in (
+        "/usr/bin/log",
+        "__OPTIMATRIX_R4_PREFLIGHT_UNMATCHABLE__",
         "__OPTIMATRIX_R3_PREFLIGHT_UNMATCHABLE__",
         "Read-only r3 persistent-service probe",
         "Independent r3 persistent-service audit",
@@ -970,7 +973,6 @@ def test_all_executable_controller_vocabulary_is_bound_to_r4() -> None:
     ):
         assert stale not in source
     for current in (
-        "__OPTIMATRIX_R4_PREFLIGHT_UNMATCHABLE__",
         "Read-only r4 persistent-service probe",
         "Independent r4 persistent-service audit",
         "Deadline-safe r4 service controller",
@@ -1137,6 +1139,15 @@ def test_commissioning_accepts_actual_lifecycle_field_and_orders_effects(tmp_pat
     assert not controller.envelope.failure_closure_receipt_path.exists()
 
 
+def test_commissioning_accepts_cpu_at_exact_fifty_percent_limit(tmp_path: Path) -> None:
+    controller, _host, _probe, _audit = _controller(
+        tmp_path,
+        host_overrides={"cpu_time_delta_ms": 90_000},
+    )
+
+    assert controller.commission().status == "COMMISSIONED"
+
+
 def test_fabricated_contract_digest_field_fails_before_probe_and_stops_once(
     tmp_path: Path,
 ) -> None:
@@ -1205,6 +1216,7 @@ def test_existing_journal_refuses_second_start_without_any_host_effect(tmp_path:
         ({"resource_sources_readable": False}, "operability observation"),
         ({"resource_boundary_delta_ms": -1}, "operability observation"),
         ({"resource_event_count": 1}, "operability observation"),
+        ({"cpu_time_delta_ms": 90_001}, "operability observation"),
     ],
 )
 def test_commissioning_and_full_operability_boundaries_fail_closed(
@@ -2604,6 +2616,17 @@ def test_production_audit_recomputes_operability_gate_for_three_current_rows(
     )
     assert invalid_evaluation["valid"] is False
 
+    over_cpu = json.loads(json.dumps(result))
+    over_cpu["operability"]["cpu_time_delta_ms"] = 90_001
+    over_cpu["operability"]["cpu_utilization_percent"] = "50.000556"
+    result_path.write_text(json.dumps(over_cpu) + "\n", encoding="utf-8")
+    over_cpu_evaluation = commissioning._operability_evaluation(
+        envelope,
+        runtime_identity=RUNTIME,
+        pid=123,
+    )
+    assert over_cpu_evaluation["valid"] is False
+
 
 @pytest.mark.parametrize(
     (
@@ -2821,83 +2844,26 @@ def test_twenty_four_hour_met_rejects_probe_time_regression_or_gap_over_90_secon
     assert report["business_acceptance"] == "OPERATIONAL_24H_GATE_NOT_MET"
 
 
-def test_unified_resource_events_match_exact_pid_in_message_not_emitter_pid(
+def test_resource_audit_does_not_query_unified_log(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     diagnostic_directory = tmp_path / "DiagnosticReports"
     diagnostic_directory.mkdir()
+    report = diagnostic_directory / "new.cpu_resource.diag"
+    report.write_text("PID: 123\n", encoding="utf-8")
+    report_ns = int(1_754_006_400.5 * 1_000_000_000)
+    os.utime(report, ns=(report_ns, report_ns))
     mapping = _envelope_mapping(tmp_path)
     mapping["diagnostic_report_directories"] = [str(diagnostic_directory.resolve())]
     mapping["diagnostic_report_baseline"] = []
     envelope = CommissioningEnvelope.from_mapping(mapping, allow_test_boundary=True)
     host = MacOSHost(envelope, FakeClock())
-    timestamp = datetime.fromtimestamp(1_754_006_400.5, tz=UTC).strftime("%Y-%m-%d %H:%M:%S.%f%z")
-    unified_rows = [
-        {
-            "timestamp": timestamp,
-            "processID": 603,
-            "eventMessage": (
-                "Kernel call to get coalition roles for PID 123, resource coalition id: 268642, "
-                "jetsam coalition id: 268643, failed: ret -1, errno 2."
-            ),
-        },
-        {
-            "timestamp": timestamp,
-            "processID": 123,
-            "eventMessage": "cpu resource event for process 999",
-        },
-        {
-            "timestamp": timestamp,
-            "processID": 999,
-            "eventMessage": "cpu resource event for process 123",
-        },
-        {
-            "timestamp": timestamp,
-            "processID": 123,
-            "eventMessage": "cpu resource event for process 1234",
-        },
-        {
-            "timestamp": timestamp,
-            "processID": 57134,
-            "processImagePath": "/usr/bin/log",
-            "sender": "/usr/bin/log",
-            "subsystem": "com.apple.log",
-            "eventMessage": (
-                "log run noninteractively, args: log show predicate exact PID 123 "
-                "burning cpu cpu resource"
-            ),
-        },
-        {
-            "timestamp": timestamp,
-            "processID": 57135,
-            "processImagePath": "/usr/bin/not-log",
-            "sender": "/usr/bin/log",
-            "subsystem": "com.apple.log",
-            "eventMessage": "cpu resource event for process 123",
-        },
-        {
-            "timestamp": timestamp,
-            "processID": 57136,
-            "processImagePath": "/usr/bin/log",
-            "sender": "/usr/bin/not-log",
-            "subsystem": "com.apple.log",
-            "eventMessage": "cpu resource event for process 123",
-        },
-        {
-            "timestamp": timestamp,
-            "processID": 57137,
-            "processImagePath": "/usr/bin/log",
-            "sender": "/usr/bin/log",
-            "subsystem": "com.example.resource",
-            "eventMessage": "cpu resource event for process 123",
-        },
-    ]
 
-    def log_show(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess([], 0, json.dumps(unified_rows), "")
+    def reject_subprocess(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("resource audit must not query unified log")
 
-    monkeypatch.setattr(host, "_run", log_show)
+    monkeypatch.setattr(host, "_run", reject_subprocess)
 
     observation = host.inspect_resource_events(
         pid=123,
@@ -2906,9 +2872,9 @@ def test_unified_resource_events_match_exact_pid_in_message_not_emitter_pid(
     )
 
     assert observation.sources_readable is True
-    assert observation.exact_pid_event_count == 4
-    assert observation.diagnostic_report_count_examined == 0
-    assert observation.unified_log_row_count_examined == 8
+    assert observation.exact_pid_event_count == 1
+    assert observation.diagnostic_report_count_examined == 1
+    assert observation.unified_log_row_count_examined == 0
 
 
 def test_resource_audit_excludes_events_after_exact_frozen_wall_cutoff(
@@ -2934,25 +2900,15 @@ def test_resource_audit_excludes_events_after_exact_frozen_wall_cutoff(
     mapping["diagnostic_report_baseline"] = []
     envelope = CommissioningEnvelope.from_mapping(mapping, allow_test_boundary=True)
     host = MacOSHost(envelope, FakeClock())
-    unified_rows = [
-        {
-            "timestamp": datetime.fromtimestamp(before_wall, tz=UTC).strftime(
-                "%Y-%m-%d %H:%M:%S.%f%z"
-            ),
-            "eventMessage": "cpu resource event for process 123",
-        },
-        {
-            "timestamp": datetime.fromtimestamp(after_wall, tz=UTC).strftime(
-                "%Y-%m-%d %H:%M:%S.%f%z"
-            ),
-            "eventMessage": "cpu resource event for process 123",
-        },
-    ]
 
-    def log_show(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess([], 0, json.dumps(unified_rows), "")
+    def reject_subprocess(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("resource audit must not query unified log")
 
-    monkeypatch.setattr(host, "_run", log_show)
+    monkeypatch.setattr(
+        host,
+        "_run",
+        reject_subprocess,
+    )
     monkeypatch.setattr(time, "time", lambda: cutoff_wall + 10)
 
     observation = host.inspect_resource_events(
@@ -2962,7 +2918,9 @@ def test_resource_audit_excludes_events_after_exact_frozen_wall_cutoff(
     )
 
     assert observation.sources_readable is True
-    assert observation.exact_pid_event_count == 2
+    assert observation.exact_pid_event_count == 1
+    assert observation.diagnostic_report_count_examined == 1
+    assert observation.unified_log_row_count_examined == 0
     assert observation.query_end_wall_utc == datetime.fromtimestamp(
         cutoff_wall,
         tz=UTC,
