@@ -8,7 +8,7 @@
 
 **Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`
 
-**Sole authorized closure:** `SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN`
+**Sole authorized closure:** `NONE`
 
 **Persistent service:** `STOPPED_NO_DEPLOYMENT`
 
@@ -28,11 +28,12 @@ Policy quality, fillability, profitability, actual exposure, or PnL.
 
 ## Current implementation
 
-The current offline simplification keeps `serve-shadow` as the sole complete product path: one
+The completed offline simplification keeps `serve-shadow` as the sole complete product path: one
 public client, reducer, downstream owner, minimal business persistence, reconnect loop, signal
-stop, coalesced Workbench publisher, and loopback health/readiness HTTP. The active task removes
-the remaining Radar-only command and the duplicate persistence reader/schema/provenance proof
-layer. Typed owners remain the sole business calculators; writers only serialize their outputs.
+stop, coalesced Workbench publisher, and loopback health/readiness HTTP. It has no Radar-only
+command, repository reader, persistence schema mirror, envelope provenance mirror, acceptance
+controller, or service evidence ledger. Typed owners remain the sole business calculators; writers
+only serialize their outputs.
 It must preserve market/Decision inputs, all three Policies, Radar semantics, Underwriting,
 Shadow, Position, Outcome, causal order, honest `UNKNOWN`, conditioned zero claims, public/private
 separation, and GET/HEAD-only Workbench behavior.
@@ -41,20 +42,16 @@ separation, and GET/HEAD-only Workbench behavior.
 
 1. **Market/Decision input contract:** `NONE`
 2. **Decision Policy:** `NONE`
-3. **Outcome/evaluation contract:** persistence-envelope provenance and repository readback
-   validation are removed; kind-specific business identities, payloads, arithmetic, lifecycle,
-   and denominators are unchanged
+3. **Outcome/evaluation contract:** `NONE`
 4. **Stage/authorization:** `NONE`
 
 ## Permission boundary
 
 Allowed:
 
-- read-only inspection and deterministic offline tests of the merged implementation.
-- the bounded offline removal of the Radar-only command, repository evidence readers, duplicate
-  persistence validators/schema mirrors, envelope provenance mirror, and validation-only tests
-  under `SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN`;
-- deterministic offline tests and repository inspection for that task.
+- read-only inspection and deterministic offline tests of the completed implementation;
+- create a new task before any further product, authority, contract, code, or durable-artifact
+  change.
 
 Forbidden:
 
@@ -70,7 +67,7 @@ Forbidden:
 
 ## Acceptance and non-claims
 
-Direct offline tests and `make check` must prove the current composition, owner continuity,
+Direct offline tests and `make check` prove the simplified composition, owner continuity,
 stop/reconnect/failure behavior, Workbench publication, health/readiness, and read-only loopback
 surface. They cannot accept the Radar, authorize deployment, or prove uptime or economics.
 

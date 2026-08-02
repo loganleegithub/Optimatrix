@@ -156,20 +156,20 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_records_the_only_active_offline_closure() -> None:
+def test_current_stage_records_no_active_closure() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized closure:**"
 
     assert current.count(marker) == 1
-    assert f"{marker} `SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN`" in flat
+    assert f"{marker} `NONE`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`" in current
     assert "**Persistent service:** `STOPPED_NO_DEPLOYMENT`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
     assert "rejected its Radar results as unreliable" in flat
     assert "Deleted history is not a business premise" in flat
-    assert "duplicate persistence reader/schema/provenance proof layer" in flat
+    assert "repository reader, persistence schema mirror, envelope provenance mirror" in flat
     for stale_claim in (
         "R4_COMMISSIONED",
         "R4_COMMISSIONED_24H_OBSERVATION_ACTIVE",
@@ -181,13 +181,10 @@ def test_current_stage_records_the_only_active_offline_closure() -> None:
         assert stale_claim not in current
 
 
-def test_only_the_active_runtime_task_is_present() -> None:
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN.md",
-        "TEMPLATE.md",
-    ]
+def test_no_completed_task_accumulates() -> None:
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
     current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
-    assert "**Sole authorized closure:** `SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
 
 
@@ -388,12 +385,12 @@ def test_authority_describes_the_current_single_public_runtime() -> None:
     for value in (
         "OFFLINE_PUBLIC_SHADOW_RUNTIME",
         "NOT_ACCEPTED_PENDING_REVALIDATION",
-        "SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN",
         "STOPPED_NO_DEPLOYMENT",
         "Live commands:",
         "FORBIDDEN",
     ):
         assert value in current_stage
+    assert "**Sole authorized closure:** `NONE`" in current_stage
 
     for value in (
         "Deribit",
@@ -488,7 +485,7 @@ def test_persistent_service_contract_is_minimal_and_has_no_service_ledger() -> N
         assert removed not in contract
     assert "`STOPPED_NO_DEPLOYMENT`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
-    assert "**Sole authorized closure:** `SHORT_VOL_SYSTEM_RUNTIME_SLIMDOWN`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     assert "Deleted history is not a business premise" in " ".join(current.split())
 
 
