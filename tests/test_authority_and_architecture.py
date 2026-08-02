@@ -193,7 +193,7 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_records_consumed_r3_and_active_r4_repair() -> None:
+def test_current_stage_records_consumed_r3_and_active_r4_observation() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
@@ -205,18 +205,10 @@ def test_current_stage_records_consumed_r3_and_active_r4_repair() -> None:
     assert (
         "**Fixed-contract public Shadow runtime:** `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`"
     ) in flat
-    assert (
-        "**Evidence gate:** `ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED`" in current
-    )
-    assert ("AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED") in flat
-    assert (
-        "**Persistent public Shadow service/workbench:** "
-        "`R4_ATTEMPT_005_TERMINAL_QUIESCENT_EVIDENCE_FILENAME_REPAIR_AUTHORIZED`"
-    ) in flat
-    assert (
-        "**Persistent deployment / 24x7 acceptance:** "
-        "`R3_NOT_MET_R4_ATTEMPT_005_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`"
-    ) in flat
+    assert "**Evidence gate:** `R4_COMMISSIONED_24H_OBSERVATION_ACTIVE`" in current
+    assert ("READ_ONLY_MONITORING_PLUS_ONE_RESULT_INDEPENDENT_TERMINAL_CLOSE_AUTHORIZED") in flat
+    assert ("**Persistent public Shadow service/workbench:** `R4_COMMISSIONED`") in flat
+    assert ("**Persistent deployment / 24x7 acceptance:** `R4_COMMISSIONED_24H_PENDING`") in flat
     assert current.count("**Evidence gate:**") == 1
     assert current.count("**Live commands:**") == 1
     assert "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure" in flat
@@ -321,27 +313,22 @@ def test_r4_commissioning_integrity_repair_is_exactly_authorized() -> None:
         "**Sole authorized next product-capability closure:** "
         "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR`"
     ) in flat
-    assert (
-        "**Persistent public Shadow service/workbench:** "
-        "`R4_ATTEMPT_005_TERMINAL_QUIESCENT_EVIDENCE_FILENAME_REPAIR_AUTHORIZED`"
-    ) in flat
-    assert (
-        "**Evidence gate:** `ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED`" in current
-    )
+    assert ("**Persistent public Shadow service/workbench:** `R4_COMMISSIONED`") in flat
+    assert "**Evidence gate:** `R4_COMMISSIONED_24H_OBSERVATION_ACTIVE`" in current
     assert (
         "**Live commands:** "
-        "`AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED`"
+        "`READ_ONLY_MONITORING_PLUS_ONE_RESULT_INDEPENDENT_TERMINAL_CLOSE_AUTHORIZED`"
     ) in flat
-    assert (
-        "**Persistent deployment / 24x7 acceptance:** "
-        "`R3_NOT_MET_R4_ATTEMPT_005_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`"
-    ) in flat
+    assert ("**Persistent deployment / 24x7 acceptance:** `R4_COMMISSIONED_24H_PENDING`") in flat
     assert "The user authorized R4 repair on 2026-08-01" in current
     assert "The user's direct 2026-08-02 instruction supersedes" in flat
     assert "R4 attempt 001 ran from merged commit" in flat
     assert "R4 attempt 002 ran from merged commit" in flat
     assert "R4 attempt 003 ran from merged commit" in flat
     assert "R4 attempt 005 ran from merged commit" in flat
+    assert "R4 commissioned attempt 006 runs from merged remote `main` commit" in flat
+    assert "ec5b85b19c4dff646d5209b4dce4add05ca8b5b7e12a0ab792455e6b9ff454f3" in current
+    assert "sha256:9b5772ce0b3aa0aa0773533fbec1eaf8af90edd9d0971b2e3b9d0aaf0a2be364" in current
 
     for exact in (
         "**Status:** ACTIVE",
@@ -549,9 +536,9 @@ def test_r3_is_consumed_and_only_r4_task_is_active() -> None:
         "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR`"
     ) in " ".join(current.split())
     assert "**Persistent public Shadow service/workbench:**" in current
-    assert "`R4_ATTEMPT_005_TERMINAL_QUIESCENT_EVIDENCE_FILENAME_REPAIR_AUTHORIZED`" in current
-    assert "AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED" in current
-    assert "`R3_NOT_MET_R4_ATTEMPT_005_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`" in current
+    assert "`R4_COMMISSIONED`" in current
+    assert "READ_ONLY_MONITORING_PLUS_ONE_RESULT_INDEPENDENT_TERMINAL_CLOSE_AUTHORIZED" in current
+    assert "`R4_COMMISSIONED_24H_PENDING`" in current
     assert "FIRST_PERIODIC_PROBE_DEADLINE_MISSED_BEFORE_PROBE_LOAD" in current
     assert "The probe was never loaded and its ledger contains zero rows" in " ".join(
         current.split()
@@ -2216,8 +2203,8 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
         "`CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`",
         "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure",
-        "R4_ATTEMPT_005_TERMINAL_QUIESCENT_EVIDENCE_FILENAME_REPAIR_AUTHORIZED",
-        "ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED",
+        "R4_COMMISSIONED",
+        "R4_COMMISSIONED_24H_OBSERVATION_ACTIVE",
         "PASS_COMPLETE_PROCESS_FAILURE_EVIDENCE_ONLY",
         "NOT_ACCEPTED_PROCESS_FAILURE",
         "Accepted operability repair and consumed fresh-restart attempt",
@@ -2452,11 +2439,11 @@ def test_persistent_service_contract_and_fresh_restart_close_exact_governance_ch
     assert "The version-1 snapshot" not in contract
     assert "`NO_LIVE_OR_DEPLOYMENT_AUTHORITY`" not in flat
     assert "SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART" not in current
-    assert "R4_ATTEMPT_005_TERMINAL_QUIESCENT_EVIDENCE_FILENAME_REPAIR_AUTHORIZED" in current
+    assert "R4_COMMISSIONED" in current
     assert "67085248fffb1b20bae1c9512ae1191d166a6509" in current
     assert "9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa" in current
-    assert "AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED" in current
-    assert "`R3_NOT_MET_R4_ATTEMPT_005_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`" in current
+    assert "READ_ONLY_MONITORING_PLUS_ONE_RESULT_INDEPENDENT_TERMINAL_CLOSE_AUTHORIZED" in current
+    assert "`R4_COMMISSIONED_24H_PENDING`" in current
     assert "d4740d6a181efebc8dad6d1091a78fa44d885957" in current
     assert "d5776f4f7c30763d095e36c7ea8b67209ec76448" in current
     assert "sha256:4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7" in current
@@ -2520,8 +2507,8 @@ def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
                 current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
                 assert (
                     "**Live commands:** "
-                    "`AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_"
-                    "UNTIL_COMMISSIONED`"
+                    "`READ_ONLY_MONITORING_PLUS_ONE_RESULT_INDEPENDENT_TERMINAL_"
+                    "CLOSE_AUTHORIZED`"
                 ) in current
                 assert (
                     "**Sole authorized next product-capability closure:** "

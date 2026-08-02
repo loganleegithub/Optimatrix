@@ -55,11 +55,14 @@ evidence identity and atomic hard-link publication, but uses a short same-direct
 name. Local `EvidenceError` also crosses subscription dispatch unchanged instead of being
 misclassified as public protocol input. This is evidence persistence and failure attribution, not
 a market adapter, business semantics, schema, cadence, process, or deployment-topology change.
-Under the 2026-08-02 Authority amendment, each observed implementation defect receives one minimal
-exact candidate and merged repair before one fresh R4 recommission attempt; failed attempts are
-preserved and this repeats only until one attempt is commissioned. This changes no service
-topology, market/Decision semantics, business owner, publication cadence, unattended service retry
-loop, contract, or Policy.
+Under the 2026-08-02 Authority amendment, each observed implementation defect received one minimal
+exact candidate and merged repair before one fresh R4 recommission attempt; failed attempts remain
+preserved. Attempt 006 reached `COMMISSIONED` at merged commit
+`1b10ecb3336c9b342e5ddb306ecbb9170c211d70` with runtime identity
+`sha256:9b5772ce0b3aa0aa0773533fbec1eaf8af90edd9d0971b2e3b9d0aaf0a2be364` and remains under read-only
+24-hour observation. Iterative repair/recommissioning authority is consumed. This changes no
+service topology, market/Decision semantics, business owner, publication cadence, unattended
+service retry loop, contract, or Policy.
 
 ## Data lifecycles
 

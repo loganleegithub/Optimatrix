@@ -124,6 +124,25 @@ regressions in the owning Radar evidence writer and runtime reducer only; it cha
 shape, business event identity, public protocol, Policy, contract, schema, cadence, dependency,
 process, endpoint, or deployment topology.
 
+## 2026-08-02 R4 attempt-006 commissioned observation amendment
+
+Attempt 006 reached `COMMISSIONED` from merged remote `main` commit
+`1b10ecb3336c9b342e5ddb306ecbb9170c211d70`, tree
+`97f7f257979ab8e1613714f1bcded14f2f2e48cb`, envelope identity
+`sha256:00f5a2ec633af5bf24543b9b3daee310b96620773a51659eea021ee580d14bbe`, and runtime identity
+`sha256:9b5772ce0b3aa0aa0773533fbec1eaf8af90edd9d0971b2e3b9d0aaf0a2be364` under PID `91781`.
+Its immutable commissioning receipt SHA-256 is
+`ec5b85b19c4dff646d5209b4dce4add05ca8b5b7e12a0ab792455e6b9ff454f3`.
+The gate covered `180000` ms with `18/18` successful HTTP attempts, zero queue-lag transitions,
+zero exact-PID CPU resource events, and one launchd run. CPU and RSS remain advisory facts.
+
+The exact runtime remains online for read-only observation and its 24-hour result is `PENDING`.
+The iterative repair/recommissioning authority is consumed. Until the result-independent terminal
+boundary, this task authorizes only read-only monitoring; at that boundary it authorizes the one
+existing stop/terminal invocation already declared below. It authorizes no further implementation
+repair, recommissioning, restart, alternate process/root/label/port, Policy change, contract change,
+or workbench publication-cadence change.
+
 ## Business closure
 
 **Given:** the sole R3 commissioning attempt is consumed. Its immutable primary receipt has SHA-256
@@ -287,12 +306,11 @@ source configuration. The controller receives the independently calculated envel
 **Proves:** the R3 attempt is truthfully consumed and closed; each R4 attempt is independently
 preserved and the R4 controller accepts the actual version-2 projection semantics, observes
 asynchronous launchd teardown safely, records advisory resource facts without Unified Log text
-classification, records temporally correct failure/closure evidence, and is bound to a fresh
-single-invocation R4 attempt boundary.
+classification, records temporally correct failure/closure evidence, and independently establishes
+that exact attempt 006 reached `COMMISSIONED` under the bound R4 boundary.
 
-**Does not prove:** that any R4 attempt has been commissioned; 24x7 service stability; complete market
-coverage; strategy edge; opportunity frequency; qualification; execution; actual fills, positions,
-fees, PnL, or capital safety.
+**Does not prove:** 24x7 service stability; complete market coverage; strategy edge; opportunity
+frequency; qualification; execution; actual fills, positions, fees, PnL, or capital safety.
 
 | Evidence class | Requirement |
 |---|---|
@@ -313,8 +331,8 @@ fees, PnL, or capital safety.
 `apps/radar_runtime/src/radar_runtime/runtime.py`; their direct tests; R4 envelope,
 failure-closure receipt, bootout/quiescence semantics, and fresh-boundary constants;
 `docs/authority/CURRENT_STAGE.md`; `docs/authority/SYSTEM_ARCHITECTURE.md`; `README.md`; authority
-tests; this sole active task; exact-candidate review/CI/merge; and iterative single-invocation R4
-commission/close attempts until one is commissioned.
+tests; this sole active task; exact-candidate review/CI/merge; the commissioned attempt-006
+read-only observation; and its one result-independent terminal close.
 
 **Out:** `service.py`; workbench schema or publication-cadence changes; market adapters;
 Radar/Underwriting/Position/Outcome formulas or state machines; contracts;
@@ -370,8 +388,9 @@ Acceptance requires all of the following on one exact candidate:
 - no live command was issued from the branch or PR;
 - merge to remote `main` occurs only after those gates.
 
-The later live result is separately accepted only from recomputed host evidence. A code/CI pass does
-not authorize claiming that commissioning or 24x7 observation has already occurred.
+The commissioning result is accepted only from the independently recomputed attempt-006 host
+evidence recorded above. The 24-hour result remains separately pending until its full denominator
+and terminal evidence complete; a code/CI pass cannot supply either fact.
 
 ## Definition of done
 
@@ -386,3 +405,6 @@ not authorize claiming that commissioning or 24x7 observation has already occurr
 - The accepted code is merged before each R4 deployment materialization or launchd mutation.
 - Each R4 attempt invokes commission once under fresh outputs; a failure is terminally closed and
   preserved before the next observed bug is repaired, with no blind retry or semantic inflation.
+- Attempt 006 remains the sole commissioned runtime until its result-independent terminal close;
+  the task stays active while its 24-hour denominator is incomplete and authorizes no further
+  repair or recommissioning.

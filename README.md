@@ -147,20 +147,17 @@ consumed. Its primary receipt was correctly written before cleanup but used the 
 status `COMMISSION_FAILED_CLEANUP_REQUIRED`; the independent terminal audit is the durable proof
 that cleanup in fact converged. R3 cannot be retried, extended, relabelled, or reused.
 
-The active R4 task owns the isolated repo-owned commissioning/stop controller plus each exact
-observed minimal owning-module repair, direct tests, and governance truth. The current candidate
-removes the recursive Unified Log gate and fixes attempt 005's overlong evidence temporary name
-plus its false public-protocol attribution; market and Decision semantics, durable evidence names,
-publication cadence, contracts, three Policies, dependencies, and workbench schema stay unchanged.
-If the exact candidate is
-independently accepted and merged, one fresh root
-`/Users/logan/Optimatrix-public-shadow-observation-004` and labels
-`com.optimatrix.public-shadow.r4` / `com.optimatrix.public-shadow.r4.probe` may be bound and started
-once. The existing 120-second first-probe and 180-second post-bootstrap operability gates remain.
-Teardown now has one 30-second monotonic convergence boundary, and each failure has an immutable
-pre-cleanup receipt plus a distinct immutable final closure receipt. Successful commissioning
-begins read-only observation and leaves 24x7 `PENDING`; it does not establish 24x7 stability,
-Policy quality, opportunity frequency, fillability, or PnL.
+The active R4 task now owns only the exact commissioned attempt-006 runtime under
+`/Users/logan/Optimatrix-public-shadow-observation-004`, its read-only observation, and one
+result-independent terminal close. It runs merged commit
+`1b10ecb3336c9b342e5ddb306ecbb9170c211d70` with runtime identity
+`sha256:9b5772ce0b3aa0aa0773533fbec1eaf8af90edd9d0971b2e3b9d0aaf0a2be364` under labels
+`com.optimatrix.public-shadow.r4` / `com.optimatrix.public-shadow.r4.probe`. Its commissioning
+receipt is `COMMISSIONED`; 24-hour acceptance remains `PENDING`. Iterative repair and
+recommissioning authority is consumed. Market and Decision semantics, durable evidence names,
+publication cadence, contracts, three Policies, dependencies, and workbench schema remain
+unchanged. Commissioning does not establish 24x7 stability, Policy quality, opportunity frequency,
+fillability, or PnL.
 
 ## Intended first business flow
 

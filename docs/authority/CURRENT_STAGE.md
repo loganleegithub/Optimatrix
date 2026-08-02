@@ -15,15 +15,15 @@
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
 **Persistent public Shadow service/workbench:**
-`R4_ATTEMPT_005_TERMINAL_QUIESCENT_EVIDENCE_FILENAME_REPAIR_AUTHORIZED`
+`R4_COMMISSIONED`
 
-**Evidence gate:** `ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED`
+**Evidence gate:** `R4_COMMISSIONED_24H_OBSERVATION_ACTIVE`
 
 **Live commands:**
-`AUTHORIZED_AFTER_EACH_EXACT_R4_FIX_MERGE_RECOMMISSION_UNTIL_COMMISSIONED`
+`READ_ONLY_MONITORING_PLUS_ONE_RESULT_INDEPENDENT_TERMINAL_CLOSE_AUTHORIZED`
 
 **Persistent deployment / 24x7 acceptance:**
-`R3_NOT_MET_R4_ATTEMPT_005_NOT_MET_ITERATIVE_RECOVERY_ACTIVE`
+`R4_COMMISSIONED_24H_PENDING`
 
 ## Authority
 
@@ -37,10 +37,12 @@ defined by [`SHORT_VOL_RADAR.md`](../contracts/SHORT_VOL_RADAR.md), records the 
 accepted fixed-contract Shadow implementation-integrity repair and two-layer engineering evidence
 defined below, preserves every consumed persistent observation exactly, accepts the bounded
 service-operability and trader-workbench repair, records the consumed R3 commissioning failure and
-clean stop exactly, and activates one bounded R4 integrity repair. The historical failed
+clean stop exactly, and records one commissioned R4 runtime under active read-only 24-hour
+observation. The historical failed
 attempt, accepted smoke, and all three persistent-service attempts remain sealed and are not
-retried. Only the active task's observed, minimal owning-module repairs and the conditional
-sequence below are authorized. The market/Decision behavior, dependencies, contracts, three
+retried. The active task now owns only read-only observation and one result-independent terminal
+close of that exact runtime; iterative repair and recommissioning authority ended when R4 reached
+`COMMISSIONED`. The market/Decision behavior, dependencies, contracts, three
 Policies, service/workbench schemas and cadence, private/account data, orders, fills, capital,
 qualification, Challenger automation, promotion, and execution remain unchanged and unauthorized.
 
@@ -179,6 +181,25 @@ unchanged final evidence name. A local `EvidenceError` must remain a fatal evide
 both subscription dispatch boundaries; it is not a public payload shape failure and must not
 increment source-invalid diagnostics. No market input, Decision, Policy, Outcome, schema,
 publication cadence, dependency, process, endpoint, or deployment topology changes.
+
+R4 commissioned attempt 006 runs from merged remote `main` commit
+`1b10ecb3336c9b342e5ddb306ecbb9170c211d70`, tree
+`97f7f257979ab8e1613714f1bcded14f2f2e48cb`, envelope identity
+`sha256:00f5a2ec633af5bf24543b9b3daee310b96620773a51659eea021ee580d14bbe`, and runtime identity
+`sha256:9b5772ce0b3aa0aa0773533fbec1eaf8af90edd9d0971b2e3b9d0aaf0a2be364` under PID `91781`.
+Its immutable commissioning receipt SHA-256 is
+`ec5b85b19c4dff646d5209b4dce4add05ca8b5b7e12a0ab792455e6b9ff454f3` with status
+`COMMISSIONED`. The bounded gate covered exactly `180000` ms, recorded `18/18` successful HTTP
+attempts, zero queue-lag transitions, zero exact-PID CPU resource events, one launchd run, and a
+maximum HTTP latency of `11` ms. Its recorded one-core CPU utilization of `20.088889%` and RSS of
+`65388544` bytes are advisory facts, not business acceptance.
+
+The same PID, argv, cwd, listener, runtime identity, probe ledger, and evidence root remain online
+for the authorized read-only 24-hour observation. Commissioning is established; 24-hour acceptance
+remains `PENDING` until one continuous `86400000` ms denominator and the result-independent
+terminal reader, conservation, and quiescence checks complete. No further R4 repair,
+recommissioning, alternate process, restart, root, label, port, Policy change, or cadence change is
+authorized during this interval.
 
 ### Consumed R3 commissioning and authorized R4 repair
 
@@ -661,8 +682,8 @@ reader passed, but `24_HOUR_CONTINUOUS_PUBLIC_SERVICE_SAMPLE = NOT_MET`. The lat
 commissioning attempt is also consumed after one valid probe row and two verifier-rejected probe
 attempts; its independent terminal audit passed clean-stop integrity, both R3 labels and the
 listener are absent, and its 24-hour sample is `NOT_MET`. The active R4 closure owns only the
-explicitly authorized controller-integrity repair and one conditional, pre-bound fresh root,
-labels, process, probe ledger, and stop boundary after every exact-candidate gate passes.
+exact commissioned attempt-006 root, labels, PID, process, probe ledger, read-only observation,
+and one result-independent terminal close. Its 24-hour denominator is still incomplete.
 
 The accepted authority-only contract changes no accepted Radar runtime or live evidence identity:
 the governing candidate remains `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`.
@@ -736,11 +757,14 @@ profitability, or fill evidence.
 ## Active and queued sequence
 
 `SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure. It owns only the
-minimal owning-module repair, direct regression tests, exact-candidate acceptance, and the
-iterative R4 recommissioning amendment above. Attempts 001 through 005 are terminally quiescent and
-`NOT_MET`.
-After each observed implementation defect is fixed and the resulting remote `main` satisfies the
-same gates, one fresh R4 attempt may run; this repeats only until one attempt is `COMMISSIONED`.
+commissioned attempt-006 read-only observation and one result-independent terminal close. Attempts
+001 through 005 are terminally quiescent and `NOT_MET`; attempt 006 is `COMMISSIONED` with 24-hour
+acceptance `PENDING`. Iterative repair and recommissioning authority is consumed. No new R4
+attempt, implementation repair, restart, or alternate deployment boundary is authorized.
+
+After the exact attempt-006 interval reaches its result-independent stop boundary, the terminal
+reader, conservation, and quiescence result must be recorded honestly. Only then may R4 close and
+a separately authorized Workbench publication-cadence task become the sole active closure.
 
 The accepted two-layer smoke and all three consumed persistent observations cannot be extended,
 retried, reused, or relabelled. These later closures remain queued and unauthorized:
