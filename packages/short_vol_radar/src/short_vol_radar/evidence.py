@@ -1058,17 +1058,6 @@ def validate_evidence_directory(directory: Path) -> tuple[dict[str, object], ...
     return _validate_evidence_directory(directory, diagnostics_version=6)
 
 
-def validate_persistent_service_evidence_directory(
-    directory: Path,
-) -> tuple[dict[str, object], ...]:
-    """Validate service-owned Radar evidence without changing the standard reader."""
-    return _validate_evidence_directory(
-        directory,
-        diagnostics_version=6,
-        allow_service_leading_zero_duration_restarts=True,
-    )
-
-
 def validate_radar_object_relationships(
     *,
     anomalies: Sequence[Mapping[str, object]],
@@ -1334,7 +1323,6 @@ def _validate_evidence_directory(
     directory: Path,
     *,
     diagnostics_version: int,
-    allow_service_leading_zero_duration_restarts: bool = False,
 ) -> tuple[dict[str, object], ...]:
     objects: list[dict[str, object]] = []
     identities: set[tuple[object, object, object]] = set()
@@ -1390,10 +1378,7 @@ def _validate_evidence_directory(
             elif diagnostics_version == 5:
                 validate_sealed_version_five_run_summary(value)
             elif diagnostics_version == 6:
-                if allow_service_leading_zero_duration_restarts:
-                    validate_persistent_service_run_summary(value)
-                else:
-                    validate_run_summary(value)
+                validate_run_summary(value)
             else:
                 raise EvidenceError("unsupported evidence diagnostics version")
             summaries.append(value)
@@ -3768,21 +3753,6 @@ def _validate_version_three_coverage(
             ):
                 raise EvidenceError("unrepresented leading continuity restart is not zero-duration")
         represented_restart_edges = represented_restart_edges[leading_unrepresented_count:]
-        if leading_unrepresented:
-            leading_restart = leading_unrepresented[-1]
-            leading_scopes = _validate_affected_scopes(leading_restart["affected_scopes"])
-            first_segment = segments[0]
-            if (
-                first_segment.global_continuity_epoch != leading_restart["to_epoch"]
-                or first_segment.reason != leading_restart["trigger_cause"]
-                or first_segment.blocking_reason != leading_restart["reason"]
-                or first_segment.affected_scopes != leading_scopes
-                or first_segment.blocking_groups
-                != (CoverageBlockingGroup(str(leading_restart["reason"]), leading_scopes),)
-            ):
-                raise EvidenceError(
-                    "leading coverage segment does not match its zero-duration restart"
-                )
     expected_final_epoch = current_epoch - 1 if terminal_restart is not None else current_epoch
     if (not allow_service_leading_zero_duration_restarts and epochs[0] != 1) or epochs[
         -1

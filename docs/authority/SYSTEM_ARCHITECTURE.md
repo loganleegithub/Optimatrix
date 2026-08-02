@@ -29,13 +29,10 @@ Monitor and Short Vol Radar flow. There is no capture job followed by a scan job
 that repeatedly rereads an unchanged local dataset. The downstream owners run in the same process.
 Production-public invocation and deployment authority comes only from `CURRENT_STAGE`.
 
-No runtime is currently deployed and no historical online result is accepted. The sole active
-implementation task changes only non-durable Workbench publication work: all business owners still
-settle every fact, while ordinary status-stable complete schema-2 snapshots publish at most once
-per 500 monotonic milliseconds. Semantic safety/lifecycle status changes publish immediately, and
-the latest pending state flushes after drain and before reconnect or clean-stop mutation. This
-changes no service topology, market/Decision semantics, business owner, Policy, schema, durable
-object, or deployment permission.
+No runtime is currently deployed and no historical online result is accepted. The active
+implementation removes the obsolete commissioning controller and service-level evidence ledger;
+it changes no market/Decision semantics, business owner, Policy, Workbench schema, or deployment
+permission.
 ## Data lifecycles
 
 ### Transient live state
@@ -271,21 +268,20 @@ composer; no lower layer imports that owner.
 ### `radar_runtime`
 
 Composes the Deribit public adapter, bounded current state, detector, domain construction,
-fixed-contract Shadow adapter, health metrics, permitted artifact sinks, persistent process host,
-exact service-evidence writer/reader, settled snapshot publisher, and loopback read-only HTTP
-surface in one continuously running process. It owns client/queue/request identity, lease, runtime
-identity, lifecycle, stop/reconnect barriers, atomic projection publication, and guarded CLI, not
-downstream economic Policy. `observe` and manifest-bound `observe-shadow` remain separate bounded
-commands with unchanged semantics.
+fixed-contract Shadow adapter, minimal business writers, persistent process host, settled snapshot
+publisher, and loopback read-only HTTP surface in one continuously running process. It owns
+client/queue/request identity, lease, runtime identity, in-memory lifecycle, stop/reconnect
+barriers, atomic projection publication, and guarded CLI, not downstream economic Policy.
+`observe` and manifest-bound `observe-shadow` remain separate bounded commands with unchanged
+semantics.
 
 ## Persistent process and read-only projection boundary
 
 [`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`](../contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md)
-owns the run-segment evidence and projection boundary. One external state root holds one advisory
-lease, one runtime identity, one reducer, one downstream owner, and one public client at a time. A
-reconnect retires the old session epoch and reuses the same owner; a process restart creates a new
-runtime identity and cannot continue prior state. An immediate zero-duration transport generation
-remains an exact diagnostics restart chain and never becomes fabricated elapsed coverage.
+owns the process and projection boundary. One external state root holds one advisory lease, one
+runtime identity, one reducer, one downstream owner, and one public client at a time. A reconnect
+retires the old session epoch and reuses the same owner; a process restart creates a new runtime
+identity and cannot continue prior state.
 
 After one reducer fact transaction settles Radar truth and the same transaction's Shadow owner
 transition, `runtime.py` invokes one publisher. The publisher always derives the lightweight
@@ -301,11 +297,11 @@ detector/Policy/classification functions, freeze mutable state, traverse owner p
 or connect to Deribit. There is no timer, thread, queue, partial-update protocol, or durable
 publication record.
 
-Service lifecycle/terminal evidence is separate from Radar and downstream object directories. The
-service terminal independently recomputes current downstream object relationships, inventory,
-Underwriting conservation, and logical non-enrolled Outcome conservation. It emits no manifest and
-no forward-cohort summary; every service-created pair is non-enrolled. Existing bounded complete
-readers remain manifest/cohort-specific and are not reused for the service.
+The service persists only Radar and downstream business objects. Lifecycle phase, health,
+readiness, and currentness are non-durable Workbench state. There is no service terminal manifest,
+inventory hash, lifecycle receipt, or second complete evidence reader around the business writers.
+Each downstream object is validated directly before publication; relationship-graph validation is
+an offline reader/test responsibility rather than an online per-write rescan.
 
 The loopback server exposes only static assets, immutable snapshot JSON, health, and readiness over
 GET/HEAD. Other methods are 405. It has no Policy mutation, account, credential, order, fill, or

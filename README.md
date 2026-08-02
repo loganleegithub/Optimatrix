@@ -16,16 +16,18 @@ current authority. There is no deployed process, launchd service, loopback liste
 private/account access, order, fill, actual position, or PnL authority.
 
 The sole active task is
-[`SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`](tasks/SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING.md).
-It keeps every Radar-to-Outcome transaction unchanged and reduces only non-durable Workbench work:
-ordinary status-stable complete snapshots publish at most once per 500 monotonic milliseconds,
-semantic safety/lifecycle changes publish immediately, and the latest pending state flushes after
-draining and before reconnect or clean-stop mutation.
+[`SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`](tasks/SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION.md).
+It removes the macOS commissioning controller and the separate service lifecycle evidence ledger,
+while keeping the complete Radar-to-Outcome transaction, reconnect loop, signal stop, minimal
+business persistence, coalesced Workbench publication, health/readiness, and loopback-only HTTP.
 
-This is deliberately small. It adds no timer, thread, queue, scheduler, partial-update protocol,
-service split, dependency, database, replay path, evidence chain, container, or deployment
-controller. Passing tests will prove deterministic publication behavior only; they will not accept
-the Radar, establish lower production CPU, or prove 24x7 stability or strategy value.
+The application no longer runs `launchd`, `lsof`, unified-log, resource probes, 24-hour acceptance,
+service-manifest, inventory-hash, or lifecycle-receipt logic. Process supervision and host resource
+monitoring belong outside Python. Passing tests prove the simplified offline composition only;
+they do not accept the Radar, deployment, uptime, or strategy value.
+
+Downstream writes still validate each business object directly, but no longer rescan every prior
+relationship on each transition; graph validation remains in offline readers and tests.
 ## Intended first business flow
 
 ```text
@@ -99,7 +101,7 @@ contract owns the offline service boundary and immutable read-only Workbench pro
   conservation, and downstream evidence owner
 - `radar_runtime`: guarded composition of the continuous production-public process
 
-There is no compatibility package or alias for the removed pipeline.
+There is no compatibility package, commissioning controller, or service-evidence ledger.
 
 The current bounded runtime separates per-band immutable index-baseline availability from
 generation-global successor publication. Normal time/watermark publication pending keeps an

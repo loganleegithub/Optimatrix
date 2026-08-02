@@ -193,23 +193,21 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_resets_unreliable_history_and_authorizes_coalescing() -> None:
+def test_current_stage_authorizes_one_runtime_simplification() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
-    marker = "**Sole authorized next product-capability closure:**"
+    marker = "**Sole authorized closure:**"
 
     assert current.count(marker) == 1
-    assert f"{marker} `SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`" in flat
+    assert f"{marker} `SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`" in current
-    assert "**Persistent public Shadow service/workbench:** `STOPPED_NO_DEPLOYMENT`" in current
-    assert "**Evidence gate:** `NONE`" in current
+    assert "**Persistent service:** `STOPPED_NO_DEPLOYMENT`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
-    assert "**Persistent deployment / 24x7 acceptance:** `NOT_CLAIMED`" in current
-    assert "explicitly rejected its Radar results as unreliable" in flat
-    assert "No historical runtime result is a current business premise" in flat
-    assert "at most one complete immutable snapshot per 500 monotonic milliseconds" in flat
-    assert "No timer, thread, queue, scheduler" in flat
+    assert "rejected its Radar results as unreliable" in flat
+    assert "Deleted history is not a business premise" in flat
+    assert "removes the obsolete macOS commissioning controller" in flat
+    assert "service lifecycle evidence/terminal-manifest system" in flat
     for stale_claim in (
         "R4_COMMISSIONED",
         "R4_COMMISSIONED_24H_OBSERVATION_ACTIVE",
@@ -221,15 +219,14 @@ def test_current_stage_resets_unreliable_history_and_authorizes_coalescing() -> 
         assert stale_claim not in current
 
 
-def test_workbench_publication_coalescing_is_exactly_authorized() -> None:
+def test_runtime_simplification_is_exactly_authorized() -> None:
     current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
-    task_path = ROOT / "tasks/SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING.md"
+    task_path = ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION.md"
     task = task_path.read_text(encoding="utf-8")
     task_flat = " ".join(task.split())
 
     assert (
-        "**Sole authorized next product-capability closure:** "
-        "`SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`"
+        "**Sole authorized closure:** `SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`"
     ) in current
     for exact in (
         "**Status:** ACTIVE",
@@ -240,35 +237,29 @@ def test_workbench_publication_coalescing_is_exactly_authorized() -> None:
         "**Decision Policy change:** NONE",
         "**Outcome/evaluation contract change:** NONE",
         "**Stage/authorization change:** APPROVED",
-        "one complete publication per 500 monotonic milliseconds",
-        "semantic safety/lifecycle status changes bypass that interval",
-        "`flush_pending()`",
-        "after accepted-event draining and before reconnect or clean-stop terminalization",
-        "There is no timer, thread, queue, scheduler",
-        "apps/radar_runtime/src/radar_runtime/workbench.py",
-        "apps/radar_runtime/src/radar_runtime/runtime.py",
+        "macOS commissioning controller",
+        "service lifecycle evidence ledger",
+        "minimal business writers",
+        "`serve-shadow` owns one process",
+        "service-manifest",
+        "commissioning, `launchd`, `lsof`, unified-log, probe",
+        "radar_runtime.service",
+        "radar_runtime.workbench",
         "Direct behavior | REQUIRED",
         "Production-public Radar | NOT_APPLICABLE",
     ):
         assert exact in task_flat, exact
-    for forbidden in (
-        "commissioning.py`; `service.py",
-        "partial/SSE transport",
-        "live deployment",
-        "deleted historical evidence",
-    ):
-        assert forbidden in task_flat
+    assert "Decision Policy change:** NONE" in task_flat
 
 
-def test_only_workbench_publication_task_is_active() -> None:
+def test_only_runtime_simplification_task_is_active() -> None:
     assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING.md",
+        "SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION.md",
         "TEMPLATE.md",
     ]
     current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
     assert (
-        "**Sole authorized next product-capability closure:** "
-        "`SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`"
+        "**Sole authorized closure:** `SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`"
     ) in current
     assert "**Live commands:** `FORBIDDEN`" in current
 
@@ -1898,13 +1889,13 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "## Current truth",
         "`OFFLINE_PUBLIC_SHADOW_RUNTIME`",
         "`NOT_ACCEPTED_PENDING_REVALIDATION`",
-        "`SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`",
+        "`SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`",
         "`STOPPED_NO_DEPLOYMENT`",
-        "**Evidence gate:** `NONE`",
         "**Live commands:** `FORBIDDEN`",
-        "No historical runtime result is a current business premise",
-        "No timer, thread, queue, scheduler",
-        "They cannot accept the Radar, a deployment, 24x7 stability",
+        "Deleted history is not a business premise",
+        "commissioning controller",
+        "service lifecycle evidence/terminal-manifest system",
+        "cannot accept the Radar, authorize deployment",
         "private/account APIs",
         "orders, fills",
     ):
@@ -1922,7 +1913,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "### `short_vol_underwriting`",
         "The pure downstream owner `short_vol_underwriting`",
         "Production-public invocation and deployment authority comes only from `CURRENT_STAGE`",
-        "at most once per 500 monotonic milliseconds",
+        "at least 500 monotonic milliseconds",
         "`flush_pending()` once before reconnect or clean-stop terminal mutation",
     ):
         assert invariant in architecture
@@ -2006,11 +1997,11 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "SHORT_VOL_UNDERWRITING_POSITION",
         "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT",
         "No production result is currently accepted",
-        "`SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`",
-        "at most once per 500 monotonic milliseconds",
-        "no timer, thread, queue, scheduler",
+        "`SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`",
+        "coalesced Workbench publication",
+        "commissioning controller",
         "maker/order/fill",
-        "database, replay path",
+        "service-evidence ledger",
         "no deployed process",
     ):
         assert invariant in readme
@@ -2087,58 +2078,39 @@ def test_radar_contract_keeps_market_signal_execution_and_decision_distinct() ->
     assert "keep `LEGGED_CLOSE_REFERENCE` diagnostic" in radar_flat
 
 
-def test_persistent_service_contract_and_publication_coalescing_are_bound() -> None:
+def test_persistent_service_contract_is_minimal_and_has_no_service_ledger() -> None:
     contract_path = ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md"
     contract = contract_path.read_text(encoding="utf-8")
     flat = " ".join(contract.split())
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    digest = f"sha256:{hashlib.sha256(contract_path.read_bytes()).hexdigest()}"
-    service_evidence = (
-        ROOT / "apps/radar_runtime/src/radar_runtime/service_evidence.py"
-    ).read_text(encoding="utf-8")
-    constant_match = re.search(
-        r'PERSISTENT_SERVICE_CONTRACT_DIGEST\s*=\s*\(\s*"([^"]+)"\s*\)',
-        service_evidence,
-    )
-
-    assert constant_match is not None
-    assert digest == constant_match.group(1)
-    assert digest == "sha256:a5a391c22f542b991d2c155f304496aeafc3c927669cd94012ac1b573d284560"
-    assert not (ROOT / "tasks/SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH.md").exists()
+    assert not (ROOT / "apps/radar_runtime/src/radar_runtime/service_evidence.py").exists()
+    assert not (ROOT / "apps/radar_runtime/src/radar_runtime/commissioning.py").exists()
+    assert not (ROOT / "tests/test_persistent_service_commissioning.py").exists()
     for invariant in (
-        "**Current implementation state:** `PUBLICATION_COALESCING_IMPLEMENTATION_AUTHORIZED`",
-        "DISABLED_NON_COHORT_SERVICE",
-        "forward_cohort_summary_emitted",
-        "read_complete_persistent_service_evidence",
-        "NOT_COMPARABLE",
-        "PersistentServiceTerminalIdentity",
-        "Atomic read-only workbench projection",
-        "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY",
-        "zero_anomaly_state = PROVEN_ZERO | NOT_ZERO | UNKNOWN",
-        "zero_candidate_state = PROVEN_ZERO | NOT_ZERO | UNKNOWN",
-        "immutable version-2 operational projection",
-        "Version 2 adds only settled display metadata",
-        "exact monotonic downstream-writer revision",
-        "version-2 browser accepts only the exact supported projection version",
-        "true unknown detector evaluation renders its unavailable required calculations as "
-        "`UNKNOWN`",
-        "Inactive episode fields and unavailable Underwriting action/economics are `N/A`",
-        "Actual PnL under public Shadow is `N/A`",
-        "Tables own their horizontal scrolling",
-        "graph-independent in the accepted downstream attempt relationship validator",
+        "Deribit → Radar → Underwriting → Shadow → Position → Outcome",
+        "service.lock",
+        "one public Deribit session",
+        "same reducer and downstream owner",
+        "service lifecycle events, terminal manifests",
+        "There is no second service-level reader or hash ledger",
         "at most once per 500 monotonic milliseconds",
-        "semantic status-key change publishes one complete immutable snapshot immediately",
-        "`flush_pending()` exactly once before `prepare_reconnect` or `clean_stop`",
-        "There is no partial JSON patch, timer, thread, queue, scheduler",
+        "semantic safety or lifecycle status change",
+        "before reconnect or clean stop",
+        "loopback IP",
+        "Other methods return 405",
     ):
         assert invariant in flat
-    assert "The version-1 snapshot" not in contract
-    assert "`NO_LIVE_OR_DEPLOYMENT_AUTHORITY`" not in flat
-    assert "SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART" not in current
+    for removed in (
+        "PersistentServiceTerminalIdentity",
+        "read_complete_persistent_service_evidence",
+        "lifecycle_inventory_identity",
+        "service_evidence_status",
+    ):
+        assert removed not in contract
     assert "`STOPPED_NO_DEPLOYMENT`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
-    assert "`SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`" in current
-    assert "No historical runtime result is a current business premise" in " ".join(current.split())
+    assert "`SHORT_VOL_PUBLIC_SHADOW_RUNTIME_SIMPLIFICATION`" in current
+    assert "Deleted history is not a business premise" in " ".join(current.split())
 
 
 def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
@@ -2168,46 +2140,7 @@ def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
             assert "**Live commands:** FORBIDDEN" in text
         elif task_kind == "IMPLEMENTATION":
             assert "**Runtime implementation:** REQUIRED" in text
-            if "**Live commands:** REQUIRED" in text:
-                flat = " ".join(text.split())
-                assert path.name == "SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR.md"
-                assert "conditional terminal-goal delegation" in flat
-                assert (
-                    "No live or launchd mutation is allowed from the implementation branch or PR"
-                    in flat
-                )
-                assert "exact R4 candidate" in flat
-                assert "remote `main`" in flat
-                assert "each newly rematerialized R4 attempt may invoke `commission` once" in flat
-                assert "result-independent stop/terminal closure" in flat
-                assert (
-                    "prove the exact CPU hot-path repair preserves publication cadence, contracts, "
-                    "Policies, dependencies, and business schema/values"
-                ) in flat
-                assert "full 180,000 ms gate" in flat
-                assert "at least two successful post-manual periodic rows" in flat
-                assert "fixed 30,000 ms maximum with bounded 100 ms polling" in flat
-                assert "failure_closure_receipt_path" in flat
-                assert "r1_no_writer" in flat
-                assert "r2_no_writer" in flat
-                assert "r3_no_writer" in flat
-                assert "COMMISSION_FAILED_CLEANUP_PENDING" in flat
-                assert "COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT" in flat
-                assert "COMMISSION_FAILED_CLEANUP_BLOCKED" in flat
-                assert "non-force remote branch equality and GitHub CI pass" in flat
-                assert "merge to remote `main` occurs only after those gates" in flat
-                current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
-                assert (
-                    "**Live commands:** "
-                    "`READ_ONLY_MONITORING_PLUS_ONE_RESULT_INDEPENDENT_TERMINAL_"
-                    "CLOSE_AUTHORIZED`"
-                ) in current
-                assert (
-                    "**Sole authorized next product-capability closure:** "
-                    "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR`"
-                ) in current
-            else:
-                assert "**Live commands:** FORBIDDEN" in text
+            assert "**Live commands:** FORBIDDEN" in text
         else:
             assert "**Runtime implementation:** FORBIDDEN" in text
             assert "**Live commands:** REQUIRED" in text
@@ -2281,12 +2214,10 @@ def test_stage_record_rejects_deleted_live_history_as_authority() -> None:
 
     for invariant in (
         "**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`",
-        "**Persistent public Shadow service/workbench:** `STOPPED_NO_DEPLOYMENT`",
-        "**Evidence gate:** `NONE`",
+        "**Persistent service:** `STOPPED_NO_DEPLOYMENT`",
         "**Live commands:** `FORBIDDEN`",
-        "**Persistent deployment / 24x7 acceptance:** `NOT_CLAIMED`",
-        "No historical runtime result is a current business premise",
-        "A future production-public validation must start fresh",
+        "Deleted history is not a business premise",
+        "reconstructing or relabelling deleted historical results",
     ):
         assert invariant in current_stage
 

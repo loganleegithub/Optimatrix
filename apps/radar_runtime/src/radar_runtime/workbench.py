@@ -19,17 +19,11 @@ from short_vol_radar.black import DecimalInterval
 from short_vol_radar.detector import DetectorState
 from short_vol_radar.evidence import CoverageBlockingReason, CoverageState
 from short_vol_underwriting.conservation import derive_underwriting_counts
-from short_vol_underwriting.evidence import DownstreamEvidenceWriter
+from short_vol_underwriting.evidence import DownstreamEvidenceWriter, RuntimeBindings
 from short_vol_underwriting.identity import canonical_decimal, canonical_value
 from short_vol_underwriting.policy import PolicyChain
 
 from radar_runtime.runtime import CausalCommit, RadarReducer
-from radar_runtime.service_evidence import (
-    DataState,
-    PersistentServiceBindings,
-    ServicePhase,
-    ServiceStatus,
-)
 
 WORKBENCH_SCHEMA_VERSION = 2
 WORKBENCH_PUBLICATION_INTERVAL_MS = 500
@@ -76,6 +70,55 @@ class ZeroClaimState(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class ServicePhase(StrEnum):
+    STARTING = "STARTING"
+    CONNECTING = "CONNECTING"
+    RUNNING = "RUNNING"
+    RECONNECTING = "RECONNECTING"
+    STOPPING = "STOPPING"
+    STOPPED = "STOPPED"
+    FAILED = "FAILED"
+
+
+class DataState(StrEnum):
+    CURRENT = "CURRENT"
+    DEGRADED = "DEGRADED"
+    STALE = "STALE"
+    UNKNOWN = "UNKNOWN"
+    INTERRUPTED = "INTERRUPTED"
+    STOPPED = "STOPPED"
+
+
+@dataclass(frozen=True)
+class ServiceStatus:
+    phase: ServicePhase
+    data_state: DataState
+    health: bool
+    ready: bool
+    stale: bool
+    reason: str
+    recorded_monotonic_ms: int
+
+    def __post_init__(self) -> None:
+        if not self.reason:
+            raise ValueError("service status reason must be non-empty")
+        if self.recorded_monotonic_ms < 0:
+            raise ValueError("service status monotonic time must be non-negative")
+        if self.ready and (
+            not self.health
+            or self.phase is not ServicePhase.RUNNING
+            or self.data_state is not DataState.CURRENT
+        ):
+            raise ValueError("ready service status must be healthy running current")
+        if self.stale != (self.data_state is DataState.STALE):
+            raise ValueError("stale flag must exactly match STALE data state")
+        terminal_phase = self.phase in {ServicePhase.STOPPED, ServicePhase.FAILED}
+        if terminal_phase and self.health:
+            raise ValueError("terminal service phase cannot remain healthy")
+        if (self.data_state is DataState.STOPPED) is not terminal_phase:
+            raise ValueError("STOPPED data state must exactly match a terminal phase")
+
+
 @dataclass(frozen=True)
 class ZeroClaim:
     state: ZeroClaimState
@@ -117,9 +160,6 @@ class ShadowMetadataSource(Protocol):
     def workbench_option_metadata(self) -> tuple[Mapping[str, object], ...]: ...
 
     def workbench_underwriting_metadata(self) -> tuple[Mapping[str, object], ...]: ...
-
-
-StatusSink = Callable[[ServiceStatus], object]
 
 
 def panel_state(rows: Sequence[object]) -> PanelState:
@@ -270,11 +310,10 @@ class WorkbenchPublisher:
         self,
         *,
         store: SnapshotStore,
-        bindings: PersistentServiceBindings,
+        bindings: RuntimeBindings,
         policies: PolicyChain,
         downstream_writer: DownstreamEvidenceWriter,
         shadow_metadata: ShadowMetadataSource,
-        status_sink: StatusSink | None = None,
         initial_recorded_monotonic_ms: int = 0,
     ) -> None:
         self.store = store
@@ -282,7 +321,6 @@ class WorkbenchPublisher:
         self.policies = policies
         self.downstream_writer = downstream_writer
         self.shadow_metadata = shadow_metadata
-        self.status_sink = status_sink
         self._status = ServiceStatus(
             ServicePhase.STARTING,
             DataState.UNKNOWN,
@@ -322,10 +360,8 @@ class WorkbenchPublisher:
     def status(self) -> ServiceStatus:
         return self._status
 
-    def update_status(self, status: ServiceStatus, *, persist: bool = True) -> None:
+    def update_status(self, status: ServiceStatus) -> None:
         status_key = _status_key(status)
-        if persist and status_key != self._last_status_key and self.status_sink is not None:
-            self.status_sink(status)
         self._last_status_key = status_key
         self._status = status
         self._dirty = True
@@ -350,8 +386,6 @@ class WorkbenchPublisher:
         self._dirty = True
         self._business_dirty = True
         status_key = _status_key(status)
-        if status_key != self._last_status_key and self.status_sink is not None:
-            self.status_sink(status)
         self._last_status_key = status_key
         self._status = status
         if (
@@ -443,7 +477,7 @@ class WorkbenchPublisher:
 
 
 def initial_workbench_document(
-    bindings: PersistentServiceBindings,
+    bindings: RuntimeBindings,
     *,
     recorded_monotonic_ms: int = 0,
 ) -> dict[str, object]:

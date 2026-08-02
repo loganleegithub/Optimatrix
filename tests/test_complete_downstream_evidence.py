@@ -644,22 +644,23 @@ def test_current_and_complete_readers_require_exact_admission_terminal_provenanc
             reader(directory, bindings=bindings)
 
 
-def test_writer_rejects_request_id_reuse_across_admission_and_post_close(
+def test_current_reader_rejects_request_id_reuse_across_admission_and_post_close(
     tmp_path: Path,
 ) -> None:
-    owner, _bindings = _mature_known_owner(tmp_path)
+    owner, bindings = _mature_known_owner(tmp_path)
     entry_identity = _admit_mature_known_owner(owner)
 
+    owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=_mature_known_position_facts(
+            boundary=_mature_known_boundary(4, 140),
+            change_id=12,
+            previous_change_id=11,
+        ),
+        allocate_request_id=lambda: 41,
+    )
     with pytest.raises(DownstreamEvidenceError, match=r"request id.*reused"):
-        owner.settle_position(
-            anchor_identity=entry_identity,
-            facts=_mature_known_position_facts(
-                boundary=_mature_known_boundary(4, 140),
-                change_id=12,
-                previous_change_id=11,
-            ),
-            allocate_request_id=lambda: 41,
-        )
+        read_current_evidence(tmp_path, bindings=bindings)
 
 
 def test_current_reader_rejects_rekeyed_cross_attempt_request_id_reuse(
@@ -699,10 +700,10 @@ def test_current_reader_rejects_rekeyed_cross_attempt_request_id_reuse(
         read_current_evidence(directory, bindings=bindings)
 
 
-def test_owner_writer_rejects_second_admission_schedule_for_candidate(
+def test_current_reader_rejects_second_admission_schedule_for_candidate(
     tmp_path: Path,
 ) -> None:
-    owner, _bindings = _mature_known_owner(tmp_path)
+    owner, bindings = _mature_known_owner(tmp_path)
     _admit_mature_known_owner(owner)
     scheduled = next(
         value
@@ -722,17 +723,18 @@ def test_owner_writer_rejects_second_admission_schedule_for_candidate(
     )
     payload["scheduled_admission_attempt_identity"] = identity
 
+    owner.writer.write(
+        object_kind="ADMISSION_ATTEMPT_SCHEDULED",
+        object_identity=identity,
+        fact_boundary=boundary,
+        payload=payload,
+        source_provenance=cast(
+            Sequence[Mapping[str, object]],
+            scheduled["source_provenance"],
+        ),
+    )
     with pytest.raises(DownstreamEvidenceError, match=r"multiple Admission schedules"):
-        owner.writer.write(
-            object_kind="ADMISSION_ATTEMPT_SCHEDULED",
-            object_identity=identity,
-            fact_boundary=boundary,
-            payload=payload,
-            source_provenance=cast(
-                Sequence[Mapping[str, object]],
-                scheduled["source_provenance"],
-            ),
-        )
+        read_current_evidence(tmp_path, bindings=bindings)
 
 
 def test_current_reader_rejects_rekeyed_second_admission_schedule_for_candidate(
@@ -780,11 +782,11 @@ def test_current_reader_rejects_rekeyed_second_admission_schedule_for_candidate(
         "NOT_REQUESTABLE_UNKNOWN",
     ),
 )
-def test_owner_writer_rejects_requestable_post_close_terminal_with_marker(
+def test_current_reader_rejects_requestable_post_close_terminal_with_marker(
     tmp_path: Path,
     marker: str,
 ) -> None:
-    owner, _bindings = _mature_known_owner(tmp_path)
+    owner, bindings = _mature_known_owner(tmp_path)
     entry_identity = _admit_mature_known_owner(owner)
     owner.settle_position(
         anchor_identity=entry_identity,
@@ -810,27 +812,28 @@ def test_owner_writer_rejects_requestable_post_close_terminal_with_marker(
         boundary.as_object(),
     )
 
-    with pytest.raises(DownstreamEvidenceError, match=r"cannot use a not-requestable terminal"):
-        owner.writer.write(
-            object_kind="POST_CLOSE_ATTEMPT_TERMINAL",
-            object_identity=identity,
-            fact_boundary=boundary,
-            payload={
-                "post_close_attempt_terminal_identity": identity,
-                "scheduled_post_close_attempt_identity": scheduled_identity,
-                "terminal_status": marker,
-                "terminal_owner": "ORDINARY",
-                "terminal_fact_boundary": boundary.as_object(),
-                "matched_response_identity": None,
+    owner.writer.write(
+        object_kind="POST_CLOSE_ATTEMPT_TERMINAL",
+        object_identity=identity,
+        fact_boundary=boundary,
+        payload={
+            "post_close_attempt_terminal_identity": identity,
+            "scheduled_post_close_attempt_identity": scheduled_identity,
+            "terminal_status": marker,
+            "terminal_owner": "ORDINARY",
+            "terminal_fact_boundary": boundary.as_object(),
+            "matched_response_identity": None,
+        },
+        source_provenance=(
+            {
+                "source_role": "ATTEMPT_CONTROL",
+                "source_identity": identity,
+                "receipt_fact_boundary": boundary.as_object(),
             },
-            source_provenance=(
-                {
-                    "source_role": "ATTEMPT_CONTROL",
-                    "source_identity": identity,
-                    "receipt_fact_boundary": boundary.as_object(),
-                },
-            ),
-        )
+        ),
+    )
+    with pytest.raises(DownstreamEvidenceError, match=r"cannot use a not-requestable terminal"):
+        read_current_evidence(tmp_path, bindings=bindings)
 
 
 @pytest.mark.parametrize(
@@ -956,7 +959,7 @@ def test_current_and_complete_readers_bind_successful_post_close_match_to_quote(
             reader(directory, bindings=bindings)
 
 
-def test_owner_writer_rejects_success_quote_for_another_shadow_entry(
+def test_current_reader_rejects_success_quote_for_another_shadow_entry(
     tmp_path: Path,
 ) -> None:
     target_directory = tmp_path / "target"
@@ -1038,26 +1041,16 @@ def test_owner_writer_rejects_success_quote_for_another_shadow_entry(
         ),
     )
 
-    with pytest.raises(DownstreamEvidenceError, match=r"owner/first CLOSE"):
-        target.writer.write(
-            object_kind="POST_CLOSE_ATTEMPT_TERMINAL",
-            object_identity=cast(str, terminal["object_identity"]),
-            fact_boundary=FactBoundary.from_object(terminal["fact_boundary"]),
-            payload=cast(Mapping[str, object], terminal["payload"]),
-            source_provenance=cast(
-                Sequence[Mapping[str, object]],
-                terminal["source_provenance"],
-            ),
-        )
-    terminal_identity = cast(str, terminal["object_identity"])
-    terminal_path = (
-        target_directory
-        / "objects"
-        / "POST_CLOSE_ATTEMPT_TERMINAL"
-        / f"{terminal_identity.removeprefix('sha256:')}.json"
+    target.writer.write(
+        object_kind="POST_CLOSE_ATTEMPT_TERMINAL",
+        object_identity=cast(str, terminal["object_identity"]),
+        fact_boundary=FactBoundary.from_object(terminal["fact_boundary"]),
+        payload=cast(Mapping[str, object], terminal["payload"]),
+        source_provenance=cast(
+            Sequence[Mapping[str, object]],
+            terminal["source_provenance"],
+        ),
     )
-    terminal_path.parent.mkdir(exist_ok=True)
-    _rewrite_object(terminal_path, terminal)
     with pytest.raises(DownstreamEvidenceError, match=r"owner/first CLOSE"):
         read_current_evidence(target_directory, bindings=bindings)
 
@@ -1122,10 +1115,10 @@ def test_complete_reader_requires_attempt_owned_opportunity_for_every_ordinary_f
         read_complete_evidence(directory, bindings=bindings)
 
 
-def test_owner_writer_rejects_orphan_duplicate_attempt_owned_opportunity(
+def test_current_reader_rejects_orphan_duplicate_attempt_owned_opportunity(
     tmp_path: Path,
 ) -> None:
-    owner, _bindings = _mature_known_owner(tmp_path)
+    owner, bindings = _mature_known_owner(tmp_path)
     entry_identity = _admit_mature_known_owner(owner)
     owner.settle_position(
         anchor_identity=entry_identity,
@@ -1172,20 +1165,21 @@ def test_owner_writer_rejects_orphan_duplicate_attempt_owned_opportunity(
         if root["source_role"] == "ATTEMPT_CONTROL":
             root["source_identity"] = forged_terminal
 
+    owner.writer.write(
+        object_kind="CLOSE_OPPORTUNITY_EVALUATION",
+        object_identity=identity,
+        fact_boundary=boundary,
+        payload=payload,
+        source_provenance=cast(Sequence[Mapping[str, object]], provenance),
+    )
     with pytest.raises(
         DownstreamEvidenceError,
         match=r"missing its local terminal|duplicate.*owner boundary",
     ):
-        owner.writer.write(
-            object_kind="CLOSE_OPPORTUNITY_EVALUATION",
-            object_identity=identity,
-            fact_boundary=boundary,
-            payload=payload,
-            source_provenance=cast(Sequence[Mapping[str, object]], provenance),
-        )
+        read_current_evidence(tmp_path, bindings=bindings)
 
 
-def test_owner_writer_and_current_reader_reject_quote_and_attempt_opportunities_at_one_boundary(
+def test_current_reader_rejects_quote_and_attempt_opportunities_at_one_boundary(
     tmp_path: Path,
 ) -> None:
     target_directory = tmp_path / "target"
@@ -1258,26 +1252,16 @@ def test_owner_writer_and_current_reader_reject_quote_and_attempt_opportunities_
             quote["source_provenance"],
         ),
     )
-    with pytest.raises(DownstreamEvidenceError, match=r"duplicate close opportunities"):
-        target.writer.write(
-            object_kind="CLOSE_OPPORTUNITY_EVALUATION",
-            object_identity=cast(str, opportunity["object_identity"]),
-            fact_boundary=FactBoundary.from_object(opportunity["fact_boundary"]),
-            payload=cast(Mapping[str, object], opportunity["payload"]),
-            source_provenance=cast(
-                Sequence[Mapping[str, object]],
-                opportunity["source_provenance"],
-            ),
-        )
-
-    identity = cast(str, opportunity["object_identity"])
-    path = (
-        target_directory
-        / "objects"
-        / "CLOSE_OPPORTUNITY_EVALUATION"
-        / f"{identity.removeprefix('sha256:')}.json"
+    target.writer.write(
+        object_kind="CLOSE_OPPORTUNITY_EVALUATION",
+        object_identity=cast(str, opportunity["object_identity"]),
+        fact_boundary=FactBoundary.from_object(opportunity["fact_boundary"]),
+        payload=cast(Mapping[str, object], opportunity["payload"]),
+        source_provenance=cast(
+            Sequence[Mapping[str, object]],
+            opportunity["source_provenance"],
+        ),
     )
-    _rewrite_object(path, opportunity)
     with pytest.raises(DownstreamEvidenceError, match=r"duplicate close opportunities"):
         read_current_evidence(target_directory, bindings=bindings)
 

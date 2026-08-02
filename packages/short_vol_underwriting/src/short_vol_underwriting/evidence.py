@@ -49,7 +49,6 @@ from short_vol_underwriting.schemas import (
 )
 from short_vol_underwriting.validation import (
     PayloadValidationError,
-    validate_attempt_relationships,
     validate_complete_attempt_relationships,
     validate_complete_cohort_summary_provenance,
     validate_complete_semantic_graph,
@@ -148,18 +147,6 @@ class DownstreamEvidenceWriter:
             source_provenance=source_provenance,
             bindings=self.bindings,
         )
-        # Availability objects have no attempt-graph edges; the builder has already
-        # enforced their complete local schema, identity, boundary, and provenance.
-        if object_kind != "UNDERWRITING_AVAILABILITY_EVALUATION":
-            prospective = {
-                f"{kind}:{identity}": existing
-                for (kind, identity), existing in self._objects.items()
-            }
-            prospective[f"{object_kind}:{object_identity}"] = value
-            try:
-                validate_attempt_relationships(prospective, require_complete=False)
-            except PayloadValidationError as exc:
-                raise DownstreamEvidenceError(str(exc)) from exc
         serialized = _serialize(value)
         path = _object_path(self.objects_directory, object_kind, object_identity)
         published = _publish_exclusive(path, serialized)

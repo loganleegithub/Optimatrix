@@ -25,7 +25,6 @@ from short_vol_underwriting.constants import (
 )
 from short_vol_underwriting.evidence import DownstreamEvidenceWriter, RuntimeBindings
 from short_vol_underwriting.identity import canonical_identity, require_code_identity
-from short_vol_underwriting.model import FactBoundary as DownstreamFactBoundary
 from short_vol_underwriting.model import TerminalSource
 from short_vol_underwriting.owner import FixedContractShadowOwner
 from short_vol_underwriting.policy import PolicyChain, load_policy_chain
@@ -46,15 +45,11 @@ from radar_runtime.runtime import (
     RadarReducer,
     reconnect_delay_seconds,
 )
-from radar_runtime.service_evidence import (
+from radar_runtime.workbench import (
     DataState,
-    PersistentServiceBindings,
-    PersistentServiceEvidenceWriter,
+    LoopbackWorkbenchServer,
     ServicePhase,
     ServiceStatus,
-)
-from radar_runtime.workbench import (
-    LoopbackWorkbenchServer,
     SnapshotStore,
     WorkbenchPublisher,
     initial_workbench_document,
@@ -193,13 +188,11 @@ class PersistentServiceStartup:
     run_directory: Path
     radar_directory: Path
     downstream_directory: Path
-    service_directory: Path
     code_identity: str
     runtime_identity: str
     startup_monotonic_ms: int
     policies: PolicyChain
     downstream_bindings: RuntimeBindings
-    service_bindings: PersistentServiceBindings
     workbench_host: str
     workbench_port: int
 
@@ -209,7 +202,6 @@ class PersistentServiceComposition:
     startup: PersistentServiceStartup
     downstream_writer: DownstreamEvidenceWriter
     owner: FixedContractShadowOwner
-    service_writer: PersistentServiceEvidenceWriter
     adapter: PersistentShadowRuntimeAdapter
     radar_writer: EvidenceWriter
     snapshot_store: SnapshotStore
@@ -219,21 +211,14 @@ class PersistentServiceComposition:
 
 
 class PersistentShadowRuntimeAdapter(FixedContractShadowRuntimeAdapter):
-    """Existing fixed-contract owner with non-cohort service terminal semantics."""
+    """Fixed-contract owner without a separate service-evidence ledger."""
 
     def __init__(
         self,
         *,
         owner: FixedContractShadowOwner,
-        service_writer: PersistentServiceEvidenceWriter,
-        service_bindings: PersistentServiceBindings,
     ) -> None:
         super().__init__(owner=owner, manifest=None)
-        self.service_writer = service_writer
-        self.service_bindings = service_bindings
-        self._terminal_disposition: str | None = None
-        self._terminal_source_identity: str | None = None
-        self._terminal_boundary: DownstreamFactBoundary | None = None
 
     def bind_reducer(self, reducer: RadarReducer) -> None:
         if self._last_reducer is not None and self._last_reducer is not reducer:
@@ -262,8 +247,8 @@ class PersistentShadowRuntimeAdapter(FixedContractShadowRuntimeAdapter):
         else:
             raise ValueError("persistent terminal source must be STOP or FAILURE")
         source_identity = canonical_identity(
-            "PersistentServiceTerminalSourceIdentity",
-            self.service_bindings.contract_identity,
+            "PublicShadowRuntimeTerminalSourceIdentity",
+            self.owner.bindings.runtime_identity,
             disposition,
             downstream.as_object(),
         )
@@ -273,28 +258,9 @@ class PersistentShadowRuntimeAdapter(FixedContractShadowRuntimeAdapter):
             terminal_source=terminal_kind,
         )
         self._consume_transition(transition, ())
-        if self._terminal_boundary is not None and (
-            self._terminal_boundary != downstream
-            or self._terminal_disposition != disposition
-            or self._terminal_source_identity != source_identity
-        ):
-            raise ValueError("persistent terminal barrier is immutable")
-        self._terminal_disposition = disposition
-        self._terminal_source_identity = source_identity
-        self._terminal_boundary = downstream
 
     def finalize_terminal(self) -> None:
-        if (
-            self._terminal_disposition is None
-            or self._terminal_source_identity is None
-            or self._terminal_boundary is None
-        ):
-            raise RuntimeError("persistent service terminal requires its owner barrier")
-        self.service_writer.finalize(
-            terminal_disposition=self._terminal_disposition,
-            terminal_source_identity=self._terminal_source_identity,
-            terminal_fact_boundary=self._terminal_boundary,
-        )
+        """Business objects are final after the owner's terminal transition."""
 
 
 def generate_runtime_identity(
@@ -359,11 +325,8 @@ def prepare_persistent_service_startup(
         run_directory.mkdir(parents=True, exist_ok=False)
         radar_directory = run_directory / "radar"
         downstream_directory = run_directory / "downstream"
-        service_directory = run_directory / "service"
         radar_directory.mkdir()
         downstream_directory.mkdir()
-        service_directory.mkdir()
-        (service_directory / "events").mkdir()
     except OSError as exc:
         raise PersistentServiceStartupError(
             "cannot create a new persistent runtime directory"
@@ -377,20 +340,17 @@ def prepare_persistent_service_startup(
         underwriting_position_contract_digest=UNDERWRITING_POSITION_CONTRACT_DIGEST,
         outcome_contract_digest=OUTCOME_CONTRACT_DIGEST,
     )
-    service_bindings = PersistentServiceBindings.from_runtime_bindings(downstream_bindings)
     return PersistentServiceStartup(
         repository=repository,
         state_root=resolved_state_root,
         run_directory=run_directory,
         radar_directory=radar_directory,
         downstream_directory=downstream_directory,
-        service_directory=service_directory,
         code_identity=resolved_code_identity,
         runtime_identity=runtime_identity,
         startup_monotonic_ms=start_ms,
         policies=policies,
         downstream_bindings=downstream_bindings,
-        service_bindings=service_bindings,
         workbench_host=validated_host,
         workbench_port=validated_port,
     )
@@ -408,31 +368,19 @@ def build_persistent_service_composition(
         bindings=startup.downstream_bindings,
         writer=downstream_writer,
     )
-    service_writer = PersistentServiceEvidenceWriter(
-        startup.service_directory,
-        bindings=startup.service_bindings,
-        downstream_directory=startup.downstream_directory,
-        radar_directory=startup.radar_directory,
-        downstream_bindings=startup.downstream_bindings,
-    )
-    adapter = PersistentShadowRuntimeAdapter(
-        owner=owner,
-        service_writer=service_writer,
-        service_bindings=startup.service_bindings,
-    )
+    adapter = PersistentShadowRuntimeAdapter(owner=owner)
     snapshot_store = SnapshotStore(
         initial_workbench_document(
-            startup.service_bindings,
+            startup.downstream_bindings,
             recorded_monotonic_ms=startup.startup_monotonic_ms,
         )
     )
     publisher = WorkbenchPublisher(
         store=snapshot_store,
-        bindings=startup.service_bindings,
+        bindings=startup.downstream_bindings,
         policies=startup.policies,
         downstream_writer=downstream_writer,
         shadow_metadata=adapter,
-        status_sink=service_writer.write_event,
         initial_recorded_monotonic_ms=startup.startup_monotonic_ms,
     )
     radar_writer = EvidenceWriter(
@@ -472,7 +420,6 @@ def build_persistent_service_composition(
         startup=startup,
         downstream_writer=downstream_writer,
         owner=owner,
-        service_writer=service_writer,
         adapter=adapter,
         radar_writer=radar_writer,
         snapshot_store=snapshot_store,
@@ -598,7 +545,6 @@ async def run_persistent_service_composition(
                         "CLEAN_STOP",
                         _terminal_ms(event, clock()),
                     ),
-                    persist=False,
                 )
                 return completed_summary_path
             except (
@@ -704,7 +650,6 @@ def _stop_without_client(
             "CLEAN_STOP",
             terminal_ms,
         ),
-        persist=False,
     )
     return summary
 
@@ -740,7 +685,6 @@ def _finalize_failure(
             "PROCESS_FAILURE",
             terminal_ms,
         ),
-        persist=False,
     )
 
 

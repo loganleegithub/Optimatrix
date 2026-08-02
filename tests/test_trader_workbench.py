@@ -18,20 +18,17 @@ from radar_runtime.runtime import (
     FailureScope,
     RadarReducer,
 )
-from radar_runtime.service_evidence import (
-    DataState,
-    PersistentServiceBindings,
-    ServicePhase,
-    ServiceStatus,
-)
 from radar_runtime.workbench import (
     CSS,
     EMPTY_PANEL_LABEL,
     HTML,
     JS,
     SIMULATION_LABEL,
+    DataState,
     LoopbackWorkbenchServer,
     PanelState,
+    ServicePhase,
+    ServiceStatus,
     SnapshotStore,
     WorkbenchRequestHandler,
     initial_workbench_document,
@@ -42,10 +39,13 @@ from radar_runtime.workbench import (
 from short_vol_radar.atomic import PublicAtomicQuoteState
 from short_vol_radar.detector import DetectorState
 from short_vol_underwriting.constants import (
+    OUTCOME_CONTRACT_DIGEST,
     POSITION_POLICY_IDENTITY,
     RADAR_POLICY_IDENTITY,
     UNDERWRITING_POLICY_IDENTITY,
+    UNDERWRITING_POSITION_CONTRACT_DIGEST,
 )
+from short_vol_underwriting.evidence import RuntimeBindings
 from short_vol_underwriting.policy import PolicyChain, load_policy_chain
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,13 +62,15 @@ def _policies() -> PolicyChain:
     )
 
 
-def _bindings() -> PersistentServiceBindings:
-    return PersistentServiceBindings(
+def _bindings() -> RuntimeBindings:
+    return RuntimeBindings(
         code_identity="a" * 40,
         runtime_identity="sha256:" + "b" * 64,
         radar_policy_identity="sha256:" + "c" * 64,
         underwriting_policy_identity="sha256:" + "d" * 64,
         position_policy_identity="sha256:" + "e" * 64,
+        underwriting_position_contract_digest=UNDERWRITING_POSITION_CONTRACT_DIGEST,
+        outcome_contract_digest=OUTCOME_CONTRACT_DIGEST,
     )
 
 

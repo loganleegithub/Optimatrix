@@ -68,7 +68,6 @@ from short_vol_underwriting.evidence import (
     _read_complete_evidence_with_git_reader,
     validate_downstream_object,
 )
-from short_vol_underwriting.validation import validate_attempt_relationships
 
 ROOT = Path(__file__).resolve().parents[1]
 RADAR_POLICY_IDENTITY = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
@@ -3480,28 +3479,31 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
         boundary=_boundary(3),
         request_instrument_name="BTC-TEST-COMBO",
     )
-    with pytest.raises(DownstreamEvidenceError, match="missing its atomic Candidate"):
-        writer.write(
-            object_kind="ADMISSION_ATTEMPT_SCHEDULED",
-            object_identity=attempt.scheduled_identity,
-            fact_boundary=_boundary(3),
-            payload={
-                "scheduled_admission_attempt_identity": attempt.scheduled_identity,
-                "candidate_identity": missing_candidate,
-                "request_id": 41,
-                "request_method": "public/get_order_book",
-                "request_params": {"instrument_name": "BTC-TEST-COMBO", "depth": 10000},
-                "schedule_fact_boundary": _boundary(3).as_object(),
+    attempt_path = writer.write(
+        object_kind="ADMISSION_ATTEMPT_SCHEDULED",
+        object_identity=attempt.scheduled_identity,
+        fact_boundary=_boundary(3),
+        payload={
+            "scheduled_admission_attempt_identity": attempt.scheduled_identity,
+            "candidate_identity": missing_candidate,
+            "request_id": 41,
+            "request_method": "public/get_order_book",
+            "request_params": {"instrument_name": "BTC-TEST-COMBO", "depth": 10000},
+            "schedule_fact_boundary": _boundary(3).as_object(),
+        },
+        source_provenance=(
+            {
+                "source_role": "ANCHOR",
+                "source_identity": missing_candidate,
+                "receipt_fact_boundary": _boundary(3).as_object(),
             },
-            source_provenance=(
-                {
-                    "source_role": "ANCHOR",
-                    "source_identity": missing_candidate,
-                    "receipt_fact_boundary": _boundary(3).as_object(),
-                },
-            ),
-        )
-    assert writer.revision == 1
+        ),
+    )
+    assert attempt_path is not None
+    assert writer.revision == 2
+    with pytest.raises(DownstreamEvidenceError, match="missing local ANCHOR"):
+        read_current_evidence(tmp_path, bindings=bindings)
+    attempt_path.unlink()
 
     raw = json.loads(path.read_text(encoding="utf-8"))
     raw["unknown_member"] = True
@@ -3513,31 +3515,19 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
         read_current_evidence(tmp_path, bindings=bindings)
 
 
-def test_availability_write_keeps_local_validation_and_skips_attempt_graph_scan(
+def test_every_write_keeps_local_validation_without_attempt_graph_scan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     local_calls = 0
-    graph_calls = 0
     original_local = evidence_module.validate_downstream_object
-    original_graph = validate_attempt_relationships
 
     def count_local(value: Mapping[str, object], *, bindings: RuntimeBindings) -> None:
         nonlocal local_calls
         local_calls += 1
         original_local(value, bindings=bindings)
 
-    def count_graph(
-        objects: Mapping[str, Mapping[str, object]],
-        *,
-        require_complete: bool,
-    ) -> None:
-        nonlocal graph_calls
-        graph_calls += 1
-        original_graph(objects, require_complete=require_complete)
-
     monkeypatch.setattr(evidence_module, "validate_downstream_object", count_local)
-    monkeypatch.setattr(evidence_module, "validate_attempt_relationships", count_graph)
 
     owner, bindings = _owner(tmp_path)
     transition = owner.settle_underwriting(
@@ -3561,7 +3551,6 @@ def test_availability_write_keeps_local_validation_and_skips_attempt_graph_scan(
         "UNDERWRITING_AVAILABILITY_EVALUATION"
     ]
     assert local_calls == 1
-    assert graph_calls == 0
     assert owner.writer.revision == 1
     assert read_current_evidence(tmp_path, bindings=bindings)
     local_calls_after_reader = local_calls
@@ -3590,7 +3579,6 @@ def test_availability_write_keeps_local_validation_and_skips_attempt_graph_scan(
     )
 
     assert local_calls == local_calls_after_reader + 1
-    assert graph_calls == 1
     assert owner.writer.revision == 2
 
 

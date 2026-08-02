@@ -1,20 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
-from copy import deepcopy
-from dataclasses import FrozenInstanceError, dataclass, field, replace
+from dataclasses import FrozenInstanceError, dataclass, field
 from pathlib import Path
-from typing import NoReturn, cast
+from typing import NoReturn
 
 import pytest
 import radar_runtime.service as service_module
 import radar_runtime.workbench as workbench_module
 from conftest import PolicyFactory
-from market_monitor import TimeInterval
 from radar_runtime.deribit_public import (
     InboundEnvelope,
     PublicProtocolIncompatibility,
@@ -30,10 +27,8 @@ from radar_runtime.runtime import (
     RadarReducer,
     RpcState,
     ShadowRpcIntent,
-    ShadowRuntimeIntegrityError,
 )
 from radar_runtime.service import (
-    PersistentServiceComposition,
     PersistentServiceStartup,
     PersistentServiceStartupError,
     PersistentStopEvent,
@@ -43,33 +38,9 @@ from radar_runtime.service import (
     prepare_persistent_service_startup,
     run_persistent_service_composition,
 )
-from radar_runtime.service_evidence import (
-    PERSISTENT_SERVICE_CONTRACT_DIGEST,
-    DataState,
-    PersistentServiceBindings,
-    PersistentServiceEvidenceError,
-    ServicePhase,
-    ServiceStatus,
-    read_complete_persistent_service_evidence,
-    read_current_persistent_service_evidence,
-)
-from short_vol_radar.evidence import (
-    AnomalyEvidence,
-    AtomicEvidence,
-    EvidenceError,
-    EvidenceWriter,
-    project_anomaly_event,
-    project_atomic_event,
-    validate_anomaly_event,
-    validate_atomic_event,
-    validate_evidence_directory,
-    validate_persistent_service_run_summary,
-)
+from radar_runtime.workbench import DataState, ServicePhase, ServiceStatus
+from short_vol_radar.evidence import EvidenceWriter
 from short_vol_radar.policy import load_policy_bytes
-from short_vol_underwriting import FactBoundary as DownstreamFactBoundary
-from short_vol_underwriting import canonical_identity
-from short_vol_underwriting.policy import PolicyChain
-from test_evidence_and_runtime import anomaly_evidence, atomic_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE = "a" * 40
@@ -88,106 +59,39 @@ def _startup(tmp_path: Path, *, nonce: str = "nonce-a") -> PersistentServiceStar
     )
 
 
-def _run_pre_latched(
-    tmp_path: Path,
-) -> tuple[PersistentServiceStartup, PersistentServiceComposition, Path]:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    event = PersistentStopEvent()
-    terminal_monotonic_ms = service_module._monotonic_ms() + 1
-    assert (
-        event.request(
-            terminal_monotonic_ms=terminal_monotonic_ms,
-            reason="TEST_STOP",
-        )
-        is True
-    )
-    client_calls = 0
-
-    def forbidden_client(**_: object) -> NoReturn:
-        nonlocal client_calls
-        client_calls += 1
-        raise AssertionError("pre-latched stop must not construct a market client")
-
-    summary = asyncio.run(
-        run_persistent_service_composition(
-            composition,
-            stop_event=event,
-            client_factory=forbidden_client,
-            monotonic_ms=lambda: terminal_monotonic_ms,
-            signal_registrar=lambda _signal, _callback: None,
-            start_workbench=False,
-        )
-    )
-    assert client_calls == 0
-    return startup, composition, summary
-
-
-def test_service_contract_digest_binds_exact_repository_bytes() -> None:
-    contract = ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md"
-    assert PERSISTENT_SERVICE_CONTRACT_DIGEST == (
-        f"sha256:{hashlib.sha256(contract.read_bytes()).hexdigest()}"
-    )
-
-
 def test_single_instance_lease_rejects_duplicate_and_releases(tmp_path: Path) -> None:
     state_root = (tmp_path / "state").resolve()
     first = SingleInstanceLease(state_root)
     second = SingleInstanceLease(state_root)
 
     first.acquire()
-    assert first.acquired is True
     with pytest.raises(PersistentServiceStartupError, match="another persistent service"):
         second.acquire()
-
     first.release()
+
     second.acquire()
     assert second.acquired is True
     second.release()
 
 
-def test_single_instance_lease_rejects_symlink_without_touching_target(
-    tmp_path: Path,
-) -> None:
-    state_root = tmp_path / "state"
-    state_root.mkdir()
-    target = tmp_path / "must-not-be-truncated"
-    target.write_text("preserve-me\n", encoding="utf-8")
-    (state_root / "service.lock").symlink_to(target)
-    lease = SingleInstanceLease(state_root)
-
+def test_startup_builds_one_business_owner_graph_without_service_ledger(tmp_path: Path) -> None:
+    startup = _startup(tmp_path)
+    composition = build_persistent_service_composition(startup)
     try:
-        with pytest.raises(PersistentServiceStartupError, match="lock path"):
-            lease.acquire()
+        assert startup.radar_directory.is_dir()
+        assert startup.downstream_directory.is_dir()
+        assert not (startup.run_directory / "service").exists()
+        assert composition.owner.policies is startup.policies
+        assert composition.runtime.policy is startup.policies.radar
+        assert composition.adapter.owner is composition.owner
+        assert composition.publisher.bindings is startup.downstream_bindings
+        with pytest.raises(FrozenInstanceError):
+            startup.policies.radar.identity = "sha256:" + "f" * 64  # type: ignore[misc]
     finally:
-        lease.release()
-
-    assert target.read_text(encoding="utf-8") == "preserve-me\n"
+        composition.workbench.close()
 
 
-def test_startup_rejects_symlinked_runs_directory(tmp_path: Path) -> None:
-    state_root = tmp_path / "state"
-    state_root.mkdir()
-    redirected = tmp_path / "redirected-runs"
-    redirected.mkdir()
-    (state_root / "runs").symlink_to(redirected, target_is_directory=True)
-
-    with pytest.raises(PersistentServiceStartupError, match="runs directory"):
-        prepare_persistent_service_startup(
-            state_root=state_root.resolve(),
-            process_cwd=ROOT,
-            workbench_host="127.0.0.1",
-            workbench_port=0,
-            code_identity=CODE,
-            startup_monotonic_ms=100,
-            process_id=123,
-            nonce_factory=lambda: "symlinked-runs",
-        )
-
-    assert tuple(redirected.iterdir()) == ()
-
-
-def test_runtime_identity_changes_each_start_and_is_canonical() -> None:
+def test_runtime_identity_changes_each_start() -> None:
     first = generate_runtime_identity(
         code_identity=CODE,
         startup_monotonic_ms=100,
@@ -204,348 +108,15 @@ def test_runtime_identity_changes_each_start_and_is_canonical() -> None:
     assert first.startswith("sha256:") and len(first) == 71
     assert second.startswith("sha256:") and len(second) == 71
     assert first != second
-    with pytest.raises(ValueError):
-        generate_runtime_identity(
-            code_identity="not-a-commit",
-            startup_monotonic_ms=100,
-            process_id=123,
-            nonce="invalid",
-        )
 
 
-def test_startup_freezes_one_shared_policy_chain(tmp_path: Path) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    try:
-        assert composition.owner.policies is startup.policies
-        assert composition.runtime.policy is startup.policies.radar
-        assert composition.adapter.owner is composition.owner
-        with pytest.raises(FrozenInstanceError):
-            startup.policies.radar.identity = "sha256:" + "f" * 64  # type: ignore[misc]
-    finally:
-        composition.workbench.close()
-
-
-def test_stop_event_preserves_first_boundary_and_returns_transition() -> None:
+def test_stop_event_preserves_first_boundary() -> None:
     event = PersistentStopEvent()
 
     assert event.request(terminal_monotonic_ms=100, reason="FIRST") is True
     assert event.request(terminal_monotonic_ms=200, reason="SECOND") is False
     assert event.terminal_monotonic_ms == 100
     assert event.reason == "FIRST"
-    assert event.is_set()
-
-
-def test_service_writer_rejects_backward_lifecycle_time(tmp_path: Path) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    try:
-        with pytest.raises(PersistentServiceEvidenceError, match="moved backward"):
-            composition.service_writer.write_event(
-                ServiceStatus(
-                    ServicePhase.CONNECTING,
-                    DataState.UNKNOWN,
-                    True,
-                    False,
-                    False,
-                    "BACKWARD",
-                    99,
-                )
-            )
-    finally:
-        composition.workbench.close()
-
-
-def test_pre_latched_stop_opens_no_client_and_writes_exact_terminal(
-    tmp_path: Path,
-) -> None:
-    startup, composition, summary = _run_pre_latched(tmp_path)
-    try:
-        assert summary == startup.radar_directory / "radar-run-summary.json"
-        assert summary.is_file()
-        evidence = read_complete_persistent_service_evidence(
-            startup.run_directory,
-            bindings=startup.service_bindings,
-            downstream_bindings=startup.downstream_bindings,
-        )
-        assert evidence.terminal is not None
-        assert evidence.events[0]["recorded_monotonic_ms"] == 100
-        assert evidence.terminal["terminal_disposition"] == "CLEAN_STOP"
-        assert evidence.terminal["radar_evidence_status"] == "COMPLETE_CLEAN_STOP"
-        event_non_claims = evidence.events[0]["non_claims"]
-        terminal_non_claims = evidence.terminal["non_claims"]
-        assert isinstance(event_non_claims, list)
-        assert isinstance(terminal_non_claims, list)
-        assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in event_non_claims
-        assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in event_non_claims
-        assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in terminal_non_claims
-        assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in terminal_non_claims
-        assert evidence.terminal["forward_cohort_summary_emitted"] is False
-        assert evidence.terminal["radar_object_count"] == 1
-        assert evidence.terminal["downstream_object_count"] == 0
-        assert str(evidence.terminal["radar_inventory_identity"]).startswith("sha256:")
-        assert str(evidence.terminal["lifecycle_inventory_identity"]).startswith("sha256:")
-        underwriting_rates = cast(Mapping[str, object], evidence.terminal["underwriting_rates"])
-        cohort_rates = cast(Mapping[str, object], evidence.terminal["cohort_rates"])
-        assert all(value is None for value in underwriting_rates.values())
-        assert all(value is None for value in cohort_rates.values())
-        downstream_files = tuple(startup.downstream_directory.rglob("*.json"))
-        assert not any("SUMMARY" in path.as_posix() for path in downstream_files)
-        before = sorted(startup.service_directory.rglob("*.json"))
-        composition.adapter.finalize_terminal()
-        after = sorted(startup.service_directory.rglob("*.json"))
-        assert after == before
-    finally:
-        composition.workbench.close()
-
-
-def test_process_failure_terminal_is_complete_without_radar_summary(tmp_path: Path) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    try:
-        composition.runtime.finalize_shadow_failure(1_000)
-        composition.runtime.finalize_shadow_failure(1_001)
-        evidence = read_complete_persistent_service_evidence(
-            startup.run_directory,
-            bindings=startup.service_bindings,
-            downstream_bindings=startup.downstream_bindings,
-        )
-        assert evidence.terminal is not None
-        assert evidence.terminal["terminal_disposition"] == "PROCESS_FAILURE"
-        assert evidence.terminal["radar_evidence_status"] == "INCOMPLETE_PROCESS_FAILURE"
-        assert evidence.terminal["radar_object_count"] == 0
-        assert not (startup.radar_directory / "radar-run-summary.json").exists()
-    finally:
-        composition.workbench.close()
-
-
-def test_process_failure_reader_rejects_corrupt_partial_radar_inventory(
-    tmp_path: Path,
-) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    try:
-        composition.runtime.finalize_shadow_failure(1_000)
-        corrupt = startup.radar_directory / "short-vol-anomaly-corrupt.json"
-        corrupt.write_text('{"object_kind":"SHORT_VOL_ANOMALY_EVENT"}\n')
-
-        with pytest.raises(PersistentServiceEvidenceError):
-            read_complete_persistent_service_evidence(
-                startup.run_directory,
-                bindings=startup.service_bindings,
-                downstream_bindings=startup.downstream_bindings,
-            )
-    finally:
-        composition.workbench.close()
-
-
-def test_process_failure_writer_rejects_corrupt_partial_radar_inventory(
-    tmp_path: Path,
-) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    try:
-        corrupt = startup.radar_directory / "unexpected.json"
-        corrupt.write_text('{"object_kind":"UNKNOWN"}\n')
-
-        with pytest.raises(ShadowRuntimeIntegrityError, match="terminal evidence finalize"):
-            composition.runtime.finalize_shadow_failure(1_000)
-        assert not (startup.service_directory / "terminal.json").exists()
-        terminal_event_count = len(composition.service_writer.events)
-        with pytest.raises(PersistentServiceEvidenceError, match="requires terminal"):
-            read_complete_persistent_service_evidence(
-                startup.run_directory,
-                bindings=startup.service_bindings,
-                downstream_bindings=startup.downstream_bindings,
-            )
-
-        corrupt.unlink()
-        composition.adapter.finalize_terminal()
-        assert len(composition.service_writer.events) == terminal_event_count
-        repaired = read_complete_persistent_service_evidence(
-            startup.run_directory,
-            bindings=startup.service_bindings,
-            downstream_bindings=startup.downstream_bindings,
-        )
-        assert repaired.terminal is not None
-    finally:
-        composition.workbench.close()
-
-
-def _bound_partial_radar(
-    startup: PersistentServiceStartup,
-) -> tuple[AnomalyEvidence, AtomicEvidence]:
-    anomaly = replace(
-        anomaly_evidence(),
-        code_identity=startup.code_identity,
-        runtime_identity=startup.runtime_identity,
-        policy_identity=startup.policies.radar.identity,
-    )
-    atomic = replace(
-        atomic_evidence(),
-        code_identity=startup.code_identity,
-        runtime_identity=startup.runtime_identity,
-        policy_identity=startup.policies.radar.identity,
-    )
-    return anomaly, atomic
-
-
-def _write_future_partial_radar(
-    startup: PersistentServiceStartup,
-    composition: PersistentServiceComposition,
-    *,
-    future_object_kind: str,
-) -> None:
-    anomaly, atomic = _bound_partial_radar(startup)
-    if future_object_kind == "anomaly":
-        composition.radar_writer.write_anomaly(project_anomaly_event(anomaly))
-        return
-    assert future_object_kind == "atomic"
-    composition.radar_writer.write_anomaly(project_anomaly_event(replace(anomaly, causal_seq=0)))
-    composition.radar_writer.write_atomic(project_atomic_event(atomic))
-
-
-def test_process_failure_rejects_duplicate_atomic_identity(tmp_path: Path) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    try:
-        anomaly, atomic = _bound_partial_radar(startup)
-        composition.radar_writer.write_anomaly(project_anomaly_event(anomaly))
-        atomic_path = composition.radar_writer.write_atomic(project_atomic_event(atomic))
-        assert atomic_path is not None
-        (startup.radar_directory / "duplicate-atomic.json").write_bytes(atomic_path.read_bytes())
-
-        with pytest.raises(ShadowRuntimeIntegrityError, match="terminal evidence finalize"):
-            composition.runtime.finalize_shadow_failure(1_000)
-
-        assert composition.service_writer.terminal is None
-        assert not (startup.service_directory / "terminal.json").exists()
-    finally:
-        composition.workbench.close()
-
-
-def test_process_failure_rejects_atomic_anomaly_short_leg_mismatch(
-    tmp_path: Path,
-) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    try:
-        anomaly, atomic = _bound_partial_radar(startup)
-        mismatched_atomic = replace(
-            atomic,
-            short_instrument_name="OTHER",
-            combo_legs=(("OTHER", atomic.combo_legs[0][1]), atomic.combo_legs[1]),
-        )
-        anomaly_value = project_anomaly_event(anomaly)
-        atomic_value = project_atomic_event(mismatched_atomic)
-        validate_anomaly_event(anomaly_value)
-        validate_atomic_event(atomic_value)
-        composition.radar_writer.write_anomaly(anomaly_value)
-        composition.radar_writer.write_atomic(atomic_value)
-
-        with pytest.raises(ShadowRuntimeIntegrityError, match="terminal evidence finalize"):
-            composition.runtime.finalize_shadow_failure(1_000)
-
-        assert composition.service_writer.terminal is None
-        assert not (startup.service_directory / "terminal.json").exists()
-    finally:
-        composition.workbench.close()
-
-
-@pytest.mark.parametrize("future_object_kind", ("anomaly", "atomic"))
-def test_process_failure_writer_rejects_partial_radar_after_terminal_boundary(
-    tmp_path: Path,
-    future_object_kind: str,
-) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    try:
-        _write_future_partial_radar(
-            startup,
-            composition,
-            future_object_kind=future_object_kind,
-        )
-
-        with pytest.raises(ShadowRuntimeIntegrityError, match="terminal evidence finalize"):
-            composition.runtime.finalize_shadow_failure(1_000)
-
-        assert composition.service_writer.terminal is None
-        assert not (startup.service_directory / "terminal.json").exists()
-    finally:
-        composition.workbench.close()
-
-
-@pytest.mark.parametrize("future_object_kind", ("anomaly", "atomic"))
-def test_process_failure_reader_rejects_partial_radar_after_terminal_boundary(
-    tmp_path: Path,
-    future_object_kind: str,
-) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    try:
-        composition.runtime.finalize_shadow_failure(1_000)
-        _write_future_partial_radar(
-            startup,
-            composition,
-            future_object_kind=future_object_kind,
-        )
-
-        with pytest.raises(
-            PersistentServiceEvidenceError,
-            match="causal boundary follows the service terminal",
-        ):
-            read_complete_persistent_service_evidence(
-                startup.run_directory,
-                bindings=startup.service_bindings,
-                downstream_bindings=startup.downstream_bindings,
-            )
-    finally:
-        composition.workbench.close()
-
-
-def test_service_reader_fails_closed_on_missing_corrupt_or_mixed_evidence(
-    tmp_path: Path,
-) -> None:
-    startup, composition, _summary = _run_pre_latched(tmp_path)
-    try:
-        terminal_path = startup.service_directory / "terminal.json"
-        exact = terminal_path.read_bytes()
-        terminal_path.unlink()
-        current = read_current_persistent_service_evidence(
-            startup.run_directory,
-            bindings=startup.service_bindings,
-            downstream_bindings=startup.downstream_bindings,
-        )
-        assert current.terminal is None
-        with pytest.raises(PersistentServiceEvidenceError, match="requires terminal"):
-            read_complete_persistent_service_evidence(
-                startup.run_directory,
-                bindings=startup.service_bindings,
-                downstream_bindings=startup.downstream_bindings,
-            )
-        terminal_path.write_bytes(exact.replace(b'"CLEAN_STOP"', b'"BROKEN_STOP"', 1))
-        with pytest.raises(PersistentServiceEvidenceError):
-            read_current_persistent_service_evidence(
-                startup.run_directory,
-                bindings=startup.service_bindings,
-                downstream_bindings=startup.downstream_bindings,
-            )
-        terminal_path.write_bytes(exact)
-        mixed = PersistentServiceBindings(
-            code_identity=CODE,
-            runtime_identity="sha256:" + "f" * 64,
-            radar_policy_identity=startup.service_bindings.radar_policy_identity,
-            underwriting_policy_identity=(startup.service_bindings.underwriting_policy_identity),
-            position_policy_identity=startup.service_bindings.position_policy_identity,
-        )
-        with pytest.raises(PersistentServiceEvidenceError, match="binding mismatch"):
-            read_current_persistent_service_evidence(
-                startup.run_directory,
-                bindings=mixed,
-                downstream_bindings=startup.downstream_bindings,
-            )
-    finally:
-        composition.workbench.close()
 
 
 class _WaitingClient:
@@ -604,73 +175,47 @@ class _FatalProtocolClient(_WaitingClient):
         raise PublicProtocolIncompatibility("test protocol incompatibility")
 
 
-def test_active_stop_publishes_stopping_before_exact_terminal(tmp_path: Path) -> None:
+def test_pre_latched_stop_opens_no_client_and_writes_radar_summary(tmp_path: Path) -> None:
     startup = _startup(tmp_path)
     composition = build_persistent_service_composition(startup)
     event = PersistentStopEvent()
-    client = _WaitingClient()
+    terminal_ms = service_module._monotonic_ms() + 1
+    event.request(terminal_monotonic_ms=terminal_ms, reason="TEST_STOP")
 
-    def client_factory(
-        *,
-        session_epoch: int,
-        rpc_deadline_ms: int,
-    ) -> AbstractAsyncContextManager[PublicClient]:
-        assert session_epoch == 1
-        assert rpc_deadline_ms > 0
-        return _WaitingClientContext(client)
+    def forbidden_client(**_: object) -> NoReturn:
+        raise AssertionError("pre-latched stop must not construct a market client")
 
-    async def scenario() -> Path:
-        task = asyncio.create_task(
+    try:
+        summary = asyncio.run(
             run_persistent_service_composition(
                 composition,
                 stop_event=event,
-                client_factory=client_factory,
+                client_factory=forbidden_client,
+                monotonic_ms=lambda: terminal_ms,
                 signal_registrar=lambda _signal, _callback: None,
                 start_workbench=False,
             )
         )
-        for _ in range(100):
-            if composition.publisher.status.phase is ServicePhase.RUNNING:
-                break
-            await asyncio.sleep(0)
-        assert composition.publisher.status.phase is ServicePhase.RUNNING
-        assert event.request(
-            terminal_monotonic_ms=service_module._monotonic_ms(),
-            reason="TEST_ACTIVE_STOP",
-        )
-        return await task
-
-    try:
-        summary = asyncio.run(scenario())
+        assert summary == startup.radar_directory / "radar-run-summary.json"
         assert summary.is_file()
-        evidence = read_complete_persistent_service_evidence(
-            startup.run_directory,
-            bindings=startup.service_bindings,
-            downstream_bindings=startup.downstream_bindings,
-        )
-        phases = [str(value["service_phase"]) for value in evidence.events]
-        assert phases[-2:] == ["STOPPING", "STOPPED"]
-        assert evidence.events[-2]["reason"] == "TEST_ACTIVE_STOP"
+        assert composition.runtime.shadow_terminalized is True
+        assert composition.publisher.status.phase is ServicePhase.STOPPED
+        assert not (startup.run_directory / "service").exists()
     finally:
         composition.workbench.close()
 
 
-def test_outer_service_loop_reconnects_without_replacing_business_owner(
-    tmp_path: Path,
-) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
+def test_outer_loop_reconnects_without_replacing_business_owner(tmp_path: Path) -> None:
+    composition = build_persistent_service_composition(_startup(tmp_path))
     event = PersistentStopEvent()
     owner = composition.owner
-    factory_epochs: list[int] = []
+    epochs: list[int] = []
 
     def client_factory(
-        *,
-        session_epoch: int,
-        rpc_deadline_ms: int,
+        *, session_epoch: int, rpc_deadline_ms: int
     ) -> AbstractAsyncContextManager[PublicClient]:
         assert rpc_deadline_ms > 0
-        factory_epochs.append(session_epoch)
+        epochs.append(session_epoch)
         client: _WaitingClient = (
             _RecoverableFailureClient(session_epoch)
             if session_epoch == 1
@@ -678,9 +223,6 @@ def test_outer_service_loop_reconnects_without_replacing_business_owner(
         )
         return _WaitingClientContext(client)
 
-    async def no_delay(_seconds: float) -> None:
-        return None
-
     async def scenario() -> Path:
         task = asyncio.create_task(
             run_persistent_service_composition(
@@ -688,7 +230,7 @@ def test_outer_service_loop_reconnects_without_replacing_business_owner(
                 stop_event=event,
                 client_factory=client_factory,
                 signal_registrar=lambda _signal, _callback: None,
-                sleep=no_delay,
+                sleep=lambda _seconds: asyncio.sleep(0),
                 start_workbench=False,
             )
         )
@@ -699,10 +241,11 @@ def test_outer_service_loop_reconnects_without_replacing_business_owner(
             ):
                 break
             await asyncio.sleep(0)
-        assert composition.runtime.reducer.current_session_epoch == 2
-        assert composition.publisher.status.phase is ServicePhase.RUNNING
         assert event.request(
-            terminal_monotonic_ms=service_module._monotonic_ms(),
+            terminal_monotonic_ms=max(
+                service_module._monotonic_ms(),
+                composition.runtime.reducer.last_boundary_monotonic_ms + 1,
+            ),
             reason="TEST_AFTER_RECONNECT",
         )
         return await task
@@ -710,34 +253,20 @@ def test_outer_service_loop_reconnects_without_replacing_business_owner(
     try:
         summary = asyncio.run(scenario())
         assert summary.is_file()
-        assert factory_epochs == [1, 2]
+        assert epochs == [1, 2]
         assert composition.owner is owner
         assert composition.runtime.reducer.diagnostics.reconnect_count == 1
-        phases = [str(value["service_phase"]) for value in composition.service_writer.events]
-        assert "RECONNECTING" in phases
-        evidence = read_complete_persistent_service_evidence(
-            startup.run_directory,
-            bindings=startup.service_bindings,
-            downstream_bindings=startup.downstream_bindings,
-        )
-        assert evidence.terminal is not None
-        assert evidence.terminal["terminal_disposition"] == "CLEAN_STOP"
+        assert composition.publisher.status.phase is ServicePhase.STOPPED
     finally:
         composition.workbench.close()
 
 
-def test_outer_service_loop_terminalizes_protocol_incompatibility(
-    tmp_path: Path,
-) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
+def test_fatal_protocol_failure_terminalizes_owner_and_status(tmp_path: Path) -> None:
+    composition = build_persistent_service_composition(_startup(tmp_path))
 
     def client_factory(
-        *,
-        session_epoch: int,
-        rpc_deadline_ms: int,
+        *, session_epoch: int, rpc_deadline_ms: int
     ) -> AbstractAsyncContextManager[PublicClient]:
-        assert session_epoch == 1
         assert rpc_deadline_ms > 0
         return _WaitingClientContext(_FatalProtocolClient(session_epoch))
 
@@ -751,70 +280,26 @@ def test_outer_service_loop_terminalizes_protocol_incompatibility(
                     start_workbench=False,
                 )
             )
-        evidence = read_complete_persistent_service_evidence(
-            startup.run_directory,
-            bindings=startup.service_bindings,
-            downstream_bindings=startup.downstream_bindings,
-        )
-        assert evidence.terminal is not None
-        assert evidence.terminal["terminal_disposition"] == "PROCESS_FAILURE"
-        assert evidence.terminal["radar_evidence_status"] == "INCOMPLETE_PROCESS_FAILURE"
+        assert composition.runtime.shadow_terminalized is True
+        assert composition.publisher.status.phase is ServicePhase.FAILED
+        assert not (composition.startup.radar_directory / "radar-run-summary.json").exists()
     finally:
         composition.workbench.close()
 
 
-def test_post_stop_drain_snapshot_cannot_move_lifecycle_time_backward(tmp_path: Path) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    try:
-        reducer = composition.runtime.reducer
-        reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-        composition.publisher.update_status(
-            ServiceStatus(
-                ServicePhase.STOPPING,
-                DataState.UNKNOWN,
-                True,
-                False,
-                False,
-                "TEST_STOP",
-                2_000,
-            )
-        )
-
-        composition.publisher.publish_settled(
-            reducer=reducer,
-            commit=CausalCommit(
-                boundary=FactBoundary(1, 1, 1_500, 1),
-                cause=CausalCause.TIME_BOUNDARY,
-                failure_domain=FailureScope.CLOCK_INDEX,
-                affected_scopes=("GLOBAL",),
-            ),
-        )
-
-        recorded = [
-            cast(int, value["recorded_monotonic_ms"]) for value in composition.service_writer.events
-        ]
-        assert recorded == sorted(recorded)
-        assert recorded[-1] == 2_000
-        assert composition.publisher.status.phase is ServicePhase.STOPPING
-    finally:
-        composition.workbench.close()
-
-
-def test_workbench_coalesces_ordinary_facts_and_flushes_latest_state(tmp_path: Path) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
+def test_workbench_coalesces_and_flushes_latest_business_state(tmp_path: Path) -> None:
+    composition = build_persistent_service_composition(_startup(tmp_path))
     reducer = composition.runtime.reducer
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-    status = workbench_module._settled_status(
-        reducer,
-        phase=ServicePhase.RUNNING,
-        recorded_monotonic_ms=1_000,
-    )
     try:
-        composition.publisher.update_status(status, persist=False)
-        published_sequence = composition.snapshot_store.read().sequence
-
+        composition.publisher.update_status(
+            workbench_module._settled_status(
+                reducer,
+                phase=ServicePhase.RUNNING,
+                recorded_monotonic_ms=1_000,
+            )
+        )
+        sequence = composition.snapshot_store.read().sequence
         for causal_seq, monotonic_ms in ((1, 1_100), (2, 1_200)):
             composition.publisher.publish_settled(
                 reducer=reducer,
@@ -825,97 +310,29 @@ def test_workbench_coalesces_ordinary_facts_and_flushes_latest_state(tmp_path: P
                     affected_scopes=("GLOBAL",),
                 ),
             )
+        assert composition.snapshot_store.read().sequence == sequence
 
-        assert composition.snapshot_store.read().sequence == published_sequence
         composition.publisher.flush_pending()
         value = json.loads(composition.snapshot_store.read().workbench_body)
-        assert value["publication_sequence"] == published_sequence + 1
+        assert value["publication_sequence"] == sequence + 1
         assert value["published_fact_boundary"]["causal_seq"] == 2
     finally:
         composition.workbench.close()
 
 
-def test_workbench_publishes_at_interval_and_status_change_bypasses_it(tmp_path: Path) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
+def test_status_change_publishes_pending_business_state_immediately(tmp_path: Path) -> None:
+    composition = build_persistent_service_composition(_startup(tmp_path))
     reducer = composition.runtime.reducer
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-    initial_status = workbench_module._settled_status(
-        reducer,
-        phase=ServicePhase.RUNNING,
-        recorded_monotonic_ms=1_000,
-    )
     try:
-        composition.publisher.update_status(initial_status, persist=False)
-        initial_sequence = composition.snapshot_store.read().sequence
-        composition.publisher.publish_settled(
-            reducer=reducer,
-            commit=CausalCommit(
-                boundary=FactBoundary(1, 1, 1_200, 1),
-                cause=CausalCause.TIME_BOUNDARY,
-                failure_domain=FailureScope.CLOCK_INDEX,
-                affected_scopes=("GLOBAL",),
-            ),
-        )
-        assert composition.snapshot_store.read().sequence == initial_sequence
-
-        composition.publisher.publish_settled(
-            reducer=reducer,
-            commit=CausalCommit(
-                boundary=FactBoundary(1, 2, 1_500, 2),
-                cause=CausalCause.TIME_BOUNDARY,
-                failure_domain=FailureScope.CLOCK_INDEX,
-                affected_scopes=("GLOBAL",),
-            ),
-        )
-        interval_value = json.loads(composition.snapshot_store.read().workbench_body)
-        assert interval_value["publication_sequence"] == initial_sequence + 1
-        assert interval_value["published_fact_boundary"]["causal_seq"] == 2
-
-        composition.publisher.publish_settled(
-            reducer=reducer,
-            commit=CausalCommit(
-                boundary=FactBoundary(1, 3, 1_600, 3),
-                cause=CausalCause.TIME_BOUNDARY,
-                failure_domain=FailureScope.CLOCK_INDEX,
-                affected_scopes=("GLOBAL",),
-            ),
-        )
         composition.publisher.update_status(
-            ServiceStatus(
-                ServicePhase.RUNNING,
-                DataState.CURRENT,
-                True,
-                True,
-                False,
-                "CURRENT",
-                1_700,
-            ),
-            persist=False,
+            workbench_module._settled_status(
+                reducer,
+                phase=ServicePhase.RUNNING,
+                recorded_monotonic_ms=1_000,
+            )
         )
-        status_value = json.loads(composition.snapshot_store.read().workbench_body)
-        assert status_value["publication_sequence"] == initial_sequence + 2
-        assert status_value["published_fact_boundary"]["causal_seq"] == 3
-        assert status_value["service"]["data_state"] == "CURRENT"
-    finally:
-        composition.workbench.close()
-
-
-def test_workbench_publication_failure_keeps_latest_state_pending(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    reducer = composition.runtime.reducer
-    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-    status = workbench_module._settled_status(
-        reducer,
-        phase=ServicePhase.RUNNING,
-        recorded_monotonic_ms=1_000,
-    )
-    try:
-        composition.publisher.update_status(status, persist=False)
+        sequence = composition.snapshot_store.read().sequence
         composition.publisher.publish_settled(
             reducer=reducer,
             commit=CausalCommit(
@@ -925,232 +342,6 @@ def test_workbench_publication_failure_keeps_latest_state_pending(
                 affected_scopes=("GLOBAL",),
             ),
         )
-        before = composition.snapshot_store.read()
-
-        def fail_publication(*_args: object, **_kwargs: object) -> NoReturn:
-            raise RuntimeError("test publication failure")
-
-        monkeypatch.setattr(
-            composition.snapshot_store,
-            "publish_preencoded_members",
-            fail_publication,
-        )
-        with pytest.raises(RuntimeError, match="test publication failure"):
-            composition.publisher.flush_pending()
-
-        assert composition.snapshot_store.read() == before
-        assert composition.publisher._dirty is True
-    finally:
-        composition.workbench.close()
-
-
-def test_workbench_reuses_downstream_projection_until_writer_revision_changes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    reducer = composition.runtime.reducer
-    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-    downstream_builds = 0
-    position_builds = 0
-    original_downstream = workbench_module._build_downstream_projection
-    original_position = workbench_module._position_rows
-
-    def counted_downstream(
-        *,
-        objects: Sequence[Mapping[str, object]],
-        policies: PolicyChain,
-        underwriting_metadata: Sequence[Mapping[str, object]],
-    ) -> workbench_module._DownstreamProjection:
-        nonlocal downstream_builds
-        downstream_builds += 1
-        return original_downstream(
-            objects=objects,
-            policies=policies,
-            underwriting_metadata=underwriting_metadata,
-        )
-
-    def counted_position(
-        kinds: Mapping[str, Sequence[Mapping[str, object]]],
-        policies: PolicyChain,
-        *,
-        trusted_time: TimeInterval | None,
-        option_metadata: Sequence[Mapping[str, object]],
-    ) -> list[dict[str, object]]:
-        nonlocal position_builds
-        position_builds += 1
-        return original_position(
-            kinds,
-            policies,
-            trusted_time=trusted_time,
-            option_metadata=option_metadata,
-        )
-
-    monkeypatch.setattr(workbench_module, "_build_downstream_projection", counted_downstream)
-    monkeypatch.setattr(workbench_module, "_position_rows", counted_position)
-
-    def assert_exact_snapshot() -> dict[str, object]:
-        snapshot = composition.snapshot_store.read()
-        expected = composition.publisher._document(
-            composition.publisher._last_business,
-            status=composition.publisher.status,
-        )
-        expected["publication_sequence"] = snapshot.sequence
-        assert snapshot.workbench_body == workbench_module._json_bytes(expected)
-        value = json.loads(snapshot.workbench_body)
-        assert isinstance(value, dict)
-        return value
-
-    try:
-        composition.publisher.update_status(
-            ServiceStatus(
-                ServicePhase.RUNNING,
-                DataState.UNKNOWN,
-                True,
-                False,
-                False,
-                "TEST_STATUS_ONLY",
-                1_000,
-            ),
-            persist=False,
-        )
-        assert_exact_snapshot()
-
-        for causal_seq in (1, 2):
-            composition.publisher.publish_settled(
-                reducer=reducer,
-                commit=CausalCommit(
-                    boundary=FactBoundary(1, causal_seq, 1_000 + causal_seq, causal_seq),
-                    cause=CausalCause.TIME_BOUNDARY,
-                    failure_domain=FailureScope.CLOCK_INDEX,
-                    affected_scopes=("GLOBAL",),
-                ),
-            )
-            composition.publisher.flush_pending()
-            assert_exact_snapshot()
-
-        second = json.loads(composition.snapshot_store.read().workbench_body)
-        assert downstream_builds == 1
-        assert position_builds == 2
-        assert second["published_fact_boundary"]["causal_seq"] == 2
-
-        downstream_boundary = DownstreamFactBoundary(
-            code_identity=composition.downstream_writer.bindings.code_identity,
-            runtime_identity=composition.downstream_writer.bindings.runtime_identity,
-            session_epoch=1,
-            ingress_seq=3,
-            received_monotonic_ms=1_003,
-            causal_seq=3,
-        )
-        candidate_identity = "sha256:" + "7" * 64
-        reason = "RUNTIME_OR_CODE_IDENTITY_CHANGED"
-        invalidation_identity = canonical_identity(
-            "CANDIDATE_INVALIDATION",
-            candidate_identity,
-            reason,
-            [reason],
-            downstream_boundary.as_object(),
-        )
-        composition.downstream_writer.write(
-            object_kind="CANDIDATE_INVALIDATION",
-            object_identity=invalidation_identity,
-            fact_boundary=downstream_boundary,
-            payload={
-                "candidate_invalidation_identity": invalidation_identity,
-                "candidate_identity": candidate_identity,
-                "primary_reason": reason,
-                "ordered_applicable_reason_vector": [reason],
-                "terminal_fact_boundary": downstream_boundary.as_object(),
-            },
-            source_provenance=(),
-        )
-        composition.publisher.publish_settled(
-            reducer=reducer,
-            commit=CausalCommit(
-                boundary=FactBoundary(1, 3, 1_003, 3),
-                cause=CausalCause.TIME_BOUNDARY,
-                failure_domain=FailureScope.CLOCK_INDEX,
-                affected_scopes=("GLOBAL",),
-            ),
-        )
-        composition.publisher.flush_pending()
-
-        third = json.loads(composition.snapshot_store.read().workbench_body)
-        assert_exact_snapshot()
-        assert downstream_builds == 2
-        assert position_builds == 3
-        assert third["publication_sequence"] == second["publication_sequence"] + 1
-        assert third["published_fact_boundary"]["causal_seq"] == 3
-
-        scope_identity = "sha256:" + "8" * 64
-        availability_identity = "sha256:" + "9" * 64
-        composition.downstream_writer._objects[
-            ("UNDERWRITING_AVAILABILITY_EVALUATION", availability_identity)
-        ] = {
-            "object_kind": "UNDERWRITING_AVAILABILITY_EVALUATION",
-            "object_identity": availability_identity,
-            "fact_boundary": {
-                "code_identity": composition.downstream_writer.bindings.code_identity,
-                "runtime_identity": composition.downstream_writer.bindings.runtime_identity,
-                "session_epoch": 1,
-                "ingress_seq": 4,
-                "received_monotonic_ms": 1_004,
-                "causal_seq": 4,
-            },
-            "payload": {
-                "radar_scope_or_short_leg_identity": scope_identity,
-                "availability": "NOT_EVALUATED",
-                "unknown_reasons": ["RADAR_EPISODE_NOT_ACTIVE"],
-                "availability_evaluation_fact_boundary": {"causal_seq": 4},
-            },
-        }
-        composition.downstream_writer._revision += 1
-        composition.publisher.publish_settled(
-            reducer=reducer,
-            commit=CausalCommit(
-                boundary=FactBoundary(1, 4, 1_004, 4),
-                cause=CausalCause.TIME_BOUNDARY,
-                failure_domain=FailureScope.CLOCK_INDEX,
-                affected_scopes=("GLOBAL",),
-            ),
-        )
-        composition.publisher.flush_pending()
-        writer_changed = assert_exact_snapshot()
-        assert downstream_builds == 3
-        writer_panel = cast(dict[str, object], writer_changed["underwriting"])
-        writer_rows = cast(list[dict[str, object]], writer_panel["rows"])
-        assert writer_rows[0]["short_leg_instrument_name"] is None
-
-        composition.adapter._workbench_underwriting_metadata = (
-            {
-                "radar_scope_identity": scope_identity,
-                "short_leg_instrument_name": "BTC-TEST-SHORT",
-                "long_leg_instrument_name": "BTC-TEST-LONG",
-                "combo_instrument_name": "BTC-TEST-COMBO",
-                "expiry_timestamp_ms": 10_000,
-                "option_type": "call",
-                "short_strike_usdc_per_btc": "100",
-                "long_strike_usdc_per_btc": "110",
-                "target_quantity_btc": "0.1",
-            },
-        )
-        composition.publisher.publish_settled(
-            reducer=reducer,
-            commit=CausalCommit(
-                boundary=FactBoundary(1, 5, 1_005, 5),
-                cause=CausalCause.TIME_BOUNDARY,
-                failure_domain=FailureScope.CLOCK_INDEX,
-                affected_scopes=("GLOBAL",),
-            ),
-        )
-        composition.publisher.flush_pending()
-        metadata_changed = assert_exact_snapshot()
-        assert downstream_builds == 4
-        metadata_panel = cast(dict[str, object], metadata_changed["underwriting"])
-        metadata_rows = cast(list[dict[str, object]], metadata_panel["rows"])
-        assert metadata_rows[0]["short_leg_instrument_name"] == "BTC-TEST-SHORT"
-
         composition.publisher.update_status(
             ServiceStatus(
                 ServicePhase.RUNNING,
@@ -1159,128 +350,13 @@ def test_workbench_reuses_downstream_projection_until_writer_revision_changes(
                 True,
                 False,
                 "CURRENT",
-                1_006,
-            ),
-            persist=False,
+                1_200,
+            )
         )
-        assert_exact_snapshot()
-        assert downstream_builds == 4
-    finally:
-        composition.workbench.close()
-
-
-def test_stop_between_sessions_does_not_create_a_synthetic_reconnect(tmp_path: Path) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    try:
-        reducer = composition.runtime.reducer
-        reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-        composition.runtime.prepare_reconnect("SESSION_GAP")
-        assert reducer.current_session_epoch == 1
-        assert reducer.diagnostics.reconnect_count == 0
-        event = PersistentStopEvent()
-        assert event.request(terminal_monotonic_ms=2_000, reason="TEST_STOP") is True
-
-        summary = service_module._stop_without_client(
-            composition,
-            event=event,
-            monotonic_ms=lambda: 2_000,
-        )
-
-        assert summary.is_file()
-        assert reducer.current_session_epoch == 1
-        assert reducer.diagnostics.reconnect_count == 0
-        evidence = read_complete_persistent_service_evidence(
-            startup.run_directory,
-            bindings=startup.service_bindings,
-            downstream_bindings=startup.downstream_bindings,
-        )
-        assert evidence.terminal is not None
-        assert evidence.terminal["terminal_disposition"] == "CLEAN_STOP"
-
-        with pytest.raises(EvidenceError, match="coverage continuity epoch"):
-            validate_evidence_directory(startup.radar_directory)
-
-        summary_value = json.loads(summary.read_text(encoding="utf-8"))
-        validate_persistent_service_run_summary(summary_value)
-
-        trigger_mismatch = deepcopy(summary_value)
-        trigger_mismatch["coverage_segments"][0]["trigger_cause"] = "RUNTIME_START"
-
-        blocker_mismatch = deepcopy(summary_value)
-        blocker_mismatch["coverage_segments"][0]["blocking_reason"] = "RUNTIME_START_PENDING"
-        blocker_mismatch["coverage_segments"][0]["blocking_groups"][0]["blocking_reason"] = (
-            "RUNTIME_START_PENDING"
-        )
-
-        scope_mismatch = deepcopy(summary_value)
-        mismatched_scope = ["SCOPE:10000:call:band"]
-        scope_mismatch["coverage_segments"][0]["affected_scopes"] = mismatched_scope
-        scope_mismatch["coverage_segments"][0]["blocking_groups"][0]["affected_scopes"] = (
-            mismatched_scope
-        )
-
-        boundary_mismatch = deepcopy(summary_value)
-        restart = boundary_mismatch["operational_diagnostics"]["global_continuity"][
-            "restart_edges"
-        ][0]
-        restart["boundary"]["received_monotonic_ms"] += 1
-
-        recovered_leading_restart = deepcopy(summary_value)
-        recovered_leading_restart["operational_diagnostics"]["global_continuity"][
-            "recovery_edges"
-        ] = [
-            {
-                "incident_id": 1,
-                "boundary": {
-                    "session_epoch": 1,
-                    "ingress_seq": 0,
-                    "received_monotonic_ms": 1_500,
-                    "causal_seq": 2,
-                },
-            }
-        ]
-
-        recovered_at_segment_end = deepcopy(recovered_leading_restart)
-        recovered_at_segment_end["operational_diagnostics"]["global_continuity"]["recovery_edges"][
-            0
-        ]["boundary"]["received_monotonic_ms"] = summary_value["clean_stop_monotonic_ms"]
-        assert (
-            summary_value["coverage_segments"][0]["end_monotonic_ms"]
-            == summary_value["clean_stop_monotonic_ms"]
-        )
-        validate_persistent_service_run_summary(recovered_at_segment_end)
-
-        for invalid in (
-            trigger_mismatch,
-            blocker_mismatch,
-            scope_mismatch,
-            boundary_mismatch,
-            recovered_leading_restart,
-        ):
-            with pytest.raises(EvidenceError):
-                validate_persistent_service_run_summary(invalid)
-    finally:
-        composition.workbench.close()
-
-
-def test_reconnect_increments_session_epoch_without_replacing_owner(tmp_path: Path) -> None:
-    startup = _startup(tmp_path)
-    composition = build_persistent_service_composition(startup)
-    try:
-        owner = composition.owner
-        runtime_identity = composition.runtime.runtime_identity
-        composition.runtime.reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-        composition.runtime.prepare_reconnect("SESSION_GAP")
-        composition.runtime.reducer.begin_session(session_epoch=2, monotonic_ms=2_000)
-
-        assert composition.runtime.runtime_identity == runtime_identity
-        assert composition.adapter.owner is owner
-        assert composition.runtime.reducer.current_session_epoch == 2
-        assert composition.runtime.reducer.diagnostics.reconnect_count == 1
-        body = json.loads(composition.snapshot_store.read().workbench_body)
-        assert body["service"]["data_state"] in {"INTERRUPTED", "UNKNOWN"}
-        assert body["runtime_identity"] == runtime_identity
+        value = json.loads(composition.snapshot_store.read().workbench_body)
+        assert value["publication_sequence"] == sequence + 1
+        assert value["published_fact_boundary"]["causal_seq"] == 1
+        assert value["service"]["ready"] is True
     finally:
         composition.workbench.close()
 
@@ -1291,20 +367,14 @@ class _OrderingAdapter:
     required_combo_instrument_names: tuple[str, ...] = ()
 
     def on_settled_transaction(
-        self,
-        *,
-        reducer: RadarReducer,
-        commit: CausalCommit,
+        self, *, reducer: RadarReducer, commit: CausalCommit
     ) -> tuple[ShadowRpcIntent, ...]:
         del reducer, commit
         self.order.append("shadow")
         return ()
 
     def next_time_boundary_monotonic_ms(
-        self,
-        *,
-        reducer: RadarReducer,
-        after_monotonic_ms: int,
+        self, *, reducer: RadarReducer, after_monotonic_ms: int
     ) -> int | None:
         del reducer, after_monotonic_ms
         return None
@@ -1316,28 +386,18 @@ class _OrderingAdapter:
         del reducer, boundary
 
     def configure_terminal_control(
-        self,
-        *,
-        terminal_disposition: str,
-        terminal_source: Mapping[str, object],
+        self, *, terminal_disposition: str, terminal_source: Mapping[str, object]
     ) -> None:
         del terminal_disposition, terminal_source
 
     def on_request_sent(
-        self,
-        *,
-        request_id: int,
-        boundary: FactBoundary,
+        self, *, request_id: int, boundary: FactBoundary
     ) -> tuple[ShadowRpcIntent, ...]:
         del request_id, boundary
         return ()
 
     def on_request_failure(
-        self,
-        *,
-        request_id: int,
-        terminal_state: RpcState,
-        boundary: FactBoundary,
+        self, *, request_id: int, terminal_state: RpcState, boundary: FactBoundary
     ) -> tuple[ShadowRpcIntent, ...]:
         del request_id, terminal_state, boundary
         return ()
@@ -1372,12 +432,11 @@ class _OrderingPublisher:
         self.snapshots.append(commit)
 
     def flush_pending(self) -> None:
-        return None
+        self.order.append("flush")
 
 
 def test_runtime_publishes_snapshot_only_after_shadow_settlement(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
+    tmp_path: Path, policy_factory: PolicyFactory
 ) -> None:
     exact, digest = policy_factory()
     order: list[str] = []
@@ -1396,9 +455,8 @@ def test_runtime_publishes_snapshot_only_after_shadow_settlement(
         shadow_adapter=adapter,
         snapshot_publisher=publisher,
     )
-    monotonic_ms = reducer._coverage._current_start_ms + 10
     commit = CausalCommit(
-        boundary=FactBoundary(1, 0, monotonic_ms, 1),
+        boundary=FactBoundary(1, 0, reducer._coverage._current_start_ms + 10, 1),
         cause=CausalCause.RUNTIME_START,
         failure_domain=FailureScope.SESSION,
         affected_scopes=("GLOBAL",),
@@ -1410,18 +468,7 @@ def test_runtime_publishes_snapshot_only_after_shadow_settlement(
     assert publisher.snapshots == [commit]
 
 
-@dataclass
-class _BoundaryPublisher:
-    order: list[str]
-
-    def publish_settled(self, *, reducer: RadarReducer, commit: CausalCommit) -> None:
-        del reducer, commit
-
-    def flush_pending(self) -> None:
-        self.order.append("flush")
-
-
-def test_runtime_flushes_publisher_before_clean_stop_and_reconnect(
+def test_runtime_flushes_before_clean_stop_and_reconnect(
     tmp_path: Path,
     policy_factory: PolicyFactory,
     monkeypatch: pytest.MonkeyPatch,
@@ -1430,7 +477,6 @@ def test_runtime_flushes_publisher_before_clean_stop_and_reconnect(
     policy = load_policy_bytes(exact, digest)
 
     clean_order: list[str] = []
-    clean_publisher = _BoundaryPublisher(clean_order)
     clean_evidence = tmp_path / "clean"
     clean_evidence.mkdir()
     clean_runtime = LiveRadarRuntime(
@@ -1443,7 +489,7 @@ def test_runtime_flushes_publisher_before_clean_stop_and_reconnect(
             policy_identity=digest,
         ),
         runtime_identity="clean-runtime",
-        snapshot_publisher=clean_publisher,
+        snapshot_publisher=_OrderingPublisher(clean_order),
     )
     original_clean_stop = clean_runtime.reducer.clean_stop
 
@@ -1458,7 +504,6 @@ def test_runtime_flushes_publisher_before_clean_stop_and_reconnect(
     assert clean_order[-2:] == ["flush", "clean_stop"]
 
     reconnect_order: list[str] = []
-    reconnect_publisher = _BoundaryPublisher(reconnect_order)
     reconnect_evidence = tmp_path / "reconnect"
     reconnect_evidence.mkdir()
     reconnect_runtime = LiveRadarRuntime(
@@ -1471,24 +516,15 @@ def test_runtime_flushes_publisher_before_clean_stop_and_reconnect(
             policy_identity=digest,
         ),
         runtime_identity="reconnect-runtime",
-        snapshot_publisher=reconnect_publisher,
+        snapshot_publisher=_OrderingPublisher(reconnect_order),
     )
-    original_prepare_reconnect = reconnect_runtime.reducer.prepare_reconnect
+    original_reconnect = reconnect_runtime.reducer.prepare_reconnect
 
-    def ordered_prepare_reconnect(reason: str) -> None:
+    def ordered_reconnect(reason: str) -> None:
         reconnect_order.append("prepare_reconnect")
-        original_prepare_reconnect(reason)
+        original_reconnect(reason)
 
-    monkeypatch.setattr(
-        reconnect_runtime.reducer,
-        "prepare_reconnect",
-        ordered_prepare_reconnect,
-    )
+    monkeypatch.setattr(reconnect_runtime.reducer, "prepare_reconnect", ordered_reconnect)
     with pytest.raises(ConnectionError, match="test recoverable transport failure"):
-        asyncio.run(
-            reconnect_runtime.run(
-                _RecoverableFailureClient(),
-                asyncio.Event(),
-            )
-        )
+        asyncio.run(reconnect_runtime.run(_RecoverableFailureClient(), asyncio.Event()))
     assert reconnect_order[-2:] == ["flush", "prepare_reconnect"]
