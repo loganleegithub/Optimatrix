@@ -25,45 +25,17 @@ Deribit public WebSocket
 ```
 
 The market-state, detector, and public atomic-availability arrows are one event-driven Market
-Monitor and Short Vol Radar flow. There is no
-capture job followed by a scan job, and no scanner that repeatedly rereads an unchanged local
-dataset. The downstream arrows are implemented in the same process. Their production-public
-permission, and any permission to invoke or deploy the persistent host, comes only from
-`CURRENT_STAGE` and an exact live task. The operability and version-2 trader-workbench repair is
-accepted at exact commit `d4740d6a181efebc8dad6d1091a78fa44d885957`. Its one authorized fresh
-restart is consumed after a commission-deadline failure and clean seal. The later R3 commissioning
-attempt is also consumed after a projection-verifier failure and independent complete clean-stop
-audit. All three persistent-observation roots are immutable. The sole active R4 task owns the
-isolated repo-owned commissioning/stop controller and any exact observed minimal owning-module
-repair allowed by `CURRENT_STAGE`. R4 attempt 001 closed terminally quiescent after the listener parser
-rejected macOS `lsof`'s always-selected `f` field; attempt 002 closed terminally quiescent after a
-normal RunningBoard `resource coalition id` row was misclassified as a CPU resource exception;
-attempt 003 commissioned and then cleanly stopped after continuous observation found an exact-PID
-macOS CPU resource violation caused by redundant inactive-scope projection and unchanged workbench
-member encoding. Attempt 004 confirmed the hot-path repair but was cleanly stopped after a manual
-`/usr/bin/log show` query self-record was falsely classified as a runtime resource event; the
-first repair excluded the exact `com.apple.log` self-record shape. The final user-authorized
-simplification removes Unified Log from the executable controller and keeps CPU, RSS, queue-lag,
-and exact-PID `cpu_resource` DiagnosticReports as advisory evidence only. Those observations remain
-recorded but do not decide commissioning or the 24-hour result; direct process identity,
-listener, HTTP/schema/current-reader, probe-continuity, fatal, terminal, and quiescence gates remain
-unchanged.
-Attempt 005 commissioned and ran for 110 minutes before a valid atomic-quote evidence publication
-exposed a local filesystem boundary: its legal 230-byte final name became a 268-byte temporary
-basename and exceeded macOS `NAME_MAX`. The bounded owning-module repair keeps the same final
-evidence identity and atomic hard-link publication, but uses a short same-directory UUID temporary
-name. Local `EvidenceError` also crosses subscription dispatch unchanged instead of being
-misclassified as public protocol input. This is evidence persistence and failure attribution, not
-a market adapter, business semantics, schema, cadence, process, or deployment-topology change.
-Under the 2026-08-02 Authority amendment, each observed implementation defect received one minimal
-exact candidate and merged repair before one fresh R4 recommission attempt; failed attempts remain
-preserved. Attempt 006 reached `COMMISSIONED` at merged commit
-`1b10ecb3336c9b342e5ddb306ecbb9170c211d70` with runtime identity
-`sha256:9b5772ce0b3aa0aa0773533fbec1eaf8af90edd9d0971b2e3b9d0aaf0a2be364` and remains under read-only
-24-hour observation. Iterative repair/recommissioning authority is consumed. This changes no
-service topology, market/Decision semantics, business owner, publication cadence, unattended
-service retry loop, contract, or Policy.
+Monitor and Short Vol Radar flow. There is no capture job followed by a scan job, and no scanner
+that repeatedly rereads an unchanged local dataset. The downstream owners run in the same process.
+Production-public invocation and deployment authority comes only from `CURRENT_STAGE`.
 
+No runtime is currently deployed and no historical online result is accepted. The sole active
+implementation task changes only non-durable Workbench publication work: all business owners still
+settle every fact, while ordinary status-stable complete schema-2 snapshots publish at most once
+per 500 monotonic milliseconds. Semantic safety/lifecycle status changes publish immediately, and
+the latest pending state flushes after drain and before reconnect or clean-stop mutation. This
+changes no service topology, market/Decision semantics, business owner, Policy, schema, durable
+object, or deployment permission.
 ## Data lifecycles
 
 ### Transient live state
@@ -316,11 +288,18 @@ runtime identity and cannot continue prior state. An immediate zero-duration tra
 remains an exact diagnostics restart chain and never becomes fabricated elapsed coverage.
 
 After one reducer fact transaction settles Radar truth and the same transaction's Shadow owner
-transition, `runtime.py` invokes one publisher. The publisher serializes a complete immutable
-snapshot before replacing the published reference. HTTP handlers read only that reference. They do
-not call detector/Policy/classification functions, freeze mutable state, traverse owner private
-containers, or connect to Deribit. Lifecycle-only publications reuse the last immutable business
-projection.
+transition, `runtime.py` invokes one publisher. The publisher always derives the lightweight
+settled status and retains only the latest settled reducer/commit reference. A semantic status-key
+change publishes one complete immutable snapshot immediately. Ordinary status-stable transactions
+publish a complete snapshot only when at least 500 monotonic milliseconds have elapsed since the
+last publication; intervening facts are coalesced to the latest settled state. An explicit
+lifecycle update publishes immediately. After the runtime drains accepted events it calls
+`flush_pending()` once before reconnect or clean-stop terminal mutation.
+
+HTTP handlers read only the atomically replaced immutable byte reference. They do not call
+detector/Policy/classification functions, freeze mutable state, traverse owner private containers,
+or connect to Deribit. There is no timer, thread, queue, partial-update protocol, or durable
+publication record.
 
 Service lifecycle/terminal evidence is separate from Radar and downstream object directories. The
 service terminal independently recomputes current downstream object relationships, inventory,

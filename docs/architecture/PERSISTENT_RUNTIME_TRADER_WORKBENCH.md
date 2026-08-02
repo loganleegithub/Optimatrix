@@ -163,10 +163,12 @@ or browser requests.
 
 ## Read-only projection architecture
 
-Snapshot construction runs synchronously in the same event loop as the sole reducer. It reads the
-current reducer, adapter indexes, and already settled downstream objects, then replaces one
-immutable snapshot reference. HTTP handlers read that reference only; they never touch mutable
-runtime state.
+Snapshot construction runs synchronously in the same event loop as the sole reducer. Every settled
+fact updates only the publisher's latest in-memory state reference. Semantic status changes publish
+immediately; ordinary status-stable facts construct and replace one complete immutable snapshot at
+most once per 500 monotonic milliseconds. A pending latest state is flushed once after drain and
+before reconnect or clean-stop mutation. No timer, thread, queue, or partial-patch protocol exists.
+HTTP handlers read the immutable snapshot reference only; they never touch mutable runtime state.
 
 The browser receives one versioned JSON projection and renders it. It does not calculate IV,
 baseline, richness, fees, reserves, Candidate validity, entry economics, close economics, PnL,

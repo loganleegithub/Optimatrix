@@ -4,7 +4,7 @@
 
 **Owning semantic identity:** `SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`
 
-**Current implementation state:** `OFFLINE_REPAIR_AUTHORIZED`
+**Current implementation state:** `PUBLICATION_COALESCING_IMPLEMENTATION_AUTHORIZED`
 
 ## Purpose and authority boundary
 
@@ -115,8 +115,9 @@ continuity, clock/index/ticker currentness, queue lag, catalog reconciliation, a
 The workbench snapshot is an immutable version-2 operational projection, not a new trading
 Decision or durable business object. After each runtime fact transaction completes both Radar
 settlement and the fixed-contract Shadow owner transition, `radar_runtime.runtime` invokes exactly
-one configured snapshot publisher. The publisher constructs a complete JSON body and atomically
-replaces one immutable byte reference.
+one configured snapshot publisher. The publisher always derives settled status and retains only
+the latest settled reducer/commit reference. It constructs a complete JSON body and atomically
+replaces one immutable byte reference when publication is due.
 
 Version 2 adds only settled display metadata: human-readable short/long option names, combo name,
 expiry, option type, strikes, and target quantity keyed by the exact existing Underwriting scope.
@@ -128,15 +129,29 @@ guess a structure from a hash.
 The publisher may cache downstream-derived grouping, Underwriting rows, Shadow rows, Outcome rows,
 and counts only under an exact monotonic downstream-writer revision. A successful durable object-set
 change advances that revision; an identical no-op, rejected write, or failed write does not. Radar,
-system status, published fact boundary, and time-sensitive Position projection remain current on
-every settled transaction. A revision change invalidates the cache before the next complete atomic
-publication. This optimization changes neither publication cadence nor snapshot completeness.
+system status, published fact boundary, and time-sensitive Position projection are recomputed from
+the latest settled state at every complete publication. A revision change invalidates the cache
+before that publication.
+
+A semantic status-key change publishes one complete immutable snapshot immediately. During a busy
+status-stable interval, ordinary facts publish at most once per 500 monotonic milliseconds; facts
+inside that interval replace only the pending in-memory latest-state reference. The first settled
+fact at or after the interval publishes the latest complete state and latest settled fact boundary.
+No timer or sleeping task is created: without a new fact there is no new business state to publish.
+
+An explicit lifecycle status update publishes immediately and includes any pending latest business
+state. After accepted events and barrier deadlines are drained, the runtime invokes
+`flush_pending()` exactly once before `prepare_reconnect` or `clean_stop` mutates terminal state.
+The flush is a no-op when no publication is pending.
+
+Publication bookkeeping advances only after the snapshot store accepts the complete encoded body.
+A serialization or store-publication failure preserves the prior immutable snapshot and leaves the
+latest settled state pending for the owning failure path. There is no partial JSON patch, timer,
+thread, queue, scheduler, new HTTP endpoint, or durable publication object.
 
 HTTP handlers read only that immutable reference. They may not call detector freeze methods,
 Policy/classification functions, market adapters, writers, or owner methods; they may not traverse
-mutable reducer or owner containers. Lifecycle-only updates may republish the last immutable
-business projection with a new immutable service-status envelope, but they may not inspect current
-mutable business state.
+mutable reducer or owner containers.
 
 The browser performs display formatting only. It never computes IV, baseline, richness,
 Underwriting action, Candidate validity, entry or close economics, PnL, hard-close state, or Outcome
@@ -427,7 +442,9 @@ Policy-chain immutability, reconnect/session continuity, health/readiness/curren
 first-stop-boundary latching, pre-latched no-client stop, exactly-once downstream and service
 terminalization, writer/reader identity recomputation, corruption/missing/mixed/incomplete failure,
 partial-Radar corruption failure, atomic snapshot publication after Shadow settlement,
-revision-keyed downstream projection cache invalidation, graph-independent availability validation,
+500-millisecond ordinary-publication coalescing, immediate semantic-status/lifecycle bypass,
+latest-state terminal-boundary flush, publication failure atomicity, revision-keyed downstream
+projection cache invalidation, graph-independent availability validation,
 settled structure display joins, loopback-only read-only HTTP, escaped and executable fail-closed
 browser rendering across fetch, HTTP, JSON, schema, render-failure, recovery, and same-sequence
 new-runtime cases, trader-state formatting/sorting/local-filter behavior, artifact-versus-stage

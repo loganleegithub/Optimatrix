@@ -32,6 +32,7 @@ from radar_runtime.service_evidence import (
 )
 
 WORKBENCH_SCHEMA_VERSION = 2
+WORKBENCH_PUBLICATION_INTERVAL_MS = 500
 SIMULATION_LABEL = "模拟入场, 不是订单或成交"
 EMPTY_PANEL_LABEL = "无已结算对象; 这不是业务零值"
 UNKNOWN_DENOMINATOR_LABEL = "UNKNOWN (分母未知或为零)"
@@ -292,7 +293,13 @@ class WorkbenchPublisher:
             initial_recorded_monotonic_ms,
         )
         self._last_status_key: tuple[object, ...] | None = None
+        self._published_status_key = _status_key(self._status)
+        self._last_publication_monotonic_ms = initial_recorded_monotonic_ms
         self._last_business: Mapping[str, object] = MappingProxyType(_empty_business_projection())
+        self._latest_reducer: RadarReducer | None = None
+        self._latest_commit: CausalCommit | None = None
+        self._dirty = False
+        self._business_dirty = False
         self._cached_downstream_revision: int | None = None
         self._cached_underwriting_metadata: tuple[Mapping[str, object], ...] | None = None
         self._cached_downstream_projection: _DownstreamProjection | None = None
@@ -321,7 +328,8 @@ class WorkbenchPublisher:
             self.status_sink(status)
         self._last_status_key = status_key
         self._status = status
-        self._publish(status=status)
+        self._dirty = True
+        self._publish_pending(status=status)
 
     def publish_settled(
         self,
@@ -337,48 +345,81 @@ class WorkbenchPublisher:
                 self._status.recorded_monotonic_ms,
             ),
         )
-        metadata = self.shadow_metadata.workbench_option_metadata()
-        underwriting_metadata = self.shadow_metadata.workbench_underwriting_metadata()
-        downstream_revision = self.downstream_writer.revision
-        downstream_changed = (
-            self._cached_downstream_projection is None
-            or downstream_revision != self._cached_downstream_revision
-            or underwriting_metadata != self._cached_underwriting_metadata
-        )
-        if downstream_changed:
-            self._cached_downstream_projection = _build_downstream_projection(
-                objects=self.downstream_writer.objects,
-                policies=self.policies,
-                underwriting_metadata=underwriting_metadata,
-            )
-            self._cached_downstream_revision = downstream_revision
-            self._cached_underwriting_metadata = underwriting_metadata
-        downstream = self._cached_downstream_projection
-        if downstream is None:
-            raise RuntimeError("workbench downstream projection cache was not initialized")
-        business = _build_business_projection(
-            reducer=reducer,
-            commit=commit,
-            downstream=downstream,
-            policies=self.policies,
-            option_metadata=metadata,
-        )
-        self._last_business = MappingProxyType(business)
-        if downstream_changed:
-            for key in ("underwriting", "shadow_entries", "outcomes"):
-                self._preencoded_members[key] = _json_value_bytes(business[key])
+        self._latest_reducer = reducer
+        self._latest_commit = commit
+        self._dirty = True
+        self._business_dirty = True
         status_key = _status_key(status)
         if status_key != self._last_status_key and self.status_sink is not None:
             self.status_sink(status)
         self._last_status_key = status_key
         self._status = status
-        self._publish(status=status)
+        if (
+            status_key != self._published_status_key
+            or status.recorded_monotonic_ms - self._last_publication_monotonic_ms
+            >= WORKBENCH_PUBLICATION_INTERVAL_MS
+        ):
+            self._publish_pending(status=status)
 
-    def _publish(self, *, status: ServiceStatus) -> None:
+    def flush_pending(self) -> None:
+        if self._dirty:
+            self._publish_pending(status=self._status)
+
+    def _publish_pending(self, *, status: ServiceStatus) -> None:
+        business = self._last_business
+        preencoded_members = dict(self._preencoded_members)
+        downstream_revision = self._cached_downstream_revision
+        underwriting_metadata = self._cached_underwriting_metadata
+        downstream_projection = self._cached_downstream_projection
+
+        if self._business_dirty:
+            reducer = self._latest_reducer
+            commit = self._latest_commit
+            if reducer is None or commit is None:
+                raise RuntimeError("pending workbench business state is incomplete")
+            option_metadata = self.shadow_metadata.workbench_option_metadata()
+            latest_underwriting_metadata = self.shadow_metadata.workbench_underwriting_metadata()
+            latest_downstream_revision = self.downstream_writer.revision
+            downstream_changed = (
+                downstream_projection is None
+                or latest_downstream_revision != downstream_revision
+                or latest_underwriting_metadata != underwriting_metadata
+            )
+            if downstream_changed:
+                downstream_projection = _build_downstream_projection(
+                    objects=self.downstream_writer.objects,
+                    policies=self.policies,
+                    underwriting_metadata=latest_underwriting_metadata,
+                )
+                downstream_revision = latest_downstream_revision
+                underwriting_metadata = latest_underwriting_metadata
+            if downstream_projection is None:
+                raise RuntimeError("workbench downstream projection cache was not initialized")
+            projected_business = _build_business_projection(
+                reducer=reducer,
+                commit=commit,
+                downstream=downstream_projection,
+                policies=self.policies,
+                option_metadata=option_metadata,
+            )
+            business = MappingProxyType(projected_business)
+            if downstream_changed:
+                for key in ("underwriting", "shadow_entries", "outcomes"):
+                    preencoded_members[key] = _json_value_bytes(projected_business[key])
+
         self.store.publish_preencoded_members(
-            self._document(self._last_business, status=status),
-            preencoded_members=self._preencoded_members,
+            self._document(business, status=status),
+            preencoded_members=preencoded_members,
         )
+        self._last_business = business
+        self._preencoded_members = preencoded_members
+        self._cached_downstream_revision = downstream_revision
+        self._cached_underwriting_metadata = underwriting_metadata
+        self._cached_downstream_projection = downstream_projection
+        self._published_status_key = _status_key(status)
+        self._last_publication_monotonic_ms = status.recorded_monotonic_ms
+        self._dirty = False
+        self._business_dirty = False
 
     def _document(
         self,

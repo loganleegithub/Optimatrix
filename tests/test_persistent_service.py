@@ -25,6 +25,7 @@ from radar_runtime.runtime import (
     CausalCommit,
     FactBoundary,
     FailureScope,
+    LiveRadarRuntime,
     PublicClient,
     RadarReducer,
     RpcState,
@@ -800,6 +801,149 @@ def test_post_stop_drain_snapshot_cannot_move_lifecycle_time_backward(tmp_path: 
         composition.workbench.close()
 
 
+def test_workbench_coalesces_ordinary_facts_and_flushes_latest_state(tmp_path: Path) -> None:
+    startup = _startup(tmp_path)
+    composition = build_persistent_service_composition(startup)
+    reducer = composition.runtime.reducer
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    status = workbench_module._settled_status(
+        reducer,
+        phase=ServicePhase.RUNNING,
+        recorded_monotonic_ms=1_000,
+    )
+    try:
+        composition.publisher.update_status(status, persist=False)
+        published_sequence = composition.snapshot_store.read().sequence
+
+        for causal_seq, monotonic_ms in ((1, 1_100), (2, 1_200)):
+            composition.publisher.publish_settled(
+                reducer=reducer,
+                commit=CausalCommit(
+                    boundary=FactBoundary(1, causal_seq, monotonic_ms, causal_seq),
+                    cause=CausalCause.TIME_BOUNDARY,
+                    failure_domain=FailureScope.CLOCK_INDEX,
+                    affected_scopes=("GLOBAL",),
+                ),
+            )
+
+        assert composition.snapshot_store.read().sequence == published_sequence
+        composition.publisher.flush_pending()
+        value = json.loads(composition.snapshot_store.read().workbench_body)
+        assert value["publication_sequence"] == published_sequence + 1
+        assert value["published_fact_boundary"]["causal_seq"] == 2
+    finally:
+        composition.workbench.close()
+
+
+def test_workbench_publishes_at_interval_and_status_change_bypasses_it(tmp_path: Path) -> None:
+    startup = _startup(tmp_path)
+    composition = build_persistent_service_composition(startup)
+    reducer = composition.runtime.reducer
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    initial_status = workbench_module._settled_status(
+        reducer,
+        phase=ServicePhase.RUNNING,
+        recorded_monotonic_ms=1_000,
+    )
+    try:
+        composition.publisher.update_status(initial_status, persist=False)
+        initial_sequence = composition.snapshot_store.read().sequence
+        composition.publisher.publish_settled(
+            reducer=reducer,
+            commit=CausalCommit(
+                boundary=FactBoundary(1, 1, 1_200, 1),
+                cause=CausalCause.TIME_BOUNDARY,
+                failure_domain=FailureScope.CLOCK_INDEX,
+                affected_scopes=("GLOBAL",),
+            ),
+        )
+        assert composition.snapshot_store.read().sequence == initial_sequence
+
+        composition.publisher.publish_settled(
+            reducer=reducer,
+            commit=CausalCommit(
+                boundary=FactBoundary(1, 2, 1_500, 2),
+                cause=CausalCause.TIME_BOUNDARY,
+                failure_domain=FailureScope.CLOCK_INDEX,
+                affected_scopes=("GLOBAL",),
+            ),
+        )
+        interval_value = json.loads(composition.snapshot_store.read().workbench_body)
+        assert interval_value["publication_sequence"] == initial_sequence + 1
+        assert interval_value["published_fact_boundary"]["causal_seq"] == 2
+
+        composition.publisher.publish_settled(
+            reducer=reducer,
+            commit=CausalCommit(
+                boundary=FactBoundary(1, 3, 1_600, 3),
+                cause=CausalCause.TIME_BOUNDARY,
+                failure_domain=FailureScope.CLOCK_INDEX,
+                affected_scopes=("GLOBAL",),
+            ),
+        )
+        composition.publisher.update_status(
+            ServiceStatus(
+                ServicePhase.RUNNING,
+                DataState.CURRENT,
+                True,
+                True,
+                False,
+                "CURRENT",
+                1_700,
+            ),
+            persist=False,
+        )
+        status_value = json.loads(composition.snapshot_store.read().workbench_body)
+        assert status_value["publication_sequence"] == initial_sequence + 2
+        assert status_value["published_fact_boundary"]["causal_seq"] == 3
+        assert status_value["service"]["data_state"] == "CURRENT"
+    finally:
+        composition.workbench.close()
+
+
+def test_workbench_publication_failure_keeps_latest_state_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    startup = _startup(tmp_path)
+    composition = build_persistent_service_composition(startup)
+    reducer = composition.runtime.reducer
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    status = workbench_module._settled_status(
+        reducer,
+        phase=ServicePhase.RUNNING,
+        recorded_monotonic_ms=1_000,
+    )
+    try:
+        composition.publisher.update_status(status, persist=False)
+        composition.publisher.publish_settled(
+            reducer=reducer,
+            commit=CausalCommit(
+                boundary=FactBoundary(1, 1, 1_100, 1),
+                cause=CausalCause.TIME_BOUNDARY,
+                failure_domain=FailureScope.CLOCK_INDEX,
+                affected_scopes=("GLOBAL",),
+            ),
+        )
+        before = composition.snapshot_store.read()
+
+        def fail_publication(*_args: object, **_kwargs: object) -> NoReturn:
+            raise RuntimeError("test publication failure")
+
+        monkeypatch.setattr(
+            composition.snapshot_store,
+            "publish_preencoded_members",
+            fail_publication,
+        )
+        with pytest.raises(RuntimeError, match="test publication failure"):
+            composition.publisher.flush_pending()
+
+        assert composition.snapshot_store.read() == before
+        assert composition.publisher._dirty is True
+    finally:
+        composition.workbench.close()
+
+
 def test_workbench_reuses_downstream_projection_until_writer_revision_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -883,6 +1027,7 @@ def test_workbench_reuses_downstream_projection_until_writer_revision_changes(
                     affected_scopes=("GLOBAL",),
                 ),
             )
+            composition.publisher.flush_pending()
             assert_exact_snapshot()
 
         second = json.loads(composition.snapshot_store.read().workbench_body)
@@ -929,6 +1074,7 @@ def test_workbench_reuses_downstream_projection_until_writer_revision_changes(
                 affected_scopes=("GLOBAL",),
             ),
         )
+        composition.publisher.flush_pending()
 
         third = json.loads(composition.snapshot_store.read().workbench_body)
         assert_exact_snapshot()
@@ -969,6 +1115,7 @@ def test_workbench_reuses_downstream_projection_until_writer_revision_changes(
                 affected_scopes=("GLOBAL",),
             ),
         )
+        composition.publisher.flush_pending()
         writer_changed = assert_exact_snapshot()
         assert downstream_builds == 3
         writer_panel = cast(dict[str, object], writer_changed["underwriting"])
@@ -997,6 +1144,7 @@ def test_workbench_reuses_downstream_projection_until_writer_revision_changes(
                 affected_scopes=("GLOBAL",),
             ),
         )
+        composition.publisher.flush_pending()
         metadata_changed = assert_exact_snapshot()
         assert downstream_builds == 4
         metadata_panel = cast(dict[str, object], metadata_changed["underwriting"])
@@ -1223,6 +1371,9 @@ class _OrderingPublisher:
         self.order.append("snapshot")
         self.snapshots.append(commit)
 
+    def flush_pending(self) -> None:
+        return None
+
 
 def test_runtime_publishes_snapshot_only_after_shadow_settlement(
     tmp_path: Path,
@@ -1257,3 +1408,87 @@ def test_runtime_publishes_snapshot_only_after_shadow_settlement(
 
     assert order == ["shadow", "snapshot"]
     assert publisher.snapshots == [commit]
+
+
+@dataclass
+class _BoundaryPublisher:
+    order: list[str]
+
+    def publish_settled(self, *, reducer: RadarReducer, commit: CausalCommit) -> None:
+        del reducer, commit
+
+    def flush_pending(self) -> None:
+        self.order.append("flush")
+
+
+def test_runtime_flushes_publisher_before_clean_stop_and_reconnect(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    policy = load_policy_bytes(exact, digest)
+
+    clean_order: list[str] = []
+    clean_publisher = _BoundaryPublisher(clean_order)
+    clean_evidence = tmp_path / "clean"
+    clean_evidence.mkdir()
+    clean_runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity=CODE,
+        evidence_writer=EvidenceWriter(
+            clean_evidence,
+            code_identity=CODE,
+            runtime_identity="clean-runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="clean-runtime",
+        snapshot_publisher=clean_publisher,
+    )
+    original_clean_stop = clean_runtime.reducer.clean_stop
+
+    def ordered_clean_stop(monotonic_ms: int) -> Path:
+        clean_order.append("clean_stop")
+        return original_clean_stop(monotonic_ms)
+
+    monkeypatch.setattr(clean_runtime.reducer, "clean_stop", ordered_clean_stop)
+    stop_event = asyncio.Event()
+    stop_event.set()
+    asyncio.run(clean_runtime.run(_WaitingClient(), stop_event))
+    assert clean_order[-2:] == ["flush", "clean_stop"]
+
+    reconnect_order: list[str] = []
+    reconnect_publisher = _BoundaryPublisher(reconnect_order)
+    reconnect_evidence = tmp_path / "reconnect"
+    reconnect_evidence.mkdir()
+    reconnect_runtime = LiveRadarRuntime(
+        policy=policy,
+        code_identity=CODE,
+        evidence_writer=EvidenceWriter(
+            reconnect_evidence,
+            code_identity=CODE,
+            runtime_identity="reconnect-runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="reconnect-runtime",
+        snapshot_publisher=reconnect_publisher,
+    )
+    original_prepare_reconnect = reconnect_runtime.reducer.prepare_reconnect
+
+    def ordered_prepare_reconnect(reason: str) -> None:
+        reconnect_order.append("prepare_reconnect")
+        original_prepare_reconnect(reason)
+
+    monkeypatch.setattr(
+        reconnect_runtime.reducer,
+        "prepare_reconnect",
+        ordered_prepare_reconnect,
+    )
+    with pytest.raises(ConnectionError, match="test recoverable transport failure"):
+        asyncio.run(
+            reconnect_runtime.run(
+                _RecoverableFailureClient(),
+                asyncio.Event(),
+            )
+        )
+    assert reconnect_order[-2:] == ["flush", "prepare_reconnect"]

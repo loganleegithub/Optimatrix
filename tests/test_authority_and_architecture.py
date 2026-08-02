@@ -193,379 +193,84 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_records_consumed_r3_and_active_r4_observation() -> None:
+def test_current_stage_resets_unreliable_history_and_authorizes_coalescing() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized next product-capability closure:**"
+
     assert current.count(marker) == 1
-    assert f"{marker} `SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR`" in flat
+    assert f"{marker} `SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Implemented runtime capability:** `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`" in current
-    assert "**Production Short Vol Radar:** `ESTABLISHED`" in current
-    assert (
-        "**Fixed-contract public Shadow runtime:** `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`"
-    ) in flat
-    assert "**Evidence gate:** `R4_COMMISSIONED_24H_OBSERVATION_ACTIVE`" in current
-    assert ("READ_ONLY_MONITORING_PLUS_ONE_RESULT_INDEPENDENT_TERMINAL_CLOSE_AUTHORIZED") in flat
-    assert ("**Persistent public Shadow service/workbench:** `R4_COMMISSIONED`") in flat
-    assert ("**Persistent deployment / 24x7 acceptance:** `R4_COMMISSIONED_24H_PENDING`") in flat
-    assert current.count("**Evidence gate:**") == 1
-    assert current.count("**Live commands:**") == 1
-    assert "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure" in flat
-    assert "Shadow Outcome, rejected-counterfactual, aligned `NO_TRADE`" in flat
-    assert "4b225ee1f199523fb052611d84612ec75c7abf78" in current
-    assert "9e53c6233949348c5805e96ea1eefb5998bf4c49" in current
-    assert "CONSUMED_FAILED_NO_RETRY" in current
-    assert "PROCESS_FAILURE" in current
-    assert "FATAL_EVIDENCE_INTEGRITY" in current
-    assert "Underwriting semantic identity must be sha256:<64 lowercase hex>" in current
-    assert "Five anomaly artifacts" in flat
-    assert "downstream complete-reader and conservation checks passed" in flat
-    assert "Radar run summary is absent" in flat
-    assert "overall forward evidence remains `INCOMPLETE` and `NOT_ACCEPTED`" in flat
-    assert (
-        "historical failed attempt, accepted smoke, and all three persistent-service attempts"
-        in flat
-    )
-    assert "6eaaddfecf4c59a19c8029682a80fc52b7896a64" in current
-    assert "f9ce7f98623ed7249160ee29c940c9c026fc4173" in current
-    assert "21af26c71ef625889d29c4d7e00ebeae92f8a15d" in current
-    assert "11b8a42d920e6be9eff7a56f45fd3c02c8ef6bed" in current
-    assert "The user's 2026-08-01 instruction" in current
-    assert "部署上线" in current
-    assert "开始观察" in current
-    assert "67085248fffb1b20bae1c9512ae1191d166a6509" in current
-    assert "9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa" in current
-    assert "9c3b46eae8b646d2c86f38df35cfcf962605c0b670385376d7c2ebef3a771778" in current
-    assert "records its frozen pre-acceptance state" in flat
-    assert "The user said `停止并修复` on 2026-08-01" in current
-    assert "PASS_COMPLETE_PROCESS_FAILURE_EVIDENCE_ONLY" in current
-    assert "NOT_ACCEPTED_PROCESS_FAILURE" in current
-    assert "24_HOUR_CONTINUOUS_PUBLIC_SERVICE_SAMPLE = NOT_MET" in current
-    assert "`11,909,685` ms" in current
-    assert "The 190 probe rows are contiguous and contract-valid" in flat
-    assert "adb4caf59c622023315d6da9cfdda2ddd4e543e2c2216969ddb0838e16f3ea8f" in current
-    assert "7ac3d999edaaaa48b5a920a07c7e9e9fa6cbd20b" in current
-    assert "3891e6520f533ded0e73c4f5c55b6741d250477f" in current
-    assert "6,442 Underwriting availability objects" in flat
-    assert "This attempt is consumed and authorizes no restart" in flat
-    assert "### Accepted operability repair and consumed fresh-restart attempt" in current
-    assert "d4740d6a181efebc8dad6d1091a78fa44d885957" in current
-    assert "d5776f4f7c30763d095e36c7ea8b67209ec76448" in current
-    assert "4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7" in current
-    assert "GitHub CI run `30694275628`" in current
-    assert "/Users/logan/Optimatrix-public-shadow-observation-002" in current
-    assert "com.optimatrix.public-shadow.r2" in current
-    assert (
-        "The old `/Users/logan/Optimatrix-public-shadow-observation` tree remained sealed" in flat
-    )
-    assert "The probe was never loaded and its ledger contains zero rows" in flat
-    assert "controller commission verifier expected a nonexistent `contract_digest` field" in flat
-    assert "`266,887` ms" in current
-    assert "PASS_COMPLETE_CLEAN_STOP" in current
-    assert "OPERATIONAL_24H_GATE_NOT_MET" in current
-    assert "5ac602eaef943c6d0f778d5469af3c1aaf004cf30cc188f46ff88c0d2401b2ca" in current
-    assert "5abd68de06aa29c002904dc5e150da69236286ff369f4a137149d0ebc1343de8" in current
-    assert "0bba76ffae80ec920544f22699cbcbf0eaae06a6a718832afc41f422a1dc4d30" in current
-    assert "c77ed48feade03b44c6a439af8d15b8463e79c8e7a809d80bbc4272b8da550dc" in current
-    assert "636088528a9375099e8531e30546842aa9cd8f82" in current
-    assert "10e352c954474fd3b27b005f6d8845d4d5b0f38f" in current
-    assert "29 Radar anomaly objects" in flat
-    assert "116 Underwriting availability objects" in flat
-    assert (
-        "The two installed r2 plist files remain only as consumed inert deployment assets" in flat
-    )
-    assert "8edb70de5b72ada67297af8d58fbbc372d31cd5e45d6cb65583e065389d440a3" in current
-    assert "82f93f80f4c531ee0d7f434ed965b9af1da0f4442c4c6ffe3961f12566577f89" in current
-    assert "Its one fresh r2 restart is now consumed" in flat
-    assert "Its 24-hour result remains pending" not in current
-    assert (
-        "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json"
-    ) in current
-    assert "1090b3d9b643c621721e59552fc0ca1e7b6a7616d9b6ec136c0660c936d62e45" in current
-    assert "labels record the state when the immutable contract content was accepted" in flat
-    assert "SHORT_VOL_PUBLIC_SHADOW_TERMINAL_GOAL_DELEGATION" in current
-    assert "## Active and queued sequence" in current
-    assert "engineering_end_to_end = PASS" in current
-    assert "production_public_integration = PASS" in current
-    assert "natural_shadow_opportunity = NOT_OBSERVED" in current
-    assert "`1,739,999` ms" in current
-    assert "135 real anomaly episode identities" in current
-    assert "271 objects" in current
-    assert "zero partition" in current
-    assert "Private/account/order/fill/capital" in flat
-    assert (
-        "/Users/logan/Optimatrix-shadow/receipts/"
-        "public-shadow-engineering-smoke-002-terminal-record.json"
-    ) in current
-    assert "a4b7a66c51133cef08a4d0420943b6fe5464a78cc10d5a8f2169c0c9d9d4db3c" in current
-    assert "c7d8eb4e6bdc9953716892376c26935089d384e5460aa11073544b7521b96cf3" in current
+    assert "**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`" in current
+    assert "**Persistent public Shadow service/workbench:** `STOPPED_NO_DEPLOYMENT`" in current
+    assert "**Evidence gate:** `NONE`" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "**Persistent deployment / 24x7 acceptance:** `NOT_CLAIMED`" in current
+    assert "explicitly rejected its Radar results as unreliable" in flat
+    assert "No historical runtime result is a current business premise" in flat
+    assert "at most one complete immutable snapshot per 500 monotonic milliseconds" in flat
+    assert "No timer, thread, queue, scheduler" in flat
+    for stale_claim in (
+        "R4_COMMISSIONED",
+        "R4_COMMISSIONED_24H_OBSERVATION_ACTIVE",
+        "R4_COMMISSIONED_24H_PENDING",
+        "CONSUMED_FAILED_NO_RETRY",
+        "engineering_end_to_end = PASS",
+        "production_public_integration = PASS",
+    ):
+        assert stale_claim not in current
 
 
-def test_r4_commissioning_integrity_repair_is_exactly_authorized() -> None:
-    current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    flat = " ".join(current.split())
-    task_path = ROOT / "tasks/SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR.md"
+def test_workbench_publication_coalescing_is_exactly_authorized() -> None:
+    current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
+    task_path = ROOT / "tasks/SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING.md"
     task = task_path.read_text(encoding="utf-8")
     task_flat = " ".join(task.split())
 
     assert (
         "**Sole authorized next product-capability closure:** "
-        "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR`"
-    ) in flat
-    assert ("**Persistent public Shadow service/workbench:** `R4_COMMISSIONED`") in flat
-    assert "**Evidence gate:** `R4_COMMISSIONED_24H_OBSERVATION_ACTIVE`" in current
-    assert (
-        "**Live commands:** "
-        "`READ_ONLY_MONITORING_PLUS_ONE_RESULT_INDEPENDENT_TERMINAL_CLOSE_AUTHORIZED`"
-    ) in flat
-    assert ("**Persistent deployment / 24x7 acceptance:** `R4_COMMISSIONED_24H_PENDING`") in flat
-    assert "The user authorized R4 repair on 2026-08-01" in current
-    assert "The user's direct 2026-08-02 instruction supersedes" in flat
-    assert "R4 attempt 001 ran from merged commit" in flat
-    assert "R4 attempt 002 ran from merged commit" in flat
-    assert "R4 attempt 003 ran from merged commit" in flat
-    assert "R4 attempt 005 ran from merged commit" in flat
-    assert "R4 commissioned attempt 006 runs from merged remote `main` commit" in flat
-    assert "ec5b85b19c4dff646d5209b4dce4add05ca8b5b7e12a0ab792455e6b9ff454f3" in current
-    assert "sha256:9b5772ce0b3aa0aa0773533fbec1eaf8af90edd9d0971b2e3b9d0aaf0a2be364" in current
-
+        "`SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`"
+    ) in current
     for exact in (
         "**Status:** ACTIVE",
         "**Task kind:** IMPLEMENTATION",
         "**Runtime implementation:** REQUIRED",
-        "**Live commands:** REQUIRED",
+        "**Live commands:** FORBIDDEN",
         "**Market/Decision input contract change:** NONE",
         "**Decision Policy change:** NONE",
         "**Outcome/evaluation contract change:** NONE",
         "**Stage/authorization change:** APPROVED",
-        "f66fa97b66487cf593d5265a8ac79d013adda104",
-        "agent/r4-commissioning-integrity-repair",
-        "agent/r4-resource-log-classification-repair",
-        "codex/r4-workbench-publication-cpu-repair",
-        "codex/r4-log-observer-self-record-repair",
-        "codex/r4-remove-unified-log-gate",
-        "/Users/logan/Optimatrix-public-shadow-observation-004",
-        "com.optimatrix.public-shadow.r4",
-        "com.optimatrix.public-shadow.r4.probe",
-        "127.0.0.1:8765",
-        "KeepAlive=false",
-        "RunAtLoad=false",
-        "LaunchOnlyOnce=true",
-        "failure_closure_receipt_path",
-        "r1_no_writer",
-        "r2_no_writer",
-        "r3_no_writer",
-        "r4_root_absent_before_materialization",
-        "r4_labels_absent_at_binding",
-        "120,000 ms",
-        "HOST_OPERABILITY_GATE_START",
-        "30,000 ms",
-        "100 ms",
-        "resource coalition id",
-        "burning cpu",
-    ):
-        assert exact in task, exact
-
-    for exact in (
-        "1104318b552b3fd2878ca5b3d81ae7d835aac448ba8240a620a41bcc1e18c6c5",
-        "a95824e3a633750a903395bf3cf4da61544fa7a87244f34ab2e5c21080ff9696",
-        "68a798c7e9558c3a82a1e5c2043a4582729af20506e0bacbbff3c8423d44a2c2",
-        "sha256:1f143560025fd03adbcf44c8c0df795d9595b568051b4adedac4f1562d7c6199",
-        "sha256:1711deeac5701ee996c63529e4e6b770a0212ac6375dfb7be1c81f66364cb126",
-        "COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT",
-    ):
-        assert exact in current, exact
-        assert exact in task, exact
-
-    for exact in (
-        "7484b939d3c15b117aa63729193ea0978603ea8d",
-        "sha256:3d0fb4e4e1c252c8e902f40507ded1e6309b2c34b59a78da01bbbf24e9f5be81",
-        "sha256:53ece78d82c4e98919a48427b24fb83fd7180d7c9ce85daf99c697d794987518",
-        "18753c50a4e4bf6b73f146c697dee9d3d99ff18ba5c9a473797ba54d5dd3deab",
-        "c3103b354828781366f40ba4806563b68c135954b6a137aa262645235308a859",
-        "2a9e2cb36fbf81b1684e5b619bf99bc4480bae702925e652ed1b1747c3688116",
-        "1388791",
-        "24 contiguous successful probe rows",
-        "processImagePath=/usr/bin/log",
-    ):
-        assert exact in flat, exact
-
-    for exact in (
-        "f2124806b47b3ff8d6cf63eea89e378a4eb112cb",
-        "sha256:67bae4f3b6eb6a7b2a7cf0fdf60da1c0e40ea395863bd699eb6f7c7f0e1c383e",
-        "sha256:b20917cb344b8b7bab15f8e17734f670f422d5c15634bc86afc817d529fd57b1",
-        "4e21ae1217a04e631493eb471cb2d6fdfd071bb9100a591c2dd47ac59f7434b8",
-        "fbd27b448cc704186773279f7340cace90b3fc8d5930022bc3cbdd996888c169",
-        "10cfee29355706de3a9c848c0a110802f9f2f3dcd73637a26fee13d619c5c88a",
-        "1332282",
-        "23 contiguous successful probe rows",
-        "cpu_resource",
-    ):
-        assert exact in current, exact
-
-    for exact in (
-        "1993bc21566909310d7affea03c1c8a83d58fa9d",
-        "sha256:c33b14b6422a320c496132d6bb7281eda0a23486bd5a53c85a92dcac8e3249fa",
-        "sha256:0a9a2cceed25cd4d1d327f876104a250882c98f692a96337bb3a6de1a532ea41",
-        "2913ee29289f5e1e50431d451587be6d7342cf0f3f0d7bacc93b0e09088f5512",
-        "4f0443984597119ff850d4c024f75e1a3fc7297c16a14a2c8bdfa137d7b5a92a",
-        "8866c90f69a502de64d30b0832891fe350071d5d326cd1624985f64df7dc689c",
-        "6644024",
-        "107 contiguous contract-valid successful probe rows",
-        "NATURAL_TERMINAL_AUDITED_QUIESCENT",
-        "PASS_COMPLETE_PROCESS_FAILURE_EVIDENCE_ONLY",
-        "NOT_ACCEPTED_PROCESS_FAILURE",
-    ):
-        assert exact in current, exact
-
-    for exact in (
-        "230-byte final filename",
-        "268 bytes",
-        "NAME_MAX=255",
-        ".evidence-{uuid.hex}.tmp",
-        "without contaminating source-shape diagnostics",
-        "packages/short_vol_radar/src/short_vol_radar/evidence.py",
+        "one complete publication per 500 monotonic milliseconds",
+        "semantic safety/lifecycle status changes bypass that interval",
+        "`flush_pending()`",
+        "after accepted-event draining and before reconnect or clean-stop terminalization",
+        "There is no timer, thread, queue, scheduler",
+        "apps/radar_runtime/src/radar_runtime/workbench.py",
         "apps/radar_runtime/src/radar_runtime/runtime.py",
-    ):
-        assert exact in task, exact
-
-    for exact in (
-        "1fbe3b4daacdc26d6ca0a0ec2f46108fa355c7b8d62f698e09e7c85a7b5d25cd",
-        "sha256:41806d81ea9182f288f0a78925887c898a4cf2ee15420affb44d5e4934cd3e5c",
-        "sha256:a5a6571345b161fbad37f594626cee921614ae84ffdd776e58ae360d279f9be1",
-        "COMMISSION_FAILED_CLEANUP_REQUIRED",
-        "8c78722020b3e8b6c54140bb1a54ca30e2c86719e1ae9ef5e3f01a89625e08a1",
-        "PASS_COMPLETE_CLEAN_STOP",
-        "CLEAN_STOP_COMPLETE",
-        "181274",
-        "OPERATIONAL_24H_GATE_NOT_MET",
-    ):
-        assert exact in current, exact
-        assert exact in task, exact
-
-    assert "each newly rematerialized R4 attempt may invoke `commission` once" in task_flat
-    assert "iterative repair/recommission attempts under the 2026-08-02 amendment" in task_flat
-    assert (
-        "No live or launchd mutation is allowed from the implementation branch or PR" in task_flat
-    )
-    assert "non-force remote branch equality and GitHub CI pass" in task_flat
-    assert "merge to remote `main` occurs only after those gates" in task_flat
-    assert "full 180,000 ms gate" in task_flat
-    assert "at least two successful post-manual periodic rows" in task_flat
-    assert "fixed 30,000 ms resource-event publication grace" in task_flat
-    assert "CPU, RSS, and DiagnosticReports are advisory facts only" in task_flat
-    assert "do not determine `COMMISSIONED` or the 24-hour result" in task_flat
-    assert (
-        "CPU above 50%, unreadable DiagnosticReports, positive exact-PID report counts, and "
-        "positive queue-lag transition counts are accepted and recorded"
-    ) in task_flat
-    assert (
-        "inconsistent CPU percentages, negative counts, and nonzero "
-        "`unified_log_row_count_examined` remain invalid evidence"
-    ) in task_flat
-    assert "`unified_log_row_count_examined` is always `0`" in task_flat
-    assert "actual fills, positions, fees, PnL, or capital safety" in task_flat
-
-
-def test_r4_authority_freezes_projection_convergence_receipt_time_and_close() -> None:
-    current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    task = (ROOT / "tasks/SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR.md").read_text(
-        encoding="utf-8"
-    )
-    current_flat = " ".join(current.split())
-    task_flat = " ".join(task.split())
-
-    for exact in (
-        "`--expected-envelope-identity`",
-        "`UNKNOWN/value=null/numerator=0`",
-        "`NOT_ZERO` requires a positive value equal to the positive numerator",
-        "`PROVEN_ZERO` requires value and numerator zero plus a positive denominator",
-        "fixed 30,000 ms maximum with bounded 100 ms polling",
-        "COMMISSION_FAILED_CLEANUP_PENDING",
-        "STARTUP_FAILED_NO_RUNTIME_CLEANUP_PENDING",
-        "COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT",
-        "STARTUP_FAILED_NO_RUNTIME_QUIESCENT",
-        "COMMISSION_FAILED_CLEANUP_BLOCKED",
-        "STARTUP_FAILED_NO_RUNTIME_CLEANUP_BLOCKED",
-        "The primary and final paths are distinct and neither is rewritten",
-        "r1/r2/r3",
+        "Direct behavior | REQUIRED",
+        "Production-public Radar | NOT_APPLICABLE",
     ):
         assert exact in task_flat, exact
-
-    for exact in (
-        "`failure_closure_receipt_path`",
-        "`r1_no_writer`, `r2_no_writer`, and `r3_no_writer`",
-        "30,000 ms convergence deadline with bounded 100 ms polling",
-        "Inventory errors, malformed output, PID substitution, or any indeterminate state fail immediately",
-        "COMMISSION_FAILED_CLEANUP_PENDING",
-        "STARTUP_FAILED_NO_RUNTIME_CLEANUP_PENDING",
-        "COMMISSION_FAILED_TERMINAL_AUDITED_QUIESCENT",
-        "STARTUP_FAILED_NO_RUNTIME_QUIESCENT",
-        "COMMISSION_FAILED_CLEANUP_BLOCKED",
-        "STARTUP_FAILED_NO_RUNTIME_CLEANUP_BLOCKED",
-        "Neither receipt is rewritten",
-        "result-independent close trigger",
-        "at most one start-incapable `stop`/close invocation",
+    for forbidden in (
+        "commissioning.py`; `service.py",
+        "partial/SSE transport",
+        "live deployment",
+        "deleted historical evidence",
     ):
-        assert exact in current_flat, exact
-
-    assert "projection-integrity rules, not a Decision or economic change" in current_flat
-    assert "projection-integrity rules, not a change to Radar" in task_flat
-    assert "candidate authorship is not independent verification" in current_flat.lower()
-    assert "independent reviewer accepts the exact commit" in task_flat
+        assert forbidden in task_flat
 
 
-def test_r3_is_consumed_and_only_r4_task_is_active() -> None:
-    assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_RUNTIME.md").exists()
-    assert not (ROOT / "tasks/SHORT_VOL_FIXED_CONTRACT_PUBLIC_SHADOW_FORWARD_EVIDENCE.md").exists()
-    assert not (ROOT / "tasks/SHORT_VOL_PUBLIC_SHADOW_TWO_LAYER_ENGINEERING_ACCEPTANCE.md").exists()
-    assert not (ROOT / "tasks/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_OBSERVATION.md").exists()
-    assert not (
-        ROOT / "tasks/SHORT_VOL_PERSISTENT_SERVICE_OPERABILITY_AND_TRADER_WORKBENCH_REPAIR.md"
-    ).exists()
-    assert not (ROOT / "tasks/SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART.md").exists()
-    assert not (ROOT / "tasks/SHORT_VOL_R3_DEADLINE_SAFE_SERVICE_ONLINE.md").exists()
+def test_only_workbench_publication_task_is_active() -> None:
     assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
-        "SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR.md",
+        "SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING.md",
         "TEMPLATE.md",
     ]
-    current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
+    current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
     assert (
         "**Sole authorized next product-capability closure:** "
-        "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR`"
-    ) in " ".join(current.split())
-    assert "**Persistent public Shadow service/workbench:**" in current
-    assert "`R4_COMMISSIONED`" in current
-    assert "READ_ONLY_MONITORING_PLUS_ONE_RESULT_INDEPENDENT_TERMINAL_CLOSE_AUTHORIZED" in current
-    assert "`R4_COMMISSIONED_24H_PENDING`" in current
-    assert "FIRST_PERIODIC_PROBE_DEADLINE_MISSED_BEFORE_PROBE_LOAD" in current
-    assert "The probe was never loaded and its ledger contains zero rows" in " ".join(
-        current.split()
-    )
-    assert "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure" in " ".join(
-        current.split()
-    )
-
-
-def test_shadow_attempt_integrity_acceptance_preserves_failure_scope_and_identities() -> None:
-    current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    flat = " ".join(current.split())
-    for invariant in (
-        "conditional R4 authority",
-        "CONSUMED_FAILED_NO_RETRY",
-        "Underwriting semantic identity must be sha256:<64 lowercase hex>",
-        "Radar run summary",
-        "relabelled, retried, or reused",
-        "/Users/logan/Optimatrix-shadow/receipts/public-shadow-forward-001-terminal-record.json",
-        "1090b3d9b643c621721e59552fc0ca1e7b6a7616d9b6ec136c0660c936d62e45",
-        "6eaaddfecf4c59a19c8029682a80fc52b7896a64",
-        "f9ce7f98623ed7249160ee29c940c9c026fc4173",
-        "74eaa501db193a8db09baa3f5a449dc8a28f3d7b",
-        "later accepted smoke used distinct paths",
-        "Private/account/order/fill/capital",
-    ):
-        assert invariant in flat
+        "`SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`"
+    ) in current
+    assert "**Live commands:** `FORBIDDEN`" in current
 
 
 def test_fixed_three_policy_chain_and_implementation_boundary_are_exact() -> None:
@@ -2190,27 +1895,18 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
     )
 
     for invariant in (
-        "Root blocker",
-        "human may approve a successor inside the same authorized Policy schema",
-        "no replay, independent offline recomputation",
-        "`PUBLIC_RADAR_ESTABLISHMENT_DELEGATION`",
-        "The two gates remain semantically independent",
-        "does not prove indefinite uptime",
-        "`EVIDENCE_ONLY` attempt",
-        "private/account data",
-        "orders, fills, capital",
-        "fixed-contract Shadow implementation adds",
-        "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
-        "`CLOSED_TWO_LAYER_ENGINEERING_ACCEPTED`",
-        "`SHORT_VOL_R4_COMMISSIONING_INTEGRITY_REPAIR` is the sole active closure",
-        "R4_COMMISSIONED",
-        "R4_COMMISSIONED_24H_OBSERVATION_ACTIVE",
-        "PASS_COMPLETE_PROCESS_FAILURE_EVIDENCE_ONLY",
-        "NOT_ACCEPTED_PROCESS_FAILURE",
-        "Accepted operability repair and consumed fresh-restart attempt",
-        "Radar run summary is absent",
-        "one result-independent production-public process",
-        "natural_shadow_opportunity = NOT_OBSERVED",
+        "## Current truth",
+        "`OFFLINE_PUBLIC_SHADOW_RUNTIME`",
+        "`NOT_ACCEPTED_PENDING_REVALIDATION`",
+        "`SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`",
+        "`STOPPED_NO_DEPLOYMENT`",
+        "**Evidence gate:** `NONE`",
+        "**Live commands:** `FORBIDDEN`",
+        "No historical runtime result is a current business premise",
+        "No timer, thread, queue, scheduler",
+        "They cannot accept the Radar, a deployment, 24x7 stability",
+        "private/account APIs",
+        "orders, fills",
     ):
         assert invariant in current_stage
 
@@ -2225,7 +1921,9 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "no preselected holding duration",
         "### `short_vol_underwriting`",
         "The pure downstream owner `short_vol_underwriting`",
-        "permission to invoke or deploy the persistent host, comes only from `CURRENT_STAGE`",
+        "Production-public invocation and deployment authority comes only from `CURRENT_STAGE`",
+        "at most once per 500 monotonic milliseconds",
+        "`flush_pending()` once before reconnect or clean-stop terminal mutation",
     ):
         assert invariant in architecture
 
@@ -2304,21 +2002,16 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
     for invariant in (
         "Ordinary no-anomaly updates",
         "planned holding duration",
-        "`PRODUCTION_PUBLIC_SHORT_VOL_RADAR`",
+        "public-only modular runtime",
         "SHORT_VOL_UNDERWRITING_POSITION",
         "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT",
-        "`ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`",
-        "`observe-shadow`",
-        "two-layer engineering closure is consumed and closed",
-        "Exact repair commit",
-        "evidence-integrity acceptance does not prove",
+        "No production result is currently accepted",
+        "`SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`",
+        "at most once per 500 monotonic milliseconds",
+        "no timer, thread, queue, scheduler",
         "maker/order/fill",
-        "production_public_integration = PASS",
-        "natural_shadow_opportunity = NOT_OBSERVED",
-        "persistent observation",
-        "PROCESS_FAILURE",
-        "exactly one r2 service started",
-        "offline-repairable",
+        "database, replay path",
+        "no deployed process",
     ):
         assert invariant in readme
     assert "effective-time" not in readme
@@ -2394,7 +2087,7 @@ def test_radar_contract_keeps_market_signal_execution_and_decision_distinct() ->
     assert "keep `LEGGED_CLOSE_REFERENCE` diagnostic" in radar_flat
 
 
-def test_persistent_service_contract_and_fresh_restart_close_exact_governance_change() -> None:
+def test_persistent_service_contract_and_publication_coalescing_are_bound() -> None:
     contract_path = ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md"
     contract = contract_path.read_text(encoding="utf-8")
     flat = " ".join(contract.split())
@@ -2410,11 +2103,10 @@ def test_persistent_service_contract_and_fresh_restart_close_exact_governance_ch
 
     assert constant_match is not None
     assert digest == constant_match.group(1)
-    assert digest == "sha256:4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7"
-    assert digest != "sha256:9c3b46eae8b646d2c86f38df35cfcf962605c0b670385376d7c2ebef3a771778"
+    assert digest == "sha256:a5a391c22f542b991d2c155f304496aeafc3c927669cd94012ac1b573d284560"
     assert not (ROOT / "tasks/SHORT_VOL_PERSISTENT_RUNTIME_TRADER_WORKBENCH.md").exists()
     for invariant in (
-        "**Current implementation state:** `OFFLINE_REPAIR_AUTHORIZED`",
+        "**Current implementation state:** `PUBLICATION_COALESCING_IMPLEMENTATION_AUTHORIZED`",
         "DISABLED_NON_COHORT_SERVICE",
         "forward_cohort_summary_emitted",
         "read_complete_persistent_service_evidence",
@@ -2434,19 +2126,19 @@ def test_persistent_service_contract_and_fresh_restart_close_exact_governance_ch
         "Actual PnL under public Shadow is `N/A`",
         "Tables own their horizontal scrolling",
         "graph-independent in the accepted downstream attempt relationship validator",
+        "at most once per 500 monotonic milliseconds",
+        "semantic status-key change publishes one complete immutable snapshot immediately",
+        "`flush_pending()` exactly once before `prepare_reconnect` or `clean_stop`",
+        "There is no partial JSON patch, timer, thread, queue, scheduler",
     ):
         assert invariant in flat
     assert "The version-1 snapshot" not in contract
     assert "`NO_LIVE_OR_DEPLOYMENT_AUTHORITY`" not in flat
     assert "SHORT_VOL_PERSISTENT_SERVICE_FRESH_PRODUCTION_RESTART" not in current
-    assert "R4_COMMISSIONED" in current
-    assert "67085248fffb1b20bae1c9512ae1191d166a6509" in current
-    assert "9f5ded618fb5fe803fd8e8b2ffa533f0b49268aa" in current
-    assert "READ_ONLY_MONITORING_PLUS_ONE_RESULT_INDEPENDENT_TERMINAL_CLOSE_AUTHORIZED" in current
-    assert "`R4_COMMISSIONED_24H_PENDING`" in current
-    assert "d4740d6a181efebc8dad6d1091a78fa44d885957" in current
-    assert "d5776f4f7c30763d095e36c7ea8b67209ec76448" in current
-    assert "sha256:4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7" in current
+    assert "`STOPPED_NO_DEPLOYMENT`" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "`SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`" in current
+    assert "No historical runtime result is a current business premise" in " ".join(current.split())
 
 
 def test_at_most_one_active_task_and_it_declares_every_change_axis() -> None:
@@ -2584,57 +2276,33 @@ def test_index_publication_contract_owns_current_projection_and_actual_sealed_vo
         assert forbidden not in radar
 
 
-def test_stage_record_binds_both_independent_live_gates() -> None:
-    current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
-    current_stage_flat = " ".join(current_stage.split())
+def test_stage_record_rejects_deleted_live_history_as_authority() -> None:
+    current_stage = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
 
     for invariant in (
-        "candidate commit `9c58120d358fd0e0ccb4885123ab95c67d1c3f31`",
-        "candidate tree `1ff49ff697df1a91237eb35f290301e26a7c06dc`",
-        "both live manifests' pre-run verified remote ref "
-        "`refs/heads/codex/radar-repository-consolidation` resolved to that exact candidate commit",
-        "does not prove indefinite uptime",
-        "The accepted authority-only contract changes no accepted Radar runtime or live evidence "
-        "identity",
+        "**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`",
+        "**Persistent public Shadow service/workbench:** `STOPPED_NO_DEPLOYMENT`",
+        "**Evidence gate:** `NONE`",
+        "**Live commands:** `FORBIDDEN`",
+        "**Persistent deployment / 24x7 acceptance:** `NOT_CLAIMED`",
+        "No historical runtime result is a current business premise",
+        "A future production-public validation must start fresh",
     ):
-        assert invariant in current_stage_flat
+        assert invariant in current_stage
 
-    smoke_binding = (
-        "`REACHABILITY_SMOKE`: `MET`, independently accepted by "
-        "`/Users/logan/Optimatrix-smoke/receipts/"
-        "reachability-smoke-radar-consolidation-001-independent-acceptance.json`, "
-        "SHA-256 `4bbf832ab7340e7224a0df5db79aea1cd6fed33d156f2aeec12690f986217a4f`, "
-        "manifest SHA-256 `70511dad86aa37dcaaab1167b688d342a33a8248635097b6f4c84b436e8e09fd`, "
-        "evidence directory "
-        "`/Users/logan/Optimatrix-smoke/evidence/reachability-smoke-radar-consolidation-001`, "
-        "summary SHA-256 `700dbbf2649830b656a75de3e3eb74aabef21cb4003786429b823091abcbbfa6`, "
-        "and 47-entry absolute-path-bound ordered evidence manifest SHA-256 "
-        "`3b70b2a7d93b3bbcf2ce31c0e63bc03ff971b18ea4ad7e9270cd943a351cccde`"
-    )
-    soak_binding = (
-        "`OPERATIONAL_SOAK`: `MET`, independently accepted by "
-        "`/Users/logan/Optimatrix-soak/receipts/"
-        "operational-soak-radar-consolidation-001-independent-acceptance.json`, "
-        "SHA-256 `d38c5bebef1e2bccfeeb9c69715970d03fda2a0359f02520a5c3deef08463345`, "
-        "manifest SHA-256 `2cf6af08bdcf7ec3c72e5bbb9292b58261c992dda67b298cf7f4ea99eac64574`, "
-        "evidence directory "
-        "`/Users/logan/Optimatrix-soak/evidence/operational-soak-radar-consolidation-001`, "
-        "summary SHA-256 `1ec01c5dba427e3a273671ef57421a6f6bfe01f95d26416e35a2d69fe6a6b218`, "
-        "and absolute-path-bound ordered evidence manifest SHA-256 "
-        "`7ff691e9b3665e0e9db7196a032440a9f6e79c6802f803b7546cb23f5125f361`"
-    )
-    assert smoke_binding in current_stage_flat
-    assert soak_binding in current_stage_flat
+    for stale_claim in (
+        "REACHABILITY_SMOKE`: `MET",
+        "OPERATIONAL_SOAK`: `MET",
+        "R4_COMMISSIONED",
+        "natural_shadow_opportunity = NOT_OBSERVED",
+    ):
+        assert stale_claim not in current_stage
 
 
 def test_delegation_separates_prepush_receipt_from_postpush_remote_equality() -> None:
-    current_stage = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
-    current_stage_flat = " ".join(current_stage.split())
     delivery_flat = " ".join(delivery.split())
 
-    assert "both live manifests' pre-run verified remote ref" in current_stage_flat
-    assert "resolved to that exact candidate commit" in current_stage_flat
     for invariant in (
         "Before a non-force push",
         "pre-push independent exact-commit pass receipt",

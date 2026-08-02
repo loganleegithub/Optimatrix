@@ -563,6 +563,8 @@ class SettledSnapshotPublisher(Protocol):
         commit: CausalCommit,
     ) -> None: ...
 
+    def flush_pending(self) -> None: ...
+
 
 class ShadowRuntimeAdapter(Protocol):
     @property
@@ -7911,6 +7913,13 @@ class LiveRadarRuntime:
         except BaseException as exc:
             if failure is None:
                 failure = exc
+        publisher = self.reducer.snapshot_publisher
+        if publisher is not None:
+            try:
+                publisher.flush_pending()
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
         if failure is not None:
             reconnect_reason = (
                 failure.reason

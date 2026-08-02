@@ -6,159 +6,26 @@ production-public Shadow only: no private API, account, margin, order, fill, or 
 
 ## Current truth
 
-The top implemented capability is `PRODUCTION_PUBLIC_SHORT_VOL_RADAR`: one guarded
-production-public Radar runtime and its `observe` command. The fixed-contract public Shadow
-implementation is separately `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`. The two-layer
-engineering closure is consumed and closed. The later persistent-service observation is also
-consumed: it sealed complete `PROCESS_FAILURE` evidence and did not satisfy the 24-hour gate. One
-service-operability and trader-workbench repair is accepted. Its one fresh restart is now also
-consumed: commissioning missed the mandatory first-probe deadline, the process was cleanly sealed,
-and 24-hour acceptance is `NOT_MET`. The later R3 commissioning attempt is also consumed: it ran
-`181274` ms, recorded one contract-valid probe row and two failed-probe markers, sealed with
-`PASS_COMPLETE_CLEAN_STOP`, and left 24-hour acceptance `NOT_MET`. R4 attempt 001 is also consumed
-and terminally quiescent: it exposed a controller-only mismatch with real macOS `lsof` `p/f/n`
-output before any probe or operability gate, and therefore did not establish an online runtime.
-R4 attempt 002 is likewise consumed and terminally quiescent: four valid operational probe rows
-were recorded, but a normal RunningBoard `resource coalition id` message was misclassified as a
-CPU resource exception, so the operability gate failed and runtime was cleanly stopped.
-R4 attempt 003 commissioned and produced 23 successful probe rows, but continuous observation found
-an exact-PID macOS CPU resource violation caused by redundant inactive-scope projection and
-unchanged workbench member encoding; it too was cleanly stopped and its 24-hour result is `NOT_MET`.
-R4 attempt 004 confirmed the CPU repair at 28.216667% over the commissioning gate and remained
-healthy through 24 probe rows. It was cleanly stopped only because a manual `/usr/bin/log show`
-query self-record was falsely counted as a runtime resource event; no new CPU diagnostic or real
-runtime violation existed. The final minimal R4 repair removes Unified Log from the executable
-controller. CPU, RSS, queue-lag transitions, and exact-PID `cpu_resource` DiagnosticReports remain
-recorded as advisory facts; they do not decide commissioning or the 24-hour result. The existing
-PID/argv/cwd, launchd-run, listener, HTTP/schema/current-reader, probe-continuity, fatal, terminal,
-and quiescence gates remain unchanged. The repair adds no endpoint, process, dependency, container,
-or restart behavior.
-R4 attempt 005 commissioned and remained healthy for 107 probe rows before a valid atomic-quote
-evidence filename exposed the macOS component-name limit: the 230-byte final name was expanded into
-a 268-byte temporary name and terminated the process. Its natural-terminal audit passed evidence
-integrity, but business acceptance is `NOT_ACCEPTED_PROCESS_FAILURE` and 24-hour acceptance is
-`NOT_MET`. The attempt is terminally quiescent and archived. The final repair uses a short
-same-directory UUID temporary name without changing the durable filename or atomic publication,
-and preserves local evidence failures instead of reporting them as Deribit payload errors.
-The user's 2026-08-02 amendment keeps R4 as the active closure and authorizes minimal observed-bug
-repair, exact gates and merge, then one fresh recommission attempt at a time until one reaches
-`COMMISSIONED`. No live command is allowed from unmerged code or without a fresh detached
-deployment preflight.
+The repository implements one public-only modular runtime for Deribit BTC-USDC 0–3DTE Short Vol:
+market ingestion, Radar, fixed-contract Underwriting, Shadow admission, Position management,
+Outcome projection, and a loopback GET/HEAD-only Workbench.
 
-The production Short Vol Radar is `ESTABLISHED` by independently accepted, exact-commit Smoke and
-Soak evidence. The downstream
-[`SHORT_VOL_UNDERWRITING_POSITION`](docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md) and
-[`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
-contracts are frozen. The fixed-contract implementation binds one exact three-Policy chain and
-provides the pure
-Underwriting, Candidate/admission, Shadow Entry, Position, close-opportunity, Outcome,
-rejected-counterfactual, aligned-pair, conservation, and strict evidence path. Exact repair commit
-`6207d59763e1aab7c455854169cd9dde6b0f940f` independently closed the writer/current/complete-reader
-attempt-integrity gap. Exact implementation-acceptance tip
-`6eaaddfecf4c59a19c8029682a80fc52b7896a64` repairs the real Radar episode-identity boundary and
-preserves the existing failure terminal. The earlier exact candidate
-`4b225ee1f199523fb052611d84612ec75c7abf78` exited `1` after five anomaly artifacts and a fatal
-Underwriting identity error. Its downstream failure summaries are complete and conserved with zero
-persisted Candidate/Entry/Position/Outcome counts, but the Radar run summary is absent; the full
-forward result is `INCOMPLETE`, `NOT_ACCEPTED`, and business-`NOT_EVALUABLE`. Radar writes its run
-summary only on clean stop, so partial Radar evidence is truthful on this process failure rather
-than a second implementation defect. That attempt remains sealed and cannot be retried or reused.
+No production result is currently accepted. The prior online observation was stopped, its Radar
+outputs were rejected as unreliable, and its runtime/evidence history is no longer an input to
+current authority. There is no deployed process, launchd service, loopback listener, 24-hour claim,
+private/account access, order, fill, actual position, or PnL authority.
 
-The later activation commit `21af26c71ef625889d29c4d7e00ebeae92f8a15d`, tree
-`11b8a42d920e6be9eff7a56f45fd3c02c8ef6bed`, passed the deterministic composed chain and one
-result-independent production-public smoke. The process used a 14-minute enrollment cutoff and
-29-minute final-stop trigger, exited `0` at `PLANNED_CLEAN_STOP`, and realized `1,739,999` ms from
-runtime-start fact to terminal. Strict Radar/current/complete readers passed; both downstream
-conservation summaries are `MET`. Real Deribit coverage was non-vacuous, and all 135 real anomaly
-activation sequences reached the Underwriting-availability path without the historical identity
-fatal. Actual RPCs were public-only, with zero RPC errors, reconnects, private/account/order/fill/
-capital activity, post-terminal retries, or second evidence invocations.
+The sole active task is
+[`SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING`](tasks/SHORT_VOL_WORKBENCH_PUBLICATION_COALESCING.md).
+It keeps every Radar-to-Outcome transaction unchanged and reduces only non-durable Workbench work:
+ordinary status-stable complete snapshots publish at most once per 500 monotonic milliseconds,
+semantic safety/lifecycle changes publish immediately, and the latest pending state flushes after
+draining and before reconnect or clean-stop mutation.
 
-The accepted result is exact:
-
-```text
-engineering_end_to_end = PASS
-production_public_integration = PASS
-natural_shadow_opportunity = NOT_OBSERVED
-```
-
-Candidate, Shadow Entry, admitted Outcome, and rejected Outcome counts were all zero. That natural
-`NOT_OBSERVED` is not an engineering failure and does not establish opportunity frequency. The
-terminal record is
-`/Users/logan/Optimatrix-shadow/receipts/public-shadow-engineering-smoke-002-terminal-record.json`,
-SHA-256 `a4b7a66c51133cef08a4d0420943b6fe5464a78cc10d5a8f2169c0c9d9d4db3c`.
-That bounded smoke by itself authorized no private/account/order/fill/capital capability, replay,
-Policy change, qualification, retry, persistent service, or further live invocation.
-Establishment means the bounded public Radar met its frozen reachability and operating predicates;
-it does not mean the Radar is persistently deployed, always running, indefinitely stable,
-profitable, or authorized to trade. Offline Shadow implementation or evidence-integrity
-acceptance does not prove a natural Candidate, Entry, Position, Outcome, forward cohort, Policy
-quality, or business success.
-
-### Consumed persistent observations and accepted repair
-
-The separately accepted persistent service/workbench implementation at commit
-`67085248fffb1b20bae1c9512ae1191d166a6509` was later deployed under one exact observation
-authority. On the user's `停止并修复`, the controller stopped the periodic probe, recorded one final
-online probe, sent one label-bound `SIGINT`, and sent no retry or second signal. The service entered
-`STOPPING / USER_REQUEST`, then truthfully sealed as `PROCESS_FAILURE` when an already-pending
-heartbeat deadline failed 9 ms later.
-
-The independent terminal audit records 190 contiguous probe rows, `11,909,685` ms of continuous
-service, complete downstream/service evidence, `MET` Underwriting and cohort conservation, and
-`INCOMPLETE_PROCESS_FAILURE` Radar evidence with no invented run summary. The 24-hour result is
-`NOT_MET`. It observed 56 Radar anomaly objects and 6,442 Underwriting-availability objects, with
-zero Candidate, atomic quote, Shadow Entry, close opportunity, or Outcome. Those natural zeros are
-`NOT_OBSERVED`, not Policy-quality or performance evidence. The consumed state root cannot be
-restarted, repaired, relabelled, or reused.
-
-The bounded repair is independently accepted at exact commit
-`d4740d6a181efebc8dad6d1091a78fa44d885957`, tree
-`d5776f4f7c30763d095e36c7ea8b67209ec76448`, under service-contract digest
-`sha256:4f94e8b8a8ddc1acbcd2c8eca47b4c0294f308500d21435c545346fba73971a7`.
-It owns only the redundant whole-history work, revision-keyed projection cache, settled display
-metadata, and truthful trader-facing version-2 presentation. It changes no Radar formula or state
-machine, Policy, Underwriting/Position/Outcome economics, durable business identity, account
-boundary, or execution permission.
-
-PR #9 subsequently merged as remote `main` commit
-`636088528a9375099e8531e30546842aa9cd8f82`, tree
-`10e352c954474fd3b27b005f6d8845d4d5b0f38f`, and exactly one r2 service started under
-`/Users/logan/Optimatrix-public-shadow-observation-002`. Transient controller checks saw its
-schema-2 health and read-only workbench respond while readiness was truthfully `false`; no current
-audit or probe row was published, so those checks are not accepted commissioning evidence.
-Commissioning failed because the controller verifier expected a nonexistent lifecycle field and
-missed the required first successful probe within 120 seconds. The probe was never loaded and has
-zero ledger rows. Durable lifecycle and terminal evidence separately record real market
-`UNKNOWN` coverage, including `INDEX_WARMUP`.
-
-The controller recorded the failure, sent one label-bound `SIGINT`, and sent no second signal or
-retry. The same runtime sealed `CLEAN_STOP`; its terminal reader and conservation checks pass, but
-the independent terminal audit records only `266,887` ms and
-`OPERATIONAL_24H_GATE_NOT_MET`. It observed 29 Radar anomalies and 116 Underwriting-availability
-objects, with zero public atomic quote, Candidate, Shadow Entry, close opportunity, or Outcome.
-Those zeros are `NOT_OBSERVED`, not Policy-quality, opportunity-frequency, fillability, or PnL
-evidence. The fresh root and both launchd identities are consumed and cannot be restarted or
-repaired. The installed r2 plist files remain inert consumed assets and may not be bootstrapped or
-reused.
-
-The later R3 attempt under `/Users/logan/Optimatrix-public-shadow-observation-003` is immutable and
-consumed. Its primary receipt was correctly written before cleanup but used the final-sounding
-status `COMMISSION_FAILED_CLEANUP_REQUIRED`; the independent terminal audit is the durable proof
-that cleanup in fact converged. R3 cannot be retried, extended, relabelled, or reused.
-
-The active R4 task now owns only the exact commissioned attempt-006 runtime under
-`/Users/logan/Optimatrix-public-shadow-observation-004`, its read-only observation, and one
-result-independent terminal close. It runs merged commit
-`1b10ecb3336c9b342e5ddb306ecbb9170c211d70` with runtime identity
-`sha256:9b5772ce0b3aa0aa0773533fbec1eaf8af90edd9d0971b2e3b9d0aaf0a2be364` under labels
-`com.optimatrix.public-shadow.r4` / `com.optimatrix.public-shadow.r4.probe`. Its commissioning
-receipt is `COMMISSIONED`; 24-hour acceptance remains `PENDING`. Iterative repair and
-recommissioning authority is consumed. Market and Decision semantics, durable evidence names,
-publication cadence, contracts, three Policies, dependencies, and workbench schema remain
-unchanged. Commissioning does not establish 24x7 stability, Policy quality, opportunity frequency,
-fillability, or PnL.
-
+This is deliberately small. It adds no timer, thread, queue, scheduler, partial-update protocol,
+service split, dependency, database, replay path, evidence chain, container, or deployment
+controller. Passing tests will prove deterministic publication behavior only; they will not accept
+the Radar, establish lower production CPU, or prove 24x7 stability or strategy value.
 ## Intended first business flow
 
 ```text
@@ -201,11 +68,10 @@ and hard boundaries before returning `HOLD | CLOSE | UNKNOWN` exactly as frozen 
 It also implements Candidate invalidation and the strictly later full-quantity close opportunity.
 
 The implemented Outcome/cohort reducer follows the frozen causal-first counterfactual exit and
-terminal `MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one bounded
-rejected counterfactual per slot, cohort-aligned `NO_TRADE`, exact public-quote PnL equations, and
-honest conservation/null denominators. A public quote remains not a fill. The consumed attempt did
-not establish production-public Shadow evidence. The later exact bounded smoke established only
-the two engineering layers recorded above; no trading capability follows from it.
+terminal `MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one
+bounded rejected counterfactual per slot, cohort-aligned `NO_TRADE`, exact public-quote PnL
+equations, and honest conservation/null denominators. A public quote remains not a fill. No current
+production-public Shadow evidence or trading capability is accepted.
 
 ## Authority
 
@@ -220,7 +86,7 @@ accepted downstream Underwriting, admission, and Shadow Position semantics, and
 [`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
 defines the accepted downstream Outcome and forward-cohort semantics. The
 [`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`](docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md)
-contract owns the offline-repairable service evidence and immutable read-only workbench boundary.
+contract owns the offline service boundary and immutable read-only Workbench projection.
 
 ## Repository shape
 
@@ -251,16 +117,7 @@ make sync
 make check
 ```
 
-The `observe`, `observe-shadow`, and `serve-shadow` commands remain guarded implementation
-surfaces. The R4 branch and PR authorize no live mutation. Only after exact-candidate acceptance,
-remote equality, GitHub CI, merge to remote `main`, and fresh detached preflight may exactly one
-fresh R4 `serve-shadow` commissioning and its result-independent close boundary run. Every private,
-account, order, fill, and capital surface remains forbidden. The accepted Smoke, Soak, two-layer
-smoke, and consumed persistent observations establish only their exact pre-bound intervals and
-grant no authority to reuse them.
-
-The failed fixed-contract attempt, accepted smoke, and all three consumed persistent-observation
-artifact roots
-are sealed and cannot be edited, deleted, completed retroactively, migrated, relabelled, retried,
-or reused. None of these intervals can be carried forward as evidence of Policy quality,
-opportunity frequency, or PnL.
+The `observe`, `observe-shadow`, and `serve-shadow` commands are implementation surfaces only.
+`CURRENT_STAGE` forbids all live commands and deployment. Every private, account, order, fill, and
+capital surface remains forbidden. Any future production-public validation requires a new explicit
+task and fresh evidence boundary; no deleted history may be reused as acceptance.
