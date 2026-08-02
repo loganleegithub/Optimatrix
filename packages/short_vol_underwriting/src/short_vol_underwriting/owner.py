@@ -1323,6 +1323,7 @@ class FixedContractShadowOwner:
         payload: dict[str, object] = {
             "underwriting_availability_evaluation_identity": identity,
             "radar_scope_or_short_leg_identity": facts.radar_scope_identity,
+            "active_episode_identity": facts.active_episode_identity,
             "consumed_availability_fact_fingerprint": evaluation.availability_fingerprint,
             "availability": evaluation.availability.value,
             "availability_evaluation_fact_boundary": facts.boundary.as_object(),
@@ -1378,8 +1379,11 @@ class FixedContractShadowOwner:
             "underwriting_action_identity": identity,
             "underwriting_availability_evaluation_identity": availability_identity,
             "underwriting_opportunity_key_identity": evaluation.opportunity_identity,
+            "active_episode_identity": facts.active_episode_identity,
             "consumed_economic_fact_fingerprint": evaluation.economic_fingerprint,
             "economic_action": evaluation.action.value,
+            "decision_blockers": list(self._underwriting_decision_blockers(evaluation)),
+            "entry_consumed_level_count": len(facts.entry_consumed_levels),
             "evaluation_fact_boundary": facts.boundary.as_object(),
             "gross_entry_credit_usdc": economics.gross_entry_credit_usdc,
             "entry_fee_reserve_usdc": economics.entry_fee_reserve_usdc,
@@ -1407,6 +1411,44 @@ class FixedContractShadowOwner:
             identity,
         )
         return identity, True
+
+    def _underwriting_decision_blockers(
+        self,
+        evaluation: _UnderwritingEvaluation,
+    ) -> tuple[str, ...]:
+        action = evaluation.action
+        economics = evaluation.economics
+        if action is None or economics is None:
+            return ()
+        blockers: list[str] = []
+        if action is UnderwritingAction.ABSTAIN:
+            if economics.net_entry_credit_usdc <= 0:
+                blockers.append("NON_POSITIVE_NET_ENTRY_CREDIT")
+            if economics.net_entry_credit_usdc <= economics.future_cost_reserve_usdc:
+                blockers.append("CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE")
+            if (
+                economics.underwriting_reserved_loss_usdc
+                > self.policies.underwriting.maximum_underwriting_reserved_loss_usdc
+            ):
+                blockers.append("UNDERWRITING_RESERVED_LOSS_LIMIT")
+        elif action is UnderwritingAction.WATCH:
+            if (
+                economics.net_entry_credit_usdc
+                < self.policies.underwriting.minimum_net_entry_credit_usdc
+            ):
+                blockers.append("MINIMUM_NET_ENTRY_CREDIT")
+            if (
+                economics.net_entry_credit_usdc
+                < self.policies.underwriting.minimum_net_credit_to_payoff_cap_fraction
+                * economics.payoff_cap_usdc
+            ):
+                blockers.append("MINIMUM_NET_CREDIT_TO_PAYOFF_CAP")
+            if (
+                len(evaluation.facts.entry_consumed_levels)
+                > self.policies.underwriting.maximum_entry_consumed_level_count
+            ):
+                blockers.append("ENTRY_CONSUMED_LEVEL_LIMIT")
+        return tuple(blockers)
 
     def _activate_candidate(
         self,
@@ -1460,6 +1502,7 @@ class FixedContractShadowOwner:
                 "candidate_identity": candidate_identity,
                 "underwriting_action_identity": action_identity,
                 "underwriting_position_slot_key_identity": evaluation.slot_identity,
+                "active_episode_identity": facts.active_episode_identity,
                 "candidate_activation_fact_boundary": facts.boundary.as_object(),
             },
         )
@@ -2797,6 +2840,7 @@ class FixedContractShadowOwner:
                 "admission_attempt_terminal_identity": attempt.terminal_identity,
                 "scheduled_admission_attempt_identity": attempt.scheduled_identity,
                 "candidate_identity": record.state.candidate_identity,
+                "active_episode_identity": record.facts.active_episode_identity,
                 "terminal_outcome": attempt.terminal_outcome.value,
                 "terminal_fact_boundary": attempt.terminal_boundary.as_object(),
                 "terminal_source_identity": attempt.terminal_source_identity,

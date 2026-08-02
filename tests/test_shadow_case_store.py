@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -173,6 +174,31 @@ def test_pre_shadow_state_is_in_memory_only_even_under_repeated_updates(tmp_path
 
     assert case_store.case_count == 0
     assert list((tmp_path / "cases").iterdir()) == []
+
+
+def test_shadow_state_exposes_each_new_record_once_without_a_history_journal(
+    tmp_path: Path,
+) -> None:
+    state, _case_store, _bindings = _system(tmp_path)
+    assert state.take_pending_records() == ()
+
+    _seed_pre_shadow(state)
+    first_revision = state.revision
+    first = state.take_pending_records()
+    assert len(first) == first_revision == 3
+    assert state.take_pending_records() == ()
+
+    candidate = first[-1]
+    candidate_payload = candidate["payload"]
+    assert isinstance(candidate_payload, Mapping)
+    state.record(
+        object_kind=str(candidate["object_kind"]),
+        object_identity=str(candidate["object_identity"]),
+        fact_boundary=_boundary(3),
+        payload=candidate_payload,
+    )
+    assert state.revision == first_revision
+    assert state.take_pending_records() == ()
 
 
 def test_shadow_entry_opens_exactly_one_minimal_case(tmp_path: Path) -> None:

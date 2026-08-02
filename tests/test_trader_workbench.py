@@ -233,6 +233,13 @@ def test_initial_snapshot_keeps_empty_panels_separate_from_unknown_zero_claims()
     assert value["zero_claims"]["candidate"]["value"] is None
     assert value["system"]["coverage_ratio_percent"] is None
     assert value["shadow_entries"]["simulation_label"] == SIMULATION_LABEL
+    assert value["funnel"]["primary_blocker"] == {
+        "stage": "APPLICABLE_MARKET_SCOPE",
+        "reason": "NO_APPLICABLE_MARKET_SCOPE_OBSERVED",
+        "blocked_count": 0,
+        "upstream_count": 0,
+        "observed_count": 0,
+    }
     assert value["service"]["data_state"] == "UNKNOWN"
     assert value["schema_version"] == 2
     assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in value["non_claims"]
@@ -590,6 +597,7 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "safeText(rendered)" in JS
     assert 'class="value ${' not in JS
     assert 'id="connection"' in HTML
+    assert 'id="funnel"' in HTML
     assert 'role="alert"' in HTML
     assert "function renderUnavailable" in JS
     assert "businessPanelIds" in JS
@@ -610,7 +618,8 @@ def test_browser_formats_business_states_and_orders_rows_without_recomputing() -
         "refresh();\nsetInterval(refresh, 2000);",
         "globalThis.__workbenchTest = { radarCellValue, underwritingCellValue, "
         "shadowCellValue, positionCellValue, outcomeCellValue, "
-        "orderedRadarRows, orderedUnderwritingRows, filterRows };",
+        "orderedRadarRows, orderedUnderwritingRows, filterRows, "
+        "funnelStageLabel, funnelBlockerText };",
     )
     assert test_js != JS
     harness = f"""
@@ -677,6 +686,11 @@ assert.equal(api.shadowCellValue({{
 assert.equal(api.positionCellValue({{}}, 'hard_close_countdown_interval_ms', {{
   lower_ms: 60000, upper_ms: 120000
 }}), '1.0 分钟 - 2.0 分钟');
+assert.equal(api.funnelStageLabel('PUBLIC_ATOMIC_QUOTE_AVAILABLE'), '目标数量原子报价');
+assert.equal(api.funnelBlockerText({{
+  NO_ACTIVE_COMBO: 2,
+  NO_TARGET_SIZE_CREDIT_QUOTE: 1
+}}), '无活跃组合可供承保评估: 2; 目标数量的组合权利金报价不可用: 1');
 
 const radar = api.orderedRadarRows([
   {{instrument_name:'N', detector_state:'NO_ANOMALY', expiration_timestamp_ms:2, strike_usdc_per_btc:'2'}},
@@ -744,7 +758,7 @@ def test_browser_executes_fail_closed_and_recovery_paths() -> None:
     assert test_js != JS
     harness = f"""
 const assert = require('node:assert/strict');
-const panelIds = ['zero', 'radar', 'underwriting', 'shadow', 'positions', 'outcomes'];
+const panelIds = ['funnel', 'zero', 'radar', 'underwriting', 'shadow', 'positions', 'outcomes'];
 const elementIds = ['connection', 'runtime', 'system', ...panelIds];
 const elements = Object.fromEntries(elementIds.map(id => [id, {{
   hidden: id === 'connection', textContent: '', innerHTML: ''

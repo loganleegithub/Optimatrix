@@ -78,6 +78,7 @@ class ShadowStateStore:
         self.observer = observer
         self._objects: dict[tuple[str, str], dict[str, object]] = {}
         self._object_snapshot: tuple[Mapping[str, object], ...] | None = ()
+        self._pending_records: list[Mapping[str, object]] = []
         self._revision = 0
 
     @property
@@ -92,6 +93,11 @@ class ShadowStateStore:
     @property
     def revision(self) -> int:
         return self._revision
+
+    def take_pending_records(self) -> tuple[Mapping[str, object], ...]:
+        records = tuple(self._pending_records)
+        self._pending_records.clear()
+        return records
 
     def record(
         self,
@@ -115,6 +121,7 @@ class ShadowStateStore:
         if previous == value:
             return
         self._objects[key] = value
+        self._pending_records.append(value)
         self._revision += 1
         self._object_snapshot = None
         if self.observer is not None:

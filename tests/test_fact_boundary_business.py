@@ -280,6 +280,10 @@ def establish_joint_witness(
         countable=True,
     )
     assert reducer.results[instrument.instrument_name].full_formula_evaluation
+    assert reducer.latest_funnel_causal_seq == 1
+    assert len(reducer.latest_funnel_evaluations) == 1
+    assert reducer.latest_funnel_evaluations[0].instrument_name == instrument.instrument_name
+    assert reducer.latest_funnel_evaluations[0].known_evaluation
 
 
 def activate_directly(
@@ -973,6 +977,10 @@ def test_amount_unknown_to_valid_establishes_known_current_without_activation_co
         countable=True,
     )
     assert reducer.trackers[unknown.instrument_name].detector_state is DetectorState.UNKNOWN
+    assert reducer.latest_funnel_causal_seq == 1
+    assert len(reducer.latest_funnel_evaluations) == 1
+    assert not reducer.latest_funnel_evaluations[0].known_evaluation
+    assert reducer.latest_funnel_evaluations[0].reason == "OPTION_AMOUNT_METADATA_UNKNOWN"
 
     valid = make_option(unknown.instrument_name, expiry, amount_known=True)
     reducer.options[valid.instrument_name] = valid
@@ -991,6 +999,8 @@ def test_amount_unknown_to_valid_establishes_known_current_without_activation_co
     result = reducer.results[valid.instrument_name]
     assert result.known_evaluation
     assert not result.observation_eligible
+    assert reducer.latest_funnel_causal_seq == 2
+    assert reducer.latest_funnel_evaluations == ()
     assert reducer.trackers[valid.instrument_name].detector_state is DetectorState.NO_ANOMALY
     assert reducer.trackers[valid.instrument_name].episode_id is None
 

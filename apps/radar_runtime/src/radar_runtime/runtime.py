@@ -263,6 +263,13 @@ class ScopeSnapshot:
 
 
 @dataclass(frozen=True)
+class RadarFunnelEvaluation:
+    instrument_name: str
+    known_evaluation: bool
+    reason: str | None
+
+
+@dataclass(frozen=True)
 class AtomicBookSnapshot:
     instrument_name: str
     state: BookState
@@ -734,6 +741,8 @@ class RadarReducer:
         self._next_combo_catalog_recovery_ms: int | None = None
         self._fact_transaction_active = False
         self._fact_transaction_revision = 0
+        self._latest_funnel_causal_seq = 0
+        self._latest_funnel_evaluations: tuple[RadarFunnelEvaluation, ...] = ()
         self._queue_lag_currentness_active = False
         self._queue_lag_transition_pending = False
         self._queue_lag_transition_application: tuple[int, int] | None = None
@@ -847,6 +856,8 @@ class RadarReducer:
         self._queue_lag_currentness_active = False
         self._queue_lag_transition_pending = False
         self._queue_lag_transition_application = None
+        self._latest_funnel_causal_seq = self._causal_seq
+        self._latest_funnel_evaluations = ()
         self._commands = []
         boundary = FactBoundary(session_epoch, 0, monotonic_ms, self._causal_seq)
         if active_incident is not None:
@@ -4671,6 +4682,17 @@ class RadarReducer:
                 if acceptance_eligible and result.full_formula_evaluation:
                     counter.known_full_detector_formula_evaluation_count += 1
 
+        self._latest_funnel_causal_seq = transaction_commit.boundary.causal_seq
+        self._latest_funnel_evaluations = tuple(
+            RadarFunnelEvaluation(
+                instrument_name=instrument.instrument_name,
+                known_evaluation=result.known_evaluation,
+                reason=result.reason,
+            )
+            for instrument, result, _state, _episode in evaluated
+            if countable and acceptance_eligible and result.band_id is not None
+        )
+
         for instrument, _result, _state, _episode in evaluated:
             tracker = self.trackers[instrument.instrument_name]
             atomic_snapshot = self._freeze_atomic_scope_snapshot(
@@ -5646,6 +5668,14 @@ class RadarReducer:
     @property
     def current_global_continuity_epoch(self) -> int:
         return self._global_continuity_epoch
+
+    @property
+    def latest_funnel_causal_seq(self) -> int:
+        return self._latest_funnel_causal_seq
+
+    @property
+    def latest_funnel_evaluations(self) -> tuple[RadarFunnelEvaluation, ...]:
+        return self._latest_funnel_evaluations
 
     def episode_started_monotonic_ms(self, episode_identity: str) -> int | None:
         return self._episode_started_ms.get(episode_identity)

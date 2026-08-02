@@ -17,10 +17,11 @@ from market_monitor import ContinuityGap, TimeInterval
 from short_vol_radar.black import DecimalInterval
 from short_vol_radar.detector import DetectorState
 from short_vol_radar.evidence import CoverageBlockingReason, CoverageState
-from short_vol_underwriting.evidence import ShadowStateStore, RuntimeBindings
+from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
 from short_vol_underwriting.identity import canonical_decimal, canonical_value
 from short_vol_underwriting.policy import PolicyChain
 
+from radar_runtime.funnel import FunnelSnapshot, FunnelTracker
 from radar_runtime.runtime import CausalCommit, RadarReducer
 
 WORKBENCH_SCHEMA_VERSION = 2
@@ -319,6 +320,7 @@ class WorkbenchPublisher:
         self.policies = policies
         self.shadow_state = shadow_state
         self.shadow_metadata = shadow_metadata
+        self.funnel_tracker = FunnelTracker()
         self._status = ServiceStatus(
             ServicePhase.STARTING,
             DataState.UNKNOWN,
@@ -357,6 +359,10 @@ class WorkbenchPublisher:
     def status(self) -> ServiceStatus:
         return self._status
 
+    @property
+    def funnel_snapshot(self) -> FunnelSnapshot:
+        return self.funnel_tracker.snapshot()
+
     def update_status(self, status: ServiceStatus) -> None:
         self._status = status
         self._dirty = True
@@ -375,6 +381,11 @@ class WorkbenchPublisher:
                 commit.boundary.received_monotonic_ms,
                 self._status.recorded_monotonic_ms,
             ),
+        )
+        self.funnel_tracker.observe(
+            reducer=reducer,
+            commit=commit,
+            new_shadow_records=self.shadow_state.take_pending_records(),
         )
         self._latest_reducer = reducer
         self._latest_commit = commit
@@ -429,6 +440,7 @@ class WorkbenchPublisher:
                 downstream=downstream_projection,
                 policies=self.policies,
                 option_metadata=option_metadata,
+                funnel=self.funnel_tracker.snapshot(),
             )
             business = MappingProxyType(projected_business)
             if downstream_changed:
@@ -506,6 +518,7 @@ def _build_business_projection(
     downstream: _DownstreamProjection,
     policies: PolicyChain,
     option_metadata: Sequence[Mapping[str, object]],
+    funnel: FunnelSnapshot,
 ) -> dict[str, object]:
     trusted = _trusted_interval(reducer, commit.boundary.received_monotonic_ms)
     radar_rows = _radar_rows(reducer, commit, trusted)
@@ -554,6 +567,7 @@ def _build_business_projection(
     )
     return {
         "published_fact_boundary": _runtime_boundary_object(commit),
+        "funnel": funnel.as_object(),
         "system": {
             "session_epoch": reducer.current_session_epoch,
             "platform_usable": reducer.platform.usable,
@@ -1185,6 +1199,7 @@ def _empty_business_projection() -> dict[str, object]:
     }
     return {
         "published_fact_boundary": None,
+        "funnel": FunnelTracker().snapshot().as_object(),
         "system": {
             "session_epoch": None,
             "platform_usable": False,
@@ -1427,6 +1442,7 @@ HTML = """<!doctype html>
   <header><h1>Optimatrix 只读交易员工作台</h1><p id="runtime"></p><p id="connection" class="warning" role="alert" hidden></p></header>
   <main>
     <section><h2>交易摘要</h2><div id="system" class="grid"></div></section>
+    <section><h2>业务漏斗</h2><div id="funnel"></div></section>
     <section><h2>业务零值证明</h2><div id="zero" class="grid"></div></section>
     <section><h2>Radar</h2><div id="radar"></div></section>
     <section><h2>承保详情</h2><div id="underwriting"></div></section>
@@ -1471,6 +1487,18 @@ const reasonLabels = {
   COMBO_QUOTE_RECEIPT_UNKNOWN: '组合报价回执不可确认',
   NO_ACTIVE_COMBO: '无活跃组合可供承保评估',
   NO_TARGET_SIZE_CREDIT_QUOTE: '目标数量的组合权利金报价不可用',
+  NO_APPLICABLE_MARKET_SCOPE_OBSERVED: '尚未观察到适用的市场范围',
+  NO_ANOMALY_ACTIVATION_OBSERVED: '已完成 Radar 计算, 尚未出现异常激活',
+  ATOMIC_AVAILABILITY_UNKNOWN: '异常已激活, 但组合可用性仍不可确认',
+  ATOMIC_AVAILABILITY_NOT_SETTLED: '异常已激活, 尚未结算组合可用性',
+  PUBLIC_ATOMIC_QUOTE_NOT_OBSERVED: '组合可用性已结算, 尚无目标数量原子报价',
+  MINIMUM_NET_ENTRY_CREDIT: '净入场权利金低于 Policy 最低值',
+  MINIMUM_NET_CREDIT_TO_PAYOFF_CAP: '净权利金相对保护宽度不足',
+  CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE: '净权利金未覆盖未来成本准备',
+  UNDERWRITING_RESERVED_LOSS_LIMIT: '承保准备损失超过 Policy 上限',
+  ADMISSION_PENDING_OR_NOT_REFRESHED: 'Candidate 尚未获得严格未来原子报价刷新',
+  OUTCOME_PENDING: 'Shadow Case 已打开, Outcome 尚未终结',
+  NO_MATERIAL_BLOCKER_OBSERVED: '当前已观察漏斗没有实质转换阻塞',
   POSITION_SLOT_CONSUMED_BY_SHADOW_ENTRY: '该承保槽位已被 Shadow Entry 使用',
   RADAR_EPISODE_NOT_ACTIVE: '当前无活跃 Radar 异常, 承保尚未评估',
   NOT_STARTED: '服务尚未启动'
@@ -1682,7 +1710,9 @@ const table = (panel, columns, rows = panel.rows, detailFields = []) => {
   return `<div class="table-scroll"><table><thead><tr>${header}${detailHeader}</tr></thead>` +
     `<tbody>${body}</tbody></table></div>`;
 };
-const businessPanelIds = ['zero', 'radar', 'underwriting', 'shadow', 'positions', 'outcomes'];
+const businessPanelIds = [
+  'funnel', 'zero', 'radar', 'underwriting', 'shadow', 'positions', 'outcomes'
+];
 let lastSuccessfulFetchAtMs = null;
 let lastPublicationRuntimeIdentity = null;
 let lastPublicationSequence = null;
@@ -1771,6 +1801,53 @@ function renderUnderwritingPanel(documentValue) {
       ['reserve breakdown', 'reserve_breakdown_usdc'],
       ['evaluation fact boundary', 'evaluation_fact_boundary']]);
 }
+const funnelStageLabels = {
+  APPLICABLE_MARKET_SCOPE: '适用市场评估',
+  RADAR_KNOWN: 'Radar 已知评估',
+  ANOMALY_ACTIVE: '异常 Episode',
+  ATOMIC_AVAILABILITY_SETTLED: '组合可用性已结算',
+  PUBLIC_ATOMIC_QUOTE_AVAILABLE: '目标数量原子报价',
+  UNDERWRITING_EVALUABLE: 'Underwriting 可评估',
+  CANDIDATE: 'Candidate',
+  SHADOW_CASE_OPENED: 'Shadow Case',
+  SHADOW_CASE_OUTCOME: 'Outcome'
+};
+const funnelStageLabel = value => funnelStageLabels[value] || String(value);
+const funnelBlockerText = values => {
+  if (!values || typeof values !== 'object') return '无';
+  const entries = Object.entries(values).filter(([, count]) => Number(count) > 0);
+  if (!entries.length) return '无';
+  return entries
+    .sort((left, right) => Number(right[1]) - Number(left[1]) || left[0].localeCompare(right[0]))
+    .map(([reason, count]) => `${reasonText(reason)}: ${count}`)
+    .join('; ');
+};
+function renderFunnel(documentValue) {
+  const funnel = documentValue.funnel;
+  if (!funnel || !Array.isArray(funnel.stages) || !funnel.primary_blocker) {
+    throw new Error('invalid funnel projection');
+  }
+  const primary = funnel.primary_blocker;
+  const summary = '<div class="grid">' +
+    card('首要漏斗阻塞阶段', funnelStageLabel(primary.stage)) +
+    card('首要阻塞原因', reasonText(primary.reason)) +
+    card('受阻数量', primary.blocked_count) +
+    card('该阶段上游/已通过', `${primary.upstream_count}/${primary.observed_count}`) +
+    '</div>';
+  const header = '<tr><th>阶段</th><th>已观察</th><th>单位</th>' +
+    '<th>上游</th><th>阻塞归因</th></tr>';
+  const rows = funnel.stages.map(stage =>
+    '<tr>' +
+    `<td>${safeText(funnelStageLabel(stage.stage))}</td>` +
+    `<td>${safeText(stage.observed_count)}</td>` +
+    `<td>${safeText(stage.unit)}</td>` +
+    `<td>${safeText(stage.upstream_count)}</td>` +
+    `<td>${safeText(funnelBlockerText(stage.blocker_counts))}</td>` +
+    '</tr>'
+  ).join('');
+  document.getElementById('funnel').innerHTML = summary +
+    `<div class="table-scroll"><table><thead>${header}</thead><tbody>${rows}</tbody></table></div>`;
+}
 function render(documentValue) {
   if (!documentValue || documentValue.schema_version !== SUPPORTED_SCHEMA_VERSION) {
     throw new Error('unsupported workbench projection schema');
@@ -1823,6 +1900,7 @@ function render(documentValue) {
       ? zero.candidate.explanation
       : `${zero.candidate.value} (${zero.candidate.state})`) +
     card('Underwriting-evaluable 分母', zero.candidate.denominator);
+  renderFunnel(documentValue);
   renderRadarPanel(documentValue);
   renderUnderwritingPanel(documentValue);
   document.getElementById('shadow').innerHTML = table(documentValue.shadow_entries, [
