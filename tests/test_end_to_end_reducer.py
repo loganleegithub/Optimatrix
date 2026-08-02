@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 from decimal import Decimal
 from pathlib import Path
@@ -386,35 +385,10 @@ def run_nonempty_scenario(
     assert result.detector_state is DetectorState.ANOMALY_ACTIVE
     scope = next(iter(reducer._scope_counts.values()))
     assert scope.complete_aggregate_with_full_formula_evaluation_count == 1
-    assert reducer._first_joint_witness_ms == final_ms + 2
     assert reducer.combo_catalog.complete
     assert tuple(reducer.combos) == ("COMBO",)
     summary_path = reducer.clean_stop(final_ms + 100)
     assert summary_path.name == "radar-run-summary.json"
-    summary = json.loads(summary_path.read_text())
-    witness = summary["operational_diagnostics"]["witness"]
-    assert witness == {
-        "global_continuity_epoch": 1,
-        "first_joint_witness_monotonic_ms": final_ms + 2,
-        "continuous_global_continuity_after_witness_ms": 98,
-        "scope": {
-            "expiration_timestamp_ms": expiry_ms,
-            "option_type": "call",
-            "tte_band_id": "settlement-clear-to-six-hours",
-        },
-        "boundary": {
-            "session_epoch": 1,
-            "ingress_seq": 30,
-            "received_monotonic_ms": final_ms + 2,
-            "causal_seq": 20,
-        },
-        "formula_instrument": {
-            "instrument_name": short_name,
-            "expiration_timestamp_ms": expiry_ms,
-            "option_type": "call",
-            "tte_band_id": "settlement-clear-to-six-hours",
-        },
-    }
     return (
         tuple(
             sorted(

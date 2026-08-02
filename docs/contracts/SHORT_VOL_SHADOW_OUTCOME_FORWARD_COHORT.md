@@ -4,7 +4,7 @@
 
 **Owning semantic identity:** `SHORT_VOL_PUBLIC_SHADOW_OUTCOME_FORWARD_COHORT`
 
-**Current implementation state:** `RUNTIME_NOT_IMPLEMENTED`
+**Current implementation state:** `OFFLINE_RUNTIME_IMPLEMENTED`
 
 ## Purpose
 
@@ -16,8 +16,8 @@ production-public Shadow runtime and forward cohort may be implemented. It owns:
 - terminal Shadow Outcome maturity and censoring;
 - at most one bounded rejected-counterfactual unit per `UnderwritingPositionSlotKeyIdentity`;
 - cohort-aligned `NO_TRADE` alternatives;
-- exact public-quote economics, conservation, denominators, and `null` behavior; and
-- strict downstream evidence identity, writing, reading, and compatibility.
+- exact public-quote economics and `null` behavior; and
+- current downstream business-object identity, writing, and reading.
 
 It does not implement a runtime, create a Candidate, admit an Entry, place an order, prove a fill,
 create exposure, settle an option, qualify a Policy, or authorize execution.
@@ -601,7 +601,7 @@ A later evidence runtime must apply this exact order:
 6. commit one immutable clean-stop `FactBoundary`;
 7. terminalize every remaining attempt under the stop boundary and transition every still-`PENDING`
    admitted/rejected observation and aligned pair to `CENSORED_AT_STOP`; and
-8. durably write all terminal objects and the conservation summary.
+8. durably write the resulting terminal business objects.
 
 The stop boundary cannot reuse the last quote, mark, mid, component-leg reference, or cached
 projection to invent an exit. Terminal objects remain immutable.
@@ -618,228 +618,23 @@ exit already accepted before the terminal failure is applied in causal order. Th
 commits one terminal failure `FactBoundary`, terminalizes remaining attempts, and transitions every
 still-`PENDING` admitted/rejected observation and aligned pair to `CENSORED_AT_FAILURE`.
 
-An evidence-integrity failure counts as a valid `CENSORED_AT_FAILURE` terminal only when the
-terminal boundary, every required censor object, and a conservation-valid summary are durably
-published. If the writer or directory failure prevents that publication, the evidence directory is
-incomplete/invalid and no terminal-state or conservation success is inferred.
+A writer failure cannot be relabelled as a successful terminal publication. Objects written before
+the failure remain immutable; no missing terminal object or success claim is fabricated.
 
 Ordinary source `UNKNOWN`, reconnect, recoverable gap, or Position `UNKNOWN` is not process failure
 and does not censor or mature an observation.
 
-## Forward cohort enrollment and manifest
+## Forward cohort enrollment
 
 Product behavior remains continuous and event-driven. There is no planned holding period, fixed
-Outcome horizon, periodic batch, saved-data scan, or replay.
+Outcome horizon, periodic batch, saved-data scan, replay, or in-application acceptance supervisor.
 
-A later production-public evidence task must pre-bind one immutable manifest before process start.
-The manifest's three time members are not guessed runtime `FactBoundary` values. They are exact
-pre-start supervisor triggers:
-
-```text
-PreboundSupervisorTrigger = {
-    "runtime_identity": Identity,
-    "supervisor_clock_identity": Identity,
-    "trigger_monotonic_ms": NonNegativeInteger,
-    "trigger_kind": "RUNTIME_START" | "ENROLLMENT_CUTOFF" | "FINAL_STOP"
-}
-
-PreboundSupervisorTriggerIdentity =
-    CanonicalIdentity(
-        "PreboundSupervisorTriggerIdentity",
-        PreboundSupervisorTrigger
-    )
-```
-
-The pre-bound `runtime_identity` binds the same monotonic-clock origin used by every later
-`FactBoundary.received_monotonic_ms`. At each trigger the supervisor opens the corresponding
-barrier and submits one reducer control. A fatal failure may preempt the cutoff or final-stop
-trigger; this never moves either trigger or rewrites the manifest.
-
-An authorized early stop is a distinct external supervisor control:
-
-```text
-AuthorizedEmergencyStopControl = {
-    "runtime_identity": Identity,
-    "supervisor_clock_identity": Identity,
-    "authority_identity": Identity,
-    "control_monotonic_ms": NonNegativeInteger,
-    "control_kind": "AUTHORIZED_EMERGENCY_STOP",
-    "reason": "USER_REQUEST" | "AUTHORITY_REVOCATION" | "EXTERNAL_SAFETY_STOP"
-}
-
-AuthorizedEmergencyStopControlIdentity =
-    CanonicalIdentity(
-        "AuthorizedEmergencyStopControlIdentity",
-        AuthorizedEmergencyStopControl
-    )
-```
-
-A fatal failure uses a distinct supervisor control:
-
-```text
-FatalFailureControl = {
-    "runtime_identity": Identity,
-    "supervisor_clock_identity": Identity,
-    "failure_source_identity": Identity,
-    "control_monotonic_ms": NonNegativeInteger,
-    "control_kind": "PROCESS_FAILURE",
-    "failure_kind": "FATAL_RUNTIME" | "FATAL_EVIDENCE_INTEGRITY"
-}
-
-FatalFailureControlIdentity =
-    CanonicalIdentity(
-        "FatalFailureControlIdentity",
-        FatalFailureControl
-    )
-```
-
-Both controls' runtime and clock identities must equal the manifest triggers. The emergency
-control's authority identity must equal the manifest's pre-bound `emergency_stop_authority`; it is
-valid only when issued externally to the product reducer and without inspecting anomaly,
-Candidate, Entry, Outcome, PnL, counts, rates, acceptance, or pass likelihood. A fatal runtime or
-evidence-integrity error is never relabelled as an emergency control; it emits the exact
-`FatalFailureControl` above and owns `PROCESS_FAILURE`. Each control or trigger identity applies
-the canonical identity rule to the native object as its sole member.
-
-The manifest content schema identity is:
-
-```text
-ManifestContentSchemaIdentity =
-    CanonicalIdentity(
-        "SHORT_VOL_SHADOW_FORWARD_COHORT_MANIFEST_SCHEMA",
-        OutcomeContractContentDigest
-    )
-```
-
-The manifest exact top-level schema is:
-
-```text
-manifest_content_schema_identity: ManifestContentSchemaIdentity
-candidate_commit: exact lowercase 40-hex Git commit identity
-candidate_tree: exact lowercase 40-hex Git tree identity
-intended_remote_ref: exact refs/heads/... string
-verified_remote_ref: exact lowercase 40-hex commit identity
-outcome_contract_identity: OutcomeContractIdentity
-outcome_contract_path: repository-relative UTF-8 path
-radar_policy_path: repository-relative UTF-8 path
-radar_policy_identity: Identity
-underwriting_policy_path: repository-relative UTF-8 path
-underwriting_policy_identity: Identity
-position_policy_path: repository-relative UTF-8 path
-position_policy_identity: Identity
-evidence_directory: new empty absolute UTF-8 path
-process_argv: non-empty array[UTF-8 string]
-process_cwd: absolute UTF-8 path
-required_pre_run_checks: non-empty array[UTF-8 string]
-runtime_start_trigger: PreboundSupervisorTrigger with trigger_kind "RUNTIME_START"
-enrollment_cutoff_trigger: PreboundSupervisorTrigger with trigger_kind "ENROLLMENT_CUTOFF"
-final_stop_trigger: PreboundSupervisorTrigger with trigger_kind "FINAL_STOP"
-clean_stop_predicate: exact result-independent UTF-8 predicate
-emergency_stop_authority: Identity
-forbidden_capabilities: exact non-empty array[Identity] sorted by bytewise-ascending UTF-8 Identity bytes
-non_claims: exact non-empty array[Identity] sorted by bytewise-ascending UTF-8 Identity bytes
-```
-
-Unknown, duplicate, or missing keys and invalid types fail validation. The manifest has no
-`manifest_identity` member. Its exact file bytes are one JSON object with keys in the schema order
-above; each trigger uses its declared key order; every other nested object or array uses its
-declared order; separators are exactly `","` and `":"`; UTF-8 is emitted with
-`ensure_ascii = false`, no BOM, no Unicode normalization, and exactly one trailing LF. The identity
-is `"sha256:" + lowercase_sha256(exact_file_bytes_including_the_trailing_LF)`, avoiding a self-hash
-cycle. Pretty printing, key sorting, CRLF, or hashing bytes without the LF produces a different and
-invalid manifest identity. It contains:
-
-The normative serializer vector is the exact UTF-8 file bytes
-`{"kind":"组合","values":["α",1,null]}\n`, whose identity is
-`sha256:8467e20e8dd44a9849ac4b63dd33d086f4fb7cedc027d663c16f70e3ed4b68f9`. The LF is one byte
-`0a` and is included in that digest.
-
-- exact candidate commit/tree and intended/verified bounded remote ref;
-- `OutcomeContractIdentity` and exact accepted contract path;
-- exact Radar, Underwriting, and Position Policy paths/digests;
-- one new empty absolute downstream evidence directory, separate from every Radar evidence
-  directory;
-- exact process argv/cwd and required pre-run checks;
-- the three exact `PreboundSupervisorTrigger` objects, with one shared runtime/clock identity and
-  strict `trigger_monotonic_ms` ordering `start < cutoff < stop`;
-- half-open enrollment interval `[start, cutoff)` and strictly-future follow-up interval
-  `[cutoff, stop)`;
-- one deterministic clean-stop predicate and exact external emergency-stop authority; and
-- explicit forbidden capabilities and non-claims.
-
-Preflight validates one closed identity graph before the process starts:
-
-```text
-candidate_commit = verified_remote_ref = every envelope.code_identity
-candidate_tree = GitTree(candidate_commit)
-Resolve(intended_remote_ref) = verified_remote_ref
-SHA256(exact bytes at outcome_contract_path) = OutcomeContractContentDigest
-SHA256(exact bytes at each Policy path) = its declared Policy identity
-RecomputeOutcomeContractIdentity(
-    OutcomeContractContentDigest,
-    candidate_commit,
-    radar_policy_identity,
-    underwriting_policy_identity,
-    position_policy_identity
-) = outcome_contract_identity
-```
-
-The repository must contain the named commit and tree, and a fresh read of the intended remote ref
-must resolve to that same commit; a manifest cannot treat an unverified local ref as remote
-equality. This fresh remote resolution is a process-start preflight gate only; its successful
-commit value is then frozen in the immutable manifest. In particular,
-`candidate_commit = verified_remote_ref = every envelope.code_identity`.
-The repository object database must also prove
-`candidate_tree = GitTree(candidate_commit)`.
-The validator recomputes every declared path's exact-byte digest rather than trusting the
-path or identity member. The three trigger objects must have one byte-identical runtime identity;
-that identity equals every envelope and every `FactBoundary` runtime identity. Every envelope's
-contract and three Policy identities equal the manifest members, and every boundary's code identity
-equals `candidate_commit`. The summary's `manifest_identity` is the digest of the exact validated
-manifest file bytes. Any mismatch is a preflight or directory-validation failure, never
-`NOT_COMPARABLE`, `UNKNOWN`, or a partial cohort.
-
-The summary records one exact realized boundary set:
-
-```text
-runtime_start_fact_boundary: FactBoundary
-enrollment_end_fact_boundary: FactBoundary
-enrollment_end_reason: "PREBOUND_CUTOFF" | "TERMINAL_BEFORE_CUTOFF"
-terminal_fact_boundary: FactBoundary
-terminal_disposition: "PLANNED_CLEAN_STOP" | "AUTHORIZED_EMERGENCY_STOP" |
-                      "PROCESS_FAILURE"
-planned_final_stop_fact_boundary: FactBoundary | null
-```
-
-The terminal owner is the first applicable row after all controls accepted at the boundary settle:
-
-| Terminal source | Exact disposition | Outcome censor owner | planned final-stop boundary | Native terminal source |
-|---|---|---|---|---|
-| fatal runtime or evidence-integrity failure | `PROCESS_FAILURE` | `FAILURE` | `null` | `FatalFailureControl` |
-| valid `AuthorizedEmergencyStopControl` and no fatal failure at that boundary | `AUTHORIZED_EMERGENCY_STOP` | `STOP` | `null` | `AuthorizedEmergencyStopControl` |
-| pre-bound final-stop trigger and neither earlier owner | `PLANNED_CLEAN_STOP` | `STOP` | required and equal to terminal boundary | manifest `final_stop_trigger` |
-
-For a normal run, the start, cutoff, and final-stop controls create the three boundaries in causal
-order and at `received_monotonic_ms >=` their respective triggers; enrollment end is the cutoff and
-terminal is final stop. If emergency stop or failure commits before cutoff, enrollment end and
-terminal are the same terminal boundary with reason `TERMINAL_BEFORE_CUTOFF`. If it commits after
-cutoff but before final stop, enrollment end remains the cutoff with reason `PREBOUND_CUTOFF` and
-terminal is the later boundary. No missing future boundary is fabricated.
-
-Enrollment applies only to admitted Entry boundaries and rejected-anchor action boundaries for
-which
-`runtime_start_fact_boundary.causal_seq < anchor.causal_seq <
-enrollment_end_fact_boundary.causal_seq`. Units outside that half-open barrier interval remain
-product facts but are not cohort-enrolled. Already enrolled units continue observation through the
-strictly later follow-up interval, whose accepted facts satisfy
-`enrollment_end_fact_boundary.causal_seq < fact.causal_seq <
-terminal_fact_boundary.causal_seq`. A fact on enrollment end cannot be both enrolled and follow-up
-evidence; a fact on the terminal boundary is terminal-owned censor evidence.
-
-The stop predicate cannot depend on anomaly, Candidate, Entry, rejection, Outcome, maturity,
-knownness, PnL, win/loss, close opportunity, denominator, or likelihood of passing. Empty/zero
-natural activity is truthful evidence but does not by itself establish a usable qualification
-cohort.
+`cohort_enrolled` is fixed when an admitted or rejected observation is created. An explicit
+offline/runtime owner may open or close enrollment at a settled boundary; units outside that
+interval remain valid product facts with `cohort_enrolled = false`. Already enrolled observations
+continue to mature or censor through ordinary causal facts. Clean stop and process failure use their
+own committed terminal boundary; no future boundary, manifest, rate, or acceptance result is
+fabricated.
 
 ## Exact durable object schemas
 
@@ -860,7 +655,6 @@ REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION
 REJECTED_COUNTERFACTUAL_EXIT
 REJECTED_COUNTERFACTUAL_OUTCOME
 ALIGNED_POLICY_NO_TRADE_PAIR
-SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY
 ```
 
 ### Canonical types and shared envelope
@@ -951,16 +745,6 @@ actual_fill_identity: "UNKNOWN"
 actual_settlement_cashflow_usdc: "UNKNOWN"
 ```
 
-`ExactRate` is an object with exactly:
-
-```text
-numerator: NonNegativeInteger
-denominator: positive JSON integer
-```
-
-No decimal quotient is durable. An unavailable rate is JSON `null`; a presentation layer may
-derive a display decimal from the exact rational without changing evidence.
-
 Every `source_provenance` member is an object with exactly:
 
 ```text
@@ -979,71 +763,12 @@ this envelope. Policy identity binds the fee formula and compatibility threshold
 actually consumed short- or long-leg commission fraction still requires its current public
 option-instrument source identity and receipt boundary under role `COMMISSION`.
 
-Every one-hop root maps to exactly one role:
-
-| Consumed root | Exact role |
-|---|---|
-| `SHADOW_ENTRY`, rejected Underwriting action/anchor, or admitted/rejected observation identity | `ANCHOR` |
-| rejected Position evaluation identity | `POSITION_EVALUATION` |
-| admitted or rejected Position action identity | `POSITION_ACTION` |
-| admitted or rejected close-quote evaluation identity | `CLOSE_QUOTE_EVALUATION` |
-| admitted or rejected close-opportunity evaluation identity | `CLOSE_OPPORTUNITY_EVALUATION` |
-| admitted or rejected selected-exit identity | `SELECTED_EXIT` |
-| admitted or rejected terminal Outcome identity | `TERMINAL_OUTCOME` |
-| normalized Position-fact fingerprint, trusted-clock, platform, catalog, option-ticker, Delta, or volatility fact identity | `POSITION_FACT` |
-| accepted official combo subscription or matched RPC quote identity | `COMBO_QUOTE` |
-| current public option-instrument commission fact identity for one named leg | `COMMISSION` |
-| accepted BTC-USDC index identity used by an economic formula | `INDEX` |
-| accepted option-instrument `delivered` or `archivized` witness identity | `INSTRUMENT_LIFECYCLE` |
-| scheduled/send/response/error/deadline/retired/censored attempt-control identity | `ATTEMPT_CONTROL` |
-| manifest, pre-bound trigger, authorized emergency-stop control, or fatal-failure control | `SUPERVISOR_CONTROL` |
-
-This is deliberately a one-hop audit set, not a transitive provenance graph. A durable root uses
-its owning object's exact `fact_boundary`; an opaque normalized fingerprint uses the evaluation
-boundary that created it; a directly consumed public fact uses its accepted receipt boundary; the
-manifest identity uses `runtime_start_fact_boundary`; and a trigger/control identity uses the
-realized boundary it created. A reader never attempts to expand an upstream
-`X.source_provenance`.
-
-The array is sorted by bytewise-ascending UTF-8 `(source_role, source_identity)`. One identical pair
-with one identical boundary appears once. A repeated pair with a different boundary is a
-conflicting duplicate and fails validation. It is a pure projection with no independently supplied
-identity or boundary: local durable roots are resolved by their identity to the exact object path;
-external roots are projected from the owning payload's exact direct-source reference or opaque
-fingerprint plus its declared boundary; and supervisor roots are recomputed from the manifest or
-summary's native control object. A missing referenced local object, a failed identity recomputation,
-or any projection mismatch invalidates the object or directory. The exact one-hop set for each
-object is:
-
-| Object kind | Exact provenance derivation |
-|---|---|
-| `SHADOW_OUTCOME_OBSERVATION` | one `ANCHOR` for `shadow_entry_identity` |
-| `SHADOW_COUNTERFACTUAL_EXIT` | resolve the local `ANCHOR` observation; project `POSITION_ACTION` and `CLOSE_OPPORTUNITY_EVALUATION` from their identities and direct boundaries; project one `COMBO_QUOTE`, exactly two ordered `COMMISSION`, and one `INDEX` from the three direct-source fields |
-| `SHADOW_OUTCOME` | resolve the local `ANCHOR` observation; for `MATURE_KNOWN`, resolve exactly one local `SELECTED_EXIT`; otherwise project every present Position-action/scheduled-attempt/attempt-terminal root from its identity and direct boundary and project exactly two lifecycle witnesses only for `MATURE_UNKNOWN`; any censor projects exactly the same `terminal_source_identity` stored by the summary as one `SUPERVISOR_CONTROL` at the terminal boundary |
-| `REJECTED_COUNTERFACTUAL_ANCHOR` | project the upstream Underwriting action as one `ANCHOR` at `anchor_fact_boundary`; project one `COMBO_QUOTE` and exactly two ordered `COMMISSION` roots from direct-source fields; project one `INDEX` and one `POSITION_FACT` for entry short-leg IV from their exact source/boundary fields |
-| `REJECTED_COUNTERFACTUAL_OBSERVATION` | one `ANCHOR` rejected anchor |
-| `REJECTED_COUNTERFACTUAL_POSITION_EVALUATION` | one `ANCHOR` rejected observation; one opaque `POSITION_FACT` for `consumed_position_fact_fingerprint`; one `POSITION_FACT` for entry short-leg IV; `INDEX` roots for entry, prior evaluation, and current evaluation exactly when current is known |
-| `REJECTED_COUNTERFACTUAL_POSITION_ACTION` | exactly one `POSITION_EVALUATION` |
-| `REJECTED_COUNTERFACTUAL_CLOSE_QUOTE_EVALUATION` | one `ANCHOR` rejected observation and one opaque `COMBO_QUOTE` for `consumed_rule_scoped_quote_fingerprint` at `evaluation_fact_boundary` |
-| `REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION` | resolve exactly one local `POSITION_ACTION`; resolve exactly one local `CLOSE_QUOTE_EVALUATION` or project one `ATTEMPT_CONTROL` from its identity and direct boundary; project commission/index direct-source roots by the exact rule table below |
-| `REJECTED_COUNTERFACTUAL_EXIT` | resolve one local `ANCHOR` rejected observation, one local `POSITION_ACTION`, one local `CLOSE_QUOTE_EVALUATION`, and one local `CLOSE_OPPORTUNITY_EVALUATION`; project the owning payload's opaque quote fingerprint at the exact quote-evaluation boundary as one `COMBO_QUOTE`, its two ordered direct commission refs as exactly two `COMMISSION`, and its direct index ref as one `INDEX` |
-| `REJECTED_COUNTERFACTUAL_OUTCOME` | resolve one local `ANCHOR` rejected observation; for `MATURE_KNOWN`, resolve exactly one local `SELECTED_EXIT`; otherwise resolve/project every present Position-action/scheduled-attempt/attempt-terminal root and resolve exactly two lifecycle witnesses only for `MATURE_UNKNOWN`; any censor projects exactly the same `terminal_source_identity` stored by the summary as one `SUPERVISOR_CONTROL` at the terminal boundary |
-| `ALIGNED_POLICY_NO_TRADE_PAIR` | one `ANCHOR` observation and one `TERMINAL_OUTCOME` |
-| `SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY` | recompute the manifest identity at `runtime_start_fact_boundary`, its runtime-start trigger at that boundary, its enrollment-cutoff trigger iff realized, and the one native `terminal_source` object selected by disposition at `terminal_fact_boundary`, all as `SUPERVISOR_CONTROL` |
-
-For rejected close-opportunity provenance:
-
-| Eligibility reason | `COMMISSION` roots | `INDEX` roots |
-|---|---|---|
-| `KNOWN_ATOMIC_UNAVAILABLE` | zero | zero |
-| `QUOTE_OR_ATTEMPT_UNKNOWN` | zero | zero |
-| `COMMISSION_UNKNOWN` | one for each accepted short/long commission fact actually consumed; zero through two | zero |
-| `COMMISSION_ABOVE_POLICY` | exactly two | zero |
-| `INDEX_UNKNOWN` | exactly two | zero when no accepted index fact exists, otherwise exactly one consumed invalid/stale index root |
-| `ELIGIBLE_COMPLETE` | exactly two | exactly one |
-
-Raw provenance never enters a normalized business fingerprint or kind-specific `object_identity`.
-Omitting one required one-hop root or appending an unconsumed root fails validation.
+The owner includes only direct facts actually consumed by the object. The array is sorted by
+bytewise-ascending UTF-8 (source_role, source_identity) and contains no duplicate pair. The
+writer and reader validate member shape, identity format, boundary identity, causal order, sorting,
+and uniqueness; they do not resolve local objects or reconstruct a second relationship graph.
+Provenance never enters a normalized business fingerprint or kind-specific object identity.
+Direct owner tests verify the role assigned to each consumed source.
 
 Every object has exactly this top-level envelope:
 
@@ -1090,7 +815,7 @@ a non-executable placeholder. Code/runtime/Policy identities remain envelope dat
 a different schema.
 
 The envelope `object_identity` equals the kind-specific identity field in `payload`.
-`fact_boundary` equals the payload's creation, evaluation, selection, terminal, or summary boundary
+`fact_boundary` equals the payload's creation, evaluation, selection, or terminal boundary
 and every duplicated code/runtime/Policy member must be byte-identical. Unknown top-level or
 payload keys, missing keys, duplicate keys, invalid array cardinality/order, or a conditionally
 forbidden non-null value fail validation.
@@ -1505,155 +1230,6 @@ The only legal family/arm combinations are exactly
 identity types must match that family. `cohort_enrolled` equals the immutable enrollment bit on the
 owning observation; it cannot be inferred from terminal state.
 
-The summary identity is:
-
-```text
-CohortSummaryIdentity =
-    OutcomeContractIdentity
-    × runtime_identity
-    × manifest_identity
-    × terminal_FactBoundary
-```
-
-`SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY`:
-
-```text
-cohort_summary_identity: CohortSummaryIdentity
-manifest_identity: Identity
-runtime_start_fact_boundary: FactBoundary
-enrollment_end_fact_boundary: FactBoundary
-enrollment_end_reason: "PREBOUND_CUTOFF" | "TERMINAL_BEFORE_CUTOFF"
-terminal_fact_boundary: FactBoundary
-terminal_disposition: "PLANNED_CLEAN_STOP" | "AUTHORIZED_EMERGENCY_STOP" |
-                      "PROCESS_FAILURE"
-planned_final_stop_fact_boundary: FactBoundary | null
-terminal_source_identity: PreboundSupervisorTriggerIdentity |
-                          AuthorizedEmergencyStopControlIdentity |
-                          FatalFailureControlIdentity
-terminal_source: PreboundSupervisorTrigger | AuthorizedEmergencyStopControl |
-                 FatalFailureControl
-evidence_status: "COMPLETE" | "INCOMPLETE"
-counts: exact CohortCounts object below
-rates: exact CohortRates object below
-conservation_status: "MET" | "NOT_MET" | "UNKNOWN"
-```
-
-For `PLANNED_CLEAN_STOP`, `planned_final_stop_fact_boundary` is non-null and equals
-`terminal_fact_boundary`. For an authorized early clean-stop safety action or process failure it is
-`null`; the exact earlier terminal boundary and disposition are preserved. A completed pre-bound
-cutoff gives `PREBOUND_CUTOFF`; otherwise enrollment end equals terminal boundary and reason is
-`TERMINAL_BEFORE_CUTOFF`.
-`PLANNED_CLEAN_STOP | AUTHORIZED_EMERGENCY_STOP` own `CENSORED_AT_STOP`;
-`PROCESS_FAILURE` owns `CENSORED_AT_FAILURE`.
-
-`terminal_source` and `terminal_source_identity` are one exact native-object pair. For
-`PLANNED_CLEAN_STOP`, the object is byte-identical to the manifest's `final_stop_trigger` and the
-identity recomputes as its `PreboundSupervisorTriggerIdentity`. For `AUTHORIZED_EMERGENCY_STOP`, it
-is the accepted `AuthorizedEmergencyStopControl`; for `PROCESS_FAILURE`, it is the accepted
-`FatalFailureControl`. Its runtime/clock identity must match the manifest, its control/trigger time
-must create `terminal_fact_boundary`, and recomputing its typed identity must equal
-`terminal_source_identity`. That same identity is the sole supervisor root on every Outcome
-censored by this terminal disposition.
-
-The status cross-matrix is exact:
-
-| evidence status | conservation status | counts | rates |
-|---|---|---|---|
-| `COMPLETE` | exactly `MET` | exact complete-directory counts satisfying every equation and one-to-one cross-bind below; every pending count is zero | every positive-denominator formula is its exact `ExactRate`; every zero-denominator formula is `null` |
-| `INCOMPLETE` with a deterministic contradiction below | exactly `NOT_MET` | observed-valid unique-identity lower-bound counts below, never authoritative zero claims | all nine values `null` |
-| `INCOMPLETE` with no deterministic contradiction below | exactly `UNKNOWN` | observed-valid unique-identity lower-bound counts below, never authoritative zero claims | all nine values `null` |
-
-`COMPLETE × NOT_MET`, `COMPLETE × UNKNOWN`, and `INCOMPLETE × MET` are invalid. `COMPLETE` is
-permitted only after manifest validation, terminal barrier drain, successful validation and
-enumeration of every durable object in the directory, exact source-root/provenance derivation,
-zero pending objects, all equations, and every identity cross-bind.
-
-Incomplete enumeration is deterministic. The reader walks the exact `objects/` namespace in
-bytewise-ascending relative-path order. A file contributes once to the lower-bound count for its
-declared kind iff it individually passes the exact envelope, payload, bound-directory identities,
-path/identity, and arithmetic checks. Identical semantic identities count once. An individually
-invalid object file, unexpected entry inside `objects/`, conflicting duplicate identity, two
-otherwise valid present objects that violate an immutable state or one-to-one cross-bind, or a
-present summary whose counts disagree with the observed-valid lower bounds is a deterministic
-contradiction and therefore `NOT_MET`. If none exists but manifest/terminal publication, barrier
-drain, a required cross-bound object, or directory completeness cannot be proved, the status is
-`UNKNOWN`. An absent expected path or an inaccessible directory segment never contributes a count
-and never proves `NOT_MET` by absence alone; an existing unreadable or truncated file inside
-`objects/` is an invalid object and therefore a deterministic contradiction. Neither incomplete
-state permits a rate or an authoritative zero claim.
-
-`CohortCounts` has exactly these nonnegative-integer keys:
-
-```text
-shadow_entry_count
-shadow_observation_count
-shadow_pending_count
-shadow_mature_known_count
-shadow_mature_unknown_count
-shadow_censored_stop_count
-shadow_censored_failure_count
-shadow_outcome_count
-shadow_selected_exit_count
-shadow_terminal_pair_count
-rejected_anchor_count
-rejected_observation_count
-rejected_pending_count
-rejected_mature_known_count
-rejected_mature_unknown_count
-rejected_censored_stop_count
-rejected_censored_failure_count
-rejected_outcome_count
-rejected_selected_exit_count
-rejected_terminal_pair_count
-rejected_position_evaluation_count
-rejected_position_action_count
-rejected_close_quote_evaluation_count
-rejected_close_opportunity_evaluation_count
-logical_admitted_pair_count
-logical_rejected_pair_count
-logical_aligned_pair_count
-non_enrolled_admitted_pair_count
-non_enrolled_rejected_pair_count
-enrolled_admitted_pair_count
-enrolled_admitted_pending_count
-enrolled_admitted_mature_known_count
-enrolled_admitted_mature_unknown_count
-enrolled_admitted_censored_stop_count
-enrolled_admitted_censored_failure_count
-enrolled_rejected_pair_count
-enrolled_rejected_pending_count
-enrolled_rejected_mature_known_count
-enrolled_rejected_mature_unknown_count
-enrolled_rejected_censored_stop_count
-enrolled_rejected_censored_failure_count
-enrolled_aligned_pair_count
-enrolled_terminal_pair_count
-enrolled_comparable_pair_count
-logical_no_trade_arm_count
-durable_terminal_pair_count
-durable_no_trade_arm_count
-enrolled_admitted_mature_known_win_count
-enrolled_admitted_mature_known_loss_count
-enrolled_admitted_mature_known_zero_count
-enrolled_rejected_mature_known_win_count
-enrolled_rejected_mature_known_loss_count
-enrolled_rejected_mature_known_zero_count
-```
-
-`CohortRates` has exactly these `ExactRate | null` keys:
-
-```text
-admitted_terminal_availability_rate
-rejected_terminal_availability_rate
-admitted_maturity_known_share
-rejected_maturity_known_share
-admitted_win_rate
-admitted_loss_rate
-rejected_win_rate
-rejected_loss_rate
-aligned_economic_comparison_availability_rate
-```
-
 ### Exact terminal null matrix
 
 The matrix applies independently to admitted and rejected terminal Outcomes:
@@ -1680,228 +1256,24 @@ later censor boundary is retained unchanged; stop/failure never rewrites it. Onl
 pending when the barrier opens receives status `CENSORED`, owner `STOP | FAILURE` matching the
 Outcome censor state/mask, and an attempt terminal boundary equal to the Outcome terminal boundary.
 `terminal_supervisor_source_identity` is null for both mature rows and is required for both censor
-rows under the exact summary cross-bind above.
+rows under the exact terminal-source binding.
 
 For aligned pairs, `no_trade_cashflow_usdc` is always exact known `"0"`. The trade net PnL and
 policy advantage are both `Decimal` with comparison availability `KNOWN` only for
 `MATURE_KNOWN`; for the other three terminal states both are `null` and availability is `UNKNOWN`.
 
-## Writer, readers, validation, and compatibility
+## Writer, reader, validation, and compatibility
 
-The only future pure downstream owner is `short_vol_underwriting`. It owns Underwriting,
-admission, Position, rejected-counterfactual, Outcome, aligned-pair, and downstream evidence
-semantics. It consumes immutable public DTOs from `market_monitor`, `options_domain`, and
-`short_vol_radar`; it never imports `radar_runtime`. The Online Runtime remains the sole composer.
+`short_vol_underwriting` is the only downstream business-object owner. It consumes immutable public
+DTOs and never imports `radar_runtime`; the runtime remains the sole composer.
 
-One downstream evidence directory binds exactly one code identity, runtime identity,
-`OutcomeContractIdentity`, and exact three-Policy identity set. It is separate from Radar evidence.
-The validated manifest is exactly `manifest.json` at that directory root; no alternate manifest
-path or second manifest is accepted. The directory identity graph is the preflight graph above:
-manifest candidate/ref/tree, contract bytes, three Policy bytes, every envelope, every
-`FactBoundary`, summary manifest identity, and all typed identity preimages must satisfy every
-recorded-value and content equality again during read. A sealed reader never resolves or depends on
-current remote state. Moving or deleting `intended_remote_ref`, loss of network access, or later
-repository history does not invalidate immutable evidence; the reader validates the recorded
-`verified_remote_ref` value and locally available named commit/tree without making a network call.
-The writer accepts only the shared envelope and exact payload key set for the declared kind. It
-recomputes `content_schema_identity`, every kind-specific `object_identity`, arithmetic, conditional
-nullability, direct-source projection, array order/cardinality, and the top-level identity
-cross-bind before persistence. It
-uses canonical UTF-8 JSON with bytewise-ascending keys at every object level, separators exactly
-`","` and `":"`, `ensure_ascii = false`, no BOM, no Unicode normalization, finite exact Decimal
-strings, and exactly one trailing LF. Each object path is exactly
-`objects/<object_kind>/<object_identity_without_sha256_prefix>.json`; the path identity must match
-the envelope identity. Creation is exclusive and followed by file flush and directory flush.
-Unknown entries inside `objects/` are invalid; diagnostics outside that namespace are
-non-authoritative and never enter counts.
-
-For every semantic identity:
-
-- an identical duplicate is an idempotent no-op;
-- a conflicting duplicate is a hard error;
-- unknown or missing members fail validation;
-- invalid enums, units, quantities, arithmetic, nullability, or causal order fail validation;
-- mixed code/contract/Policy/runtime identities fail closed; and
-- writers never overwrite an existing object.
-
-Repository-owned current readers target exactly
-`CanonicalIdentity("OUTCOME_CONTENT_SCHEMA", OutcomeContractContentDigest, object_kind)`; they do
-not accept a minimum subset, unknown extension, ordinal fallback, or an older/newer contract digest.
-Any explicitly sealed future reader remains immutable under its owning exact schema. A different
-contract digest, Policy identity, code identity, source family, maturity rule, exit rule, cohort
-rule, or arithmetic is `NOT_COMPARABLE` for economic/qualification claims unless a later authorized
-compatibility contract proves otherwise.
-
-Existing `SHORT_VOL_ANOMALY_EVENT`, `PUBLIC_ATOMIC_QUOTE_EVENT`, `RADAR_RUN_SUMMARY`, current Radar
-writer/readers, and sealed Radar readers remain unchanged. No migration, replay, recomputation,
-backfill, relabeling, or full-market archive is authorized.
-
-## Conservation and denominators
-
-Counts use distinct normalized business identities after settled-state de-duplication, never market
-messages, timer ticks, requests, source generations, `change_id` values, files, repeated
-calculations, or elapsed seconds.
-
-For every complete evidence directory:
-
-```text
-shadow_entry_count =
-    shadow_observation_count
-
-shadow_observation_count =
-    shadow_pending_count
-    + shadow_mature_known_count
-    + shadow_mature_unknown_count
-    + shadow_censored_stop_count
-    + shadow_censored_failure_count
-
-shadow_outcome_count =
-    shadow_mature_known_count
-    + shadow_mature_unknown_count
-    + shadow_censored_stop_count
-    + shadow_censored_failure_count
-
-shadow_selected_exit_count =
-    shadow_mature_known_count
-
-shadow_terminal_pair_count =
-    shadow_outcome_count
-
-rejected_anchor_count =
-    rejected_observation_count
-
-rejected_observation_count =
-    rejected_pending_count
-    + rejected_mature_known_count
-    + rejected_mature_unknown_count
-    + rejected_censored_stop_count
-    + rejected_censored_failure_count
-
-rejected_outcome_count =
-    rejected_mature_known_count
-    + rejected_mature_unknown_count
-    + rejected_censored_stop_count
-    + rejected_censored_failure_count
-
-rejected_selected_exit_count =
-    rejected_mature_known_count
-
-rejected_terminal_pair_count =
-    rejected_outcome_count
-
-rejected_position_evaluation_count =
-    rejected_position_action_count
-
-logical_admitted_pair_count =
-    shadow_observation_count
-
-logical_rejected_pair_count =
-    rejected_observation_count
-
-logical_aligned_pair_count =
-    logical_admitted_pair_count
-    + logical_rejected_pair_count
-
-logical_no_trade_arm_count =
-    logical_aligned_pair_count
-
-logical_admitted_pair_count =
-    enrolled_admitted_pair_count
-    + non_enrolled_admitted_pair_count
-
-logical_rejected_pair_count =
-    enrolled_rejected_pair_count
-    + non_enrolled_rejected_pair_count
-
-enrolled_admitted_pair_count =
-    enrolled_admitted_pending_count
-    + enrolled_admitted_mature_known_count
-    + enrolled_admitted_mature_unknown_count
-    + enrolled_admitted_censored_stop_count
-    + enrolled_admitted_censored_failure_count
-
-enrolled_rejected_pair_count =
-    enrolled_rejected_pending_count
-    + enrolled_rejected_mature_known_count
-    + enrolled_rejected_mature_unknown_count
-    + enrolled_rejected_censored_stop_count
-    + enrolled_rejected_censored_failure_count
-
-enrolled_aligned_pair_count =
-    enrolled_admitted_pair_count
-    + enrolled_rejected_pair_count
-
-enrolled_terminal_pair_count =
-    enrolled_admitted_mature_known_count
-    + enrolled_admitted_mature_unknown_count
-    + enrolled_admitted_censored_stop_count
-    + enrolled_admitted_censored_failure_count
-    + enrolled_rejected_mature_known_count
-    + enrolled_rejected_mature_unknown_count
-    + enrolled_rejected_censored_stop_count
-    + enrolled_rejected_censored_failure_count
-
-enrolled_comparable_pair_count =
-    enrolled_admitted_mature_known_count
-    + enrolled_rejected_mature_known_count
-
-enrolled_admitted_mature_known_count =
-    enrolled_admitted_mature_known_win_count
-    + enrolled_admitted_mature_known_loss_count
-    + enrolled_admitted_mature_known_zero_count
-
-enrolled_rejected_mature_known_count =
-    enrolled_rejected_mature_known_win_count
-    + enrolled_rejected_mature_known_loss_count
-    + enrolled_rejected_mature_known_zero_count
-
-durable_terminal_pair_count =
-    shadow_terminal_pair_count
-    + rejected_terminal_pair_count
-
-durable_no_trade_arm_count =
-    durable_terminal_pair_count
-```
-
-Every terminal Outcome cross-binds exactly one observation and one durable terminal pair of the
-same family; the reverse mapping is also one-to-one. Every selected exit cross-binds exactly one
-`MATURE_KNOWN` Outcome and vice versa. `MATURE_UNKNOWN` and censored units have no selected exit.
-Every rejected Position evaluation has exactly one rejected Position action. Every logical pair
-has one logical `NO_TRADE` arm, while only a terminal pair writes one durable `NO_TRADE` arm;
-pending pairs are never counted as durable pair objects. Enrollment changes denominators, not
-product-object creation. For a terminal summary with `evidence_status = COMPLETE`,
-`shadow_pending_count = rejected_pending_count = enrolled_admitted_pending_count =
-enrolled_rejected_pending_count = 0`.
-
-| `CohortRates` key | Exact numerator | Exact denominator and conditioning | `null` rule |
-|---|---|---|---|
-| `admitted_terminal_availability_rate` | `enrolled_admitted_mature_known_count + enrolled_admitted_mature_unknown_count` | `enrolled_admitted_mature_known_count + enrolled_admitted_mature_unknown_count + enrolled_admitted_censored_stop_count + enrolled_admitted_censored_failure_count` | `null` iff denominator zero |
-| `rejected_terminal_availability_rate` | `enrolled_rejected_mature_known_count + enrolled_rejected_mature_unknown_count` | `enrolled_rejected_mature_known_count + enrolled_rejected_mature_unknown_count + enrolled_rejected_censored_stop_count + enrolled_rejected_censored_failure_count` | `null` iff denominator zero |
-| `admitted_maturity_known_share` | `enrolled_admitted_mature_known_count` | `enrolled_admitted_mature_known_count + enrolled_admitted_mature_unknown_count` | `null` iff denominator zero |
-| `rejected_maturity_known_share` | `enrolled_rejected_mature_known_count` | `enrolled_rejected_mature_known_count + enrolled_rejected_mature_unknown_count` | `null` iff denominator zero |
-| `admitted_win_rate` | `enrolled_admitted_mature_known_win_count` | `enrolled_admitted_mature_known_count` | `null` iff denominator zero |
-| `admitted_loss_rate` | `enrolled_admitted_mature_known_loss_count` | `enrolled_admitted_mature_known_count` | `null` iff denominator zero |
-| `rejected_win_rate` | `enrolled_rejected_mature_known_win_count` | `enrolled_rejected_mature_known_count` | `null` iff denominator zero |
-| `rejected_loss_rate` | `enrolled_rejected_mature_known_loss_count` | `enrolled_rejected_mature_known_count` | `null` iff denominator zero |
-| `aligned_economic_comparison_availability_rate` | `enrolled_comparable_pair_count` | `enrolled_terminal_pair_count`; pending excluded, mature-unknown/censored included and separately counted | `null` iff denominator zero |
-
-Every non-null cell is the exact `ExactRate {numerator, denominator}` above; equality is rational
-equality, so `1/3` remains exactly `{1, 3}` and is never rounded into a `Decimal`.
-
-A win is exact net PnL `> 0`, a loss is `< 0`, and exact zero is neither win nor loss and is reported
-separately. Admitted and rejected economic distributions are never silently pooled. A combined
-view, if reported, must be explicitly labeled and must carry both family numerators and
-denominators. No `MATURE_UNKNOWN`, pending, or censored unit enters PnL, win, loss, or aligned
-economic comparison; those terminal states do enter the availability-rate denominator above so
-the rate is not tautologically one.
-
-An exact zero object count is authoritative only in a `COMPLETE × MET` summary and means only that
-the complete enumerated directory contains zero such objects. This contract defines no Entry rate
-or rejected-anchor rate and binds no upstream opportunity-coverage denominator, so a zero Entry or
-anchor count cannot claim zero opportunity rate, reachability, or usable cohort. In an incomplete
-summary, a partial zero is diagnostic only and never an absence claim. A numeric zero cohort rate
-requires its exact positive denominator above; a zero or unavailable denominator serializes the
-rate as `null`, never `0`.
+The writer validates exact envelope and payload keys, primary boundary, object identity, source
+shape/order, and code/runtime/contract/Policy bindings before exclusive immutable publication. An
+identical duplicate is an idempotent no-op; a conflicting duplicate is a hard error. The current
+reader repeats the same per-object checks; it does not recompute owner arithmetic or reconstruct a
+second relationship graph. The typed owner is the sole calculator and its arithmetic and state
+matrices are covered by direct behavior tests. There is no manifest, terminal summary,
+complete-directory proof, compatibility reader, replay, backfill, or migration path.
 
 ## Direct verification and evidence boundary
 
@@ -1915,10 +1287,10 @@ Direct contract tests must prove:
 - exact `MATURE_UNKNOWN` predicates without settlement payoff;
 - one rejected anchor per slot, excluded inputs, and separate rejected identities;
 - aligned `NO_TRADE`, terminal/censor-mask alignment, and comparison exclusion;
-- manifest exact-byte identity, result-independence, emergency/failure mapping, and stop ordering;
-- durable object fields, full-quantity consumed-level order, exact provenance derivation,
+- clean-stop/failure ordering and immutable censor ownership;
+- durable object fields, full-quantity consumed-level order, owner-produced provenance,
   writer/readers, and strict duplicate/mixed-identity behavior;
-- conservation, completeness/status matrix, denominators, natural zero, `null`, and `UNKNOWN`; and
+- natural zero, `null`, and `UNKNOWN` without a fabricated cohort rate; and
 - compatibility with unchanged Radar and Underwriting/Position contracts.
 
 This authority-only closure requires no production-public command, live market fact, capture,
@@ -1928,8 +1300,7 @@ qualification, promotion, deployment, fill, or execution permission.
 
 ## Explicitly prohibited scope
 
-- changing Radar Policy, Underwriting Policy, Position Policy, upstream contracts, events,
-  summaries, sealed evidence, or accepted hashes;
+- changing Radar Policy, Underwriting Policy, Position Policy, upstream contracts, or business events;
 - adding runtime code, package scaffolding, CLI, writer/reader implementation, Policy instance, or
   evidence schema without a separately active task;
 - adding a delivery/settlement-price source or treating mark, mid, component legs, last quote, or

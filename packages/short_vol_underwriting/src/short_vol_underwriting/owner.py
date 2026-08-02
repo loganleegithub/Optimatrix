@@ -35,14 +35,6 @@ from short_vol_underwriting.cohort import (
     RejectedAnchor,
     RejectedAnchorSelector,
 )
-from short_vol_underwriting.conservation import (
-    cohort_conservation_status,
-    compute_cohort_rates,
-    compute_underwriting_rates,
-    derive_cohort_counts,
-    derive_underwriting_counts,
-    underwriting_conservation_status,
-)
 from short_vol_underwriting.constants import (
     ADMISSION_CUTOFF_LEAD_MS,
     POSITION_CLOSE_REASONS,
@@ -64,7 +56,6 @@ from short_vol_underwriting.evidence import (
     RuntimeBindings,
 )
 from short_vol_underwriting.identity import IdentityError, canonical_identity, require_identity
-from short_vol_underwriting.manifest import ValidatedManifest
 from short_vol_underwriting.model import (
     FactBoundary,
     OutcomeState,
@@ -72,7 +63,6 @@ from short_vol_underwriting.model import (
     TerminalSource,
 )
 from short_vol_underwriting.policy import PolicyChain
-from short_vol_underwriting.validation import validate_complete_semantic_graph
 
 
 @dataclass(frozen=True)
@@ -346,7 +336,6 @@ class FixedContractShadowOwner:
         self._terminal_boundary: FactBoundary | None = None
         self._terminal_source_identity: str | None = None
         self._terminal_source_kind: TerminalSource | None = None
-        self._terminal_summary_written = False
 
     @property
     def required_combo_instrument_names(self) -> tuple[str, ...]:
@@ -1074,293 +1063,6 @@ class FixedContractShadowOwner:
                 terminal_source_identity=terminal_source_identity,
             )
         return self._finish_transition()
-
-    def finalize_terminal(
-        self,
-        *,
-        manifest: ValidatedManifest,
-        terminal_disposition: str,
-        terminal_source: Mapping[str, object],
-    ) -> OwnerTransition:
-        """Write the two immutable terminal summaries after the terminal drain."""
-        self._begin_transition()
-        if self._terminal_summary_written:
-            return self._finish_transition()
-        boundary = self._terminal_boundary
-        terminal_identity = self._terminal_source_identity
-        terminal_kind = self._terminal_source_kind
-        if boundary is None or terminal_identity is None or terminal_kind is None:
-            raise ValueError("terminal summaries require a committed terminal barrier")
-        if any(
-            record.state.lifecycle.value == "VALID" for record in self._candidates.values()
-        ) or any(
-            trade.observation.state is OutcomeState.PENDING for trade in self._trades.values()
-        ):
-            raise RuntimeError("terminal summaries require a fully drained owner")
-        if manifest.runtime_identity != self.bindings.runtime_identity:
-            raise ValueError("manifest runtime identity differs from owner bindings")
-        if manifest.candidate_commit != self.bindings.code_identity:
-            raise ValueError("manifest candidate commit differs from owner bindings")
-        start = self._enrollment_start
-        if start is None:
-            raise ValueError("terminal summaries require a realized runtime start")
-        start_trigger = self._manifest_mapping(manifest, "runtime_start_trigger")
-        cutoff_trigger = self._manifest_mapping(manifest, "enrollment_cutoff_trigger")
-        final_trigger = self._manifest_mapping(manifest, "final_stop_trigger")
-        if start.received_monotonic_ms < self._trigger_monotonic_ms(start_trigger):
-            raise ValueError("runtime start boundary does not realize the manifest trigger")
-        terminal_source_value, expected_terminal_identity = self._validate_terminal_source(
-            manifest=manifest,
-            terminal_disposition=terminal_disposition,
-            terminal_source=terminal_source,
-            boundary=boundary,
-            final_trigger=final_trigger,
-        )
-        if expected_terminal_identity != terminal_identity:
-            raise ValueError("terminal source identity differs from the committed barrier")
-        if terminal_disposition == "PROCESS_FAILURE":
-            if terminal_kind is not TerminalSource.FAILURE:
-                raise ValueError("process failure must own failure censoring")
-        elif terminal_kind is not TerminalSource.STOP:
-            raise ValueError("clean/emergency stop must own stop censoring")
-
-        cutoff_realized = self._enrollment_end is not None
-        enrollment_end = self._enrollment_end or boundary
-        if cutoff_realized:
-            if not (
-                enrollment_end.is_strictly_after(start)
-                and boundary.is_strictly_after(enrollment_end)
-            ):
-                raise ValueError(
-                    "realized enrollment cutoff must be strictly after runtime start "
-                    "and strictly before terminal"
-                )
-            if enrollment_end.received_monotonic_ms < self._trigger_monotonic_ms(cutoff_trigger):
-                raise ValueError("enrollment cutoff boundary does not realize the manifest trigger")
-            enrollment_end_reason = "PREBOUND_CUTOFF"
-        else:
-            if not boundary.is_strictly_after(start):
-                raise ValueError("terminal-before-cutoff must be strictly after runtime start")
-            enrollment_end_reason = "TERMINAL_BEFORE_CUTOFF"
-
-        current_objects = self.writer.objects
-        validate_complete_semantic_graph(
-            {
-                f"{value['object_kind']}:{value['object_identity']}": value
-                for value in current_objects
-            },
-            runtime_start=start,
-            enrollment_end=enrollment_end,
-            terminal_boundary=boundary,
-        )
-        underwriting_counts = derive_underwriting_counts(current_objects)
-        underwriting_rates = compute_underwriting_rates(underwriting_counts)
-        underwriting_status = underwriting_conservation_status(underwriting_counts)
-        if underwriting_status != "MET":
-            raise RuntimeError("Underwriting terminal conservation is not met")
-        underwriting_summary_identity = canonical_identity(
-            "UNDERWRITING_POSITION_SUMMARY",
-            self.bindings.underwriting_position_contract_digest,
-            self.bindings.code_identity,
-            self.bindings.runtime_identity,
-            self.bindings.radar_policy_identity,
-            self.bindings.underwriting_policy_identity,
-            self.bindings.position_policy_identity,
-            terminal_identity,
-            boundary.as_object(),
-            underwriting_counts,
-            underwriting_rates,
-            underwriting_status,
-        )
-        self._emit(
-            "UNDERWRITING_POSITION_SUMMARY",
-            underwriting_summary_identity,
-            boundary,
-            {
-                "underwriting_position_summary_identity": underwriting_summary_identity,
-                "terminal_source_identity": terminal_identity,
-                "terminal_fact_boundary": boundary.as_object(),
-                "counts": underwriting_counts,
-                "rates": underwriting_rates,
-                "conservation_status": underwriting_status,
-            },
-            self._local_provenance(
-                "SUPERVISOR_CONTROL",
-                terminal_identity,
-                boundary,
-            ),
-        )
-
-        cohort_counts = derive_cohort_counts(current_objects)
-        cohort_rates = compute_cohort_rates(cohort_counts, evidence_status="COMPLETE")
-        cohort_status = cohort_conservation_status(
-            cohort_counts,
-            evidence_status="COMPLETE",
-        )
-        if cohort_status != "MET":
-            raise RuntimeError("Outcome cohort terminal conservation is not met")
-        planned_boundary = (
-            boundary.as_object() if terminal_disposition == "PLANNED_CLEAN_STOP" else None
-        )
-        cohort_summary_identity = canonical_identity(
-            "CohortSummaryIdentity",
-            self.bindings.outcome_contract_identity,
-            self.bindings.runtime_identity,
-            manifest.manifest_identity,
-            boundary.as_object(),
-        )
-        provenance = [
-            *self._local_provenance(
-                "SUPERVISOR_CONTROL",
-                manifest.manifest_identity,
-                start,
-            ),
-            *self._local_provenance(
-                "SUPERVISOR_CONTROL",
-                canonical_identity(
-                    "PreboundSupervisorTriggerIdentity",
-                    start_trigger,
-                ),
-                start,
-            ),
-        ]
-        if cutoff_realized:
-            provenance.extend(
-                self._local_provenance(
-                    "SUPERVISOR_CONTROL",
-                    canonical_identity(
-                        "PreboundSupervisorTriggerIdentity",
-                        cutoff_trigger,
-                    ),
-                    enrollment_end,
-                )
-            )
-        provenance.extend(
-            self._local_provenance(
-                "SUPERVISOR_CONTROL",
-                terminal_identity,
-                boundary,
-            )
-        )
-        unique_provenance = {
-            (str(item["source_role"]), str(item["source_identity"])): item for item in provenance
-        }
-        self._emit(
-            "SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY",
-            cohort_summary_identity,
-            boundary,
-            {
-                "cohort_summary_identity": cohort_summary_identity,
-                "manifest_identity": manifest.manifest_identity,
-                "runtime_start_fact_boundary": start.as_object(),
-                "enrollment_end_fact_boundary": enrollment_end.as_object(),
-                "enrollment_end_reason": enrollment_end_reason,
-                "terminal_fact_boundary": boundary.as_object(),
-                "terminal_disposition": terminal_disposition,
-                "planned_final_stop_fact_boundary": planned_boundary,
-                "terminal_source_identity": terminal_identity,
-                "terminal_source": terminal_source_value,
-                "evidence_status": "COMPLETE",
-                "counts": cohort_counts,
-                "rates": cohort_rates,
-                "conservation_status": cohort_status,
-            },
-            tuple(unique_provenance.values()),
-        )
-        self._terminal_summary_written = True
-        return self._finish_transition()
-
-    @staticmethod
-    def _manifest_mapping(
-        manifest: ValidatedManifest,
-        field: str,
-    ) -> Mapping[str, object]:
-        value = manifest.value[field]
-        if not isinstance(value, Mapping):
-            raise ValueError(f"manifest {field} must be an object")
-        return value
-
-    @staticmethod
-    def _trigger_monotonic_ms(trigger: Mapping[str, object]) -> int:
-        value = trigger.get("trigger_monotonic_ms")
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError("manifest trigger monotonic time is invalid")
-        return value
-
-    def _validate_terminal_source(
-        self,
-        *,
-        manifest: ValidatedManifest,
-        terminal_disposition: str,
-        terminal_source: Mapping[str, object],
-        boundary: FactBoundary,
-        final_trigger: Mapping[str, object],
-    ) -> tuple[dict[str, object], str]:
-        source = dict(terminal_source)
-        if terminal_disposition == "PLANNED_CLEAN_STOP":
-            if source != dict(final_trigger):
-                raise ValueError("planned stop source must equal the manifest final trigger")
-            identity = canonical_identity("PreboundSupervisorTriggerIdentity", source)
-            monotonic_ms = source["trigger_monotonic_ms"]
-        elif terminal_disposition == "AUTHORIZED_EMERGENCY_STOP":
-            expected = (
-                "runtime_identity",
-                "supervisor_clock_identity",
-                "authority_identity",
-                "control_monotonic_ms",
-                "control_kind",
-                "reason",
-            )
-            if tuple(source) != expected:
-                raise ValueError("emergency stop control requires exact keys")
-            if (
-                source["control_kind"] != "AUTHORIZED_EMERGENCY_STOP"
-                or source["reason"]
-                not in {
-                    "USER_REQUEST",
-                    "AUTHORITY_REVOCATION",
-                    "EXTERNAL_SAFETY_STOP",
-                }
-                or source["authority_identity"] != manifest.value["emergency_stop_authority"]
-            ):
-                raise ValueError("emergency stop control is not authorized")
-            identity = canonical_identity("AuthorizedEmergencyStopControlIdentity", source)
-            monotonic_ms = source["control_monotonic_ms"]
-        elif terminal_disposition == "PROCESS_FAILURE":
-            expected = (
-                "runtime_identity",
-                "supervisor_clock_identity",
-                "failure_source_identity",
-                "control_monotonic_ms",
-                "control_kind",
-                "failure_kind",
-            )
-            if tuple(source) != expected:
-                raise ValueError("fatal failure control requires exact keys")
-            if source["control_kind"] != "PROCESS_FAILURE" or source["failure_kind"] not in {
-                "FATAL_RUNTIME",
-                "FATAL_EVIDENCE_INTEGRITY",
-            }:
-                raise ValueError("fatal failure control is invalid")
-            require_identity(source["failure_source_identity"], "failure_source_identity")
-            identity = canonical_identity("FatalFailureControlIdentity", source)
-            monotonic_ms = source["control_monotonic_ms"]
-        else:
-            raise ValueError("terminal disposition is invalid")
-        if isinstance(monotonic_ms, bool) or not isinstance(monotonic_ms, int):
-            raise ValueError("terminal source monotonic time is invalid")
-        boundary_time_matches = (
-            boundary.received_monotonic_ms >= monotonic_ms
-            if terminal_disposition == "PLANNED_CLEAN_STOP"
-            else boundary.received_monotonic_ms == monotonic_ms
-        )
-        if (
-            source.get("runtime_identity") != manifest.runtime_identity
-            or source.get("supervisor_clock_identity") != manifest.supervisor_clock_identity
-            or not boundary_time_matches
-        ):
-            raise ValueError("terminal source does not create the terminal boundary")
-        return source, identity
 
     def _require_radar_episode_binding(self, facts: UnderwritingFacts) -> None:
         episode_identity = facts.active_episode_identity

@@ -32,7 +32,6 @@ from short_vol_underwriting import (
     SubscriptionAdmissionRefreshWitness,
     TerminalSource,
     UnderwritingFacts,
-    ValidatedManifest,
     canonical_identity,
 )
 from short_vol_underwriting import (
@@ -110,10 +109,8 @@ class FixedContractShadowRuntimeAdapter:
         self,
         *,
         owner: FixedContractShadowOwner,
-        manifest: ValidatedManifest | None = None,
     ) -> None:
         self.owner = owner
-        self.manifest = manifest
         self._session_epoch: int | None = None
         self._option_sources: dict[str, _OptionSource] = {}
         self._options_by_identity: dict[str, _OptionSource] = {}
@@ -128,17 +125,12 @@ class FixedContractShadowRuntimeAdapter:
         self._anchors_by_observation: dict[str, _Anchor] = {}
         self._requests: dict[int, _RequestContext] = {}
         self._last_reducer: RadarReducer | None = None
-        self._enrollment_opened = False
-        self._enrollment_closed = False
-        self._terminal_disposition: str | None = None
-        self._terminal_source: Mapping[str, object] | None = None
-        self._configured_terminal_control: (
-            tuple[
-                str,
-                Mapping[str, object],
-            ]
-            | None
-        ) = None
+
+    def bind_reducer(self, reducer: RadarReducer) -> None:
+        if self._last_reducer is not None and self._last_reducer is not reducer:
+            raise ValueError("adapter reducer binding is immutable")
+        self._require_bindings(reducer)
+        self._last_reducer = reducer
 
     @property
     def required_combo_instrument_names(self) -> tuple[str, ...]:
@@ -369,77 +361,6 @@ class FixedContractShadowRuntimeAdapter:
             )
             intents.extend(self._consume_transition(position_transition, projected))
         return tuple(intents)
-
-    def realize_runtime_start(
-        self,
-        *,
-        reducer: RadarReducer,
-        boundary: FactBoundary,
-    ) -> None:
-        """Consume one supervisor-owned global causal boundary for runtime start."""
-        downstream = self._boundary(reducer, boundary)
-        self._require_bindings(reducer)
-        self._last_reducer = reducer
-        if self.manifest is None:
-            raise RuntimeError("runtime-start control requires the validated manifest")
-        if self._enrollment_opened:
-            raise ValueError("runtime-start control is immutable")
-        if downstream.received_monotonic_ms < _manifest_monotonic(
-            self.manifest,
-            "runtime_start_trigger",
-        ):
-            raise ValueError("runtime-start control precedes its prebound trigger")
-        self.owner.open_enrollment(downstream)
-        self._enrollment_opened = True
-
-    def realize_enrollment_cutoff(
-        self,
-        *,
-        reducer: RadarReducer,
-        boundary: FactBoundary,
-    ) -> None:
-        """Consume a distinct supervisor-owned global causal boundary for cutoff."""
-        downstream = self._boundary(reducer, boundary)
-        self._require_bindings(reducer)
-        self._last_reducer = reducer
-        if self.manifest is None:
-            raise RuntimeError("enrollment-cutoff control requires the validated manifest")
-        if not self._enrollment_opened:
-            raise ValueError("enrollment cutoff requires an earlier runtime-start control")
-        if self._enrollment_closed:
-            raise ValueError("enrollment-cutoff control is immutable")
-        if downstream.received_monotonic_ms < _manifest_monotonic(
-            self.manifest,
-            "enrollment_cutoff_trigger",
-        ):
-            raise ValueError("enrollment cutoff precedes its prebound trigger")
-        self.owner.close_enrollment(downstream)
-        self._enrollment_closed = True
-
-    def configure_terminal_control(
-        self,
-        *,
-        terminal_disposition: str,
-        terminal_source: Mapping[str, object],
-    ) -> None:
-        """Bind the typed supervisor control before the terminal reducer boundary."""
-        if terminal_disposition not in {
-            "PLANNED_CLEAN_STOP",
-            "AUTHORIZED_EMERGENCY_STOP",
-            "PROCESS_FAILURE",
-        }:
-            raise ValueError("terminal disposition is invalid")
-        if self._terminal_disposition is not None:
-            raise ValueError("terminal supervisor control is immutable after termination")
-        configured = self._configured_terminal_control
-        if configured is not None:
-            prior_disposition, _prior_source = configured
-            if terminal_disposition != "PROCESS_FAILURE" or prior_disposition == "PROCESS_FAILURE":
-                raise ValueError("only fatal failure may supersede a pending stop control")
-        self._configured_terminal_control = (
-            terminal_disposition,
-            dict(terminal_source),
-        )
 
     def on_request_sent(
         self,
@@ -789,10 +710,19 @@ class FixedContractShadowRuntimeAdapter:
     def terminate(self, *, source: str, boundary: FactBoundary) -> None:
         reducer = self._require_reducer()
         downstream = self._boundary(reducer, boundary)
-        terminal_kind = TerminalSource.STOP if source == "STOP" else TerminalSource.FAILURE
-        terminal_disposition, terminal_source, terminal_identity = self._terminal_control(
-            source=source,
-            boundary=downstream,
+        if source == "STOP":
+            terminal_kind = TerminalSource.STOP
+            disposition = "CLEAN_STOP"
+        elif source == "FAILURE":
+            terminal_kind = TerminalSource.FAILURE
+            disposition = "PROCESS_FAILURE"
+        else:
+            raise ValueError("terminal source must be STOP or FAILURE")
+        terminal_identity = canonical_identity(
+            "PublicShadowRuntimeTerminalSourceIdentity",
+            self.owner.bindings.runtime_identity,
+            disposition,
+            downstream.as_object(),
         )
         transition = self.owner.terminate(
             boundary=downstream,
@@ -800,21 +730,6 @@ class FixedContractShadowRuntimeAdapter:
             terminal_source=terminal_kind,
         )
         self._consume_transition(transition, ())
-        self._terminal_disposition = terminal_disposition
-        self._terminal_source = terminal_source
-
-    def finalize_terminal(self) -> None:
-        if (
-            self.manifest is None
-            or self._terminal_disposition is None
-            or self._terminal_source is None
-        ):
-            raise RuntimeError("Shadow terminal summary requires its validated manifest/control")
-        self.owner.finalize_terminal(
-            manifest=self.manifest,
-            terminal_disposition=self._terminal_disposition,
-            terminal_source=self._terminal_source,
-        )
 
     def _refresh_sources(
         self,
@@ -1754,65 +1669,6 @@ class FixedContractShadowRuntimeAdapter:
             anchor.target_quantity_btc,
         )
 
-    def _terminal_control(
-        self,
-        *,
-        source: str,
-        boundary: DownstreamFactBoundary,
-    ) -> tuple[str, Mapping[str, object], str]:
-        if source not in {"STOP", "FAILURE"}:
-            raise ValueError("terminal source must be STOP or FAILURE")
-        if self.manifest is None:
-            raise RuntimeError("terminal control requires the validated manifest")
-        configured = self._configured_terminal_control
-        if configured is not None:
-            disposition, control = configured
-            if source == "FAILURE" and disposition != "PROCESS_FAILURE":
-                raise ValueError("failure boundary requires PROCESS_FAILURE control")
-            if source == "STOP" and disposition == "PROCESS_FAILURE":
-                raise ValueError("stop boundary cannot consume PROCESS_FAILURE control")
-            value = dict(control)
-            label = {
-                "PLANNED_CLEAN_STOP": "PreboundSupervisorTriggerIdentity",
-                "AUTHORIZED_EMERGENCY_STOP": "AuthorizedEmergencyStopControlIdentity",
-                "PROCESS_FAILURE": "FatalFailureControlIdentity",
-            }[disposition]
-            return disposition, value, canonical_identity(label, value)
-        if source == "STOP":
-            raw_control = self.manifest.value["final_stop_trigger"]
-            if not isinstance(raw_control, Mapping):
-                raise RuntimeError("validated final stop trigger must be a mapping")
-            value = dict(raw_control)
-            trigger_ms = value.get("trigger_monotonic_ms")
-            if (
-                isinstance(trigger_ms, bool)
-                or not isinstance(trigger_ms, int)
-                or boundary.received_monotonic_ms < trigger_ms
-            ):
-                raise RuntimeError("pre-final STOP requires an authorized typed emergency control")
-            return (
-                "PLANNED_CLEAN_STOP",
-                value,
-                canonical_identity("PreboundSupervisorTriggerIdentity", value),
-            )
-        failure_identity = canonical_identity(
-            "RadarRuntimeFailureSourceIdentity",
-            boundary.as_object(),
-        )
-        value = {
-            "runtime_identity": self.manifest.runtime_identity,
-            "supervisor_clock_identity": self.manifest.supervisor_clock_identity,
-            "failure_source_identity": failure_identity,
-            "control_monotonic_ms": boundary.received_monotonic_ms,
-            "control_kind": "PROCESS_FAILURE",
-            "failure_kind": "FATAL_RUNTIME",
-        }
-        return (
-            "PROCESS_FAILURE",
-            value,
-            canonical_identity("FatalFailureControlIdentity", value),
-        )
-
     def _require_bindings(self, reducer: RadarReducer) -> None:
         if (
             reducer.code_identity != self.owner.bindings.code_identity
@@ -2191,13 +2047,3 @@ def _decimal(value: object) -> Decimal:
     if not parsed.is_finite():
         raise ValueError("Decimal must be finite")
     return parsed
-
-
-def _manifest_monotonic(manifest: ValidatedManifest, field: str) -> int:
-    value = manifest.value[field]
-    if not isinstance(value, Mapping):
-        raise RuntimeError(f"validated manifest {field} must be a mapping")
-    monotonic_ms = value["trigger_monotonic_ms"]
-    if isinstance(monotonic_ms, bool) or not isinstance(monotonic_ms, int):
-        raise RuntimeError(f"validated manifest {field} monotonic time must be an integer")
-    return monotonic_ms

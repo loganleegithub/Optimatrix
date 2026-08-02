@@ -63,10 +63,7 @@ are not persisted.
 Domain writers retain their direct schema/identity validation because those checks define the
 meaning of business objects. There is no second service-level reader or hash ledger around them.
 The downstream writer does not rebuild and validate the complete accumulated relationship graph
-for every new object. Current/complete offline readers retain graph validation.
-An omitted zero-duration leading session must have a contiguous restart edge at the first retained
-timestamp. The first retained positive-duration segment need not repeat the retired reason after a
-same-timestamp recovery.
+for every new object, and the current offline reader does not recreate that graph.
 
 ## Lifecycle and currentness
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,7 +33,6 @@ class RecordingShadowAdapter:
     failed: list[tuple[int, RpcState, FactBoundary]] = field(default_factory=list)
     responses: list[tuple[int, object, FactBoundary, FactBoundary]] = field(default_factory=list)
     terminals: list[tuple[str, FactBoundary]] = field(default_factory=list)
-    finalized: int = 0
 
     def on_settled_transaction(
         self,
@@ -93,14 +91,6 @@ class RecordingShadowAdapter:
     ) -> None:
         del reducer, boundary
 
-    def configure_terminal_control(
-        self,
-        *,
-        terminal_disposition: str,
-        terminal_source: Mapping[str, object],
-    ) -> None:
-        del terminal_disposition, terminal_source
-
     def on_request_failure(
         self,
         *,
@@ -124,9 +114,6 @@ class RecordingShadowAdapter:
 
     def terminate(self, *, source: str, boundary: FactBoundary) -> None:
         self.terminals.append((source, boundary))
-
-    def finalize_terminal(self) -> None:
-        self.finalized += 1
 
 
 def _reducer(
@@ -233,8 +220,6 @@ def test_shadow_rpc_uses_global_request_id_specific_budgets_and_typed_route(
             FactBoundary(1, 2, monotonic_ms + 15, 3),
         )
     ]
-    assert "public/get_order_book" not in reducer.diagnostics.rpc_request_count
-    assert "public/get_order_book" not in reducer.diagnostics.rpc_success_count
 
 
 def test_shadow_subscription_requirement_is_unioned_with_radar_requirement(
@@ -304,7 +289,6 @@ def test_shadow_terminal_is_idempotent_for_clean_stop(
 
     assert len(adapter.terminals) == 1
     assert adapter.terminals[0][0] == "STOP"
-    assert adapter.finalized == 1
     assert all(commit.cause is not CausalCause.CLEAN_STOP for commit in adapter.settled)
 
 
@@ -322,7 +306,6 @@ def test_shadow_terminal_is_idempotent_for_failure(
     assert adapter.terminals == [
         ("FAILURE", FactBoundary(1, 0, monotonic_ms, 1)),
     ]
-    assert adapter.finalized == 1
 
 
 def test_no_adapter_preserves_existing_reducer_surface(

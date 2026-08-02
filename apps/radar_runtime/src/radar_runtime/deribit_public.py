@@ -9,10 +9,6 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
-from short_vol_radar.evidence import (
-    TRANSPORT_CLOSE_CODE_ALLOWLIST,
-    TRANSPORT_EXCEPTION_CLASS_ALLOWLIST,
-)
 from websockets.asyncio.client import ClientConnection, connect
 
 PRODUCTION_PUBLIC_ENDPOINT = "wss://www.deribit.com/ws/api/v2"
@@ -29,6 +25,42 @@ PUBLIC_METHODS = frozenset(
         "public/get_time",
         "public/set_heartbeat",
         "public/test",
+    }
+)
+TRANSPORT_CLOSE_CODE_ALLOWLIST = frozenset(
+    {
+        "1000",
+        "1001",
+        "1002",
+        "1003",
+        "1006",
+        "1007",
+        "1008",
+        "1009",
+        "1010",
+        "1011",
+        "1012",
+        "1013",
+        "1014",
+        "1015",
+        "NOT_AVAILABLE",
+        "OTHER",
+    }
+)
+TRANSPORT_CLOSE_DISPOSITION_ALLOWLIST = frozenset({"CLEAN", "ABNORMAL"})
+TRANSPORT_EXCEPTION_CLASS_ALLOWLIST = frozenset(
+    {
+        "NONE",
+        "PublicProtocolIncompatibility",
+        "PublicProtocolError",
+        "ConnectionClosedOK",
+        "ConnectionClosedError",
+        "OSError",
+        "SSLError",
+        "TimeoutError",
+        "EOFError",
+        "WebSocketException",
+        "OTHER",
     }
 )
 

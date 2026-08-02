@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 from pathlib import Path
 from types import MethodType
@@ -27,7 +26,7 @@ from radar_runtime.runtime import (
     RpcPurpose,
 )
 from short_vol_radar.detector import DetectorState, EpisodeTracker
-from short_vol_radar.evidence import CoverageState, EvidenceWriter, validate_run_summary
+from short_vol_radar.evidence import CoverageState, EvidenceWriter
 from short_vol_radar.policy import load_policy_bytes
 
 _next_application_seq_by_epoch: dict[int, int] = {}
@@ -344,8 +343,6 @@ def test_pre_ack_frames_do_not_change_truth_and_reconcile_once_after_ack(
             "state": "closed",
         }
     ]
-    assert reducer.diagnostics.reduced_envelope_count == 5
-    assert reducer.diagnostics.send_control_event_count == 2
 
 
 def test_reordered_subscription_ack_commits_the_requested_batch(
@@ -397,10 +394,6 @@ def test_partial_bootstrap_subscription_ack_is_a_session_failure(
         )
     assert applied == []
     assert reducer._held_subscription_frame_count == 0
-    assert reducer.diagnostics.rpc_success_count["public/subscribe"] == 0
-    assert reducer.diagnostics.rpc_error_count["public/subscribe"] == 1
-    assert reducer.diagnostics.source_valid_count["public/subscribe"] == 1
-    assert reducer.diagnostics.source_invalid_count["public/subscribe"] == 0
 
 
 def test_partial_channel_ack_commits_missing_truth_before_releasing_success_frame(
@@ -498,10 +491,6 @@ def test_partial_channel_ack_commits_successes_and_scopes_missing_failure(
     assert reducer.channel_state(first) is ChannelState.ACKNOWLEDGED
     assert reducer.channel_state(second) is ChannelState.RETIRED
     assert reducer._channels[second].retry_after_ms is not None
-    assert reducer.diagnostics.rpc_success_count["public/subscribe"] == 0
-    assert reducer.diagnostics.rpc_error_count["public/subscribe"] == 1
-    assert reducer.diagnostics.source_valid_count["public/subscribe"] == 1
-    assert reducer.diagnostics.source_invalid_count["public/subscribe"] == 0
 
     reducer._channels[first].desired_subscribed = False
     reducer._channels[second].state = ChannelState.ACKNOWLEDGED
@@ -523,10 +512,6 @@ def test_partial_channel_ack_commits_successes_and_scopes_missing_failure(
     assert reducer.channel_state(second) is ChannelState.RETIRED
     assert reducer.channel_state(first) is ChannelState.ACKNOWLEDGED
     assert reducer._channels[first].retry_after_ms is not None
-    assert reducer.diagnostics.rpc_success_count["public/unsubscribe"] == 0
-    assert reducer.diagnostics.rpc_error_count["public/unsubscribe"] == 1
-    assert reducer.diagnostics.source_valid_count["public/unsubscribe"] == 1
-    assert reducer.diagnostics.source_invalid_count["public/unsubscribe"] == 0
 
 
 def test_partial_ack_does_not_fail_a_channel_owned_by_a_newer_generation(
@@ -1318,7 +1303,6 @@ def test_response_then_later_ingress_with_earlier_receive_time_cannot_regress_bo
 
     assert reducer._current_fact_boundary().received_monotonic_ms == 2_000
     assert reducer._last_wire_received_ms == 2_000
-    assert reducer.diagnostics.source_observed_count["option_lifecycle"] == 1
 
 
 def test_retired_channel_generation_frame_has_zero_business_effect(
@@ -1359,7 +1343,6 @@ def test_retired_channel_generation_frame_has_zero_business_effect(
 
     assert reducer.channel_state(channel) is ChannelState.RETIRED
     assert reducer.option_catalog.buffered_events == []
-    assert reducer.diagnostics.source_observed_count["option_lifecycle"] == 0
 
 
 def test_every_frame_reduces_once_and_retired_epoch_has_zero_business_effect(
@@ -1390,7 +1373,6 @@ def test_every_frame_reduces_once_and_retired_epoch_has_zero_business_effect(
     assert reducer.reduce(old, processed_monotonic_ms=2_001) == ()
     assert reducer.business_fingerprint() != before
     assert "OLD" not in reducer.catalog_options
-    assert reducer.diagnostics.retired_epoch_frame_count == 1
     assert reducer.diagnostics.session_gap_count == 1
 
     current_heartbeat = next(iter(reducer.pending_rpcs.values()))
@@ -1410,58 +1392,6 @@ def test_every_frame_reduces_once_and_retired_epoch_has_zero_business_effect(
             ),
             processed_monotonic_ms=2_003,
         )
-
-
-def test_retired_heartbeat_remains_cross_ledger_conserved_after_reconnect(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-) -> None:
-    reducer = make_reducer(tmp_path, policy_factory)
-    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-    with pytest.raises(PublicSessionError, match="connection"):
-        reducer.reduce(
-            InboundEnvelope(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "connection_error",
-                    "params": {
-                        "kind": "SESSION_FAILURE",
-                        "reason": "TRANSPORT_READ_FAILURE",
-                        "close_code": "NOT_AVAILABLE",
-                        "close_disposition": "ABNORMAL",
-                        "exception_class": "OSError",
-                    },
-                },
-                session_epoch=1,
-                ingress_seq=1,
-                received_monotonic_ms=1_100,
-            ),
-            processed_monotonic_ms=1_100,
-        )
-    reducer.reduce(
-        InboundEnvelope(
-            {
-                "jsonrpc": "2.0",
-                "method": "heartbeat",
-                "params": {"type": "heartbeat"},
-            },
-            session_epoch=1,
-            ingress_seq=2,
-            received_monotonic_ms=1_101,
-        ),
-        processed_monotonic_ms=1_101,
-    )
-    reducer.begin_session(session_epoch=2, monotonic_ms=2_000)
-
-    summary = json.loads(reducer.clean_stop(2_100).read_text())
-    validate_run_summary(summary)
-    heartbeat_source = next(
-        row
-        for row in summary["operational_diagnostics"]["source_shapes"]
-        if row["source"] == "heartbeat"
-    )
-    assert heartbeat_source["observed_count"] == 1
-    assert reducer.diagnostics.retired_epoch_frame_count == 1
 
 
 def test_retired_connection_error_drain_is_counted_with_bounded_attribution(
@@ -1493,11 +1423,6 @@ def test_retired_connection_error_drain_is_counted_with_bounded_attribution(
     )
 
     assert reducer.reduce(drained, processed_monotonic_ms=1_100) == ()
-    assert reducer.diagnostics.connection_error_event_count == 1
-    assert dict(reducer.diagnostics.transport_terminal_attribution_count) == {
-        ("NOT_AVAILABLE", "ABNORMAL", "OSError"): 1
-    }
-    assert reducer.diagnostics.retired_epoch_frame_count == 1
 
 
 def test_session_epoch_cannot_be_reused_or_regressed(
@@ -1568,13 +1493,6 @@ def test_success_error_late_notification_and_heartbeat_response_reduce_once(
         processed_monotonic_ms=1_004 + seq,
     )
 
-    assert reducer.diagnostics.reduced_envelope_count == seq + 9
-    assert reducer.diagnostics.send_control_event_count == 5
-    assert reducer.diagnostics.rpc_success_count["public/status"] == 1
-    assert reducer.diagnostics.rpc_error_count["public/get_combos"] == 1
-    assert reducer.diagnostics.late_response_count == 1
-    assert reducer.diagnostics.heartbeat_public_test_success_count == 1
-
 
 def test_heartbeat_control_is_live_while_channel_rpc_is_pending(
     tmp_path: Path,
@@ -1630,9 +1548,7 @@ def test_ordered_receive_lag_enters_currentness_without_retiring_session(
         processed_monotonic_ms=delayed.received_monotonic_ms + 1_001,
     )
 
-    assert reducer.diagnostics.max_receive_to_reduce_lag_ms == 1_001
     assert reducer.diagnostics.session_gap_count == 0
-    assert reducer.diagnostics.global_continuity_restart_count == {}
     assert reducer._global_continuity_epoch == 1
     assert reducer._session_epoch not in reducer._retired_epochs
     assert reducer._queue_lag_currentness_active
@@ -1921,78 +1837,6 @@ def test_relevant_platform_lock_status_fails_epoch_canonically(
     assert reducer.pending_rpcs == {}
 
 
-def test_rpc_latency_starts_at_actual_send_boundary(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-) -> None:
-    reducer = make_reducer(tmp_path, policy_factory)
-    heartbeat = only(
-        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
-        RpcPurpose.SET_HEARTBEAT,
-    )
-
-    reducer.reduce(
-        send_control(
-            heartbeat,
-            kind="SEND_COMPLETED",
-            boundary_ms=1_200,
-        ),
-        processed_monotonic_ms=1_200,
-    )
-    reducer.reduce(
-        envelope(
-            {"id": heartbeat.request_id, "result": "ok"},
-            seq=1,
-            received_ms=1_250,
-        ),
-        processed_monotonic_ms=1_250,
-    )
-
-    diagnostics = reducer._operational_diagnostics(250)
-    rpc_rows = diagnostics["rpc_by_method"]
-    assert isinstance(rpc_rows, list)
-    row = next(
-        item
-        for item in rpc_rows
-        if isinstance(item, dict) and item["method"] == "public/set_heartbeat"
-    )
-    assert row["scheduled_count"] == 1
-    assert row["sent_count"] == 1
-    assert row["success_count"] == 1
-    assert row["latency_observation_count"] == 1
-    assert row["latency_ms_sum"] == 50
-    assert row["latency_ms_max"] == 50
-
-
-def test_orphan_late_wire_response_is_persisted_separately(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-) -> None:
-    reducer = make_reducer(tmp_path, policy_factory)
-    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-
-    reducer.reduce(
-        envelope({"id": 999_999, "result": "orphan"}, seq=1, received_ms=1_001),
-        processed_monotonic_ms=1_001,
-    )
-
-    summary = json.loads(reducer.clean_stop(1_002).read_text())
-    validate_run_summary(summary)
-    diagnostics = summary["operational_diagnostics"]
-    assert isinstance(diagnostics, dict)
-    assert diagnostics["rpc_orphan_late_wire_count"] == 1
-    rpc_rows = diagnostics["rpc_by_method"]
-    assert isinstance(rpc_rows, list)
-    assert (
-        sum(
-            row["deadline_late_count"]
-            for row in rpc_rows
-            if isinstance(row, dict) and isinstance(row.get("deadline_late_count"), int)
-        )
-        == 0
-    )
-
-
 def test_blocked_send_keeps_scheduled_until_completed_receipt_starts_response_deadline(
     tmp_path: Path,
     policy_factory: PolicyFactory,
@@ -2050,8 +1894,6 @@ def test_send_cancel_and_failure_enter_reducer_as_terminal_control_events(
     assert lifecycle.state is runtime_module.RpcState.ERROR
     assert lifecycle.sent_monotonic_ms is None
     assert command.request_id not in reducer.pending_rpcs
-    assert reducer.diagnostics.rpc_sent_count[command.method] == 0
-    assert reducer.diagnostics.rpc_error_count[command.method] == 1
 
 
 def test_response_preceding_send_receipt_is_orphan_and_cannot_complete_request(
@@ -2077,7 +1919,6 @@ def test_response_preceding_send_receipt_is_orphan_and_cannot_complete_request(
     )
     lifecycle = reducer._rpc_lifecycles[command.request_id]
     assert lifecycle.state is runtime_module.RpcState.SCHEDULED
-    assert reducer.diagnostics.rpc_orphan_late_wire_count == 0
 
     commands = reducer.reduce(
         send_control(
@@ -2091,8 +1932,6 @@ def test_response_preceding_send_receipt_is_orphan_and_cannot_complete_request(
 
     lifecycle = reducer._rpc_lifecycles[command.request_id]
     assert lifecycle.state is runtime_module.RpcState.SENT
-    assert reducer.diagnostics.rpc_success_count[command.method] == 0
-    assert reducer.diagnostics.rpc_orphan_late_wire_count == 1
     assert commands == ()
 
     commands = reducer.reduce(
@@ -2106,8 +1945,6 @@ def test_response_preceding_send_receipt_is_orphan_and_cannot_complete_request(
 
     lifecycle = reducer._rpc_lifecycles[command.request_id]
     assert lifecycle.state is runtime_module.RpcState.SUCCESS
-    assert reducer.diagnostics.rpc_success_count[command.method] == 1
-    assert reducer.diagnostics.rpc_latency_sum[command.method] == 10
     assert only(commands, RpcPurpose.SUBSCRIBE_CHANNELS)
 
 
@@ -2173,8 +2010,6 @@ def test_duplicate_control_application_identity_fails_closed(
     with pytest.raises(PublicSessionError, match="sequence"):
         reducer.reduce(control, processed_monotonic_ms=1_101)
 
-    assert reducer.diagnostics.ingress_gap_or_duplicate_count == 1
-
 
 @pytest.mark.parametrize("event_kind", ("WIRE", "SEND_CONTROL", "CONNECTION_CONTROL"))
 def test_application_sequence_gap_fails_closed_for_every_event_kind(
@@ -2223,8 +2058,6 @@ def test_application_sequence_gap_fails_closed_for_every_event_kind(
         reducer.reduce(event, processed_monotonic_ms=1_100)
 
     assert reducer._application_frontier_by_epoch[1] == 0
-    assert reducer.diagnostics.reduced_envelope_count == 0
-    assert reducer.diagnostics.ingress_gap_or_duplicate_count == 1
 
 
 def test_local_send_control_does_not_refresh_wire_liveness(
@@ -2261,79 +2094,6 @@ def test_local_send_control_does_not_refresh_wire_liveness(
 
     with pytest.raises(PublicSessionError, match="liveness"):
         reducer.advance_time(61_003)
-
-
-def test_pre_send_rpc_terminal_summary_is_strictly_valid(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-) -> None:
-    reducer = make_reducer(tmp_path, policy_factory)
-    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-    command = reducer._schedule(
-        purpose=RpcPurpose.UNSUBSCRIBE_CHANNELS,
-        method="public/unsubscribe",
-        params={"channels": []},
-        scope="CHANNELS",
-        generation=1,
-        origin_boundary=FactBoundary(1, 0, 1_000, 0),
-        failure_scope=FailureScope.OPTION,
-    )
-    reducer.reduce(
-        send_control(
-            command,
-            kind="SEND_FAILED",
-            boundary_ms=1_100,
-            failure="ERROR",
-            ingress_seq=1,
-        ),
-        processed_monotonic_ms=1_100,
-    )
-
-    summary = json.loads(reducer.clean_stop(1_200).read_text())
-    validate_run_summary(summary)
-    rows = summary["operational_diagnostics"]["rpc_by_method"]
-    row = next(item for item in rows if item["method"] == "public/unsubscribe")
-    assert row["scheduled_count"] == 1
-    assert row["sent_count"] == 0
-    assert row["error_count"] == 1
-
-
-def test_pre_send_deadline_terminal_summary_is_strictly_valid(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-) -> None:
-    reducer = make_reducer(tmp_path, policy_factory)
-    heartbeat = only(
-        reducer.begin_session(session_epoch=1, monotonic_ms=1_000),
-        RpcPurpose.SET_HEARTBEAT,
-    )
-    reducer.pending_rpcs.pop(heartbeat.request_id)
-    reducer._finish_rpc(
-        heartbeat,
-        state=runtime_module.RpcState.CENSORED,
-        terminal_monotonic_ms=1_000,
-        record_latency=False,
-    )
-    command = reducer._schedule(
-        purpose=RpcPurpose.UNSUBSCRIBE_CHANNELS,
-        method="public/unsubscribe",
-        params={"channels": []},
-        scope="CHANNELS",
-        generation=1,
-        origin_boundary=FactBoundary(1, 0, 1_000, 0),
-        failure_scope=FailureScope.OPTION,
-    )
-
-    reducer.advance_time(command.send_deadline_monotonic_ms + 1)
-
-    summary = json.loads(reducer.clean_stop(command.send_deadline_monotonic_ms + 2).read_text())
-    validate_run_summary(summary)
-    rows = summary["operational_diagnostics"]["rpc_by_method"]
-    row = next(item for item in rows if item["method"] == "public/unsubscribe")
-    assert row["scheduled_count"] == 1
-    assert row["sent_count"] == 0
-    assert row["deadline_late_count"] == 1
-    assert row["pre_send_deadline_late_count"] == 1
 
 
 def test_nonheartbeat_pre_sent_response_is_orphan_and_later_response_keeps_its_boundary(
@@ -2384,7 +2144,6 @@ def test_nonheartbeat_pre_sent_response_is_orphan_and_later_response_keeps_its_b
     assert reducer.causal_seq == 0
     assert captured == []
     assert reducer._rpc_lifecycles[command.request_id].state is runtime_module.RpcState.SENT
-    assert reducer.diagnostics.rpc_orphan_late_wire_count == 1
 
     reducer.reduce(
         envelope(
@@ -2398,7 +2157,6 @@ def test_nonheartbeat_pre_sent_response_is_orphan_and_later_response_keeps_its_b
     assert reducer.causal_seq == 1
     assert len(captured) == 1
     assert captured[0].boundary == FactBoundary(1, 3, 1_270, 1)
-    assert reducer.diagnostics.rpc_latency_sum[command.method] == 10
 
 
 def test_send_cancellation_after_send_deadline_cannot_rewrite_terminal_state(
@@ -2425,8 +2183,6 @@ def test_send_cancellation_after_send_deadline_cannot_rewrite_terminal_state(
     lifecycle = reducer._rpc_lifecycles[command.request_id]
     assert lifecycle.state is runtime_module.RpcState.DEADLINE_LATE
     assert lifecycle.terminal_monotonic_ms == 31_002
-    assert reducer.diagnostics.rpc_deadline_late_count[command.method] == 1
-    assert reducer.diagnostics.rpc_error_count[command.method] == 0
 
 
 def test_send_failure_cannot_rewrite_a_completed_send_boundary(
@@ -2500,8 +2256,6 @@ def test_clean_stop_censors_scheduled_and_sent_without_collapsing_boundaries(
     assert scheduled_lifecycle.sent_monotonic_ms is None
     assert sent_lifecycle.state is runtime_module.RpcState.CENSORED
     assert sent_lifecycle.sent_monotonic_ms == 1_100
-    assert reducer.diagnostics.rpc_censored_count["public/set_heartbeat"] == 1
-    assert reducer.diagnostics.rpc_censored_count["public/get_time"] == 1
 
 
 def test_unsupported_target_option_lifecycle_enters_catalog_recovery_not_session_failure(
@@ -2707,11 +2461,6 @@ def test_non_btc_usdc_lifecycle_is_shape_only_and_has_no_business_side_effect(
         reducer._coverage._current_blocking_reason,
         tuple(reducer._coverage._segments),
     )
-    witness_before = (
-        reducer._first_joint_witness_ms,
-        reducer._first_joint_witness_identity,
-        dict(reducer._current_epoch_joint_evaluation_counts),
-    )
     pending_before = dict(reducer.pending_rpcs)
 
     commands = reducer.reduce(
@@ -2747,13 +2496,6 @@ def test_non_btc_usdc_lifecycle_is_shape_only_and_has_no_business_side_effect(
         reducer._coverage._current_blocking_reason,
         tuple(reducer._coverage._segments),
     ) == coverage_before
-    assert (
-        reducer._first_joint_witness_ms,
-        reducer._first_joint_witness_identity,
-        dict(reducer._current_epoch_joint_evaluation_counts),
-    ) == witness_before
-    assert reducer.diagnostics.source_observed_count["option_lifecycle"] >= 1
-    assert reducer.diagnostics.source_valid_count["option_lifecycle"] >= 1
 
 
 def test_temporary_option_lifecycle_state_retains_member_as_local_unknown(
@@ -3061,7 +2803,6 @@ def test_metadata_response_commits_after_sustained_market_ingress(
     )
 
     assert name in reducer.catalog_options
-    assert reducer.diagnostics.channel_received_count["OPTION_TICKER"] == 20
 
 
 def test_close_while_option_snapshot_is_pending_wins_over_old_snapshot(
@@ -3221,7 +2962,6 @@ def test_combo_refresh_repeats_until_one_generation_has_no_lifecycle_crossing(
         == ()
     )
     assert reducer.combo_catalog.complete
-    assert reducer.diagnostics.combo_authoritative_refresh_attempt_count == 3
 
 
 def test_nonempty_combo_catalog_fetches_metadata_once_and_reuses_unchanged(
@@ -3281,10 +3021,7 @@ def test_nonempty_combo_catalog_fetches_metadata_once_and_reuses_unchanged(
     assert tuple(reducer.combos) == ("COMBO",)
     assert reducer.combo_catalog.complete
 
-    refresh = reducer._schedule_combo_refresh(
-        reducer._current_fact_boundary(),
-        trailing=False,
-    )
+    refresh = reducer._schedule_combo_refresh(reducer._current_fact_boundary())
     assert (
         reducer.reduce(
             response(reducer, refresh, [summary], seq=seq + 3),
@@ -3383,8 +3120,6 @@ def test_operational_recovery_and_subscription_peaks_are_runtime_facts(
         response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
-    initial_channel_peak = reducer.diagnostics.peak_subscribed_channel_count
-    assert initial_channel_peak == len(exact_channels(subscribe))
 
     reducer.prepare_reconnect("TEST_SESSION_GAP")
     reducer.prepare_reconnect("DUPLICATE_NOTICE")
@@ -3392,150 +3127,6 @@ def test_operational_recovery_and_subscription_peaks_are_runtime_facts(
 
     assert reducer.diagnostics.session_gap_count == 1
     assert reducer.diagnostics.reconnect_count == 1
-    assert reducer.diagnostics.peak_subscribed_channel_count == initial_channel_peak
-
-
-def test_option_local_ledger_keeps_the_complete_final_hour_not_the_first_rows(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-) -> None:
-    reducer = make_reducer(tmp_path, policy_factory)
-    reducer.begin_session(session_epoch=1, monotonic_ms=0)
-
-    for index in range(300):
-        instrument_name = f"OLD-{index}"
-        reducer._start_option_local_unavailability(
-            instrument_name,
-            generation=1,
-            reason="TICKER_SOURCE_STALE",
-            monotonic_ms=index * 2,
-        )
-        reducer._close_option_local_unavailability(
-            instrument_name,
-            monotonic_ms=index * 2 + 1,
-            end_disposition="RECOVERED",
-        )
-
-    clean_stop_ms = 4_000_000
-    for index in range(2):
-        instrument_name = f"TAIL-{index}"
-        reducer._start_option_local_unavailability(
-            instrument_name,
-            generation=1,
-            reason="TICKER_SOURCE_STALE",
-            monotonic_ms=clean_stop_ms - 1_000 + index * 10,
-        )
-        reducer._close_option_local_unavailability(
-            instrument_name,
-            monotonic_ms=clean_stop_ms - 999 + index * 10,
-            end_disposition="RECOVERED",
-        )
-
-    summary = json.loads(reducer.clean_stop(clean_stop_ms).read_text())
-    availability = summary["operational_diagnostics"]["option_local_availability"]
-
-    assert availability["acceptance_window_ms"] == 3_600_000
-    assert availability["retained_interval_limit"] == 10_000
-    assert availability["outside_window_interval_count"] == 300
-    assert availability["outside_window_latest_end_monotonic_ms"] == 599
-    assert availability["outside_window_interval_count_by_reason"] == {
-        "TICKER_SOURCE_STALE": {
-            "RECOVERED": 300,
-            "REASON_CHANGED": 0,
-            "CENSORED_AT_STOP": 0,
-        }
-    }
-    assert availability["omitted_interval_count"] == 0
-    assert [row["instrument_name"] for row in availability["intervals"]] == [
-        "TAIL-0",
-        "TAIL-1",
-    ]
-    validate_run_summary(summary)
-
-
-def test_option_local_final_window_row_bound_fails_closed_as_real_omission(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-) -> None:
-    reducer = make_reducer(tmp_path, policy_factory)
-    reducer.begin_session(session_epoch=1, monotonic_ms=0)
-
-    for index in range(10_001):
-        instrument_name = f"TAIL-{index}"
-        reducer._start_option_local_unavailability(
-            instrument_name,
-            generation=1,
-            reason="TICKER_SOURCE_STALE",
-            monotonic_ms=index * 2,
-        )
-        reducer._close_option_local_unavailability(
-            instrument_name,
-            monotonic_ms=index * 2 + 1,
-            end_disposition="RECOVERED",
-        )
-
-    summary = json.loads(reducer.clean_stop(30_000).read_text())
-    availability = summary["operational_diagnostics"]["option_local_availability"]
-
-    assert len(availability["intervals"]) == 10_000
-    assert availability["outside_window_interval_count"] == 0
-    assert availability["omitted_interval_count"] == 1
-    assert availability["omitted_interval_count_by_reason"] == {
-        "TICKER_SOURCE_STALE": {
-            "RECOVERED": 1,
-            "REASON_CHANGED": 0,
-            "CENSORED_AT_STOP": 0,
-        }
-    }
-    validate_run_summary(summary)
-
-
-@pytest.mark.parametrize(
-    ("message", "expected_reason"),
-    (
-        (
-            {
-                "method": "connection_error",
-                "params": {
-                    "kind": "SESSION_FAILURE",
-                    "reason": "TRANSPORT_READ_FAILURE",
-                    "close_code": "NOT_AVAILABLE",
-                    "close_disposition": "ABNORMAL",
-                    "exception_class": "OSError",
-                },
-            },
-            "TRANSPORT_READ_FAILURE",
-        ),
-        (None, "SESSION_LIVENESS_DEADLINE"),
-    ),
-)
-def test_session_retirement_preserves_the_owning_boundary_cause(
-    message: dict[str, object] | None,
-    expected_reason: str,
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-) -> None:
-    reducer = make_reducer(tmp_path, policy_factory)
-    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-
-    with pytest.raises(PublicSessionError):
-        if message is None:
-            reducer.advance_time(1_001 + reducer.policy.runtime_limits.session_liveness_deadline_ms)
-        else:
-            reducer.reduce(
-                envelope(message, seq=1, received_ms=1_001),
-                processed_monotonic_ms=1_001,
-            )
-
-    reducer.prepare_reconnect("DUPLICATE_LATER_NOTICE")
-    continuity = reducer._operational_diagnostics(1)["global_continuity"]
-    assert isinstance(continuity, dict)
-    assert continuity["restart_count_by_reason"] == {expected_reason: 1}
-    restart_edges = continuity["restart_edges"]
-    assert isinstance(restart_edges, list)
-    restart = restart_edges[0]
-    assert isinstance(restart, dict)
-    assert restart["reason"] == expected_reason
 
 
 def test_retired_epoch_is_not_established_or_platform_current(
@@ -3567,107 +3158,6 @@ def test_retired_epoch_is_not_established_or_platform_current(
 
     assert not reducer.session_established
     assert not reducer.platform.usable
-
-
-def test_live_transport_metrics_feed_strict_operational_diagnostics(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-) -> None:
-    reducer = make_reducer(tmp_path, policy_factory)
-
-    reducer.note_transport_metrics(queue_high_water_frames=7, overflow_count=2)
-    reducer.note_transport_metrics(queue_high_water_frames=4, overflow_count=2)
-
-    diagnostics = reducer._operational_diagnostics(1_000)
-    ingress = diagnostics["ingress"]
-    assert isinstance(ingress, dict)
-    assert ingress["queue_high_water_frames"] == 7
-    assert ingress["overflow_count"] == 2
-
-
-def test_source_shape_diagnostics_keep_only_consumed_keys_and_types(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-) -> None:
-    reducer = make_reducer(tmp_path, policy_factory)
-
-    reducer._note_source_shape(
-        "public/get_instrument",
-        {
-            "instrument_name": "OPTION",
-            "kind": "option",
-            "expiration_timestamp": 1_000,
-            "unrelated_future_field": {"market": "payload"},
-        },
-        valid=True,
-    )
-
-    diagnostics = reducer._operational_diagnostics(1_000)
-    rows = diagnostics["source_shapes"]
-    assert isinstance(rows, list)
-    row = next(item for item in rows if item["source"] == "public/get_instrument")
-    assert row["consumed_fields"] == [
-        {"key": "expiration_timestamp", "type": "integer"},
-        {"key": "instrument_name", "type": "string"},
-        {"key": "kind", "type": "string"},
-    ]
-
-
-def test_source_shape_diagnostics_widen_mixed_json_numbers_once(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-) -> None:
-    reducer = make_reducer(tmp_path, policy_factory)
-
-    reducer._note_source_shape(
-        "public/get_instrument",
-        {"min_trade_amount": 1},
-        valid=True,
-    )
-    reducer._note_source_shape(
-        "public/get_instrument",
-        {"min_trade_amount": Decimal("0.1")},
-        valid=True,
-    )
-
-    diagnostics = reducer._operational_diagnostics(1_000)
-    rows = diagnostics["source_shapes"]
-    assert isinstance(rows, list)
-    row = next(item for item in rows if item["source"] == "public/get_instrument")
-    assert row["consumed_fields"] == [{"key": "min_trade_amount", "type": "number"}]
-
-
-def test_incomplete_catalog_response_is_rpc_success_but_shape_invalid(
-    tmp_path: Path,
-    policy_factory: PolicyFactory,
-) -> None:
-    reducer = make_reducer(tmp_path, policy_factory)
-    subscribe, seq = begin_through_bootstrap_subscribe(reducer)
-    commands = reducer.reduce(
-        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
-        processed_monotonic_ms=1_000 + seq,
-    )
-    commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
-    catalog = only(commands, RpcPurpose.OPTION_CATALOG)
-
-    reducer.reduce(
-        response(
-            reducer,
-            catalog,
-            [{"instrument_name": "BROKEN"}],
-            seq=seq + 1,
-        ),
-        processed_monotonic_ms=1_001 + seq,
-    )
-
-    assert reducer.diagnostics.rpc_success_count["public/get_instruments"] == 1
-    assert reducer.diagnostics.source_valid_count["public/get_instruments"] == 0
-    assert reducer.diagnostics.source_invalid_count["public/get_instruments"] == 1
-    assert not reducer.option_catalog.complete
-    recovery = reducer._operational_diagnostics(1_000)["recovery"]
-    assert isinstance(recovery, dict)
-    assert recovery["option_catalog_refresh_success_count"] == 0
-    assert recovery["option_catalog_refresh_failure_count"] == 1
 
 
 def test_incomplete_option_snapshot_cannot_create_membership_loss(

@@ -161,32 +161,29 @@ The runtime must replace or resynchronize affected state before using it again. 
 be carried through an unproved gap. Covered unaffected structures remain usable when their
 declared dependencies remain complete.
 
-Operational truth is kept in four independent ledgers:
+The reducer keeps four independent pieces of bounded current state:
 
 1. `global_continuity_epoch` restarts only for a retired session, non-contiguous/overflowed
    ingress, a trusted-clock gap, or a real index continuity loss. Option-local unavailability and
    current coverage changes never restart it. One root incident can restart at most once before
    its explicit recovery edge.
-2. `current_market_truth_coverage` continues to partition every runtime millisecond into
+2. Current market-truth coverage partitions every runtime millisecond into
    `NO_APPLICABLE_SCOPE | KNOWN_COMPLETE | KNOWN_DEGRADED | UNKNOWN`. Its segments identify why
    the state began, the affected global/aggregate/option scope, and the active continuity epoch.
-3. `option_local_availability` records the smallest affected option, its unavailable reason, and
-   bounded recovery timing. It can end or pause that option's current detector truth exactly as
-   the owning contract specifies, but it cannot erase unrelated current truth or global
-   continuity.
-4. `index_baseline_publication` records generation-global successor pending independently from
-   coverage. Its `CURRENTNESS_LOST` transition owns the exact invalidating reason and full
-   `FactBoundary`; closing and invalidating publication is never conditional on whether an active
-   continuity incident is allowed to create another epoch edge.
+3. Per-option currentness keeps only the latest accepted availability and stale latch. It can end
+   or pause that option's current detector truth exactly as the owning contract specifies, but it
+   cannot erase unrelated current truth or global continuity.
+4. Index baseline publication keeps the current generation, immutable published suffix, and
+   immediate-successor phase independently from coverage. Invalidating publication is never
+   conditional on whether an active continuity incident may create another epoch edge.
 
-One joint operational witness is derived from one settled full current
-`Policy identity × expiry_timestamp × option_type` scope snapshot. Its current-epoch durable row
-freezes `Policy identity × expiry_timestamp × option_type × TTE band × formula instrument ×
-boundary`. The same snapshot supplies both complete aggregate coverage and
-`has_current_full_formula`; a historical formula result, a different instrument, or only the
-boundary's affected subset cannot be combined with a separately computed complete scope.
-`EvidenceWriter` persists only detector/atomic episode edges and the clean-stop summary and never
-participates in current-truth decisions.
+Each aggregate is derived from one settled full current
+`Policy identity × expiry_timestamp × option_type` scope snapshot. The same snapshot supplies both
+complete aggregate coverage and `has_current_full_formula`; a historical formula result, a
+different instrument, or only the boundary's affected subset cannot be combined with separately
+computed scope coverage. No separate witness row is retained. `EvidenceWriter` persists only
+detector/atomic episode edges and the clean-stop summary and never participates in current-truth
+decisions.
 
 Index baseline availability and publication are separate. For each Policy return count, the
 Monitor projects an exact `N + 1` immutable `MinuteClose` window ending at the latest minute jointly
@@ -253,17 +250,15 @@ counterfactual Outcome and cohort semantics.
 
 [`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](../contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
 owns causal-first public counterfactual exit selection, terminal Shadow Outcome and rejected-
-counterfactual maturity/censoring, cohort-aligned `NO_TRADE`, forward-evidence conservation, and
-strict downstream evidence compatibility. It introduces no Outcome/Cohort Policy and no new market,
-delivery, or settlement-price source.
+counterfactual maturity/censoring, and cohort-aligned `NO_TRADE`. It introduces no Outcome/Cohort
+Policy and no new market, delivery, or settlement-price source.
 
 The pure downstream owner `short_vol_underwriting` consumes immutable public DTOs from the existing
 lower layers and owns
 Underwriting, admission, Position, counterfactual, Outcome, aligned-pair, and downstream evidence
-semantics. Its schemas, writer, current/complete readers, manifest binding, canonical identities,
-`UNKNOWN` handling, and conservation checks are strict and deterministic. It is a package, not a
-service, client, queue, database, or authority to run live. The Online Runtime remains the sole
-composer; no lower layer imports that owner.
+semantics. Its schemas, current writer/reader, canonical identities, and `UNKNOWN` handling are
+deterministic. It is a package, not a service, client, queue, database, or authority to run live.
+The Online Runtime remains the sole composer; no lower layer imports that owner.
 
 ### `radar_runtime`
 
@@ -271,9 +266,8 @@ Composes the Deribit public adapter, bounded current state, detector, domain con
 fixed-contract Shadow adapter, minimal business writers, persistent process host, settled snapshot
 publisher, and loopback read-only HTTP surface in one continuously running process. It owns
 client/queue/request identity, lease, runtime identity, in-memory lifecycle, stop/reconnect
-barriers, atomic projection publication, and guarded CLI, not downstream economic Policy.
-`observe` and manifest-bound `observe-shadow` remain separate bounded commands with unchanged
-semantics.
+barriers, atomic projection publication, and guarded CLI, not downstream economic Policy. The CLI
+exposes only the Radar `observe` path and the continuous `serve-shadow` product path.
 
 ## Persistent process and read-only projection boundary
 
@@ -300,8 +294,9 @@ publication record.
 The service persists only Radar and downstream business objects. Lifecycle phase, health,
 readiness, and currentness are non-durable Workbench state. There is no service terminal manifest,
 inventory hash, lifecycle receipt, or second complete evidence reader around the business writers.
-Each downstream object is validated directly before publication; relationship-graph validation is
-an offline reader/test responsibility rather than an online per-write rescan.
+Each downstream object's schema, primary boundary and identity are validated before publication.
+The current reader repeats those checks; it does not recompute owner arithmetic or rebuild a
+relationship graph.
 
 The loopback server exposes only static assets, immutable snapshot JSON, health, and readiness over
 GET/HEAD. Other methods are 405. It has no Policy mutation, account, credential, order, fill, or

@@ -7,7 +7,7 @@ import signal
 import stat
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +25,6 @@ from short_vol_underwriting.constants import (
 )
 from short_vol_underwriting.evidence import DownstreamEvidenceWriter, RuntimeBindings
 from short_vol_underwriting.identity import canonical_identity, require_code_identity
-from short_vol_underwriting.model import TerminalSource
 from short_vol_underwriting.owner import FixedContractShadowOwner
 from short_vol_underwriting.policy import PolicyChain, load_policy_chain
 from websockets.exceptions import WebSocketException
@@ -39,10 +38,8 @@ from radar_runtime.deribit_public import (
 from radar_runtime.fixed_contract_shadow import FixedContractShadowRuntimeAdapter
 from radar_runtime.identity import clean_code_identity, git_repository_root
 from radar_runtime.runtime import (
-    FactBoundary,
     LiveRadarRuntime,
     PublicClient,
-    RadarReducer,
     reconnect_delay_seconds,
 )
 from radar_runtime.workbench import (
@@ -202,65 +199,12 @@ class PersistentServiceComposition:
     startup: PersistentServiceStartup
     downstream_writer: DownstreamEvidenceWriter
     owner: FixedContractShadowOwner
-    adapter: PersistentShadowRuntimeAdapter
+    adapter: FixedContractShadowRuntimeAdapter
     radar_writer: EvidenceWriter
     snapshot_store: SnapshotStore
     publisher: WorkbenchPublisher
     runtime: LiveRadarRuntime
     workbench: LoopbackWorkbenchServer
-
-
-class PersistentShadowRuntimeAdapter(FixedContractShadowRuntimeAdapter):
-    """Fixed-contract owner without a separate service-evidence ledger."""
-
-    def __init__(
-        self,
-        *,
-        owner: FixedContractShadowOwner,
-    ) -> None:
-        super().__init__(owner=owner, manifest=None)
-
-    def bind_reducer(self, reducer: RadarReducer) -> None:
-        if self._last_reducer is not None and self._last_reducer is not reducer:
-            raise ValueError("persistent adapter reducer binding is immutable")
-        self._require_bindings(reducer)
-        self._last_reducer = reducer
-
-    def configure_terminal_control(
-        self,
-        *,
-        terminal_disposition: str,
-        terminal_source: Mapping[str, object],
-    ) -> None:
-        del terminal_disposition, terminal_source
-        raise RuntimeError("persistent service does not consume bounded cohort controls")
-
-    def terminate(self, *, source: str, boundary: FactBoundary) -> None:
-        reducer = self._require_reducer()
-        downstream = self._boundary(reducer, boundary)
-        if source == "STOP":
-            disposition = "CLEAN_STOP"
-            terminal_kind = TerminalSource.STOP
-        elif source == "FAILURE":
-            disposition = "PROCESS_FAILURE"
-            terminal_kind = TerminalSource.FAILURE
-        else:
-            raise ValueError("persistent terminal source must be STOP or FAILURE")
-        source_identity = canonical_identity(
-            "PublicShadowRuntimeTerminalSourceIdentity",
-            self.owner.bindings.runtime_identity,
-            disposition,
-            downstream.as_object(),
-        )
-        transition = self.owner.terminate(
-            boundary=downstream,
-            terminal_source_identity=source_identity,
-            terminal_source=terminal_kind,
-        )
-        self._consume_transition(transition, ())
-
-    def finalize_terminal(self) -> None:
-        """Business objects are final after the owner's terminal transition."""
 
 
 def generate_runtime_identity(
@@ -368,7 +312,7 @@ def build_persistent_service_composition(
         bindings=startup.downstream_bindings,
         writer=downstream_writer,
     )
-    adapter = PersistentShadowRuntimeAdapter(owner=owner)
+    adapter = FixedContractShadowRuntimeAdapter(owner=owner)
     snapshot_store = SnapshotStore(
         initial_workbench_document(
             startup.downstream_bindings,
@@ -388,7 +332,6 @@ def build_persistent_service_composition(
         code_identity=startup.code_identity,
         runtime_identity=startup.runtime_identity,
         policy_identity=startup.policies.radar.identity,
-        allow_service_leading_zero_duration_restarts=True,
     )
     runtime = LiveRadarRuntime(
         policy=startup.policies.radar,
@@ -397,7 +340,6 @@ def build_persistent_service_composition(
         runtime_identity=startup.runtime_identity,
         shadow_adapter=adapter,
         snapshot_publisher=publisher,
-        allow_service_leading_zero_duration_restarts=True,
     )
     adapter.bind_reducer(runtime.reducer)
     workbench = LoopbackWorkbenchServer(
@@ -773,7 +715,6 @@ __all__ = [
     "PersistentServiceComposition",
     "PersistentServiceStartup",
     "PersistentServiceStartupError",
-    "PersistentShadowRuntimeAdapter",
     "PersistentStopEvent",
     "SingleInstanceLease",
     "build_persistent_service_composition",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -11,7 +11,6 @@ import pytest
 import short_vol_underwriting.evidence as evidence_module
 from short_vol_underwriting import (
     CANDIDATE_INVALIDATION_REASONS,
-    COHORT_COUNT_KEYS,
     OUTCOME_OBJECT_KINDS,
     POSITION_CLOSE_REASONS,
     UNDERWRITING_OBJECT_KINDS,
@@ -29,7 +28,6 @@ from short_vol_underwriting import (
     DownstreamEvidenceWriter,
     FactBoundary,
     FixedContractShadowOwner,
-    ManifestError,
     Observation,
     OutcomeReducer,
     OutcomeState,
@@ -50,24 +48,20 @@ from short_vol_underwriting import (
     SubscriptionAdmissionRefreshWitness,
     TerminalSource,
     UnderwritingFacts,
-    ValidatedManifest,
     canonical_identity,
     classify_close_quote,
-    cohort_conservation_status,
     compute_close_economics,
-    compute_cohort_rates,
     compute_entry_economics,
     evaluate_close_opportunity,
-    load_manifest_bytes,
     load_policy_chain,
-    manifest_identity_bytes,
     ordered_candidate_invalidation,
     read_current_evidence,
 )
-from short_vol_underwriting.evidence import (
-    _read_complete_evidence_with_git_reader,
-    validate_downstream_object,
+from short_vol_underwriting.constants import (
+    OUTCOME_CONTRACT_DIGEST,
+    UNDERWRITING_POSITION_CONTRACT_DIGEST,
 )
+from short_vol_underwriting.evidence import validate_downstream_object
 
 ROOT = Path(__file__).resolve().parents[1]
 RADAR_POLICY_IDENTITY = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
@@ -75,27 +69,6 @@ UNDERWRITING_POLICY_IDENTITY = (
     "sha256:be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af"
 )
 POSITION_POLICY_IDENTITY = "sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439"
-UNDERWRITING_CONTRACT_DIGEST = (
-    "sha256:9cbaecf57fb1db0dedf782a4ab002b655e43319a1ad7c5880db3d7b4682d4b03"
-)
-OUTCOME_CONTRACT_DIGEST = "sha256:61a032fe0fe265d66a38bcbb1a3c8498409664fedbda2c8bd0a245180581a695"
-
-
-def _fake_manifest_git_reader(repository: Path, arguments: Sequence[str]) -> bytes:
-    assert repository == ROOT
-    command = tuple(arguments)
-    if command == ("rev-parse", "--show-toplevel"):
-        return f"{ROOT}\n".encode()
-    if command == ("cat-file", "-e", f"{'a' * 40}^{{commit}}"):
-        return b""
-    if command == ("rev-parse", f"{'a' * 40}^{{tree}}"):
-        return f"{'d' * 40}\n".encode()
-    if command == ("cat-file", "-e", f"{'d' * 40}^{{tree}}"):
-        return b""
-    prefix = f"{'a' * 40}:"
-    if len(command) == 3 and command[:2] == ("cat-file", "blob") and command[2].startswith(prefix):
-        return (ROOT / command[2].removeprefix(prefix)).read_bytes()
-    raise AssertionError(f"unexpected Git object command: {command}")
 
 
 def _object(value: object) -> dict[str, object]:
@@ -253,7 +226,7 @@ def _owner(
         radar_policy_identity=RADAR_POLICY_IDENTITY,
         underwriting_policy_identity=UNDERWRITING_POLICY_IDENTITY,
         position_policy_identity=POSITION_POLICY_IDENTITY,
-        underwriting_position_contract_digest=UNDERWRITING_CONTRACT_DIGEST,
+        underwriting_position_contract_digest=UNDERWRITING_POSITION_CONTRACT_DIGEST,
         outcome_contract_digest=OUTCOME_CONTRACT_DIGEST,
     )
     owner = FixedContractShadowOwner(
@@ -346,68 +319,6 @@ def test_owner_rejects_unbound_radar_episode_before_emission(
     with pytest.raises(ValueError, match="not bound"):
         owner.settle_underwriting((facts,), allocate_request_id=lambda: 41)
     assert owner.writer.objects == ()
-
-
-def _manifest_for_owner(tmp_path: Path) -> tuple[ValidatedManifest, dict[str, object]]:
-    runtime = "sha256:" + "b" * 64
-    clock = "sha256:" + "c" * 64
-
-    def trigger(kind: str, at: int) -> dict[str, object]:
-        return {
-            "runtime_identity": runtime,
-            "supervisor_clock_identity": clock,
-            "trigger_monotonic_ms": at,
-            "trigger_kind": kind,
-        }
-
-    final_trigger = trigger("FINAL_STOP", 300)
-    value: dict[str, object] = {
-        "manifest_content_schema_identity": canonical_identity(
-            "SHORT_VOL_SHADOW_FORWARD_COHORT_MANIFEST_SCHEMA",
-            OUTCOME_CONTRACT_DIGEST,
-        ),
-        "candidate_commit": "a" * 40,
-        "candidate_tree": "d" * 40,
-        "intended_remote_ref": "refs/heads/codex/short-vol-fixed-contract-public-shadow-runtime",
-        "verified_remote_ref": "a" * 40,
-        "outcome_contract_identity": canonical_identity(
-            "OUTCOME_CONTRACT",
-            "SHORT_VOL_PUBLIC_SHADOW_OUTCOME_FORWARD_COHORT",
-            OUTCOME_CONTRACT_DIGEST,
-            "a" * 40,
-            RADAR_POLICY_IDENTITY,
-            UNDERWRITING_POLICY_IDENTITY,
-            POSITION_POLICY_IDENTITY,
-        ),
-        "outcome_contract_path": "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md",
-        "radar_policy_path": "policies/short-vol-fixed-public-shadow-radar.json",
-        "radar_policy_identity": RADAR_POLICY_IDENTITY,
-        "underwriting_policy_path": "policies/short-vol-fixed-public-shadow-underwriting.json",
-        "underwriting_policy_identity": UNDERWRITING_POLICY_IDENTITY,
-        "position_policy_path": "policies/short-vol-fixed-public-shadow-position.json",
-        "position_policy_identity": POSITION_POLICY_IDENTITY,
-        "evidence_directory": str(tmp_path),
-        "process_argv": ["python", "-m", "radar_runtime", "observe-shadow"],
-        "process_cwd": str(ROOT),
-        "required_pre_run_checks": ["make check"],
-        "runtime_start_trigger": trigger("RUNTIME_START", 100),
-        "enrollment_cutoff_trigger": trigger("ENROLLMENT_CUTOFF", 200),
-        "final_stop_trigger": final_trigger,
-        "clean_stop_predicate": "final stop trigger accepted independent of results",
-        "emergency_stop_authority": "sha256:" + "e" * 64,
-        "forbidden_capabilities": [
-            "sha256:" + "1" * 64,
-            "sha256:" + "2" * 64,
-        ],
-        "non_claims": [
-            "sha256:" + "3" * 64,
-            "sha256:" + "4" * 64,
-        ],
-    }
-    exact = (
-        json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n"
-    ).encode()
-    return load_manifest_bytes(exact), final_trigger
 
 
 def _admit_owner(owner: FixedContractShadowOwner) -> str:
@@ -659,9 +570,8 @@ def test_kind_registries_are_exact_and_disjoint() -> None:
         "POST_CLOSE_ATTEMPT_TERMINAL",
         "CLOSE_OPPORTUNITY_EVALUATION",
         "SHADOW_CLOSE_OPPORTUNITY",
-        "UNDERWRITING_POSITION_SUMMARY",
     )
-    assert len(OUTCOME_OBJECT_KINDS) == 13
+    assert len(OUTCOME_OBJECT_KINDS) == 12
     assert not set(UNDERWRITING_OBJECT_KINDS) & set(OUTCOME_OBJECT_KINDS)
 
 
@@ -1436,33 +1346,6 @@ def test_owner_first_close_then_strictly_future_subscription_exit_round_trip(
         sum(value["object_kind"] == "SHADOW_COUNTERFACTUAL_EXIT" for value in objects.values()) == 1
     )
     assert sum(value["object_kind"] == "SHADOW_OUTCOME" for value in objects.values()) == 1
-    manifest, final_trigger = _manifest_for_owner(tmp_path)
-    terminal_boundary = _boundary(101, 300)
-    terminal_identity = canonical_identity(
-        "PreboundSupervisorTriggerIdentity",
-        final_trigger,
-    )
-    owner.terminate(
-        boundary=terminal_boundary,
-        terminal_source_identity=terminal_identity,
-        terminal_source=TerminalSource.STOP,
-    )
-    owner.finalize_terminal(
-        manifest=manifest,
-        terminal_disposition="PLANNED_CLEAN_STOP",
-        terminal_source=final_trigger,
-    )
-    complete = read_current_evidence(tmp_path, bindings=bindings)
-    cohort_summary = next(
-        value
-        for value in complete.values()
-        if value["object_kind"] == "SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY"
-    )
-    summary_payload = _object(cohort_summary["payload"])
-    counts = _object(summary_payload["counts"])
-    assert counts["shadow_mature_known_count"] == 1
-    assert counts["enrolled_admitted_mature_known_win_count"] == 1
-    assert summary_payload["conservation_status"] == "MET"
 
 
 def test_owner_matches_equal_distinct_first_close_subscription_witnesses(
@@ -2183,46 +2066,6 @@ def test_owner_quiet_current_combo_schedules_post_close_rpc_when_time_latches_cl
         "POST_CLOSE_ATTEMPT_SCHEDULED",
     ]
     assert [intent.request_id for intent in closed.request_intents] == [42]
-
-
-def test_outcome_validator_enforces_exact_terminal_null_matrix(tmp_path: Path) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(4, 140),
-            change_id=12,
-            previous_change_id=11,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(5, 150),
-            change_id=13,
-            previous_change_id=12,
-        ),
-        allocate_request_id=lambda: 43,
-    )
-    objects = read_current_evidence(tmp_path, bindings=bindings)
-    outcome = next(value for value in objects.values() if value["object_kind"] == "SHADOW_OUTCOME")
-
-    missing_attempt_owner = json.loads(json.dumps(outcome))
-    missing_attempt_owner["payload"]["post_close_attempt_terminal_owner"] = None
-    with pytest.raises(DownstreamEvidenceError, match=r"all required|terminal owner"):
-        validate_downstream_object(missing_attempt_owner, bindings=bindings)
-
-    mature_with_supervisor = json.loads(json.dumps(outcome))
-    mature_with_supervisor["payload"]["terminal_supervisor_source_identity"] = "sha256:" + "f" * 64
-    with pytest.raises(DownstreamEvidenceError, match="supervisor"):
-        validate_downstream_object(mature_with_supervisor, bindings=bindings)
-
-    partial_close_tuple = json.loads(json.dumps(outcome))
-    partial_close_tuple["payload"]["post_close_attempt_terminal_identity"] = None
-    with pytest.raises(DownstreamEvidenceError, match=r"all required|nullable"):
-        validate_downstream_object(partial_close_tuple, bindings=bindings)
 
 
 def test_downstream_validator_rejects_provenance_from_a_future_causal_boundary(
@@ -2959,89 +2802,6 @@ def test_negative_signed_close_level_preserves_atomic_quote_and_credit(
     assert quotes[0]["gross_close_cashflow_usdc"] == "0.1"
 
 
-@pytest.mark.parametrize(
-    ("field", "value", "error"),
-    (
-        ("price_usdc_per_btc", "NaN", "price"),
-        ("price_usdc_per_btc", "Infinity", "price"),
-        ("amount_btc", "0", "amount"),
-        ("amount_btc", "-0.1", "amount"),
-        ("amount_btc", "NaN", "amount"),
-        ("amount_btc", "Infinity", "amount"),
-    ),
-)
-def test_current_reader_rejects_malformed_persisted_close_level(
-    tmp_path: Path,
-    field: str,
-    value: str,
-    error: str,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(4, 140),
-            change_id=12,
-            previous_change_id=11,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-    quote = next(
-        value
-        for value in read_current_evidence(tmp_path, bindings=bindings).values()
-        if value["object_kind"] == "CLOSE_QUOTE_EVALUATION"
-    )
-    tampered = json.loads(json.dumps(quote))
-    tampered["payload"]["consumed_levels"][0][field] = value
-
-    with pytest.raises(DownstreamEvidenceError, match=error):
-        validate_downstream_object(tampered, bindings=bindings)
-
-
-def test_current_reader_rederives_signed_close_cashflow_from_levels(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(4, 140),
-            change_id=12,
-            previous_change_id=11,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-    quote = next(
-        value
-        for value in read_current_evidence(tmp_path, bindings=bindings).values()
-        if value["object_kind"] == "CLOSE_QUOTE_EVALUATION"
-    )
-    tampered = json.loads(json.dumps(quote))
-    tampered["payload"]["consumed_levels"][0]["price_usdc_per_btc"] = "-1"
-
-    with pytest.raises(DownstreamEvidenceError, match="gross close cashflow"):
-        validate_downstream_object(tampered, bindings=bindings)
-
-
-def test_current_reader_rederives_signed_entry_credit_from_levels(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    _admit_owner(owner)
-    entry = next(
-        value
-        for value in read_current_evidence(tmp_path, bindings=bindings).values()
-        if value["object_kind"] == "SHADOW_ENTRY"
-    )
-    tampered = json.loads(json.dumps(entry))
-    tampered["payload"]["entry_consumed_levels"][0]["price_usdc_per_btc"] = "-200"
-
-    with pytest.raises(DownstreamEvidenceError, match="gross entry credit"):
-        validate_downstream_object(tampered, bindings=bindings)
-
-
 def test_owner_rejected_counterfactual_closes_through_same_future_quote(
     tmp_path: Path,
 ) -> None:
@@ -3250,148 +3010,26 @@ def test_owner_replaces_candidate_only_after_ordinary_economic_fingerprint_chang
     assert second_candidate != first_candidate
 
 
-def test_owner_terminalizes_zero_business_and_writes_both_conservation_summaries(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    manifest, final_trigger = _manifest_for_owner(tmp_path)
-    terminal_boundary = _boundary(101, 300)
-    terminal_identity = canonical_identity(
-        "PreboundSupervisorTriggerIdentity",
-        final_trigger,
-    )
-    owner.terminate(
-        boundary=terminal_boundary,
-        terminal_source_identity=terminal_identity,
-        terminal_source=TerminalSource.STOP,
-    )
-    transition = owner.finalize_terminal(
-        manifest=manifest,
-        terminal_disposition="PLANNED_CLEAN_STOP",
-        terminal_source=final_trigger,
-    )
-    assert [item.object_kind for item in transition.emitted] == [
-        "UNDERWRITING_POSITION_SUMMARY",
-        "SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY",
-    ]
-    objects = read_current_evidence(tmp_path, bindings=bindings)
-    summaries = {
-        str(value["object_kind"]): _object(value["payload"])
-        for value in objects.values()
-        if str(value["object_kind"]).endswith("SUMMARY")
-    }
-    assert summaries["UNDERWRITING_POSITION_SUMMARY"]["conservation_status"] == "MET"
-    assert summaries["SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY"]["conservation_status"] == "MET"
-    assert all(
-        rate is None
-        for rate in _object(summaries["SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY"]["rates"]).values()
-    )
-
-
-def test_owner_failure_before_cutoff_censors_pending_trade_and_closes_enrollment(
-    tmp_path: Path,
-) -> None:
+def test_owner_failure_censors_pending_trade(tmp_path: Path) -> None:
     owner, bindings = _owner(tmp_path, close_enrollment=False)
     _admit_owner(owner)
-    manifest, _final_trigger = _manifest_for_owner(tmp_path)
     failure_boundary = _boundary(6, 150)
-    failure_control = {
-        "runtime_identity": bindings.runtime_identity,
-        "supervisor_clock_identity": manifest.supervisor_clock_identity,
-        "failure_source_identity": "sha256:" + "f" * 64,
-        "control_monotonic_ms": 150,
-        "control_kind": "PROCESS_FAILURE",
-        "failure_kind": "FATAL_RUNTIME",
-    }
     failure_identity = canonical_identity(
-        "FatalFailureControlIdentity",
-        failure_control,
+        "PublicShadowRuntimeTerminalSourceIdentity",
+        bindings.runtime_identity,
+        "PROCESS_FAILURE",
+        failure_boundary.as_object(),
     )
+
     owner.terminate(
         boundary=failure_boundary,
         terminal_source_identity=failure_identity,
         terminal_source=TerminalSource.FAILURE,
     )
-    owner.finalize_terminal(
-        manifest=manifest,
-        terminal_disposition="PROCESS_FAILURE",
-        terminal_source=failure_control,
-    )
-    (tmp_path / "manifest.json").write_bytes(manifest.exact_bytes)
-    objects = _read_complete_evidence_with_git_reader(
-        tmp_path,
-        bindings=bindings,
-        git_object_reader=_fake_manifest_git_reader,
-    )
+
+    objects = read_current_evidence(tmp_path, bindings=bindings)
     outcome = next(value for value in objects.values() if value["object_kind"] == "SHADOW_OUTCOME")
-    outcome_payload = _object(outcome["payload"])
-    assert outcome_payload["terminal_state"] == "CENSORED_AT_FAILURE"
-    summary = next(
-        value
-        for value in objects.values()
-        if value["object_kind"] == "SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY"
-    )
-    summary_payload = _object(summary["payload"])
-    assert summary_payload["enrollment_end_reason"] == "TERMINAL_BEFORE_CUTOFF"
-    assert summary_payload["enrollment_end_fact_boundary"] == failure_boundary.as_object()
-    assert _object(summary_payload["counts"])["shadow_censored_failure_count"] == 1
-    assert summary_payload["conservation_status"] == "MET"
-
-    wrong_source_identity = "sha256:" + "0" * 64
-    outcome_path = (
-        tmp_path
-        / "objects"
-        / "SHADOW_OUTCOME"
-        / f"{str(outcome['object_identity']).removeprefix('sha256:')}.json"
-    )
-    tampered = _object(json.loads(outcome_path.read_text()))
-    _object(tampered["payload"])["terminal_supervisor_source_identity"] = wrong_source_identity
-    provenance = tampered["source_provenance"]
-    assert isinstance(provenance, list)
-    supervisor_root = next(
-        _object(root) for root in provenance if _object(root)["source_role"] == "SUPERVISOR_CONTROL"
-    )
-    supervisor_root["source_identity"] = wrong_source_identity
-    outcome_path.write_text(
-        json.dumps(tampered, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
-    assert read_current_evidence(tmp_path, bindings=bindings)
-    with pytest.raises(DownstreamEvidenceError, match="differs from cohort summary"):
-        _read_complete_evidence_with_git_reader(
-            tmp_path,
-            bindings=bindings,
-            git_object_reader=_fake_manifest_git_reader,
-        )
-
-
-def test_owner_rejects_non_identity_process_failure_source(tmp_path: Path) -> None:
-    owner, bindings = _owner(tmp_path, close_enrollment=False)
-    manifest, _final_trigger = _manifest_for_owner(tmp_path)
-    failure_boundary = _boundary(6, 150)
-    failure_control = {
-        "runtime_identity": bindings.runtime_identity,
-        "supervisor_clock_identity": manifest.supervisor_clock_identity,
-        "failure_source_identity": "not-an-identity",
-        "control_monotonic_ms": 150,
-        "control_kind": "PROCESS_FAILURE",
-        "failure_kind": "FATAL_RUNTIME",
-    }
-    owner.terminate(
-        boundary=failure_boundary,
-        terminal_source_identity=canonical_identity(
-            "FatalFailureControlIdentity",
-            failure_control,
-        ),
-        terminal_source=TerminalSource.FAILURE,
-    )
-
-    with pytest.raises(ValueError, match="failure_source_identity"):
-        owner.finalize_terminal(
-            manifest=manifest,
-            terminal_disposition="PROCESS_FAILURE",
-            terminal_source=failure_control,
-        )
+    assert _object(outcome["payload"])["terminal_state"] == "CENSORED_AT_FAILURE"
 
 
 def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) -> None:
@@ -3401,7 +3039,7 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
         radar_policy_identity=RADAR_POLICY_IDENTITY,
         underwriting_policy_identity=UNDERWRITING_POLICY_IDENTITY,
         position_policy_identity=POSITION_POLICY_IDENTITY,
-        underwriting_position_contract_digest=UNDERWRITING_CONTRACT_DIGEST,
+        underwriting_position_contract_digest=UNDERWRITING_POSITION_CONTRACT_DIGEST,
         outcome_contract_digest=OUTCOME_CONTRACT_DIGEST,
     )
     writer = DownstreamEvidenceWriter(tmp_path, bindings=bindings)
@@ -3501,8 +3139,7 @@ def test_downstream_writer_current_reader_and_duplicate_rules(tmp_path: Path) ->
     )
     assert attempt_path is not None
     assert writer.revision == 2
-    with pytest.raises(DownstreamEvidenceError, match="missing local ANCHOR"):
-        read_current_evidence(tmp_path, bindings=bindings)
+    assert attempt.scheduled_identity in read_current_evidence(tmp_path, bindings=bindings)
     attempt_path.unlink()
 
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -3580,120 +3217,6 @@ def test_every_write_keeps_local_validation_without_attempt_graph_scan(
 
     assert local_calls == local_calls_after_reader + 1
     assert owner.writer.revision == 2
-
-
-def test_manifest_normative_serializer_vector_and_closed_identity_graph(tmp_path: Path) -> None:
-    vector = '{"kind":"组合","values":["' + "\N{GREEK SMALL LETTER ALPHA}" + '",1,null]}\n'
-    assert manifest_identity_bytes(vector.encode()) == (
-        "sha256:8467e20e8dd44a9849ac4b63dd33d086f4fb7cedc027d663c16f70e3ed4b68f9"
-    )
-    candidate = "a" * 40
-    runtime = "sha256:" + "b" * 64
-    clock = "sha256:" + "c" * 64
-    outcome_contract_identity = canonical_identity(
-        "OUTCOME_CONTRACT",
-        "SHORT_VOL_PUBLIC_SHADOW_OUTCOME_FORWARD_COHORT",
-        OUTCOME_CONTRACT_DIGEST,
-        candidate,
-        RADAR_POLICY_IDENTITY,
-        UNDERWRITING_POLICY_IDENTITY,
-        POSITION_POLICY_IDENTITY,
-    )
-
-    def trigger(kind: str, at: int) -> dict[str, object]:
-        return {
-            "runtime_identity": runtime,
-            "supervisor_clock_identity": clock,
-            "trigger_monotonic_ms": at,
-            "trigger_kind": kind,
-        }
-
-    manifest: dict[str, object] = {
-        "manifest_content_schema_identity": canonical_identity(
-            "SHORT_VOL_SHADOW_FORWARD_COHORT_MANIFEST_SCHEMA",
-            OUTCOME_CONTRACT_DIGEST,
-        ),
-        "candidate_commit": candidate,
-        "candidate_tree": "d" * 40,
-        "intended_remote_ref": "refs/heads/codex/short-vol-fixed-contract-public-shadow-runtime",
-        "verified_remote_ref": candidate,
-        "outcome_contract_identity": outcome_contract_identity,
-        "outcome_contract_path": "docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md",
-        "radar_policy_path": "policies/short-vol-fixed-public-shadow-radar.json",
-        "radar_policy_identity": RADAR_POLICY_IDENTITY,
-        "underwriting_policy_path": "policies/short-vol-fixed-public-shadow-underwriting.json",
-        "underwriting_policy_identity": UNDERWRITING_POLICY_IDENTITY,
-        "position_policy_path": "policies/short-vol-fixed-public-shadow-position.json",
-        "position_policy_identity": POSITION_POLICY_IDENTITY,
-        "evidence_directory": str(tmp_path / "evidence"),
-        "process_argv": ["python", "-m", "radar_runtime", "observe-shadow"],
-        "process_cwd": str(ROOT),
-        "required_pre_run_checks": ["make check"],
-        "runtime_start_trigger": trigger("RUNTIME_START", 1),
-        "enrollment_cutoff_trigger": trigger("ENROLLMENT_CUTOFF", 2),
-        "final_stop_trigger": trigger("FINAL_STOP", 3),
-        "clean_stop_predicate": "final stop trigger accepted independent of results",
-        "emergency_stop_authority": "sha256:" + "e" * 64,
-        "forbidden_capabilities": [
-            "sha256:" + "1" * 64,
-            "sha256:" + "2" * 64,
-        ],
-        "non_claims": [
-            "sha256:" + "3" * 64,
-            "sha256:" + "4" * 64,
-        ],
-    }
-    exact = (
-        json.dumps(manifest, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n"
-    ).encode()
-    loaded = load_manifest_bytes(exact)
-    assert loaded.candidate_commit == candidate
-    assert loaded.runtime_identity == runtime
-    assert loaded.manifest_identity == manifest_identity_bytes(exact)
-
-    manifest["unknown"] = True
-    bad = (
-        json.dumps(manifest, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n"
-    ).encode()
-    with pytest.raises(ManifestError, match=r"exact keys|order"):
-        load_manifest_bytes(bad)
-
-
-def test_cohort_conservation_and_exact_rates_never_fabricate_zero() -> None:
-    zero = {key: 0 for key in COHORT_COUNT_KEYS}
-    assert cohort_conservation_status(zero, evidence_status="COMPLETE") == "MET"
-    assert all(rate is None for rate in compute_cohort_rates(zero).values())
-
-    counts = dict(zero)
-    counts.update(
-        {
-            "shadow_entry_count": 1,
-            "shadow_observation_count": 1,
-            "shadow_mature_known_count": 1,
-            "shadow_outcome_count": 1,
-            "shadow_selected_exit_count": 1,
-            "shadow_terminal_pair_count": 1,
-            "logical_admitted_pair_count": 1,
-            "logical_aligned_pair_count": 1,
-            "enrolled_admitted_pair_count": 1,
-            "enrolled_admitted_mature_known_count": 1,
-            "enrolled_aligned_pair_count": 1,
-            "enrolled_terminal_pair_count": 1,
-            "enrolled_comparable_pair_count": 1,
-            "logical_no_trade_arm_count": 1,
-            "durable_terminal_pair_count": 1,
-            "durable_no_trade_arm_count": 1,
-            "enrolled_admitted_mature_known_win_count": 1,
-        }
-    )
-    assert cohort_conservation_status(counts, evidence_status="COMPLETE") == "MET"
-    assert compute_cohort_rates(counts)["admitted_win_rate"] == {
-        "numerator": 1,
-        "denominator": 1,
-    }
-
-    counts["shadow_selected_exit_count"] = 0
-    assert cohort_conservation_status(counts, evidence_status="COMPLETE") == "NOT_MET"
 
 
 def test_close_quote_classifier_follows_the_frozen_first_match_order() -> None:

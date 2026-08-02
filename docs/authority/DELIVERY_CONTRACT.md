@@ -184,21 +184,15 @@ proof.
 Serializers use null/undefined for a rate whose denominator is zero or unknown. They never replace
 an undefined rate with `0`.
 
-## Index publication evidence schema
+## Radar summary evidence
 
-The current Radar writer and current validators emit and accept only integer operational
-diagnostics schema version 6. Version 6 keeps grouped coverage and continuity cross-checks and adds
-one exact bounded `index_baseline_publication` pending ledger. Normal publication pending is not a
-coverage blocker and has no acceptance budget; it is diagnostic and may overlap known-complete
-coverage or unrelated local unavailability. Its retained `CURRENTNESS_LOST` row is the independent
-owning transition for exact invalidating reason and full fact boundary; active-incident
-de-duplication cannot suppress that closure or require a second restart. Current Soak accounting
-keeps `K` over the full final hour, `G` as real currentness incidents, `E = W \ G`, and
-option-local `U` intersected with `E`.
+The current Radar writer persists coverage partitions and business-transition counts only. It does
+not persist RPC, transport, source-shape, publication-cadence, host-resource, or acceptance-control
+ledgers. Those operational observations are not business denominators and do not belong in the
+market-event hot path.
 
-Diagnostics versions 2–5 and unversioned legacy objects are unsupported and `NOT_COMPARABLE`.
-Their deleted artifacts are not migrated, reconstructed, replayed, recomputed, or used as
-acceptance input. The repository keeps no compatibility reader or historical Soak formula.
+Deleted diagnostic summaries are unsupported and `NOT_COMPARABLE`. They are not migrated,
+reconstructed, replayed, recomputed, or used as acceptance input.
 
 ## Denominator integrity
 

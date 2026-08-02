@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Mapping
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -38,7 +37,6 @@ class RecordingShadowAdapter:
         self.supervisor_boundaries: list[tuple[str, FactBoundary]] = []
         self.settled: list[CausalCommit] = []
         self.order: list[str] = []
-        self.finalized = 0
 
     @property
     def required_combo_instrument_names(self) -> tuple[str, ...]:
@@ -83,14 +81,6 @@ class RecordingShadowAdapter:
         self.supervisor_boundaries.append(("ENROLLMENT_CUTOFF", boundary))
         self.order.append("ENROLLMENT_CUTOFF")
 
-    def configure_terminal_control(
-        self,
-        *,
-        terminal_disposition: str,
-        terminal_source: Mapping[str, object],
-    ) -> None:
-        del terminal_disposition, terminal_source
-
     def on_request_sent(
         self,
         *,
@@ -125,9 +115,6 @@ class RecordingShadowAdapter:
     def terminate(self, *, source: str, boundary: FactBoundary) -> None:
         del boundary
         self.terminals.append(source)
-
-    def finalize_terminal(self) -> None:
-        self.finalized += 1
 
 
 def _runtime(
@@ -294,7 +281,6 @@ def test_fatal_terminal_follows_every_barrier_accepted_shadow_failure(
 
     runtime.reducer.finalize_shadow_failure(runtime.reducer._last_boundary_monotonic_ms + 1)
     assert adapter.terminals == ["FAILURE"]
-    assert adapter.finalized == 1
 
 
 def test_recoverable_reconnect_drains_without_terminalizing_and_next_session_works(
@@ -387,7 +373,6 @@ def test_pre_sent_shadow_response_is_orphan_and_request_expires_normally(
     assert early_response.received_monotonic_ms == 1_001
     assert runtime.reducer._rpc_lifecycles[request_id].state is RpcState.SENT
     assert adapter.responses == []
-    assert runtime.reducer.diagnostics.rpc_orphan_late_wire_count == 1
 
     runtime.reducer.advance_time(1_102)
     assert runtime.reducer._rpc_lifecycles[request_id].state is RpcState.SENT
@@ -463,362 +448,6 @@ def test_barrier_discards_new_shadow_intents_without_enrollment(
     assert request_id not in runtime.reducer._rpc_lifecycles
 
 
-def test_start_and_cutoff_are_distinct_reducer_owned_control_boundaries(
-    tmp_path: Path,
-    policy_factory: Any,
-) -> None:
-    adapter = RecordingShadowAdapter()
-    runtime = _runtime(tmp_path, policy_factory, adapter)
-    runtime.reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-
-    start = runtime.commit_shadow_supervisor_control(
-        runtime_module.ShadowSupervisorControlKind.RUNTIME_START,
-        monotonic_ms=1_100,
-    )
-    cutoff = runtime.commit_shadow_supervisor_control(
-        runtime_module.ShadowSupervisorControlKind.ENROLLMENT_CUTOFF,
-        monotonic_ms=1_100,
-    )
-
-    assert start == FactBoundary(1, 0, 1_100, 1)
-    assert cutoff == FactBoundary(1, 0, 1_100, 2)
-    assert adapter.supervisor_boundaries == [
-        ("RUNTIME_START", start),
-        ("ENROLLMENT_CUTOFF", cutoff),
-    ]
-
-
-class _IdleClient:
-    session_epoch = 1
-    queue_high_water_frames = 0
-    overflow_count = 0
-    received_frame_count = 0
-    enqueued_envelope_count = 0
-
-    async def send_request(self, **_kwargs: object) -> None:
-        raise AssertionError("stopped fixture must not send")
-
-    async def next_envelope(
-        self,
-        timeout_seconds: float | None = None,
-    ) -> InboundEnvelope:
-        del timeout_seconds
-        raise AssertionError("stopped fixture must not await transport")
-
-    def drain_envelopes(self) -> tuple[InboundEnvelope, ...]:
-        return ()
-
-    async def stop_intake(self) -> None:
-        return None
-
-    def enqueue_send_control(self, event: SendControlEvent) -> None:
-        raise AssertionError(f"stopped fixture unexpectedly emitted {event}")
-
-
-class _TerminalStopEvent(asyncio.Event):
-    def __init__(self, terminal_monotonic_ms: int) -> None:
-        super().__init__()
-        self.terminal_monotonic_ms = terminal_monotonic_ms
-        self.set()
-
-
-class _RequestableTerminalStopEvent(asyncio.Event):
-    def __init__(self) -> None:
-        super().__init__()
-        self.terminal_monotonic_ms: int | None = None
-
-    def request(self, *, terminal_monotonic_ms: int) -> None:
-        self.terminal_monotonic_ms = terminal_monotonic_ms
-        self.set()
-
-
-def test_initial_stop_realizes_overdue_start_and_cutoff_before_terminal(
-    tmp_path: Path,
-    policy_factory: Any,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    adapter = RecordingShadowAdapter()
-    runtime = _runtime(tmp_path, policy_factory, adapter)
-    monkeypatch.setattr(runtime_module, "_monotonic_ms", lambda: 1_000)
-
-    summary_path = asyncio.run(
-        runtime.run(
-            _IdleClient(),
-            _TerminalStopEvent(1_000),
-            shadow_supervisor_triggers=runtime_module.ShadowSupervisorTriggers(
-                runtime_start_monotonic_ms=900,
-                enrollment_cutoff_monotonic_ms=950,
-            ),
-        )
-    )
-
-    assert summary_path.exists()
-    assert adapter.order == ["RUNTIME_START", "ENROLLMENT_CUTOFF"]
-    start = adapter.supervisor_boundaries[0][1]
-    cutoff = adapter.supervisor_boundaries[1][1]
-    assert start.received_monotonic_ms == cutoff.received_monotonic_ms == 1_000
-    assert cutoff.causal_seq == start.causal_seq + 1
-    assert adapter.terminals == ["STOP"]
-
-
-class _BufferedSupervisorClient(_IdleClient):
-    received_frame_count = 3
-    enqueued_envelope_count = 3
-
-    def __init__(self) -> None:
-        self._drained = False
-        self._events = (
-            InboundEnvelope(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "heartbeat",
-                    "params": {"type": "heartbeat"},
-                },
-                session_epoch=1,
-                ingress_seq=1,
-                received_monotonic_ms=900,
-            ),
-            InboundEnvelope(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "heartbeat",
-                    "params": {"type": "heartbeat"},
-                },
-                session_epoch=1,
-                ingress_seq=2,
-                received_monotonic_ms=960,
-            ),
-            InboundEnvelope(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "heartbeat",
-                    "params": {"type": "heartbeat"},
-                },
-                session_epoch=1,
-                ingress_seq=3,
-                received_monotonic_ms=1_000,
-            ),
-        )
-
-    def drain_envelopes(self) -> tuple[InboundEnvelope, ...]:
-        if self._drained:
-            return ()
-        self._drained = True
-        return self._events
-
-
-class _FinalBarrierRecordingShadowAdapter(RecordingShadowAdapter):
-    def __init__(self) -> None:
-        super().__init__()
-        self.created_intent_boundaries: list[FactBoundary] = []
-
-    def on_settled_transaction(
-        self,
-        *,
-        reducer: RadarReducer,
-        commit: CausalCommit,
-    ) -> tuple[ShadowRpcIntent, ...]:
-        super().on_settled_transaction(reducer=reducer, commit=commit)
-        if (
-            commit.cause is runtime_module.CausalCause.PLATFORM_FACT
-            and commit.boundary.ingress_seq >= 3
-        ):
-            self.created_intent_boundaries.append(commit.boundary)
-            return (
-                ShadowRpcIntent(
-                    request_id=reducer.allocate_shadow_request_id(),
-                    purpose=RpcPurpose.ADMISSION_REFRESH,
-                    method="public/get_order_book",
-                    params={"instrument_name": "BTC-COMBO", "depth": 10000},
-                    scope="CANDIDATE:terminal-boundary",
-                    origin_boundary=commit.boundary,
-                    send_budget_ms=100,
-                    response_budget_ms=100,
-                ),
-            )
-        return ()
-
-
-class _BufferedFinalStopClient(_IdleClient):
-    received_frame_count = 4
-    enqueued_envelope_count = 4
-
-    def __init__(self) -> None:
-        self._drained = False
-        self._events = tuple(
-            InboundEnvelope(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "subscription",
-                    "params": {
-                        "channel": "platform_state",
-                        "data": {"maintenance": maintenance},
-                    },
-                },
-                session_epoch=1,
-                ingress_seq=ingress_seq,
-                received_monotonic_ms=received_monotonic_ms,
-            )
-            for ingress_seq, received_monotonic_ms, maintenance in (
-                (1, 900, False),
-                (2, 960, False),
-                (3, 1_000, False),
-                (4, 1_001, True),
-            )
-        )
-
-    def drain_envelopes(self) -> tuple[InboundEnvelope, ...]:
-        if self._drained:
-            return ()
-        self._drained = True
-        return self._events
-
-
-def test_buffered_pretrigger_event_reduces_before_each_due_supervisor_control(
-    tmp_path: Path,
-    policy_factory: Any,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    adapter = RecordingShadowAdapter()
-    runtime = _runtime(tmp_path, policy_factory, adapter)
-    stop_event = asyncio.Event()
-    monkeypatch.setattr(runtime_module, "_monotonic_ms", lambda: 1_000)
-    original_begin_session = runtime.reducer.begin_session
-    original_reduce = runtime.reducer.reduce
-
-    def begin_without_outbound(
-        *,
-        session_epoch: int,
-        monotonic_ms: int,
-    ) -> tuple[runtime_module.PendingRpc, ...]:
-        original_begin_session(
-            session_epoch=session_epoch,
-            monotonic_ms=monotonic_ms,
-        )
-        return ()
-
-    def tracked_reduce(
-        envelope: InboundEnvelope,
-        *,
-        processed_monotonic_ms: int,
-    ) -> tuple[runtime_module.PendingRpc, ...]:
-        adapter.order.append(f"EVENT_{envelope.ingress_seq}")
-        result = original_reduce(
-            envelope,
-            processed_monotonic_ms=processed_monotonic_ms,
-        )
-        if envelope.ingress_seq == 3:
-            stop_event.set()
-        return result
-
-    monkeypatch.setattr(runtime.reducer, "begin_session", begin_without_outbound)
-    monkeypatch.setattr(runtime.reducer, "reduce", tracked_reduce)
-
-    asyncio.run(
-        runtime.run(
-            _BufferedSupervisorClient(),
-            stop_event,
-            shadow_supervisor_triggers=runtime_module.ShadowSupervisorTriggers(
-                runtime_start_monotonic_ms=950,
-                enrollment_cutoff_monotonic_ms=1_000,
-            ),
-        )
-    )
-
-    assert adapter.order[:5] == [
-        "EVENT_1",
-        "RUNTIME_START",
-        "EVENT_2",
-        "ENROLLMENT_CUTOFF",
-        "EVENT_3",
-    ]
-
-
-def test_final_stop_opens_barrier_before_reducing_trigger_or_later_facts(
-    tmp_path: Path,
-    policy_factory: Any,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    adapter = _FinalBarrierRecordingShadowAdapter()
-    runtime = _runtime(tmp_path, policy_factory, adapter)
-    stop_event = _RequestableTerminalStopEvent()
-    monkeypatch.setattr(runtime_module, "_monotonic_ms", lambda: 1_000)
-    original_begin_session = runtime.reducer.begin_session
-    original_reduce = runtime.reducer.reduce
-
-    def begin_without_outbound(
-        *,
-        session_epoch: int,
-        monotonic_ms: int,
-    ) -> tuple[runtime_module.PendingRpc, ...]:
-        original_begin_session(
-            session_epoch=session_epoch,
-            monotonic_ms=monotonic_ms,
-        )
-        runtime.reducer._channels["platform_state"] = runtime_module._ChannelSlot(
-            state=runtime_module.ChannelState.ACKNOWLEDGED,
-            generation=1,
-            desired_subscribed=True,
-        )
-        runtime.reducer._update_subscription_peaks()
-        return ()
-
-    def tracked_reduce(
-        envelope: InboundEnvelope,
-        *,
-        processed_monotonic_ms: int,
-    ) -> tuple[runtime_module.PendingRpc, ...]:
-        adapter.order.append(f"EVENT_{envelope.ingress_seq}")
-        return original_reduce(
-            envelope,
-            processed_monotonic_ms=processed_monotonic_ms,
-        )
-
-    def realize_terminal_gate(monotonic_ms: int) -> None:
-        adapter.order.append("FINAL_STOP")
-        runtime.configure_shadow_terminal_control(
-            terminal_disposition="PLANNED_CLEAN_STOP",
-            terminal_source={"control_monotonic_ms": monotonic_ms},
-        )
-        stop_event.request(terminal_monotonic_ms=monotonic_ms)
-
-    monkeypatch.setattr(runtime.reducer, "begin_session", begin_without_outbound)
-    monkeypatch.setattr(runtime.reducer, "reduce", tracked_reduce)
-
-    asyncio.run(
-        runtime.run(
-            _BufferedFinalStopClient(),
-            stop_event,
-            shadow_supervisor_triggers=runtime_module.ShadowSupervisorTriggers(
-                runtime_start_monotonic_ms=800,
-                enrollment_cutoff_monotonic_ms=850,
-                final_stop_monotonic_ms=960,
-            ),
-            shadow_terminal_gate=realize_terminal_gate,
-        )
-    )
-
-    assert adapter.order == [
-        "RUNTIME_START",
-        "ENROLLMENT_CUTOFF",
-        "EVENT_1",
-        "FINAL_STOP",
-        "EVENT_2",
-        "EVENT_3",
-        "EVENT_4",
-    ]
-    platform_commits = [
-        commit
-        for commit in adapter.settled
-        if commit.cause is runtime_module.CausalCause.PLATFORM_FACT
-    ]
-    assert [commit.boundary.ingress_seq for commit in platform_commits] == [1, 2]
-    assert adapter.created_intent_boundaries == []
-    assert not runtime.reducer.platform.maintenance_guard
-    assert runtime.reducer.diagnostics.retired_epoch_frame_count == 2
-    assert adapter.terminals == ["STOP"]
-
-
 def test_radar_summary_writer_failure_does_not_skip_downstream_terminal(
     tmp_path: Path,
     policy_factory: Any,
@@ -837,7 +466,6 @@ def test_radar_summary_writer_failure_does_not_skip_downstream_terminal(
         runtime.reducer.clean_stop(1_100)
 
     assert adapter.terminals == ["FAILURE"]
-    assert adapter.finalized == 1
 
 
 def _set_platform_usable(reducer: RadarReducer) -> None:

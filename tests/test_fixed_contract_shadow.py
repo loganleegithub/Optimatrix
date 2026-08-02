@@ -65,6 +65,10 @@ from short_vol_underwriting import (
 from short_vol_underwriting import (
     FactBoundary as DownstreamFactBoundary,
 )
+from short_vol_underwriting.constants import (
+    OUTCOME_CONTRACT_DIGEST,
+    UNDERWRITING_POSITION_CONTRACT_DIGEST,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 RADAR_POLICY_IDENTITY = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
@@ -72,10 +76,6 @@ UNDERWRITING_POLICY_IDENTITY = (
     "sha256:be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af"
 )
 POSITION_POLICY_IDENTITY = "sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439"
-UNDERWRITING_CONTRACT_DIGEST = (
-    "sha256:9cbaecf57fb1db0dedf782a4ab002b655e43319a1ad7c5880db3d7b4682d4b03"
-)
-OUTCOME_CONTRACT_DIGEST = "sha256:61a032fe0fe265d66a38bcbb1a3c8498409664fedbda2c8bd0a245180581a695"
 
 
 def _reducer(tmp_path: Path, policy_factory: PolicyFactory) -> RadarReducer:
@@ -284,7 +284,7 @@ def _shadow_system(
         radar_policy_identity=RADAR_POLICY_IDENTITY,
         underwriting_policy_identity=UNDERWRITING_POLICY_IDENTITY,
         position_policy_identity=POSITION_POLICY_IDENTITY,
-        underwriting_position_contract_digest=UNDERWRITING_CONTRACT_DIGEST,
+        underwriting_position_contract_digest=UNDERWRITING_POSITION_CONTRACT_DIGEST,
         outcome_contract_digest=OUTCOME_CONTRACT_DIGEST,
     )
     downstream = tmp_path / "downstream"
@@ -1319,36 +1319,6 @@ def test_retired_admission_request_keeps_typed_source_gap_semantics(
     assert payload["primary_reason"] == ("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN")
 
 
-def test_fatal_control_may_supersede_pending_stop_control_once(
-    tmp_path: Path,
-) -> None:
-    _reducer_value, adapter, _owner = _shadow_system(tmp_path)
-    emergency: dict[str, object] = {
-        "control_kind": "AUTHORIZED_EMERGENCY_STOP",
-        "reason": "USER_REQUEST",
-    }
-    fatal: dict[str, object] = {
-        "control_kind": "PROCESS_FAILURE",
-        "failure_kind": "FATAL_RUNTIME",
-    }
-
-    adapter.configure_terminal_control(
-        terminal_disposition="AUTHORIZED_EMERGENCY_STOP",
-        terminal_source=emergency,
-    )
-    adapter.configure_terminal_control(
-        terminal_disposition="PROCESS_FAILURE",
-        terminal_source=fatal,
-    )
-
-    assert adapter._configured_terminal_control == ("PROCESS_FAILURE", fatal)
-    with pytest.raises(ValueError, match="only fatal failure"):
-        adapter.configure_terminal_control(
-            terminal_disposition="PROCESS_FAILURE",
-            terminal_source=fatal,
-        )
-
-
 def test_platform_currentness_budget_is_inclusive_then_unknown_at_budget_plus_one(
     tmp_path: Path,
 ) -> None:
@@ -1954,7 +1924,6 @@ def test_candidate_subscription_winner_retires_runtime_rpc_and_late_wire_is_orph
         request_id=request.request_id,
         boundary=late_boundary,
     )
-    orphan_before = reducer.diagnostics.rpc_orphan_late_wire_count
     reducer._apply_response(
         InboundEnvelope(
             {
@@ -1967,7 +1936,6 @@ def test_candidate_subscription_winner_retires_runtime_rpc_and_late_wire_is_orph
             received_monotonic_ms=next_monotonic + 20,
         )
     )
-    assert reducer.diagnostics.rpc_orphan_late_wire_count == orphan_before + 1
     assert tuple(owner.writer.objects) == after_winner
 
 
@@ -2057,7 +2025,6 @@ def test_post_close_subscription_winner_retires_runtime_rpc_and_late_wire_is_orp
         request_id=request.request_id,
         boundary=late_boundary,
     )
-    orphan_before = reducer.diagnostics.rpc_orphan_late_wire_count
     reducer._apply_response(
         InboundEnvelope(
             {
@@ -2070,5 +2037,4 @@ def test_post_close_subscription_winner_retires_runtime_rpc_and_late_wire_is_orp
             received_monotonic_ms=next_monotonic + 20,
         )
     )
-    assert reducer.diagnostics.rpc_orphan_late_wire_count == orphan_before + 1
     assert tuple(owner.writer.objects) == after_winner

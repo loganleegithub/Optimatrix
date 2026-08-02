@@ -10,7 +10,6 @@ from decimal import Decimal
 from enum import StrEnum
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol, cast
 
@@ -18,7 +17,6 @@ from market_monitor import ContinuityGap, TimeInterval
 from short_vol_radar.black import DecimalInterval
 from short_vol_radar.detector import DetectorState
 from short_vol_radar.evidence import CoverageBlockingReason, CoverageState
-from short_vol_underwriting.conservation import derive_underwriting_counts
 from short_vol_underwriting.evidence import DownstreamEvidenceWriter, RuntimeBindings
 from short_vol_underwriting.identity import canonical_decimal, canonical_value
 from short_vol_underwriting.policy import PolicyChain
@@ -330,7 +328,6 @@ class WorkbenchPublisher:
             "STARTING",
             initial_recorded_monotonic_ms,
         )
-        self._last_status_key: tuple[object, ...] | None = None
         self._published_status_key = _status_key(self._status)
         self._last_publication_monotonic_ms = initial_recorded_monotonic_ms
         self._last_business: Mapping[str, object] = MappingProxyType(_empty_business_projection())
@@ -361,8 +358,6 @@ class WorkbenchPublisher:
         return self._status
 
     def update_status(self, status: ServiceStatus) -> None:
-        status_key = _status_key(status)
-        self._last_status_key = status_key
         self._status = status
         self._dirty = True
         self._publish_pending(status=status)
@@ -386,7 +381,6 @@ class WorkbenchPublisher:
         self._dirty = True
         self._business_dirty = True
         status_key = _status_key(status)
-        self._last_status_key = status_key
         self._status = status
         if (
             status_key != self._published_status_key
@@ -627,8 +621,33 @@ def _build_downstream_projection(
         ),
         shadow_rows=_shadow_rows(kinds, policies),
         outcome_rows=_outcome_rows(kinds),
-        underwriting_counts=derive_underwriting_counts(objects),
+        underwriting_counts=_underwriting_counts(objects),
     )
+
+
+def _underwriting_counts(
+    objects: Sequence[Mapping[str, object]],
+) -> dict[str, int]:
+    counts = {
+        "candidate_count": 0,
+        "underwriting_availability_evaluable_count": 0,
+    }
+    seen: set[tuple[str, str]] = set()
+    for value in objects:
+        kind = value.get("object_kind")
+        identity = value.get("object_identity")
+        if not isinstance(kind, str) or not isinstance(identity, str):
+            continue
+        if (kind, identity) in seen:
+            continue
+        seen.add((kind, identity))
+        if kind == "CANDIDATE_ACTIVATION":
+            counts["candidate_count"] += 1
+        elif kind == "UNDERWRITING_AVAILABILITY_EVALUATION":
+            payload = value.get("payload")
+            if isinstance(payload, Mapping) and payload.get("availability") == "EVALUABLE":
+                counts["underwriting_availability_evaluable_count"] += 1
+    return counts
 
 
 def _radar_rows(
@@ -2090,8 +2109,3 @@ def validate_loopback_endpoint(host: str, port: int) -> tuple[str, int]:
     if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65_535:
         raise ValueError("workbench port must be within [0, 65535]")
     return str(address), port
-
-
-def write_static_fixture(path: Path, document: Mapping[str, object]) -> None:
-    """Test helper for UI fixtures; not used by the runtime or HTTP path."""
-    path.write_bytes(_json_bytes(document))

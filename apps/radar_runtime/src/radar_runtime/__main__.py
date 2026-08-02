@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import sys
 from pathlib import Path
 
 from short_vol_radar.policy import load_policy
@@ -15,11 +14,6 @@ from radar_runtime.identity import (
 )
 from radar_runtime.runtime import observe
 from radar_runtime.service import run_persistent_service
-from radar_runtime.shadow import (
-    build_shadow_composition,
-    observe_shadow,
-    prepare_shadow_startup,
-)
 
 
 def main() -> int:
@@ -29,39 +23,11 @@ def main() -> int:
     observe_parser.add_argument("--policy", type=Path, required=True)
     observe_parser.add_argument("--expected-policy-digest", required=True)
     observe_parser.add_argument("--evidence-dir", type=Path, required=True)
-    shadow_parser = subparsers.add_parser("observe-shadow")
-    shadow_parser.add_argument("--manifest", type=Path, required=True)
-    shadow_parser.add_argument("--radar-evidence-dir", type=Path, required=True)
     service_parser = subparsers.add_parser("serve-shadow")
     service_parser.add_argument("--state-root", type=Path, required=True)
     service_parser.add_argument("--workbench-host", default="127.0.0.1")
     service_parser.add_argument("--workbench-port", type=int, default=8765)
     arguments = parser.parse_args()
-    if arguments.command == "observe-shadow":
-        shadow_startup = prepare_shadow_startup(
-            manifest_path=arguments.manifest,
-            radar_evidence_directory=arguments.radar_evidence_dir,
-            process_argv=tuple(sys.argv),
-            process_cwd=Path.cwd(),
-        )
-        composition = build_shadow_composition(shadow_startup)
-        summary_path = asyncio.run(observe_shadow(composition))
-        print(
-            json.dumps(
-                {
-                    "manifest_identity": shadow_startup.manifest.manifest_identity,
-                    "manifest_path": str(composition.manifest_path),
-                    "code_identity": shadow_startup.code_identity,
-                    "runtime_identity": shadow_startup.runtime_identity,
-                    "radar_summary_path": str(summary_path),
-                    "downstream_evidence_directory": str(
-                        shadow_startup.downstream_evidence_directory
-                    ),
-                },
-                sort_keys=True,
-            )
-        )
-        return 0
     if arguments.command == "serve-shadow":
         service_startup, summary_path = asyncio.run(
             run_persistent_service(

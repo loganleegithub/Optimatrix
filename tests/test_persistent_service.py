@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import FrozenInstanceError, dataclass, field
 from pathlib import Path
@@ -385,11 +384,6 @@ class _OrderingAdapter:
     def realize_enrollment_cutoff(self, *, reducer: RadarReducer, boundary: FactBoundary) -> None:
         del reducer, boundary
 
-    def configure_terminal_control(
-        self, *, terminal_disposition: str, terminal_source: Mapping[str, object]
-    ) -> None:
-        del terminal_disposition, terminal_source
-
     def on_request_sent(
         self, *, request_id: int, boundary: FactBoundary
     ) -> tuple[ShadowRpcIntent, ...]:
@@ -415,9 +409,6 @@ class _OrderingAdapter:
 
     def terminate(self, *, source: str, boundary: FactBoundary) -> None:
         del source, boundary
-
-    def finalize_terminal(self) -> None:
-        return None
 
 
 @dataclass

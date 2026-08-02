@@ -198,14 +198,6 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
         "projected_shadow_net_pnl_usdc",
         "projected_net_loss_usdc",
     ),
-    "UNDERWRITING_POSITION_SUMMARY": (
-        "underwriting_position_summary_identity",
-        "terminal_source_identity",
-        "terminal_fact_boundary",
-        "counts",
-        "rates",
-        "conservation_status",
-    ),
     "SHADOW_OUTCOME_OBSERVATION": (
         "shadow_observation_identity",
         "shadow_entry_identity",
@@ -479,22 +471,6 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
         "policy_advantage_usdc",
         "comparison_availability",
     ),
-    "SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY": (
-        "cohort_summary_identity",
-        "manifest_identity",
-        "runtime_start_fact_boundary",
-        "enrollment_end_fact_boundary",
-        "enrollment_end_reason",
-        "terminal_fact_boundary",
-        "terminal_disposition",
-        "planned_final_stop_fact_boundary",
-        "terminal_source_identity",
-        "terminal_source",
-        "evidence_status",
-        "counts",
-        "rates",
-        "conservation_status",
-    ),
 }
 
 IDENTITY_PAYLOAD_FIELDS = {kind: keys[0] for kind, keys in PAYLOAD_KEYS.items()}
@@ -514,7 +490,6 @@ PRIMARY_BOUNDARY_FIELDS = {
     "POST_CLOSE_ATTEMPT_TERMINAL": "terminal_fact_boundary",
     "CLOSE_OPPORTUNITY_EVALUATION": "evaluation_fact_boundary",
     "SHADOW_CLOSE_OPPORTUNITY": "opportunity_fact_boundary",
-    "UNDERWRITING_POSITION_SUMMARY": "terminal_fact_boundary",
     "SHADOW_OUTCOME_OBSERVATION": "start_fact_boundary",
     "SHADOW_COUNTERFACTUAL_EXIT": "selection_fact_boundary",
     "SHADOW_OUTCOME": "terminal_fact_boundary",
@@ -527,7 +502,6 @@ PRIMARY_BOUNDARY_FIELDS = {
     "REJECTED_COUNTERFACTUAL_EXIT": "selection_fact_boundary",
     "REJECTED_COUNTERFACTUAL_OUTCOME": "terminal_fact_boundary",
     "ALIGNED_POLICY_NO_TRADE_PAIR": "terminal_fact_boundary",
-    "SHORT_VOL_SHADOW_FORWARD_COHORT_SUMMARY": "terminal_fact_boundary",
 }
 
 if set(PAYLOAD_KEYS) != set(ALL_DOWNSTREAM_OBJECT_KINDS):

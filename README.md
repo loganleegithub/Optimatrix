@@ -15,19 +15,20 @@ outputs were rejected as unreliable, and its runtime/evidence history is no long
 current authority. There is no deployed process, launchd service, loopback listener, 24-hour claim,
 private/account access, order, fill, actual position, or PnL authority.
 
-The merged offline runtime removed the macOS commissioning controller and the separate service
+The current offline runtime removed the macOS commissioning controller and the separate service
 lifecycle evidence ledger while keeping the complete Radar-to-Outcome transaction, reconnect loop,
 signal stop, minimal business persistence, coalesced Workbench publication, health/readiness, and
-loopback-only HTTP. The active offline task removes obsolete Radar evidence compatibility code;
-live commands remain forbidden.
+loopback-only HTTP. The active offline task removes the remaining acceptance-only diagnostics and
+manifest harness; live commands remain forbidden.
 
 The application no longer runs `launchd`, `lsof`, unified-log, resource probes, 24-hour acceptance,
 service-manifest, inventory-hash, or lifecycle-receipt logic. Process supervision and host resource
 monitoring belong outside Python. Passing tests prove the simplified offline composition only;
 they do not accept the Radar, deployment, uptime, or strategy value.
 
-Downstream writes still validate each business object directly, but no longer rescan every prior
-relationship on each transition; graph validation remains in offline readers and tests.
+Downstream writes validate each current business object's schema, primary boundary and identity.
+Reading the current set repeats those checks; it does not recompute owner arithmetic or rebuild a
+second relationship graph.
 ## Intended first business flow
 
 ```text
@@ -72,7 +73,7 @@ It also implements Candidate invalidation and the strictly later full-quantity c
 The implemented Outcome/cohort reducer follows the frozen causal-first counterfactual exit and
 terminal `MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one
 bounded rejected counterfactual per slot, cohort-aligned `NO_TRADE`, exact public-quote PnL
-equations, and honest conservation/null denominators. A public quote remains not a fill. No current
+equations, and honest unknown/censoring behavior. A public quote remains not a fill. No current
 production-public Shadow evidence or trading capability is accepted.
 
 ## Authority
@@ -97,8 +98,8 @@ contract owns the offline service boundary and immutable read-only Workbench pro
   quote arithmetic
 - `short_vol_radar`: detector episodes, official atomic availability, and minimal event
   projection
-- `short_vol_underwriting`: pure fixed-contract Underwriting, admission, Position, Outcome,
-  conservation, and downstream evidence owner
+- `short_vol_underwriting`: pure fixed-contract Underwriting, admission, Position, Outcome, and
+  current business-object owner
 - `radar_runtime`: guarded composition of the continuous production-public process
 
 There is no compatibility package, commissioning controller, or service-evidence ledger.
@@ -107,10 +108,10 @@ The current bounded runtime separates per-band immutable index-baseline availabi
 generation-global successor publication. Normal time/watermark publication pending keeps an
 already proven `N + 1` close tuple available and does not pause detector episodes, Layer 2, known
 coverage, or persistence. Real window, source-stale, and continuity failures remain fail-closed.
-Publication currentness invalidates exactly once independently from continuity-incident restart
-de-duplication, so a stronger clock/session/index loss cannot leave a pending row or tuple alive.
-Current run summaries and their only reader use diagnostics schema version 6. Older and
-unversioned objects are unsupported, not migrated, and not acceptance input.
+Publication currentness invalidates independently from continuity-incident restart de-duplication,
+so a stronger clock/session/index loss cannot leave a stale tuple alive. Current run summaries
+contain coverage and business-transition counts only; transport and acceptance diagnostics are
+ordinary non-durable process concerns.
 
 ## Local verification
 
@@ -119,7 +120,7 @@ make sync
 make check
 ```
 
-The `observe`, `observe-shadow`, and `serve-shadow` commands are implementation surfaces only.
+The `observe` and `serve-shadow` commands are implementation surfaces only.
 `CURRENT_STAGE` forbids all live commands and deployment. Every private, account, order, fill, and
 capital surface remains forbidden. Any future production-public validation requires a new explicit
 task and fresh evidence boundary; no deleted history may be reused as acceptance.

@@ -8,7 +8,7 @@
 
 **Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`
 
-**Sole authorized closure:** `SHORT_VOL_RADAR_CURRENT_EVIDENCE_ONLY`
+**Sole authorized closure:** `SHORT_VOL_RUNTIME_EVIDENCE_SLIMDOWN`
 
 **Persistent service:** `STOPPED_NO_DEPLOYMENT`
 
@@ -28,16 +28,14 @@ Policy quality, fillability, profitability, actual exposure, or PnL.
 
 ## Current implementation
 
-The merged offline implementation removed the obsolete macOS commissioning controller and the
+The current offline simplification removes the obsolete macOS commissioning controller and the
 separate service lifecycle evidence/terminal-manifest system. It simplified `serve-shadow` to the
 business runtime itself: one public client, reducer, downstream owner, minimal business
 persistence, reconnect loop, signal stop, coalesced Workbench publisher, and loopback
 health/readiness HTTP.
-It also removes accumulated whole-graph rescans from the downstream writer hot path while retaining
-direct per-object validation and offline reader graph validation.
-The service-only run-summary path may accept a contiguous omitted zero-duration leading restart
-without demanding that a same-timestamp recovered segment repeat the retired reason.
-
+It also removes accumulated whole-graph rescans. Writer and reader retain one shared per-object
+schema, primary-boundary and identity check; owner arithmetic is tested directly and is not
+recomputed by persistence code.
 It must preserve market/Decision inputs, all three Policies, Radar semantics, Underwriting,
 Shadow, Position, Outcome, causal order, honest `UNKNOWN`, conditioned zero claims, public/private
 separation, and GET/HEAD-only Workbench behavior.
@@ -54,17 +52,16 @@ separation, and GET/HEAD-only Workbench behavior.
 Allowed:
 
 - read-only inspection and deterministic offline tests of the merged implementation.
-- the bounded offline removal of obsolete Radar diagnostics schema version 2–5 and legacy reader,
-  accounting, test, and contract compatibility surfaces under
-  `SHORT_VOL_RADAR_CURRENT_EVIDENCE_ONLY`;
+- the bounded offline removal of acceptance-only Radar operational diagnostics, the manifest-bound
+  `observe-shadow` harness, complete downstream proof readers/summaries, duplicate terminal graph
+  validation, and dead runtime state under `SHORT_VOL_RUNTIME_EVIDENCE_SLIMDOWN`;
 - deterministic offline tests and repository inspection for that task.
 
 Forbidden:
 
 - production-public market, service, probe, commissioning, deployment, or evidence commands;
 - reconstructing or relabelling deleted historical results;
-- changing the current diagnostics schema version-6 writer, persisted meaning, or business
-  accounting;
+- changing Radar, Underwriting, Shadow, Position, Outcome, coverage, or business-count meaning;
 - changing market sources, universe, continuity, missingness, detector formulas/thresholds,
   Underwriting, Shadow admission, Position, Outcome, or cohort semantics;
 - private/account APIs, credentials, balances, margin, positions, orders, fills, settlement,
@@ -74,7 +71,7 @@ Forbidden:
 
 ## Acceptance and non-claims
 
-Direct offline tests and `make check` must prove the simplified composition, owner continuity,
+Direct offline tests and `make check` must prove the current composition, owner continuity,
 stop/reconnect/failure behavior, Workbench publication, health/readiness, and read-only loopback
 surface. They cannot accept the Radar, authorize deployment, or prove uptime or economics.
 
