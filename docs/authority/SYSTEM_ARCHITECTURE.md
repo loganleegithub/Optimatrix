@@ -452,7 +452,7 @@ but a pair is economically comparable only when its trade arm is `MATURE_KNOWN`.
 censored trade arms cannot enter the comparison denominator.
 
 The `short_vol_underwriting` owner writes these objects to one downstream evidence directory
-separate from Radar evidence. Existing Radar schemas and current/sealed readers remain unchanged.
+separate from Radar evidence. Radar evidence has one current schema and reader.
 The runtime continues to maintain bounded current public state for open observations after the
 Radar episode ends; this is not full-market persistence, replay, or a workflow service.
 

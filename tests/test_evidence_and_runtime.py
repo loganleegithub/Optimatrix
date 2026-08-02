@@ -65,18 +65,10 @@ from short_vol_radar.evidence import (
     project_atomic_event,
     project_run_summary,
     ratio_or_none,
-    sealed_version_five_operational_soak_window_accounting,
     validate_anomaly_event,
     validate_atomic_event,
     validate_evidence_directory,
-    validate_legacy_evidence_directory,
-    validate_legacy_run_summary,
     validate_run_summary,
-    validate_sealed_operational_run_summary,
-    validate_sealed_version_five_evidence_directory,
-    validate_sealed_version_five_run_summary,
-    validate_sealed_version_four_evidence_directory,
-    validate_sealed_version_four_run_summary,
 )
 from short_vol_radar.policy import OptionRule, load_policy_bytes
 
@@ -187,9 +179,8 @@ def summary_object(
     )
 
 
-def operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
+def _operational_diagnostics_base(*, observation_ms: int = 20) -> dict[str, object]:
     return {
-        "operational_diagnostics_schema_version": 2,
         "runtime_limits": {
             "heartbeat_interval_seconds": 30,
             "session_liveness_deadline_ms": 60_000,
@@ -261,15 +252,11 @@ def operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
             }
             for source in CORE_SOURCE_NAMES
         ],
-        "witness": {
-            "first_joint_witness_monotonic_ms": None,
-            "continuous_covered_after_witness_ms": None,
-        },
     }
 
 
 def current_operational_diagnostics(*, observation_ms: int = 20) -> dict[str, object]:
-    diagnostics = operational_diagnostics(observation_ms=observation_ms)
+    diagnostics = _operational_diagnostics_base(observation_ms=observation_ms)
     diagnostics["operational_diagnostics_schema_version"] = 6
     ingress = diagnostics["ingress"]
     assert isinstance(ingress, dict)
@@ -380,45 +367,6 @@ def current_operational_diagnostics(*, observation_ms: int = 20) -> dict[str, ob
     return diagnostics
 
 
-def legacy_summary_object(
-    *,
-    runtime_identity: str = "runtime",
-    segments: tuple[CoverageSegment, ...] = (
-        CoverageSegment(
-            0,
-            10,
-            CoverageState.UNKNOWN,
-            reason="RUNTIME_START",
-            blocking_reason="RUNTIME_START_PENDING",
-            affected_scopes=("GLOBAL",),
-            global_continuity_epoch=1,
-        ),
-        CoverageSegment(
-            10,
-            20,
-            CoverageState.KNOWN_COMPLETE,
-            reason="TICKER_APPLIED",
-            blocking_reason="NONE",
-            affected_scopes=("OPTION:SHORT",),
-            global_continuity_epoch=1,
-        ),
-    ),
-) -> dict[str, object]:
-    summary = summary_object(runtime_identity=runtime_identity, segments=segments)
-    summary["operational_diagnostics"] = operational_diagnostics(
-        observation_ms=segments[-1].end_monotonic_ms - segments[0].start_monotonic_ms
-    )
-    summary["coverage_segments"] = [
-        {
-            "start_monotonic_ms": segment.start_monotonic_ms,
-            "end_monotonic_ms": segment.end_monotonic_ms,
-            "state": segment.state.value,
-        }
-        for segment in segments
-    ]
-    return summary
-
-
 def current_summary_object(
     *,
     segments: tuple[CoverageSegment, ...] = (
@@ -458,76 +406,6 @@ def current_summary_object(
             current_operational_diagnostics() if diagnostics is None else diagnostics
         ),
     )
-
-
-def sealed_version_five_summary_object(
-    *,
-    segments: tuple[CoverageSegment, ...] = (
-        CoverageSegment(
-            0,
-            10,
-            CoverageState.UNKNOWN,
-            reason="RUNTIME_START",
-            blocking_reason="RUNTIME_START_PENDING",
-            affected_scopes=("GLOBAL",),
-            global_continuity_epoch=1,
-        ),
-        CoverageSegment(
-            10,
-            20,
-            CoverageState.KNOWN_COMPLETE,
-            reason="TICKER_APPLIED",
-            blocking_reason="NONE",
-            affected_scopes=("OPTION:SHORT",),
-            global_continuity_epoch=1,
-        ),
-    ),
-) -> dict[str, object]:
-    summary = current_summary_object()
-    diagnostics = summary["operational_diagnostics"]
-    assert isinstance(diagnostics, dict)
-    diagnostics["operational_diagnostics_schema_version"] = 5
-    diagnostics.pop("index_baseline_publication")
-    summary["runtime_started_monotonic_ms"] = segments[0].start_monotonic_ms
-    summary["clean_stop_monotonic_ms"] = segments[-1].end_monotonic_ms
-    summary["coverage_segments"] = [
-        {
-            "start_monotonic_ms": segment.start_monotonic_ms,
-            "end_monotonic_ms": segment.end_monotonic_ms,
-            "state": segment.state.value,
-            "trigger_cause": segment.reason,
-            "blocking_reason": segment.blocking_reason,
-            "affected_scopes": list(segment.affected_scopes),
-            "blocking_groups": [
-                {
-                    "blocking_reason": group.blocking_reason,
-                    "affected_scopes": list(group.affected_scopes),
-                }
-                for group in segment.blocking_groups
-            ],
-            "global_continuity_epoch": segment.global_continuity_epoch,
-        }
-        for segment in segments
-    ]
-    durations = {
-        state: sum(
-            segment.end_monotonic_ms - segment.start_monotonic_ms
-            for segment in segments
-            if segment.state is state
-        )
-        for state in CoverageState
-    }
-    observation_ms = segments[-1].end_monotonic_ms - segments[0].start_monotonic_ms
-    summary["coverage"] = {
-        "observation_interval_ms": observation_ms,
-        "known_complete_ms": durations[CoverageState.KNOWN_COMPLETE],
-        "known_degraded_ms": durations[CoverageState.KNOWN_DEGRADED],
-        "unknown_ms": durations[CoverageState.UNKNOWN],
-        "no_applicable_scope_ms": durations[CoverageState.NO_APPLICABLE_SCOPE],
-        "coverage_partition_error_ms": observation_ms - sum(durations.values()),
-    }
-    validate_sealed_version_five_run_summary(summary)
-    return summary
 
 
 def attach_joint_witness(
@@ -925,7 +803,7 @@ def cross_ledger_summary() -> dict[str, object]:
         "channel.CONNECTION_CONTROL.processed_rate_per_second",
     ),
 )
-def test_schema_three_cross_ledger_conservation_rejects_single_point_tampering(
+def test_current_cross_ledger_conservation_rejects_single_point_tampering(
     field: str,
 ) -> None:
     summary = cross_ledger_summary()
@@ -982,7 +860,7 @@ def test_schema_three_cross_ledger_conservation_rejects_single_point_tampering(
         "channel.CONNECTION_CONTROL",
     ),
 )
-def test_schema_three_cross_ledger_rejects_internally_consistent_row_tampering(
+def test_current_cross_ledger_rejects_internally_consistent_row_tampering(
     ledger: str,
 ) -> None:
     summary = cross_ledger_summary()
@@ -1636,164 +1514,6 @@ def test_schema_six_blocking_groups_are_strict(
         validate_run_summary(summary)
 
 
-def test_sealed_version_five_soak_accounting_keeps_legacy_p_g_e_u() -> None:
-    summary = sealed_version_five_summary_object(
-        segments=(
-            CoverageSegment(
-                0,
-                100,
-                CoverageState.UNKNOWN,
-                reason="TIME_BOUNDARY",
-                blocking_reason="CURRENT_SCOPE_INCOMPLETE",
-                affected_scopes=("OPTION:A", "OPTION:B"),
-                global_continuity_epoch=1,
-                blocking_groups=(
-                    CoverageBlockingGroup(
-                        "INDEX_TIME_BOUNDARY_PENDING",
-                        ("OPTION:A",),
-                    ),
-                    CoverageBlockingGroup(
-                        "TICKER_SOURCE_STALE",
-                        ("OPTION:B",),
-                    ),
-                ),
-            ),
-            CoverageSegment(
-                100,
-                200,
-                CoverageState.UNKNOWN,
-                reason="CLOCK_FACT",
-                blocking_reason="CLOCK_UNAVAILABLE",
-                affected_scopes=("GLOBAL",),
-                global_continuity_epoch=1,
-            ),
-            CoverageSegment(
-                200,
-                3_600_000,
-                CoverageState.KNOWN_COMPLETE,
-                reason="TICKER_APPLIED",
-                blocking_reason="NONE",
-                affected_scopes=("OPTION:A", "OPTION:B"),
-                global_continuity_epoch=1,
-            ),
-        )
-    )
-    diagnostics = summary["operational_diagnostics"]
-    assert isinstance(diagnostics, dict)
-    availability = diagnostics["option_local_availability"]
-    assert isinstance(availability, dict)
-    availability.update(
-        {
-            "unavailable_count_by_reason": {"TICKER_SOURCE_STALE": 1},
-            "recovery_count_by_reason": {"TICKER_SOURCE_STALE": 1},
-            "end_count_by_disposition": {
-                "RECOVERED": 1,
-                "REASON_CHANGED": 0,
-                "CENSORED_AT_STOP": 0,
-            },
-            "intervals": [
-                {
-                    "instrument_name": "B",
-                    "generation": 1,
-                    "reason": "TICKER_SOURCE_STALE",
-                    "start_monotonic_ms": 300,
-                    "end_monotonic_ms": 450,
-                    "duration_ms": 150,
-                    "end_disposition": "RECOVERED",
-                    "global_continuity_epoch": 1,
-                }
-            ],
-        }
-    )
-
-    assert sealed_version_five_operational_soak_window_accounting(summary) == {
-        "window_start_monotonic_ms": 0,
-        "window_end_monotonic_ms": 3_600_000,
-        "known_complete_ms": 3_599_800,
-        "normal_boundary_pending_ms": 100,
-        "global_currentness_incident_ms": 100,
-        "effective_option_local_denominator_ms": 3_599_800,
-        "option_local_unavailable_union_ms": 150,
-    }
-
-
-def test_explicit_sealed_operational_summary_path_does_not_weaken_current_schema() -> None:
-    summary = current_summary_object()
-    diagnostics = summary["operational_diagnostics"]
-    assert isinstance(diagnostics, dict)
-    diagnostics["operational_diagnostics_schema_version"] = 3
-    diagnostics.pop("transport_terminal_attribution")
-    diagnostics.pop("index_baseline_publication")
-    coverage_segments = summary["coverage_segments"]
-    assert isinstance(coverage_segments, list)
-    for segment in coverage_segments:
-        segment["reason"] = segment.pop("trigger_cause")
-        segment.pop("blocking_reason")
-        segment.pop("blocking_groups")
-
-    validate_sealed_operational_run_summary(summary)
-    with pytest.raises(EvidenceError, match="diagnostics schema 6"):
-        validate_run_summary(summary)
-
-
-def test_sealed_compacted_option_local_schema_remains_exact() -> None:
-    summary = current_summary_object()
-    diagnostics = summary["operational_diagnostics"]
-    assert isinstance(diagnostics, dict)
-    diagnostics["operational_diagnostics_schema_version"] = 3
-    diagnostics.pop("transport_terminal_attribution")
-    diagnostics.pop("index_baseline_publication")
-    availability = diagnostics["option_local_availability"]
-    assert isinstance(availability, dict)
-    availability["retained_interval_limit"] = 256
-    for field in (
-        "acceptance_window_ms",
-        "outside_window_interval_count",
-        "outside_window_latest_end_monotonic_ms",
-        "outside_window_interval_count_by_reason",
-    ):
-        availability.pop(field)
-    coverage_segments = summary["coverage_segments"]
-    assert isinstance(coverage_segments, list)
-    for segment in coverage_segments:
-        segment["reason"] = segment.pop("trigger_cause")
-        segment.pop("blocking_reason")
-        segment.pop("blocking_groups")
-
-    validate_sealed_operational_run_summary(summary)
-    availability["acceptance_window_ms"] = 3_600_000
-    with pytest.raises(EvidenceError, match="exact repository-owned schema"):
-        validate_sealed_operational_run_summary(summary)
-
-
-def test_sealed_operational_schema_retains_historical_queue_lag_restart_semantics() -> None:
-    summary = epoch_two_summary(recovery_ms=12)
-    diagnostics = summary["operational_diagnostics"]
-    assert isinstance(diagnostics, dict)
-    diagnostics["operational_diagnostics_schema_version"] = 3
-    diagnostics.pop("transport_terminal_attribution")
-    diagnostics.pop("index_baseline_publication")
-    continuity = diagnostics["global_continuity"]
-    assert isinstance(continuity, dict)
-    continuity["restart_count_by_reason"] = {"QUEUE_LAG_DEADLINE": 1}
-    restart = continuity["restart_edges"][0]
-    assert isinstance(restart, dict)
-    restart.pop("trigger_cause")
-    restart["reason"] = "QUEUE_LAG_DEADLINE"
-    restart["failure_domain"] = "SESSION"
-    coverage_segments = summary["coverage_segments"]
-    assert isinstance(coverage_segments, list)
-    blocked = coverage_segments[1]
-    assert isinstance(blocked, dict)
-    blocked["trigger_cause"] = "QUEUE_LAG_DEADLINE"
-    for segment in coverage_segments:
-        segment["reason"] = segment.pop("trigger_cause")
-        segment.pop("blocking_reason")
-        segment.pop("blocking_groups")
-
-    validate_sealed_operational_run_summary(summary)
-
-
 @pytest.mark.parametrize(
     ("state", "blocking_reason"),
     (
@@ -1827,7 +1547,7 @@ def test_current_coverage_state_and_blocking_reason_cannot_contradict(
         validate_run_summary(summary)
 
 
-def test_schema_three_accepts_bounded_option_local_coverage_scope() -> None:
+def test_current_accepts_bounded_option_local_coverage_scope() -> None:
     summary = current_summary_object()
     coverage_segments = summary["coverage_segments"]
     assert isinstance(coverage_segments, list)
@@ -1875,29 +1595,6 @@ def test_run_summary_cross_checks_episode_activation_and_end_totals() -> None:
 
     with pytest.raises(EvidenceError, match="episode ends"):
         validate_run_summary(summary)
-
-
-def test_version_two_operational_diagnostics_remain_strict_and_payload_free() -> None:
-    summary = legacy_summary_object()
-    diagnostics = summary["operational_diagnostics"]
-    assert isinstance(diagnostics, dict)
-    assert diagnostics["operational_diagnostics_schema_version"] == 2
-    assert "price" not in json.dumps(diagnostics)
-
-    channels = diagnostics["channel_by_class"]
-    assert isinstance(channels, list)
-    channels[0]["received_count"] = 1
-    with pytest.raises(EvidenceError, match="rate"):
-        evidence_module.validate_legacy_run_summary(summary)
-
-    summary = legacy_summary_object()
-    diagnostics = summary["operational_diagnostics"]
-    assert isinstance(diagnostics, dict)
-    source_shapes = diagnostics["source_shapes"]
-    assert isinstance(source_shapes, list)
-    source_shapes[0]["payload"] = {"price": 100}
-    with pytest.raises(EvidenceError, match="exact"):
-        evidence_module.validate_legacy_run_summary(summary)
 
 
 def test_version_six_diagnostics_and_attributed_coverage_are_strict() -> None:
@@ -1969,49 +1666,22 @@ def test_current_schema_version_requires_an_integer_token() -> None:
         current_summary_object(diagnostics=writer_diagnostics)
 
 
-def test_explicit_sealed_version_four_summary_keeps_its_exact_shape() -> None:
-    summary = current_summary_object()
-    diagnostics = summary["operational_diagnostics"]
-    assert isinstance(diagnostics, dict)
-    diagnostics["operational_diagnostics_schema_version"] = 4
-    diagnostics.pop("index_baseline_publication")
-    segments = summary["coverage_segments"]
-    assert isinstance(segments, list)
-    for segment in segments:
-        segment.pop("blocking_groups")
-
-    validate_sealed_version_four_run_summary(summary)
-    with pytest.raises(EvidenceError, match="diagnostics schema 6"):
-        validate_run_summary(summary)
-
-    segments[0]["blocking_groups"] = []
-    with pytest.raises(EvidenceError, match="exact repository-owned schema"):
-        validate_sealed_version_four_run_summary(summary)
+def test_radar_evidence_exports_only_the_current_schema_reader() -> None:
+    for retired_name in (
+        "validate_legacy_run_summary",
+        "validate_sealed_operational_run_summary",
+        "validate_sealed_version_four_run_summary",
+        "validate_sealed_version_five_run_summary",
+        "validate_legacy_evidence_directory",
+        "validate_sealed_operational_evidence_directory",
+        "validate_sealed_version_four_evidence_directory",
+        "validate_sealed_version_five_evidence_directory",
+        "sealed_version_five_operational_soak_window_accounting",
+    ):
+        assert not hasattr(evidence_module, retired_name)
 
 
-def test_explicit_sealed_version_four_directory_route_is_isolated(
-    tmp_path: Path,
-) -> None:
-    summary = current_summary_object()
-    diagnostics = summary["operational_diagnostics"]
-    assert isinstance(diagnostics, dict)
-    diagnostics["operational_diagnostics_schema_version"] = 4
-    diagnostics.pop("index_baseline_publication")
-    segments = summary["coverage_segments"]
-    assert isinstance(segments, list)
-    for segment in segments:
-        segment.pop("blocking_groups")
-    (tmp_path / "radar-run-summary.json").write_text(
-        json.dumps(summary),
-        encoding="utf-8",
-    )
-
-    assert len(validate_sealed_version_four_evidence_directory(tmp_path)) == 1
-    with pytest.raises(EvidenceError, match="integer diagnostics schema 6"):
-        validate_evidence_directory(tmp_path)
-
-
-def test_version_three_late_diagnostics_are_bounded_and_payload_free() -> None:
+def test_current_late_diagnostics_are_bounded_and_payload_free() -> None:
     summary = current_summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
@@ -2150,7 +1820,7 @@ def test_run_summary_rejects_unknown_operational_diagnostics_schema() -> None:
         validate_run_summary(summary)
 
 
-def test_run_summary_rejects_legacy_eight_field_runtime_limits() -> None:
+def test_run_summary_rejects_incomplete_runtime_limits() -> None:
     summary = summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
@@ -2245,16 +1915,16 @@ def test_run_summary_rejects_impossible_joint_witness_continuity(
     continuous_ms: int,
     message: str,
 ) -> None:
-    summary = legacy_summary_object(segments=segments)
+    summary = current_summary_object(segments=segments)
+    attach_joint_witness(summary, first_ms=first_witness_ms)
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
     witness = diagnostics["witness"]
     assert isinstance(witness, dict)
-    witness["first_joint_witness_monotonic_ms"] = first_witness_ms
-    witness["continuous_covered_after_witness_ms"] = continuous_ms
+    witness["continuous_global_continuity_after_witness_ms"] = continuous_ms
 
     with pytest.raises(EvidenceError, match=message):
-        evidence_module.validate_legacy_run_summary(summary)
+        validate_run_summary(summary)
 
 
 def test_zero_duration_coverage_is_truthful_not_fabricated() -> None:
@@ -2956,10 +2626,18 @@ def test_unexpected_sender_cancellation_fails_closed(
         asyncio.run(runtime.run(WaitingClient(), asyncio.Event()))
 
 
-def test_current_writer_and_validator_are_schema_six_only_with_explicit_legacy_entry(
+@pytest.mark.parametrize("invalid_version", (None, 2, 3, 4, 5, True, "6"))
+def test_current_writer_and_reader_reject_every_noncurrent_schema_version(
     tmp_path: Path,
+    invalid_version: object,
 ) -> None:
-    legacy = legacy_summary_object()
+    summary = current_summary_object()
+    diagnostics = summary["operational_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    if invalid_version is None:
+        diagnostics.pop("operational_diagnostics_schema_version")
+    else:
+        diagnostics["operational_diagnostics_schema_version"] = invalid_version
     writer = EvidenceWriter(
         tmp_path,
         code_identity="a" * 40,
@@ -2968,18 +2646,16 @@ def test_current_writer_and_validator_are_schema_six_only_with_explicit_legacy_e
     )
 
     with pytest.raises(EvidenceError, match="diagnostics schema 6"):
-        validate_run_summary(legacy)
+        validate_run_summary(summary)
     with pytest.raises(EvidenceError, match="diagnostics schema 6"):
-        writer.write_summary(legacy)
+        writer.write_summary(summary)
 
-    validate_legacy_run_summary(legacy)
     (tmp_path / "radar-run-summary.json").write_text(
-        json.dumps(legacy),
+        json.dumps(summary),
         encoding="utf-8",
     )
     with pytest.raises(EvidenceError, match="diagnostics schema 6"):
         validate_evidence_directory(tmp_path)
-    assert len(validate_legacy_evidence_directory(tmp_path)) == 1
 
 
 def test_coverage_cause_has_no_default_and_rejects_unknown_reason() -> None:
@@ -2997,7 +2673,7 @@ def test_coverage_cause_has_no_default_and_rejects_unknown_reason() -> None:
         validate_run_summary(summary)
 
 
-def test_schema_three_rejects_unknown_coverage_scope_and_option_local_reason() -> None:
+def test_current_rejects_unknown_coverage_scope_and_option_local_reason() -> None:
     unknown_scope = current_summary_object()
     segments = unknown_scope["coverage_segments"]
     assert isinstance(segments, list)
@@ -3041,9 +2717,7 @@ def test_schema_three_rejects_unknown_coverage_scope_and_option_local_reason() -
         validate_run_summary(unknown_local_reason)
 
 
-def test_schema_three_witness_is_strictly_after_epoch_start_and_has_cross_checked_identity() -> (
-    None
-):
+def test_current_witness_is_strictly_after_epoch_start_and_has_cross_checked_identity() -> None:
     at_start = current_summary_object()
     diagnostics = at_start["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
@@ -3107,7 +2781,7 @@ def test_schema_three_witness_is_strictly_after_epoch_start_and_has_cross_checke
         validate_run_summary(cross_identity)
 
 
-def test_schema_three_ticker_rpc_and_option_local_ledgers_must_conserve() -> None:
+def test_current_ticker_rpc_and_option_local_ledgers_must_conserve() -> None:
     ticker = current_summary_object()
     diagnostics = ticker["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
@@ -3189,7 +2863,7 @@ def test_schema_three_ticker_rpc_and_option_local_ledgers_must_conserve() -> Non
         validate_run_summary(availability)
 
 
-def test_schema_three_option_local_ledger_binds_the_exact_final_hour() -> None:
+def test_current_option_local_ledger_binds_the_exact_final_hour() -> None:
     summary = current_summary_object(
         segments=(
             CoverageSegment(
@@ -3288,7 +2962,7 @@ def test_schema_three_option_local_ledger_binds_the_exact_final_hour() -> None:
         validate_run_summary(false_outside_count)
 
 
-def test_schema_three_epoch_edges_must_match_restart_incidents_one_for_one() -> None:
+def test_current_epoch_edges_must_match_restart_incidents_one_for_one() -> None:
     summary = current_summary_object()
     segments = summary["coverage_segments"]
     assert isinstance(segments, list)
@@ -3346,7 +3020,7 @@ def test_schema_three_epoch_edges_must_match_restart_incidents_one_for_one() -> 
         validate_run_summary(summary)
 
 
-def test_schema_three_rejects_all_unknown_empty_count_joint_witness() -> None:
+def test_current_rejects_all_unknown_empty_count_joint_witness() -> None:
     summary = current_summary_object(
         segments=(
             CoverageSegment(
@@ -3366,7 +3040,7 @@ def test_schema_three_rejects_all_unknown_empty_count_joint_witness() -> None:
         validate_run_summary(summary)
 
 
-def test_schema_three_joint_witness_binds_nonzero_scope_count() -> None:
+def test_current_joint_witness_binds_nonzero_scope_count() -> None:
     summary = current_summary_object()
     attach_joint_witness(summary, joint_count=0)
 
@@ -3374,7 +3048,7 @@ def test_schema_three_joint_witness_binds_nonzero_scope_count() -> None:
         validate_run_summary(summary)
 
 
-def test_schema_three_joint_witness_binds_exact_current_epoch_evaluation_boundary() -> None:
+def test_current_joint_witness_binds_exact_current_epoch_evaluation_boundary() -> None:
     summary = current_summary_object()
     attach_joint_witness(summary, joint_count=1)
     validate_run_summary(summary)
@@ -3392,7 +3066,7 @@ def test_schema_three_joint_witness_binds_exact_current_epoch_evaluation_boundar
         validate_run_summary(summary)
 
 
-def test_schema_three_joint_witness_binds_exact_formula_instrument_identity() -> None:
+def test_current_joint_witness_binds_exact_formula_instrument_identity() -> None:
     summary = current_summary_object()
     attach_joint_witness(summary, joint_count=1)
     validate_run_summary(summary)
@@ -3416,7 +3090,7 @@ def test_schema_three_joint_witness_binds_exact_formula_instrument_identity() ->
         ("tte_band_id", "other-band"),
     ),
 )
-def test_schema_three_joint_witness_binds_every_exact_scope_identity_field(
+def test_current_joint_witness_binds_every_exact_scope_identity_field(
     field: str,
     replacement: object,
 ) -> None:
@@ -3438,7 +3112,7 @@ def test_schema_three_joint_witness_binds_every_exact_scope_identity_field(
         validate_run_summary(summary)
 
 
-def test_schema_three_joint_witness_must_fall_in_known_complete_segment() -> None:
+def test_current_joint_witness_must_fall_in_known_complete_segment() -> None:
     summary = current_summary_object(
         segments=(
             CoverageSegment(
@@ -3458,35 +3132,35 @@ def test_schema_three_joint_witness_must_fall_in_known_complete_segment() -> Non
         validate_run_summary(summary)
 
 
-def test_schema_three_rejects_current_epoch_witness_without_strict_recovery() -> None:
+def test_current_rejects_current_epoch_witness_without_strict_recovery() -> None:
     summary = epoch_two_summary(recovery_ms=None, witness_ms=15)
 
     with pytest.raises(EvidenceError, match=r"recover|incident"):
         validate_run_summary(summary)
 
 
-def test_schema_three_rejects_witness_that_precedes_latest_recovery() -> None:
+def test_current_rejects_witness_that_precedes_latest_recovery() -> None:
     summary = epoch_two_summary(recovery_ms=18, witness_ms=15)
 
     with pytest.raises(EvidenceError, match=r"recover|witness"):
         validate_run_summary(summary)
 
 
-def test_schema_three_recovery_must_be_strictly_later_than_restart() -> None:
+def test_current_recovery_must_be_strictly_later_than_restart() -> None:
     summary = epoch_two_summary(recovery_ms=10)
 
     with pytest.raises(EvidenceError, match=r"strict|recover|restart"):
         validate_run_summary(summary)
 
 
-def test_schema_three_recovery_must_be_inside_runtime_interval() -> None:
+def test_current_recovery_must_be_inside_runtime_interval() -> None:
     summary = epoch_two_summary(recovery_ms=21)
 
     with pytest.raises(EvidenceError, match=r"runtime|interval|recover"):
         validate_run_summary(summary)
 
 
-def test_schema_three_rejects_historical_joint_count_after_epoch_restart() -> None:
+def test_current_rejects_historical_joint_count_after_epoch_restart() -> None:
     summary = epoch_two_summary(recovery_ms=12, witness_ms=15)
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
@@ -3498,7 +3172,7 @@ def test_schema_three_rejects_historical_joint_count_after_epoch_restart() -> No
         validate_run_summary(summary)
 
 
-def test_schema_three_rejects_second_restart_before_incident_recovery() -> None:
+def test_current_rejects_second_restart_before_incident_recovery() -> None:
     summary = current_summary_object()
     summary["coverage_segments"] = [
         {
@@ -3607,7 +3281,7 @@ def test_schema_three_rejects_second_restart_before_incident_recovery() -> None:
         validate_run_summary(summary)
 
 
-def test_schema_three_rejects_illegal_restart_cause_domain_scope_tuple() -> None:
+def test_current_rejects_illegal_restart_cause_domain_scope_tuple() -> None:
     summary = current_summary_object()
     summary["coverage_segments"] = [
         {
@@ -3683,7 +3357,7 @@ def test_schema_three_rejects_illegal_restart_cause_domain_scope_tuple() -> None
         validate_run_summary(summary)
 
 
-def test_schema_three_accepts_exact_transport_session_restart_cause() -> None:
+def test_current_accepts_exact_transport_session_restart_cause() -> None:
     summary = epoch_two_summary(recovery_ms=12)
     segments = summary["coverage_segments"]
     assert isinstance(segments, list)
@@ -3820,7 +3494,7 @@ def test_current_schema_rejects_queue_lag_as_global_continuity_restart() -> None
         validate_run_summary(summary)
 
 
-def test_schema_three_restart_cause_cannot_appear_without_an_epoch_edge() -> None:
+def test_current_restart_cause_cannot_appear_without_an_epoch_edge() -> None:
     summary = current_summary_object()
     segments = summary["coverage_segments"]
     assert isinstance(segments, list)
@@ -3923,7 +3597,7 @@ def test_terminal_restart_without_coverage_cannot_claim_recovery() -> None:
         validate_run_summary(summary)
 
 
-def test_schema_three_rpc_method_uses_exact_allowlist() -> None:
+def test_current_rpc_method_uses_exact_allowlist() -> None:
     summary = current_summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
@@ -3959,7 +3633,7 @@ def test_schema_three_rpc_method_uses_exact_allowlist() -> None:
         validate_run_summary(summary)
 
 
-def test_schema_three_source_shape_rejects_unobserved_fabricated_consumed_field() -> None:
+def test_current_source_shape_rejects_unobserved_fabricated_consumed_field() -> None:
     summary = current_summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
@@ -3981,7 +3655,7 @@ def test_schema_three_source_shape_rejects_unobserved_fabricated_consumed_field(
         {"key": "type", "type": "integer"},
     ),
 )
-def test_schema_three_source_shape_rejects_observed_field_outside_shared_spec(
+def test_current_source_shape_rejects_observed_field_outside_shared_spec(
     consumed_field: dict[str, str],
 ) -> None:
     summary = current_summary_object()
@@ -4022,7 +3696,7 @@ def test_schema_three_source_shape_rejects_observed_field_outside_shared_spec(
         validate_run_summary(summary)
 
 
-def test_schema_three_censored_interval_must_end_at_clean_stop() -> None:
+def test_current_censored_interval_must_end_at_clean_stop() -> None:
     summary = current_summary_object()
     diagnostics = summary["operational_diagnostics"]
     assert isinstance(diagnostics, dict)
@@ -4262,7 +3936,7 @@ def test_current_publication_pending_overlaps_known_complete_without_reducing_ef
     assert result["effective_interval_ms"] == 3_600_000
 
 
-def test_current_publication_pending_does_not_obey_sealed_partition_or_36_second_cap() -> None:
+def test_current_publication_pending_is_independent_of_coverage_budget() -> None:
     result = operational_soak_window_accounting(_current_publication_accounting_summary())
     assert result["publication_pending_ms"] == 50_000
     assert result["publication_pending_ms"] > 36_000
@@ -4282,36 +3956,6 @@ def test_current_omitted_publication_interval_rejects_soak_accounting() -> None:
     ] = 1
     with pytest.raises(EvidenceError):
         operational_soak_window_accounting(summary)
-
-
-def test_sealed_version_five_accounting_is_legacy_only_and_current_rejects_fixture() -> None:
-    summary = sealed_version_five_summary_object(
-        segments=(
-            CoverageSegment(
-                0,
-                3_600_000,
-                CoverageState.KNOWN_COMPLETE,
-                reason="TICKER_APPLIED",
-                blocking_reason="NONE",
-                affected_scopes=("OPTION:SHORT",),
-                global_continuity_epoch=1,
-            ),
-        )
-    )
-    assert sealed_version_five_operational_soak_window_accounting(summary)
-    with pytest.raises(EvidenceError):
-        operational_soak_window_accounting(summary)
-
-
-def test_sealed_version_five_directory_has_an_explicit_read_only_route(
-    tmp_path: Path,
-) -> None:
-    summary = sealed_version_five_summary_object()
-    (tmp_path / "run-summary.json").write_text(json.dumps(summary), encoding="utf-8")
-
-    assert validate_sealed_version_five_evidence_directory(tmp_path) == (summary,)
-    with pytest.raises(EvidenceError, match="diagnostics schema 6"):
-        validate_evidence_directory(tmp_path)
 
 
 def _publication_row(
@@ -4717,7 +4361,7 @@ def test_current_publication_ledger_rejects_order_phase_and_stop_forgeries(
         validate_run_summary(summary)
 
 
-def test_current_coverage_rejects_legacy_index_pending_blockers() -> None:
+def test_current_coverage_rejects_index_pending_blockers() -> None:
     with pytest.raises(EvidenceError, match="cannot use index publication pending blockers"):
         current_summary_object(
             segments=(

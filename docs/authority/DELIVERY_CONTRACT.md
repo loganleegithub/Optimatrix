@@ -184,7 +184,7 @@ proof.
 Serializers use null/undefined for a rate whose denominator is zero or unknown. They never replace
 an undefined rate with `0`.
 
-## Index publication evidence compatibility
+## Index publication evidence schema
 
 The current Radar writer and current validators emit and accept only integer operational
 diagnostics schema version 6. Version 6 keeps grouped coverage and continuity cross-checks and adds
@@ -196,11 +196,9 @@ de-duplication cannot suppress that closure or require a second restart. Current
 keeps `K` over the full final hour, `G` as real currentness incidents, `E = W \ G`, and
 option-local `U` intersected with `E`.
 
-Sealed diagnostics versions 5, 4, 3, and 2 remain immutable under explicit read-only readers.
-Version-5 operational Soak accounting retains its historical `K/P/G/E/U` formula and cannot be
-selected by the current reader. No historical object is migrated, replayed, recomputed, or
-retroactively accepted. `operational-soak-attempt-005` and `operational-soak-attempt-006` remain
-permanently sealed version-5 `NOT_MET` evidence.
+Diagnostics versions 2–5 and unversioned legacy objects are unsupported and `NOT_COMPARABLE`.
+Their deleted artifacts are not migrated, reconstructed, replayed, recomputed, or used as
+acceptance input. The repository keeps no compatibility reader or historical Soak formula.
 
 ## Denominator integrity
 

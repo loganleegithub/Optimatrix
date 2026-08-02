@@ -46,8 +46,8 @@ The upstream Radar remains the sole owner of:
 - `SHORT_VOL_ANOMALY_EVENT`, `PUBLIC_ATOMIC_QUOTE_EVENT`, and `RADAR_RUN_SUMMARY`.
 
 `PUBLIC_ATOMIC_QUOTE_EVENT` is a historical first-observed fact. It cannot prove a current
-Candidate or refresh an admission. Existing Radar objects and sealed readers remain compatible and
-are never migrated, replayed, recalculated, or relabelled.
+Candidate or refresh an admission. Current Radar objects remain compatible; unsupported older
+objects are never migrated, replayed, recalculated, or relabelled.
 
 The downstream lifecycle is:
 

@@ -8,7 +8,7 @@
 
 **Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** `SHORT_VOL_RADAR_CURRENT_EVIDENCE_ONLY`
 
 **Persistent service:** `STOPPED_NO_DEPLOYMENT`
 
@@ -54,13 +54,17 @@ separation, and GET/HEAD-only Workbench behavior.
 Allowed:
 
 - read-only inspection and deterministic offline tests of the merged implementation.
-- create a new task before any further product, authority, contract, code, or durable-artifact
-  change.
+- the bounded offline removal of obsolete Radar diagnostics schema version 2–5 and legacy reader,
+  accounting, test, and contract compatibility surfaces under
+  `SHORT_VOL_RADAR_CURRENT_EVIDENCE_ONLY`;
+- deterministic offline tests and repository inspection for that task.
 
 Forbidden:
 
 - production-public market, service, probe, commissioning, deployment, or evidence commands;
 - reconstructing or relabelling deleted historical results;
+- changing the current diagnostics schema version-6 writer, persisted meaning, or business
+  accounting;
 - changing market sources, universe, continuity, missingness, detector formulas/thresholds,
   Underwriting, Shadow admission, Position, Outcome, or cohort semantics;
 - private/account APIs, credentials, balances, margin, positions, orders, fills, settlement,

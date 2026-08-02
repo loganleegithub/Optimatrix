@@ -612,13 +612,12 @@ when it is available, `status` projects `AVAILABLE | TIME_BOUNDARY_PENDING |
 WATERMARK_PENDING` from the independent publication phase. This compatibility projection does not
 make publication pending a coverage blocker or collapse the two normative axes.
 
-By contrast, `INDEX_TAIL_PENDING` was a repository-internal Python-only compatibility name. It was
-never serialized by the current or sealed evidence writers, and no owning-version evidence reader
-consumes it. Sealed version-5 pending accounting instead recognizes the distinct serialized
-coverage reasons `INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING` through
-`SOAK_PENDING_REASONS`; those reasons and all owning-version readers remain unchanged. The current
-contract does not require a Python tracker, disposition, or other runtime state named
-`INDEX_TAIL_PENDING`. For one accepted index generation and global continuity epoch, the
+By contrast, `INDEX_TAIL_PENDING` was a repository-internal Python-only compatibility name. It is
+not serialized and the current reader does not consume it. Current coverage rejects
+`INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING` as blockers; publication pending lives
+only in `index_baseline_publication`. The current contract does not require a Python tracker,
+disposition, or other runtime state named `INDEX_TAIL_PENDING`. For one accepted index generation
+and global continuity epoch, the
 publication tracker is inactive until trusted clock, accepted watermark, and at least one
 immutable published close exist. Thereafter it observes only the immediate successor:
 `published = tail.last_start`, `target = published + 60_000`, and
@@ -843,9 +842,7 @@ BAND_SUSPENDED
 ```
 
 The removed `INDEX_TAIL_PENDING` enum/disposition was Python-only compatibility surface, not a
-serialized tracker field. Current and sealed evidence readers do not recognize such a tracker
-field. Sealed version-5 accounting continues to recognize its actual serialized pending coverage
-reasons, `INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING`; the current runtime never
+serialized tracker field. The current reader does not recognize it. The current runtime never
 enters an `INDEX_TAIL_PENDING` tracker state, and generation-global publication pending is
 diagnostic only.
 
@@ -923,9 +920,8 @@ suspended interval is counted as known-active time.
 
 Current normal index publication pending never enters the removed Python-only
 `INDEX_TAIL_PENDING` compatibility state and never resets activation or clear counts. The
-distinct sealed coverage reasons `INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING`
-remain readable by their owning-version evidence accounting; current Python tracker enums do not
-need the unrelated compatibility name.
+current reader rejects `INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING` as coverage
+blockers; publication timing is represented only by `index_baseline_publication`.
 `WARMUP`, `WINDOW_GAP`, `SOURCE_STALE`, and `CONTINUITY_GAP` remain fail-closed exactly as the
 availability table specifies.
 
@@ -1175,8 +1171,7 @@ these members:
   `formula_instrument_name`, positive `count`, and nullable
   `first_joint_evaluation_boundary`. Every current version-6 restart edge has exactly `incident_id`,
   `from_epoch`, `to_epoch`, root `trigger_cause`, restart-effect `reason`, `failure_domain`,
-  `affected_scopes`, and `boundary`; sealed version-4 restart edges retain that same exact shape,
-  while version-3 restart edges retain their original shape without `trigger_cause`;
+  `affected_scopes`, and `boundary`;
 - `ticker_application`: `disposition_count` has exact counts for
   `APPLIED | LATE_IGNORED | AHEAD_IGNORED | STALE_GENERATION_IGNORED | SHAPE_REJECTED`, a fixed
   `late_ignored_diagnostic_limit = 256`, `omitted_late_ignored_diagnostic_count`, and at most 256
@@ -1388,17 +1383,13 @@ evidence directory fail closed. Comparison compatibility across different Policy
 reported side by side, with no causal or quality inference. A schema or reader change requires an
 explicit task.
 
-The Policy schema remains exactly version 3 and is unchanged by this repair. New summaries use
+The Policy schema remains exactly version 3 and is unchanged by this repair. Summaries use
 integer `operational_diagnostics_schema_version = 6` and the grouped coverage-segment shape above.
-The current-schema writer and validator path accept only version 6. Explicit read-only validators
-continue to validate sealed version-5, version-4, version-3, and version-2 summaries under their
-own original exact schemas. Sealed version-5 operational Soak accounting retains its historical
-pending-in-coverage formula; current version-6 accounting treats publication `P` as diagnostic,
-keeps `K` independent, defines `G` from real currentness incidents, `E = W \ G`, and intersects
-option-local `U` with `E`. No older version can be relabelled, supplemented, replayed, recomputed,
-or emitted by the current writer. `SHORT_VOL_ANOMALY_EVENT` and `PUBLIC_ATOMIC_QUOTE_EVENT`
-semantics remain compatible and unchanged. Repository implementation-surface consolidation may
-not change the current version-6 writer/reader or any explicit sealed-version reader.
+The writer and reader accept only version 6. Current accounting treats publication `P` as
+diagnostic, keeps `K` independent, defines `G` from real currentness incidents, `E = W \ G`, and
+intersects option-local `U` with `E`. Versions 2–5 and unversioned objects are unsupported and
+`NOT_COMPARABLE`; there is no migration or compatibility reader. `SHORT_VOL_ANOMALY_EVENT` and
+`PUBLIC_ATOMIC_QUOTE_EVENT` semantics remain compatible and unchanged.
 
 Ordinary market facts, `NO_ANOMALY`, theoretical structures, unmatched combos, and full chain
 state are transient. The objects do not contain the full option chain and cannot reconstruct the
@@ -1475,10 +1466,10 @@ Tests must cover:
   pending that preserves history, real global-gap epoch restart, post-gap recovery with a new
   same-current-scope joint witness, exact global-continuity duration, independent local
   availability intervals, and attributed coverage segments;
-- current version-6 writer/validator tests for separate ticker
+- current writer/validator tests for separate ticker
   shape/currentness/application/publication ledgers, bounded regression diagnostics, and grouped
-  coverage reason-to-scope attribution, plus explicit read-only validation of immutable sealed
-  version-5, version-4, version-3, and version-2 evidence;
+  coverage reason-to-scope attribution, including rejection of missing, non-integer, and
+  non-current diagnostics versions;
 - absence of replay, offline recomputation, private, maker, Candidate, Shadow, Position, and
   Outcome paths.
 
@@ -1574,10 +1565,9 @@ The construction implementation must record:
 - the uninterrupted global-continuity interval after a same-current-scope joint full-formula
   complete-aggregate witness.
 
-The sealed `operational-soak-attempt-001` remains permanently `NOT_MET` and may not be rewritten,
-migrated, replayed, recomputed, or retroactively accepted. Before any later Soak, the order is:
+Before any later Soak, the order is:
 
-1. direct focused tests, `make check`, and strict validation of the old evidence directory;
+1. direct focused tests and `make check`;
 2. any heartbeat wire probe required by the active task, separately pre-bound under the current
    authority;
 3. pre-freezing of the new global-continuity duration and explicit option-local and
@@ -1601,8 +1591,8 @@ cross-conserve. The pre-bound run manifest owns all frozen thresholds. A determi
 registered external supervisor is valid; elapsed time alone is never acceptance. Process failure,
 an incomplete directory, or a directory that was not empty at startup is `NOT_MET`. The current
 version-6 strict directory reader accepts only regular non-symlink `.json` entries and requires
-exactly one canonical `radar-run-summary.json`; sealed readers keep their historical behavior.
-Historical attempts are never retroactively authorized.
+exactly one canonical `radar-run-summary.json`. Unsupported historical objects are never
+retroactively authorized.
 
 ## Evidence boundary
 

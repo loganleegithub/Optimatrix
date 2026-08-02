@@ -193,13 +193,13 @@ def test_task_template_carries_business_and_evidence_contract() -> None:
         assert value in template
 
 
-def test_current_stage_records_merged_runtime_without_an_active_closure() -> None:
+def test_current_stage_records_the_only_active_offline_closure() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     flat = " ".join(current.split())
     marker = "**Sole authorized closure:**"
 
     assert current.count(marker) == 1
-    assert f"{marker} `NONE`" in flat
+    assert f"{marker} `SHORT_VOL_RADAR_CURRENT_EVIDENCE_ONLY`" in flat
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`" in current
     assert "**Persistent service:** `STOPPED_NO_DEPLOYMENT`" in current
@@ -219,10 +219,13 @@ def test_current_stage_records_merged_runtime_without_an_active_closure() -> Non
         assert stale_claim not in current
 
 
-def test_no_completed_runtime_task_accumulates_on_main() -> None:
-    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == ["TEMPLATE.md"]
+def test_only_the_active_runtime_task_is_present() -> None:
+    assert sorted(path.name for path in (ROOT / "tasks").glob("*.md")) == [
+        "SHORT_VOL_RADAR_CURRENT_EVIDENCE_ONLY.md",
+        "TEMPLATE.md",
+    ]
     current = _flat(ROOT / "docs/authority/CURRENT_STAGE.md")
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "**Sole authorized closure:** `SHORT_VOL_RADAR_CURRENT_EVIDENCE_ONLY`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
 
 
@@ -248,8 +251,8 @@ def test_fixed_three_policy_chain_and_implementation_boundary_are_exact() -> Non
         "sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439",
     )
     declared_contract_digests = (
-        "sha256:b9733ad0c90837338b88fb5b6eb66ad8eed448cce6372a3f527988395087b3fe",
-        "sha256:9cbaecf57fb1db0dedf782a4ab002b655e43319a1ad7c5880db3d7b4682d4b03",
+        "sha256:10f247c2b463437bea112a1b1ac8345f7dea274d3e5d661f79ed47c581bf4f97",
+        "sha256:2f3f768e4209b8ccbb699c6127cfb6d75d394eeabcdff29f8a2606a1705473f5",
         "sha256:61a032fe0fe265d66a38bcbb1a3c8498409664fedbda2c8bd0a245180581a695",
     )
 
@@ -1851,7 +1854,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "## Current truth",
         "`OFFLINE_PUBLIC_SHADOW_RUNTIME`",
         "`NOT_ACCEPTED_PENDING_REVALIDATION`",
-        "**Sole authorized closure:** `NONE`",
+        "**Sole authorized closure:** `SHORT_VOL_RADAR_CURRENT_EVIDENCE_ONLY`",
         "`STOPPED_NO_DEPLOYMENT`",
         "**Live commands:** `FORBIDDEN`",
         "Deleted history is not a business premise",
@@ -1933,7 +1936,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "`AHEAD_IGNORED`",
         "`operational_diagnostics_schema_version = 6`",
         "`blocking_groups`",
-        "sealed version-5, version-4, version-3, and version-2",
+        "Versions 2\N{EN DASH}5 and unversioned objects are unsupported",
         "`index_baseline_publication`",
         "`KNOWN_INELIGIBLE`",
         "`UNKNOWN_AT_GAP`",
@@ -1959,7 +1962,7 @@ def test_authority_defines_one_live_flow_and_implemented_frozen_downstream_contr
         "SHORT_VOL_UNDERWRITING_POSITION",
         "SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT",
         "No production result is currently accepted",
-        "No implementation or evidence task is currently active",
+        "active offline task removes obsolete Radar evidence compatibility code",
         "coalesced Workbench publication",
         "commissioning controller",
         "maker/order/fill",
@@ -2071,7 +2074,7 @@ def test_persistent_service_contract_is_minimal_and_has_no_service_ledger() -> N
         assert removed not in contract
     assert "`STOPPED_NO_DEPLOYMENT`" in current
     assert "**Live commands:** `FORBIDDEN`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "**Sole authorized closure:** `SHORT_VOL_RADAR_CURRENT_EVIDENCE_ONLY`" in current
     assert "Deleted history is not a business premise" in " ".join(current.split())
 
 
@@ -2142,7 +2145,7 @@ def test_repository_owned_contracts_use_semantic_not_ordinal_identities() -> Non
             assert '"version":' not in text, f"owned version field remains in {path}"
 
 
-def test_index_publication_contract_owns_current_projection_and_actual_sealed_vocabulary() -> None:
+def test_index_publication_contract_owns_one_current_evidence_schema() -> None:
     radar = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
     radar_flat = " ".join(radar.split())
 
@@ -2151,16 +2154,15 @@ def test_index_publication_contract_owns_current_projection_and_actual_sealed_vo
         "projections",
         "This compatibility projection does not make publication pending a coverage blocker",
         "`INDEX_TAIL_PENDING` was a repository-internal Python-only compatibility name",
-        "never serialized by the current or sealed evidence writers",
+        "not serialized and the current reader does not consume it",
         "`INDEX_TIME_BOUNDARY_PENDING` and `INDEX_WATERMARK_PENDING`",
-        "`SOAK_PENDING_REASONS`",
+        "publication pending lives only in `index_baseline_publication`",
         "Normal index publication pending is not a suspension or detector state",
         "baseline component of identity is only the exact selected immutable `MinuteClose` tuple",
         "provenance, not detector de-duplication facts",
-        "current-schema writer and validator path accept only version 6",
-        "Explicit read-only validators continue to validate sealed version-5, version-4, "
-        "version-3, and version-2",
-        "implementation-surface consolidation may not change the current version-6 writer/reader",
+        "The writer and reader accept only version 6",
+        "Versions 2\N{EN DASH}5 and unversioned objects are unsupported",
+        "there is no migration or compatibility reader",
         "same-tail/same-target latch",
     ):
         assert invariant in radar_flat

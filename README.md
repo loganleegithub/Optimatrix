@@ -18,7 +18,8 @@ private/account access, order, fill, actual position, or PnL authority.
 The merged offline runtime removed the macOS commissioning controller and the separate service
 lifecycle evidence ledger while keeping the complete Radar-to-Outcome transaction, reconnect loop,
 signal stop, minimal business persistence, coalesced Workbench publication, health/readiness, and
-loopback-only HTTP. No implementation or evidence task is currently active.
+loopback-only HTTP. The active offline task removes obsolete Radar evidence compatibility code;
+live commands remain forbidden.
 
 The application no longer runs `launchd`, `lsof`, unified-log, resource probes, 24-hour acceptance,
 service-manifest, inventory-hash, or lifecycle-receipt logic. Process supervision and host resource
@@ -108,8 +109,8 @@ already proven `N + 1` close tuple available and does not pause detector episode
 coverage, or persistence. Real window, source-stale, and continuity failures remain fail-closed.
 Publication currentness invalidates exactly once independently from continuity-incident restart
 de-duplication, so a stronger clock/session/index loss cannot leave a pending row or tuple alive.
-Current run summaries use diagnostics schema version 6; sealed versions 5 through 2 remain
-read-only and are never migrated.
+Current run summaries and their only reader use diagnostics schema version 6. Older and
+unversioned objects are unsupported, not migrated, and not acceptance input.
 
 ## Local verification
 
