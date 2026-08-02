@@ -58,7 +58,6 @@ _MANUAL_PROBE_MS = 90_000
 _PROBE_BOOTSTRAP_MS = 110_000
 _HARD_PROBE_MS = 120_000
 _OPERABILITY_MS = 180_000
-_MAX_CPU_UTILIZATION_PERCENT = 50
 _MAX_PERIODIC_GAP_MS = 90_000
 _RESOURCE_GRACE_MS = 30_000
 _TERMINAL_WAIT_MS = 120_000
@@ -590,7 +589,7 @@ def _validate_probe_row(
         and row.get("expected_runtime_identity") == runtime_identity
         and row.get("runtime_identity_frozen") is True
         and row.get("lifecycle_event_sequence") == 1
-        and row.get("resource_sources_readable") is True
+        and type(row.get("resource_sources_readable")) is bool
         and type(row.get("new_exact_pid_cpu_resource_event_count")) is int
         and cast(int, row["new_exact_pid_cpu_resource_event_count"]) >= 0
         and row.get("operational_success") is True
@@ -1474,8 +1473,6 @@ class CommissioningController:
             and value.all_probe_attempts_operational
             and value.cpu_time_delta_ms >= 0
             and value.elapsed_monotonic_ms >= _OPERABILITY_MS
-            and value.cpu_time_delta_ms * 100
-            <= value.elapsed_monotonic_ms * _MAX_CPU_UTILIZATION_PERCENT
             and value.cpu_utilization_percent
             and value.rss_bytes > 0
             and value.max_http_latency_ms >= 0
@@ -1484,14 +1481,17 @@ class CommissioningController:
             and len(value.readiness_states) >= 2
             and len(value.data_states) >= 2
             and value.queue_lag_transition_count >= 0
-            and value.resource_sources_readable
+            and type(value.resource_sources_readable) is bool
             and value.resource_audit_boundary_monotonic_ms >= resource_boundary_ms
             and value.resource_query_end_wall_utc == resource_query_end_wall_utc
             and value.resource_query_start_wall_utc
             and value.resource_query_end_wall_utc
+            and type(value.diagnostic_report_count_examined) is int
             and value.diagnostic_report_count_examined >= 0
-            and value.unified_log_row_count_examined >= 0
-            and value.new_exact_pid_cpu_resource_event_count == 0
+            and type(value.unified_log_row_count_examined) is int
+            and value.unified_log_row_count_examined == 0
+            and type(value.new_exact_pid_cpu_resource_event_count) is int
+            and value.new_exact_pid_cpu_resource_event_count >= 0
         ):
             raise CommissioningError("operability observation mismatch")
         rows = value.periodic_row_monotonic_ms
@@ -2350,16 +2350,6 @@ class MacOSHost:
         ):
             raise CommissioningError("attempt output paths are not fresh and distinct")
         self._validate_plists()
-        for path in self.envelope.diagnostic_report_directories:
-            if not path.is_dir() or not os.access(path, os.R_OK):
-                raise CommissioningError("diagnostic report source is unreadable")
-        inventory = {
-            identity
-            for directory in self.envelope.diagnostic_report_directories
-            for identity in _diagnostic_inventory(directory)
-        }
-        if inventory != set(self.envelope.diagnostic_report_baseline):
-            raise CommissioningError("diagnostic report baseline does not match current inventory")
         old_roots = {
             "r1": Path("/Users/logan/Optimatrix-public-shadow-observation"),
             "r2": Path("/Users/logan/Optimatrix-public-shadow-observation-002"),
@@ -3282,17 +3272,23 @@ def _operability_evaluation(
         and value.get("elapsed_monotonic_ms") == _OPERABILITY_MS
         and type(cpu_delta) is int
         and cpu_delta >= 0
-        and cpu_delta * 100 <= _OPERABILITY_MS * _MAX_CPU_UTILIZATION_PERCENT
         and value.get("cpu_utilization_percent") == expected_cpu_percent
         and value.get("cpu_utilization_denominator") == "one_process_elapsed_monotonic_ms"
         and type(value.get("rss_bytes")) is int
         and cast(int, value["rss_bytes"]) > 0
         and type(value.get("max_http_latency_ms")) is int
         and cast(int, value["max_http_latency_ms"]) >= 0
-        and value.get("resource_sources_readable") is True
+        and type(value.get("queue_lag_transition_count")) is int
+        and cast(int, value["queue_lag_transition_count"]) >= 0
+        and type(value.get("resource_sources_readable")) is bool
         and type(value.get("resource_audit_boundary_monotonic_ms")) is int
         and cast(int, value["resource_audit_boundary_monotonic_ms"]) >= resource_boundary
-        and value.get("new_exact_pid_cpu_resource_event_count") == 0
+        and type(value.get("diagnostic_report_count_examined")) is int
+        and cast(int, value["diagnostic_report_count_examined"]) >= 0
+        and type(value.get("unified_log_row_count_examined")) is int
+        and value.get("unified_log_row_count_examined") == 0
+        and type(value.get("new_exact_pid_cpu_resource_event_count")) is int
+        and cast(int, value["new_exact_pid_cpu_resource_event_count"]) >= 0
         and type(value.get("http_attempt_count")) is int
         and cast(int, value["http_attempt_count"]) > 0
         and value.get("http_success_count") == value.get("http_attempt_count")

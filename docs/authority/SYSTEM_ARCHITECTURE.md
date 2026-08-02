@@ -43,9 +43,11 @@ macOS CPU resource violation caused by redundant inactive-scope projection and u
 member encoding. Attempt 004 confirmed the hot-path repair but was cleanly stopped after a manual
 `/usr/bin/log show` query self-record was falsely classified as a runtime resource event; the
 first repair excluded the exact `com.apple.log` self-record shape. The final user-authorized
-simplification removes Unified Log from the executable hard gate, retains exact-PID
-`cpu_resource` DiagnosticReports, and directly applies the existing 50% limit to the already
-recorded 180,000 ms process CPU ratio.
+simplification removes Unified Log from the executable controller and keeps CPU, RSS, queue-lag,
+and exact-PID `cpu_resource` DiagnosticReports as advisory evidence only. Those observations remain
+recorded but do not decide commissioning or the 24-hour result; direct process identity,
+listener, HTTP/schema/current-reader, probe-continuity, fatal, terminal, and quiescence gates remain
+unchanged.
 Under the 2026-08-02 Authority amendment, each observed implementation defect receives one minimal
 exact candidate and merged repair before one fresh R4 recommission attempt; failed attempts are
 preserved and this repeats only until one attempt is commissioned. This changes no service

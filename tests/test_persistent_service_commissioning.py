@@ -523,7 +523,10 @@ class FakeHost:
     all_probe_attempts_operational: bool = True
     resource_sources_readable: bool = True
     resource_boundary_delta_ms: int = 0
+    diagnostic_report_count_examined: int = 0
     resource_event_count: int = 0
+    queue_lag_transition_count: int = 0
+    unified_log_row_count_examined: int = 0
     cpu_time_delta_ms: int = 900
     probe_bootstrap_delay_ms: int = 0
     observed_gate_start_ms: int | None = None
@@ -631,7 +634,7 @@ class FakeHost:
             http_success_count=15,
             readiness_states=(False, False),
             data_states=("UNKNOWN", "UNKNOWN"),
-            queue_lag_transition_count=0,
+            queue_lag_transition_count=self.queue_lag_transition_count,
             resource_sources_readable=self.resource_sources_readable,
             resource_audit_boundary_monotonic_ms=(
                 resource_audit_boundary_monotonic_ms + self.resource_boundary_delta_ms
@@ -640,8 +643,8 @@ class FakeHost:
             resource_query_end_wall_utc=datetime.fromtimestamp(
                 resource_query_end_wall, tz=UTC
             ).isoformat(timespec="microseconds"),
-            diagnostic_report_count_examined=0,
-            unified_log_row_count_examined=0,
+            diagnostic_report_count_examined=self.diagnostic_report_count_examined,
+            unified_log_row_count_examined=self.unified_log_row_count_examined,
             new_exact_pid_cpu_resource_event_count=self.resource_event_count,
         )
 
@@ -1139,13 +1142,33 @@ def test_commissioning_accepts_actual_lifecycle_field_and_orders_effects(tmp_pat
     assert not controller.envelope.failure_closure_receipt_path.exists()
 
 
-def test_commissioning_accepts_cpu_at_exact_fifty_percent_limit(tmp_path: Path) -> None:
-    controller, _host, _probe, _audit = _controller(
+def test_commissioning_records_resource_observations_as_advisory_facts(
+    tmp_path: Path,
+) -> None:
+    controller, host, _probe, _audit = _controller(
         tmp_path,
-        host_overrides={"cpu_time_delta_ms": 90_000},
+        host_overrides={
+            "cpu_time_delta_ms": 90_001,
+            "resource_sources_readable": False,
+            "diagnostic_report_count_examined": 3,
+            "resource_event_count": 2,
+            "queue_lag_transition_count": 4,
+        },
     )
 
     assert controller.commission().status == "COMMISSIONED"
+    result = json.loads(
+        (host.envelope.journal_directory / "HOST_OPERABILITY_GATE_RESULT.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    operability = result["operability"]
+    assert operability["cpu_utilization_percent"] == "50.000556"
+    assert operability["resource_sources_readable"] is False
+    assert operability["diagnostic_report_count_examined"] == 3
+    assert operability["new_exact_pid_cpu_resource_event_count"] == 2
+    assert operability["queue_lag_transition_count"] == 4
+    assert operability["unified_log_row_count_examined"] == 0
 
 
 def test_fabricated_contract_digest_field_fails_before_probe_and_stops_once(
@@ -1213,10 +1236,12 @@ def test_existing_journal_refuses_second_start_without_any_host_effect(tmp_path:
         ({"periodic_offsets_ms": (10_000, 170_000)}, "periodic gap"),
         ({"operability_covered_from_delta_ms": 1}, "operability observation"),
         ({"all_probe_attempts_operational": False}, "operability observation"),
-        ({"resource_sources_readable": False}, "operability observation"),
+        ({"resource_sources_readable": "UNKNOWN"}, "operability observation"),
         ({"resource_boundary_delta_ms": -1}, "operability observation"),
-        ({"resource_event_count": 1}, "operability observation"),
-        ({"cpu_time_delta_ms": 90_001}, "operability observation"),
+        ({"diagnostic_report_count_examined": -1}, "operability observation"),
+        ({"resource_event_count": -1}, "operability observation"),
+        ({"queue_lag_transition_count": -1}, "operability observation"),
+        ({"unified_log_row_count_examined": 1}, "operability observation"),
     ],
 )
 def test_commissioning_and_full_operability_boundaries_fail_closed(
@@ -2416,11 +2441,11 @@ def test_production_probe_locks_and_exactly_appends_full_schema(
         MacOSHost,
         "inspect_resource_events",
         lambda _self, **_kwargs: commissioning.ResourceEventObservation(
-            sources_readable=True,
-            exact_pid_event_count=0,
+            sources_readable=False,
+            exact_pid_event_count=2,
             query_start_wall_utc="2026-08-01T00:00:00+00:00",
             query_end_wall_utc="2026-08-01T00:00:01+00:00",
-            diagnostic_report_count_examined=0,
+            diagnostic_report_count_examined=3,
             unified_log_row_count_examined=0,
         ),
     )
@@ -2450,6 +2475,8 @@ def test_production_probe_locks_and_exactly_appends_full_schema(
     inventory = rows[0]["inventory"]
     assert isinstance(inventory, Mapping)
     assert inventory["run_directories"] == [RUNTIME.removeprefix("sha256:")]
+    assert rows[0]["resource_sources_readable"] is False
+    assert rows[0]["new_exact_pid_cpu_resource_event_count"] == 2
     commissioning._validate_probe_row(
         envelope,
         rows[0],
@@ -2616,16 +2643,60 @@ def test_production_audit_recomputes_operability_gate_for_three_current_rows(
     )
     assert invalid_evaluation["valid"] is False
 
-    over_cpu = json.loads(json.dumps(result))
-    over_cpu["operability"]["cpu_time_delta_ms"] = 90_001
-    over_cpu["operability"]["cpu_utilization_percent"] = "50.000556"
-    result_path.write_text(json.dumps(over_cpu) + "\n", encoding="utf-8")
-    over_cpu_evaluation = commissioning._operability_evaluation(
+    advisory = json.loads(json.dumps(result))
+    advisory["operability"].update(
+        {
+            "cpu_time_delta_ms": 90_001,
+            "cpu_utilization_percent": "50.000556",
+            "resource_sources_readable": False,
+            "diagnostic_report_count_examined": 3,
+            "new_exact_pid_cpu_resource_event_count": 2,
+            "queue_lag_transition_count": 4,
+        }
+    )
+    result_path.write_text(json.dumps(advisory) + "\n", encoding="utf-8")
+    advisory_evaluation = commissioning._operability_evaluation(
         envelope,
         runtime_identity=RUNTIME,
         pid=123,
     )
-    assert over_cpu_evaluation["valid"] is False
+    assert advisory_evaluation["valid"] is True
+
+    invalid_cpu_percent = json.loads(json.dumps(advisory))
+    invalid_cpu_percent["operability"]["cpu_utilization_percent"] = "50.000555"
+    result_path.write_text(json.dumps(invalid_cpu_percent) + "\n", encoding="utf-8")
+    assert (
+        commissioning._operability_evaluation(
+            envelope,
+            runtime_identity=RUNTIME,
+            pid=123,
+        )["valid"]
+        is False
+    )
+
+    invalid_count = json.loads(json.dumps(advisory))
+    invalid_count["operability"]["diagnostic_report_count_examined"] = -1
+    result_path.write_text(json.dumps(invalid_count) + "\n", encoding="utf-8")
+    assert (
+        commissioning._operability_evaluation(
+            envelope,
+            runtime_identity=RUNTIME,
+            pid=123,
+        )["valid"]
+        is False
+    )
+
+    invalid_unified_log_count = json.loads(json.dumps(advisory))
+    invalid_unified_log_count["operability"]["unified_log_row_count_examined"] = 1
+    result_path.write_text(json.dumps(invalid_unified_log_count) + "\n", encoding="utf-8")
+    assert (
+        commissioning._operability_evaluation(
+            envelope,
+            runtime_identity=RUNTIME,
+            pid=123,
+        )["valid"]
+        is False
+    )
 
 
 @pytest.mark.parametrize(

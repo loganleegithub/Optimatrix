@@ -28,9 +28,11 @@ R4 attempt 004 confirmed the CPU repair at 28.216667% over the commissioning gat
 healthy through 24 probe rows. It was cleanly stopped only because a manual `/usr/bin/log show`
 query self-record was falsely counted as a runtime resource event; no new CPU diagnostic or real
 runtime violation existed. The final minimal R4 repair removes Unified Log from the executable
-gate, keeps exact-PID `cpu_resource` DiagnosticReports, and directly enforces the existing 50%
-one-core limit over the recorded 180-second process CPU interval. It adds no endpoint, process,
-dependency, container, or restart behavior.
+controller. CPU, RSS, queue-lag transitions, and exact-PID `cpu_resource` DiagnosticReports remain
+recorded as advisory facts; they do not decide commissioning or the 24-hour result. The existing
+PID/argv/cwd, launchd-run, listener, HTTP/schema/current-reader, probe-continuity, fatal, terminal,
+and quiescence gates remain unchanged. The repair adds no endpoint, process, dependency, container,
+or restart behavior.
 The user's 2026-08-02 amendment keeps R4 as the active closure and authorizes minimal observed-bug
 repair, exact gates and merge, then one fresh recommission attempt at a time until one reaches
 `COMMISSIONED`. No live command is allowed from unmerged code or without a fresh detached

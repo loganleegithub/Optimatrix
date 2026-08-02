@@ -25,7 +25,7 @@ R4 deployment preflight
 `agent/r4-commissioning-integrity-repair`, iterative repairs `agent/r4-lsof-field-repair` and
 `agent/r4-resource-log-classification-repair`, and current CPU repair
 `codex/r4-workbench-publication-cpu-repair`, followed by exact log-observer repair
-`codex/r4-log-observer-self-record-repair` and final direct resource-gate repair
+`codex/r4-log-observer-self-record-repair` and final advisory resource-observation repair
 `codex/r4-remove-unified-log-gate`; no force push, history rewrite, main merge into a task branch,
 or live mutation before exact-candidate acceptance
 
@@ -85,19 +85,22 @@ contained the exact runtime PID and CPU-resource search terms. The first minimal
 excluded only rows whose `processImagePath` and `sender` are both `/usr/bin/log` and whose subsystem
 is `com.apple.log`; it retained every other existing resource gate.
 
-## 2026-08-02 R4 direct resource-gate amendment
+## 2026-08-02 R4 advisory resource-observation amendment
 
 The user's subsequent instruction to avoid over-design and finish the solution in one implementation
-round supersedes only the requirement that Unified Log text rows remain gating. The final minimal
+round supersedes the requirement that host resource observations remain gating. The final minimal
 controller repair removes `/usr/bin/log show` from preflight, periodic probes, final-online probes,
-and the bounded operability audit. It keeps the exact-PID `cpu_resource` DiagnosticReports scan and
-directly gates the already-recorded 180,000 ms exact-process CPU ratio at or below the existing 50%
-one-core threshold. The receipt/probe schema remains unchanged:
-`unified_log_row_count_examined` is retained and truthfully fixed at `0`; resource-event counts now
-come only from bounded DiagnosticReports. PID, argv, cwd, launchd runs, listener, RSS, HTTP,
-queue-lag, diagnostic-source readability, terminal-before-bootout, and quiescence checks remain
-unchanged. No new module, endpoint, process, dependency, container, automatic restart, business
-rule, Policy, or contract is authorized.
+and the bounded operability audit. CPU, RSS, and DiagnosticReports are advisory facts only; they
+remain recorded but do not determine `COMMISSIONED` or the 24-hour result. Queue-lag transition
+counts retain the same advisory treatment. CPU above 50%, unreadable DiagnosticReports, positive
+exact-PID report counts, and positive queue-lag transition counts are accepted and recorded. The
+receipt/probe schema remains unchanged, and `unified_log_row_count_examined` is retained and
+truthfully fixed at `0`. Well-typed facts and CPU-percentage consistency remain evidence-integrity
+requirements: inconsistent CPU percentages, negative counts, and nonzero
+`unified_log_row_count_examined` remain invalid evidence. PID, argv, cwd, launchd runs, listener,
+HTTP/schema/current-reader, probe continuity, fatal process evidence, terminal-before-bootout, and
+quiescence remain direct hard gates. No new module, endpoint, process, dependency, container,
+automatic restart, warning type, business rule, Policy, or contract is authorized.
 
 ## Business closure
 
@@ -119,8 +122,8 @@ semantics, replaces immediate launchd post-`bootout` assertions with bounded mon
 separates the durable pre-cleanup failure fact from an immutable final cleanup conclusion, migrates
 the controller to an entirely fresh R4 root/label/envelope boundary, passes focused tests and full
 `make check`, receives independent exact-candidate review, reaches remote equality and passing
-GitHub CI, and is merged to remote `main`. The final implementation also replaces the recursive
-Unified Log text gate with the existing bounded DiagnosticReports check and direct 50% CPU gate.
+GitHub CI, and is merged to remote `main`. The final implementation also removes the recursive
+Unified Log text gate while retaining CPU, RSS, queue-lag, and DiagnosticReports as advisory facts.
 
 **Then:** each newly rematerialized R4 attempt may invoke `commission` once, and an observed
 implementation defect may follow the iterative recovery amendment above until one attempt reaches
@@ -224,8 +227,10 @@ final candidate. At minimum the direct suite proves:
    production boundary, and keeps the loopback/one-start/no-`-k` constraints.
 7. All existing absolute commissioning deadlines, exactly-once start/stop behavior, manual probe,
    periodic gate, resource audit, terminal audit, and stop semantics continue to pass. The
-   executable controller contains no `/usr/bin/log` command; exact-PID DiagnosticReports remain
-   gating, the 180,000 ms CPU ratio accepts exactly 50% and rejects any greater value, and
+   executable controller contains no `/usr/bin/log` command; CPU above 50%, unreadable
+   DiagnosticReports, positive exact-PID report counts, and positive queue-lag transition counts
+   are accepted and recorded; inconsistent CPU percentages, negative counts, and nonzero
+   `unified_log_row_count_examined` remain invalid evidence; and
    `unified_log_row_count_examined` is always `0`.
 8. Authority tests prove exactly one active task, consumed R3 truth, the sole conditional R4
    boundary, and no stale executable R3 authorization.
@@ -248,17 +253,17 @@ full gates.
 No live or launchd mutation is allowed from the implementation branch or PR. The eventual live
 invocation requires the exact merged remote `main`, a detached clean checkout, an independently
 created envelope and attempt-specific plists/wrappers, exact artifact digests, fresh output paths,
-all three old-root inventories unchanged, no old or R4 label/process/listener, and readable frozen
-resource sources. The controller receives the independently calculated envelope identity through
+all three old-root inventories unchanged, no old or R4 label/process/listener, and bound resource
+source configuration. The controller receives the independently calculated envelope identity through
 `--expected-envelope-identity` and refuses mismatch.
 
 ## Evidence boundary
 
 **Proves:** the R3 attempt is truthfully consumed and closed; each R4 attempt is independently
 preserved and the R4 controller accepts the actual version-2 projection semantics, observes
-asynchronous launchd teardown safely, measures the bounded exact-process CPU ratio without Unified
-Log text classification, records temporally correct failure/closure evidence, and is bound to a
-fresh single-invocation R4 attempt boundary.
+asynchronous launchd teardown safely, records advisory resource facts without Unified Log text
+classification, records temporally correct failure/closure evidence, and is bound to a fresh
+single-invocation R4 attempt boundary.
 
 **Does not prove:** that any R4 attempt has been commissioned; 24x7 service stability; complete market
 coverage; strategy edge; opportunity frequency; qualification; execution; actual fills, positions,

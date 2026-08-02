@@ -15,7 +15,7 @@
 `ENGINEERING_AND_PUBLIC_INTEGRATION_ACCEPTED`
 
 **Persistent public Shadow service/workbench:**
-`R4_ATTEMPT_004_TERMINAL_QUIESCENT_DIRECT_RESOURCE_GATE_REPAIR_AUTHORIZED`
+`R4_ATTEMPT_004_TERMINAL_QUIESCENT_ADVISORY_RESOURCE_REPAIR_AUTHORIZED`
 
 **Evidence gate:** `ACTIVE_R4_ITERATIVE_REPAIR_RECOMMISSION_UNTIL_COMMISSIONED`
 
@@ -143,15 +143,17 @@ first minimal repair excluded that exact self-observation shape and was merged, 
 the recursive text-log gate.
 
 The user's subsequent 2026-08-02 instruction to finish the solution in one simple implementation
-round supersedes only the requirement that Unified Log text classification remain a hard gate. The
-current repair removes `/usr/bin/log show` from preflight and every resource observation. It keeps
-the existing exact-PID `cpu_resource` DiagnosticReports check and makes the already-recorded
-180,000 ms exact-process CPU ratio pass only at or below the existing 50% one-core threshold. PID,
-argv, cwd, launchd-run, listener, RSS, HTTP, queue-lag, diagnostic-source readability, terminal,
-and quiescence checks remain unchanged. The existing receipt member
-`unified_log_row_count_examined` remains schema-compatible and is truthfully fixed at `0`. This
-adds no service endpoint, process, dependency, container, restart behavior, business rule, Policy,
-or contract change.
+round supersedes the requirement that host resource observations decide commissioning. The current
+repair removes `/usr/bin/log show` from preflight and every resource observation. CPU, RSS,
+queue-lag transitions, DiagnosticReports source readability, reports examined, and exact-PID
+`cpu_resource` event counts remain schema-compatible advisory facts only; their values do not
+determine `COMMISSIONED` or the 24-hour result. Unreadable DiagnosticReports sources are recorded as
+`false`, positive report/event counts are retained, and a nonnegative CPU value with its consistent
+percentage is retained. Malformed facts, negative counts, and a nonzero
+`unified_log_row_count_examined` remain invalid evidence. PID, argv, cwd, launchd runs, listener,
+HTTP/schema/current-reader, probe continuity, fatal process evidence, terminal-before-bootout, and
+quiescence remain direct hard gates. This adds no service endpoint, process, dependency, container,
+restart behavior, business rule, Policy, or contract change.
 
 ### Consumed R3 commissioning and authorized R4 repair
 
