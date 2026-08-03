@@ -173,11 +173,10 @@ jobs:
           replace_once(
               funnel,
               "                outcome_episode = self._entry_episode_by_identity.pop(entry or \"\", None)\n",
-              "                outcome_episode = (\n"
-              "                    self._entry_episode_by_identity.pop(entry, None)\n"
-              "                    if entry is not None\n"
-              "                    else None\n"
-              "                )\n",
+              "                if entry is None:\n"
+              "                    outcome_episode = None\n"
+              "                else:\n"
+              "                    outcome_episode = self._entry_episode_by_identity.pop(entry, None)\n",
           )
 
           workbench = "apps/radar_runtime/src/radar_runtime/workbench.py"
