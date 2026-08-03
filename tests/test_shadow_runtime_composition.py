@@ -20,7 +20,7 @@ from radar_runtime.runtime import (
     RpcState,
     ShadowRpcIntent,
 )
-from short_vol_radar.evidence import EvidenceWriter
+from short_vol_radar.evidence import RadarEventSink
 from short_vol_radar.policy import load_policy_bytes
 
 
@@ -126,8 +126,7 @@ def _reducer(
     return RadarReducer(
         policy=load_policy_bytes(exact, digest),
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity="runtime",
             policy_identity=digest,

@@ -9,6 +9,12 @@ from short_vol_underwriting.admission import (
     RpcRequestIntent,
     SubscriptionAdmissionRefreshWitness,
 )
+from short_vol_underwriting.case_store import (
+    ShadowCaseRead,
+    ShadowCaseReadStatus,
+    ShadowCaseStore,
+    ShadowCaseStoreError,
+)
 from short_vol_underwriting.close import (
     CloseAtomicAvailability,
     CloseBookAvailability,
@@ -22,12 +28,6 @@ from short_vol_underwriting.close import (
     PostCloseAttemptStatus,
     classify_close_quote,
     evaluate_close_opportunity,
-)
-from short_vol_underwriting.cohort import (
-    AlignedPair,
-    Observation,
-    RejectedAnchor,
-    RejectedAnchorSelector,
 )
 from short_vol_underwriting.constants import (
     CANDIDATE_INVALIDATION_REASONS,
@@ -53,10 +53,10 @@ from short_vol_underwriting.domain import (
     ordered_candidate_invalidation,
 )
 from short_vol_underwriting.evidence import (
-    DownstreamEvidenceError,
-    DownstreamEvidenceWriter,
     RuntimeBindings,
-    build_downstream_object,
+    ShadowStateError,
+    ShadowStateStore,
+    build_current_shadow_object,
 )
 from short_vol_underwriting.identity import (
     IdentityError,
@@ -69,6 +69,7 @@ from short_vol_underwriting.model import (
     PredicateTruth,
     TerminalSource,
 )
+from short_vol_underwriting.observation import Observation
 from short_vol_underwriting.owner import (
     FixedContractShadowOwner,
     OwnerTransition,
@@ -95,7 +96,6 @@ __all__ = [
     "AdmissionRefreshKind",
     "AdmissionRefreshWitness",
     "AdmissionTerminalOutcome",
-    "AlignedPair",
     "CandidateState",
     "CloseAtomicAvailability",
     "CloseBookAvailability",
@@ -105,8 +105,6 @@ __all__ = [
     "CloseOptionAvailability",
     "CloseQuoteFacts",
     "CloseQuoteState",
-    "DownstreamEvidenceError",
-    "DownstreamEvidenceWriter",
     "EntryEconomics",
     "FactBoundary",
     "FixedContractShadowOwner",
@@ -126,13 +124,17 @@ __all__ = [
     "PostCloseAttemptStatus",
     "PredicateTruth",
     "RefreshClassification",
-    "RejectedAnchor",
-    "RejectedAnchorSelector",
     "RpcAdmissionRefreshWitness",
     "RpcRequestIntent",
     "RpcRetirementIntent",
     "RuntimeBindings",
+    "ShadowCaseRead",
+    "ShadowCaseReadStatus",
+    "ShadowCaseStore",
+    "ShadowCaseStoreError",
     "ShadowOutcomeEconomics",
+    "ShadowStateError",
+    "ShadowStateStore",
     "SourceFact",
     "SubscriptionAdmissionRefreshWitness",
     "TerminalSource",
@@ -141,7 +143,7 @@ __all__ = [
     "UnderwritingAvailability",
     "UnderwritingFacts",
     "UnderwritingPolicy",
-    "build_downstream_object",
+    "build_current_shadow_object",
     "canonical_decimal",
     "canonical_identity",
     "classify_close_quote",

@@ -2,67 +2,63 @@
 
 **Status:** ACTIVE IMPLEMENTATION CONTRACT
 
-**Owning semantic identity:** `SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`
+**Owning capability:** `SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`
 
 ## Purpose
 
-Run the existing public Deribit → Radar → Underwriting → Shadow → Position → Outcome path in one
-long-lived process and expose its settled current state through a loopback read-only Workbench.
+Run one public Deribit → Radar → Underwriting → Shadow Case → Position → Outcome path in one
+long-lived process and expose current settled state through a loopback read-only Workbench.
 
-This contract authorizes implementation only. Live invocation and deployment come from
-[`CURRENT_STAGE`](../authority/CURRENT_STAGE.md). It adds no private/account source, order, fill,
-capital, Policy mutation, replay system, database, service split, or trading control.
+The service adds no account, order, fill, capital, replay, database, qualification, or deployment
+authority. Live invocation comes only from `CURRENT_STAGE`.
 
-## One process and owner graph
+## Process shape
 
-One absolute external `state_root` owns:
+One process owns:
+
+- one public Deribit client and bounded application queue;
+- one synchronous Radar reducer;
+- one in-memory Underwriting/Admission/Position owner;
+- one minimal Shadow Case store;
+- one coalesced immutable Workbench snapshot store;
+- one loopback GET/HEAD HTTP server.
+
+Recoverable transport failure starts a new session epoch without replacing the in-process owners.
+A process restart creates a fresh runtime and does not resume prior open Cases.
+
+The long-lived process retains only current option/combo sources, active Underwriting scopes,
+active Candidates and requests, open Shadow Cases, and one latest terminal Case for trader display.
+Terminal identities are evicted at their owning boundary. Durable Case files remain the source for
+historical research; neither the owner nor Workbench keeps a second in-memory event history.
+
+## State root
+
+One external absolute state root contains:
 
 ```text
 service.lock
-runs/<runtime-digest>/
-    radar/
-    downstream/
+runs/<runtime-id>/cases/<case-id>/...
 ```
 
-The process takes a non-blocking advisory lock before constructing a market client. Each start
-creates a new runtime identity and run directory. Reconnects increment the session epoch while
-retaining the same reducer and downstream owner; restarts never continue in-memory Candidates,
-Positions, or Outcomes.
+There is no `radar/` or `downstream/` evidence directory. The lock prevents two processes from
+owning the same state root. It is not a commissioning or host-identity proof.
 
-Startup loads the exact Radar, Underwriting, and Position Policy files once. The same immutable
-`PolicyChain` is shared by the reducer and downstream owner. There is no hot reload, threshold
-adjustment, watcher, or no-opportunity extension.
+## Runtime lifecycle
 
-## Continuous runtime
+`serve-shadow` performs only:
 
-`serve-shadow` performs only these orchestration duties:
+1. prepare one clean code identity and fixed three-Policy chain;
+2. acquire the state-root lease and create a fresh runtime/cases directory;
+3. start loopback Workbench;
+4. connect/reconnect one public Deribit session;
+5. settle each accepted fact through Radar and the current owner;
+6. publish admitted Shadow Case records and their bounded future results;
+7. stop on the first SIGINT/SIGTERM or fatal process failure.
 
-1. start the loopback Workbench;
-2. open one public Deribit session;
-3. let `LiveRadarRuntime` settle accepted facts through every business owner;
-4. reconnect recoverable public transport failures with the existing bounded delay;
-5. stop on the first `SIGINT` or `SIGTERM` boundary;
-6. terminate downstream pending state on clean stop or fatal process failure.
+Process supervision, restart policy, CPU, memory, host logs, and uptime monitoring are external.
+The application does not inspect or control them.
 
-Process supervision and host resource monitoring are external operational concerns.
-
-## Persistence
-
-Durable output is limited to existing business records:
-
-- minimal Radar anomaly and official atomic-quote events plus one clean-stop run summary;
-- downstream Underwriting, Candidate, simulated Entry, Position, close-opportunity, Outcome, and
-  aligned objects already required by the accepted business contracts.
-
-Normal market ticks, complete books, no-anomaly updates, Workbench snapshots, HTTP requests,
-service lifecycle events, terminal manifests, file inventories, and service acceptance receipts
-are not persisted.
-
-Typed domain owners determine payloads, identities, boundaries, and arithmetic before publication.
-Writers bind the current runtime/Policy identities, normalize JSON, and publish immutable business
-records.
-
-## Lifecycle and currentness
+## Current state and Workbench
 
 Workbench service phase is:
 
@@ -70,37 +66,37 @@ Workbench service phase is:
 STARTING | CONNECTING | RUNNING | RECONNECTING | STOPPING | STOPPED | FAILED
 ```
 
-Data state is independently:
+Data state is:
 
 ```text
 CURRENT | DEGRADED | STALE | UNKNOWN | INTERRUPTED | STOPPED
 ```
 
-`health = true` means the process and HTTP surface are responsive. `ready = true` requires
-`RUNNING`, an established current session, and `CURRENT` data. Connection alone never proves
-readiness. Missing, stale, incomplete, or discontinuous business facts keep their owning
-`UNKNOWN`; they do not stop an otherwise functioning process.
+`health=true` means the process/HTTP surface responds. `ready=true` requires RUNNING and current
+market truth. Connection alone is insufficient.
 
-## Workbench publication
+After a fact settles all business owners, the publisher retains the latest current references and
+publishes one complete immutable schema snapshot:
 
-After a runtime fact settles Radar and the downstream owner, the publisher retains the latest
-settled reducer/commit reference. It publishes a complete immutable schema-2 snapshot:
+- immediately on readiness/currentness/lifecycle change;
+- at most once per 500 monotonic milliseconds for ordinary status-stable updates;
+- once for pending state before reconnect or stop.
 
-- immediately on a semantic safety or lifecycle status change;
-- at most once per 500 monotonic milliseconds for ordinary status-stable facts;
-- once for the latest pending state after accepted-event drain and before reconnect or clean stop.
+There is no publication timer, event stream, durable Workbench file, SSE, partial patch, or browser
+strategy engine. HTTP readers see old or new complete bytes only.
 
-There is no publication timer, queue, thread, partial patch, SSE stream, or durable snapshot.
-Cached downstream grouping is invalidated only by the existing downstream writer revision.
-Serialization and atomic store replacement complete before HTTP readers can observe new bytes.
+## Funnel diagnostics
 
-An empty panel is not a zero claim. Zero anomaly requires a complete known non-empty monitor
-denominator. Zero Candidate additionally requires a positive Underwriting-evaluable denominator.
-Otherwise the value is `null` and the state is `UNKNOWN`.
+The service exposes non-durable funnel counts and a primary blocker in the Workbench. They are
+computed from current reducer/owner transitions and reset with the runtime. They do not create Case
+files or qualify a Policy.
 
-## HTTP boundary
+Completed funnel identities are retired. Only cumulative scalar counts and bounded normalized
+reason categories survive, so diagnostic memory is independent of completed opportunity count.
 
-The server binds only to an explicit loopback IP and accepts `GET`/`HEAD` for:
+## HTTP surface
+
+Only explicit loopback addresses are permitted. GET/HEAD routes are:
 
 ```text
 /
@@ -111,26 +107,24 @@ The server binds only to an explicit loopback IP and accepts `GET`/`HEAD` for:
 /readyz
 ```
 
-Other methods return 405 and unknown paths return 404. Handlers read only the current immutable
-byte snapshot. The browser formats settled data only; it cannot calculate strategy truth, mutate
-Policy, connect to Deribit, access an account, or submit an order.
+Other methods are rejected and unknown paths return 404. Browser fetch/schema/render failure hides
+stale business tables and displays UNKNOWN until a complete later snapshot succeeds.
 
-Fetch, decode, schema, or render failure hides cached business tables and marks the page
-`UNKNOWN`. A later complete successful render may replace it.
+## Stop and failure
+
+Before reconnect or clean stop, every accepted queued fact is drained and pending Workbench state
+is flushed. The owner terminalizes pending Cases as censored when the failure/stop boundary is
+available. An uncatchable process loss may leave only `opened.json`; the Case reader reports it as
+`INCOMPLETE_UNCLEAN_EXIT`.
+
+No terminal manifest, inventory, service receipt, host audit, or automatic restart belongs to this
+contract.
 
 ## Direct verification
 
-Offline tests must cover:
-
-- one state-root lease and fresh runtime identity;
-- one shared immutable Policy/owner graph;
-- reconnect without owner replacement;
-- clean stop and fatal downstream terminalization;
-- Shadow settlement before Workbench publication;
-- 500 ms coalescing, status bypass, latest-state flush, and atomic replacement;
-- loopback-only GET/HEAD HTTP plus independent health/readiness;
-- truthful empty/zero/null and browser fail-closed rendering.
-
-These tests prove implementation behavior only. They do not prove production Radar correctness,
-24-hour uptime, opportunity frequency, forecast skill, fillability, profitability, actual
-exposure, PnL, qualification, promotion, or execution permission.
+Offline tests cover one owner graph, fixed Policies, reconnect without owner replacement,
+pre-Shadow file count zero, Case open/first-close/outcome persistence, minimal reader states,
+Workbench coalescing/status bypass/flush, loopback HTTP, truthful zero/UNKNOWN, and public-method
+allowlisting. Repeated Episode, Candidate, scope-replacement, and completed-Case tests must prove
+that retained collections return to the active-set bound. A later bounded public smoke may prove
+current-state reachability only.

@@ -10,7 +10,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import StrEnum
-from pathlib import Path
 from typing import Protocol, cast
 
 from market_monitor import (
@@ -81,7 +80,7 @@ from short_vol_radar.evidence import (
     CoverageSegment,
     CoverageState,
     EvidenceError,
-    EvidenceWriter,
+    RadarEventSink,
     decimal_text,
     project_anomaly_event,
     project_atomic_event,
@@ -261,6 +260,13 @@ class ScopeSnapshot:
     boundary_countable: bool
     acceptance_eligible: bool
     catalog_complete: bool
+
+
+@dataclass(frozen=True)
+class RadarFunnelEvaluation:
+    instrument_name: str
+    known_evaluation: bool
+    reason: str | None
 
 
 @dataclass(frozen=True)
@@ -621,14 +627,14 @@ class RadarReducer:
         *,
         policy: RadarPolicy,
         code_identity: str,
-        evidence_writer: EvidenceWriter,
+        event_sink: RadarEventSink,
         runtime_identity: str,
         shadow_adapter: ShadowRuntimeAdapter | None = None,
         snapshot_publisher: SettledSnapshotPublisher | None = None,
     ) -> None:
         self.policy = policy
         self.code_identity = code_identity
-        self.writer = evidence_writer
+        self.event_sink = event_sink
         self.runtime_identity = runtime_identity
         self.shadow_adapter = shadow_adapter
         self.snapshot_publisher = snapshot_publisher
@@ -735,6 +741,8 @@ class RadarReducer:
         self._next_combo_catalog_recovery_ms: int | None = None
         self._fact_transaction_active = False
         self._fact_transaction_revision = 0
+        self._latest_funnel_causal_seq = 0
+        self._latest_funnel_evaluations: tuple[RadarFunnelEvaluation, ...] = ()
         self._queue_lag_currentness_active = False
         self._queue_lag_transition_pending = False
         self._queue_lag_transition_application: tuple[int, int] | None = None
@@ -848,6 +856,8 @@ class RadarReducer:
         self._queue_lag_currentness_active = False
         self._queue_lag_transition_pending = False
         self._queue_lag_transition_application = None
+        self._latest_funnel_causal_seq = self._causal_seq
+        self._latest_funnel_evaluations = ()
         self._commands = []
         boundary = FactBoundary(session_epoch, 0, monotonic_ms, self._causal_seq)
         if active_incident is not None:
@@ -4672,6 +4682,17 @@ class RadarReducer:
                 if acceptance_eligible and result.full_formula_evaluation:
                     counter.known_full_detector_formula_evaluation_count += 1
 
+        self._latest_funnel_causal_seq = transaction_commit.boundary.causal_seq
+        self._latest_funnel_evaluations = tuple(
+            RadarFunnelEvaluation(
+                instrument_name=instrument.instrument_name,
+                known_evaluation=result.known_evaluation,
+                reason=result.reason,
+            )
+            for instrument, result, _state, _episode in evaluated
+            if countable and acceptance_eligible and result.band_id is not None
+        )
+
         for instrument, _result, _state, _episode in evaluated:
             tracker = self.trackers[instrument.instrument_name]
             atomic_snapshot = self._freeze_atomic_scope_snapshot(
@@ -4807,7 +4828,7 @@ class RadarReducer:
                 richness=calculation.richness,
             )
         )
-        self.writer.write_anomaly(event)
+        self.event_sink.record_anomaly(event)
 
     def _record_episode_end(self, ended: EpisodeEnd | None, monotonic_ms: int) -> None:
         if ended is None:
@@ -4838,6 +4859,10 @@ class RadarReducer:
             counter = self._scope_counter(option_type, ended.activation_band_id)
             counter.anomaly_end_count_by_reason[ended.reason.value] += 1
             counter.known_active_duration_ms_sum_by_end_reason[ended.reason.value] += duration
+        self.event_sink.retire_episode(ended.episode_id)
+        self._emitted_atomic_quotes = {
+            key for key in self._emitted_atomic_quotes if key[0] != ended.episode_id
+        }
         previous_atomic = self.atomic_states.pop(ended.episode_id, None)
         if (
             previous_atomic is not None
@@ -5129,7 +5154,7 @@ class RadarReducer:
                     anomaly_activation_seq=snapshot.anomaly_activation_seq,
                 )
             )
-            self.writer.write_atomic(event)
+            self.event_sink.record_atomic(event)
             self._emitted_atomic_quotes.add(emitted_key)
 
     def _sync_combo_subscriptions(self, boundary: FactBoundary) -> None:
@@ -5648,6 +5673,14 @@ class RadarReducer:
     def current_global_continuity_epoch(self) -> int:
         return self._global_continuity_epoch
 
+    @property
+    def latest_funnel_causal_seq(self) -> int:
+        return self._latest_funnel_causal_seq
+
+    @property
+    def latest_funnel_evaluations(self) -> tuple[RadarFunnelEvaluation, ...]:
+        return self._latest_funnel_evaluations
+
     def episode_started_monotonic_ms(self, episode_identity: str) -> int | None:
         return self._episode_started_ms.get(episode_identity)
 
@@ -5826,7 +5859,7 @@ class RadarReducer:
             cause = CausalCause.RUNTIME_SESSION_FAILURE
         self._retire_current_epoch(cause.value)
 
-    def clean_stop(self, monotonic_ms: int) -> Path:
+    def clean_stop(self, monotonic_ms: int) -> Mapping[str, object]:
         if monotonic_ms < self._last_boundary_monotonic_ms:
             raise RuntimeError("clean-stop boundary precedes an accepted application boundary")
         self.begin_runtime_barrier(monotonic_ms, terminal=True)
@@ -5883,7 +5916,7 @@ class RadarReducer:
             public_atomic_quote_state_transition_count=self._atomic_transition_counts,
         )
         try:
-            summary_path = self.writer.write_summary(summary)
+            settled_summary = self.event_sink.record_summary(summary)
         except Exception:
             try:
                 self._terminate_shadow(source="FAILURE", boundary=boundary)
@@ -5891,7 +5924,7 @@ class RadarReducer:
                 pass
             raise
         self._terminate_shadow(source="STOP", boundary=boundary)
-        return summary_path
+        return settled_summary
 
     def finalize_shadow_failure(self, monotonic_ms: int) -> None:
         if self.shadow_adapter is None or self._shadow_terminalized:
@@ -6106,7 +6139,7 @@ class LiveRadarRuntime:
         *,
         policy: RadarPolicy,
         code_identity: str,
-        evidence_writer: EvidenceWriter,
+        event_sink: RadarEventSink,
         runtime_identity: str | None = None,
         shadow_adapter: ShadowRuntimeAdapter | None = None,
         snapshot_publisher: SettledSnapshotPublisher | None = None,
@@ -6115,7 +6148,7 @@ class LiveRadarRuntime:
         self.reducer = RadarReducer(
             policy=policy,
             code_identity=code_identity,
-            evidence_writer=evidence_writer,
+            event_sink=event_sink,
             runtime_identity=identity,
             shadow_adapter=shadow_adapter,
             snapshot_publisher=snapshot_publisher,
@@ -6134,8 +6167,8 @@ class LiveRadarRuntime:
         return self.reducer.runtime_identity
 
     @property
-    def writer(self) -> EvidenceWriter:
-        return self.reducer.writer
+    def event_sink(self) -> RadarEventSink:
+        return self.reducer.event_sink
 
     @property
     def platform(self) -> PlatformReadiness:
@@ -6153,7 +6186,7 @@ class LiveRadarRuntime:
         self,
         client: PublicClient,
         stop_event: asyncio.Event,
-    ) -> Path:
+    ) -> Mapping[str, object]:
         started_monotonic_ms = _monotonic_ms()
         outbound: asyncio.Queue[PendingRpc] = asyncio.Queue(maxsize=MAX_PENDING_INBOUND_FRAMES)
         sender_task = asyncio.create_task(

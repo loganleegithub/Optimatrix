@@ -132,7 +132,6 @@ class PositionDecisionState:
     shadow_entry_identity: str
     position_policy_identity: str
     entry_boundary: FactBoundary
-    rejected: bool = False
     first_latched_close_action_identity: str | None = None
     _latched_reasons: set[str] | None = None
 
@@ -174,22 +173,14 @@ class PositionDecisionState:
         else:
             action = "HOLD"
         evaluation_identity = canonical_identity(
-            (
-                "RejectedCounterfactualPositionEvaluationIdentity"
-                if self.rejected
-                else "PositionEvaluationIdentity"
-            ),
+            "PositionEvaluationIdentity",
             self.shadow_entry_identity,
             self.position_policy_identity,
             consumed_position_fact_fingerprint,
             boundary.as_object(),
         )
         action_identity = canonical_identity(
-            (
-                "RejectedCounterfactualPositionActionIdentity"
-                if self.rejected
-                else "PositionActionIdentity"
-            ),
+            "PositionActionIdentity",
             evaluation_identity,
             action,
             vector,

@@ -15,7 +15,7 @@ def main() -> int:
     service_parser.add_argument("--workbench-host", default="127.0.0.1")
     service_parser.add_argument("--workbench-port", type=int, default=8765)
     arguments = parser.parse_args()
-    service_startup, summary_path = asyncio.run(
+    service_startup, terminal_summary = asyncio.run(
         run_persistent_service(
             state_root=arguments.state_root,
             process_cwd=Path.cwd(),
@@ -26,7 +26,8 @@ def main() -> int:
     print(
         f"runtime={service_startup.runtime_identity} "
         f"workbench=http://{service_startup.workbench_host}:{service_startup.workbench_port} "
-        f"summary={summary_path}"
+        f"cases={service_startup.cases_directory} "
+        f"terminal={terminal_summary.get('object_kind', 'RADAR_RUN_SUMMARY')}"
     )
     return 0
 

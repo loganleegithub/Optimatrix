@@ -1,109 +1,64 @@
 # Optimatrix
 
-Optimatrix is intended to become an autonomous 0–3DTE options decision and trading system. Its
-first product slice is Deribit BTC-USDC defined-risk Short Vol. The current permission is
-production-public Shadow only: no private API, account, margin, order, fill, or money access.
+Optimatrix is a trader-facing BTC 0–3DTE options opportunity-discovery and Shadow-learning system.
+The current product slice consumes Deribit BTC-USDC public data, evaluates one fixed defined-risk
+Short Vol strategy chain, displays current opportunity state, and may enroll a simulated Shadow
+Case for strictly future observation. It has no private account, order, fill, capital, or actual
+position capability.
 
-## Current truth
-
-The repository implements one public-only modular runtime for Deribit BTC-USDC 0–3DTE Short Vol:
-market ingestion, Radar, fixed-contract Underwriting, Shadow admission, Position management,
-Outcome projection, and a loopback GET/HEAD-only Workbench.
-
-No production result is currently accepted. The prior online observation was stopped, its Radar
-outputs were rejected as unreliable, and no service is deployed. Private/account access, orders,
-fills, actual positions, and PnL remain outside the current permission boundary.
-
-The current offline runtime keeps the complete Radar-to-Outcome transaction, reconnect loop,
-signal stop, minimal business persistence, coalesced Workbench publication, health/readiness, and
-loopback-only HTTP. Process supervision and host resource monitoring stay outside the application.
-Live commands remain forbidden; tests prove offline behavior only.
-
-Typed owners calculate business state once. Persistence normalizes and serializes those completed
-objects without re-validating them through a second schema or relationship graph; the Workbench
-uses the same in-memory current-object set.
-
-## Intended first business flow
+## Product flow
 
 ```text
-live Deribit BTC-USDC 0–3DTE option-chain changes
-→ one exact content-identified Short Vol baseline
-→ independent SHORT_VOL_ANOMALY_EVENT
-→ while active, independent official atomic-combo availability
-→ optional PUBLIC_ATOMIC_QUOTE_EVENT
-→ fixed-contract Underwriting and deterministic Shadow admission
-→ post-Entry Position, causal-first Outcome, and aligned forward-cohort evidence
+Deribit public facts
+→ bounded current market state
+→ Short Vol Radar
+→ official atomic-combo availability
+→ Underwriting: CANDIDATE | WATCH | ABSTAIN when evaluable
+→ explicit Shadow admission
+→ Position: HOLD | CLOSE | UNKNOWN
+→ strictly future Shadow Case Outcome
 ```
 
-Market ingestion, bounded in-memory chain maintenance, and Radar notification are one continuous
-event-driven flow. The product does not first save the whole market and then repeatedly scan the
-same facts. Ordinary no-anomaly updates and the theoretical structure universe are not persisted.
+Before Shadow enrollment, market facts, Radar results, anomalies, quotes, Underwriting, Candidate,
+and Workbench projections are in-memory current state. They are not durable research records. The
+first durable product record is `SHADOW_CASE_OPENED`; a later qualification Cohort is derived
+offline from Shadow Cases.
 
-The three layers remain distinct:
+## Current stage
 
-- detector: `UNKNOWN | NO_ANOMALY | ANOMALY_ACTIVE`;
-- existing official atomic combo:
-  `NOT_EVALUATED | UNKNOWN | NO_ACTIVE_COMBO | NO_TARGET_SIZE_CREDIT_QUOTE |
-  PUBLIC_ATOMIC_QUOTE_AVAILABLE`;
-- maker/order/fill: not implemented or authorized.
+The active permission remains `PUBLIC_SHADOW`. The minimal Shadow Case data boundary is implemented
+offline: pre-Shadow state is memory-only and only an admitted Case can create durable files. The
+sole active closure is to expose and measure the primary funnel blocker. Persistent deployment
+remains forbidden; exactly one bounded public-only funnel smoke is conditionally authorized after
+the exact candidate passes repository checks.
 
-An anomaly or public atomic quote is not Candidate, Shadow Entry, fill, Outcome, or proof of an
-edge. Component-leg prices cannot substitute for an official combo.
+See:
 
-Exact quantity, Delta/TTE bands, return lookbacks, trigger/clear ratios, and persistence live in a
-content-identified Policy file rather than code. One run cannot change its Policy. A
-human-approved or expressly terminal-goal-delegated successor inside the declared Policy schema
-uses a new identity and forward observation interval; current Radar evidence alone cannot prove
-better forecasting or profitability.
-
-## Later position and Outcome behavior
-
-Neither a Shadow `SHADOW_ENTRY` nor a future filled entry chooses a planned holding duration. The
-implemented Underwriting/Position owner evaluates current remaining
-premium, short-leg risk, path, volatility state, liquidity, executable close debit, fee reserves,
-and hard boundaries before returning `HOLD | CLOSE | UNKNOWN` exactly as frozen by the contract.
-It also implements Candidate invalidation and the strictly later full-quantity close opportunity.
-
-The implemented Outcome/cohort reducer follows the frozen causal-first counterfactual exit and
-terminal `MATURE_KNOWN | MATURE_UNKNOWN | CENSORED_AT_STOP | CENSORED_AT_FAILURE` semantics, one
-bounded rejected counterfactual per slot, cohort-aligned `NO_TRADE`, exact public-quote PnL
-equations, and honest unknown/censoring behavior. A public quote remains not a fill. No current
-production-public Shadow evidence or trading capability is accepted.
-
-## Authority
-
-Start with [`AGENTS.md`](AGENTS.md). The
-[`PRODUCT_CONSTITUTION`](docs/authority/PRODUCT_CONSTITUTION.md) owns product meaning,
-[`CURRENT_STAGE`](docs/authority/CURRENT_STAGE.md) grants permission,
-[`SYSTEM_ARCHITECTURE`](docs/authority/SYSTEM_ARCHITECTURE.md) owns structure, and
-[`DELIVERY_CONTRACT`](docs/authority/DELIVERY_CONTRACT.md) owns development and evidence.
-[`SHORT_VOL_RADAR`](docs/contracts/SHORT_VOL_RADAR.md) defines the first Radar,
-[`SHORT_VOL_UNDERWRITING_POSITION`](docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md) defines the
-accepted downstream Underwriting, admission, and Shadow Position semantics, and
-[`SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT`](docs/contracts/SHORT_VOL_SHADOW_OUTCOME_FORWARD_COHORT.md)
-defines the accepted downstream Outcome and forward-cohort semantics. The
-[`SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE`](docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md)
-contract owns the offline service boundary and immutable read-only Workbench projection.
+- `docs/authority/PRODUCT_CONSTITUTION.md`
+- `docs/authority/CURRENT_STAGE.md`
+- `docs/authority/SYSTEM_ARCHITECTURE.md`
+- `docs/authority/DELIVERY_CONTRACT.md`
+- `docs/contracts/SHORT_VOL_RADAR.md`
+- `docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md`
+- `docs/contracts/SHORT_VOL_SHADOW_CASE.md`
+- `docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md`
 
 ## Repository shape
 
-- `market_monitor`: public adapters, known-at order, continuity, and bounded current state
-- `options_domain`: option facts, authorized leg relationships, and target-size public
-  quote arithmetic
-- `short_vol_radar`: detector episodes, official atomic availability, and minimal event
-  projection
-- `short_vol_underwriting`: pure fixed-contract Underwriting, admission, Position, Outcome, and
-  current business-object owner
-- `radar_runtime`: guarded composition of the continuous production-public process
+- `market_monitor`: Deribit public-source parsing, continuity, trusted time, and bounded market
+  state;
+- `options_domain`: instrument and target-size quote arithmetic;
+- `short_vol_radar`: detector, episode, and official atomic-combo state;
+- `short_vol_underwriting`: Underwriting, admission, Position, Outcome, in-memory owner state, and
+  the minimal Shadow Case store;
+- `radar_runtime`: one process, one bounded queue, one reducer, Shadow adapter, funnel diagnostics,
+  and loopback read-only Workbench.
 
-The current bounded runtime separates per-band immutable index-baseline availability from
-generation-global successor publication. Normal time/watermark publication pending keeps an
-already proven `N + 1` close tuple available and does not pause detector episodes, Layer 2, known
-coverage, or persistence. Real window, source-stale, and continuity failures remain fail-closed.
-Publication currentness invalidates independently from continuity-incident restart de-duplication,
-so a stronger clock/session/index loss cannot leave a stale tuple alive. Current run summaries
-contain coverage and business-transition counts only; transport and acceptance diagnostics are
-ordinary non-durable process concerns.
+## Engineering rules
+
+Product progress means moving one funnel node or lowering its largest blocker—not producing more
+receipts, hashes, tests, objects, or runtime hours. The application does not commission itself,
+inspect host logs/PIDs, maintain a replay platform, or persist Workbench/operational state.
 
 ## Local verification
 
@@ -112,7 +67,5 @@ make sync
 make check
 ```
 
-`serve-shadow` is the sole product command. `CURRENT_STAGE` forbids live commands and deployment.
-Every private, account, order, fill, and
-capital surface remains forbidden. Any future production-public validation requires a new explicit
-task and fresh evidence boundary.
+Passing checks proves only the offline code behavior. It does not establish opportunity frequency,
+strategy value, fillability, deployment, qualification, or execution permission.

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import FrozenInstanceError, replace
 from decimal import Decimal
@@ -59,7 +58,7 @@ from short_vol_radar.detector import (
 from short_vol_radar.evidence import (
     CoverageState,
     EvidenceError,
-    EvidenceWriter,
+    RadarEventSink,
 )
 from short_vol_radar.policy import RadarPolicy, load_policy_bytes
 from short_vol_radar.radar import CurrentEvaluation, TickerState
@@ -69,8 +68,7 @@ def make_reducer(tmp_path: Path, policy: RadarPolicy) -> RadarReducer:
     reducer = RadarReducer(
         policy=policy,
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity="runtime",
             policy_identity=policy.identity,
@@ -281,6 +279,10 @@ def establish_joint_witness(
         countable=True,
     )
     assert reducer.results[instrument.instrument_name].full_formula_evaluation
+    assert reducer.latest_funnel_causal_seq == 1
+    assert len(reducer.latest_funnel_evaluations) == 1
+    assert reducer.latest_funnel_evaluations[0].instrument_name == instrument.instrument_name
+    assert reducer.latest_funnel_evaluations[0].known_evaluation
 
 
 def activate_directly(
@@ -974,6 +976,10 @@ def test_amount_unknown_to_valid_establishes_known_current_without_activation_co
         countable=True,
     )
     assert reducer.trackers[unknown.instrument_name].detector_state is DetectorState.UNKNOWN
+    assert reducer.latest_funnel_causal_seq == 1
+    assert len(reducer.latest_funnel_evaluations) == 1
+    assert not reducer.latest_funnel_evaluations[0].known_evaluation
+    assert reducer.latest_funnel_evaluations[0].reason == "OPTION_AMOUNT_METADATA_UNKNOWN"
 
     valid = make_option(unknown.instrument_name, expiry, amount_known=True)
     reducer.options[valid.instrument_name] = valid
@@ -992,6 +998,8 @@ def test_amount_unknown_to_valid_establishes_known_current_without_activation_co
     result = reducer.results[valid.instrument_name]
     assert result.known_evaluation
     assert not result.observation_eligible
+    assert reducer.latest_funnel_causal_seq == 2
+    assert not reducer.latest_funnel_evaluations
     assert reducer.trackers[valid.instrument_name].detector_state is DetectorState.NO_ANOMALY
     assert reducer.trackers[valid.instrument_name].episode_id is None
 
@@ -1054,7 +1062,7 @@ def test_late_ticker_snapshot_is_shape_valid_and_has_no_truth_side_effects(
     result = reducer.results[name]
     coverage_state = reducer._coverage._current_state
     coverage_start = reducer._coverage._current_start_ms
-    anomaly_files = tuple(tmp_path.glob("short-vol-anomaly-*.json"))
+    anomaly_events = reducer.event_sink.anomalies
 
     assert (
         reducer.reduce(
@@ -1082,7 +1090,7 @@ def test_late_ticker_snapshot_is_shape_valid_and_has_no_truth_side_effects(
     assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 0
     assert reducer._coverage._current_state is coverage_state
     assert reducer._coverage._current_start_ms == coverage_start
-    assert tuple(tmp_path.glob("short-vol-anomaly-*.json")) == anomaly_files
+    assert reducer.event_sink.anomalies == anomaly_events
     assert not reducer._channels[channel].resync_requested
 
 
@@ -1361,13 +1369,15 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
     assert not reducer.results[name].observation_eligible
     assert reducer.trackers[name].state.name == "ARMED"
     assert reducer.trackers[name].episode_id is None
-    assert len(tuple(tmp_path.glob("short-vol-anomaly-*.json"))) == 1
+    assert not reducer.event_sink.anomalies
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
     assert reducer._global_continuity_epoch == 1
 
-    summary = json.loads(reducer.clean_stop(2_100).read_text())
+    summary = reducer.clean_stop(2_100)
+    coverage_segments = cast(list[dict[str, object]], summary["coverage_segments"])
     stale_coverage = next(
         segment
-        for segment in summary["coverage_segments"]
+        for segment in coverage_segments
         if segment["blocking_reason"] == "TICKER_SOURCE_STALE"
     )
     assert stale_coverage["state"] == "UNKNOWN"
@@ -1414,7 +1424,7 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
         countable=True,
     )
     assert reducer.trackers[name].episode_id is not None
-    assert len(tuple(tmp_path.glob("short-vol-anomaly-*.json"))) == 1
+    assert len(reducer.event_sink.anomalies) == 1
 
     commands = reducer.advance_time(2_000)
     unsubscribe = next(
@@ -1494,7 +1504,8 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
     assert not reducer.results[name].observation_eligible
     assert reducer.trackers[name].state.name == "ARMED"
     assert reducer.trackers[name].episode_id is None
-    assert len(tuple(tmp_path.glob("short-vol-anomaly-*.json"))) == 1
+    assert not reducer.event_sink.anomalies
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
 
 
 def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recovery(
@@ -1910,7 +1921,7 @@ def test_option_book_gap_quarantines_old_generation_snapshot(
     assert reducer.option_books["SHORT"].state.name == "UNKNOWN"
     assert not reducer.results["SHORT"].known_evaluation
     assert reducer.trackers["SHORT"].episode_id is None
-    assert not tuple(tmp_path.glob("short-vol-anomaly-*.json"))
+    assert not reducer.event_sink.anomalies
 
 
 def test_combo_book_gap_quarantines_old_generation_atomic_quote(
@@ -1980,7 +1991,7 @@ def test_combo_book_gap_quarantines_old_generation_atomic_quote(
 
     assert reducer.combo_books["COMBO"].state.name == "UNKNOWN"
     assert reducer.atomic_states[episode_id] is PublicAtomicQuoteState.UNKNOWN
-    assert not tuple(tmp_path.glob("public-atomic-quote-*.json"))
+    assert not reducer.event_sink.atomics
 
 
 def test_index_publication_pending_preserves_episode_layer_two_and_known_coverage(
@@ -3077,7 +3088,7 @@ def test_combo_book_after_short_ticker_ttl_cannot_emit_atomic_evidence(
     assert reducer.results[short.instrument_name].reason == "TICKER_SOURCE_STALE"
     assert reducer.trackers[short.instrument_name].episode_id is None
     assert episode_id not in reducer.atomic_states
-    assert not tuple(tmp_path.glob("public-atomic-quote-*.json"))
+    assert not reducer.event_sink.atomics
 
 
 def test_runtime_writer_validates_activation_then_later_atomic_combo_boundary(
@@ -3137,11 +3148,8 @@ def test_runtime_writer_validates_activation_then_later_atomic_combo_boundary(
         },
         FactBoundary(1, 2, 1_100, 2),
     )
-    reducer.clean_stop(1_200)
-
-    objects = [json.loads(path.read_text()) for path in tmp_path.glob("*.json")]
-    anomaly = next(item for item in objects if item["object_kind"] == "SHORT_VOL_ANOMALY_EVENT")
-    atomic = next(item for item in objects if item["object_kind"] == "PUBLIC_ATOMIC_QUOTE_EVENT")
+    anomaly = next(iter(reducer.event_sink.anomalies))
+    atomic = next(iter(reducer.event_sink.atomics))
     assert anomaly["episode_identity"] == atomic["episode_identity"] == episode_id
     anomaly_causal_seq = anomaly["causal_seq"]
     detector_causal_seq = atomic["detector_causal_seq"]
@@ -3149,6 +3157,10 @@ def test_runtime_writer_validates_activation_then_later_atomic_combo_boundary(
     assert isinstance(detector_causal_seq, int)
     assert anomaly_causal_seq < detector_causal_seq
     assert atomic["detector_causal_seq"] == atomic["quote_causal_seq"] == 2
+
+    reducer.clean_stop(1_200)
+    assert not reducer.event_sink.anomalies
+    assert not reducer.event_sink.atomics
 
 
 def test_fact_transaction_preserves_trigger_and_concurrent_source_stale_attribution(
@@ -3299,10 +3311,11 @@ def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_resta
     assert reducer._coverage._current_blocking_reason == "NONE"
     assert reducer._global_continuity_epoch == 1
 
-    summary = json.loads(reducer.clean_stop(2_200).read_text())
+    summary = reducer.clean_stop(2_200)
+    coverage_segments = cast(list[dict[str, object]], summary["coverage_segments"])
     incident = next(
         segment
-        for segment in summary["coverage_segments"]
+        for segment in coverage_segments
         if segment["blocking_reason"] == "QUEUE_LAG_CURRENTNESS"
     )
     assert incident["start_monotonic_ms"] == 1_100
@@ -3493,11 +3506,15 @@ def test_coverage_preserves_heterogeneous_nonpublication_blockers(
     )
     assert reducer._coverage._current_blocking_reason == "CURRENT_SCOPE_INCOMPLETE"
 
-    summary = json.loads(reducer.clean_stop(1_300).read_text())
+    summary = reducer.clean_stop(1_300)
+    coverage_segments = cast(list[dict[str, object]], summary["coverage_segments"])
     assert any(
-        {group["blocking_reason"] for group in segment["blocking_groups"]}
+        {
+            group["blocking_reason"]
+            for group in cast(list[dict[str, object]], segment["blocking_groups"])
+        }
         == {"OPTION_BOOK_UNAVAILABLE", "TICKER_SOURCE_STALE"}
-        for segment in summary["coverage_segments"]
+        for segment in coverage_segments
     )
 
 

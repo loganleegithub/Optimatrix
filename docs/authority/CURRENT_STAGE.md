@@ -4,68 +4,60 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Implemented runtime capability:** `OFFLINE_PUBLIC_SHADOW_RUNTIME`
+**Current implementation status:**
+`SHADOW_CASE_DATA_BOUNDARY_AND_FUNNEL_DIAGNOSTICS_IMPLEMENTED`
 
-**Production Short Vol Radar:** `NOT_ACCEPTED_PENDING_REVALIDATION`
-
-**Sole authorized closure:** `NONE`
+**Production Short Vol Radar:** `OFFLINE_READY_BOUNDED_PUBLIC_REACHABILITY_OBSERVED`
 
 **Persistent service:** `STOPPED_NO_DEPLOYMENT`
 
-**Live commands:** `FORBIDDEN`
+**Live commands:** `NONE_AUTHORIZED`
+
+**Sole authorized closure:** `NONE`
 
 ## Current truth
 
-The user stopped the previous observation on 2026-08-02 and rejected its Radar results as
-unreliable. Its active runtime, commissioning, probe, soak, and evidence roots were removed after
-the process, launchd labels, and loopback listener were confirmed absent. Deleted history is not a
-business premise, denominator, acceptance input, or permission source.
+The simplified implementation conforms to the Shadow Case data boundary. Market,
+Radar, atomic availability, Underwriting, Candidate, admission attempts, and Workbench state are
+in-memory. A run with no Shadow admission writes zero business files. The first durable record is
+`SHADOW_CASE_OPENED`; only first CLOSE and terminal Outcome may follow. A minimal reader marks an
+opened-only Case after an unclean exit as `INCOMPLETE_UNCLEAN_EXIT`.
 
-The repository implements a public-only modular monolith: Deribit ingestion, Radar, fixed-contract
-Underwriting, Shadow admission, Position management, Outcome projection, and a loopback read-only
-Workbench. This implementation fact does not prove production correctness, 24-hour stability,
-Policy quality, fillability, profitability, actual exposure, or PnL.
+The one authorized bounded public smoke was consumed and stopped cleanly. Its covered interval
+reached `APPLICABLE_MARKET_SCOPE` and `RADAR_KNOWN`; the earliest observed loss was
+`RADAR_KNOWN / INDEX_WARMUP`, with `OPTION_BOOK_UNKNOWN` also counted. No natural anomaly occurred,
+so `STRUCTURE_REVIEWABLE` and all later stages were not observed. This is a reachability result, not
+a strategy-quality, opportunity-frequency, deployment, or uptime claim.
 
-## Current implementation
+The exact Radar, Underwriting, and Position Policy files, public source semantics, causality,
+`UNKNOWN`, and full-quantity official atomic entry/exit requirements remain unchanged. No runtime
+is deployed and no private/account/order/fill/capital capability exists.
 
-`serve-shadow` is the sole complete product path: one public client, reducer, downstream owner,
-minimal business persistence, reconnect loop, signal stop, coalesced Workbench publisher, and
-loopback health/readiness HTTP. Typed owners calculate business state; writers serialize it.
-It must preserve market/Decision inputs, all three Policies, Radar semantics, Underwriting,
-Shadow, Position, Outcome, causal order, honest `UNKNOWN`, conditioned zero claims, public/private
-separation, and GET/HEAD-only Workbench behavior.
+## Next closure
 
-## Change declarations
+No implementation or public command is currently authorized. A new explicit task must start from
+the measured earliest blocker or another user-approved funnel movement. Funnel state remains
+non-durable current diagnostics.
 
-1. **Market/Decision input contract:** `NONE`
-2. **Decision Policy:** `NONE`
-3. **Outcome/evaluation contract:** `NONE`
-4. **Stage/authorization:** `NONE`
+## Allowed work
 
-## Permission boundary
+- read-only repository and Workbench review;
+- deterministic local checks and GitHub CI for the completed candidate;
+- drafting, but not executing, a new explicitly approved task.
 
-Allowed:
+## Forbidden work
 
-- read-only inspection and deterministic offline tests of the completed implementation;
-- create a new task before any further product, authority, contract, code, or durable-artifact
-  change.
+- persistent deployment or automatic restart;
+- credentials, account, balance, margin, private API, order, fill, capital, or actual position;
+- Policy tuning, threshold changes, hot reload, or run extension after observing results;
+- durable funnel data, database, replay platform, event bus, microservice split, Docker/Kubernetes
+  requirement;
+- application commissioning, host PID/log inspection, manifest, receipt chain, broad artifact
+  package, 24-hour Soak, or any additional smoke invocation;
+- qualification, promotion, or execution controller.
 
-Forbidden:
+## Acceptance boundary
 
-- production-public market, service, probe, commissioning, deployment, or evidence commands;
-- reconstructing or relabelling deleted historical results;
-- changing Radar, Underwriting, Shadow, Position, Outcome, coverage, or business-count meaning;
-- changing market sources, universe, continuity, missingness, detector formulas/thresholds,
-  Underwriting, Shadow admission, Position, Outcome, or cohort semantics;
-- private/account APIs, credentials, balances, margin, positions, orders, fills, settlement,
-  execution gateways, capital, qualification, promotion, or money;
-- public Internet binding, databases, full-market persistence, replay platforms, schedulers,
-  workflow engines, feature stores, registries, or new services.
-
-## Acceptance and non-claims
-
-Direct offline tests and `make check` prove the simplified composition, owner continuity,
-stop/reconnect/failure behavior, Workbench publication, health/readiness, and read-only loopback
-surface. They cannot accept the Radar, authorize deployment, or prove uptime or economics.
-
-Update this document only when capability, permission, the sole closure, or its blocker changes.
+Green tests establish the offline diagnostics. The one public smoke establishes only what its
+covered interval naturally reached. It cannot establish strategy value, opportunity frequency,
+fillability, qualification, deployment, or execution permission.

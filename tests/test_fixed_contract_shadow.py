@@ -48,15 +48,15 @@ from radar_runtime.runtime import (
 )
 from short_vol_radar.black import DecimalInterval
 from short_vol_radar.detector import DetectorObservation, EpisodeTracker, TrackerState
-from short_vol_radar.evidence import EvidenceWriter
+from short_vol_radar.evidence import RadarEventSink
 from short_vol_radar.policy import load_policy_bytes
 from short_vol_radar.radar import TickerState
 from short_vol_underwriting import (
     CloseAtomicAvailability,
     CloseOptionAvailability,
-    DownstreamEvidenceWriter,
     FixedContractShadowOwner,
     RuntimeBindings,
+    ShadowStateStore,
     SourceFact,
     SubscriptionAdmissionRefreshWitness,
     canonical_identity,
@@ -64,10 +64,6 @@ from short_vol_underwriting import (
 )
 from short_vol_underwriting import (
     FactBoundary as DownstreamFactBoundary,
-)
-from short_vol_underwriting.constants import (
-    OUTCOME_CONTRACT_DIGEST,
-    UNDERWRITING_POSITION_CONTRACT_DIGEST,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,13 +74,28 @@ UNDERWRITING_POLICY_IDENTITY = (
 POSITION_POLICY_IDENTITY = "sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439"
 
 
+class _HistoryObserver:
+    def __init__(self) -> None:
+        self.records: list[dict[str, object]] = []
+
+    def on_record(
+        self,
+        value: Mapping[str, object],
+        state: ShadowStateStore,
+    ) -> None:
+        del state
+        self.records.append(dict(value))
+
+
+_HISTORY_BY_OWNER: dict[int, _HistoryObserver] = {}
+
+
 def _reducer(tmp_path: Path, policy_factory: PolicyFactory) -> RadarReducer:
     exact, digest = policy_factory()
     reducer = RadarReducer(
         policy=load_policy_bytes(exact, digest),
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            tmp_path,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity="sha256:" + "b" * 64,
             policy_identity=digest,
@@ -284,44 +295,23 @@ def _shadow_system(
         radar_policy_identity=RADAR_POLICY_IDENTITY,
         underwriting_policy_identity=UNDERWRITING_POLICY_IDENTITY,
         position_policy_identity=POSITION_POLICY_IDENTITY,
-        underwriting_position_contract_digest=UNDERWRITING_POSITION_CONTRACT_DIGEST,
-        outcome_contract_digest=OUTCOME_CONTRACT_DIGEST,
     )
     downstream = tmp_path / "downstream"
     radar = tmp_path / "radar"
     downstream.mkdir()
     radar.mkdir()
+    history = _HistoryObserver()
     owner = FixedContractShadowOwner(
         policies=policies,
         bindings=bindings,
-        writer=DownstreamEvidenceWriter(downstream, bindings=bindings),
+        state_store=ShadowStateStore(bindings=bindings, observer=history),
     )
-    owner.open_enrollment(
-        DownstreamFactBoundary(
-            code_identity="a" * 40,
-            runtime_identity=runtime_identity,
-            session_epoch=1,
-            ingress_seq=0,
-            received_monotonic_ms=90,
-            causal_seq=0,
-        )
-    )
-    owner.close_enrollment(
-        DownstreamFactBoundary(
-            code_identity="a" * 40,
-            runtime_identity=runtime_identity,
-            session_epoch=1,
-            ingress_seq=99,
-            received_monotonic_ms=1_000,
-            causal_seq=99,
-        )
-    )
+    _HISTORY_BY_OWNER[id(owner)] = history
     adapter = FixedContractShadowRuntimeAdapter(owner=owner)
     reducer = RadarReducer(
         policy=policies.radar,
         code_identity="a" * 40,
-        evidence_writer=EvidenceWriter(
-            radar,
+        event_sink=RadarEventSink(
             code_identity="a" * 40,
             runtime_identity=runtime_identity,
             policy_identity=RADAR_POLICY_IDENTITY,
@@ -502,7 +492,7 @@ def test_real_episode_identity_round_trips_without_economic_action(
     assert facts.active_episode_identity == episode_identity
     assert facts.short_leg_instrument_name == "BTC-SHORT"
     assert facts.atomic_state == expected_atomic_state
-    assert [value["object_kind"] for value in owner.writer.objects] == [
+    assert [value["object_kind"] for value in owner.state_store.objects] == [
         "UNDERWRITING_AVAILABILITY_EVALUATION"
     ]
 
@@ -537,30 +527,22 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
         )
         == ()
     )
-    (inactive,) = adapter._underwriting_by_scope.values()
-    assert inactive.active_episode_identity is None
-    inactive_availability: list[Mapping[str, object]] = []
-    for value in owner.writer.objects:
-        payload = value["payload"]
-        assert isinstance(payload, dict)
-        if value["object_kind"] == "UNDERWRITING_AVAILABILITY_EVALUATION" and payload[
-            "unknown_reasons"
-        ] == ["RADAR_EPISODE_NOT_ACTIVE"]:
-            inactive_availability.append(value)
+    assert adapter._underwriting_by_scope == {}
+    assert adapter.workbench_underwriting_metadata() == ()
+    inactive_availability = [
+        payload
+        for payload in _object_payloads(owner, "UNDERWRITING_AVAILABILITY_EVALUATION")
+        if payload["unknown_reasons"] == ["RADAR_EPISODE_NOT_ACTIVE"]
+    ]
     assert len(inactive_availability) == 1
-    assert (
-        len(
-            [
-                value
-                for value in owner.writer.objects
-                if value["object_kind"] == "CANDIDATE_INVALIDATION"
-            ]
-        )
-        == 1
-    )
-    inactive_revision = owner.writer.revision
-    inactive_objects = tuple(owner.writer.objects)
-    inactive_paths = tuple(sorted((tmp_path / "downstream" / "objects").rglob("*.json")))
+    assert len(_object_payloads(owner, "CANDIDATE_INVALIDATION")) == 1
+    assert owner.retained_state_counts["active_candidates"] == 0
+    assert owner.retained_state_counts["availability_scopes"] == 0
+    assert adapter.retained_state_counts["underwriting_scopes"] == 0
+    assert adapter.retained_state_counts["candidate_origins"] == 0
+    assert adapter.retained_state_counts["request_contexts"] == 0
+    inactive_revision = owner.state_store.revision
+    inactive_objects = tuple(owner.state_store.objects)
 
     unrelated_commit = _commit(
         causal_seq=3,
@@ -568,10 +550,9 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
         cause=CausalCause.TICKER_APPLIED,
     )
     assert adapter.on_settled_transaction(reducer=reducer, commit=unrelated_commit) == ()
-    assert adapter._underwriting_by_scope[inactive.radar_scope_identity] is inactive
-    assert owner.writer.revision == inactive_revision
-    assert tuple(owner.writer.objects) == inactive_objects
-    assert tuple(sorted((tmp_path / "downstream" / "objects").rglob("*.json"))) == inactive_paths
+    assert adapter._underwriting_by_scope == {}
+    assert owner.state_store.revision == inactive_revision
+    assert tuple(owner.state_store.objects) == inactive_objects
 
     next_tracker = EpisodeTracker(
         runtime_identity=reducer.runtime_identity,
@@ -591,11 +572,84 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
             cause=CausalCause.COMBO_BOOK_CHANGED,
         ),
     )
-    assert owner.writer.revision > inactive_revision
+    assert owner.state_store.revision > inactive_revision
     assert any(
         facts.active_episode_identity == next_tracker.episode_id
         for facts in adapter._underwriting_by_scope.values()
     )
+
+
+def test_replaced_atomic_quote_scopes_remain_bounded_across_many_candidates(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    (first_intent,) = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.COMBO_BOOK_CHANGED,
+        ),
+    )
+    assert first_intent.request_id > 0
+    (first_scope,) = adapter._underwriting_by_scope
+    template = reducer.combos["BTC-COMBO"]
+    replacement_count = 200
+    last_name = ""
+
+    for causal_seq in range(2, replacement_count + 2):
+        last_name = f"BTC-COMBO-{causal_seq}"
+        combo = replace(template, instrument_name=last_name)
+        book = ContinuousOrderBook(last_name)
+        book.apply(
+            {
+                "type": "snapshot",
+                "instrument_name": last_name,
+                "change_id": causal_seq * 10,
+                "timestamp": 1_000_000 + causal_seq * 10,
+                "bids": [["new", "300", "0.1"]],
+                "asks": [["new", "301", "0.1"]],
+            },
+            100 + causal_seq * 10,
+        )
+        boundary = FactBoundary(1, causal_seq, 100 + causal_seq * 10, causal_seq)
+        reducer.combos = {last_name: combo}
+        reducer.combo_books = {last_name: book}
+        reducer.accepted_book_receipts = {
+            last_name: AcceptedBookReceipt(
+                instrument_name=last_name,
+                snapshot_kind="snapshot",
+                prev_change_id=None,
+                change_id=causal_seq * 10,
+                source_timestamp_ms=1_000_000 + causal_seq * 10,
+                session_epoch=1,
+                subscription_generation=1,
+                boundary=boundary,
+            )
+        }
+
+        (replacement_intent,) = adapter.on_settled_transaction(
+            reducer=reducer,
+            commit=_commit(
+                causal_seq=causal_seq,
+                monotonic_ms=100 + causal_seq * 10,
+                cause=CausalCause.COMBO_BOOK_CHANGED,
+            ),
+        )
+        assert replacement_intent.request_id > first_intent.request_id
+        assert owner.retained_state_counts["active_candidates"] == 1
+        assert owner.retained_state_counts["availability_scopes"] == 1
+        assert adapter.retained_state_counts["underwriting_scopes"] == 1
+        assert adapter.retained_state_counts["candidate_origins"] == 1
+        assert adapter.retained_state_counts["request_contexts"] == 1
+        assert adapter.retained_state_counts["current_combo_sources"] == 1
+        assert adapter.retained_state_counts["retained_combo_identities"] == 1
+
+    assert len(adapter._underwriting_by_scope) == 1
+    assert first_scope not in adapter._underwriting_by_scope
+    (current_facts,) = adapter._underwriting_by_scope.values()
+    assert current_facts.combo_instrument_name == last_name
+    assert len(_object_payloads(owner, "CANDIDATE_INVALIDATION")) == replacement_count
 
 
 def test_workbench_underwriting_metadata_reuses_unchanged_snapshot(
@@ -648,7 +702,7 @@ def test_atomic_scope_rejects_unbound_radar_episode_before_economic_action(
                 cause=CausalCause.COMBO_BOOK_CHANGED,
             ),
         )
-    assert owner.writer.objects == ()
+    assert owner.state_store.objects == ()
 
 
 def _downstream_source(seed: str) -> SourceFact:
@@ -974,7 +1028,7 @@ def _rest_combo_book(
 
 def _terminal_outcomes(owner: FixedContractShadowOwner) -> list[str]:
     outcomes: list[str] = []
-    for value in owner.writer.objects:
+    for value in _HISTORY_BY_OWNER[id(owner)].records:
         if value["object_kind"] != "ADMISSION_ATTEMPT_TERMINAL":
             continue
         payload = value["payload"]
@@ -1043,7 +1097,7 @@ def _object_payloads(
     kind: str,
 ) -> list[dict[str, object]]:
     payloads: list[tuple[int, dict[str, object]]] = []
-    for value in owner.writer.objects:
+    for value in _HISTORY_BY_OWNER[id(owner)].records:
         if value["object_kind"] != kind:
             continue
         payload = value["payload"]
@@ -1149,24 +1203,11 @@ def _reject_and_latch_close(
     return post_close_intent.request_id
 
 
-@pytest.mark.parametrize(
-    ("rejected", "outcome_kind"),
-    (
-        (False, "SHADOW_OUTCOME"),
-        (True, "REJECTED_COUNTERFACTUAL_OUTCOME"),
-    ),
-)
-def test_ordinary_post_close_failure_settles_natural_mature_unknown(
+def test_ordinary_post_close_failure_settles_admitted_natural_mature_unknown(
     tmp_path: Path,
-    rejected: bool,
-    outcome_kind: str,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    request_id = (
-        _reject_and_latch_close(reducer, adapter)
-        if rejected
-        else _admit_and_latch_close(reducer, adapter)
-    )
+    request_id = _admit_and_latch_close(reducer, adapter)
     _set_natural_lifecycle_ready(reducer)
 
     adapter.on_request_failure(
@@ -1175,7 +1216,9 @@ def test_ordinary_post_close_failure_settles_natural_mature_unknown(
         boundary=FactBoundary(1, 5, 150, 5),
     )
 
-    outcome = next(value for value in owner.writer.objects if value["object_kind"] == outcome_kind)
+    outcome = next(
+        value for value in owner.state_store.objects if value["object_kind"] == "SHADOW_OUTCOME"
+    )
     payload = outcome["payload"]
     assert isinstance(payload, dict)
     assert payload["terminal_state"] == "MATURE_UNKNOWN"
@@ -1184,15 +1227,10 @@ def test_ordinary_post_close_failure_settles_natural_mature_unknown(
     witnesses = payload["natural_terminal_lifecycle_witnesses"]
     assert isinstance(witnesses, list)
     assert [value["canonical_leg_role"] for value in witnesses] == ["SHORT", "LONG"]
-    pair = next(
-        value
-        for value in owner.writer.objects
-        if value["object_kind"] == "ALIGNED_POLICY_NO_TRADE_PAIR"
+    assert not any(
+        value["object_kind"] == "ALIGNED_POLICY_NO_TRADE_PAIR"
+        for value in owner.state_store.objects
     )
-    pair_payload = pair["payload"]
-    assert isinstance(pair_payload, dict)
-    assert pair_payload["terminal_state"] == "MATURE_UNKNOWN"
-    assert pair_payload["comparison_availability"] == "UNKNOWN"
 
 
 def test_first_close_same_boundary_as_natural_lifecycle_cannot_mature(
@@ -1230,7 +1268,7 @@ def test_first_close_same_boundary_as_natural_lifecycle_cannot_mature(
         commit=_commit(causal_seq=4, monotonic_ms=140, cause=CausalCause.COMBO_BOOK_FACT),
     )
 
-    assert not any(value["object_kind"] == "SHADOW_OUTCOME" for value in owner.writer.objects)
+    assert not any(value["object_kind"] == "SHADOW_OUTCOME" for value in owner.state_store.objects)
 
 
 def test_equal_change_id_with_different_rest_depth_is_unknown_not_entry(
@@ -1251,7 +1289,7 @@ def test_equal_change_id_with_different_rest_depth_is_unknown_not_entry(
         boundary=FactBoundary(1, 3, 130, 3),
     )
 
-    kinds = [str(value["object_kind"]) for value in owner.writer.objects]
+    kinds = [str(value["object_kind"]) for value in owner.state_store.objects]
     assert "SHADOW_ENTRY" not in kinds
     assert _terminal_outcomes(owner) == ["UNKNOWN_CONSUMED"]
 
@@ -1282,14 +1320,10 @@ def test_admission_response_reprojects_contemporaneous_ancillary_facts(
         boundary=FactBoundary(1, 3, 130, 3),
     )
 
-    kinds = [str(value["object_kind"]) for value in owner.writer.objects]
+    kinds = [str(value["object_kind"]) for value in owner.state_store.objects]
     assert "SHADOW_ENTRY" not in kinds
     assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
-    invalidation = next(
-        value for value in owner.writer.objects if value["object_kind"] == "CANDIDATE_INVALIDATION"
-    )
-    payload = invalidation["payload"]
-    assert isinstance(payload, dict)
+    (payload,) = _object_payloads(owner, "CANDIDATE_INVALIDATION")
     assert payload["primary_reason"] == ("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN")
 
 
@@ -1311,11 +1345,7 @@ def test_retired_admission_request_keeps_typed_source_gap_semantics(
     )
 
     assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
-    invalidation = next(
-        value for value in owner.writer.objects if value["object_kind"] == "CANDIDATE_INVALIDATION"
-    )
-    payload = invalidation["payload"]
-    assert isinstance(payload, dict)
+    (payload,) = _object_payloads(owner, "CANDIDATE_INVALIDATION")
     assert payload["primary_reason"] == ("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN")
 
 
@@ -1394,7 +1424,7 @@ def test_concrete_adapter_runs_candidate_admission_position_and_future_exit_once
         )
         == ()
     )
-    kinds = [str(value["object_kind"]) for value in owner.writer.objects]
+    kinds = [str(value["object_kind"]) for value in owner.state_store.objects]
     assert kinds.count("SHADOW_ENTRY") == 1
 
     _set_platform_usable(reducer, False)
@@ -1431,15 +1461,23 @@ def test_concrete_adapter_runs_candidate_admission_position_and_future_exit_once
         )
         == ()
     )
-    kinds = [str(value["object_kind"]) for value in owner.writer.objects]
+    kinds = [str(value["object_kind"]) for value in owner.state_store.objects]
     assert kinds.count("SHADOW_ENTRY") == 1
-    assert kinds.count("POSITION_ACTION") == 2
-    assert kinds.count("POST_CLOSE_ATTEMPT_SCHEDULED") == 1
-    assert kinds.count("POST_CLOSE_ATTEMPT_TERMINAL") == 1
-    assert kinds.count("SHADOW_CLOSE_OPPORTUNITY") == 1
-    assert kinds.count("SHADOW_OUTCOME") == 1
+    assert kinds.count("POSITION_ACTION") == 1
+    assert len(_object_payloads(owner, "POSITION_ACTION")) == 2
+    assert len(_object_payloads(owner, "POST_CLOSE_ATTEMPT_SCHEDULED")) == 1
+    assert len(_object_payloads(owner, "POST_CLOSE_ATTEMPT_TERMINAL")) == 1
+    assert len(_object_payloads(owner, "SHADOW_CLOSE_OPPORTUNITY")) == 1
+    assert len(_object_payloads(owner, "SHADOW_OUTCOME")) == 1
+    assert owner.retained_state_counts["active_candidates"] == 0
+    assert owner.retained_state_counts["active_trades"] == 0
+    assert adapter.retained_state_counts["candidate_origins"] == 0
+    assert adapter.retained_state_counts["active_anchors"] == 0
+    assert adapter.retained_state_counts["request_contexts"] == 0
+    assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 1
+    assert owner.state_store.retained_state_counts["latest_terminal_cases"] == 1
 
-    before = tuple(owner.writer.objects)
+    before = tuple(owner.state_store.objects)
     assert (
         adapter.on_settled_transaction(
             reducer=reducer,
@@ -1451,7 +1489,7 @@ def test_concrete_adapter_runs_candidate_admission_position_and_future_exit_once
         )
         == ()
     )
-    assert tuple(owner.writer.objects) == before
+    assert tuple(owner.state_store.objects) == before
 
 
 def test_time_polls_use_discrete_business_classes_and_exact_crossings_once(
@@ -1463,7 +1501,7 @@ def test_time_polls_use_discrete_business_classes_and_exact_crossings_once(
         commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
     )
 
-    before_same_class = tuple(owner.writer.objects)
+    before_same_class = tuple(owner.state_store.objects)
     assert (
         adapter.on_settled_transaction(
             reducer=reducer,
@@ -1471,7 +1509,7 @@ def test_time_polls_use_discrete_business_classes_and_exact_crossings_once(
         )
         == ()
     )
-    assert tuple(owner.writer.objects) == before_same_class
+    assert tuple(owner.state_store.objects) == before_same_class
 
     expiry_ms = reducer.options["BTC-SHORT"].expiration_timestamp_ms
     admission_cutoff_ms = expiry_ms - 1_800_000
@@ -1499,10 +1537,10 @@ def test_time_polls_use_discrete_business_classes_and_exact_crossings_once(
     reasons = invalidations[0]["ordered_applicable_reason_vector"]
     assert isinstance(reasons, list)
     assert "LATEST_ADMISSION_BOUNDARY_REACHED" in reasons
-    after_cutoff = tuple(owner.writer.objects)
+    after_cutoff = tuple(owner.state_store.objects)
     reducer._last_wire_received_ms = cutoff_crossing + 1
     reducer.advance_time(cutoff_crossing + 1)
-    assert tuple(owner.writer.objects) == after_cutoff
+    assert tuple(owner.state_store.objects) == after_cutoff
     assert admission_intent.request_id in reducer._reserved_shadow_request_ids
 
 
@@ -1542,7 +1580,7 @@ def test_position_latest_exit_and_expiry_cross_at_exact_time_once(
         == ()
     )
     assert len(_object_payloads(owner, "POSITION_ACTION")) == 1
-    before_same_class = tuple(owner.writer.objects)
+    before_same_class = tuple(owner.state_store.objects)
     assert (
         adapter.on_settled_transaction(
             reducer=reducer,
@@ -1550,7 +1588,7 @@ def test_position_latest_exit_and_expiry_cross_at_exact_time_once(
         )
         == ()
     )
-    assert tuple(owner.writer.objects) == before_same_class
+    assert tuple(owner.state_store.objects) == before_same_class
 
     expiry_ms = reducer.options["BTC-SHORT"].expiration_timestamp_ms
     latest_exit_ms = expiry_ms - owner.policies.position.latest_exit_lead_ms
@@ -1576,10 +1614,10 @@ def test_position_latest_exit_and_expiry_cross_at_exact_time_once(
     assert len(position_actions) == 2
     assert position_actions[-1]["primary_close_reason"] == "LATEST_EXIT_BOUNDARY_REACHED"
     assert position_actions[-1]["secondary_close_reasons"] == ["PLATFORM_OR_SOURCE_DISCONTINUITY"]
-    after_latest = tuple(owner.writer.objects)
+    after_latest = tuple(owner.state_store.objects)
     reducer._last_wire_received_ms = latest_crossing + 1
     reducer.advance_time(latest_crossing + 1)
-    assert tuple(owner.writer.objects) == after_latest
+    assert tuple(owner.state_store.objects) == after_latest
 
     expiry_base_ms = latest_crossing + 2
     _set_trusted_source_time(
@@ -1605,10 +1643,10 @@ def test_position_latest_exit_and_expiry_cross_at_exact_time_once(
         "LATEST_EXIT_BOUNDARY_REACHED",
         "PLATFORM_OR_SOURCE_DISCONTINUITY",
     ]
-    after_expiry = tuple(owner.writer.objects)
+    after_expiry = tuple(owner.state_store.objects)
     reducer._last_wire_received_ms = expiry_crossing + 1
     reducer.advance_time(expiry_crossing + 1)
-    assert tuple(owner.writer.objects) == after_expiry
+    assert tuple(owner.state_store.objects) == after_expiry
 
 
 @pytest.mark.parametrize("deadline", ["CLOCK", "PLATFORM", "INDEX", "TICKER"])
@@ -1714,7 +1752,7 @@ def test_currentness_deadlines_cross_exactly_once_and_invalidate_candidate(
                 cause=CausalCause.TIME_BOUNDARY,
             ),
         )
-    before_crossing = tuple(owner.writer.objects)
+    before_crossing = tuple(owner.state_store.objects)
     assert (
         adapter.next_time_boundary_monotonic_ms(
             reducer=reducer,
@@ -1729,12 +1767,12 @@ def test_currentness_deadlines_cross_exactly_once_and_invalidate_candidate(
     reducer.advance_time(expected_crossing_ms)
     invalidations = _object_payloads(owner, "CANDIDATE_INVALIDATION")
     assert len(invalidations) == 1
-    assert tuple(owner.writer.objects) != before_crossing
+    assert tuple(owner.state_store.objects) != before_crossing
 
-    after_crossing = tuple(owner.writer.objects)
+    after_crossing = tuple(owner.state_store.objects)
     reducer._last_wire_received_ms = expected_crossing_ms + 1
     reducer.advance_time(expected_crossing_ms + 1)
-    assert tuple(owner.writer.objects) == after_crossing
+    assert tuple(owner.state_store.objects) == after_crossing
 
 
 def test_session_gap_settles_hold_to_close_before_first_reconnect_quote(
@@ -1780,7 +1818,7 @@ def test_session_gap_settles_hold_to_close_before_first_reconnect_quote(
     ]
     assert position_actions[-1]["primary_close_reason"] == ("PLATFORM_OR_SOURCE_DISCONTINUITY")
     position_objects = [
-        value for value in owner.writer.objects if value["object_kind"] == "POSITION_ACTION"
+        value for value in owner.state_store.objects if value["object_kind"] == "POSITION_ACTION"
     ]
     gap_close_boundary = max(
         (DownstreamFactBoundary.from_object(value["fact_boundary"]) for value in position_objects),
@@ -1917,7 +1955,7 @@ def test_candidate_subscription_winner_retires_runtime_rpc_and_late_wire_is_orph
     assert _terminal_outcomes(owner) == ["ENTRY_EMITTED"]
     assert len(_object_payloads(owner, "SHADOW_ENTRY")) == 1
 
-    after_winner = tuple(owner.writer.objects)
+    after_winner = tuple(owner.state_store.objects)
     late_boundary = FactBoundary(1, next_causal + 1, next_monotonic + 10, next_causal + 1)
     _mark_shadow_request_sent(
         reducer,
@@ -1936,7 +1974,7 @@ def test_candidate_subscription_winner_retires_runtime_rpc_and_late_wire_is_orph
             received_monotonic_ms=next_monotonic + 20,
         )
     )
-    assert tuple(owner.writer.objects) == after_winner
+    assert tuple(owner.state_store.objects) == after_winner
 
 
 @pytest.mark.parametrize("request_state", [RpcState.SCHEDULED, RpcState.SENT])
@@ -2018,7 +2056,7 @@ def test_post_close_subscription_winner_retires_runtime_rpc_and_late_wire_is_orp
     assert len(_object_payloads(owner, "POST_CLOSE_ATTEMPT_TERMINAL")) == 1
     assert len(_object_payloads(owner, "SHADOW_OUTCOME")) == 1
 
-    after_winner = tuple(owner.writer.objects)
+    after_winner = tuple(owner.state_store.objects)
     late_boundary = FactBoundary(1, next_causal + 1, next_monotonic + 10, next_causal + 1)
     _mark_shadow_request_sent(
         reducer,
@@ -2037,4 +2075,4 @@ def test_post_close_subscription_winner_retires_runtime_rpc_and_late_wire_is_orp
             received_monotonic_ms=next_monotonic + 20,
         )
     )
-    assert tuple(owner.writer.objects) == after_winner
+    assert tuple(owner.state_store.objects) == after_winner

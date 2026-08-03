@@ -122,8 +122,6 @@ class FixedContractShadowRuntimeAdapter:
         self._workbench_underwriting_metadata: tuple[Mapping[str, object], ...] = ()
         self._candidate_origins: dict[str, UnderwritingFacts] = {}
         self._anchors: dict[str, _Anchor] = {}
-        self._anchors_by_observation: dict[str, _Anchor] = {}
-        self._anchor_writer_revision = 0
         self._requests: dict[int, _RequestContext] = {}
         self._last_reducer: RadarReducer | None = None
 
@@ -140,6 +138,20 @@ class FixedContractShadowRuntimeAdapter:
     @property
     def required_option_instrument_names(self) -> tuple[str, ...]:
         return self.owner.required_option_instrument_names
+
+    @property
+    def retained_state_counts(self) -> Mapping[str, int]:
+        return {
+            "current_option_sources": len(self._option_sources),
+            "retained_option_identities": len(self._options_by_identity),
+            "current_combo_sources": len(self._combo_sources),
+            "retained_combo_identities": len(self._combos_by_identity),
+            "current_ticker_sources": len(self._ticker_sources),
+            "underwriting_scopes": len(self._underwriting_by_scope),
+            "candidate_origins": len(self._candidate_origins),
+            "active_anchors": len(self._anchors),
+            "request_contexts": len(self._requests),
+        }
 
     def workbench_option_metadata(self) -> tuple[Mapping[str, object], ...]:
         """Copy settled option identity metadata for the in-process read-only projection."""
@@ -339,14 +351,21 @@ class FixedContractShadowRuntimeAdapter:
         self._last_reducer = reducer
         self._refresh_sources(reducer, boundary)
 
-        projected = self._project_underwriting(reducer, commit, boundary)
+        projected, scope_retirements, episode_retirements = self._project_underwriting(
+            reducer,
+            commit,
+            boundary,
+        )
         transition = self.owner.settle_underwriting(
             projected,
             allocate_request_id=reducer.allocate_shadow_request_id,
         )
         intents = list(self._consume_transition(transition, projected))
+        self._retire_underwriting_scopes(
+            scope_retirements,
+            episode_retirements,
+        )
 
-        self._discover_anchors()
         for anchor in tuple(self._anchors.values()):
             if not boundary.is_strictly_after(anchor.entry_boundary):
                 continue
@@ -516,6 +535,7 @@ class FixedContractShadowRuntimeAdapter:
         if context.purpose == "ADMISSION_REFRESH":
             origin = self._candidate_origins.get(context.owner_identity)
             if origin is None:
+                self._requests.pop(request_id, None)
                 return ()
             self._refresh_sources(reducer, accepted_boundary)
             refreshed = self._refresh_admission_facts(
@@ -536,11 +556,12 @@ class FixedContractShadowRuntimeAdapter:
                 refresh_witness=witness,
             )
             result_intents = self._consume_transition(transition, (refreshed,))
-            self._discover_anchors()
+            self._requests.pop(request_id, None)
             return result_intents
 
         anchor = self._anchor_for_owner_identity(context.owner_identity)
         if anchor is None:
+            self._requests.pop(request_id, None)
             return ()
         facts = self._project_position(
             reducer=reducer,
@@ -559,7 +580,9 @@ class FixedContractShadowRuntimeAdapter:
             refreshed_facts=facts,
             refresh_witness=witness,
         )
-        return self._consume_transition(transition, ())
+        result_intents = self._consume_transition(transition, ())
+        self._requests.pop(request_id, None)
+        return result_intents
 
     def _refresh_admission_facts(
         self,
@@ -829,14 +852,17 @@ class FixedContractShadowRuntimeAdapter:
             )
         for name in set(self._ticker_sources) - set(reducer.tickers):
             self._ticker_sources.pop(name, None)
+        self._prune_semantic_sources()
 
     def _project_underwriting(
         self,
         reducer: RadarReducer,
         commit: CausalCommit,
         boundary: DownstreamFactBoundary,
-    ) -> tuple[UnderwritingFacts, ...]:
+    ) -> tuple[tuple[UnderwritingFacts, ...], tuple[str, ...], tuple[str, ...]]:
         current: dict[str, UnderwritingFacts] = {}
+        scope_retirements: list[str] = []
+        episode_retirements: set[str] = set()
         snapshots: list[AtomicScopeSnapshot] = []
         for tracker in reducer.trackers.values():
             snapshot = reducer._freeze_atomic_scope_snapshot(tracker, commit=commit)
@@ -870,10 +896,9 @@ class FixedContractShadowRuntimeAdapter:
         for scope, prior in self._underwriting_by_scope.items():
             if scope in current:
                 continue
-            if prior.active_episode_identity in by_episode:
-                continue
             if prior.active_episode_identity is None:
                 continue
+            episode_still_active = prior.active_episode_identity in by_episode
             trusted = self._trusted_interval(
                 reducer,
                 boundary,
@@ -884,11 +909,20 @@ class FixedContractShadowRuntimeAdapter:
                 boundary=boundary,
                 active_episode_identity=None,
                 atomic_state=PublicAtomicQuoteState.NOT_EVALUATED.value,
+                entry_consumed_levels=(),
                 trusted_time_lower_ms=(trusted.lower_ms if trusted is not None else None),
                 trusted_time_upper_ms=(trusted.upper_ms if trusted is not None else None),
+                quote_source=None,
                 quote_refresh_witness=None,
-                unknown_reasons=("RADAR_EPISODE_NOT_ACTIVE",),
+                unknown_reasons=(
+                    "RADAR_SCOPE_NOT_CURRENT"
+                    if episode_still_active
+                    else "RADAR_EPISODE_NOT_ACTIVE",
+                ),
             )
+            scope_retirements.append(scope)
+            if not episode_still_active:
+                episode_retirements.add(prior.active_episode_identity)
         metadata_changed = False
         for scope, facts in current.items():
             self._underwriting_by_scope[scope] = facts
@@ -901,7 +935,11 @@ class FixedContractShadowRuntimeAdapter:
                 self._workbench_underwriting_metadata_by_scope[key]
                 for key in sorted(self._workbench_underwriting_metadata_by_scope)
             )
-        return tuple(current[key] for key in sorted(current))
+        return (
+            tuple(current[key] for key in sorted(current)),
+            tuple(sorted(scope_retirements)),
+            tuple(sorted(episode_retirements)),
+        )
 
     def _underwriting_quote(
         self,
@@ -1042,6 +1080,19 @@ class FixedContractShadowRuntimeAdapter:
             long_leg_instrument_name=(
                 long_instrument.instrument_name if long_instrument is not None else None
             ),
+            radar_band_id=snapshot.activation_band_id,
+            radar_richness_lower=(
+                snapshot.short_current.calculation.richness.lower
+                if snapshot.short_current is not None
+                and snapshot.short_current.calculation is not None
+                else None
+            ),
+            radar_richness_upper=(
+                snapshot.short_current.calculation.richness.upper
+                if snapshot.short_current is not None
+                and snapshot.short_current.calculation is not None
+                else None
+            ),
             unknown_reasons=tuple(sorted(unknown)),
         )
 
@@ -1109,6 +1160,19 @@ class FixedContractShadowRuntimeAdapter:
             ticker_source=None,
             short_leg_instrument_name=(snapshot.short_leg.instrument_name),
             long_leg_instrument_name=None,
+            radar_band_id=snapshot.activation_band_id,
+            radar_richness_lower=(
+                snapshot.short_current.calculation.richness.lower
+                if snapshot.short_current is not None
+                and snapshot.short_current.calculation is not None
+                else None
+            ),
+            radar_richness_upper=(
+                snapshot.short_current.calculation.richness.upper
+                if snapshot.short_current is not None
+                and snapshot.short_current.calculation is not None
+                else None
+            ),
             unknown_reasons=tuple(snapshot.result.unknown_reasons)
             or ("ATOMIC_SCOPE_NOT_EVALUABLE",),
         )
@@ -1390,14 +1454,17 @@ class FixedContractShadowRuntimeAdapter:
             if fact.active_episode_identity is not None and fact.short_leg_identity is not None
         }
         for emitted in transition.emitted:
-            if emitted.object_kind != "CANDIDATE_ACTIVATION":
-                continue
-            value = self.owner.writer.get_object(emitted.object_kind, emitted.object_identity)
+            value = self.owner.state_store.get_object(
+                emitted.object_kind,
+                emitted.object_identity,
+            )
             payload = value.get("payload") if value is not None else None
-            if isinstance(payload, Mapping):
+            if emitted.object_kind == "CANDIDATE_ACTIVATION" and isinstance(payload, Mapping):
                 slot = payload.get("underwriting_position_slot_key_identity")
                 if isinstance(slot, str) and slot in facts_by_slot:
                     self._candidate_origins[emitted.object_identity] = facts_by_slot[slot]
+            elif emitted.object_kind == "SHADOW_ENTRY" and value is not None:
+                self._remember_anchor(value)
         result: list[ShadowRpcIntent] = []
         for intent in transition.request_intents:
             context = _RequestContext(
@@ -1408,6 +1475,8 @@ class FixedContractShadowRuntimeAdapter:
             )
             self._requests[intent.request_id] = context
             result.append(self._shadow_intent(intent))
+        self._prune_owner_refs()
+        self._prune_semantic_sources()
         return tuple(result)
 
     def _consume_ordinary_post_close_terminal(
@@ -1418,23 +1487,20 @@ class FixedContractShadowRuntimeAdapter:
         boundary: DownstreamFactBoundary,
         transition: OwnerTransition,
     ) -> tuple[ShadowRpcIntent, ...]:
-        intents = list(self._consume_transition(transition, ()))
         context = self._requests.get(request_id)
+        intents = list(self._consume_transition(transition, ()))
         if (
             context is None
             or context.purpose != "POST_CLOSE_QUOTE"
             or not any(
-                emitted.object_kind
-                in {
-                    "POST_CLOSE_ATTEMPT_TERMINAL",
-                    "REJECTED_COUNTERFACTUAL_CLOSE_OPPORTUNITY_EVALUATION",
-                }
+                emitted.object_kind == "POST_CLOSE_ATTEMPT_TERMINAL"
                 for emitted in transition.emitted
             )
         ):
             return tuple(intents)
-        anchor = self._anchor_for_owner_identity(context.owner_identity)
+        anchor = self._anchors.get(context.owner_identity)
         if anchor is None:
+            self._requests.pop(request_id, None)
             return tuple(intents)
         self._refresh_sources(reducer, boundary)
         facts = self._project_position(
@@ -1452,6 +1518,7 @@ class FixedContractShadowRuntimeAdapter:
             allocate_request_id=reject_second_attempt,
         )
         intents.extend(self._consume_transition(settlement, ()))
+        self._requests.pop(request_id, None)
         return tuple(intents)
 
     def _shadow_intent(self, intent: RpcRequestIntent) -> ShadowRpcIntent:
@@ -1481,54 +1548,80 @@ class FixedContractShadowRuntimeAdapter:
             response_budget_ms=response_budget,
         )
 
-    def _discover_anchors(self) -> None:
-        revision = self.owner.writer.revision
-        if revision == self._anchor_writer_revision:
+    def _remember_anchor(self, value: Mapping[str, object]) -> None:
+        identity = str(value["object_identity"])
+        payload = value.get("payload")
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("Shadow Entry payload must be a mapping")
+        leg_ids = payload.get("canonical_leg_identities")
+        if not isinstance(leg_ids, list) or len(leg_ids) != 2:
+            raise RuntimeError("Shadow Entry requires exact canonical leg identities")
+        self._anchors[identity] = _Anchor(
+            anchor_identity=identity,
+            entry_boundary=DownstreamFactBoundary.from_object(value["fact_boundary"]),
+            canonical_combo_identity=str(payload["canonical_combo_identity"]),
+            short_leg_identity=str(leg_ids[0]),
+            long_leg_identity=str(leg_ids[1]),
+            entry_direction=str(payload["entry_direction"]),
+            target_quantity_btc=_decimal(payload["full_quantity_btc"]),
+        )
+
+    def _retire_underwriting_scopes(
+        self,
+        scope_retirements: Sequence[str],
+        episode_retirements: Sequence[str],
+    ) -> None:
+        if not scope_retirements and not episode_retirements:
             return
-        objects = self.owner.writer.objects
-        for value in objects:
-            kind = value["object_kind"]
-            if kind not in {"SHADOW_ENTRY", "REJECTED_COUNTERFACTUAL_ANCHOR"}:
-                continue
-            identity = str(value["object_identity"])
-            if identity in self._anchors:
-                continue
-            payload = value["payload"]
-            if not isinstance(payload, Mapping):
-                raise RuntimeError("anchor payload must be a mapping")
-            leg_ids = payload["canonical_leg_identities"]
-            if not isinstance(leg_ids, list) or len(leg_ids) != 2:
-                raise RuntimeError("anchor requires exact canonical leg identities")
-            self._anchors[identity] = _Anchor(
-                anchor_identity=identity,
-                entry_boundary=DownstreamFactBoundary.from_object(value["fact_boundary"]),
-                canonical_combo_identity=str(payload["canonical_combo_identity"]),
-                short_leg_identity=str(leg_ids[0]),
-                long_leg_identity=str(leg_ids[1]),
-                entry_direction=str(payload["entry_direction"]),
-                target_quantity_btc=_decimal(payload["full_quantity_btc"]),
-            )
-        for value in objects:
-            if value["object_kind"] not in {
-                "SHADOW_OUTCOME_OBSERVATION",
-                "REJECTED_COUNTERFACTUAL_OBSERVATION",
-            }:
-                continue
-            payload = value["payload"]
-            if not isinstance(payload, Mapping):
-                raise RuntimeError("observation payload must be a mapping")
-            anchor_field = (
-                "rejected_anchor_identity"
-                if value["object_kind"] == "REJECTED_COUNTERFACTUAL_OBSERVATION"
-                else "shadow_entry_identity"
-            )
-            anchor = self._anchors.get(str(payload[anchor_field]))
-            if anchor is not None:
-                self._anchors_by_observation[str(value["object_identity"])] = anchor
-        self._anchor_writer_revision = revision
+        for scope_identity in scope_retirements:
+            self._underwriting_by_scope.pop(scope_identity, None)
+            self._workbench_underwriting_metadata_by_scope.pop(scope_identity, None)
+            self.owner.retire_underwriting_scope(scope_identity)
+        for episode_identity in episode_retirements:
+            self.owner.retire_radar_episode(episode_identity)
+        self._rebuild_underwriting_metadata()
+        self._prune_owner_refs()
+        self._prune_semantic_sources()
+
+    def _rebuild_underwriting_metadata(self) -> None:
+        self._workbench_underwriting_metadata = tuple(
+            self._workbench_underwriting_metadata_by_scope[key]
+            for key in sorted(self._workbench_underwriting_metadata_by_scope)
+        )
+
+    def _prune_owner_refs(self) -> None:
+        active_candidates = self.owner.active_candidate_identities
+        for candidate_identity in tuple(self._candidate_origins):
+            if candidate_identity not in active_candidates:
+                self._candidate_origins.pop(candidate_identity, None)
+        active_trades = self.owner.active_trade_identities
+        for anchor_identity in tuple(self._anchors):
+            if anchor_identity not in active_trades:
+                self._anchors.pop(anchor_identity, None)
+        for request_id, context in tuple(self._requests.items()):
+            owners = active_candidates if context.purpose == "ADMISSION_REFRESH" else active_trades
+            if context.owner_identity not in owners:
+                self._requests.pop(request_id, None)
+
+    def _prune_semantic_sources(self) -> None:
+        retained_option_ids = {source.semantic_identity for source in self._option_sources.values()}
+        retained_combo_ids = {source.semantic_identity for source in self._combo_sources.values()}
+        for anchor in self._anchors.values():
+            retained_option_ids.update({anchor.short_leg_identity, anchor.long_leg_identity})
+            retained_combo_ids.add(anchor.canonical_combo_identity)
+        self._options_by_identity = {
+            identity: source
+            for identity, source in self._options_by_identity.items()
+            if identity in retained_option_ids
+        }
+        self._combos_by_identity = {
+            identity: source
+            for identity, source in self._combos_by_identity.items()
+            if identity in retained_combo_ids
+        }
 
     def _anchor_for_owner_identity(self, owner_identity: str) -> _Anchor | None:
-        return self._anchors.get(owner_identity) or self._anchors_by_observation.get(owner_identity)
+        return self._anchors.get(owner_identity)
 
     def _subscription_witness(
         self,
