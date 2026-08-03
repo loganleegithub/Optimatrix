@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import cast
 
+from market_monitor import IndexAvailabilityState
 from radar_runtime.funnel import FunnelSnapshot, FunnelTracker
 from radar_runtime.runtime import (
     CausalCause,
@@ -32,6 +33,8 @@ def _reducer(
     evaluations: tuple[RadarFunnelEvaluation, ...] = (),
     episode: str | None = None,
     atomic_state: PublicAtomicQuoteState | None = None,
+    index_availability: IndexAvailabilityState = IndexAvailabilityState.AVAILABLE,
+    band_id: str = "band",
 ) -> RadarReducer:
     trackers: dict[str, object] = {}
     atomic_states: dict[str, PublicAtomicQuoteState] = {}
@@ -42,6 +45,10 @@ def _reducer(
         )
         if atomic_state is not None:
             atomic_states[episode] = atomic_state
+    results = {
+        evaluation.instrument_name: SimpleNamespace(band_id=band_id)
+        for evaluation in evaluations
+    }
     return cast(
         RadarReducer,
         SimpleNamespace(
@@ -49,6 +56,17 @@ def _reducer(
             latest_funnel_evaluations=evaluations,
             trackers=trackers,
             atomic_states=atomic_states,
+            results=results,
+            policy=SimpleNamespace(
+                tte_bands=(SimpleNamespace(band_id=band_id, lookbacks_minutes=(1,)),),
+                runtime_limits=SimpleNamespace(index_source_stale_deadline_ms=90_000),
+            ),
+            clock=SimpleNamespace(interval_at=lambda _monotonic_ms: object()),
+            index=SimpleNamespace(
+                current_tail=lambda _return_count, **_kwargs: SimpleNamespace(
+                    availability=index_availability
+                )
+            ),
         ),
     )
 
@@ -80,6 +98,8 @@ def _observe(
     episode: str | None = None,
     atomic_state: PublicAtomicQuoteState | None = None,
     records: Sequence[Mapping[str, object]] = (),
+    index_availability: IndexAvailabilityState = IndexAvailabilityState.AVAILABLE,
+    band_id: str = "band",
 ) -> FunnelSnapshot:
     commit = _commit(causal_seq)
     resolved_evaluations = (
@@ -93,6 +113,8 @@ def _observe(
             evaluations=resolved_evaluations,
             episode=episode,
             atomic_state=atomic_state,
+            index_availability=index_availability,
+            band_id=band_id,
         ),
         commit=commit,
         new_shadow_records=records,
@@ -104,11 +126,129 @@ def _stage(snapshot: FunnelSnapshot, name: str) -> Mapping[str, object]:
     return next(stage.as_object() for stage in snapshot.stages if stage.stage == name)
 
 
-def test_funnel_reports_no_scope_without_inventing_a_later_blocker() -> None:
+def test_funnel_reports_no_post_warmup_scope_without_inventing_a_later_blocker() -> None:
     snapshot = FunnelTracker().snapshot()
 
     assert snapshot.primary_blocker.stage == "APPLICABLE_MARKET_SCOPE"
-    assert snapshot.primary_blocker.reason == "NO_APPLICABLE_MARKET_SCOPE_OBSERVED"
+    assert (
+        snapshot.primary_blocker.reason
+        == "NO_APPLICABLE_MARKET_SCOPE_OBSERVED"
+    )
+    assert snapshot.radar_knownness.post_warmup.as_object()[
+        "radar_known_over_applicable"
+    ] == {"numerator": 0, "denominator": 0, "ratio": None}
+
+
+def test_funnel_separates_startup_warmup_from_steady_state_knownness() -> None:
+    tracker = FunnelTracker()
+    startup = _observe(
+        tracker,
+        causal_seq=1,
+        evaluations=(
+            RadarFunnelEvaluation("WARMUP", False, "INDEX_WARMUP"),
+            RadarFunnelEvaluation("BOOK", False, "OPTION_BOOK_UNKNOWN"),
+        ),
+        index_availability=IndexAvailabilityState.WARMUP,
+    )
+
+    assert startup.primary_blocker.stage == "APPLICABLE_MARKET_SCOPE"
+    startup_knownness = startup.radar_knownness.startup_warmup.as_object()
+    assert startup_knownness["applicable_market_scope_count"] == 2
+    assert startup_knownness["blocker_counts"] == {
+        "INDEX_WARMUP": 1,
+        "OPTION_BOOK_UNKNOWN": 1,
+    }
+    assert startup.radar_knownness.post_warmup.as_object()[
+        "applicable_market_scope_count"
+    ] == 0
+
+    steady = _observe(
+        tracker,
+        causal_seq=2,
+        evaluations=(
+            RadarFunnelEvaluation("KNOWN", True, None),
+            RadarFunnelEvaluation("BOOK", False, "OPTION_BOOK_UNKNOWN"),
+        ),
+        index_availability=IndexAvailabilityState.AVAILABLE,
+    )
+
+    post = steady.radar_knownness.post_warmup.as_object()
+    assert post["radar_known_over_applicable"] == {
+        "numerator": 1,
+        "denominator": 2,
+        "ratio": "0.5",
+    }
+    assert post["blocker_counts"] == {"OPTION_BOOK_UNKNOWN": 1}
+    assert steady.primary_blocker.stage == "RADAR_KNOWN"
+    assert steady.primary_blocker.reason == "OPTION_BOOK_UNKNOWN"
+    assert steady.radar_knownness.warmed_band_ids == ("band",)
+
+
+def test_funnel_counts_post_warmup_index_loss_as_a_steady_state_blocker() -> None:
+    tracker = FunnelTracker()
+    _observe(
+        tracker,
+        causal_seq=1,
+        evaluations=(RadarFunnelEvaluation("KNOWN", True, None),),
+        index_availability=IndexAvailabilityState.AVAILABLE,
+    )
+    snapshot = _observe(
+        tracker,
+        causal_seq=2,
+        evaluations=(
+            RadarFunnelEvaluation("STALE", False, "INDEX_SOURCE_STALE"),
+        ),
+        index_availability=IndexAvailabilityState.SOURCE_STALE,
+    )
+
+    post = snapshot.radar_knownness.post_warmup.as_object()
+    assert post["radar_known_over_applicable"] == {
+        "numerator": 1,
+        "denominator": 2,
+        "ratio": "0.5",
+    }
+    assert post["blocker_counts"] == {"INDEX_SOURCE_STALE": 1}
+    assert snapshot.primary_blocker.reason == "INDEX_SOURCE_STALE"
+
+
+def test_funnel_keeps_rewarmup_visible_but_out_of_the_steady_denominator() -> None:
+    tracker = FunnelTracker()
+    _observe(
+        tracker,
+        causal_seq=1,
+        evaluations=(RadarFunnelEvaluation("KNOWN", True, None),),
+        index_availability=IndexAvailabilityState.AVAILABLE,
+    )
+    snapshot = _observe(
+        tracker,
+        causal_seq=2,
+        evaluations=(RadarFunnelEvaluation("REWARM", False, "INDEX_WARMUP"),),
+        index_availability=IndexAvailabilityState.WARMUP,
+    )
+
+    assert snapshot.radar_knownness.startup_warmup.as_object()["blocker_counts"] == {
+        "INDEX_WARMUP": 1
+    }
+    assert snapshot.radar_knownness.post_warmup.as_object()[
+        "radar_known_over_applicable"
+    ] == {"numerator": 1, "denominator": 1, "ratio": "1"}
+    assert snapshot.primary_blocker.stage == "ANOMALY_ACTIVE"
+    assert snapshot.primary_blocker.reason == "NO_ANOMALY_ACTIVATION_OBSERVED"
+
+
+def test_funnel_bounds_every_unrecognized_radar_unknown_reason() -> None:
+    snapshot = _observe(
+        FunnelTracker(),
+        causal_seq=1,
+        evaluations=(
+            RadarFunnelEvaluation("UNKNOWN", False, "DYNAMIC_INSTRUMENT_12345"),
+        ),
+    )
+
+    assert snapshot.radar_knownness.post_warmup.as_object()["blocker_counts"] == {
+        "OTHER_RADAR_UNKNOWN": 1
+    }
+    assert snapshot.primary_blocker.reason == "OTHER_RADAR_UNKNOWN"
 
 
 def test_funnel_counts_exact_radar_unknown_and_deduplicates_one_transaction() -> None:
