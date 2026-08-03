@@ -177,23 +177,16 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
 def test_current_stage_authorizes_only_a1_fixed_boundary_observation() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert (
-        "`RADAR_STEADY_STATE_KNOWNNESS_CANDIDATE_AWAITING_PUBLIC_OBSERVATION`"
-        in current
-    )
+    assert "`RADAR_STEADY_STATE_KNOWNNESS_CANDIDATE_AWAITING_PUBLIC_OBSERVATION`" in current
     assert (
         "**Production Short Vol Radar:** `OFFLINE_READY_BOUNDED_PUBLIC_REACHABILITY_OBSERVED`"
         in current
     )
     assert (
         "**Live commands:** "
-        "`ONE_BOUNDED_RADAR_KNOWNNESS_OBSERVATION_CONDITIONALLY_AUTHORIZED`"
-        in current
+        "`ONE_BOUNDED_RADAR_KNOWNNESS_OBSERVATION_CONDITIONALLY_AUTHORIZED`" in current
     )
-    assert (
-        "**Sole authorized closure:** `SHORT_VOL_RADAR_STEADY_STATE_KNOWNNESS`"
-        in current
-    )
+    assert "**Sole authorized closure:** `SHORT_VOL_RADAR_STEADY_STATE_KNOWNNESS`" in current
     assert "--duration-seconds 900" in current
     assert "may not be extended, retried, or repeated" in current
     active_task = ROOT / "tasks/SHORT_VOL_RADAR_STEADY_STATE_KNOWNNESS.md"

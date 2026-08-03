@@ -46,8 +46,7 @@ def _reducer(
         if atomic_state is not None:
             atomic_states[episode] = atomic_state
     results = {
-        evaluation.instrument_name: SimpleNamespace(band_id=band_id)
-        for evaluation in evaluations
+        evaluation.instrument_name: SimpleNamespace(band_id=band_id) for evaluation in evaluations
     }
     return cast(
         RadarReducer,
@@ -130,13 +129,12 @@ def test_funnel_reports_no_post_warmup_scope_without_inventing_a_later_blocker()
     snapshot = FunnelTracker().snapshot()
 
     assert snapshot.primary_blocker.stage == "APPLICABLE_MARKET_SCOPE"
-    assert (
-        snapshot.primary_blocker.reason
-        == "NO_APPLICABLE_MARKET_SCOPE_OBSERVED"
-    )
-    assert snapshot.radar_knownness.post_warmup.as_object()[
-        "radar_known_over_applicable"
-    ] == {"numerator": 0, "denominator": 0, "ratio": None}
+    assert snapshot.primary_blocker.reason == "NO_APPLICABLE_MARKET_SCOPE_OBSERVED"
+    assert snapshot.radar_knownness.post_warmup.as_object()["radar_known_over_applicable"] == {
+        "numerator": 0,
+        "denominator": 0,
+        "ratio": None,
+    }
 
 
 def test_funnel_separates_startup_warmup_from_steady_state_knownness() -> None:
@@ -158,9 +156,7 @@ def test_funnel_separates_startup_warmup_from_steady_state_knownness() -> None:
         "INDEX_WARMUP": 1,
         "OPTION_BOOK_UNKNOWN": 1,
     }
-    assert startup.radar_knownness.post_warmup.as_object()[
-        "applicable_market_scope_count"
-    ] == 0
+    assert startup.radar_knownness.post_warmup.as_object()["applicable_market_scope_count"] == 0
 
     steady = _observe(
         tracker,
@@ -195,9 +191,7 @@ def test_funnel_counts_post_warmup_index_loss_as_a_steady_state_blocker() -> Non
     snapshot = _observe(
         tracker,
         causal_seq=2,
-        evaluations=(
-            RadarFunnelEvaluation("STALE", False, "INDEX_SOURCE_STALE"),
-        ),
+        evaluations=(RadarFunnelEvaluation("STALE", False, "INDEX_SOURCE_STALE"),),
         index_availability=IndexAvailabilityState.SOURCE_STALE,
     )
 
@@ -229,9 +223,11 @@ def test_funnel_keeps_rewarmup_visible_but_out_of_the_steady_denominator() -> No
     assert snapshot.radar_knownness.startup_warmup.as_object()["blocker_counts"] == {
         "INDEX_WARMUP": 1
     }
-    assert snapshot.radar_knownness.post_warmup.as_object()[
-        "radar_known_over_applicable"
-    ] == {"numerator": 1, "denominator": 1, "ratio": "1"}
+    assert snapshot.radar_knownness.post_warmup.as_object()["radar_known_over_applicable"] == {
+        "numerator": 1,
+        "denominator": 1,
+        "ratio": "1",
+    }
     assert snapshot.primary_blocker.stage == "ANOMALY_ACTIVE"
     assert snapshot.primary_blocker.reason == "NO_ANOMALY_ACTIVATION_OBSERVED"
 
@@ -240,9 +236,7 @@ def test_funnel_bounds_every_unrecognized_radar_unknown_reason() -> None:
     snapshot = _observe(
         FunnelTracker(),
         causal_seq=1,
-        evaluations=(
-            RadarFunnelEvaluation("UNKNOWN", False, "DYNAMIC_INSTRUMENT_12345"),
-        ),
+        evaluations=(RadarFunnelEvaluation("UNKNOWN", False, "DYNAMIC_INSTRUMENT_12345"),),
     )
 
     assert snapshot.radar_knownness.post_warmup.as_object()["blocker_counts"] == {

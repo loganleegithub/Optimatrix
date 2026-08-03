@@ -118,9 +118,7 @@ def build_radar_knownness_observation(
     snapshot = funnel.as_object()
     shadow_case_opened_count = _stage_observed_count(funnel, "SHADOW_CASE_OPENED")
     durable_files = tuple(
-        path
-        for path in cases_directory.rglob("*")
-        if path.is_file() or path.is_symlink()
+        path for path in cases_directory.rglob("*") if path.is_file() or path.is_symlink()
     )
     if shadow_case_opened_count == 0 and durable_files:
         raise RuntimeError("pre-Shadow observation created durable Shadow Case files")
@@ -229,8 +227,7 @@ def _validate_duration_seconds(value: int) -> None:
         raise TypeError("observation duration must be an integer")
     if not 1 <= value <= MAX_BOUNDED_OBSERVATION_SECONDS:
         raise ValueError(
-            "observation duration must be between 1 and "
-            f"{MAX_BOUNDED_OBSERVATION_SECONDS} seconds"
+            f"observation duration must be between 1 and {MAX_BOUNDED_OBSERVATION_SECONDS} seconds"
         )
 
 
