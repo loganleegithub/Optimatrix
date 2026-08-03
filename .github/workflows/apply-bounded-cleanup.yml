@@ -81,12 +81,19 @@ jobs:
       - name: Install exact development toolchain
         run: make sync
 
-      - name: Apply exact static fixes and canonical formatting
+      - name: Apply exact static and type fixes
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+
+          def replace_once(path_name: str, old: str, new: str) -> None:
+              path = Path(path_name)
+              text = path.read_text(encoding="utf-8")
+              if text.count(old) != 1:
+                  raise SystemExit(f"unexpected replacement boundary: {path_name}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
           test_file = Path("tests/test_short_vol_underwriting.py")
           text = test_file.read_text(encoding="utf-8")
@@ -96,6 +103,111 @@ jobs:
               raise SystemExit("unexpected Mapping import boundary")
           test_file.write_text(
               text.replace(future, future + mapping_import + "\n", 1),
+              encoding="utf-8",
+          )
+
+          evidence = "packages/short_vol_underwriting/src/short_vol_underwriting/evidence.py"
+          replace_once(
+              evidence,
+              "            scope = self._scope_by_availability.get(availability)\n"
+              "            if scope is None:\n"
+              "                raise ShadowStateError(\"Underwriting action lacks its current availability scope\")\n"
+              "            return \"scope\", scope\n",
+              "            owning_scope = self._scope_by_availability.get(availability)\n"
+              "            if owning_scope is None:\n"
+              "                raise ShadowStateError(\"Underwriting action lacks its current availability scope\")\n"
+              "            return \"scope\", owning_scope\n",
+          )
+          replace_once(
+              evidence,
+              "            entry = self._entry_by_post_close_attempt.get(scheduled)\n"
+              "            if entry is None:\n"
+              "                raise ShadowStateError(\"post-CLOSE terminal lacks its current Case\")\n"
+              "            return \"entry\", entry\n",
+              "            owning_entry = self._entry_by_post_close_attempt.get(scheduled)\n"
+              "            if owning_entry is None:\n"
+              "                raise ShadowStateError(\"post-CLOSE terminal lacks its current Case\")\n"
+              "            return \"entry\", owning_entry\n",
+          )
+          replace_once(
+              evidence,
+              "            entry = self._entry_by_observation.get(observation)\n"
+              "            if entry is None:\n"
+              "                raise ShadowStateError(\"selected exit lacks its current Case observation\")\n"
+              "            return \"entry\", entry\n",
+              "            owning_entry = self._entry_by_observation.get(observation)\n"
+              "            if owning_entry is None:\n"
+              "                raise ShadowStateError(\"selected exit lacks its current Case observation\")\n"
+              "            return \"entry\", owning_entry\n",
+          )
+
+          funnel = "apps/radar_runtime/src/radar_runtime/funnel.py"
+          replace_once(
+              funnel,
+              "                if candidate is not None:\n"
+              "                    if not state.candidate:\n"
+              "                        state.candidate = True\n"
+              "                        self._candidate_episode_count += 1\n"
+              "                    self._candidate_episode_by_identity[candidate] = episode\n",
+              "                if candidate is not None and episode is not None:\n"
+              "                    if not state.candidate:\n"
+              "                        state.candidate = True\n"
+              "                        self._candidate_episode_count += 1\n"
+              "                    self._candidate_episode_by_identity[candidate] = episode\n",
+          )
+          replace_once(
+              funnel,
+              "                if entry is not None:\n"
+              "                    if not state.case_opened:\n"
+              "                        state.case_opened = True\n"
+              "                        self._case_opened_count += 1\n"
+              "                    state.entry_identity = entry\n"
+              "                    self._entry_episode_by_identity[entry] = episode\n",
+              "                if entry is not None and episode is not None:\n"
+              "                    if not state.case_opened:\n"
+              "                        state.case_opened = True\n"
+              "                        self._case_opened_count += 1\n"
+              "                    state.entry_identity = entry\n"
+              "                    self._entry_episode_by_identity[entry] = episode\n",
+          )
+          replace_once(
+              funnel,
+              "                outcome_episode = self._entry_episode_by_identity.pop(entry or \"\", None)\n",
+              "                outcome_episode = (\n"
+              "                    self._entry_episode_by_identity.pop(entry, None)\n"
+              "                    if entry is not None\n"
+              "                    else None\n"
+              "                )\n",
+          )
+
+          workbench = "apps/radar_runtime/src/radar_runtime/workbench.py"
+          replace_once(
+              workbench,
+              "        if expiry_ms is None and isinstance(leg_ids, list):\n"
+              "            expiries = {\n"
+              "                expiry_by_leg.get(str(identity))\n"
+              "                for identity in leg_ids\n"
+              "                if expiry_by_leg.get(str(identity)) is not None\n"
+              "            }\n"
+              "            if len(expiries) == 1:\n"
+              "                expiry_ms = next(iter(expiries))\n",
+              "        if expiry_ms is None and isinstance(leg_ids, list):\n"
+              "            expiries: set[int] = set()\n"
+              "            for identity in leg_ids:\n"
+              "                leg_expiry = expiry_by_leg.get(str(identity))\n"
+              "                if isinstance(leg_expiry, int):\n"
+              "                    expiries.add(leg_expiry)\n"
+              "            if len(expiries) == 1:\n"
+              "                expiry_ms = next(iter(expiries))\n",
+          )
+
+          fact_test = Path("tests/test_fact_boundary_business.py")
+          text = fact_test.read_text(encoding="utf-8")
+          old_assertion = "    assert reducer.event_sink.anomalies == ()\n"
+          if text.count(old_assertion) != 3:
+              raise SystemExit("unexpected anomaly assertion count")
+          fact_test.write_text(
+              text.replace(old_assertion, "    assert not reducer.event_sink.anomalies\n"),
               encoding="utf-8",
           )
           PY
@@ -109,7 +221,9 @@ jobs:
             apps/radar_runtime/src/radar_runtime/fixed_contract_shadow.py
             apps/radar_runtime/src/radar_runtime/funnel.py
             apps/radar_runtime/src/radar_runtime/workbench.py
+            packages/short_vol_underwriting/src/short_vol_underwriting/evidence.py
             packages/short_vol_underwriting/src/short_vol_underwriting/owner.py
+            tests/test_fact_boundary_business.py
             tests/test_fixed_contract_shadow.py
             tests/test_short_vol_underwriting.py
           )
