@@ -312,3 +312,117 @@ def test_funnel_complete_chain_has_no_material_blocker() -> None:
 
     assert snapshot.primary_blocker.stage == "NONE"
     assert snapshot.primary_blocker.reason == "NO_MATERIAL_BLOCKER_OBSERVED"
+
+
+def test_funnel_retires_completed_identity_state_across_many_cases() -> None:
+    tracker = FunnelTracker()
+    case_count = 1_000
+
+    for index in range(1, case_count + 1):
+        episode = f"episode-{index}"
+        candidate = f"candidate-{index}"
+        entry = f"entry-{index}"
+        _observe(
+            tracker,
+            causal_seq=index,
+            episode=episode,
+            atomic_state=PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE,
+            records=(
+                _record(
+                    "UNDERWRITING_AVAILABILITY_EVALUATION",
+                    episode=episode,
+                    payload={"availability": "EVALUABLE", "unknown_reasons": []},
+                ),
+                _record(
+                    "UNDERWRITING_ACTION",
+                    episode=episode,
+                    payload={"economic_action": "CANDIDATE", "decision_blockers": []},
+                ),
+                _record("CANDIDATE_ACTIVATION", episode=episode, identity=candidate),
+                _record(
+                    "ADMISSION_ATTEMPT_TERMINAL",
+                    episode=episode,
+                    payload={
+                        "candidate_identity": candidate,
+                        "terminal_outcome": "ENTRY_EMITTED",
+                    },
+                ),
+                _record("SHADOW_ENTRY", episode=episode, identity=entry),
+                _record(
+                    "SHADOW_OUTCOME",
+                    payload={"shadow_entry_identity": entry},
+                ),
+            ),
+        )
+
+    snapshot = tracker.snapshot()
+    assert tracker.retained_state_counts == {
+        "episodes": 0,
+        "candidate_identities": 0,
+        "entry_identities": 0,
+    }
+    assert _stage(snapshot, "ANOMALY_ACTIVE")["observed_count"] == case_count
+    assert _stage(snapshot, "SHADOW_CASE_OPENED")["observed_count"] == case_count
+    assert _stage(snapshot, "SHADOW_CASE_OUTCOME")["observed_count"] == case_count
+    assert snapshot.primary_blocker.stage == "NONE"
+
+
+def test_funnel_normalizes_instrument_specific_blockers_to_bounded_categories() -> None:
+    tracker = FunnelTracker()
+    episode_count = 500
+
+    for index in range(1, episode_count + 1):
+        episode = f"episode-{index}"
+        _observe(
+            tracker,
+            causal_seq=index * 2 - 1,
+            episode=episode,
+            atomic_state=PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE,
+            records=(
+                _record(
+                    "UNDERWRITING_AVAILABILITY_EVALUATION",
+                    episode=episode,
+                    payload={
+                        "availability": "UNKNOWN",
+                        "unknown_reasons": [f"BTC-COMBO-{index}:BOOK_UNKNOWN"],
+                    },
+                ),
+            ),
+        )
+        _observe(tracker, causal_seq=index * 2)
+
+    snapshot = tracker.snapshot()
+    blockers = _stage(snapshot, "UNDERWRITING_EVALUABLE")["blocker_counts"]
+    assert blockers == {"BOOK_UNKNOWN": episode_count}
+    assert tracker.retained_state_counts == {
+        "episodes": 0,
+        "candidate_identities": 0,
+        "entry_identities": 0,
+    }
+
+
+def test_funnel_preserves_internal_symbolic_blocker_without_an_exhaustive_allowlist() -> None:
+    tracker = FunnelTracker()
+    episode = "episode-protective-leg"
+
+    _observe(
+        tracker,
+        causal_seq=1,
+        episode=episode,
+        atomic_state=PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE,
+        records=(
+            _record(
+                "UNDERWRITING_AVAILABILITY_EVALUATION",
+                episode=episode,
+                payload={
+                    "availability": "UNKNOWN",
+                    "unknown_reasons": ["PROTECTIVE_LEG_UNRESOLVED"],
+                },
+            ),
+        ),
+    )
+    snapshot = _observe(tracker, causal_seq=2)
+
+    assert _stage(snapshot, "UNDERWRITING_EVALUABLE")["blocker_counts"] == {
+        "PROTECTIVE_LEG_UNRESOLVED": 1
+    }

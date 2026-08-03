@@ -68,6 +68,12 @@ The following remain bounded in memory:
 - internal typed transitions used by the owner and Workbench;
 - service status and funnel diagnostics.
 
+“Bounded” means current ownership, not retained process history. An ended Radar Episode, terminal
+Candidate/admission attempt, and terminal Shadow Case are removed from their active owner maps.
+Workbench may retain only the current live set plus one latest terminal Case projection. Funnel
+diagnostics retain cumulative scalar counts and a fixed blocker-reason vocabulary, while completed
+Episode, Candidate, and Case identities are discarded.
+
 Normal market facts, anomalies, atomic quotes, Underwriting decisions, Candidates, admission
 attempts, run summaries, and Workbench snapshots are not written to disk.
 
@@ -109,6 +115,10 @@ records.
 
 The runtime exposes non-durable cumulative funnel counters and blocker reasons. Diagnostics are
 computed from the same settled reducer/owner state, never by rereading files.
+
+Instrument-specific source labels are normalized into bounded blocker categories before entering
+cumulative counters. Exact current instrument/scope detail remains available in the ordinary
+Workbench rows; it cannot create an unbounded aggregate reason-key set.
 
 The canonical stages are:
 

@@ -1055,3 +1055,35 @@ def test_complete_writer_directory_accepts_anomaly_then_later_normalized_atomic_
     assert len(writer.atomics) == 1
     assert writer.summary == summary
     assert list(tmp_path.iterdir()) == []
+
+
+def test_radar_event_sink_retires_completed_episode_details_at_constant_bound() -> None:
+    sink = RadarEventSink(
+        code_identity="a" * 40,
+        runtime_identity="runtime",
+        policy_identity="sha256:" + "b" * 64,
+    )
+
+    for index in range(1, 1_001):
+        episode = f"episode-{index}"
+        sink.record_anomaly(
+            {
+                "code_identity": "a" * 40,
+                "runtime_identity": "runtime",
+                "policy_identity": "sha256:" + "b" * 64,
+                "episode_identity": episode,
+            }
+        )
+        sink.record_atomic(
+            {
+                "code_identity": "a" * 40,
+                "runtime_identity": "runtime",
+                "policy_identity": "sha256:" + "b" * 64,
+                "episode_identity": episode,
+                "combo_instrument_name": f"BTC-COMBO-{index}",
+            }
+        )
+        sink.retire_episode(episode)
+
+    assert sink.anomalies == ()
+    assert sink.atomics == ()

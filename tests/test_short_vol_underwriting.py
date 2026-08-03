@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -14,7 +15,6 @@ from short_vol_underwriting import (
     UNDERWRITING_OBJECT_KINDS,
     AdmissionAttempt,
     AdmissionTerminalOutcome,
-    AlignedPair,
     CandidateState,
     CloseAtomicAvailability,
     CloseBookAvailability,
@@ -36,8 +36,6 @@ from short_vol_underwriting import (
     PostCloseAttemptStatus,
     PredicateTruth,
     RefreshClassification,
-    RejectedAnchor,
-    RejectedAnchorSelector,
     RpcAdmissionRefreshWitness,
     RuntimeBindings,
     ShadowCaseReadStatus,
@@ -70,7 +68,21 @@ def _object(value: object) -> dict[str, object]:
     return value
 
 
+class _HistoryObserver:
+    def __init__(self) -> None:
+        self.records: list[dict[str, object]] = []
+
+    def on_record(
+        self,
+        value: Mapping[str, object],
+        state: ShadowStateStore,
+    ) -> None:
+        del state
+        self.records.append(dict(value))
+
+
 _STATE_BY_DIRECTORY: dict[Path, ShadowStateStore] = {}
+_HISTORY_BY_DIRECTORY: dict[Path, _HistoryObserver] = {}
 
 
 def _written_objects(
@@ -79,9 +91,11 @@ def _written_objects(
     bindings: RuntimeBindings,
 ) -> dict[str, dict[str, object]]:
     del bindings
-    state = _STATE_BY_DIRECTORY[directory.resolve()]
     result: dict[str, dict[str, object]] = {}
-    for value in state.objects:
+    resolved = directory.resolve()
+    history = _HISTORY_BY_DIRECTORY.get(resolved)
+    values = history.records if history is not None else _STATE_BY_DIRECTORY[resolved].objects
+    for value in values:
         identity = value["object_identity"]
         assert isinstance(identity, str)
         result[identity] = dict(value)
@@ -243,13 +257,15 @@ def _owner(
         underwriting_policy_identity=UNDERWRITING_POLICY_IDENTITY,
         position_policy_identity=POSITION_POLICY_IDENTITY,
     )
-    state_store = ShadowStateStore(bindings=bindings)
+    history = _HistoryObserver()
+    state_store = ShadowStateStore(bindings=bindings, observer=history)
     owner = FixedContractShadowOwner(
         policies=policies,
         bindings=bindings,
         state_store=state_store,
     )
     _STATE_BY_DIRECTORY[tmp_path.resolve()] = state_store
+    _HISTORY_BY_DIRECTORY[tmp_path.resolve()] = history
     return owner, bindings
 
 
@@ -582,7 +598,11 @@ def test_kind_registries_are_exact_and_disjoint() -> None:
         "CLOSE_OPPORTUNITY_EVALUATION",
         "SHADOW_CLOSE_OPPORTUNITY",
     )
-    assert len(OUTCOME_OBJECT_KINDS) == 12
+    assert OUTCOME_OBJECT_KINDS == (
+        "SHADOW_OUTCOME_OBSERVATION",
+        "SHADOW_COUNTERFACTUAL_EXIT",
+        "SHADOW_OUTCOME",
+    )
     assert not set(UNDERWRITING_OBJECT_KINDS) & set(OUTCOME_OBJECT_KINDS)
 
 
@@ -3320,44 +3340,11 @@ def test_post_close_attempt_is_one_shot_and_barrier_owner_is_explicit() -> None:
     assert pending.terminal_owner is PostCloseAttemptOwner.FAILURE
 
 
-def test_rejected_anchor_is_first_causal_action_with_lexical_same_boundary_tie_break() -> None:
-    selector = RejectedAnchorSelector()
-    slot = "sha256:" + "1" * 64
-    late = RejectedAnchor(
-        slot_identity=slot,
-        underwriting_action_identity="sha256:" + "f" * 64,
-        action="WATCH",
-        boundary=_boundary(2),
-    )
-    early = RejectedAnchor(
-        slot_identity=slot,
-        underwriting_action_identity="sha256:" + "0" * 64,
-        action="ABSTAIN",
-        boundary=_boundary(2),
-    )
-    selected = selector.select_boundary((late, early))
-    assert selected == early
-    assert (
-        selector.select_boundary(
-            (
-                RejectedAnchor(
-                    slot_identity=slot,
-                    underwriting_action_identity="sha256:" + "a" * 64,
-                    action="WATCH",
-                    boundary=_boundary(3),
-                ),
-            )
-        )
-        == early
-    )
-
-
-def test_observation_first_exit_and_aligned_pair_are_terminal_and_no_hindsight() -> None:
+def test_admitted_observation_selects_the_first_exit_without_online_cohort_state() -> None:
     observation = Observation.admitted(
         outcome_contract_identity="sha256:" + "1" * 64,
         shadow_entry_identity="sha256:" + "2" * 64,
         entry_boundary=_boundary(1),
-        cohort_enrolled=True,
     )
     observation.latch_close("sha256:" + "3" * 64, _boundary(2))
     first = observation.accept_eligible_exit(
@@ -3373,23 +3360,5 @@ def test_observation_first_exit_and_aligned_pair_are_terminal_and_no_hindsight()
         is None
     )
     assert observation.state is OutcomeState.MATURE_KNOWN
-
-    pair = AlignedPair.for_admitted(
-        outcome_contract_identity="sha256:" + "1" * 64,
-        shadow_entry_identity="sha256:" + "2" * 64,
-        cohort_enrolled=True,
-    )
-    pair.terminalize(
-        state=OutcomeState.MATURE_KNOWN,
-        terminal_boundary=_boundary(3),
-        trade_outcome_identity="sha256:" + "6" * 64,
-        trade_net_pnl_usdc=Decimal("-2"),
-    )
-    assert pair.policy_advantage_usdc == Decimal("-2")
-    with pytest.raises(ValueError, match="terminal"):
-        pair.terminalize(
-            state=OutcomeState.MATURE_UNKNOWN,
-            terminal_boundary=_boundary(4),
-            trade_outcome_identity="sha256:" + "7" * 64,
-            trade_net_pnl_usdc=None,
-        )
+    assert not hasattr(observation, "cohort_enrolled")
+    assert not hasattr(observation, "rejected")

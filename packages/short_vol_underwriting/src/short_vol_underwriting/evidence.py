@@ -65,8 +65,11 @@ class ShadowStateObserver(Protocol):
     ) -> None: ...
 
 
+type _ObjectKey = tuple[str, str]
+
+
 class ShadowStateStore:
-    """Current in-memory owner state; never writes pre-Shadow records to disk."""
+    """Bounded current owner projection; completed history belongs only to Shadow Case files."""
 
     def __init__(
         self,
@@ -76,10 +79,19 @@ class ShadowStateStore:
     ) -> None:
         self.bindings = bindings
         self.observer = observer
-        self._objects: dict[tuple[str, str], dict[str, object]] = {}
+        self._objects: dict[_ObjectKey, dict[str, object]] = {}
         self._object_snapshot: tuple[Mapping[str, object], ...] | None = ()
         self._pending_records: list[Mapping[str, object]] = []
         self._revision = 0
+
+        self._scope_keys: dict[str, dict[str, _ObjectKey]] = {}
+        self._candidate_keys: dict[str, dict[str, _ObjectKey]] = {}
+        self._entry_keys: dict[str, dict[str, _ObjectKey]] = {}
+        self._scope_by_availability: dict[str, str] = {}
+        self._candidate_by_admission_attempt: dict[str, str] = {}
+        self._entry_by_observation: dict[str, str] = {}
+        self._entry_by_post_close_attempt: dict[str, str] = {}
+        self._latest_terminal_entry: str | None = None
 
     @property
     def objects(self) -> tuple[Mapping[str, object], ...]:
@@ -93,6 +105,37 @@ class ShadowStateStore:
     @property
     def revision(self) -> int:
         return self._revision
+
+    @property
+    def retained_object_count(self) -> int:
+        return len(self._objects)
+
+    @property
+    def active_scope_count(self) -> int:
+        return len(self._scope_keys)
+
+    @property
+    def active_candidate_count(self) -> int:
+        return len(self._candidate_keys)
+
+    @property
+    def retained_case_count(self) -> int:
+        return len(self._entry_keys)
+
+    @property
+    def retained_state_counts(self) -> Mapping[str, int]:
+        return {
+            "objects": len(self._objects),
+            "pending_records": len(self._pending_records),
+            "active_scopes": len(self._scope_keys),
+            "active_candidates": len(self._candidate_keys),
+            "active_or_latest_terminal_cases": len(self._entry_keys),
+            "availability_bindings": len(self._scope_by_availability),
+            "admission_attempt_bindings": len(self._candidate_by_admission_attempt),
+            "observation_bindings": len(self._entry_by_observation),
+            "post_close_attempt_bindings": len(self._entry_by_post_close_attempt),
+            "latest_terminal_cases": int(self._latest_terminal_entry is not None),
+        }
 
     def take_pending_records(self) -> tuple[Mapping[str, object], ...]:
         records = tuple(self._pending_records)
@@ -120,12 +163,144 @@ class ShadowStateStore:
             raise ShadowStateError(f"conflicting in-memory object: {object_kind}/{object_identity}")
         if previous == value:
             return
+
+        owner_kind, owner_identity = self._current_owner(object_kind, object_identity, value)
+        if owner_kind is not None and owner_identity is not None:
+            owner_index = self._owner_index(owner_kind)
+            current_by_kind = owner_index.setdefault(owner_identity, {})
+            old_key = current_by_kind.get(object_kind)
+            if old_key is not None and old_key != key:
+                self._objects.pop(old_key, None)
+            current_by_kind[object_kind] = key
+
         self._objects[key] = value
         self._pending_records.append(value)
         self._revision += 1
         self._object_snapshot = None
         if self.observer is not None:
             self.observer.on_record(value, self)
+
+    def retire_scope(self, scope_identity: str) -> None:
+        self._retire_owner("scope", scope_identity)
+
+    def retire_candidate(self, candidate_identity: str) -> None:
+        self._retire_owner("candidate", candidate_identity)
+        for attempt, candidate in tuple(self._candidate_by_admission_attempt.items()):
+            if candidate == candidate_identity:
+                self._candidate_by_admission_attempt.pop(attempt, None)
+
+    def retain_latest_terminal_case(self, entry_identity: str) -> None:
+        previous = self._latest_terminal_entry
+        if previous is not None and previous != entry_identity:
+            self._retire_owner("entry", previous)
+        self._latest_terminal_entry = entry_identity
+
+    def _current_owner(
+        self,
+        kind: str,
+        identity: str,
+        value: Mapping[str, object],
+    ) -> tuple[str | None, str | None]:
+        payload = value.get("payload")
+        if not isinstance(payload, Mapping):
+            raise ShadowStateError("current Shadow payload must be an object")
+
+        if kind == "UNDERWRITING_AVAILABILITY_EVALUATION":
+            scope = _required_text(payload, "radar_scope_or_short_leg_identity")
+            prior = self._scope_keys.get(scope, {}).get(kind)
+            if prior is not None and prior[1] != identity:
+                self._scope_by_availability.pop(prior[1], None)
+            self._scope_by_availability[identity] = scope
+            return "scope", scope
+        if kind == "UNDERWRITING_ACTION":
+            availability = _required_text(
+                payload,
+                "underwriting_availability_evaluation_identity",
+            )
+            owner_scope = self._scope_by_availability.get(availability)
+            if owner_scope is None:
+                raise ShadowStateError("Underwriting action lacks its current availability scope")
+            return "scope", owner_scope
+
+        if kind == "CANDIDATE_ACTIVATION":
+            return "candidate", identity
+        if kind == "ADMISSION_ATTEMPT_SCHEDULED":
+            candidate = _required_text(payload, "candidate_identity")
+            self._candidate_by_admission_attempt[identity] = candidate
+            return "candidate", candidate
+        if kind in {"ADMISSION_ATTEMPT_TERMINAL", "CANDIDATE_INVALIDATION"}:
+            return "candidate", _required_text(payload, "candidate_identity")
+
+        if kind == "SHADOW_ENTRY":
+            return "entry", identity
+        if kind == "SHADOW_OUTCOME_OBSERVATION":
+            entry = _required_text(payload, "shadow_entry_identity")
+            self._entry_by_observation[identity] = entry
+            return "entry", entry
+        if kind in {"POSITION_EVALUATION", "POSITION_ACTION", "CLOSE_QUOTE_EVALUATION"}:
+            return "entry", _required_text(payload, "shadow_entry_identity")
+        if kind == "POST_CLOSE_ATTEMPT_SCHEDULED":
+            entry = _required_text(payload, "shadow_entry_identity")
+            self._entry_by_post_close_attempt[identity] = entry
+            return "entry", entry
+        if kind == "POST_CLOSE_ATTEMPT_TERMINAL":
+            scheduled = _required_text(payload, "scheduled_post_close_attempt_identity")
+            owner_entry = self._entry_by_post_close_attempt.get(scheduled)
+            if owner_entry is None:
+                raise ShadowStateError("post-CLOSE terminal lacks its current Case")
+            return "entry", owner_entry
+        if kind in {
+            "CLOSE_OPPORTUNITY_EVALUATION",
+            "SHADOW_CLOSE_OPPORTUNITY",
+            "SHADOW_OUTCOME",
+        }:
+            return "entry", _required_text(payload, "shadow_entry_identity")
+        if kind == "SHADOW_COUNTERFACTUAL_EXIT":
+            observation = _required_text(payload, "shadow_observation_identity")
+            owner_entry = self._entry_by_observation.get(observation)
+            if owner_entry is None:
+                raise ShadowStateError("selected exit lacks its current Case observation")
+            return "entry", owner_entry
+        return None, None
+
+    def _owner_index(self, owner_kind: str) -> dict[str, dict[str, _ObjectKey]]:
+        if owner_kind == "scope":
+            return self._scope_keys
+        if owner_kind == "candidate":
+            return self._candidate_keys
+        if owner_kind == "entry":
+            return self._entry_keys
+        raise RuntimeError("unknown current-state owner kind")
+
+    def _retire_owner(self, owner_kind: str, owner_identity: str) -> None:
+        owner_index = self._owner_index(owner_kind)
+        keys = owner_index.pop(owner_identity, None)
+        if not keys:
+            return
+        for key in keys.values():
+            self._objects.pop(key, None)
+        if owner_kind == "scope":
+            for availability, scope in tuple(self._scope_by_availability.items()):
+                if scope == owner_identity:
+                    self._scope_by_availability.pop(availability, None)
+        elif owner_kind == "entry":
+            for observation, entry in tuple(self._entry_by_observation.items()):
+                if entry == owner_identity:
+                    self._entry_by_observation.pop(observation, None)
+            for attempt, entry in tuple(self._entry_by_post_close_attempt.items()):
+                if entry == owner_identity:
+                    self._entry_by_post_close_attempt.pop(attempt, None)
+            if self._latest_terminal_entry == owner_identity:
+                self._latest_terminal_entry = None
+        self._revision += 1
+        self._object_snapshot = None
+
+
+def _required_text(value: Mapping[str, object], field: str) -> str:
+    member = value.get(field)
+    if not isinstance(member, str) or not member:
+        raise ShadowStateError(f"{field} must be a non-empty string")
+    return member
 
 
 def build_current_shadow_object(

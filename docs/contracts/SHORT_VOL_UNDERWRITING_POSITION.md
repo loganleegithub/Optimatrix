@@ -183,6 +183,12 @@ The owner may retain typed current state needed by Workbench and active Shadow C
 use a filesystem writer as an event bus, registry, or Workbench datastore. Funnel counts are
 non-durable and derived from current owner transitions.
 
+When an atomic structure scope is replaced, the prior scope is settled once as no longer current,
+its Candidate is invalidated, and its current-state indexes are removed. Candidate terminalization
+removes admission/request ownership; Outcome terminalization removes the active Position owner.
+Only one latest terminal Case may remain in the Workbench projection; all historical terminal truth
+comes from the bounded Shadow Case files.
+
 ## Required verification
 
 Direct tests cover Policy compatibility, signed economics, action boundaries, Candidate

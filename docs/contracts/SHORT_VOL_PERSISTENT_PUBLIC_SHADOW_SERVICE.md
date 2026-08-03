@@ -26,6 +26,11 @@ One process owns:
 Recoverable transport failure starts a new session epoch without replacing the in-process owners.
 A process restart creates a fresh runtime and does not resume prior open Cases.
 
+The long-lived process retains only current option/combo sources, active Underwriting scopes,
+active Candidates and requests, open Shadow Cases, and one latest terminal Case for trader display.
+Terminal identities are evicted at their owning boundary. Durable Case files remain the source for
+historical research; neither the owner nor Workbench keeps a second in-memory event history.
+
 ## State root
 
 One external absolute state root contains:
@@ -86,6 +91,9 @@ The service exposes non-durable funnel counts and a primary blocker in the Workb
 computed from current reducer/owner transitions and reset with the runtime. They do not create Case
 files or qualify a Policy.
 
+Completed funnel identities are retired. Only cumulative scalar counts and bounded normalized
+reason categories survive, so diagnostic memory is independent of completed opportunity count.
+
 ## HTTP surface
 
 Only explicit loopback addresses are permitted. GET/HEAD routes are:
@@ -117,4 +125,6 @@ contract.
 Offline tests cover one owner graph, fixed Policies, reconnect without owner replacement,
 pre-Shadow file count zero, Case open/first-close/outcome persistence, minimal reader states,
 Workbench coalescing/status bypass/flush, loopback HTTP, truthful zero/UNKNOWN, and public-method
-allowlisting. A later bounded public smoke may prove current-state reachability only.
+allowlisting. Repeated Episode, Candidate, scope-replacement, and completed-Case tests must prove
+that retained collections return to the active-set bound. A later bounded public smoke may prove
+current-state reachability only.

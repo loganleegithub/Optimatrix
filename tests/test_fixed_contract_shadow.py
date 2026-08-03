@@ -74,6 +74,22 @@ UNDERWRITING_POLICY_IDENTITY = (
 POSITION_POLICY_IDENTITY = "sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439"
 
 
+class _HistoryObserver:
+    def __init__(self) -> None:
+        self.records: list[dict[str, object]] = []
+
+    def on_record(
+        self,
+        value: Mapping[str, object],
+        state: ShadowStateStore,
+    ) -> None:
+        del state
+        self.records.append(dict(value))
+
+
+_HISTORY_BY_OWNER: dict[int, _HistoryObserver] = {}
+
+
 def _reducer(tmp_path: Path, policy_factory: PolicyFactory) -> RadarReducer:
     exact, digest = policy_factory()
     reducer = RadarReducer(
@@ -284,11 +300,13 @@ def _shadow_system(
     radar = tmp_path / "radar"
     downstream.mkdir()
     radar.mkdir()
+    history = _HistoryObserver()
     owner = FixedContractShadowOwner(
         policies=policies,
         bindings=bindings,
-        state_store=ShadowStateStore(bindings=bindings),
+        state_store=ShadowStateStore(bindings=bindings, observer=history),
     )
+    _HISTORY_BY_OWNER[id(owner)] = history
     adapter = FixedContractShadowRuntimeAdapter(owner=owner)
     reducer = RadarReducer(
         policy=policies.radar,
@@ -509,30 +527,22 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
         )
         == ()
     )
-    (inactive,) = adapter._underwriting_by_scope.values()
-    assert inactive.active_episode_identity is None
-    inactive_availability: list[Mapping[str, object]] = []
-    for value in owner.state_store.objects:
-        payload = value["payload"]
-        assert isinstance(payload, dict)
-        if value["object_kind"] == "UNDERWRITING_AVAILABILITY_EVALUATION" and payload[
-            "unknown_reasons"
-        ] == ["RADAR_EPISODE_NOT_ACTIVE"]:
-            inactive_availability.append(value)
+    assert adapter._underwriting_by_scope == {}
+    assert adapter.workbench_underwriting_metadata() == ()
+    inactive_availability = [
+        payload
+        for payload in _object_payloads(owner, "UNDERWRITING_AVAILABILITY_EVALUATION")
+        if payload["unknown_reasons"] == ["RADAR_EPISODE_NOT_ACTIVE"]
+    ]
     assert len(inactive_availability) == 1
-    assert (
-        len(
-            [
-                value
-                for value in owner.state_store.objects
-                if value["object_kind"] == "CANDIDATE_INVALIDATION"
-            ]
-        )
-        == 1
-    )
+    assert len(_object_payloads(owner, "CANDIDATE_INVALIDATION")) == 1
+    assert owner.retained_state_counts["active_candidates"] == 0
+    assert owner.retained_state_counts["availability_scopes"] == 0
+    assert adapter.retained_state_counts["underwriting_scopes"] == 0
+    assert adapter.retained_state_counts["candidate_origins"] == 0
+    assert adapter.retained_state_counts["request_contexts"] == 0
     inactive_revision = owner.state_store.revision
     inactive_objects = tuple(owner.state_store.objects)
-    inactive_paths = tuple(sorted((tmp_path / "downstream" / "objects").rglob("*.json")))
 
     unrelated_commit = _commit(
         causal_seq=3,
@@ -540,10 +550,9 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
         cause=CausalCause.TICKER_APPLIED,
     )
     assert adapter.on_settled_transaction(reducer=reducer, commit=unrelated_commit) == ()
-    assert adapter._underwriting_by_scope[inactive.radar_scope_identity] is inactive
+    assert adapter._underwriting_by_scope == {}
     assert owner.state_store.revision == inactive_revision
     assert tuple(owner.state_store.objects) == inactive_objects
-    assert tuple(sorted((tmp_path / "downstream" / "objects").rglob("*.json"))) == inactive_paths
 
     next_tracker = EpisodeTracker(
         runtime_identity=reducer.runtime_identity,
@@ -568,6 +577,79 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
         facts.active_episode_identity == next_tracker.episode_id
         for facts in adapter._underwriting_by_scope.values()
     )
+
+
+def test_replaced_atomic_quote_scopes_remain_bounded_across_many_candidates(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    (first_intent,) = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.COMBO_BOOK_CHANGED,
+        ),
+    )
+    assert first_intent.request_id > 0
+    (first_scope,) = adapter._underwriting_by_scope
+    template = reducer.combos["BTC-COMBO"]
+    replacement_count = 200
+    last_name = ""
+
+    for causal_seq in range(2, replacement_count + 2):
+        last_name = f"BTC-COMBO-{causal_seq}"
+        combo = replace(template, instrument_name=last_name)
+        book = ContinuousOrderBook(last_name)
+        book.apply(
+            {
+                "type": "snapshot",
+                "instrument_name": last_name,
+                "change_id": causal_seq * 10,
+                "timestamp": 1_000_000 + causal_seq * 10,
+                "bids": [["new", "300", "0.1"]],
+                "asks": [["new", "301", "0.1"]],
+            },
+            100 + causal_seq * 10,
+        )
+        boundary = FactBoundary(1, causal_seq, 100 + causal_seq * 10, causal_seq)
+        reducer.combos = {last_name: combo}
+        reducer.combo_books = {last_name: book}
+        reducer.accepted_book_receipts = {
+            last_name: AcceptedBookReceipt(
+                instrument_name=last_name,
+                snapshot_kind="snapshot",
+                prev_change_id=None,
+                change_id=causal_seq * 10,
+                source_timestamp_ms=1_000_000 + causal_seq * 10,
+                session_epoch=1,
+                subscription_generation=1,
+                boundary=boundary,
+            )
+        }
+
+        (replacement_intent,) = adapter.on_settled_transaction(
+            reducer=reducer,
+            commit=_commit(
+                causal_seq=causal_seq,
+                monotonic_ms=100 + causal_seq * 10,
+                cause=CausalCause.COMBO_BOOK_CHANGED,
+            ),
+        )
+        assert replacement_intent.request_id > first_intent.request_id
+        assert owner.retained_state_counts["active_candidates"] == 1
+        assert owner.retained_state_counts["availability_scopes"] == 1
+        assert adapter.retained_state_counts["underwriting_scopes"] == 1
+        assert adapter.retained_state_counts["candidate_origins"] == 1
+        assert adapter.retained_state_counts["request_contexts"] == 1
+        assert adapter.retained_state_counts["current_combo_sources"] == 1
+        assert adapter.retained_state_counts["retained_combo_identities"] == 1
+
+    assert len(adapter._underwriting_by_scope) == 1
+    assert first_scope not in adapter._underwriting_by_scope
+    (current_facts,) = adapter._underwriting_by_scope.values()
+    assert current_facts.combo_instrument_name == last_name
+    assert len(_object_payloads(owner, "CANDIDATE_INVALIDATION")) == replacement_count
 
 
 def test_workbench_underwriting_metadata_reuses_unchanged_snapshot(
@@ -946,7 +1028,7 @@ def _rest_combo_book(
 
 def _terminal_outcomes(owner: FixedContractShadowOwner) -> list[str]:
     outcomes: list[str] = []
-    for value in owner.state_store.objects:
+    for value in _HISTORY_BY_OWNER[id(owner)].records:
         if value["object_kind"] != "ADMISSION_ATTEMPT_TERMINAL":
             continue
         payload = value["payload"]
@@ -1015,7 +1097,7 @@ def _object_payloads(
     kind: str,
 ) -> list[dict[str, object]]:
     payloads: list[tuple[int, dict[str, object]]] = []
-    for value in owner.state_store.objects:
+    for value in _HISTORY_BY_OWNER[id(owner)].records:
         if value["object_kind"] != kind:
             continue
         payload = value["payload"]
@@ -1241,13 +1323,7 @@ def test_admission_response_reprojects_contemporaneous_ancillary_facts(
     kinds = [str(value["object_kind"]) for value in owner.state_store.objects]
     assert "SHADOW_ENTRY" not in kinds
     assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
-    invalidation = next(
-        value
-        for value in owner.state_store.objects
-        if value["object_kind"] == "CANDIDATE_INVALIDATION"
-    )
-    payload = invalidation["payload"]
-    assert isinstance(payload, dict)
+    (payload,) = _object_payloads(owner, "CANDIDATE_INVALIDATION")
     assert payload["primary_reason"] == ("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN")
 
 
@@ -1269,13 +1345,7 @@ def test_retired_admission_request_keeps_typed_source_gap_semantics(
     )
 
     assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
-    invalidation = next(
-        value
-        for value in owner.state_store.objects
-        if value["object_kind"] == "CANDIDATE_INVALIDATION"
-    )
-    payload = invalidation["payload"]
-    assert isinstance(payload, dict)
+    (payload,) = _object_payloads(owner, "CANDIDATE_INVALIDATION")
     assert payload["primary_reason"] == ("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN")
 
 
@@ -1393,11 +1463,19 @@ def test_concrete_adapter_runs_candidate_admission_position_and_future_exit_once
     )
     kinds = [str(value["object_kind"]) for value in owner.state_store.objects]
     assert kinds.count("SHADOW_ENTRY") == 1
-    assert kinds.count("POSITION_ACTION") == 2
-    assert kinds.count("POST_CLOSE_ATTEMPT_SCHEDULED") == 1
-    assert kinds.count("POST_CLOSE_ATTEMPT_TERMINAL") == 1
-    assert kinds.count("SHADOW_CLOSE_OPPORTUNITY") == 1
-    assert kinds.count("SHADOW_OUTCOME") == 1
+    assert kinds.count("POSITION_ACTION") == 1
+    assert len(_object_payloads(owner, "POSITION_ACTION")) == 2
+    assert len(_object_payloads(owner, "POST_CLOSE_ATTEMPT_SCHEDULED")) == 1
+    assert len(_object_payloads(owner, "POST_CLOSE_ATTEMPT_TERMINAL")) == 1
+    assert len(_object_payloads(owner, "SHADOW_CLOSE_OPPORTUNITY")) == 1
+    assert len(_object_payloads(owner, "SHADOW_OUTCOME")) == 1
+    assert owner.retained_state_counts["active_candidates"] == 0
+    assert owner.retained_state_counts["active_trades"] == 0
+    assert adapter.retained_state_counts["candidate_origins"] == 0
+    assert adapter.retained_state_counts["active_anchors"] == 0
+    assert adapter.retained_state_counts["request_contexts"] == 0
+    assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 1
+    assert owner.state_store.retained_state_counts["latest_terminal_cases"] == 1
 
     before = tuple(owner.state_store.objects)
     assert (
