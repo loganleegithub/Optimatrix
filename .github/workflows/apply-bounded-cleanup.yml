@@ -178,6 +178,14 @@ jobs:
               "                else:\n"
               "                    outcome_episode = self._entry_episode_by_identity.pop(entry, None)\n",
           )
+          replace_once(
+              funnel,
+              "            if state.entry_identity is not None:\n"
+              "                self._entry_episode_by_identity.pop(state.entry_identity, None)\n",
+              "            entry_identity = state.entry_identity\n"
+              "            if entry_identity is not None:\n"
+              "                self._entry_episode_by_identity.pop(entry_identity, None)\n",
+          )
 
           workbench = "apps/radar_runtime/src/radar_runtime/workbench.py"
           replace_once(
