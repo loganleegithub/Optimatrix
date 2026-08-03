@@ -1,0 +1,56 @@
+name: A1 apply canonical Ruff format
+
+on:
+  push:
+    branches:
+      - agent/short-vol-radar-steady-state-knownness
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    name: Apply pinned Ruff format
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out exact branch tip
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+
+      - name: Install pinned uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.10.0"
+          enable-cache: true
+          cache-dependency-glob: requirements-dev.lock
+          python-version: "3.13.5"
+
+      - name: Install exact development toolchain
+        run: make sync
+
+      - name: Format exact A1 files and remove formatter
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m ruff format \
+            apps/radar_runtime/src/radar_runtime/observation.py \
+            tests/test_authority_and_architecture.py \
+            tests/test_funnel.py
+          git rm -- .github/workflows/a1-format.yml
+          git diff --check
+
+      - name: Publish append-only formatted candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- \
+            apps/radar_runtime/src/radar_runtime/observation.py \
+            tests/test_authority_and_architecture.py \
+            tests/test_funnel.py
+          git commit -m "Format Radar steady-state knownness candidate"
+          git push origin HEAD:agent/short-vol-radar-steady-state-knownness
