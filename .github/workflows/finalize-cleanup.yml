@@ -1,0 +1,78 @@
+name: Finalize bounded runtime cleanup
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/finalize-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    name: Build, verify, and push final cleanup
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Verify one-shot staging boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          actual="$(git diff --name-only 1290eddf6c082c9f502aacb973bd1c84989451b3..HEAD | LC_ALL=C sort)"
+          expected="$(printf '%s\n' \
+            .github/cleanup.patch.part00 \
+            .github/cleanup.patch.part01 \
+            .github/cleanup.patch.part02 \
+            .github/finalize_cleanup.py \
+            .github/workflows/apply-bounded-cleanup.yml \
+            .github/workflows/export-sandbox-source.yml \
+            .github/workflows/finalize-cleanup.yml | LC_ALL=C sort)"
+          test "$actual" = "$expected"
+
+      - name: Install pinned uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.10.0"
+          enable-cache: true
+          cache-dependency-glob: requirements-dev.lock
+          python-version: "3.13.5"
+
+      - name: Install exact development toolchain
+        run: make sync
+
+      - name: Apply exact cleanup and remove transport helpers
+        run: .venv/bin/python .github/finalize_cleanup.py
+
+      - name: Run repository checks
+        run: make check
+
+      - name: Verify final product tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --cached --check
+          test -z "$(git status --porcelain --untracked-files=all | grep '^??' || true)"
+          test "$(find .github/workflows -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)" = "ci.yml"
+          ! find .github -maxdepth 2 -type f -name '*cleanup*' -print -quit | grep .
+          ! grep -R -n -E 'Rejected|rejected|cohort_enrolled|AlignedPair|RejectedAnchor|_create_rejected_trade|REJECTED_COUNTERFACTUAL' apps packages --include='*.py'
+          test ! -e tasks/SHORT_VOL_RUNTIME_COMPLETED_STATE_EVICTION.md
+          test ! -e packages/short_vol_underwriting/src/short_vol_underwriting/cohort.py
+          test -e packages/short_vol_underwriting/src/short_vol_underwriting/observation.py
+
+      - name: Commit and push exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "refactor: bound completed runtime state"
+          git push origin HEAD:agent/shadow-case-data-boundary
