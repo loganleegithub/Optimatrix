@@ -1805,7 +1805,7 @@ const funnelStageLabels = {
   APPLICABLE_MARKET_SCOPE: '适用市场评估',
   RADAR_KNOWN: 'Radar 已知评估',
   ANOMALY_ACTIVE: '异常 Episode',
-  ATOMIC_AVAILABILITY_SETTLED: '组合可用性已结算',
+  STRUCTURE_REVIEWABLE: '结构可审查',
   PUBLIC_ATOMIC_QUOTE_AVAILABLE: '目标数量原子报价',
   UNDERWRITING_EVALUABLE: 'Underwriting 可评估',
   CANDIDATE: 'Candidate',

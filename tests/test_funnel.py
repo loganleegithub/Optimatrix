@@ -122,9 +122,7 @@ def test_funnel_counts_exact_radar_unknown_and_deduplicates_one_transaction() ->
 
     assert _stage(snapshot, "APPLICABLE_MARKET_SCOPE")["observed_count"] == 2
     assert _stage(snapshot, "RADAR_KNOWN")["observed_count"] == 1
-    assert _stage(snapshot, "RADAR_KNOWN")["blocker_counts"] == {
-        "OPTION_BOOK_UNKNOWN": 1
-    }
+    assert _stage(snapshot, "RADAR_KNOWN")["blocker_counts"] == {"OPTION_BOOK_UNKNOWN": 1}
     assert duplicate == snapshot
     assert snapshot.primary_blocker.stage == "RADAR_KNOWN"
     assert snapshot.primary_blocker.reason == "OPTION_BOOK_UNKNOWN"
@@ -156,10 +154,27 @@ def test_funnel_attributes_atomic_unknown_and_known_negative_states() -> None:
         atomic_state=PublicAtomicQuoteState.NO_ACTIVE_COMBO,
     )
 
-    assert unknown.primary_blocker.stage == "ATOMIC_AVAILABILITY_SETTLED"
+    assert unknown.primary_blocker.stage == "STRUCTURE_REVIEWABLE"
     assert unknown.primary_blocker.reason == "ATOMIC_AVAILABILITY_UNKNOWN"
     assert known_negative.primary_blocker.stage == "PUBLIC_ATOMIC_QUOTE_AVAILABLE"
     assert known_negative.primary_blocker.reason == "NO_ACTIVE_COMBO"
+
+
+def test_funnel_reports_the_earliest_material_loss_not_the_largest_later_fraction() -> None:
+    tracker = FunnelTracker()
+    snapshot = _observe(
+        tracker,
+        causal_seq=1,
+        evaluations=(
+            RadarFunnelEvaluation("KNOWN", True, None),
+            RadarFunnelEvaluation("UNKNOWN", False, "OPTION_BOOK_UNKNOWN"),
+        ),
+        episode="episode-1",
+        atomic_state=PublicAtomicQuoteState.UNKNOWN,
+    )
+
+    assert snapshot.primary_blocker.stage == "RADAR_KNOWN"
+    assert snapshot.primary_blocker.reason == "OPTION_BOOK_UNKNOWN"
 
 
 def test_funnel_attributes_underwriting_and_candidate_losses() -> None:

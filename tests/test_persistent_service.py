@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import FrozenInstanceError, dataclass, field
 from pathlib import Path
@@ -222,7 +223,7 @@ def test_outer_loop_reconnects_without_replacing_business_owner(tmp_path: Path) 
         )
         return _WaitingClientContext(client)
 
-    async def scenario() -> Path:
+    async def scenario() -> Mapping[str, object]:
         task = asyncio.create_task(
             run_persistent_service_composition(
                 composition,
@@ -485,7 +486,7 @@ def test_runtime_flushes_before_clean_stop_and_reconnect(
     )
     original_clean_stop = clean_runtime.reducer.clean_stop
 
-    def ordered_clean_stop(monotonic_ms: int) -> Path:
+    def ordered_clean_stop(monotonic_ms: int) -> Mapping[str, object]:
         clean_order.append("clean_stop")
         return original_clean_stop(monotonic_ms)
 

@@ -16,12 +16,12 @@ from typing import Protocol, cast
 from market_monitor import ContinuityGap
 from market_monitor.types import SourceDataError
 from short_vol_radar.evidence import RadarEventSink
+from short_vol_underwriting.case_store import ShadowCaseStore
 from short_vol_underwriting.constants import (
     POSITION_POLICY_IDENTITY,
     RADAR_POLICY_IDENTITY,
     UNDERWRITING_POLICY_IDENTITY,
 )
-from short_vol_underwriting.case_store import ShadowCaseStore
 from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
 from short_vol_underwriting.identity import canonical_identity, require_code_identity
 from short_vol_underwriting.owner import FixedContractShadowOwner

@@ -149,9 +149,9 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "at most one explicitly authorized bounded read-only smoke" in " ".join(delivery.split())
     assert "does not require a manifest, receipt chain" in delivery
     assert "Two-strike deletion rule" in delivery
-    persistent = (
-        ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md"
-    ).read_text(encoding="utf-8")
+    persistent = (ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md").read_text(
+        encoding="utf-8"
+    )
     assert "Process supervision, restart policy, CPU, memory, host logs" in persistent
     assert "No terminal manifest" in persistent
 
@@ -190,10 +190,9 @@ def test_tasks_hold_only_template_and_at_most_one_active_closure() -> None:
         and "**Status:** ACTIVE" in "\n".join(path.read_text(encoding="utf-8").splitlines()[:8])
     ]
     assert len(active) <= 1
-    assert all(
-        path.name == "TEMPLATE.md" or path in active
-        for path in task_paths
-    ), "completed or inactive task files must not accumulate"
+    assert all(path.name == "TEMPLATE.md" or path in active for path in task_paths), (
+        "completed or inactive task files must not accumulate"
+    )
 
 
 def test_internal_package_dependency_direction() -> None:

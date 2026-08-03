@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import FrozenInstanceError, replace
 from decimal import Decimal
@@ -1000,7 +999,7 @@ def test_amount_unknown_to_valid_establishes_known_current_without_activation_co
     assert result.known_evaluation
     assert not result.observation_eligible
     assert reducer.latest_funnel_causal_seq == 2
-    assert reducer.latest_funnel_evaluations == ()
+    assert not reducer.latest_funnel_evaluations
     assert reducer.trackers[valid.instrument_name].detector_state is DetectorState.NO_ANOMALY
     assert reducer.trackers[valid.instrument_name].episode_id is None
 
@@ -1374,9 +1373,10 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
     assert reducer._global_continuity_epoch == 1
 
     summary = reducer.clean_stop(2_100)
+    coverage_segments = cast(list[dict[str, object]], summary["coverage_segments"])
     stale_coverage = next(
         segment
-        for segment in summary["coverage_segments"]
+        for segment in coverage_segments
         if segment["blocking_reason"] == "TICKER_SOURCE_STALE"
     )
     assert stale_coverage["state"] == "UNKNOWN"
@@ -3308,9 +3308,10 @@ def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_resta
     assert reducer._global_continuity_epoch == 1
 
     summary = reducer.clean_stop(2_200)
+    coverage_segments = cast(list[dict[str, object]], summary["coverage_segments"])
     incident = next(
         segment
-        for segment in summary["coverage_segments"]
+        for segment in coverage_segments
         if segment["blocking_reason"] == "QUEUE_LAG_CURRENTNESS"
     )
     assert incident["start_monotonic_ms"] == 1_100
@@ -3502,10 +3503,14 @@ def test_coverage_preserves_heterogeneous_nonpublication_blockers(
     assert reducer._coverage._current_blocking_reason == "CURRENT_SCOPE_INCOMPLETE"
 
     summary = reducer.clean_stop(1_300)
+    coverage_segments = cast(list[dict[str, object]], summary["coverage_segments"])
     assert any(
-        {group["blocking_reason"] for group in segment["blocking_groups"]}
+        {
+            group["blocking_reason"]
+            for group in cast(list[dict[str, object]], segment["blocking_groups"])
+        }
         == {"OPTION_BOOK_UNAVAILABLE", "TICKER_SOURCE_STALE"}
-        for segment in summary["coverage_segments"]
+        for segment in coverage_segments
     )
 
 

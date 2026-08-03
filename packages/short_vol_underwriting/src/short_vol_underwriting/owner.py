@@ -47,8 +47,8 @@ from short_vol_underwriting.domain import (
     compute_shadow_outcome_economics,
 )
 from short_vol_underwriting.evidence import (
-    ShadowStateStore,
     RuntimeBindings,
+    ShadowStateStore,
 )
 from short_vol_underwriting.identity import IdentityError, canonical_identity, require_identity
 from short_vol_underwriting.model import (
@@ -482,10 +482,7 @@ class FixedContractShadowOwner:
                 evaluation,
                 availability_identity=availability_identity,
             )
-            if (
-                action_changed
-                and evaluation.action is UnderwritingAction.CANDIDATE
-            ):
+            if action_changed and evaluation.action is UnderwritingAction.CANDIDATE:
                 self._activate_candidate(
                     evaluation,
                     action_identity=action_identity,
@@ -1634,8 +1631,7 @@ class FixedContractShadowOwner:
                     "lower": facts.radar_richness_lower,
                     "upper": facts.radar_richness_upper,
                 }
-                if facts.radar_richness_lower is not None
-                and facts.radar_richness_upper is not None
+                if facts.radar_richness_lower is not None and facts.radar_richness_upper is not None
                 else None
             ),
             "canonical_combo_identity": facts.canonical_combo_identity,

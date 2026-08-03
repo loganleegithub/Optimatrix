@@ -11,7 +11,12 @@ from enum import StrEnum
 from pathlib import Path
 
 from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
-from short_vol_underwriting.identity import canonical_identity, canonical_value, require_identity
+from short_vol_underwriting.identity import (
+    canonical_identity,
+    canonical_value,
+    require_code_identity,
+    require_identity,
+)
 from short_vol_underwriting.model import FactBoundary
 from short_vol_underwriting.policy import PolicyChain
 
@@ -81,7 +86,7 @@ class ShadowCaseStore:
         require_identity(case_id, "case_id")
         case_directory = self._case_directory(case_id)
         opened = _read_json(case_directory / "opened.json")
-        _validate_opened(opened, expected_case_id=case_id)
+        _validate_opened(opened, expected_case_id=case_id, bindings=self.bindings)
         first_close_path = case_directory / "first-close.json"
         outcome_path = case_directory / "outcome.json"
         first_close = _read_json(first_close_path) if first_close_path.exists() else None
@@ -91,6 +96,13 @@ class ShadowCaseStore:
         if outcome is not None:
             _validate_followup(opened, outcome, expected_kind=OUTCOME_KIND)
             _validate_outcome_economics(opened, outcome)
+            if outcome.get("terminal_state") == "MATURE_KNOWN":
+                if first_close is None:
+                    raise ShadowCaseStoreError("known Outcome lacks its first CLOSE")
+                if outcome.get("first_latched_close_action_identity") != first_close.get(
+                    "position_action_identity"
+                ):
+                    raise ShadowCaseStoreError("known Outcome first CLOSE identity mismatch")
         status = (
             ShadowCaseReadStatus.COMPLETE
             if outcome is not None
@@ -184,9 +196,7 @@ class ShadowCaseStore:
                 "net_entry_credit_usdc": payload.get("net_entry_credit_usdc"),
                 "payoff_cap_usdc": payload.get("payoff_cap_usdc"),
                 "future_cost_reserve_usdc": payload.get("future_cost_reserve_usdc"),
-                "underwriting_reserved_loss_usdc": payload.get(
-                    "underwriting_reserved_loss_usdc"
-                ),
+                "underwriting_reserved_loss_usdc": payload.get("underwriting_reserved_loss_usdc"),
             },
             "non_claims": [
                 "PUBLIC_QUOTE_NOT_FILL",
@@ -195,7 +205,7 @@ class ShadowCaseStore:
             ],
         }
         normalized = _normalized_mapping(opened)
-        _validate_opened(normalized, expected_case_id=case_id)
+        _validate_opened(normalized, expected_case_id=case_id, bindings=self.bindings)
         self._publish(case_id, "opened.json", normalized)
         self._case_by_entry[entry_identity] = case_id
         self._opened_by_case[case_id] = normalized
@@ -221,9 +231,7 @@ class ShadowCaseStore:
                 "first_close_fact_boundary": value.get("fact_boundary"),
                 "position_action_identity": action_identity,
                 "primary_close_reason": payload.get("primary_close_reason"),
-                "ordered_latched_close_reasons": payload.get(
-                    "ordered_latched_close_reason_vector"
-                ),
+                "ordered_latched_close_reasons": payload.get("ordered_latched_close_reason_vector"),
                 "predicate_truth_vector": payload.get("ordered_predicate_truth_vector"),
             }
         )
@@ -257,9 +265,7 @@ class ShadowCaseStore:
                 "close_fee_reserve_usdc": payload.get("close_fee_reserve_usdc"),
                 "net_close_cashflow_usdc": payload.get("net_close_cashflow_usdc"),
                 "gross_pnl_usdc": payload.get("gross_pnl_usdc"),
-                "total_public_fee_reserve_usdc": payload.get(
-                    "total_public_fee_reserve_usdc"
-                ),
+                "total_public_fee_reserve_usdc": payload.get("total_public_fee_reserve_usdc"),
                 "net_pnl_after_public_standard_fee_reserve_usdc": payload.get(
                     "net_pnl_after_public_standard_fee_reserve_usdc"
                 ),
@@ -330,7 +336,12 @@ class ShadowCaseStore:
             os.close(directory_fd)
 
 
-def _validate_opened(value: Mapping[str, object], *, expected_case_id: str) -> None:
+def _validate_opened(
+    value: Mapping[str, object],
+    *,
+    expected_case_id: str,
+    bindings: RuntimeBindings,
+) -> None:
     required = {
         "record_kind",
         "schema_version",
@@ -358,6 +369,22 @@ def _validate_opened(value: Mapping[str, object], *, expected_case_id: str) -> N
         raise ShadowCaseStoreError("opened record kind/schema is invalid")
     if value.get("case_id") != expected_case_id:
         raise ShadowCaseStoreError("opened record Case identity mismatch")
+    try:
+        require_code_identity(value.get("code_identity"))
+    except ValueError as exc:
+        raise ShadowCaseStoreError(str(exc)) from exc
+    expected_bindings = {
+        "code_identity": bindings.code_identity,
+        "runtime_identity": bindings.runtime_identity,
+        "radar_policy_identity": bindings.radar_policy_identity,
+        "underwriting_policy_identity": bindings.underwriting_policy_identity,
+        "position_policy_identity": bindings.position_policy_identity,
+    }
+    for field, expected in expected_bindings.items():
+        if value.get(field) != expected:
+            raise ShadowCaseStoreError(f"opened record binding mismatch: {field}")
+    if value.get("shadow_case_contract_identity") != bindings.shadow_case_contract_identity:
+        raise ShadowCaseStoreError("opened record binding mismatch: shadow_case_contract_identity")
     for field in (
         "runtime_identity",
         "radar_policy_identity",
@@ -369,17 +396,163 @@ def _validate_opened(value: Mapping[str, object], *, expected_case_id: str) -> N
         "underwriting_action_identity",
     ):
         _identity(value.get(field), field)
-    _boundary(value.get("opened_fact_boundary"), "opened_fact_boundary")
+    opened_boundary = FactBoundary.from_object(
+        _boundary(value.get("opened_fact_boundary"), "opened_fact_boundary")
+    )
+    if (
+        opened_boundary.code_identity != bindings.code_identity
+        or opened_boundary.runtime_identity != bindings.runtime_identity
+    ):
+        raise ShadowCaseStoreError("opened FactBoundary binding mismatch")
+    recomputed_case_id = canonical_identity(
+        "ShadowCaseIdentity",
+        bindings.code_identity,
+        bindings.runtime_identity,
+        bindings.radar_policy_identity,
+        bindings.underwriting_policy_identity,
+        bindings.position_policy_identity,
+        value.get("shadow_entry_identity"),
+        opened_boundary,
+    )
+    if recomputed_case_id != expected_case_id:
+        raise ShadowCaseStoreError("opened record Case identity mismatch")
     structure = _mapping(value.get("structure"), "structure")
+    _exact_keys(
+        structure,
+        {
+            "canonical_combo_identity",
+            "canonical_leg_identities",
+            "combo_instrument_name",
+            "short_leg_instrument_name",
+            "long_leg_instrument_name",
+            "expiry_ms",
+            "option_type",
+            "short_strike_usdc_per_btc",
+            "long_strike_usdc_per_btc",
+            "entry_direction",
+            "full_quantity_btc",
+            "entry_consumed_levels",
+        },
+        "opened structure",
+    )
+    _identity(structure.get("canonical_combo_identity"), "canonical_combo_identity")
+    leg_identities = _sequence(
+        structure.get("canonical_leg_identities"), "canonical_leg_identities"
+    )
+    if len(leg_identities) != 2:
+        raise ShadowCaseStoreError("opened structure must contain exactly two leg identities")
+    for index, identity in enumerate(leg_identities):
+        _identity(identity, f"canonical_leg_identities[{index}]")
+    for field in (
+        "combo_instrument_name",
+        "short_leg_instrument_name",
+        "long_leg_instrument_name",
+    ):
+        _text(structure.get(field), field)
+    expiry_ms = structure.get("expiry_ms")
+    if isinstance(expiry_ms, bool) or not isinstance(expiry_ms, int) or expiry_ms <= 0:
+        raise ShadowCaseStoreError("expiry_ms must be a positive integer")
+    if structure.get("option_type") not in {"call", "put"}:
+        raise ShadowCaseStoreError("option_type is invalid")
+    if structure.get("entry_direction") != "SELL":
+        raise ShadowCaseStoreError("entry_direction is invalid")
+    _decimal(structure.get("short_strike_usdc_per_btc"), "short_strike_usdc_per_btc")
+    _decimal(structure.get("long_strike_usdc_per_btc"), "long_strike_usdc_per_btc")
     quantity = _decimal(structure.get("full_quantity_btc"), "full_quantity_btc")
     if quantity <= 0:
         raise ShadowCaseStoreError("opened quantity must be positive")
     levels = _sequence(structure.get("entry_consumed_levels"), "entry_consumed_levels")
     if _levels_amount(levels) != quantity:
         raise ShadowCaseStoreError("opened levels do not sum to full quantity")
+    radar = _mapping(value.get("radar"), "radar")
+    _exact_keys(
+        radar,
+        {
+            "active_episode_identity",
+            "radar_scope_identity",
+            "atomic_state",
+            "band_id",
+            "richness_interval",
+        },
+        "opened radar",
+    )
+    _text(radar.get("active_episode_identity"), "active_episode_identity")
+    _identity(radar.get("radar_scope_identity"), "radar_scope_identity")
+    if radar.get("atomic_state") != "PUBLIC_ATOMIC_QUOTE_AVAILABLE":
+        raise ShadowCaseStoreError("opened atomic_state is invalid")
+    _text(radar.get("band_id"), "band_id")
+    richness = _mapping(radar.get("richness_interval"), "richness_interval")
+    _exact_keys(richness, {"lower", "upper"}, "richness_interval")
+    if _decimal(richness.get("lower"), "richness lower") > _decimal(
+        richness.get("upper"), "richness upper"
+    ):
+        raise ShadowCaseStoreError("richness interval is inverted")
+
+    underwriting = _mapping(value.get("underwriting"), "underwriting")
+    _exact_keys(
+        underwriting,
+        {
+            "action",
+            "minimum_net_entry_credit_usdc",
+            "minimum_net_credit_to_payoff_cap_fraction",
+            "maximum_underwriting_reserved_loss_usdc",
+            "maximum_entry_consumed_level_count",
+        },
+        "opened underwriting",
+    )
+    if underwriting.get("action") != "CANDIDATE":
+        raise ShadowCaseStoreError("opened Underwriting action is invalid")
+    for field in (
+        "minimum_net_entry_credit_usdc",
+        "minimum_net_credit_to_payoff_cap_fraction",
+        "maximum_underwriting_reserved_loss_usdc",
+    ):
+        _decimal(underwriting.get(field), field)
+    maximum_levels = underwriting.get("maximum_entry_consumed_level_count")
+    if (
+        isinstance(maximum_levels, bool)
+        or not isinstance(maximum_levels, int)
+        or maximum_levels <= 0
+    ):
+        raise ShadowCaseStoreError("maximum_entry_consumed_level_count must be positive")
+
     economics = _mapping(value.get("entry_economics"), "entry_economics")
-    if _decimal(economics.get("gross_entry_credit_usdc"), "gross entry credit") <= 0:
+    _exact_keys(
+        economics,
+        {
+            "gross_entry_credit_usdc",
+            "entry_fee_reserve_usdc",
+            "net_entry_credit_usdc",
+            "payoff_cap_usdc",
+            "future_cost_reserve_usdc",
+            "underwriting_reserved_loss_usdc",
+        },
+        "entry_economics",
+    )
+    gross_entry = _decimal(economics.get("gross_entry_credit_usdc"), "gross entry credit")
+    if gross_entry <= 0:
         raise ShadowCaseStoreError("opened gross entry credit must be positive")
+    entry_fee = _decimal(economics.get("entry_fee_reserve_usdc"), "entry fee reserve")
+    net_entry = _decimal(economics.get("net_entry_credit_usdc"), "net entry credit")
+    if net_entry != gross_entry - entry_fee:
+        raise ShadowCaseStoreError("opened entry economics do not conserve")
+    for field in (
+        "payoff_cap_usdc",
+        "future_cost_reserve_usdc",
+        "underwriting_reserved_loss_usdc",
+    ):
+        _decimal(economics.get(field), field)
+    _string_sequence(value.get("non_claims"), "non_claims")
+
+    decision_boundary = FactBoundary.from_object(
+        _boundary(value.get("decision_fact_boundary"), "decision_fact_boundary")
+    )
+    if (
+        decision_boundary.code_identity != bindings.code_identity
+        or decision_boundary.runtime_identity != bindings.runtime_identity
+        or not opened_boundary.is_strictly_after(decision_boundary)
+    ):
+        raise ShadowCaseStoreError("decision FactBoundary binding/order mismatch")
 
 
 def _validate_followup(
@@ -388,6 +561,50 @@ def _validate_followup(
     *,
     expected_kind: str,
 ) -> None:
+    expected_keys = (
+        {
+            "record_kind",
+            "schema_version",
+            "case_id",
+            "code_identity",
+            "runtime_identity",
+            "radar_policy_identity",
+            "underwriting_policy_identity",
+            "position_policy_identity",
+            "first_close_fact_boundary",
+            "position_action_identity",
+            "primary_close_reason",
+            "ordered_latched_close_reasons",
+            "predicate_truth_vector",
+        }
+        if expected_kind == FIRST_CLOSE_KIND
+        else {
+            "record_kind",
+            "schema_version",
+            "case_id",
+            "code_identity",
+            "runtime_identity",
+            "radar_policy_identity",
+            "underwriting_policy_identity",
+            "position_policy_identity",
+            "outcome_fact_boundary",
+            "shadow_outcome_identity",
+            "terminal_state",
+            "selected_exit_identity",
+            "first_latched_close_action_identity",
+            "gross_close_cashflow_usdc",
+            "close_fee_reserve_usdc",
+            "net_close_cashflow_usdc",
+            "gross_pnl_usdc",
+            "total_public_fee_reserve_usdc",
+            "net_pnl_after_public_standard_fee_reserve_usdc",
+            "net_loss_usdc",
+            "economic_availability",
+            "censor_mask",
+            "non_claims",
+        }
+    )
+    _exact_keys(value, expected_keys, "Case follow-up")
     if value.get("record_kind") != expected_kind or value.get("schema_version") != 1:
         raise ShadowCaseStoreError("Case follow-up kind/schema is invalid")
     if value.get("case_id") != opened.get("case_id"):
@@ -403,11 +620,34 @@ def _validate_followup(
             raise ShadowCaseStoreError(f"Case follow-up {field} mismatch")
     opened_boundary = FactBoundary.from_object(opened.get("opened_fact_boundary"))
     field = (
-        "first_close_fact_boundary" if expected_kind == FIRST_CLOSE_KIND else "outcome_fact_boundary"
+        "first_close_fact_boundary"
+        if expected_kind == FIRST_CLOSE_KIND
+        else "outcome_fact_boundary"
     )
-    later = FactBoundary.from_object(value.get(field))
+    later = FactBoundary.from_object(_boundary(value.get(field), field))
+    if (
+        later.code_identity != opened_boundary.code_identity
+        or later.runtime_identity != opened_boundary.runtime_identity
+    ):
+        raise ShadowCaseStoreError("Case follow-up FactBoundary binding mismatch")
     if not later.is_strictly_after(opened_boundary):
         raise ShadowCaseStoreError("Case follow-up is not strictly post-open")
+    if expected_kind == FIRST_CLOSE_KIND:
+        _identity(value.get("position_action_identity"), "position_action_identity")
+        _text(value.get("primary_close_reason"), "primary_close_reason")
+        _string_sequence(value.get("ordered_latched_close_reasons"), "close reasons")
+        _string_sequence(value.get("predicate_truth_vector"), "predicate truth vector")
+    else:
+        _identity(value.get("shadow_outcome_identity"), "shadow_outcome_identity")
+        for identity_field in (
+            "selected_exit_identity",
+            "first_latched_close_action_identity",
+        ):
+            identity = value.get(identity_field)
+            if identity is not None:
+                _identity(identity, identity_field)
+        _string_sequence(value.get("censor_mask"), "censor_mask")
+        _string_sequence(value.get("non_claims"), "non_claims")
 
 
 def _validate_outcome_economics(
@@ -537,6 +777,26 @@ def _levels_amount(levels: Sequence[object]) -> Decimal:
     total = Decimal(0)
     for index, raw in enumerate(levels):
         level = _mapping(raw, f"level[{index}]")
-        total += _decimal(level.get("amount_btc"), f"level[{index}].amount_btc")
-        _decimal(level.get("price_usdc_per_btc"), f"level[{index}].price_usdc_per_btc")
+        _exact_keys(level, {"amount_btc", "price_usdc_per_btc"}, f"level[{index}]")
+        amount = _decimal(level.get("amount_btc"), f"level[{index}].amount_btc")
+        price = _decimal(level.get("price_usdc_per_btc"), f"level[{index}].price_usdc_per_btc")
+        if amount <= 0 or price <= 0:
+            raise ShadowCaseStoreError("consumed level amount and price must be positive")
+        total += amount
     return total
+
+
+def _exact_keys(value: Mapping[str, object], expected: set[str], field: str) -> None:
+    if set(value) != expected:
+        raise ShadowCaseStoreError(f"{field} has an invalid key set")
+
+
+def _text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ShadowCaseStoreError(f"{field} must be a non-empty string")
+    return value
+
+
+def _string_sequence(value: object, field: str) -> tuple[str, ...]:
+    members = _sequence(value, field)
+    return tuple(_text(member, f"{field} member") for member in members)

@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from typing import TypeVar
 
 from market_monitor import PriceLevel, TimeInterval
 
@@ -27,6 +28,8 @@ SUMMARY_NON_CLAIMS = (
     "NO_EDGE_OR_PROFITABILITY_CLAIM",
     "NO_FILL_OR_EXECUTION_PERMISSION",
 )
+
+_EventKey = TypeVar("_EventKey")
 
 
 class EvidenceError(ValueError):
@@ -401,8 +404,8 @@ class RadarEventSink:
 
     @staticmethod
     def _record(
-        values: dict[object, dict[str, object]],
-        key: object,
+        values: dict[_EventKey, dict[str, object]],
+        key: _EventKey,
         event: Mapping[str, object],
     ) -> bool:
         normalized = dict(event)

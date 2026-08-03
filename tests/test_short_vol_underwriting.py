@@ -22,10 +22,6 @@ from short_vol_underwriting import (
     CloseOptionAvailability,
     CloseQuoteFacts,
     CloseQuoteState,
-    ShadowCaseReadStatus,
-    ShadowCaseStore,
-    ShadowStateError,
-    ShadowStateStore,
     FactBoundary,
     FixedContractShadowOwner,
     Observation,
@@ -44,6 +40,10 @@ from short_vol_underwriting import (
     RejectedAnchorSelector,
     RpcAdmissionRefreshWitness,
     RuntimeBindings,
+    ShadowCaseReadStatus,
+    ShadowCaseStore,
+    ShadowStateError,
+    ShadowStateStore,
     SourceFact,
     SubscriptionAdmissionRefreshWitness,
     TerminalSource,
@@ -56,6 +56,7 @@ from short_vol_underwriting import (
     load_policy_chain,
     ordered_candidate_invalidation,
 )
+
 ROOT = Path(__file__).resolve().parents[1]
 RADAR_POLICY_IDENTITY = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
 UNDERWRITING_POLICY_IDENTITY = (
@@ -215,6 +216,9 @@ def _underwriting_facts(
         ticker_source=SourceFact("sha256:" + "b" * 64, boundary),
         short_leg_instrument_name="BTC-SHORT",
         long_leg_instrument_name="BTC-LONG",
+        radar_band_id="six-to-twenty-four-hours",
+        radar_richness_lower=Decimal("1.3"),
+        radar_richness_upper=Decimal("1.31"),
     )
 
 
@@ -1278,7 +1282,9 @@ def test_owner_opens_admitted_observation_without_online_cohort_membership(
         value for value in objects.values() if value["object_kind"] == "SHADOW_OUTCOME_OBSERVATION"
     )
     assert "cohort_enrolled" not in _object(observation["payload"])
-    assert not any(value["object_kind"] == "ALIGNED_POLICY_NO_TRADE_PAIR" for value in objects.values())
+    assert not any(
+        value["object_kind"] == "ALIGNED_POLICY_NO_TRADE_PAIR" for value in objects.values()
+    )
 
 
 def test_owner_emits_slot_consumed_availability_after_entry(
@@ -2812,7 +2818,9 @@ def test_watch_and_abstain_remain_current_state_without_automatic_counterfactual
                 watch_facts,
                 boundary=_boundary(2, 120),
                 quote_source=SourceFact(
-                    cast(SubscriptionAdmissionRefreshWitness, watch_facts.quote_refresh_witness).source_identity,
+                    cast(
+                        SubscriptionAdmissionRefreshWitness, watch_facts.quote_refresh_witness
+                    ).source_identity,
                     _boundary(2, 120),
                 ),
             ),
@@ -3007,7 +3015,6 @@ def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_p
     assert writer.revision == 2
     assert writer.objects is not first_snapshot
     assert attempt.scheduled_identity in _written_objects(tmp_path, bindings=bindings)
-
 
 
 def test_actual_owner_shadow_entry_opens_one_durable_case(tmp_path: Path) -> None:

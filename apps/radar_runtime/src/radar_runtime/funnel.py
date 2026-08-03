@@ -3,20 +3,19 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from short_vol_radar.atomic import PublicAtomicQuoteState
 from short_vol_radar.detector import DetectorState
 
 if TYPE_CHECKING:
-    from radar_runtime.runtime import CausalCommit, RadarReducer
+    from radar_runtime.runtime import CausalCommit, RadarFunnelEvaluation, RadarReducer
 
 FUNNEL_STAGE_ORDER = (
     "APPLICABLE_MARKET_SCOPE",
     "RADAR_KNOWN",
     "ANOMALY_ACTIVE",
-    "ATOMIC_AVAILABILITY_SETTLED",
+    "STRUCTURE_REVIEWABLE",
     "PUBLIC_ATOMIC_QUOTE_AVAILABLE",
     "UNDERWRITING_EVALUABLE",
     "CANDIDATE",
@@ -171,7 +170,7 @@ class FunnelTracker:
                 ),
             ),
             FunnelStageSnapshot(
-                "ATOMIC_AVAILABILITY_SETTLED",
+                "STRUCTURE_REVIEWABLE",
                 len(structure_episodes),
                 "DISTINCT_ANOMALY_EPISODE",
                 anomaly_count,
@@ -223,6 +222,7 @@ class FunnelTracker:
 
     def _observe_radar(self, reducer: RadarReducer, commit: CausalCommit) -> None:
         causal_seq = reducer.latest_funnel_causal_seq
+        evaluations: tuple[RadarFunnelEvaluation, ...]
         if causal_seq <= self._last_radar_causal_seq:
             evaluations = ()
         elif causal_seq == commit.boundary.causal_seq:
@@ -352,7 +352,9 @@ class FunnelTracker:
         for episode in self._candidate_episodes - self._entry_episodes:
             outcome = self._admission_terminal_by_episode.get(episode)
             blockers[
-                f"ADMISSION_{outcome}" if outcome is not None else "ADMISSION_PENDING_OR_NOT_REFRESHED"
+                f"ADMISSION_{outcome}"
+                if outcome is not None
+                else "ADMISSION_PENDING_OR_NOT_REFRESHED"
             ] += 1
         return blockers
 
@@ -360,59 +362,39 @@ class FunnelTracker:
     def _primary_blocker(
         stages: tuple[FunnelStageSnapshot, ...],
     ) -> PrimaryFunnelBlocker:
-        radar_stage = stages[FUNNEL_STAGE_ORDER.index("RADAR_KNOWN")]
-        anomaly_stage = stages[FUNNEL_STAGE_ORDER.index("ANOMALY_ACTIVE")]
-        if anomaly_stage.observed_count == 0:
-            radar_upstream = radar_stage.upstream_count or 0
-            radar_blocked = max(0, radar_upstream - radar_stage.observed_count)
-            if radar_blocked > 0:
-                return PrimaryFunnelBlocker(
-                    radar_stage.stage,
-                    _largest_reason(radar_stage.blocker_counts),
-                    radar_blocked,
-                    radar_upstream,
-                    radar_stage.observed_count,
-                )
-            if anomaly_stage.upstream_count:
-                return PrimaryFunnelBlocker(
-                    anomaly_stage.stage,
-                    "NO_ANOMALY_ACTIVATION_OBSERVED",
-                    anomaly_stage.upstream_count,
-                    anomaly_stage.upstream_count,
-                    0,
-                )
-
-        candidates: list[tuple[Decimal, int, int, FunnelStageSnapshot]] = []
-        for index, stage in enumerate(stages[1:], start=1):
+        if stages[0].observed_count == 0:
+            return PrimaryFunnelBlocker(
+                "APPLICABLE_MARKET_SCOPE",
+                "NO_APPLICABLE_MARKET_SCOPE_OBSERVED",
+                0,
+                0,
+                0,
+            )
+        for stage in stages[1:]:
             upstream = stage.upstream_count
             if upstream is None or upstream <= 0:
                 continue
             if stage.stage == "ANOMALY_ACTIVE":
+                if stage.observed_count == 0:
+                    return PrimaryFunnelBlocker(
+                        stage.stage,
+                        "NO_ANOMALY_ACTIVATION_OBSERVED",
+                        upstream,
+                        upstream,
+                        0,
+                    )
                 continue
             blocked = max(0, upstream - stage.observed_count)
             if blocked <= 0:
                 continue
-            fraction = Decimal(blocked) / Decimal(upstream)
-            candidates.append((fraction, blocked, -index, stage))
-        if not candidates:
-            if stages[0].observed_count == 0:
-                return PrimaryFunnelBlocker(
-                    "APPLICABLE_MARKET_SCOPE",
-                    "NO_APPLICABLE_MARKET_SCOPE_OBSERVED",
-                    0,
-                    0,
-                    0,
-                )
-            return PrimaryFunnelBlocker("NONE", "NO_MATERIAL_BLOCKER_OBSERVED", 0, 0, 0)
-        _fraction, blocked, _order, stage = max(candidates)
-        reason = _largest_reason(stage.blocker_counts)
-        return PrimaryFunnelBlocker(
-            stage.stage,
-            reason,
-            blocked,
-            stage.upstream_count or 0,
-            stage.observed_count,
-        )
+            return PrimaryFunnelBlocker(
+                stage.stage,
+                _largest_reason(stage.blocker_counts),
+                blocked,
+                upstream,
+                stage.observed_count,
+            )
+        return PrimaryFunnelBlocker("NONE", "NO_MATERIAL_BLOCKER_OBSERVED", 0, 0, 0)
 
 
 def _largest_reason(values: Mapping[str, int]) -> str:

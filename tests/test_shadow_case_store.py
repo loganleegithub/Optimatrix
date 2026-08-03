@@ -21,9 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CODE = "a" * 40
 RUNTIME = "sha256:" + "b" * 64
 RADAR_POLICY = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
-UNDERWRITING_POLICY = (
-    "sha256:be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af"
-)
+UNDERWRITING_POLICY = "sha256:be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af"
 POSITION_POLICY = "sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439"
 
 
@@ -116,9 +114,7 @@ def _open_case(state: ShadowStateStore, candidate_identity: str) -> str:
         payload={
             "shadow_entry_identity": entry_identity,
             "candidate_identity": candidate_identity,
-            "active_episode_identity": (
-                f"{RUNTIME}:{RADAR_POLICY}:BTC_USDC-8AUG26-100000-C:1"
-            ),
+            "active_episode_identity": (f"{RUNTIME}:{RADAR_POLICY}:BTC_USDC-8AUG26-100000-C:1"),
             "radar_scope_identity": canonical_identity("RadarScope", "scope"),
             "atomic_state": "PUBLIC_ATOMIC_QUOTE_AVAILABLE",
             "radar_band_id": "six-to-twenty-four-hours",
@@ -137,9 +133,7 @@ def _open_case(state: ShadowStateStore, candidate_identity: str) -> str:
             "long_strike_usdc_per_btc": "105000",
             "entry_direction": "SELL",
             "full_quantity_btc": "0.1",
-            "entry_consumed_levels": [
-                {"price_usdc_per_btc": "300", "amount_btc": "0.1"}
-            ],
+            "entry_consumed_levels": [{"price_usdc_per_btc": "300", "amount_btc": "0.1"}],
             "gross_entry_credit_usdc": "30",
             "entry_fee_reserve_usdc": "3",
             "net_entry_credit_usdc": "27",
@@ -157,19 +151,23 @@ def test_pre_shadow_state_is_in_memory_only_even_under_repeated_updates(tmp_path
     action = state.get_object("UNDERWRITING_ACTION", action_identity)
     candidate = state.get_object("CANDIDATE_ACTIVATION", candidate_identity)
     assert action is not None and candidate is not None
+    action_payload = action["payload"]
+    candidate_payload = candidate["payload"]
+    assert isinstance(action_payload, Mapping)
+    assert isinstance(candidate_payload, Mapping)
 
     for _ in range(100_000):
         state.record(
             object_kind="UNDERWRITING_ACTION",
             object_identity=action_identity,
             fact_boundary=_boundary(2),
-            payload=action["payload"],
+            payload=action_payload,
         )
         state.record(
             object_kind="CANDIDATE_ACTIVATION",
             object_identity=candidate_identity,
             fact_boundary=_boundary(3),
-            payload=candidate["payload"],
+            payload=candidate_payload,
         )
 
     assert case_store.case_count == 0
@@ -214,7 +212,24 @@ def test_shadow_entry_opens_exactly_one_minimal_case(tmp_path: Path) -> None:
     read = case_store.read_case(case_id, runtime_active=True)
     assert read.status is ShadowCaseReadStatus.OPEN
     assert read.opened["shadow_entry_identity"] == entry_identity
-    assert read.opened["underwriting"]["action"] == "CANDIDATE"
+    underwriting = read.opened["underwriting"]
+    assert isinstance(underwriting, Mapping)
+    assert underwriting["action"] == "CANDIDATE"
+
+
+def test_case_reader_rejects_unexpected_nested_opened_fields(tmp_path: Path) -> None:
+    state, case_store, _bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    entry_identity = _open_case(state, candidate_identity)
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+    opened_path = tmp_path / "cases" / case_id.removeprefix("sha256:") / "opened.json"
+    opened = json.loads(opened_path.read_text(encoding="utf-8"))
+    opened["structure"]["unexpected_history"] = []
+    opened_path.write_text(json.dumps(opened), encoding="utf-8")
+
+    with pytest.raises(ShadowCaseStoreError, match="key set"):
+        case_store.read_case(case_id)
 
 
 def test_first_close_and_known_outcome_complete_case_with_recomputable_economics(
@@ -278,6 +293,16 @@ def test_first_close_and_known_outcome_complete_case_with_recomputable_economics
     assert read.outcome is not None
     assert read.outcome["net_pnl_after_public_standard_fee_reserve_usdc"] == "19"
 
+    for filename in ("first-close.json", "outcome.json"):
+        path = case_directory / filename
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["unexpected_history"] = []
+        path.write_text(json.dumps(record), encoding="utf-8")
+        with pytest.raises(ShadowCaseStoreError, match="key set"):
+            case_store.read_case(case_id)
+        del record["unexpected_history"]
+        path.write_text(json.dumps(record), encoding="utf-8")
+
 
 def test_opened_only_case_is_explicitly_incomplete_after_unclean_exit(tmp_path: Path) -> None:
     state, case_store, bindings = _system(tmp_path)
@@ -292,8 +317,7 @@ def test_opened_only_case_is_explicitly_incomplete_after_unclean_exit(tmp_path: 
         policies=case_store.policies,
     )
     assert (
-        restarted_reader.read_case(case_id).status
-        is ShadowCaseReadStatus.INCOMPLETE_UNCLEAN_EXIT
+        restarted_reader.read_case(case_id).status is ShadowCaseReadStatus.INCOMPLETE_UNCLEAN_EXIT
     )
 
 
@@ -342,6 +366,39 @@ def test_case_reader_rejects_tampered_known_outcome_arithmetic(tmp_path: Path) -
         restarted_reader.read_case(case_id)
 
 
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("code_identity", "c" * 40),
+        ("runtime_identity", "sha256:" + "d" * 64),
+        ("radar_policy_identity", "sha256:" + "e" * 64),
+        ("shadow_entry_identity", canonical_identity("ShadowEntryIdentity", "tampered")),
+    ),
+)
+def test_case_reader_rejects_tampered_opened_identity_binding(
+    tmp_path: Path,
+    field: str,
+    replacement: str,
+) -> None:
+    state, case_store, bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    entry_identity = _open_case(state, candidate_identity)
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+    opened_path = tmp_path / "cases" / case_id.removeprefix("sha256:") / "opened.json"
+    opened = json.loads(opened_path.read_text(encoding="utf-8"))
+    opened[field] = replacement
+    opened_path.write_text(json.dumps(opened), encoding="utf-8")
+
+    restarted_reader = ShadowCaseStore(
+        tmp_path / "cases",
+        bindings=bindings,
+        policies=case_store.policies,
+    )
+    with pytest.raises(ShadowCaseStoreError, match=r"binding|identity"):
+        restarted_reader.read_case(case_id)
+
+
 def test_in_memory_store_rejects_conflicting_duplicate_before_case_persistence(
     tmp_path: Path,
 ) -> None:
@@ -349,13 +406,15 @@ def test_in_memory_store_rejects_conflicting_duplicate_before_case_persistence(
     _availability, action_identity, _candidate_identity = _seed_pre_shadow(state)
     action = state.get_object("UNDERWRITING_ACTION", action_identity)
     assert action is not None
+    action_payload = action["payload"]
+    assert isinstance(action_payload, Mapping)
 
     with pytest.raises(ShadowStateError, match="conflicting"):
         state.record(
             object_kind="UNDERWRITING_ACTION",
             object_identity=action_identity,
             fact_boundary=_boundary(2),
-            payload={**action["payload"], "economic_action": "WATCH"},
+            payload={**action_payload, "economic_action": "WATCH"},
         )
 
     assert case_store.case_count == 0

@@ -54,9 +54,9 @@ from short_vol_radar.radar import TickerState
 from short_vol_underwriting import (
     CloseAtomicAvailability,
     CloseOptionAvailability,
-    ShadowStateStore,
     FixedContractShadowOwner,
     RuntimeBindings,
+    ShadowStateStore,
     SourceFact,
     SubscriptionAdmissionRefreshWitness,
     canonical_identity,
@@ -65,6 +65,7 @@ from short_vol_underwriting import (
 from short_vol_underwriting import (
     FactBoundary as DownstreamFactBoundary,
 )
+
 ROOT = Path(__file__).resolve().parents[1]
 RADAR_POLICY_IDENTITY = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
 UNDERWRITING_POLICY_IDENTITY = (
@@ -1241,7 +1242,9 @@ def test_admission_response_reprojects_contemporaneous_ancillary_facts(
     assert "SHADOW_ENTRY" not in kinds
     assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
     invalidation = next(
-        value for value in owner.state_store.objects if value["object_kind"] == "CANDIDATE_INVALIDATION"
+        value
+        for value in owner.state_store.objects
+        if value["object_kind"] == "CANDIDATE_INVALIDATION"
     )
     payload = invalidation["payload"]
     assert isinstance(payload, dict)
@@ -1267,7 +1270,9 @@ def test_retired_admission_request_keeps_typed_source_gap_semantics(
 
     assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
     invalidation = next(
-        value for value in owner.state_store.objects if value["object_kind"] == "CANDIDATE_INVALIDATION"
+        value
+        for value in owner.state_store.objects
+        if value["object_kind"] == "CANDIDATE_INVALIDATION"
     )
     payload = invalidation["payload"]
     assert isinstance(payload, dict)

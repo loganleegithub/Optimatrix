@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -623,7 +624,7 @@ def test_continuous_inbound_flow_cannot_starve_absolute_time_boundaries(
         runtime_identity="runtime",
     )
     stop_event = asyncio.Event()
-    summary_path = tmp_path / "summary.json"
+    summary = {"object_kind": "RADAR_RUN_SUMMARY"}
     now_ms = 0
     next_seq = 0
     reduced: list[int] = []
@@ -679,9 +680,9 @@ def test_continuous_inbound_flow_cannot_starve_absolute_time_boundaries(
     monkeypatch.setattr(runtime.reducer, "begin_session", lambda **_kwargs: ())
     monkeypatch.setattr(runtime.reducer, "reduce", reduce_frame)
     monkeypatch.setattr(runtime.reducer, "advance_time", advance_time)
-    monkeypatch.setattr(runtime.reducer, "clean_stop", lambda _stop_ms: summary_path)
+    monkeypatch.setattr(runtime.reducer, "clean_stop", lambda _stop_ms: summary)
 
-    assert asyncio.run(runtime.run(ContinuousClient(), stop_event)) == summary_path
+    assert asyncio.run(runtime.run(ContinuousClient(), stop_event)) == summary
     assert reduced == [1, 2, 3]
     assert timer_boundaries == [1_000]
 
@@ -916,7 +917,7 @@ def test_blocked_send_clean_stop_drains_cancellation_then_censors_scheduled(
 
     client = BlockingClient(session_epoch=1, rpc_deadline_ms=30_000)
 
-    async def scenario() -> Path:
+    async def scenario() -> Mapping[str, object]:
         task = asyncio.create_task(runtime.run(client, stop_event))
         await send_started.wait()
         stop_event.set()
