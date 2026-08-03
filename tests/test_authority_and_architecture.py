@@ -156,13 +156,17 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_accepts_offline_case_boundary_and_one_funnel_smoke() -> None:
+def test_current_stage_closes_the_consumed_funnel_smoke_authority() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`OFFLINE_SHADOW_CASE_DATA_BOUNDARY_IMPLEMENTED`" in current
-    assert "**Production Short Vol Radar:** `OFFLINE_READY_PENDING_FUNNEL_SMOKE`" in current
-    assert "**Live commands:** `ONE_BOUNDED_FUNNEL_SMOKE_CONDITIONALLY_AUTHORIZED`" in current
-    assert "**Sole authorized closure:** `SHORT_VOL_FUNNEL_PRIMARY_BLOCKER`" in current
+    assert "`SHADOW_CASE_DATA_BOUNDARY_AND_FUNNEL_DIAGNOSTICS_IMPLEMENTED`" in current
+    assert (
+        "**Production Short Vol Radar:** `OFFLINE_READY_BOUNDED_PUBLIC_REACHABILITY_OBSERVED`"
+        in current
+    )
+    assert "**Live commands:** `NONE_AUTHORIZED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
+    assert not (ROOT / "tasks/SHORT_VOL_FUNNEL_PRIMARY_BLOCKER.md").exists()
 
 
 def test_task_template_measures_product_progress_not_proof_volume() -> None:
