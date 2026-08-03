@@ -3,7 +3,7 @@ name: Apply bounded completed-state cleanup
 on:
   pull_request:
     paths:
-      - .github/cleanup.patch.part01
+      - .github/workflows/apply-bounded-cleanup.yml
 
 permissions:
   contents: write
@@ -35,6 +35,22 @@ jobs:
             .github/workflows/apply-bounded-cleanup.yml \
             .github/workflows/export-sandbox-source.yml | LC_ALL=C sort)"
           test "$actual" = "$expected"
+
+      - name: Correct the one proven transport byte
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path(".github/cleanup.patch.part01")
+          value = path.read_bytes()
+          polluted = b"kweeted0k6"
+          exact = b"ketted0k6"
+          if value.count(polluted) != 1 or exact in value:
+              raise SystemExit("unexpected cleanup part01 transport shape")
+          path.write_bytes(value.replace(polluted, exact, 1))
+          PY
 
       - name: Verify and apply exact patch
         shell: bash
