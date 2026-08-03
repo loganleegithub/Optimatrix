@@ -81,6 +81,19 @@ jobs:
       - name: Install exact development toolchain
         run: make sync
 
+      - name: Canonically format exact changed files
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            apps/radar_runtime/src/radar_runtime/fixed_contract_shadow.py
+            apps/radar_runtime/src/radar_runtime/funnel.py
+            packages/short_vol_underwriting/src/short_vol_underwriting/owner.py
+            tests/test_fixed_contract_shadow.py
+          )
+          .venv/bin/python -m ruff format "${files[@]}"
+          git add "${files[@]}"
+
       - name: Run repository checks
         run: make check
 
