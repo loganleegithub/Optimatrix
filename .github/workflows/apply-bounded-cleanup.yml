@@ -81,15 +81,47 @@ jobs:
       - name: Install exact development toolchain
         run: make sync
 
-      - name: Canonically format exact changed files
+      - name: Apply exact static fixes and canonical formatting
         shell: bash
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          workbench = Path("apps/radar_runtime/src/radar_runtime/workbench.py")
+          text = workbench.read_text(encoding="utf-8")
+          unused_entries = '''    entries = {
+              str(_payload(value).get("candidate_identity")): value
+              for value in kinds.get("SHADOW_ENTRY", ())
+          }
+          '''
+          if text.count(unused_entries) != 1:
+              raise SystemExit("unexpected Workbench entries block")
+          workbench.write_text(text.replace(unused_entries, "", 1), encoding="utf-8")
+
+          test_file = Path("tests/test_short_vol_underwriting.py")
+          text = test_file.read_text(encoding="utf-8")
+          future = "from __future__ import annotations\n\n"
+          mapping_import = "from collections.abc import Mapping\n"
+          if mapping_import in text or text.count(future) != 1:
+              raise SystemExit("unexpected Mapping import boundary")
+          test_file.write_text(
+              text.replace(future, future + mapping_import + "\n", 1),
+              encoding="utf-8",
+          )
+          PY
+
+          .venv/bin/python -m ruff check --fix \
+            packages/short_vol_underwriting/src/short_vol_underwriting/owner.py \
+            tests/test_short_vol_underwriting.py
+
           files=(
             apps/radar_runtime/src/radar_runtime/fixed_contract_shadow.py
             apps/radar_runtime/src/radar_runtime/funnel.py
+            apps/radar_runtime/src/radar_runtime/workbench.py
             packages/short_vol_underwriting/src/short_vol_underwriting/owner.py
             tests/test_fixed_contract_shadow.py
+            tests/test_short_vol_underwriting.py
           )
           .venv/bin/python -m ruff format "${files[@]}"
           git add "${files[@]}"
