@@ -136,12 +136,31 @@ STRUCTURE_REVIEWABLE
 PUBLIC_ATOMIC_QUOTE_AVAILABLE
 ```
 
+For knownness, one countable applicable instrument evaluation is partitioned exactly once:
+
+- `startup_warmup`: the current Policy-band index tail is `WARMUP`, or that band has not yet
+  produced an `AVAILABLE` tail in the runtime;
+- `post_warmup`: the current tail is `AVAILABLE`, or the band was previously available and the
+  current non-warmup state is `SOURCE_STALE`, `WINDOW_GAP`, or `CONTINUITY_GAP`.
+
+A later `WARMUP` recovery interval returns to `startup_warmup`; it does not become a steady-state
+loss. `INDEX_WARMUP` therefore remains visible in the startup/recovery projection but cannot be the
+post-warmup primary blocker. The availability transition itself is post-warmup.
+
+Canonical `APPLICABLE_MARKET_SCOPE` and `RADAR_KNOWN` counts use only post-warmup evaluations. The
+projection outputs the exact numerator, denominator, ratio, and blocker counts for both partitions.
+Every Radar UNKNOWN contributes exactly one bounded aggregate reason; exact instrument detail
+remains in the current Radar rows. A post-warmup source-stale, window-gap, or continuity-gap loss is
+not hidden as startup.
+
 Counters are current operational product diagnostics. They are not research evidence, acceptance
 receipts, Cohort denominators, or full-market reconstruction.
 
 ## Required verification
 
 Direct tests own formula boundaries, missingness, continuity, episode transitions, exact combo
-orientation, target depth, signed credit, and one-reducer ordering. A separately authorized bounded
-public smoke may prove connectivity and at least one known formula evaluation. It does not require
-a natural anomaly or Shadow admission and creates no durable Radar evidence.
+orientation, target depth, signed credit, one-reducer ordering, warmup partitioning, and finite
+UNKNOWN reasons. A separately authorized bounded public smoke may prove connectivity, a positive
+post-warmup applicable denominator, and the naturally observed known proportion. It does not
+require a natural anomaly or Shadow admission and creates no durable Radar evidence. When no
+Shadow Case opens, durable Shadow Case files must remain zero.
