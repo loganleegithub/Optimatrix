@@ -65,7 +65,8 @@ jobs:
           echo "fa7a904e581ccd31d1a17e7d33ecb6abef96100f207db9607a593d5e1778eb8e  /tmp/optimatrix-cleanup.patch" | sha256sum -c -
           git apply --check /tmp/optimatrix-cleanup.patch
           git apply --index /tmp/optimatrix-cleanup.patch
-          git rm .github/cleanup.patch.part00 .github/cleanup.patch.part01 .github/cleanup.patch.part02 .github/workflows/apply-bounded-cleanup.yml
+          git rm .github/cleanup.patch.part00 .github/cleanup.patch.part02 .github/workflows/apply-bounded-cleanup.yml
+          git rm -f .github/cleanup.patch.part01
           test ! -e .github/workflows/export-sandbox-source.yml
           test "$(find .github/workflows -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)" = "ci.yml"
 
