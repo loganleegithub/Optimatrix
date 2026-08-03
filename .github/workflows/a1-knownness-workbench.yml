@@ -1,0 +1,251 @@
+name: A1 expose steady-state knownness in Workbench
+
+on:
+  push:
+    branches:
+      - agent/short-vol-radar-steady-state-knownness
+
+permissions:
+  contents: write
+
+jobs:
+  workbench:
+    name: Add trader-visible knownness partition
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out exact branch tip
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+
+      - name: Install pinned uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.10.0"
+          enable-cache: true
+          cache-dependency-glob: requirements-dev.lock
+          python-version: "3.13.5"
+
+      - name: Install exact development toolchain
+        run: make sync
+
+      - name: Apply bounded Workbench presentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv/bin/python - <<'PY'
+          from pathlib import Path
+
+          workbench_path = Path("apps/radar_runtime/src/radar_runtime/workbench.py")
+          workbench = workbench_path.read_text(encoding="utf-8")
+          old_reasons = """  CLOCK_GAP: '可信时间不连续',
+            INDEX_CONTINUITY_GAP: '指数行情连续性中断',
+            SESSION_GAP: '公共行情会话中断',
+          """
+          new_reasons = """  CLOCK_GAP: '可信时间不连续',
+            INDEX_WARMUP: '指数基线处于启动或恢复 warmup',
+            INDEX_WINDOW_GAP: '指数基线窗口存在缺口',
+            INDEX_SOURCE_STALE: '指数来源已陈旧',
+            INDEX_CONTINUITY_GAP: '指数行情连续性中断',
+            OPTION_BOOK_UNKNOWN: '期权簿不可确认',
+            OPTION_AMOUNT_METADATA_UNKNOWN: '期权数量元数据不可确认',
+            FORWARD_TICKER_UNKNOWN: '远期价格 ticker 不可确认',
+            NUMERICAL_MODEL_UNKNOWN: '数值模型边界不可确认',
+            OTHER_OPTION_SOURCE_UNKNOWN: '其他期权本地来源不可确认',
+            OTHER_RADAR_UNKNOWN: '其他有界 Radar 未知原因',
+            SESSION_GAP: '公共行情会话中断',
+          """
+          if workbench.count(old_reasons) != 1:
+              raise SystemExit("reason label anchor mismatch")
+          workbench = workbench.replace(old_reasons, new_reasons)
+
+          old_render = """function renderFunnel(documentValue) {
+            const funnel = documentValue.funnel;
+            if (!funnel || !Array.isArray(funnel.stages) || !funnel.primary_blocker) {
+              throw new Error('invalid funnel projection');
+            }
+            const primary = funnel.primary_blocker;
+            const summary = '<div class=\"grid\">' +
+              card('首要漏斗阻塞阶段', funnelStageLabel(primary.stage)) +
+              card('首要阻塞原因', reasonText(primary.reason)) +
+              card('受阻数量', primary.blocked_count) +
+              card('该阶段上游/已通过', `${primary.upstream_count}/${primary.observed_count}`) +
+              '</div>';
+            const header = '<tr><th>阶段</th><th>已观察</th><th>单位</th>' +
+              '<th>上游</th><th>阻塞归因</th></tr>';
+            const rows = funnel.stages.map(stage =>
+              '<tr>' +
+              `<td>${safeText(funnelStageLabel(stage.stage))}</td>` +
+              `<td>${safeText(stage.observed_count)}</td>` +
+              `<td>${safeText(stage.unit)}</td>` +
+              `<td>${safeText(stage.upstream_count)}</td>` +
+              `<td>${safeText(funnelBlockerText(stage.blocker_counts))}</td>` +
+              '</tr>'
+            ).join('');
+            document.getElementById('funnel').innerHTML = summary +
+              `<div class=\"table-scroll\"><table><thead>${header}</thead><tbody>${rows}</tbody></table></div>`;
+          }
+          """
+          new_render = """const knownnessRatioText = slice => {
+            if (!slice || typeof slice !== 'object') return 'UNKNOWN';
+            const ratio = slice.radar_known_over_applicable;
+            if (!ratio || typeof ratio !== 'object') return 'UNKNOWN';
+            const numerator = Number(ratio.numerator);
+            const denominator = Number(ratio.denominator);
+            if (!Number.isInteger(numerator) || numerator < 0 ||
+                !Number.isInteger(denominator) || denominator < 0 || numerator > denominator) {
+              return 'UNKNOWN';
+            }
+            if (denominator === 0 || isMissing(ratio.ratio)) {
+              return `${numerator}/${denominator} (UNKNOWN)`;
+            }
+            const percentage = Number(ratio.ratio) * 100;
+            return Number.isFinite(percentage)
+              ? `${numerator}/${denominator} (${percentage.toFixed(2)}%)`
+              : `${numerator}/${denominator} (UNKNOWN)`;
+          };
+          function renderFunnel(documentValue) {
+            const funnel = documentValue.funnel;
+            const knownness = funnel && funnel.radar_knownness;
+            if (!funnel || !Array.isArray(funnel.stages) || !funnel.primary_blocker ||
+                !knownness || !knownness.startup_warmup || !knownness.post_warmup ||
+                !Array.isArray(knownness.warmed_band_ids)) {
+              throw new Error('invalid funnel projection');
+            }
+            const primary = funnel.primary_blocker;
+            const startup = knownness.startup_warmup;
+            const steady = knownness.post_warmup;
+            const summary = '<div class=\"grid\">' +
+              card('首要漏斗阻塞阶段', funnelStageLabel(primary.stage)) +
+              card('首要阻塞原因', reasonText(primary.reason)) +
+              card('受阻数量', primary.blocked_count) +
+              card('该阶段上游/已通过', `${primary.upstream_count}/${primary.observed_count}`) +
+              card('启动/恢复 warmup Radar known / applicable', knownnessRatioText(startup)) +
+              card('启动/恢复 warmup UNKNOWN', funnelBlockerText(startup.blocker_counts)) +
+              card('稳态 Radar known / applicable', knownnessRatioText(steady)) +
+              card('稳态 Radar UNKNOWN', funnelBlockerText(steady.blocker_counts)) +
+              card('已完成 warmup Policy bands', knownness.warmed_band_ids.length
+                ? knownness.warmed_band_ids.join(', ') : '尚无') +
+              '</div>';
+            const header = '<tr><th>阶段</th><th>已观察</th><th>单位</th>' +
+              '<th>上游</th><th>阻塞归因</th></tr>';
+            const rows = funnel.stages.map(stage =>
+              '<tr>' +
+              `<td>${safeText(funnelStageLabel(stage.stage))}</td>` +
+              `<td>${safeText(stage.observed_count)}</td>` +
+              `<td>${safeText(stage.unit)}</td>` +
+              `<td>${safeText(stage.upstream_count)}</td>` +
+              `<td>${safeText(funnelBlockerText(stage.blocker_counts))}</td>` +
+              '</tr>'
+            ).join('');
+            document.getElementById('funnel').innerHTML = summary +
+              `<div class=\"table-scroll\"><table><thead>${header}</thead><tbody>${rows}</tbody></table></div>`;
+          }
+          """
+          if workbench.count(old_render) != 1:
+              raise SystemExit("funnel renderer anchor mismatch")
+          workbench = workbench.replace(old_render, new_render)
+          workbench_path.write_text(workbench, encoding="utf-8")
+
+          test_path = Path("tests/test_trader_workbench.py")
+          test = test_path.read_text(encoding="utf-8")
+          old_export = (
+              '"funnelStageLabel, funnelBlockerText };",\n'
+          )
+          new_export = (
+              '"funnelStageLabel, funnelBlockerText, knownnessRatioText };",\n'
+          )
+          if test.count(old_export) != 1:
+              raise SystemExit("browser helper export anchor mismatch")
+          test = test.replace(old_export, new_export)
+
+          old_helper_assert = """assert.equal(api.funnelBlockerText({{
+            NO_ACTIVE_COMBO: 2,
+            NO_TARGET_SIZE_CREDIT_QUOTE: 1
+          }}), '无活跃组合可供承保评估: 2; 目标数量的组合权利金报价不可用: 1');
+          """
+          new_helper_assert = old_helper_assert + """assert.equal(api.knownnessRatioText({{
+            radar_known_over_applicable: {{numerator: 3, denominator: 4, ratio: '0.75'}}
+          }}), '3/4 (75.00%)');
+          assert.equal(api.knownnessRatioText({{
+            radar_known_over_applicable: {{numerator: 0, denominator: 0, ratio: null}}
+          }}), '0/0 (UNKNOWN)');
+          """
+          if test.count(old_helper_assert) != 1:
+              raise SystemExit("knownness helper assertion anchor mismatch")
+          test = test.replace(old_helper_assert, new_helper_assert)
+
+          old_boundary = """    document["published_fact_boundary"] = {
+                "causal_seq": 42,
+                "received_monotonic_ms": 1_234,
+            }
+          """
+          new_boundary = old_boundary + """    document["funnel"]["radar_knownness"] = {
+                "warmup_gate": "PER_POLICY_TTE_BAND_INDEX_TAIL_AVAILABLE",
+                "startup_warmup": {
+                    "phase": "STARTUP_WARMUP",
+                    "applicable_market_scope_count": 2,
+                    "radar_known_count": 0,
+                    "radar_unknown_count": 2,
+                    "radar_known_over_applicable": {
+                        "numerator": 0,
+                        "denominator": 2,
+                        "ratio": "0",
+                    },
+                    "blocker_counts": {"INDEX_WARMUP": 2},
+                },
+                "post_warmup": {
+                    "phase": "POST_WARMUP",
+                    "applicable_market_scope_count": 4,
+                    "radar_known_count": 3,
+                    "radar_unknown_count": 1,
+                    "radar_known_over_applicable": {
+                        "numerator": 3,
+                        "denominator": 4,
+                        "ratio": "0.75",
+                    },
+                    "blocker_counts": {"OPTION_BOOK_UNKNOWN": 1},
+                },
+                "warmed_band_ids": ["operational-soak-30m-to-72h"],
+            }
+          """
+          if test.count(old_boundary) != 1:
+              raise SystemExit("browser document anchor mismatch")
+          test = test.replace(old_boundary, new_boundary)
+
+          old_render_assert = """  assert.match(elements.system.innerHTML, /received_monotonic_ms/);
+            assert.ok(systemHas('最近成功获取 age', '0 ms'));
+          """
+          new_render_assert = """  assert.match(elements.system.innerHTML, /received_monotonic_ms/);
+            assert.match(elements.funnel.innerHTML, /启动\/恢复 warmup Radar known \/ applicable/);
+            assert.match(elements.funnel.innerHTML, /指数基线处于启动或恢复 warmup: 2/);
+            assert.match(elements.funnel.innerHTML, /稳态 Radar known \/ applicable/);
+            assert.match(elements.funnel.innerHTML, /3\/4 \(75.00%\)/);
+            assert.match(elements.funnel.innerHTML, /期权簿不可确认: 1/);
+            assert.ok(systemHas('最近成功获取 age', '0 ms'));
+          """
+          if test.count(old_render_assert) != 1:
+              raise SystemExit("browser render assertion anchor mismatch")
+          test = test.replace(old_render_assert, new_render_assert)
+          test_path.write_text(test, encoding="utf-8")
+          PY
+          .venv/bin/python -m ruff format \
+            apps/radar_runtime/src/radar_runtime/workbench.py \
+            tests/test_trader_workbench.py
+          .venv/bin/python -m pytest tests/test_trader_workbench.py tests/test_funnel.py
+          git rm -- .github/workflows/a1-knownness-workbench.yml
+          git diff --check
+
+      - name: Publish append-only Workbench correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- \
+            apps/radar_runtime/src/radar_runtime/workbench.py \
+            tests/test_trader_workbench.py
+          git commit -m "Expose Radar warmup and steady knownness in Workbench"
+          git push origin HEAD:agent/short-vol-radar-steady-state-knownness
