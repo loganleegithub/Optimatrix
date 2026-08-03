@@ -70,6 +70,14 @@ jobs:
           test ! -e .github/workflows/export-sandbox-source.yml
           test "$(find .github/workflows -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)" = "ci.yml"
 
+      - name: Install pinned uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.10.0"
+          enable-cache: true
+          cache-dependency-glob: requirements-dev.lock
+          python-version: "3.13.5"
+
       - name: Install exact development toolchain
         run: make sync
 
