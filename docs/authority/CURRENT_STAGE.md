@@ -17,47 +17,53 @@
 
 ## Current truth
 
-The simplified implementation conforms to the Shadow Case data boundary. Market,
-Radar, atomic availability, Underwriting, Candidate, admission attempts, and Workbench state are
-in-memory. A run with no Shadow admission writes zero business files. The first durable record is
-`SHADOW_CASE_OPENED`; only first CLOSE and terminal Outcome may follow. A minimal reader marks an
-opened-only Case after an unclean exit as `INCOMPLETE_UNCLEAN_EXIT`.
+The implementation conforms to one Shadow Case data boundary. Market facts, Radar, atomic
+availability, Underwriting, Candidate, admission attempts, Funnel diagnostics, and Workbench state
+remain in memory. A run with no Shadow admission writes zero business files. The first durable
+record is `SHADOW_CASE_OPENED`; only first CLOSE and terminal Outcome may follow. The minimal Case
+reader marks an opened-only Case after an unclean exit as `INCOMPLETE_UNCLEAN_EXIT`.
+
+The online owner contains no rejected-counterfactual or qualification-Cohort branch. A normal
+`WATCH` or `ABSTAIN` remains current decision state and cannot create an online counterfactual
+trade. Qualification Cohorts, no-trade comparisons, and Challenger datasets are derived offline
+only after separate authorization.
+
+Runtime ownership is bounded by current work. Ended Radar Episodes, terminal Candidates, consumed
+request contexts, replaced Underwriting scopes, and terminal Shadow Cases are removed from active
+identity collections. The Workbench may retain one latest terminal Case projection for the trader;
+complete historical truth remains in the three durable Shadow Case record kinds. Funnel history is
+represented by scalar counts and a fixed normalized blocker taxonomy, not retained per-Episode
+identities.
 
 The one authorized bounded public smoke was consumed and stopped cleanly. Its covered interval
 reached `APPLICABLE_MARKET_SCOPE` and `RADAR_KNOWN`; the earliest observed loss was
 `RADAR_KNOWN / INDEX_WARMUP`, with `OPTION_BOOK_UNKNOWN` also counted. No natural anomaly occurred,
-so `STRUCTURE_REVIEWABLE` and all later stages were not observed. This is a reachability result, not
-a strategy-quality, opportunity-frequency, deployment, or uptime claim.
+so `STRUCTURE_REVIEWABLE` and later stages were not observed. This is a reachability result, not a
+strategy-quality, opportunity-frequency, deployment, memory-soak, or uptime claim.
 
 The exact Radar, Underwriting, and Position Policy files, public source semantics, causality,
 `UNKNOWN`, and full-quantity official atomic entry/exit requirements remain unchanged. No runtime
 is deployed and no private/account/order/fill/capital capability exists.
 
-## Next closure
+## No active closure
 
-No implementation or public command is currently authorized. A new explicit task must start from
-the measured earliest blocker or another user-approved funnel movement. Funnel state remains
-non-durable current diagnostics.
-
-## Allowed work
-
-- read-only repository and Workbench review;
-- deterministic local checks and GitHub CI for the completed candidate;
-- drafting, but not executing, a new explicitly approved task.
+No implementation, live observation, deployment, qualification, promotion, or execution task is
+authorized. A future 24-hour memory or uptime observation requires a new explicit task and cannot
+reuse the consumed smoke as acceptance.
 
 ## Forbidden work
 
-- persistent deployment or automatic restart;
+- persistent deployment, automatic restart, or an additional public smoke;
 - credentials, account, balance, margin, private API, order, fill, capital, or actual position;
 - Policy tuning, threshold changes, hot reload, or run extension after observing results;
-- durable funnel data, database, replay platform, event bus, microservice split, Docker/Kubernetes
-  requirement;
+- durable funnel data, database, replay platform, event bus, microservice split, or mandatory
+  Docker/Kubernetes;
 - application commissioning, host PID/log inspection, manifest, receipt chain, broad artifact
-  package, 24-hour Soak, or any additional smoke invocation;
+  package, or 24-hour Soak without new authority;
 - qualification, promotion, or execution controller.
 
 ## Acceptance boundary
 
-Green tests establish the offline diagnostics. The one public smoke establishes only what its
-covered interval naturally reached. It cannot establish strategy value, opportunity frequency,
-fillability, qualification, deployment, or execution permission.
+Deterministic lifecycle tests and repository checks establish bounded in-process ownership for the
+implemented transitions. They do not prove actual 24-hour RSS, uptime, opportunity frequency,
+strategy value, fillability, qualification, deployment, or execution permission.

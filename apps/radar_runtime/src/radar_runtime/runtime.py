@@ -4859,6 +4859,10 @@ class RadarReducer:
             counter = self._scope_counter(option_type, ended.activation_band_id)
             counter.anomaly_end_count_by_reason[ended.reason.value] += 1
             counter.known_active_duration_ms_sum_by_end_reason[ended.reason.value] += duration
+        self.event_sink.retire_episode(ended.episode_id)
+        self._emitted_atomic_quotes = {
+            key for key in self._emitted_atomic_quotes if key[0] != ended.episode_id
+        }
         previous_atomic = self.atomic_states.pop(ended.episode_id, None)
         if (
             previous_atomic is not None

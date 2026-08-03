@@ -287,9 +287,9 @@ def test_shadow_projection_derives_exact_entry_vwap_only_from_persisted_atomic_l
     assert row["simulated_entry_price_usdc_per_btc"] == "106"
     assert (
         row["simulated_entry_price_availability"]
-        == "AVAILABLE_FROM_PERSISTED_ATOMIC_CONSUMED_LEVELS"
+        == "AVAILABLE_FROM_SHADOW_ENTRY_ATOMIC_CONSUMED_LEVELS"
     )
-    assert row["simulated_entry_price_basis"] == ("PERSISTED_ATOMIC_COMBO_CONSUMED_LEVELS_VWAP")
+    assert row["simulated_entry_price_basis"] == ("SHADOW_ENTRY_ATOMIC_COMBO_CONSUMED_LEVELS_VWAP")
     assert row["simulation_label"] == SIMULATION_LABEL
 
 

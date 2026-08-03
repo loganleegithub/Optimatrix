@@ -144,6 +144,24 @@ def test_product_data_boundary_is_unambiguous() -> None:
     assert "SHADOW_CASE_OUTCOME" in shadow_case
 
 
+def test_online_runtime_has_no_rejected_counterfactual_or_cohort_surface() -> None:
+    package = ROOT / "packages/short_vol_underwriting/src/short_vol_underwriting"
+    assert not (package / "cohort.py").exists()
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for root in (ROOT / "apps", ROOT / "packages")
+        for path in root.rglob("*.py")
+    )
+    for forbidden in (
+        "REJECTED_COUNTERFACTUAL",
+        "RejectedAnchor",
+        "AlignedPair",
+        "cohort_enrolled",
+        "_create_rejected_trade",
+    ):
+        assert forbidden not in production_source
+
+
 def test_public_only_validation_does_not_recreate_commissioning() -> None:
     delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
     assert "at most one explicitly authorized bounded read-only smoke" in " ".join(delivery.split())

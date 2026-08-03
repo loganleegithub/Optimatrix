@@ -1369,7 +1369,8 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
     assert not reducer.results[name].observation_eligible
     assert reducer.trackers[name].state.name == "ARMED"
     assert reducer.trackers[name].episode_id is None
-    assert len(reducer.event_sink.anomalies) == 1
+    assert not reducer.event_sink.anomalies
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
     assert reducer._global_continuity_epoch == 1
 
     summary = reducer.clean_stop(2_100)
@@ -1503,7 +1504,8 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
     assert not reducer.results[name].observation_eligible
     assert reducer.trackers[name].state.name == "ARMED"
     assert reducer.trackers[name].episode_id is None
-    assert len(reducer.event_sink.anomalies) == 1
+    assert not reducer.event_sink.anomalies
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
 
 
 def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recovery(
@@ -3146,8 +3148,6 @@ def test_runtime_writer_validates_activation_then_later_atomic_combo_boundary(
         },
         FactBoundary(1, 2, 1_100, 2),
     )
-    reducer.clean_stop(1_200)
-
     anomaly = next(iter(reducer.event_sink.anomalies))
     atomic = next(iter(reducer.event_sink.atomics))
     assert anomaly["episode_identity"] == atomic["episode_identity"] == episode_id
@@ -3157,6 +3157,10 @@ def test_runtime_writer_validates_activation_then_later_atomic_combo_boundary(
     assert isinstance(detector_causal_seq, int)
     assert anomaly_causal_seq < detector_causal_seq
     assert atomic["detector_causal_seq"] == atomic["quote_causal_seq"] == 2
+
+    reducer.clean_stop(1_200)
+    assert not reducer.event_sink.anomalies
+    assert reducer.event_sink.atomics == ()
 
 
 def test_fact_transaction_preserves_trigger_and_concurrent_source_stale_attribution(

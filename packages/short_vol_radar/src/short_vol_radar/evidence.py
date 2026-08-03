@@ -385,6 +385,13 @@ class RadarEventSink:
         )
         return self._record(self._atomics, key, event)
 
+    def retire_episode(self, episode_identity: str) -> None:
+        """Drop current transition detail after the episode's owner records its terminal edge."""
+        self._anomalies.pop(episode_identity, None)
+        for key in tuple(self._atomics):
+            if key[0] == episode_identity:
+                self._atomics.pop(key, None)
+
     def record_summary(self, summary: Mapping[str, object]) -> Mapping[str, object]:
         self._require_identity(summary)
         normalized = dict(summary)

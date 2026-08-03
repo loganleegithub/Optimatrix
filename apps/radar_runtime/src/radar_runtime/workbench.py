@@ -786,8 +786,12 @@ def _underwriting_rows(
         str(_payload(value).get("candidate_identity")): value
         for value in kinds.get("CANDIDATE_INVALIDATION", ())
     }
-    entries = {
+    {
         str(_payload(value).get("candidate_identity")): value
+        for value in kinds.get("SHADOW_ENTRY", ())
+    }
+    entries_by_scope = {
+        str(_payload(value).get("radar_scope_identity")): value
         for value in kinds.get("SHADOW_ENTRY", ())
     }
     rows: list[dict[str, object]] = []
@@ -806,7 +810,14 @@ def _underwriting_rows(
             candidates_by_action.get(action_identity) if action_identity is not None else None
         )
         candidate_identity = str(candidate["object_identity"]) if candidate is not None else None
-        if candidate_identity in entries:
+        admitted_entry = entries_by_scope.get(str(scope_identity))
+        if admitted_entry is not None:
+            admitted_candidate = _payload(admitted_entry).get("candidate_identity")
+            candidate_identity = (
+                str(admitted_candidate)
+                if isinstance(admitted_candidate, str)
+                else candidate_identity
+            )
             lifecycle = "ADMITTED"
         elif candidate_identity in invalidations:
             lifecycle = "INVALIDATED"
@@ -897,33 +908,37 @@ def _shadow_rows(
     kinds: Mapping[str, Sequence[Mapping[str, object]]],
     policies: PolicyChain,
 ) -> list[dict[str, object]]:
-    terminals = {
-        str(_payload(value).get("candidate_identity")): value
-        for value in kinds.get("ADMISSION_ATTEMPT_TERMINAL", ())
-    }
-    invalidations = {
-        str(_payload(value).get("candidate_identity")): value
-        for value in kinds.get("CANDIDATE_INVALIDATION", ())
-    }
-    entries = {
+    entries_by_candidate = {
         str(_payload(value).get("candidate_identity")): value
         for value in kinds.get("SHADOW_ENTRY", ())
     }
     rows: list[dict[str, object]] = []
     for candidate in kinds.get("CANDIDATE_ACTIVATION", ()):
         candidate_identity = str(candidate["object_identity"])
-        terminal = terminals.get(candidate_identity)
-        invalidation = invalidations.get(candidate_identity)
-        entry = entries.get(candidate_identity)
-        entry_payload = _payload(entry) if entry is not None else {}
-        terminal_payload = _payload(terminal) if terminal is not None else {}
-        no_entry_reason = None
-        if entry is None:
-            no_entry_reason = (
-                _payload(invalidation).get("primary_reason")
-                if invalidation is not None
-                else terminal_payload.get("terminal_outcome", "PENDING_REFRESH")
-            )
+        if candidate_identity in entries_by_candidate:
+            continue
+        rows.append(
+            {
+                "candidate_identity": candidate_identity,
+                "candidate_formed_fact_boundary": _payload(candidate).get(
+                    "candidate_activation_fact_boundary"
+                ),
+                "admission_refresh_terminal_outcome": None,
+                "matched_refresh_source_identity": None,
+                "shadow_entry_identity": None,
+                "simulated_entry_price_usdc_per_btc": None,
+                "simulated_entry_price_availability": "UNKNOWN",
+                "simulated_entry_price_basis": None,
+                "simulated_entry_credit_usdc": None,
+                "target_quantity_btc": str(policies.underwriting.target_base_quantity_btc),
+                "entry_consumed_levels": None,
+                "no_entry_reason": "PENDING_REFRESH",
+                "simulation_label": SIMULATION_LABEL,
+            }
+        )
+    for entry in kinds.get("SHADOW_ENTRY", ()):
+        entry_payload = _payload(entry)
+        candidate_identity = str(entry_payload.get("candidate_identity"))
         target_quantity = entry_payload.get("full_quantity_btc") or str(
             policies.underwriting.target_base_quantity_btc
         )
@@ -934,31 +949,25 @@ def _shadow_rows(
         rows.append(
             {
                 "candidate_identity": candidate_identity,
-                "candidate_formed_fact_boundary": _payload(candidate).get(
-                    "candidate_activation_fact_boundary"
-                ),
-                "admission_refresh_terminal_outcome": terminal_payload.get("terminal_outcome"),
-                "matched_refresh_source_identity": terminal_payload.get(
-                    "matched_response_identity"
-                ),
-                "shadow_entry_identity": (
-                    str(entry["object_identity"]) if entry is not None else None
-                ),
+                "candidate_formed_fact_boundary": None,
+                "admission_refresh_terminal_outcome": "ENTRY_EMITTED",
+                "matched_refresh_source_identity": None,
+                "shadow_entry_identity": str(entry["object_identity"]),
                 "simulated_entry_price_usdc_per_btc": entry_price,
                 "simulated_entry_price_availability": (
-                    "AVAILABLE_FROM_PERSISTED_ATOMIC_CONSUMED_LEVELS"
+                    "AVAILABLE_FROM_SHADOW_ENTRY_ATOMIC_CONSUMED_LEVELS"
                     if entry_price is not None
                     else "UNKNOWN"
                 ),
                 "simulated_entry_price_basis": (
-                    "PERSISTED_ATOMIC_COMBO_CONSUMED_LEVELS_VWAP"
+                    "SHADOW_ENTRY_ATOMIC_COMBO_CONSUMED_LEVELS_VWAP"
                     if entry_price is not None
                     else None
                 ),
                 "simulated_entry_credit_usdc": entry_payload.get("gross_entry_credit_usdc"),
                 "target_quantity_btc": target_quantity,
                 "entry_consumed_levels": entry_payload.get("entry_consumed_levels"),
-                "no_entry_reason": no_entry_reason,
+                "no_entry_reason": None,
                 "simulation_label": SIMULATION_LABEL,
             }
         )
@@ -1018,13 +1027,14 @@ def _position_rows(
         selected = selected_by_entry.get(entry_identity)
         outcome = outcomes_by_entry.get(entry_identity)
         leg_ids = entry_payload.get("canonical_leg_identities")
-        expiry_ms = None
-        if isinstance(leg_ids, list):
-            expiries = {
-                expiry_by_leg.get(str(identity))
-                for identity in leg_ids
-                if expiry_by_leg.get(str(identity)) is not None
-            }
+        expiry_value = entry_payload.get("expiry_ms")
+        expiry_ms = expiry_value if isinstance(expiry_value, int) else None
+        if expiry_ms is None and isinstance(leg_ids, list):
+            expiries: set[int] = set()
+            for identity in leg_ids:
+                leg_expiry = expiry_by_leg.get(str(identity))
+                if isinstance(leg_expiry, int):
+                    expiries.add(leg_expiry)
             if len(expiries) == 1:
                 expiry_ms = next(iter(expiries))
         hard_close_boundary_ms = (

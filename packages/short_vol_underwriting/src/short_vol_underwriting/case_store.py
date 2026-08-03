@@ -61,9 +61,14 @@ class ShadowCaseStore:
         self.policies = policies
         self._case_by_entry: dict[str, str] = {}
         self._opened_by_case: dict[str, Mapping[str, object]] = {}
+        self._case_count = 0
 
     @property
     def case_count(self) -> int:
+        return self._case_count
+
+    @property
+    def active_case_count(self) -> int:
         return len(self._opened_by_case)
 
     def case_id_for_entry(self, entry_identity: str) -> str | None:
@@ -209,6 +214,7 @@ class ShadowCaseStore:
         self._publish(case_id, "opened.json", normalized)
         self._case_by_entry[entry_identity] = case_id
         self._opened_by_case[case_id] = normalized
+        self._case_count += 1
 
     def _record_first_close(self, value: Mapping[str, object]) -> None:
         payload = _mapping(value.get("payload"), "POSITION_ACTION.payload")
@@ -283,6 +289,8 @@ class ShadowCaseStore:
         _validate_followup(opened, record, expected_kind=OUTCOME_KIND)
         _validate_outcome_economics(opened, record)
         self._publish(case_id, "outcome.json", record)
+        self._case_by_entry.pop(entry_identity, None)
+        self._opened_by_case.pop(case_id, None)
 
     def _binding_object(self) -> dict[str, str]:
         return {

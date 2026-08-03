@@ -29,12 +29,6 @@ from short_vol_underwriting.close import (
     classify_close_quote,
     evaluate_close_opportunity,
 )
-from short_vol_underwriting.cohort import (
-    AlignedPair,
-    Observation,
-    RejectedAnchor,
-    RejectedAnchorSelector,
-)
 from short_vol_underwriting.constants import (
     CANDIDATE_INVALIDATION_REASONS,
     OUTCOME_OBJECT_KINDS,
@@ -75,6 +69,7 @@ from short_vol_underwriting.model import (
     PredicateTruth,
     TerminalSource,
 )
+from short_vol_underwriting.observation import Observation
 from short_vol_underwriting.owner import (
     FixedContractShadowOwner,
     OwnerTransition,
@@ -101,7 +96,6 @@ __all__ = [
     "AdmissionRefreshKind",
     "AdmissionRefreshWitness",
     "AdmissionTerminalOutcome",
-    "AlignedPair",
     "CandidateState",
     "CloseAtomicAvailability",
     "CloseBookAvailability",
@@ -130,8 +124,6 @@ __all__ = [
     "PostCloseAttemptStatus",
     "PredicateTruth",
     "RefreshClassification",
-    "RejectedAnchor",
-    "RejectedAnchorSelector",
     "RpcAdmissionRefreshWitness",
     "RpcRequestIntent",
     "RpcRetirementIntent",

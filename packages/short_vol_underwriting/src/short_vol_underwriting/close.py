@@ -250,7 +250,6 @@ class PostCloseAttempt:
     canonical_combo_identity: str | None
     request_instrument_name: str | None
     origin_quote_witness: SubscriptionAdmissionRefreshWitness | None
-    rejected: bool = False
     _intent_taken: bool = False
     sent_boundary: FactBoundary | None = None
     terminal_status: PostCloseAttemptStatus | None = None
@@ -268,7 +267,6 @@ class PostCloseAttempt:
         canonical_combo_identity: str,
         request_id: int,
         boundary: FactBoundary,
-        rejected: bool = False,
         request_instrument_name: str,
         origin_quote_witness: SubscriptionAdmissionRefreshWitness,
     ) -> PostCloseAttempt:
@@ -290,13 +288,8 @@ class PostCloseAttempt:
             raise ValueError("post-CLOSE origin quote witness does not match the scheduled scope")
         instrument_name = request_instrument_name
         params = {"instrument_name": instrument_name, "depth": 10000}
-        label = (
-            "RejectedScheduledPostCloseQuoteAttemptIdentity"
-            if rejected
-            else "ScheduledPostCloseQuoteAttemptIdentity"
-        )
         identity = canonical_identity(
-            label,
+            "ScheduledPostCloseQuoteAttemptIdentity",
             anchor_identity,
             first_close_action_identity,
             request_id,
@@ -313,7 +306,6 @@ class PostCloseAttempt:
             canonical_combo_identity=canonical_combo_identity,
             request_instrument_name=instrument_name,
             origin_quote_witness=origin_quote_witness,
-            rejected=rejected,
         )
 
     @classmethod
@@ -324,7 +316,6 @@ class PostCloseAttempt:
         first_close_action_identity: str,
         status: PostCloseAttemptStatus,
         boundary: FactBoundary,
-        rejected: bool = False,
     ) -> PostCloseAttempt:
         if status not in {
             PostCloseAttemptStatus.NOT_REQUESTABLE_KNOWN_ATOMIC_UNAVAILABLE,
@@ -333,13 +324,8 @@ class PostCloseAttempt:
             raise ValueError("not-requestable attempt requires an exact marker status")
         require_identity(anchor_identity, "anchor_identity")
         require_identity(first_close_action_identity, "first_close_action_identity")
-        label = (
-            "RejectedScheduledPostCloseQuoteAttemptIdentity"
-            if rejected
-            else "ScheduledPostCloseQuoteAttemptIdentity"
-        )
         scheduled = canonical_identity(
-            label,
+            "ScheduledPostCloseQuoteAttemptIdentity",
             anchor_identity,
             first_close_action_identity,
             status.value,
@@ -356,7 +342,6 @@ class PostCloseAttempt:
             canonical_combo_identity=None,
             request_instrument_name=None,
             origin_quote_witness=None,
-            rejected=rejected,
         )
         attempt._terminalize(
             status=status,
@@ -599,17 +584,12 @@ class PostCloseAttempt:
             raise ValueError("post-CLOSE attempt terminal must be causally later")
         if matched_response_identity is not None:
             require_identity(matched_response_identity, "matched_response_identity")
-        label = (
-            "RejectedPostCloseAttemptTerminalIdentity"
-            if self.rejected
-            else "PostCloseAttemptTerminalIdentity"
-        )
         self.terminal_status = status
         self.terminal_owner = owner
         self.terminal_boundary = boundary
         self.matched_response_identity = matched_response_identity
         self.terminal_identity = canonical_identity(
-            label,
+            "PostCloseAttemptTerminalIdentity",
             self.scheduled_identity,
             status.value,
             owner.value,
