@@ -40,7 +40,7 @@ partitions, one finite Radar-reason classifier, and one bounded public-only obse
 dependency, persistence schema, service, or second formula path.
 
 **Complexity deleted:** startup `INDEX_WARMUP` is removed from the steady-state primary-blocker
-calculation.
+calculation, and the one-shot workflow that edited and pushed source from CI is deleted.
 
 ## Business closure
 
@@ -53,7 +53,8 @@ and one 900-second public-only observation is stopped by a deadline fixed before
 
 **Then:** post-warmup `APPLICABLE_MARKET_SCOPE > 0`; the output contains the exact post-warmup
 `RADAR_KNOWN` numerator, applicable denominator, ratio, bounded UNKNOWN blocker counts, visible
-startup/warmup counts, fixed stop boundary, and durable Shadow Case file count.
+startup/warmup counts, precommitted deadline plus actual terminal offset, and durable Shadow Case
+file count.
 
 **Valid zero/UNKNOWN:** zero anomaly and zero Shadow admission are valid and satisfy this closure;
 post-warmup applicable denominator zero does not satisfy it. Any UNKNOWN remains truthful and must
@@ -79,9 +80,9 @@ exact candidate.
 
 ## Scope
 
-**In:** `radar_runtime.funnel`, a bounded observation composition and CLI, direct funnel/observation
-tests, the owning Radar contract and stage/architecture text, README current-stage text, and the
-Task Template terminology correction.
+**In:** `radar_runtime.funnel`, its direct Workbench presentation, a bounded observation composition
+and CLI, direct funnel/observation/Workbench tests, the owning Radar contract and stage/architecture
+text, README current-stage text, and the Task Template terminology correction.
 
 **Out:** Radar thresholds, Policy bytes, TTE/Delta universe, atomic-combo behavior, Underwriting,
 Position, Outcome, Shadow admission, new persistent diagnostics, replay, commissioning, deployment,
@@ -93,7 +94,7 @@ composes existing service owners and writes no diagnostic artifact.
 ## Validation
 
 - focused tests:
-  `.venv/bin/pytest tests/test_funnel.py tests/test_radar_knownness_observation.py tests/test_authority_and_architecture.py`;
+  `.venv/bin/pytest tests/test_funnel.py tests/test_radar_knownness_observation.py tests/test_trader_workbench.py tests/test_authority_and_architecture.py tests/test_fact_boundary_business.py::test_funnel_partitions_the_real_reducer_index_tail_at_first_availability`;
 - repository gate: `make check`;
 - public observation, exactly once after the exact candidate and GitHub CI pass:
 

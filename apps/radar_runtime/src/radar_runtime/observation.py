@@ -20,7 +20,7 @@ from radar_runtime.service import (
 )
 
 PRECOMMITTED_STOP_REASON = "PRECOMMITTED_RADAR_KNOWNNESS_BOUNDARY"
-MAX_BOUNDED_OBSERVATION_SECONDS = 3_600
+OBSERVATION_DURATION_SECONDS = 900
 
 MonotonicClock = Callable[[], int]
 AsyncSleep = Callable[[float], Awaitable[None]]
@@ -54,11 +54,10 @@ class RadarKnownnessObservation:
                 "started_monotonic_ms": self.started_monotonic_ms,
                 "deadline_monotonic_ms": self.stop_deadline_monotonic_ms,
                 "terminal_monotonic_ms": self.terminal_monotonic_ms,
-                "stop_reason": self.stop_reason,
-                "precommitted_boundary_reached": (
-                    self.stop_reason == PRECOMMITTED_STOP_REASON
-                    and self.terminal_monotonic_ms == self.stop_deadline_monotonic_ms
+                "terminal_offset_ms": (
+                    self.terminal_monotonic_ms - self.stop_deadline_monotonic_ms
                 ),
+                "stop_reason": self.stop_reason,
             },
             "post_warmup_radar_known_over_applicable": ratio,
             "funnel": dict(self.funnel),
@@ -106,9 +105,9 @@ def build_radar_knownness_observation(
         raise ValueError("terminal boundary cannot precede observation start")
     if (
         stop_reason == PRECOMMITTED_STOP_REASON
-        and terminal_monotonic_ms != stop_deadline_monotonic_ms
+        and terminal_monotonic_ms < stop_deadline_monotonic_ms
     ):
-        raise ValueError("precommitted stop must preserve the exact fixed deadline")
+        raise ValueError("terminal boundary cannot precede the precommitted deadline")
     if not stop_reason:
         raise ValueError("stop reason must be non-empty")
     terminal_kind = terminal_summary.get("object_kind")
@@ -148,10 +147,11 @@ async def request_precommitted_stop(
     if deadline_monotonic_ms < 0:
         raise ValueError("precommitted stop deadline must be non-negative")
     while not stop_event.is_set():
-        remaining_ms = deadline_monotonic_ms - monotonic_ms()
+        requested_ms = monotonic_ms()
+        remaining_ms = deadline_monotonic_ms - requested_ms
         if remaining_ms <= 0:
             stop_event.request(
-                terminal_monotonic_ms=deadline_monotonic_ms,
+                terminal_monotonic_ms=requested_ms,
                 reason=PRECOMMITTED_STOP_REASON,
             )
             return
@@ -225,9 +225,9 @@ def _stage_observed_count(funnel: FunnelSnapshot, stage_name: str) -> int:
 def _validate_duration_seconds(value: int) -> None:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("observation duration must be an integer")
-    if not 1 <= value <= MAX_BOUNDED_OBSERVATION_SECONDS:
+    if value != OBSERVATION_DURATION_SECONDS:
         raise ValueError(
-            f"observation duration must be between 1 and {MAX_BOUNDED_OBSERVATION_SECONDS} seconds"
+            f"observation duration must be exactly {OBSERVATION_DURATION_SECONDS} seconds"
         )
 
 
@@ -236,7 +236,7 @@ def _monotonic_ms() -> int:
 
 
 __all__ = [
-    "MAX_BOUNDED_OBSERVATION_SECONDS",
+    "OBSERVATION_DURATION_SECONDS",
     "PRECOMMITTED_STOP_REASON",
     "RadarKnownnessObservation",
     "build_radar_knownness_observation",

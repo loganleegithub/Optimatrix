@@ -53,8 +53,9 @@ public-only observation is authorized with a stop deadline fixed before connecti
 ```
 
 The command prints one non-durable JSON result to stdout. It must report startup/warmup and
-post-warmup counts, bounded UNKNOWN reasons, `post-warmup RADAR_KNOWN / APPLICABLE`, the fixed stop
-boundary, and the Shadow Case durable-file count. The result is accepted for this closure only when
+post-warmup counts, bounded UNKNOWN reasons, `post-warmup RADAR_KNOWN / APPLICABLE`, the
+precommitted deadline and actual terminal offset, and the Shadow Case durable-file count. The result
+is accepted for this closure only when
 post-warmup `APPLICABLE_MARKET_SCOPE > 0`; a natural anomaly and Shadow admission are not required.
 If no Shadow Case opens, durable Shadow Case files must equal zero.
 

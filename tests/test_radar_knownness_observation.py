@@ -15,7 +15,7 @@ from radar_runtime.observation import (
 from radar_runtime.service import PersistentStopEvent
 
 
-def test_precommitted_stop_uses_the_fixed_deadline_not_wake_time() -> None:
+def test_precommitted_stop_reports_the_actual_request_after_the_fixed_deadline() -> None:
     event = PersistentStopEvent()
     now = 100
 
@@ -35,7 +35,7 @@ def test_precommitted_stop_uses_the_fixed_deadline_not_wake_time() -> None:
         )
     )
 
-    assert event.terminal_monotonic_ms == 1_100
+    assert event.terminal_monotonic_ms == 1_107
     assert event.reason == PRECOMMITTED_STOP_REASON
 
 
@@ -57,7 +57,14 @@ def test_observation_reports_zero_durable_files_without_shadow_admission(
 
     value = observation.as_object()
     stop_boundary = cast(Mapping[str, object], value["stop_boundary"])
-    assert stop_boundary["precommitted_boundary_reached"] is True
+    assert stop_boundary == {
+        "requested_duration_seconds": 900,
+        "started_monotonic_ms": 100,
+        "deadline_monotonic_ms": 900_100,
+        "terminal_monotonic_ms": 900_100,
+        "terminal_offset_ms": 0,
+        "stop_reason": PRECOMMITTED_STOP_REASON,
+    }
     assert value["post_warmup_radar_known_over_applicable"] == {
         "numerator": 0,
         "denominator": 0,
@@ -91,7 +98,7 @@ def test_observation_rejects_pre_shadow_business_files(tmp_path: Path) -> None:
 
 def test_observation_duration_is_bounded() -> None:
     cases = Path("/unused")
-    with pytest.raises(ValueError, match="between 1 and 3600"):
+    with pytest.raises(ValueError, match="exactly 900"):
         build_radar_knownness_observation(
             requested_duration_seconds=86_400,
             started_monotonic_ms=0,

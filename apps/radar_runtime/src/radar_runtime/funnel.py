@@ -730,4 +730,4 @@ def _string_or(value: object, fallback: str) -> str:
 def _string_tuple(value: object) -> tuple[str, ...]:
     if not isinstance(value, list):
         return ()
-    return tuple(item for item in value if isinstance(item, str))
+    return tuple(item for item in value if isinstance(item, str) and item)

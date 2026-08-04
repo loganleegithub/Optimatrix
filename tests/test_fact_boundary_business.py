@@ -35,6 +35,7 @@ from radar_runtime.deribit_public import (
     SendControlEvent,
     SendControlKind,
 )
+from radar_runtime.funnel import FunnelTracker
 from radar_runtime.runtime import (
     CausalCause,
     CausalCommit,
@@ -529,6 +530,52 @@ def test_bootstrap_warmup_does_not_report_or_recover_a_real_index_gap(
     assert reducer.results[instrument.instrument_name].reason == "INDEX_WARMUP"
     assert not reducer._index_gap_active
     assert not reducer._index_resubscribe_pending
+
+
+def test_funnel_partitions_the_real_reducer_index_tail_at_first_availability(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    instrument = make_option(
+        "BTC_USDC-27SEP24-100010-C",
+        1_000_000 + 60 * 60_000,
+    )
+    configure_full_formula_scope(reducer, instrument)
+    tracker = FunnelTracker()
+
+    warmup_commit = fact_commit(
+        FactBoundary(1, 1, 1_001, 1),
+        CausalCause.INDEX_TICK,
+    )
+    reducer.settle_fact(
+        commit=warmup_commit,
+        affected_instruments=(instrument.instrument_name,),
+        countable=True,
+    )
+    assert reducer.results[instrument.instrument_name].reason == "INDEX_WARMUP"
+    tracker.observe(reducer=reducer, commit=warmup_commit, new_shadow_records=())
+    warmup = tracker.snapshot().radar_knownness
+    assert warmup.startup_warmup.applicable_market_scope_count == 1
+    assert warmup.post_warmup.applicable_market_scope_count == 0
+
+    seed_flat_available_index(reducer)
+    available_commit = fact_commit(
+        FactBoundary(1, 2, 1_002, 2),
+        CausalCause.INDEX_TICK,
+    )
+    reducer.settle_fact(
+        commit=available_commit,
+        affected_instruments=(instrument.instrument_name,),
+        countable=True,
+    )
+    assert reducer.results[instrument.instrument_name].known_evaluation
+    tracker.observe(reducer=reducer, commit=available_commit, new_shadow_records=())
+    knownness = tracker.snapshot().radar_knownness
+    assert knownness.post_warmup.applicable_market_scope_count == 1
+    assert knownness.post_warmup.radar_known_count == 1
+    assert knownness.warmed_band_ids == (reducer.policy.tte_bands[0].band_id,)
 
 
 def setup_same_millisecond_watermark_phase(
