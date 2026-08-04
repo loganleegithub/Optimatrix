@@ -174,26 +174,20 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_only_a1_fixed_boundary_observation() -> None:
+def test_current_stage_closes_a1_at_the_measured_downstream_blocker() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`RADAR_STEADY_STATE_KNOWNNESS_CANDIDATE_AWAITING_PUBLIC_OBSERVATION`" in current
-    assert (
-        "**Production Short Vol Radar:** `OFFLINE_READY_BOUNDED_PUBLIC_REACHABILITY_OBSERVED`"
-        in current
+    assert "`RADAR_STEADY_STATE_KNOWNNESS_IMPLEMENTED`" in current
+    assert "**Production Short Vol Radar:** `POST_WARMUP_KNOWNNESS_OBSERVED`" in current
+    assert "**Live commands:** `NONE_AUTHORIZED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
+    assert "`1,556,097` `RADAR_KNOWN` evaluations: `100%`" in current
+    assert "`PUBLIC_ATOMIC_QUOTE_AVAILABLE / NO_ACTIVE_COMBO`" in current
+    assert not (ROOT / "tasks/SHORT_VOL_RADAR_STEADY_STATE_KNOWNNESS.md").exists()
+    entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
+        encoding="utf-8"
     )
-    assert (
-        "**Live commands:** "
-        "`ONE_BOUNDED_RADAR_KNOWNNESS_OBSERVATION_CONDITIONALLY_AUTHORIZED`" in current
-    )
-    assert "**Sole authorized closure:** `SHORT_VOL_RADAR_STEADY_STATE_KNOWNNESS`" in current
-    assert "--duration-seconds 900" in current
-    assert "may not be extended, retried, or repeated" in current
-    active_task = ROOT / "tasks/SHORT_VOL_RADAR_STEADY_STATE_KNOWNNESS.md"
-    assert active_task.exists()
-    assert "**Status:** ACTIVE" in "\n".join(
-        active_task.read_text(encoding="utf-8").splitlines()[:8]
-    )
+    assert "observe-radar-knownness" not in entrypoint
 
 
 def test_architecture_restores_applicable_scope_and_freezes_warmup_partition() -> None:

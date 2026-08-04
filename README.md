@@ -27,15 +27,15 @@ offline from Shadow Cases.
 ## Current stage
 
 The active permission remains `PUBLIC_SHADOW`. The minimal Shadow Case data boundary is implemented
-offline: pre-Shadow state is memory-only and only an admitted Case can create durable files. The
-sole active closure is `SHORT_VOL_RADAR_STEADY_STATE_KNOWNNESS`: separate startup or recovery
-index warmup from the post-warmup Radar denominator, expose bounded steady-state UNKNOWN reasons,
-and report `post-warmup RADAR_KNOWN / APPLICABLE_MARKET_SCOPE`.
+offline: pre-Shadow state is memory-only and only an admitted Case can create durable files. A1 now
+separates startup/recovery index warmup from the steady denominator. Its bounded public observation
+reported post-warmup `RADAR_KNOWN / APPLICABLE_MARKET_SCOPE` of
+`1,556,097 / 1,556,097` (`100%`) with zero steady-state Radar UNKNOWN.
 
-Persistent deployment remains forbidden. After the exact candidate passes focused tests,
-`make check`, and GitHub CI, `CURRENT_STAGE` authorizes exactly one pre-bounded public-only
-observation. It does not require a natural anomaly or Shadow admission; when no Shadow Case opens,
-the durable Case-file count must remain zero.
+The earliest material funnel loss moved to
+`PUBLIC_ATOMIC_QUOTE_AVAILABLE / NO_ACTIVE_COMBO`: all `146` reviewable anomaly Episodes lacked an
+active official combo. No Shadow Case opened and no durable Case file was written. Persistent
+deployment and further live commands remain forbidden.
 
 See:
 
