@@ -332,7 +332,7 @@ def calculate_current_evaluation(
         baseline = compute_baseline(
             closes=causal_closes,
             lookbacks=band.lookbacks_minutes,
-            weights=band.lookback_weights,
+            return_interval_minutes=band.return_interval_minutes,
             annualized_variance_floor=band.annualized_variance_floor,
             remaining_life_minutes_low=Decimal(lower_tte_ms) / MILLISECONDS_PER_MINUTE,
             remaining_life_minutes_high=Decimal(upper_tte_ms) / MILLISECONDS_PER_MINUTE,

@@ -710,6 +710,25 @@ def _radar_rows(
                     if calculation is not None
                     else None
                 ),
+                "baseline_return_interval_minutes": (
+                    calculation.baseline.return_interval_minutes
+                    if calculation is not None
+                    else None
+                ),
+                "baseline_selected_lookback_minutes": (
+                    calculation.baseline.selected_lookback_minutes
+                    if calculation is not None
+                    else None
+                ),
+                "baseline_source": (
+                    (
+                        "ANNUALIZED_VARIANCE_FLOOR"
+                        if calculation.baseline.selected_lookback_minutes is None
+                        else "TRAILING_REALIZED_VARIANCE"
+                    )
+                    if calculation is not None
+                    else None
+                ),
                 "richness_ratio_interval": (
                     _decimal_interval(calculation.richness) if calculation is not None else None
                 ),
@@ -1450,7 +1469,7 @@ HTML = """<!doctype html>
     <section><h2>交易摘要</h2><div id="system" class="grid"></div></section>
     <section><h2>业务漏斗</h2><div id="funnel"></div></section>
     <section><h2>业务零值证明</h2><div id="zero" class="grid"></div></section>
-    <section><h2>Radar</h2><div id="radar"></div></section>
+    <section><h2>Radar 可信候选</h2><div id="radar"></div></section>
     <section><h2>承保详情</h2><div id="underwriting"></div></section>
     <section><h2>Shadow 入场</h2><p class="warning">模拟入场, 不是订单或成交</p><div id="shadow"></div></section>
     <section><h2>持仓管理</h2><div id="positions"></div></section>
@@ -1520,7 +1539,7 @@ const reasonLabels = {
   OUTCOME_PENDING: 'Shadow Case 已打开, Outcome 尚未终结',
   NO_MATERIAL_BLOCKER_OBSERVED: '当前已观察漏斗没有实质转换阻塞',
   POSITION_SLOT_CONSUMED_BY_SHADOW_ENTRY: '该承保槽位已被 Shadow Entry 使用',
-  RADAR_EPISODE_NOT_ACTIVE: '当前无活跃 Radar 异常, 承保尚未评估',
+  RADAR_EPISODE_NOT_ACTIVE: '当前无活跃 Radar 候选, 承保尚未评估',
   NOT_STARTED: '服务尚未启动'
 };
 const reasonText = value => reasonLabels[value] || String(value);
@@ -1585,6 +1604,15 @@ const radarCellValue = (row, field, value) => {
   }
   if (field === 'baseline_annualized_volatility') {
     return isMissing(value) ? unavailableRadarCalculation(row) : formatPercent(value);
+  }
+  if (field === 'baseline_return_interval_minutes') {
+    return isMissing(value) ? unavailableRadarCalculation(row) : `${formatDecimal(value)} 分钟`;
+  }
+  if (field === 'baseline_selected_lookback_minutes') {
+    if (!isMissing(value)) return `${formatDecimal(value)} 分钟`;
+    return row.baseline_source === 'ANNUALIZED_VARIANCE_FLOOR'
+      ? '固定年化方差下限'
+      : unavailableRadarCalculation(row);
   }
   if (field === 'richness_ratio_interval') {
     return isMissing(value) ? unavailableRadarCalculation(row)
@@ -1774,15 +1802,20 @@ function renderRadarPanel(documentValue) {
       ['TTE', 'tte_interval_ms', radarCellValue], ['类型', 'option_type', radarCellValue],
       ['Strike', 'strike_usdc_per_btc', radarCellValue],
       ['Executable IV', 'executable_iv_interval', radarCellValue],
+      ['RV采样', 'baseline_return_interval_minutes', radarCellValue],
+      ['保守基准窗口', 'baseline_selected_lookback_minutes', radarCellValue],
       ['基准波动率', 'baseline_annualized_volatility', radarCellValue],
       ['Richness', 'richness_ratio_interval', radarCellValue],
-      ['Radar', 'detector_state', radarCellValue], ['原因', 'detector_reason', radarCellValue],
+      ['候选状态', 'detector_state', radarCellValue], ['原因', 'detector_reason', radarCellValue],
       ['Atomic combo', 'public_atomic_quote_state', radarCellValue]
     ], rows, [['episode identity', 'active_episode_identity'],
       ['expiration timestamp ms', 'expiration_timestamp_ms'],
       ['TTE interval ms', 'tte_interval_ms'], ['strike exact', 'strike_usdc_per_btc'],
       ['executable sell price exact', 'executable_sell_price_usdc_per_btc'],
       ['executable IV exact', 'executable_iv_interval'],
+      ['baseline return interval minutes', 'baseline_return_interval_minutes'],
+      ['baseline selected lookback minutes', 'baseline_selected_lookback_minutes'],
+      ['baseline source', 'baseline_source'],
       ['baseline volatility exact', 'baseline_annualized_volatility'],
       ['richness exact', 'richness_ratio_interval'], ['detector reason enum', 'detector_reason'],
       ['episode start monotonic ms', 'anomaly_started_monotonic_ms'],
@@ -1905,7 +1938,7 @@ function render(documentValue) {
     card('当前行情判定', service.ready ? '可用于当前判定' : '不可用于当前判定') +
     card('主阻塞原因', reasonText(service.reason)) +
     card('Coverage 已知/监控', `${system.known_current_instrument_evaluation_count}/${system.monitored_instrument_count}`) +
-    card('Radar 结论', zeroClaimText(documentValue.zero_claims.anomaly, '异常')) +
+    card('Radar 候选结论', zeroClaimText(documentValue.zero_claims.anomaly, 'Radar 候选')) +
     card('Candidate 结论', zeroClaimText(documentValue.zero_claims.candidate, 'Candidate')) +
     card('数据延迟', isMissing(system.data_delay_ms) ? 'UNKNOWN' : formatDurationMs(system.data_delay_ms)) +
     '<details class="system-details"><summary>运行与 Policy 详情</summary><div class="grid">' +

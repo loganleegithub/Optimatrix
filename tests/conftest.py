@@ -42,8 +42,8 @@ def policy_document(
         "minimum_separation_ms": separation_ms,
     }
     return {
-        "policy_schema_version": 3,
-        "policy_family": "POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE",
+        "policy_schema_version": 4,
+        "policy_family": "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS",
         "target_base_quantity_btc": target,
         "runtime_limits": {
             "heartbeat_interval_seconds": 30,
@@ -61,8 +61,8 @@ def policy_document(
                 "band_id": "settlement-clear-to-six-hours",
                 "lower_bound_minutes": 30,
                 "upper_bound_minutes": 360,
-                "lookbacks_minutes": [2, 5],
-                "lookback_weights": [0.25, 0.75],
+                "return_interval_minutes": 5,
+                "lookbacks_minutes": [5],
                 "annualized_variance_floor": 0.01,
                 "option_rules": {"call": rule, "put": dict(rule)},
             },
@@ -70,8 +70,8 @@ def policy_document(
                 "band_id": "six-to-seventy-two-hours",
                 "lower_bound_minutes": 360,
                 "upper_bound_minutes": 4_320,
+                "return_interval_minutes": 5,
                 "lookbacks_minutes": [5],
-                "lookback_weights": [1],
                 "annualized_variance_floor": 0.02,
                 "option_rules": {"call": dict(rule), "put": dict(rule)},
             },

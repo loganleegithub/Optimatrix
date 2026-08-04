@@ -5,15 +5,15 @@
 **Current permission boundary:** `PUBLIC_SHADOW`
 
 **Current implementation status:**
-`RADAR_STEADY_STATE_KNOWNNESS_IMPLEMENTED`
+`RADAR_CANDIDATE_GENERATOR_IMPLEMENTED_PENDING_OBSERVATION`
 
-**Production Short Vol Radar:** `POST_WARMUP_KNOWNNESS_OBSERVED`
+**Production Short Vol Radar:** `A2_CANDIDATE_VALIDITY_OBSERVATION_PENDING`
 
 **Persistent service:** `STOPPED_NO_DEPLOYMENT`
 
-**Live commands:** `NONE_AUTHORIZED`
+**Live commands:** `ONE_CONDITIONAL_43200_SECOND_A2_OBSERVATION`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** `SHORT_VOL_RADAR_CANDIDATE_VALIDITY`
 
 ## Current truth
 
@@ -39,37 +39,51 @@ None reached an available official atomic quote because all `146` were blocked b
 `PUBLIC_ATOMIC_QUOTE_AVAILABLE / NO_ACTIVE_COMBO`. No Shadow Case opened and the durable Shadow Case
 file count remained zero.
 
-The exact Radar, Underwriting, and Position Policy files, public source semantics, TTE/Delta
-universe, atomic-combo semantics, causality, `UNKNOWN`, and full-quantity official atomic entry/exit
-requirements remain unchanged. No runtime is deployed and no private/account/order/fill/capital
-capability exists.
+The A1 observation used the then-current exact Radar, Underwriting, and Position Policy chain. A2
+may replace only the Radar benchmark and activation/clear persistence declared below; the dependent
+Underwriting and Position Policy bytes may change only to bind the new upstream content identities.
+Public source semantics, the TTE/Delta universe, target quantity, option inversion, atomic-combo
+semantics, causality, `UNKNOWN`, and full-quantity official atomic entry/exit requirements remain
+unchanged. No runtime is deployed and no private/account/order/fill/capital capability exists.
 
-## Next closure
+## Active closure
 
-No implementation or public command is currently authorized. A new explicit task should start from
-the measured earliest blocker, `PUBLIC_ATOMIC_QUOTE_AVAILABLE / NO_ACTIVE_COMBO`: `146` of `146`
-reviewable anomaly Episodes were blocked. Funnel state remains a non-durable current diagnostic.
+A1 measured `NO_ACTIVE_COMBO` after `146` anomaly Episodes, but its operational-probe Policy used
+one one-minute index return and two changed observations separated by only one second. Before combo
+conversion can carry opportunity meaning, A2 must establish `RADAR_CANDIDATE_VALIDITY` at the
+`ANOMALY_ACTIVE` funnel node.
+
+The authorized implementation keeps the BTC-USDC `30m < TTE <= 72h` OTM call/put universe, target
+quantity, executable-bid IV inversion, activation ratio, and atomic semantics fixed. It replaces
+the operational benchmark with non-overlapping five-minute returns over declared 30-minute,
+120-minute, and 360-minute causal windows, selects the highest realized-variance rate or fixed
+floor, and requires time-persistent activation and clear observations. Exact Policy bytes remain
+content-identified.
 
 ## Allowed work
 
 - read-only repository and Workbench review;
-- deterministic local checks and GitHub CI for the completed candidate;
-- drafting, but not executing, a new explicitly approved task.
+- the active A2 implementation and deterministic local/GitHub checks on its bounded branch;
+- exactly one 43,200-second production-public read-only observation after focused tests,
+  `make check`, and exact-candidate review pass.
 
 ## Forbidden work
 
-- changing Radar thresholds, Policy bytes, TTE/Delta universe, or atomic-combo semantics;
-- persistent deployment, automatic restart, or another public observation;
+- changing the Radar TTE/Delta universe, target quantity, IV inversion, or atomic-combo semantics;
+- any Radar Policy or benchmark change outside the exact active A2 task;
+- persistent deployment, automatic restart, or more than the one authorized A2 observation;
 - credentials, account, balance, margin, private API, order, fill, capital, or actual position;
 - durable funnel data, a new persistent diagnostic, database, replay platform, event bus,
   microservice split, or Docker/Kubernetes requirement;
 - application commissioning, host PID/log inspection, manifest, receipt chain, broad evidence
-  package, 24-hour Soak, or anomaly-generation requirement;
+  package, 24-hour stability Soak, or anomaly-generation requirement;
 - qualification, promotion, or execution controller.
 
 ## Acceptance boundary
 
-The public observation establishes only the post-warmup known proportion and naturally reached
-funnel blocker during its fixed interval. It does not establish strategy value, future opportunity
-frequency, general official-combo availability, fillability, qualification, deployment, uptime, or
-execution permission.
+The A2 implementation may establish that each emitted Radar candidate follows the declared causal,
+multi-horizon and time-persistent screen. Its one public observation may establish current
+post-warmup reachability, natural candidate frequency during that fixed interval, and the naturally
+reached next blocker. It does not establish future frequency, expected return, strategy edge,
+general official-combo availability, fillability, qualification, deployment, uptime, or execution
+permission.

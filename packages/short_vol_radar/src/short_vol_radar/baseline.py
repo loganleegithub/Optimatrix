@@ -14,7 +14,9 @@ class BaselineUnavailable(ValueError):
 
 @dataclass(frozen=True)
 class BaselineResult:
+    return_interval_minutes: int
     window_variances: tuple[tuple[int, Decimal], ...]
+    selected_lookback_minutes: int | None
     variance_rate_per_minute: Decimal
     annualized_volatility: Decimal
     total_variance_low: Decimal
@@ -25,13 +27,20 @@ def compute_baseline(
     *,
     closes: tuple[Decimal, ...],
     lookbacks: tuple[int, ...],
-    weights: tuple[Decimal, ...],
+    return_interval_minutes: int,
     annualized_variance_floor: Decimal,
     remaining_life_minutes_low: Decimal,
     remaining_life_minutes_high: Decimal,
 ) -> BaselineResult:
-    if len(lookbacks) != len(weights) or not lookbacks:
-        raise ValueError("lookbacks and weights must be non-empty and aligned")
+    if not lookbacks:
+        raise ValueError("lookbacks must be non-empty")
+    if isinstance(return_interval_minutes, bool) or return_interval_minutes <= 0:
+        raise ValueError("return interval must be a positive integer")
+    if any(
+        isinstance(lookback, bool) or lookback <= 0 or lookback % return_interval_minutes != 0
+        for lookback in lookbacks
+    ):
+        raise ValueError("lookbacks must be positive and divisible by return interval")
     if len(closes) < max(lookbacks) + 1:
         raise BaselineUnavailable("causal close history has not completed warm-up")
     if any(close <= 0 or not close.is_finite() for close in closes):
@@ -43,23 +52,35 @@ def compute_baseline(
         raise BaselineUnavailable("remaining life or variance floor is invalid")
     try:
         with localcontext(DECIMAL_CONTEXT) as context:
-            returns = tuple(
-                context.ln(later) - context.ln(earlier) for earlier, later in pairwise(closes)
-            )
             windows: list[tuple[int, Decimal]] = []
-            weighted = Decimal(0)
-            for lookback, weight in sorted(zip(lookbacks, weights, strict=True)):
-                squared = tuple(value * value for value in returns[-lookback:])
-                variance = sum(squared, Decimal(0)) / Decimal(lookback)
-                windows.append((lookback, +variance))
-                weighted += weight * variance
+            for lookback in sorted(lookbacks):
+                window = closes[-(lookback + 1) :]
+                sampled = window[::return_interval_minutes]
+                returns = tuple(
+                    context.ln(later) - context.ln(earlier) for earlier, later in pairwise(sampled)
+                )
+                squared = tuple(value * value for value in returns)
+                variance_rate = sum(squared, Decimal(0)) / Decimal(lookback)
+                windows.append((lookback, +variance_rate))
             floor_per_minute = annualized_variance_floor / MINUTES_PER_YEAR
-            variance_rate = max(floor_per_minute, weighted)
+            selected = max(
+                windows,
+                key=lambda item: (item[1], item[0]),
+            )
+            selected_lookback: int | None = selected[0]
+            selected_rate = selected[1]
+            if floor_per_minute >= selected_rate:
+                variance_rate = floor_per_minute
+                selected_lookback = None
+            else:
+                variance_rate = selected_rate
             annualized = context.sqrt(variance_rate * MINUTES_PER_YEAR)
             total_low = variance_rate * remaining_life_minutes_low
             total_high = variance_rate * remaining_life_minutes_high
             result = BaselineResult(
+                return_interval_minutes=return_interval_minutes,
                 window_variances=tuple(windows),
+                selected_lookback_minutes=selected_lookback,
                 variance_rate_per_minute=+variance_rate,
                 annualized_volatility=+annualized,
                 total_variance_low=+total_low,

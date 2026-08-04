@@ -15,14 +15,20 @@ from short_vol_underwriting import (
     canonical_identity,
     load_policy_chain,
 )
+from short_vol_underwriting.constants import (
+    POSITION_POLICY_IDENTITY as POSITION_POLICY,
+)
+from short_vol_underwriting.constants import (
+    RADAR_POLICY_IDENTITY as RADAR_POLICY,
+)
+from short_vol_underwriting.constants import (
+    UNDERWRITING_POLICY_IDENTITY as UNDERWRITING_POLICY,
+)
 from short_vol_underwriting.model import FactBoundary
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE = "a" * 40
 RUNTIME = "sha256:" + "b" * 64
-RADAR_POLICY = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
-UNDERWRITING_POLICY = "sha256:be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af"
-POSITION_POLICY = "sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439"
 
 
 def _boundary(causal_seq: int) -> FactBoundary:

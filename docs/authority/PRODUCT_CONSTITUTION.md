@@ -72,8 +72,10 @@ The product does not apply execution-stage risk preferences to every earlier sta
 
 ### Radar and trader review
 
-False-positive cost is low because no order or Shadow Case follows automatically from display.
-Radar should expose bounded opportunities with confidence, missing facts, and upgrade/invalidation
+False-positive cost is lower than at admission because no order or Shadow Case follows automatically
+from display, but it is not zero: an over-broad Radar makes every downstream conversion rate and
+blocker economically misleading. Radar should therefore expose selective, time-persistent bounded
+candidates with the causal benchmark, confidence, missing facts, and upgrade/invalidation
 conditions. An unrelated `UNKNOWN` must not erase a known positive witness.
 
 ### Underwriting and Shadow admission
@@ -123,7 +125,8 @@ particular qualification denominator.
 The first Radar asks:
 
 > Is target-size executable sell-side implied volatility unusually rich relative to the exact
-> deployed causal baseline for the same remaining-life interval?
+> deployed conservative multi-horizon BTC realized-volatility baseline, and has that richness
+> persisted long enough to merit structure review?
 
 It separately reports whether an existing official Deribit combo exposes the required target-size
 1:1 protective credit vertical. Detector truth and atomic availability remain distinct:
@@ -134,8 +137,10 @@ atomic = NOT_EVALUATED | UNKNOWN | NO_ACTIVE_COMBO |
          NO_TARGET_SIZE_CREDIT_QUOTE | PUBLIC_ATOMIC_QUOTE_AVAILABLE
 ```
 
-The Radar must show the trader what was found, why it matters, what is missing, and what would
-upgrade or invalidate it. It does not persist anomaly or atomic-quote events.
+The Radar must show the trader what was found, which causal sampling interval and conservative
+horizon produced the benchmark, why it matters, what is missing, and what would upgrade or
+invalidate it. It does not persist candidate or atomic-quote events and does not claim calendar
+forecasting, surface-relative mispricing, Policy edge, or profitability.
 
 ## Underwriting and admission
 

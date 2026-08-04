@@ -191,9 +191,24 @@ class ScopeCounts:
     complete_aggregate_with_full_formula_evaluation_count: int = 0
     distinct_anomaly_episode_count: int = 0
     anomaly_activation_transition_count: int = 0
+    candidate_activation_batch_count: int = 0
     anomaly_end_count_by_reason: Counter[str] = field(default_factory=Counter)
     known_active_duration_ms_sum_by_end_reason: Counter[str] = field(default_factory=Counter)
     public_atomic_quote_state_transition_count: Counter[str] = field(default_factory=Counter)
+    _last_candidate_activation_causal_seq: int | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
+    def record_candidate_activation(self, causal_seq: int) -> None:
+        if isinstance(causal_seq, bool) or not isinstance(causal_seq, int) or causal_seq <= 0:
+            raise ValueError("candidate activation causal sequence must be a positive integer")
+        self.distinct_anomaly_episode_count += 1
+        self.anomaly_activation_transition_count += 1
+        if self._last_candidate_activation_causal_seq != causal_seq:
+            self.candidate_activation_batch_count += 1
+            self._last_candidate_activation_causal_seq = causal_seq
 
     def as_object(self) -> dict[str, object]:
         known_formula_rate = ratio_or_none(
@@ -229,6 +244,7 @@ class ScopeCounts:
             ),
             "distinct_anomaly_episode_count": self.distinct_anomaly_episode_count,
             "anomaly_activation_transition_count": self.anomaly_activation_transition_count,
+            "candidate_activation_batch_count": self.candidate_activation_batch_count,
             "anomaly_end_count_by_reason": dict(self.anomaly_end_count_by_reason),
             "known_active_duration_ms_sum_by_end_reason": dict(
                 self.known_active_duration_ms_sum_by_end_reason
@@ -4656,6 +4672,7 @@ class RadarReducer:
                         aggregate.coverage or DetectorCoverage.DEGRADED,
                         snapshot.trusted_time,
                         boundary.received_monotonic_ms,
+                        boundary.causal_seq,
                     )
             if snapshot.acceptance_eligible and aggregate.coverage is DetectorCoverage.COMPLETE:
                 counter = self._scope_counter(
@@ -4788,14 +4805,14 @@ class RadarReducer:
         coverage: DetectorCoverage,
         trusted: TimeInterval,
         monotonic_ms: int,
+        activation_causal_seq: int,
     ) -> None:
         episode_id = result.transition.activated_episode_id
         calculation = result.calculation
         if episode_id is None or calculation is None:
-            raise RuntimeError("activation lacks full calculation")
+            raise RuntimeError("activation lacks its full calculation")
         counter = self._scope_counter(instrument.option_type, calculation.band.band_id)
-        counter.distinct_anomaly_episode_count += 1
-        counter.anomaly_activation_transition_count += 1
+        counter.record_candidate_activation(activation_causal_seq)
         self._episode_started_ms[episode_id] = monotonic_ms
         self._episode_last_trusted_ms[episode_id] = monotonic_ms
         self._episode_paused_duration_ms[episode_id] = 0

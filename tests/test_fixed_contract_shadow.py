@@ -65,13 +65,13 @@ from short_vol_underwriting import (
 from short_vol_underwriting import (
     FactBoundary as DownstreamFactBoundary,
 )
+from short_vol_underwriting.constants import (
+    POSITION_POLICY_IDENTITY,
+    RADAR_POLICY_IDENTITY,
+    UNDERWRITING_POLICY_IDENTITY,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
-RADAR_POLICY_IDENTITY = "sha256:2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
-UNDERWRITING_POLICY_IDENTITY = (
-    "sha256:be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af"
-)
-POSITION_POLICY_IDENTITY = "sha256:498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439"
 
 
 class _HistoryObserver:
@@ -658,8 +658,11 @@ def test_workbench_underwriting_metadata_reuses_unchanged_snapshot(
     reducer, adapter, _owner = _shadow_system(tmp_path)
     reducer.trackers.clear()
     _activate_real_episode(reducer)
+    causal_seq = (
+        reducer.policy.tte_bands[0].option_rules[OptionType.CALL].activation_observation_count
+    )
     commit = _commit(
-        causal_seq=2,
+        causal_seq=causal_seq,
         monotonic_ms=120,
         cause=CausalCause.COMBO_BOOK_CHANGED,
     )

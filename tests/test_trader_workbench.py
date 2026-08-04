@@ -176,6 +176,57 @@ def test_radar_projection_binds_atomic_state_to_active_episode_identity() -> Non
     assert row["public_atomic_quote_state"] == "PUBLIC_ATOMIC_QUOTE_AVAILABLE"
 
 
+def test_radar_projection_explains_candidate_baseline_sampling_and_selection() -> None:
+    baseline = SimpleNamespace(
+        annualized_volatility="0.72",
+        return_interval_minutes=5,
+        selected_lookback_minutes=120,
+    )
+    calculation = SimpleNamespace(
+        executable_sell_price_usdc="123.45",
+        executable_bid_iv=SimpleNamespace(lower="0.80", upper="0.81"),
+        baseline=baseline,
+        richness=SimpleNamespace(lower="1.20", upper="1.21"),
+    )
+    reducer = cast(
+        RadarReducer,
+        SimpleNamespace(
+            options={
+                "BTC-TEST": SimpleNamespace(
+                    expiration_timestamp_ms=10_000,
+                    option_type=SimpleNamespace(value="call"),
+                    strike=100,
+                )
+            },
+            results={
+                "BTC-TEST": SimpleNamespace(
+                    detector_state=DetectorState.NO_ANOMALY,
+                    reason="BELOW_ACTIVATION",
+                    known_evaluation=True,
+                    band_id="band",
+                    calculation=calculation,
+                )
+            },
+            trackers={},
+            atomic_states={},
+            episode_started_monotonic_ms=lambda _episode: None,
+            episode_active_duration_ms=lambda _episode, *, observed_monotonic_ms: None,
+        ),
+    )
+    commit = CausalCommit(
+        boundary=FactBoundary(1, 1, 200, 1),
+        cause=CausalCause.TIME_BOUNDARY,
+        failure_domain=FailureScope.CLOCK_INDEX,
+        affected_scopes=("GLOBAL",),
+    )
+
+    (row,) = workbench_module._radar_rows(reducer, commit, None)
+
+    assert row["baseline_return_interval_minutes"] == 5
+    assert row["baseline_selected_lookback_minutes"] == 120
+    assert row["baseline_source"] == "TRAILING_REALIZED_VARIANCE"
+
+
 def test_radar_projection_uses_not_evaluated_without_active_detector_truth() -> None:
     episode_identity = "sha256:" + "8" * 64
     reducer = cast(
@@ -648,6 +699,17 @@ assert.equal(api.radarCellValue({{
   detector_state: 'UNKNOWN', known_evaluation: false
 }}, 'detector_reason', 'QUEUE_LAG_CURRENTNESS'),
   '处理队列延迟, 行情时效性不可确认');
+assert.equal(api.radarCellValue({{
+  detector_state: 'ANOMALY_ACTIVE', known_evaluation: true
+}}, 'baseline_return_interval_minutes', 5), '5 分钟');
+assert.equal(api.radarCellValue({{
+  detector_state: 'ANOMALY_ACTIVE', known_evaluation: true,
+  baseline_source: 'TRAILING_REALIZED_VARIANCE'
+}}, 'baseline_selected_lookback_minutes', 120), '120 分钟');
+assert.equal(api.radarCellValue({{
+  detector_state: 'ANOMALY_ACTIVE', known_evaluation: true,
+  baseline_source: 'ANNUALIZED_VARIANCE_FLOOR'
+}}, 'baseline_selected_lookback_minutes', null), '固定年化方差下限');
 
 assert.equal(api.underwritingCellValue({{
   availability: 'NOT_EVALUATED', action: null
@@ -667,7 +729,7 @@ assert.equal(api.underwritingCellValue({{
   availability: 'NOT_EVALUATED', action: null,
   unknown_reasons: ['RADAR_EPISODE_NOT_ACTIVE']
 }}, 'decision_reason', 'UNDERWRITING_NOT_EVALUATED:RADAR_EPISODE_NOT_ACTIVE'),
-  '当前无活跃 Radar 异常, 承保尚未评估');
+  '当前无活跃 Radar 候选, 承保尚未评估');
 assert.equal(api.underwritingCellValue({{
   availability: 'NOT_EVALUATED', action: null,
   unknown_reasons: ['NO_ACTIVE_COMBO']
@@ -730,6 +792,9 @@ assert.deepEqual(
 def test_browser_keeps_formatted_exact_facts_in_collapsed_details() -> None:
     for exact_field in (
         "executable IV exact",
+        "baseline return interval minutes",
+        "baseline selected lookback minutes",
+        "baseline source",
         "baseline volatility exact",
         "richness exact",
         "short strike exact",

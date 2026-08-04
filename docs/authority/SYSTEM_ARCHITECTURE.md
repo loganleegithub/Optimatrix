@@ -124,6 +124,9 @@ For Radar knownness, the funnel uses the canonical `IndexMinuteReducer` tail sta
 the settled reducer; it does not recalculate the Radar formula. The warmup gate is per Policy TTE
 band:
 
+- the Radar calculator samples that canonical tail into declared non-overlapping return intervals
+  and owns multi-horizon variance selection; no second index history or baseline owner exists;
+
 - an applicable countable evaluation with current index availability `WARMUP` is assigned to the
   visible startup/recovery bucket and never to the steady denominator;
 - the boundary at which that band first has an `AVAILABLE` tail is post-warmup;

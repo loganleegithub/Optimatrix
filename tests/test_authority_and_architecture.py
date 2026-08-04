@@ -174,20 +174,22 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_closes_a1_at_the_measured_downstream_blocker() -> None:
+def test_current_stage_authorizes_only_a2_candidate_validity_after_a1() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`RADAR_STEADY_STATE_KNOWNNESS_IMPLEMENTED`" in current
-    assert "**Production Short Vol Radar:** `POST_WARMUP_KNOWNNESS_OBSERVED`" in current
-    assert "**Live commands:** `NONE_AUTHORIZED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "`RADAR_CANDIDATE_GENERATOR_IMPLEMENTED_PENDING_OBSERVATION`" in current
+    assert "**Production Short Vol Radar:** `A2_CANDIDATE_VALIDITY_OBSERVATION_PENDING`" in current
+    assert "**Live commands:** `ONE_CONDITIONAL_43200_SECOND_A2_OBSERVATION`" in current
+    assert "**Sole authorized closure:** `SHORT_VOL_RADAR_CANDIDATE_VALIDITY`" in current
     assert "`1,556,097` `RADAR_KNOWN` evaluations: `100%`" in current
     assert "`PUBLIC_ATOMIC_QUOTE_AVAILABLE / NO_ACTIVE_COMBO`" in current
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_STEADY_STATE_KNOWNNESS.md").exists()
+    assert (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"
     )
     assert "observe-radar-knownness" not in entrypoint
+    assert "observe-radar-candidate-validity" in entrypoint
 
 
 def test_architecture_restores_applicable_scope_and_freezes_warmup_partition() -> None:
@@ -242,16 +244,16 @@ def test_internal_package_dependency_direction() -> None:
             assert not forbidden, f"{path} imports higher layers: {sorted(forbidden)}"
 
 
-def test_fixed_policy_files_remain_content_identified_and_unchanged() -> None:
+def test_fixed_policy_files_remain_content_identified_after_a2_chain_rebind() -> None:
     expected = {
         "policies/short-vol-fixed-public-shadow-radar.json": (
-            "2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
+            "61cad3f89f28f534a7c1817b896f95c7121ae7ddf5f2130b91fd16ae5e7f929b"
         ),
         "policies/short-vol-fixed-public-shadow-underwriting.json": (
-            "be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af"
+            "e459d16976df30b91af861e5eda71b4aa2782f9c4bda5a74d9c6bcdf06a9f134"
         ),
         "policies/short-vol-fixed-public-shadow-position.json": (
-            "498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439"
+            "c8a87ac5370272051ea94a9f0a9f05a261081469d57e6e42c14f6c8b0a9557da"
         ),
     }
     for relative, digest in expected.items():

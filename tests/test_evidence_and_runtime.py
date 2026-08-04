@@ -89,11 +89,13 @@ def anomaly_evidence() -> AnomalyEvidence:
         target_base_quantity_btc=Decimal("0.1"),
         rule=rule,
         baseline=BaselineResult(
-            ((5, Decimal("0.0001")),),
-            Decimal("0.0001"),
-            Decimal("0.2"),
-            Decimal("0.001"),
-            Decimal("0.002"),
+            return_interval_minutes=5,
+            window_variances=((5, Decimal("0.0001")),),
+            selected_lookback_minutes=5,
+            variance_rate_per_minute=Decimal("0.0001"),
+            annualized_volatility=Decimal("0.2"),
+            total_variance_low=Decimal("0.001"),
+            total_variance_high=Decimal("0.002"),
         ),
         trusted_time=TimeInterval(1_000, 1_001),
         remaining_life_years=DecimalInterval(Decimal("0.01"), Decimal("0.011")),
@@ -130,6 +132,19 @@ def atomic_evidence() -> AtomicEvidence:
         target_base_quantity_btc=Decimal("0.1"),
         source_timestamp_ms=2_000,
     )
+
+
+def test_scope_counts_collapse_correlated_instrument_activations_at_one_boundary() -> None:
+    scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
+
+    scope.record_candidate_activation(10)
+    scope.record_candidate_activation(10)
+    scope.record_candidate_activation(11)
+
+    assert scope.distinct_anomaly_episode_count == 3
+    assert scope.anomaly_activation_transition_count == 3
+    assert scope.candidate_activation_batch_count == 2
+    assert scope.as_object()["candidate_activation_batch_count"] == 2
 
 
 def summary_object(
@@ -215,6 +230,12 @@ def test_minimal_events_are_strict_unit_bearing_and_carry_non_claims() -> None:
     anomaly_non_claims = anomaly["non_claims"]
     assert isinstance(anomaly_non_claims, list)
     assert "NOT_VALIDATED_FORECAST" in anomaly_non_claims
+    assert "NOT_SURFACE_RELATIVE_MISPRICING_CLAIM" in anomaly_non_claims
+    assert "NOT_CALENDAR_OR_EVENT_FORECAST" in anomaly_non_claims
+    baseline = anomaly["baseline"]
+    assert isinstance(baseline, dict)
+    assert baseline["return_interval_minutes"] == 5
+    assert baseline["selected_lookback_minutes"] == 5
     assert atomic["object_kind"] == "PUBLIC_ATOMIC_QUOTE_EVENT"
     assert atomic["gross_entry_credit_usdc"] == "0.5"
     atomic_non_claims = atomic["non_claims"]

@@ -7,9 +7,11 @@
 ## Purpose
 
 Maintain the current Deribit BTC-USDC 0–72 hour option market in memory and tell the trader whether
-target-size executable sell-side implied volatility is unusually rich relative to one exact causal
-same-remaining-life baseline. While a short-leg anomaly is active, independently report whether an
-existing official Deribit combo exposes the authorized target-size 1:1 protective credit vertical.
+target-size executable sell-side implied volatility remains unusually rich relative to an exact
+causal, conservative multi-horizon BTC realized-volatility baseline. A positive state is a
+reviewable Radar candidate, not merely a point-in-time anomaly. While a short-leg candidate is
+active, independently report whether an existing official Deribit combo exposes the authorized
+target-size 1:1 protective credit vertical.
 
 The Radar is a current decision component. It does not persist anomaly, quote, no-anomaly, coverage,
 or run-summary objects. It does not decide whether to enter a Shadow Case, place an order, prove a
@@ -66,19 +68,42 @@ For one short-leg option at one causal boundary:
    Delta eligibility, trusted causal index close history, and numerical domain;
 2. solve Black total volatility from the consumed target-size executable bid;
 3. convert total volatility to an IV interval over the trusted remaining-life interval;
-4. compute the frozen weighted causal trailing-index variance rate and annualized volatility;
-5. classify the IV-richness interval against the Policy activation/clear boundaries.
+4. form non-overlapping five-minute log returns from the same causal minute-close owner;
+5. compute realized-variance rates over the trailing 30-minute, 120-minute, and 360-minute windows;
+6. use the highest window variance rate or the annualized variance floor, whichever is more
+   conservative for a short-vol screen;
+7. classify the IV-richness interval against the Policy activation/clear boundaries.
 
-The calculation is a pointwise hypothesis, not a delivery-TWAP forecast, physical probability,
-model-free VRP estimate, or proven edge. Numeric thresholds live only in the content-identified
-Radar Policy.
+The calculation is a causal candidate screen, not a delivery-TWAP forecast, event/calendar model,
+surface-relative mispricing test, physical probability, model-free VRP estimate, or proven edge.
+It uses no SPX-transferred parameter, fitted coefficient, or future observation. Numeric thresholds
+live only in the content-identified Radar Policy.
+
+The five-minute sampling choice follows BTC-specific evidence that five-minute realized variance
+can outperform alternative realized measures. The multiple horizons follow the long-memory idea
+behind HAR-RV, but A2 deliberately takes the maximum rather than importing or fitting a forecasting
+regression. Bitcoin evidence also shows regime-dependent variance premia and asymmetric tail risk,
+so this Policy does not turn historical VRP into a profitability claim. Deribit's 24/7 expiry and
+weekend structure is not treated as SPX market hours or as an automatic weekend edge.
+
+Design references:
+
+- Takahiro Hattori, [Does 5-Minute RV Outperform Other Realized Measures in the Cryptocurrency
+  Market?](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3416106);
+- Fulvio Corsi, [A Simple Long Memory Model of Realized Volatility](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1365738);
+- Gkillas et al., [Forecasting realised volatility of Bitcoin](https://repository.up.ac.za/bitstream/handle/2263/84189/Gkillas_Forecasting_2021.pdf);
+- [Bitcoin Options: Finding Edge in Four Years of Volatility Regimes](https://insights.deribit.com/industry/bitcoin-options-finding-edge-in-four-years-of-volatility-regimes/);
+- [Selling Weekend Vol Revisited](https://insights.deribit.com/education/option-backtest-selling-weekend-vol-revisited/);
+- Deribit [Contract Introduction Policy](https://support.deribit.com/hc/en-us/articles/25944688876957-Contract-Introduction-Policy).
 
 ## Episode semantics
 
 One episode identity is namespaced by runtime, Radar Policy, short-leg instrument, and activation
-causal sequence. Activation and clear persistence use only countable changed economic observations.
-Repeated bytes, heartbeat, arbitrary polling, display publication, and unchanged recomputation do
-not advance persistence.
+causal sequence. Activation requires three qualifying countable observations separated by at least
+five minutes, so the first-to-third span is at least ten minutes. Clear requires two qualifying
+observations separated by at least five minutes. Repeated bytes, heartbeat, arbitrary polling,
+display publication, unchanged recomputation, and multiple changes inside one separation interval
+do not advance persistence.
 
 An episode ends on clear, known ineligibility, scope/membership loss, required detector fact loss,
 continuity loss, or run stop. A source gap ends it as unknown; a later resync requires fresh
@@ -118,8 +143,9 @@ After each settled transaction the Radar exposes current typed state to:
 - the read-only Workbench;
 - bounded in-memory funnel diagnostics.
 
-A trader-facing row should state the instrument, TTE, executable sell price, IV/baseline/richness,
-episode state, atomic state, blocker reason, and what change would upgrade or invalidate it.
+A trader-facing row should state the instrument, TTE, executable sell price, five-minute return
+sampling, selected conservative horizon or floor, IV/baseline/richness, candidate episode state,
+atomic state, blocker reason, and what change would upgrade or invalidate it.
 
 Neither an anomaly nor an atomic quote is a durable record. Only a later admitted
 `SHADOW_CASE_OPENED` may freeze the exact Radar and quote facts it consumed.
@@ -156,11 +182,18 @@ not hidden as startup.
 Counters are current operational product diagnostics. They are not research evidence, acceptance
 receipts, Cohort denominators, or full-market reconstruction.
 
+Candidate diagnostics keep two units distinct: instrument Episodes count every activated contract;
+an activation batch collapses all same-option-type/same-band activations at one causal boundary.
+The latter is the trader-readable count of temporally distinct volatility clues for this screen, but
+it is not a claim of statistical independence across batches, directions, expiries, or regimes.
+
 ## Required verification
 
-Direct tests own formula boundaries, missingness, continuity, episode transitions, exact combo
-orientation, target depth, signed credit, one-reducer ordering, warmup partitioning, and finite
-UNKNOWN reasons. A separately authorized bounded public smoke may prove connectivity, a positive
-post-warmup applicable denominator, and the naturally observed known proportion. It does not
-require a natural anomaly or Shadow admission and creates no durable Radar evidence. When no
-Shadow Case opens, durable Shadow Case files must remain zero.
+Direct tests own five-minute sampling, multi-horizon maximum and floor selection, causal warmup,
+formula boundaries, missingness, continuity, episode persistence, exact combo orientation, target
+depth, signed credit, one-reducer ordering, warmup partitioning, and finite UNKNOWN reasons. The
+single separately authorized 43,200-second public observation may establish connectivity, a
+positive post-warmup applicable denominator, the naturally observed known proportion, candidate
+Episode count/duration/end reasons, and the naturally reached next funnel loss. It does not require
+a natural candidate or Shadow admission, does not prove future frequency or edge, and creates no
+durable Radar evidence. When no Shadow Case opens, durable Shadow Case files must remain zero.
