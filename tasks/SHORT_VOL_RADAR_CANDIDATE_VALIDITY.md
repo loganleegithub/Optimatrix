@@ -10,7 +10,7 @@
 
 **Base commit:** `42973ad66c348025a0d9ec38239311e8ac0dae64`
 
-**Target branch/PR:** `codex/short-vol-radar-candidate-validity` / Draft PR to be opened
+**Target branch/PR:** `codex/short-vol-radar-candidate-validity` / Draft PR `#20`
 
 **Owning authority/contract:**
 [`CURRENT_STAGE`](../docs/authority/CURRENT_STAGE.md),
