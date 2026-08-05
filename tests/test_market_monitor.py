@@ -140,8 +140,14 @@ def test_index_history_open_provider_bucket_may_change_without_revision() -> Non
         maximum_lookback_minutes=5,
         return_interval_minutes=5,
     )
-    assert reducer.apply_chart_result([[0, 100], [300_000, 101], [600_000, 102]])
-    assert reducer.apply_chart_result([[0, 100], [300_000, 101], [600_000, 103]])
+    assert reducer.apply_chart_result(
+        [[0, 100], [300_000, 101], [600_000, 102]],
+        trusted_time=TimeInterval(600_000, 600_000),
+    )
+    assert reducer.apply_chart_result(
+        [[0, 100], [300_000, 101], [600_000, 103]],
+        trusted_time=TimeInterval(900_000, 900_000),
+    )
     state = reducer.current_tail(
         5,
         trusted_time=TimeInterval(900_000, 900_000),
@@ -151,6 +157,44 @@ def test_index_history_open_provider_bucket_may_change_without_revision() -> Non
     assert state.contract is not None
     assert state.contract.revision_count == 0
     assert not state.contract.revision_pending
+
+
+def test_index_history_revision_of_previously_consumed_newest_point_fails_closed() -> None:
+    reducer = IndexHistoryReducer(
+        maximum_lookback_minutes=5,
+        return_interval_minutes=5,
+    )
+    initial = [[0, 100], [300_000, 101], [600_000, 102]]
+    assert reducer.apply_chart_result(
+        initial,
+        trusted_time=TimeInterval(900_000, 900_000),
+    )
+    consumed = reducer.current_tail(
+        5,
+        trusted_time=TimeInterval(900_000, 900_000),
+        source_stale_deadline_ms=900_000,
+    )
+    assert consumed.availability is IndexAvailabilityState.AVAILABLE
+    assert consumed.points[-1].timestamp_ms == 600_000
+    assert consumed.contract is not None
+    assert not consumed.contract.newest_response_point_excluded_by_completion_cutoff
+
+    revised = [*initial[:-1], [600_000, Decimal("102.01")]]
+    assert reducer.apply_chart_result(
+        revised,
+        trusted_time=TimeInterval(900_000, 900_000),
+    )
+    state = reducer.current_tail(
+        5,
+        trusted_time=TimeInterval(900_000, 900_000),
+        source_stale_deadline_ms=900_000,
+    )
+
+    assert state.availability is IndexAvailabilityState.REVISION
+    assert state.reason == "INDEX_HISTORY_REVISION"
+    assert state.contract is not None
+    assert state.contract.revision_pending
+    assert state.contract.revised_timestamps_ms == (600_000,)
 
 
 def test_index_history_distinguishes_no_response_from_a_valid_empty_response() -> None:

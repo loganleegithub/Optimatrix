@@ -77,6 +77,7 @@ class IndexHistoryReducer:
         self._revision_pending = False
         self._revision_count = 0
         self._revised_timestamps: tuple[int, ...] = ()
+        self._completed_cutoff_ms: int | None = None
 
     @property
     def points(self) -> tuple[IndexHistoryPoint, ...]:
@@ -86,7 +87,12 @@ class IndexHistoryReducer:
     def revision_pending(self) -> bool:
         return self._revision_pending
 
-    def apply_chart_result(self, value: object) -> bool:
+    def apply_chart_result(
+        self,
+        value: object,
+        *,
+        trusted_time: TimeInterval | None = None,
+    ) -> bool:
         rows = require_list(value, "index chart result")
         if len(rows) > MAX_INDEX_HISTORY_POINTS:
             raise SourceDataError("index chart result exceeds the bounded point limit")
@@ -117,6 +123,9 @@ class IndexHistoryReducer:
             # replacement generation when every previously revised completed point is stable.
             self._revision_pending = False
             self._revised_timestamps = ()
+        if trusted_time is not None:
+            interval_ms = self.return_interval_minutes * MINUTE_MS
+            self._completed_cutoff_ms = trusted_time.lower_ms - interval_ms
         self._points = parsed
         self._has_response = True
         return changed
@@ -135,15 +144,21 @@ class IndexHistoryReducer:
             for timestamp in self._revised_timestamps
         )
 
-    @staticmethod
     def _completed_overlap_revisions(
+        self,
         previous: tuple[IndexHistoryPoint, ...],
         current: tuple[IndexHistoryPoint, ...],
     ) -> tuple[int, ...]:
         if len(previous) < 2 or not current:
             return ()
-        # The newest point in the previous response may still be the provider's open bucket.
-        previous_completed = {point.timestamp_ms: point.average_price for point in previous[:-1]}
+        if self._completed_cutoff_ms is None:
+            # Before trusted time exists, only the previous response's newest point may be open.
+            completed = previous[:-1]
+        else:
+            completed = tuple(
+                point for point in previous if point.timestamp_ms <= self._completed_cutoff_ms
+            )
+        previous_completed = {point.timestamp_ms: point.average_price for point in completed}
         return tuple(
             point.timestamp_ms
             for point in current

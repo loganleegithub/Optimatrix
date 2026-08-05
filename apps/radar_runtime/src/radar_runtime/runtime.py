@@ -1862,8 +1862,17 @@ class RadarReducer:
                 )
                 self._drain_held_frames(boundary)
         elif request.purpose is RpcPurpose.INDEX_HISTORY:
+            history_trusted_time: TimeInterval | None = None
+            if self.clock is not None:
+                try:
+                    history_trusted_time = self.clock.interval_at(boundary.received_monotonic_ms)
+                except (ContinuityGap, ValueError):
+                    pass
             try:
-                history_changed = self.index_history.apply_chart_result(result)
+                history_changed = self.index_history.apply_chart_result(
+                    result,
+                    trusted_time=history_trusted_time,
+                )
             except SourceDataError as exc:
                 raise PublicProtocolIncompatibility(
                     "public/get_index_chart_data response shape is incompatible"
