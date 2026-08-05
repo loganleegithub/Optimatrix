@@ -13,11 +13,11 @@ from enum import StrEnum
 from typing import Protocol, cast
 
 from market_monitor import (
-    BaselinePublicationPhase,
     BookState,
     ContinuityGap,
     ContinuousOrderBook,
     IndexAvailabilityState,
+    IndexHistoryReducer,
     IndexMinuteReducer,
     IndexPublicationBoundary,
     IndexPublicationUpdate,
@@ -126,6 +126,7 @@ from radar_runtime.deribit_public import (
 PUBLIC_RPC_METHODS = frozenset(
     {
         "public/get_combos",
+        "public/get_index_chart_data",
         "public/get_instrument",
         "public/get_instruments",
         "public/get_time",
@@ -357,6 +358,7 @@ class RpcPurpose(StrEnum):
     PLATFORM_STATUS = "PLATFORM_STATUS"
     CLOCK_BOOTSTRAP = "CLOCK_BOOTSTRAP"
     CLOCK_REFRESH = "CLOCK_REFRESH"
+    INDEX_HISTORY = "INDEX_HISTORY"
     OPTION_CATALOG = "OPTION_CATALOG"
     OPTION_METADATA = "OPTION_METADATA"
     COMBO_CATALOG = "COMBO_CATALOG"
@@ -679,6 +681,10 @@ class RadarReducer:
             AggregateDetectorResult,
         ] = {}
         self.index = IndexMinuteReducer(policy.largest_lookback_minutes)
+        self.index_history = IndexHistoryReducer(
+            maximum_lookback_minutes=policy.largest_lookback_minutes,
+            return_interval_minutes=policy.return_interval_minutes,
+        )
         self.clock: TrustedClock | None = None
         self.diagnostics = RuntimeDiagnostics()
         self.pending_rpcs: dict[int, PendingRpc] = {}
@@ -753,6 +759,7 @@ class RadarReducer:
         self._index_coverage_generation: int | None = None
         self._index_gap_active = False
         self._next_clock_refresh_ms: int | None = None
+        self._next_index_history_refresh_ms: int | None = None
         self._next_option_catalog_recovery_ms: int | None = None
         self._next_combo_catalog_recovery_ms: int | None = None
         self._fact_transaction_active = False
@@ -842,6 +849,10 @@ class RadarReducer:
         self.atomic_states.clear()
         self.aggregate_results.clear()
         self.index = IndexMinuteReducer(self.policy.largest_lookback_minutes)
+        self.index_history = IndexHistoryReducer(
+            maximum_lookback_minutes=self.policy.largest_lookback_minutes,
+            return_interval_minutes=self.policy.return_interval_minutes,
+        )
         self.clock = None
         self._last_time_currentness_token = None
         self._last_time_currentness_by_instrument.clear()
@@ -867,6 +878,7 @@ class RadarReducer:
         self._next_clock_refresh_ms = (
             monotonic_ms + self.policy.runtime_limits.clock_refresh_interval_ms
         )
+        self._next_index_history_refresh_ms = None
         self._next_option_catalog_recovery_ms = None
         self._next_combo_catalog_recovery_ms = None
         self._queue_lag_currentness_active = False
@@ -1849,6 +1861,27 @@ class RadarReducer:
                     release_index_generation,
                 )
                 self._drain_held_frames(boundary)
+        elif request.purpose is RpcPurpose.INDEX_HISTORY:
+            try:
+                history_changed = self.index_history.apply_chart_result(result)
+            except SourceDataError as exc:
+                raise PublicProtocolIncompatibility(
+                    "public/get_index_chart_data response shape is incompatible"
+                ) from exc
+            self._next_index_history_refresh_ms = (
+                boundary.received_monotonic_ms
+                + self.policy.runtime_limits.index_history_refresh_interval_ms
+            )
+            self._settle_fact(
+                commit=CausalCommit(
+                    boundary=boundary,
+                    cause=CausalCause.INDEX_HISTORY,
+                    failure_domain=FailureScope.CLOCK_INDEX,
+                    affected_scopes=("GLOBAL",),
+                ),
+                affected_instruments=tuple(self.options),
+                countable=history_changed,
+            )
         elif request.purpose is RpcPurpose.OPTION_CATALOG:
             source_valid = self._apply_option_snapshot(result, boundary)
         elif request.purpose is RpcPurpose.OPTION_METADATA:
@@ -1888,6 +1921,22 @@ class RadarReducer:
                         boundary=self._current_fact_boundary(),
                     ),
                 )
+            )
+            return
+        if request.purpose is RpcPurpose.INDEX_HISTORY:
+            boundary = self._current_fact_boundary()
+            self._next_index_history_refresh_ms = (
+                boundary.received_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
+            )
+            self._settle_fact(
+                commit=CausalCommit(
+                    boundary=boundary,
+                    cause=CausalCause.INDEX_HISTORY,
+                    failure_domain=FailureScope.CLOCK_INDEX,
+                    affected_scopes=("GLOBAL",),
+                ),
+                affected_instruments=tuple(self.options),
+                countable=False,
             )
             return
         if request.purpose in {
@@ -2276,8 +2325,24 @@ class RadarReducer:
             origin_boundary=boundary,
             failure_scope=FailureScope.CLOCK_INDEX,
         )
+        self._schedule_index_history_refresh(boundary)
         self._schedule_option_catalog_refresh(boundary)
         self._schedule_combo_refresh(boundary)
+
+    def _schedule_index_history_refresh(self, boundary: FactBoundary) -> PendingRpc:
+        self._next_index_history_refresh_ms = (
+            boundary.received_monotonic_ms
+            + self.policy.runtime_limits.index_history_refresh_interval_ms
+        )
+        return self._schedule(
+            purpose=RpcPurpose.INDEX_HISTORY,
+            method="public/get_index_chart_data",
+            params={"index_name": "btc_usdc", "range": "1d"},
+            scope="INDEX_HISTORY",
+            generation=None,
+            origin_boundary=boundary,
+            failure_scope=FailureScope.CLOCK_INDEX,
+        )
 
     def _note_post_status_bootstrap_success(
         self,
@@ -4016,22 +4081,18 @@ class RadarReducer:
         if applicability.band is None:
             tail_identity: tuple[object, ...] = ()
         else:
-            tail = self.index.current_tail(
+            tail = self.index_history.current_tail(
                 max(applicability.band.lookbacks_minutes),
                 trusted_time=trusted,
                 source_stale_deadline_ms=(
-                    self.policy.runtime_limits.index_source_stale_deadline_ms
+                    self.policy.runtime_limits.index_history_source_stale_deadline_ms
                 ),
             )
-            tail_state = tail.availability.value
-            if (
-                tail.availability is IndexAvailabilityState.AVAILABLE
-                and tail.publication_phase is not BaselinePublicationPhase.CURRENT
-            ):
-                tail_state = tail.publication_phase.value
             tail_identity = (
-                tail_state,
-                tuple((close.minute_start_ms, close.causal_seq) for close in tail.closes),
+                tail.availability.value,
+                tail.reason,
+                tail.latest_source_timestamp_ms,
+                tuple((point.timestamp_ms, point.average_price) for point in tail.points),
             )
         return (
             applicability.classification.value,
@@ -4261,7 +4322,6 @@ class RadarReducer:
                         self.aggregate_results.pop(aggregate_key, None)
         prepared: list[ScopeCurrent] = []
         global_gap_reasons: set[str] = set()
-        global_gap_scope_labels: set[str] = set()
         global_gap_reason: str | None = None
         global_gap_effect: CausalEffect | None = None
         global_resubscribe = False
@@ -4278,44 +4338,6 @@ class RadarReducer:
             }:
                 global_resubscribe = True
                 global_resubscribe_reason = publication_update.currentness_lost_reason
-        for name in names:
-            instrument = self.options[name]
-            applicability = classify_time_applicability(
-                self.policy,
-                expiration_timestamp_ms=instrument.expiration_timestamp_ms,
-                trusted_time=trusted,
-                option_type=instrument.option_type,
-            )
-            tail = None
-            if applicability.band is not None:
-                tail = self.index.current_tail(
-                    max(applicability.band.lookbacks_minutes),
-                    trusted_time=trusted,
-                    source_stale_deadline_ms=(
-                        self.policy.runtime_limits.index_source_stale_deadline_ms
-                    ),
-                )
-                if tail.availability in {
-                    IndexAvailabilityState.WINDOW_GAP,
-                    IndexAvailabilityState.SOURCE_STALE,
-                    IndexAvailabilityState.CONTINUITY_GAP,
-                }:
-                    global_gap_reasons.add(tail.reason or "INDEX_CONTINUITY_GAP")
-                    global_gap_scope_labels.add(
-                        "SCOPE:"
-                        f"{instrument.expiration_timestamp_ms}:"
-                        f"{instrument.option_type.value}:"
-                        f"{applicability.band.band_id}"
-                    )
-                if tail.availability in {
-                    IndexAvailabilityState.SOURCE_STALE,
-                    IndexAvailabilityState.CONTINUITY_GAP,
-                }:
-                    global_resubscribe = True
-                    if tail.availability is IndexAvailabilityState.CONTINUITY_GAP:
-                        global_resubscribe_reason = "INDEX_CONTINUITY_GAP"
-                    elif global_resubscribe_reason is None:
-                        global_resubscribe_reason = "INDEX_SOURCE_STALE"
         if global_gap_reasons:
             global_gap_reason = next(
                 reason
@@ -4326,21 +4348,10 @@ class RadarReducer:
                 )
                 if reason in global_gap_reasons
             )
-            gap_affected_scopes = (
-                ("GLOBAL",)
-                if global_gap_reason
-                in {
-                    "INDEX_CONTINUITY_GAP",
-                    "INDEX_SOURCE_STALE",
-                }
-                or not global_gap_scope_labels
-                or len(global_gap_scope_labels) > 256
-                else tuple(sorted(global_gap_scope_labels))
-            )
             global_gap_effect = CausalEffect(
                 cause=CausalCause(global_gap_reason),
                 failure_domain=FailureScope.CLOCK_INDEX,
-                affected_scopes=gap_affected_scopes,
+                affected_scopes=("GLOBAL",),
             )
             transaction_commit = self._freeze_fact_commit(
                 commit,
@@ -4411,11 +4422,11 @@ class RadarReducer:
                 option_type=instrument.option_type,
             )
             tail = (
-                self.index.current_tail(
+                self.index_history.current_tail(
                     max(applicability.band.lookbacks_minutes),
                     trusted_time=trusted,
                     source_stale_deadline_ms=(
-                        self.policy.runtime_limits.index_source_stale_deadline_ms
+                        self.policy.runtime_limits.index_history_source_stale_deadline_ms
                     ),
                 )
                 if applicability.band is not None
@@ -5825,6 +5836,15 @@ class RadarReducer:
             self._next_clock_refresh_ms = (
                 monotonic_ms + self.policy.runtime_limits.clock_refresh_interval_ms
             )
+        if (
+            self._next_index_history_refresh_ms is not None
+            and monotonic_ms >= self._next_index_history_refresh_ms
+            and not any(
+                request.purpose is RpcPurpose.INDEX_HISTORY
+                for request in self.pending_rpcs.values()
+            )
+        ):
+            self._schedule_index_history_refresh(boundary)
         if (
             self._next_option_catalog_recovery_ms is not None
             and monotonic_ms >= self._next_option_catalog_recovery_ms

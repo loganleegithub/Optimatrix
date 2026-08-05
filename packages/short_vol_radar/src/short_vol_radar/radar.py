@@ -330,7 +330,7 @@ def calculate_current_evaluation(
         if causal_closes is None:
             raise BaselineUnavailable(baseline_unavailable_reason)
         baseline = compute_baseline(
-            closes=causal_closes,
+            sampled_prices=causal_closes,
             lookbacks=band.lookbacks_minutes,
             return_interval_minutes=band.return_interval_minutes,
             annualized_variance_floor=band.annualized_variance_floor,

@@ -224,7 +224,7 @@ def test_radar_projection_explains_candidate_baseline_sampling_and_selection() -
 
     assert row["baseline_return_interval_minutes"] == 5
     assert row["baseline_selected_lookback_minutes"] == 120
-    assert row["baseline_source"] == "TRAILING_REALIZED_VARIANCE"
+    assert row["baseline_source"] == "OFFICIAL_INDEX_CHART_REALIZED_VARIANCE"
 
 
 def test_radar_projection_uses_not_evaluated_without_active_detector_truth() -> None:
@@ -704,7 +704,7 @@ assert.equal(api.radarCellValue({{
 }}, 'baseline_return_interval_minutes', 5), '5 分钟');
 assert.equal(api.radarCellValue({{
   detector_state: 'ANOMALY_ACTIVE', known_evaluation: true,
-  baseline_source: 'TRAILING_REALIZED_VARIANCE'
+  baseline_source: 'OFFICIAL_INDEX_CHART_REALIZED_VARIANCE'
 }}, 'baseline_selected_lookback_minutes', 120), '120 分钟');
 assert.equal(api.radarCellValue({{
   detector_state: 'ANOMALY_ACTIVE', known_evaluation: true,

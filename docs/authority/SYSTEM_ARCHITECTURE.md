@@ -120,18 +120,23 @@ Instrument-specific source labels are normalized into bounded blocker categories
 cumulative counters. Exact current instrument/scope detail remains available in the ordinary
 Workbench rows; it cannot create an unbounded aggregate reason-key set.
 
-For Radar knownness, the funnel uses the canonical `IndexMinuteReducer` tail state already owned by
-the settled reducer; it does not recalculate the Radar formula. The warmup gate is per Policy TTE
-band:
+For Radar knownness, the funnel uses the canonical `IndexHistoryReducer` tail state already owned
+by the settled reducer; it does not recalculate the Radar formula. The history reducer is the sole
+validator and in-memory owner of the official `public/get_index_chart_data` response. It accepts
+only bounded, strictly chronological, positive finite BTC-USDC points and exposes an exact
+completed five-minute suffix without interpolation or synthetic gap filling. The warmup gate is per
+Policy TTE band:
 
-- the Radar calculator samples that canonical tail into declared non-overlapping return intervals
-  and owns multi-horizon variance selection; no second index history or baseline owner exists;
+- `IndexHistoryReducer` owns causal sampling and availability; the Radar baseline calculator owns
+  only multi-horizon variance selection over those samples. The streaming `IndexMinuteReducer`
+  continues to own live index currentness and publication, but no longer owns the economic
+  360-minute baseline;
 
 - an applicable countable evaluation with current index availability `WARMUP` is assigned to the
   visible startup/recovery bucket and never to the steady denominator;
 - the boundary at which that band first has an `AVAILABLE` tail is post-warmup;
-- after a band has been available, later `SOURCE_STALE`, `WINDOW_GAP`, or `CONTINUITY_GAP`
-  evaluations remain post-warmup steady-state UNKNOWNs;
+- after a band has been available, later history `SOURCE_STALE` or `WINDOW_GAP`, or live index
+  `CONTINUITY_GAP`, evaluations remain post-warmup steady-state UNKNOWNs;
 - a later `WARMUP` recovery interval returns to the startup/recovery bucket until availability is
   restored.
 
@@ -171,6 +176,8 @@ write route. The server binds only to loopback and supports the declared GET/HEA
 ## Failure domains
 
 - malformed or incompatible public protocol: fail the owning session or process as declared;
+- unavailable index-chart refresh: retain the last valid in-memory history until its Policy stale
+  deadline, then expose bounded Radar `UNKNOWN`; do not reconnect the streaming index;
 - local option/book/ticker missingness: `UNKNOWN` at the smallest consumer;
 - reconnect: rebuild current session facts without replacing the same in-process Shadow owner;
 - Workbench publication error: explicit process failure in the current simple topology, not stale

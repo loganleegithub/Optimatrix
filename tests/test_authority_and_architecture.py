@@ -177,9 +177,9 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
 def test_current_stage_authorizes_only_a2_candidate_validity_after_a1() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`RADAR_CANDIDATE_GENERATOR_IMPLEMENTED_PENDING_OBSERVATION`" in current
-    assert "**Production Short Vol Radar:** `A2_CANDIDATE_VALIDITY_OBSERVATION_PENDING`" in current
-    assert "**Live commands:** `ONE_CONDITIONAL_43200_SECOND_A2_OBSERVATION`" in current
+    assert "`RADAR_CANDIDATE_GENERATOR_OBSERVATION_REJECTED`" in current
+    assert "**Production Short Vol Radar:** `POST_WARMUP_APPLICABLE_SCOPE_NOT_REACHED`" in current
+    assert "**Live commands:** `NONE_AUTHORIZED`" in current
     assert "**Sole authorized closure:** `SHORT_VOL_RADAR_CANDIDATE_VALIDITY`" in current
     assert "`1,556,097` `RADAR_KNOWN` evaluations: `100%`" in current
     assert "`PUBLIC_ATOMIC_QUOTE_AVAILABLE / NO_ACTIVE_COMBO`" in current
@@ -189,7 +189,7 @@ def test_current_stage_authorizes_only_a2_candidate_validity_after_a1() -> None:
         encoding="utf-8"
     )
     assert "observe-radar-knownness" not in entrypoint
-    assert "observe-radar-candidate-validity" in entrypoint
+    assert "observe-radar-candidate-validity" not in entrypoint
 
 
 def test_architecture_restores_applicable_scope_and_freezes_warmup_partition() -> None:
@@ -247,13 +247,13 @@ def test_internal_package_dependency_direction() -> None:
 def test_fixed_policy_files_remain_content_identified_after_a2_chain_rebind() -> None:
     expected = {
         "policies/short-vol-fixed-public-shadow-radar.json": (
-            "61cad3f89f28f534a7c1817b896f95c7121ae7ddf5f2130b91fd16ae5e7f929b"
+            "4781317bb4c71e14dc7a9d24c577be7912f846d4196a5541da0909ab14b6c282"
         ),
         "policies/short-vol-fixed-public-shadow-underwriting.json": (
-            "e459d16976df30b91af861e5eda71b4aa2782f9c4bda5a74d9c6bcdf06a9f134"
+            "b8e14afe67f519f9b159f773fa35a1377a089cc3dec649b15cd8fa52301686bc"
         ),
         "policies/short-vol-fixed-public-shadow-position.json": (
-            "c8a87ac5370272051ea94a9f0a9f05a261081469d57e6e42c14f6c8b0a9557da"
+            "17be43bd7bf32f7a6f6c8b15756f34764b864ec7e0d04ada8766599a284064ef"
         ),
     }
     for relative, digest in expected.items():

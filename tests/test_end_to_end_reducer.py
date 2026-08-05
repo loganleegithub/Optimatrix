@@ -178,6 +178,7 @@ def run_nonempty_scenario(
         processed_monotonic_ms=1_003,
     )
     clock = only(bootstrap_commands, RpcPurpose.CLOCK_BOOTSTRAP)
+    index_history = only(bootstrap_commands, RpcPurpose.INDEX_HISTORY)
     option_catalog = only(bootstrap_commands, RpcPurpose.OPTION_CATALOG)
     combo_catalog = only(bootstrap_commands, RpcPurpose.COMBO_CATALOG)
     index_subscribe = only(
@@ -186,6 +187,16 @@ def run_nonempty_scenario(
             processed_monotonic_ms=1_004,
         ),
         RpcPurpose.SUBSCRIBE_CHANNELS,
+    )
+    reducer.reduce(
+        response(
+            reducer,
+            index_history,
+            [[0, 100], [300_000, 100]],
+            seq=5,
+            received_ms=1_004,
+        ),
+        processed_monotonic_ms=1_004,
     )
     reducer.reduce(
         response(

@@ -1,5 +1,5 @@
 {
-  "policy_schema_version": 4,
+  "policy_schema_version": 5,
   "policy_family": "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS",
   "target_base_quantity_btc": 0.1,
   "runtime_limits": {
@@ -9,6 +9,8 @@
     "clock_refresh_interval_ms": 15000,
     "clock_stale_deadline_ms": 45000,
     "index_source_stale_deadline_ms": 90000,
+    "index_history_refresh_interval_ms": 300000,
+    "index_history_source_stale_deadline_ms": 900000,
     "ticker_source_stale_deadline_ms": 300000,
     "notification_queue_lag_deadline_ms": 5000,
     "time_boundary_poll_interval_ms": 1000

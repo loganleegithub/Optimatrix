@@ -38,7 +38,7 @@ def _policy_with_ticker_stale_deadline(
 ) -> tuple[bytes, str]:
     exact, _ = policy_factory()
     document: dict[str, Any] = json.loads(exact)
-    document["policy_schema_version"] = 4
+    document["policy_schema_version"] = 5
     runtime_limits = document["runtime_limits"]
     assert isinstance(runtime_limits, dict)
     runtime_limits["ticker_source_stale_deadline_ms"] = deadline_ms
@@ -53,7 +53,7 @@ def test_policy_requires_and_binds_ticker_source_stale_deadline(
 
     policy = load_policy_bytes(exact, digest)
 
-    assert policy.schema_version == 4
+    assert policy.schema_version == 5
     assert policy.runtime_limits.ticker_source_stale_deadline_ms == 5_000
     assert policy.runtime_limits.as_object()["ticker_source_stale_deadline_ms"] == 5_000
 
@@ -88,8 +88,10 @@ def test_policy_loads_exact_bytes_once_and_binds_digest(
     path.write_bytes(exact)
     policy = load_policy(path, digest)
     assert policy.identity == digest
-    assert policy.schema_version == 4
+    assert policy.schema_version == 5
     assert policy.target_base_quantity_btc == Decimal("0.1")
+    assert policy.runtime_limits.index_history_refresh_interval_ms == 300_000
+    assert policy.runtime_limits.index_history_source_stale_deadline_ms == 900_000
     assert policy.largest_lookback_minutes == 5
     assert policy.tte_bands[0].return_interval_minutes == 5
     assert policy.runtime_limits.notification_queue_lag_deadline_ms == 1_000
@@ -106,9 +108,11 @@ def test_production_a2_policy_is_the_exact_authorized_candidate_screen() -> None
     exact = path.read_bytes()
     policy = load_policy_bytes(exact, digest_policy_bytes(exact))
 
-    assert policy.schema_version == 4
+    assert policy.schema_version == 5
     assert policy.family == "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS"
     assert policy.target_base_quantity_btc == Decimal("0.1")
+    assert policy.runtime_limits.index_history_refresh_interval_ms == 300_000
+    assert policy.runtime_limits.index_history_source_stale_deadline_ms == 900_000
     assert len(policy.tte_bands) == 1
     band = policy.tte_bands[0]
     assert (band.lower_bound_minutes, band.upper_bound_minutes) == (30, 4_320)
@@ -274,6 +278,12 @@ def test_policy_rejects_invalid_ticker_source_stale_deadline(
             lambda document: document["runtime_limits"].update(clock_stale_deadline_ms=30_000),
             "clock_stale_deadline_ms",
         ),
+        (
+            lambda document: document["runtime_limits"].update(
+                index_history_source_stale_deadline_ms=300_000
+            ),
+            "index_history_source_stale_deadline_ms",
+        ),
     ],
 )
 def test_policy_owns_and_validates_all_runtime_deadlines(
@@ -312,6 +322,21 @@ def test_band_selection_uses_full_uncertainty_interval(
         )
         is None
     )
+
+
+def test_policy_rejects_multiple_owners_for_the_history_sampling_interval(
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, _digest = policy_factory()
+    document: dict[str, Any] = json.loads(exact)
+    bands = document["tte_bands"]
+    assert isinstance(bands, list)
+    assert isinstance(bands[1], dict)
+    bands[1]["return_interval_minutes"] = 1
+    changed = json.dumps(document, separators=(",", ":"), sort_keys=True).encode()
+
+    with pytest.raises(PolicyError, match="share one return_interval_minutes owner"):
+        load_policy_bytes(changed, digest_policy_bytes(changed))
 
 
 def test_time_applicability_classifies_every_business_boundary(
@@ -356,7 +381,7 @@ def test_baseline_uses_non_overlapping_five_minute_returns_and_conservative_max(
         for item in ("100", "100", "100", "100", "100", "101", "101", "101", "101", "101", "110")
     )
     result = compute_baseline(
-        closes=closes,
+        sampled_prices=(closes[0], closes[5], closes[10]),
         lookbacks=(5, 10),
         return_interval_minutes=5,
         annualized_variance_floor=Decimal("0.01"),
@@ -373,7 +398,7 @@ def test_baseline_uses_non_overlapping_five_minute_returns_and_conservative_max(
     assert result.annualized_volatility > 0
 
     floored = compute_baseline(
-        closes=(Decimal(100),) * 6,
+        sampled_prices=(Decimal(100),) * 2,
         lookbacks=(5,),
         return_interval_minutes=5,
         annualized_variance_floor=Decimal("0.04"),
@@ -384,19 +409,10 @@ def test_baseline_uses_non_overlapping_five_minute_returns_and_conservative_max(
     assert floored.selected_lookback_minutes is None
 
 
-def test_baseline_ignores_intra_bucket_path_when_five_minute_endpoints_match() -> None:
-    quiet_path = tuple(
-        Decimal(value)
-        for value in ("100", "100", "100", "100", "100", "101", "101", "101", "101", "101", "102")
-    )
-    noisy_path = tuple(
-        Decimal(value)
-        for value in ("100", "80", "120", "90", "130", "101", "70", "140", "85", "125", "102")
-    )
-
-    def baseline(closes: tuple[Decimal, ...]) -> BaselineResult:
+def test_baseline_consumes_only_the_owning_five_minute_samples() -> None:
+    def baseline(sampled_prices: tuple[Decimal, ...]) -> BaselineResult:
         return compute_baseline(
-            closes=closes,
+            sampled_prices=sampled_prices,
             lookbacks=(10,),
             return_interval_minutes=5,
             annualized_variance_floor=Decimal("0.000001"),
@@ -404,13 +420,15 @@ def test_baseline_ignores_intra_bucket_path_when_five_minute_endpoints_match() -
             remaining_life_minutes_high=Decimal(60),
         )
 
-    assert baseline(quiet_path) == baseline(noisy_path)
+    result = baseline((Decimal("100"), Decimal("101"), Decimal("102")))
+    assert result.return_interval_minutes == 5
+    assert result.selected_lookback_minutes == 10
 
 
 def test_baseline_warmup_and_invalid_inputs_fail_closed() -> None:
     with pytest.raises(BaselineUnavailable, match="warm-up"):
         compute_baseline(
-            closes=(Decimal(100), Decimal(101)),
+            sampled_prices=(Decimal(100),),
             lookbacks=(5,),
             return_interval_minutes=5,
             annualized_variance_floor=Decimal("0.01"),
@@ -419,7 +437,7 @@ def test_baseline_warmup_and_invalid_inputs_fail_closed() -> None:
         )
     with pytest.raises(BaselineUnavailable, match="invalid price"):
         compute_baseline(
-            closes=(Decimal(100), Decimal(0)),
+            sampled_prices=(Decimal(100), Decimal(0)),
             lookbacks=(1,),
             return_interval_minutes=1,
             annualized_variance_floor=Decimal("0.01"),
@@ -429,7 +447,7 @@ def test_baseline_warmup_and_invalid_inputs_fail_closed() -> None:
 
     with pytest.raises(ValueError, match="divisible"):
         compute_baseline(
-            closes=(Decimal(100),) * 7,
+            sampled_prices=(Decimal(100),) * 7,
             lookbacks=(6,),
             return_interval_minutes=5,
             annualized_variance_floor=Decimal("0.01"),

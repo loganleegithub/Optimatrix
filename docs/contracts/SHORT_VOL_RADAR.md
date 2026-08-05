@@ -25,7 +25,7 @@ fill, estimate actual account risk, or qualify a Policy.
 - `0 < TTE <= 72 hours` under trusted Deribit time;
 - calls and puts evaluated separately;
 - official option and combo metadata, option ticker, option/combo order books, BTC-USDC index,
-  platform status, heartbeat, and public time;
+  official BTC-USDC index-chart history, platform status, heartbeat, and public time;
 - one exact target quantity and TTE-band Policy for the full run.
 
 No private/account, RFQ, combo-creation, order, trade, fill, balance, margin, settlement act, or test
@@ -65,10 +65,12 @@ An empty applicable universe is `NO_APPLICABLE_SCOPE`, not a vacuous `NO_ANOMALY
 For one short-leg option at one causal boundary:
 
 1. prove time-band applicability, option lifecycle, target quantity, target bid depth, forward,
-   Delta eligibility, trusted causal index close history, and numerical domain;
+   Delta eligibility, trusted causal index-chart history, and numerical domain;
 2. solve Black total volatility from the consumed target-size executable bid;
 3. convert total volatility to an IV interval over the trusted remaining-life interval;
-4. form non-overlapping five-minute log returns from the same causal minute-close owner;
+4. consume an exact suffix of completed non-overlapping five-minute average-index samples from the
+   official `public/get_index_chart_data` method (`btc_usdc`, `1d`), rejecting stale, missing,
+   non-chronological, or gapped input without interpolation;
 5. compute realized-variance rates over the trailing 30-minute, 120-minute, and 360-minute windows;
 6. use the highest window variance rate or the annualized variance floor, whichever is more
    conservative for a short-vol screen;
@@ -94,7 +96,8 @@ Design references:
 - Gkillas et al., [Forecasting realised volatility of Bitcoin](https://repository.up.ac.za/bitstream/handle/2263/84189/Gkillas_Forecasting_2021.pdf);
 - [Bitcoin Options: Finding Edge in Four Years of Volatility Regimes](https://insights.deribit.com/industry/bitcoin-options-finding-edge-in-four-years-of-volatility-regimes/);
 - [Selling Weekend Vol Revisited](https://insights.deribit.com/education/option-backtest-selling-weekend-vol-revisited/);
-- Deribit [Contract Introduction Policy](https://support.deribit.com/hc/en-us/articles/25944688876957-Contract-Introduction-Policy).
+- Deribit [Contract Introduction Policy](https://support.deribit.com/hc/en-us/articles/25944688876957-Contract-Introduction-Policy);
+- Deribit [`public/get_index_chart_data`](https://docs.deribit.com/api-reference/market-data/public-get_index_chart_data).
 
 ## Episode semantics
 
@@ -108,7 +111,9 @@ do not advance persistence.
 An episode ends on clear, known ineligibility, scope/membership loss, required detector fact loss,
 continuity loss, or run stop. A source gap ends it as unknown; a later resync requires fresh
 activation. An explicitly declared adjacent-band boundary may suspend and resume the same episode
-without treating normal index-publication timing as market blindness.
+without treating normal index-publication timing as market blindness. An unavailable history
+refresh keeps the last valid baseline only until the Policy stale deadline; it does not force a
+live-index resubscribe or create a second baseline owner.
 
 ## Official atomic availability
 
@@ -143,9 +148,9 @@ After each settled transaction the Radar exposes current typed state to:
 - the read-only Workbench;
 - bounded in-memory funnel diagnostics.
 
-A trader-facing row should state the instrument, TTE, executable sell price, five-minute return
-sampling, selected conservative horizon or floor, IV/baseline/richness, candidate episode state,
-atomic state, blocker reason, and what change would upgrade or invalidate it.
+A trader-facing row should state the instrument, TTE, executable sell price, official index-chart
+five-minute sampling, selected conservative horizon or floor, IV/baseline/richness, candidate
+episode state, atomic state, blocker reason, and what change would upgrade or invalidate it.
 
 Neither an anomaly nor an atomic quote is a durable record. Only a later admitted
 `SHADOW_CASE_OPENED` may freeze the exact Radar and quote facts it consumed.

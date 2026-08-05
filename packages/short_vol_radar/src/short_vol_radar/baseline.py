@@ -25,7 +25,7 @@ class BaselineResult:
 
 def compute_baseline(
     *,
-    closes: tuple[Decimal, ...],
+    sampled_prices: tuple[Decimal, ...],
     lookbacks: tuple[int, ...],
     return_interval_minutes: int,
     annualized_variance_floor: Decimal,
@@ -41,10 +41,11 @@ def compute_baseline(
         for lookback in lookbacks
     ):
         raise ValueError("lookbacks must be positive and divisible by return interval")
-    if len(closes) < max(lookbacks) + 1:
-        raise BaselineUnavailable("causal close history has not completed warm-up")
-    if any(close <= 0 or not close.is_finite() for close in closes):
-        raise BaselineUnavailable("close history contains an invalid price")
+    required_sample_count = max(lookbacks) // return_interval_minutes + 1
+    if len(sampled_prices) < required_sample_count:
+        raise BaselineUnavailable("causal sampled-price history has not completed warm-up")
+    if any(price <= 0 or not price.is_finite() for price in sampled_prices):
+        raise BaselineUnavailable("sampled-price history contains an invalid price")
     if not (
         Decimal(0) < remaining_life_minutes_low <= remaining_life_minutes_high
         and annualized_variance_floor > 0
@@ -54,8 +55,8 @@ def compute_baseline(
         with localcontext(DECIMAL_CONTEXT) as context:
             windows: list[tuple[int, Decimal]] = []
             for lookback in sorted(lookbacks):
-                window = closes[-(lookback + 1) :]
-                sampled = window[::return_interval_minutes]
+                sample_count = lookback // return_interval_minutes + 1
+                sampled = sampled_prices[-sample_count:]
                 returns = tuple(
                     context.ln(later) - context.ln(earlier) for earlier, later in pairwise(sampled)
                 )

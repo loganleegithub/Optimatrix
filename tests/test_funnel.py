@@ -58,10 +58,10 @@ def _reducer(
             results=results,
             policy=SimpleNamespace(
                 tte_bands=(SimpleNamespace(band_id=band_id, lookbacks_minutes=(1,)),),
-                runtime_limits=SimpleNamespace(index_source_stale_deadline_ms=90_000),
+                runtime_limits=SimpleNamespace(index_history_source_stale_deadline_ms=900_000),
             ),
             clock=SimpleNamespace(interval_at=lambda _monotonic_ms: object()),
-            index=SimpleNamespace(
+            index_history=SimpleNamespace(
                 current_tail=lambda _return_count, **_kwargs: SimpleNamespace(
                     availability=index_availability
                 )

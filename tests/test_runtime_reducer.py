@@ -1804,6 +1804,94 @@ def test_invalid_core_status_shape_is_fatal_protocol_incompatibility(
         )
 
 
+def test_post_status_schedules_the_official_btc_usdc_index_history_boundary(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    subscribe, seq = begin_through_bootstrap_subscribe(reducer)
+    commands = reducer.reduce(
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
+        processed_monotonic_ms=1_000 + seq,
+    )
+    commands, _seq = accept_platform_status(reducer, commands, seq=seq + 1)
+
+    history = only(commands, RpcPurpose.INDEX_HISTORY)
+
+    assert history.method == "public/get_index_chart_data"
+    assert history.params == {"index_name": "btc_usdc", "range": "1d"}
+    assert history.scope == "INDEX_HISTORY"
+    assert history.failure_scope is FailureScope.CLOCK_INDEX
+    assert RpcPurpose.INDEX_HISTORY not in runtime_module.POST_STATUS_BOOTSTRAP_PURPOSES
+
+
+def test_invalid_index_history_shape_is_a_protocol_incompatibility(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    subscribe, seq = begin_through_bootstrap_subscribe(reducer)
+    commands = reducer.reduce(
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
+        processed_monotonic_ms=1_000 + seq,
+    )
+    commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
+    history = only(commands, RpcPurpose.INDEX_HISTORY)
+
+    with pytest.raises(PublicProtocolError, match="get_index_chart_data"):
+        reducer.reduce(
+            response(reducer, history, {"unexpected": "shape"}, seq=seq + 1),
+            processed_monotonic_ms=1_001 + seq,
+        )
+
+
+def test_index_history_rpc_failure_preserves_clock_and_last_valid_history(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    reducer.pending_rpcs.clear()
+    clock = TrustedClock.from_response(
+        600_000,
+        1_000,
+        1_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer.clock = clock
+    reducer.index_history.apply_chart_result([[0, 100], [300_000, 101]])
+    history = reducer._schedule_index_history_refresh(reducer._current_fact_boundary())
+    reducer.reduce(
+        send_control(
+            history,
+            kind="SEND_COMPLETED",
+            boundary_ms=history.origin_boundary.received_monotonic_ms,
+        ),
+        processed_monotonic_ms=history.origin_boundary.received_monotonic_ms,
+    )
+
+    reducer.reduce(
+        envelope(
+            {
+                "id": history.request_id,
+                "error": {"code": 10_028, "message": "too_many_requests"},
+            },
+            seq=1,
+            received_ms=1_001,
+        ),
+        processed_monotonic_ms=1_001,
+    )
+
+    assert reducer.clock is clock
+    assert [point.average_price for point in reducer.index_history.points] == [
+        Decimal(100),
+        Decimal(101),
+    ]
+    retry_commands = reducer.advance_time(1_001 + reducer.policy.runtime_limits.rpc_deadline_ms)
+    retry = only(retry_commands, RpcPurpose.INDEX_HISTORY)
+    assert retry.params == {"index_name": "btc_usdc", "range": "1d"}
+
+
 @pytest.mark.parametrize(
     "status",
     [

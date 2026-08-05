@@ -724,7 +724,7 @@ def _radar_rows(
                     (
                         "ANNUALIZED_VARIANCE_FLOOR"
                         if calculation.baseline.selected_lookback_minutes is None
-                        else "TRAILING_REALIZED_VARIANCE"
+                        else "OFFICIAL_INDEX_CHART_REALIZED_VARIANCE"
                     )
                     if calculation is not None
                     else None

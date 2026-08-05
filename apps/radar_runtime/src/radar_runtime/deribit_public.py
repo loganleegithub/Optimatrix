@@ -18,6 +18,7 @@ PUBLIC_METHODS = frozenset(
         "public/subscribe",
         "public/unsubscribe",
         "public/get_instruments",
+        "public/get_index_chart_data",
         "public/get_instrument",
         "public/get_combos",
         "public/get_order_book",

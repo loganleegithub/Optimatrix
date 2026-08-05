@@ -12,6 +12,11 @@ from market_monitor.index import (
     MinuteClose,
     PublishedIndexTail,
 )
+from market_monitor.index_history import (
+    IndexHistoryPoint,
+    IndexHistoryReducer,
+    IndexHistoryState,
+)
 from market_monitor.types import ContinuityGap, PriceLevel, SourceDataError, TimeInterval
 
 __all__ = [
@@ -21,6 +26,9 @@ __all__ = [
     "ContinuousOrderBook",
     "IndexAvailabilityState",
     "IndexBaselineState",
+    "IndexHistoryPoint",
+    "IndexHistoryReducer",
+    "IndexHistoryState",
     "IndexMinuteReducer",
     "IndexPublicationBoundary",
     "IndexPublicationUpdate",

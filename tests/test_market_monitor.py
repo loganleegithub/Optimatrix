@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from itertools import pairwise
 
 import pytest
-from market_monitor import BookState, ContinuityGap, ContinuousOrderBook, TimeInterval, TrustedClock
+from market_monitor import (
+    BookState,
+    ContinuityGap,
+    ContinuousOrderBook,
+    IndexHistoryReducer,
+    TimeInterval,
+    TrustedClock,
+)
 from market_monitor.deribit import (
     INDEX_CHANNEL,
     CatalogBootstrap,
@@ -20,6 +28,80 @@ from market_monitor.index import (
     IndexPublicationBoundary,
 )
 from market_monitor.types import SourceDataError
+
+
+def test_index_history_selects_a_causal_five_minute_suffix_from_finer_chart_points() -> None:
+    reducer = IndexHistoryReducer(
+        maximum_lookback_minutes=360,
+        return_interval_minutes=5,
+    )
+    rows = [[minute * 60_000, 100 + minute / 100] for minute in range(400)]
+
+    assert reducer.apply_chart_result(rows)
+    tail = reducer.current_tail(
+        360,
+        trusted_time=TimeInterval(400 * 60_000, 400 * 60_000),
+        source_stale_deadline_ms=900_000,
+    )
+
+    assert tail.availability is IndexAvailabilityState.AVAILABLE
+    assert len(tail.points) == 73
+    assert tail.points[-1].timestamp_ms == 395 * 60_000
+    assert all(
+        later.timestamp_ms - earlier.timestamp_ms == 5 * 60_000
+        for earlier, later in pairwise(tail.points)
+    )
+
+
+def test_index_history_fails_closed_for_gap_staleness_and_invalid_shape() -> None:
+    reducer = IndexHistoryReducer(
+        maximum_lookback_minutes=30,
+        return_interval_minutes=5,
+    )
+    rows = [[minute * 60_000, 100] for minute in range(40) if minute != 20]
+    reducer.apply_chart_result(rows)
+
+    gap = reducer.current_tail(
+        30,
+        trusted_time=TimeInterval(40 * 60_000, 40 * 60_000),
+        source_stale_deadline_ms=900_000,
+    )
+    assert gap.availability is IndexAvailabilityState.WINDOW_GAP
+    assert gap.reason == "INDEX_HISTORY_WINDOW_GAP"
+
+    stale = reducer.current_tail(
+        30,
+        trusted_time=TimeInterval(60 * 60_000, 60 * 60_000),
+        source_stale_deadline_ms=900_000,
+    )
+    assert stale.availability is IndexAvailabilityState.SOURCE_STALE
+    assert stale.reason == "INDEX_HISTORY_SOURCE_STALE"
+
+    with pytest.raises(SourceDataError, match="strictly increasing"):
+        reducer.apply_chart_result([[0, 100], [0, 101]])
+
+
+def test_index_history_distinguishes_no_response_from_a_valid_empty_response() -> None:
+    reducer = IndexHistoryReducer(
+        maximum_lookback_minutes=30,
+        return_interval_minutes=5,
+    )
+    trusted = TimeInterval(1_000_000, 1_000_000)
+
+    bootstrap = reducer.current_tail(
+        30,
+        trusted_time=trusted,
+        source_stale_deadline_ms=900_000,
+    )
+    assert bootstrap.reason == "INDEX_HISTORY_BOOTSTRAP_REQUIRED"
+    assert reducer.apply_chart_result([])
+    warmup = reducer.current_tail(
+        30,
+        trusted_time=trusted,
+        source_stale_deadline_ms=900_000,
+    )
+    assert warmup.reason == "INDEX_HISTORY_WARMUP"
+    assert not reducer.apply_chart_result([])
 
 
 def snapshot(

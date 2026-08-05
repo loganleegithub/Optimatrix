@@ -64,6 +64,8 @@ class RuntimeLimits:
     clock_refresh_interval_ms: int
     clock_stale_deadline_ms: int
     index_source_stale_deadline_ms: int
+    index_history_refresh_interval_ms: int
+    index_history_source_stale_deadline_ms: int
     ticker_source_stale_deadline_ms: int
     notification_queue_lag_deadline_ms: int
     time_boundary_poll_interval_ms: int
@@ -76,6 +78,8 @@ class RuntimeLimits:
             "clock_refresh_interval_ms": self.clock_refresh_interval_ms,
             "clock_stale_deadline_ms": self.clock_stale_deadline_ms,
             "index_source_stale_deadline_ms": self.index_source_stale_deadline_ms,
+            "index_history_refresh_interval_ms": self.index_history_refresh_interval_ms,
+            "index_history_source_stale_deadline_ms": self.index_history_source_stale_deadline_ms,
             "ticker_source_stale_deadline_ms": self.ticker_source_stale_deadline_ms,
             "notification_queue_lag_deadline_ms": self.notification_queue_lag_deadline_ms,
             "time_boundary_poll_interval_ms": self.time_boundary_poll_interval_ms,
@@ -94,6 +98,13 @@ class RadarPolicy:
     @property
     def largest_lookback_minutes(self) -> int:
         return max(max(band.lookbacks_minutes) for band in self.tte_bands)
+
+    @property
+    def return_interval_minutes(self) -> int:
+        intervals = {band.return_interval_minutes for band in self.tte_bands}
+        if len(intervals) != 1:
+            raise RuntimeError("Radar Policy has inconsistent return intervals")
+        return next(iter(intervals))
 
 
 class TimeApplicability(StrEnum):
@@ -237,8 +248,8 @@ def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:
         "Policy",
     )
     schema_version = _positive_int(raw["policy_schema_version"], "policy_schema_version")
-    if schema_version != 4:
-        raise PolicyError("policy_schema_version must be exactly 4")
+    if schema_version != 5:
+        raise PolicyError("policy_schema_version must be exactly 5")
     family = raw["policy_family"]
     if family != POLICY_FAMILY:
         raise PolicyError(f"policy_family must be {POLICY_FAMILY}")
@@ -252,6 +263,8 @@ def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:
     if len(set(band_ids)) != len(band_ids):
         raise PolicyError("tte_bands band_id values must be unique")
     ordered = tuple(sorted(bands, key=lambda item: (item.lower_bound_minutes, item.band_id)))
+    if len({band.return_interval_minutes for band in ordered}) != 1:
+        raise PolicyError("tte_bands must share one return_interval_minutes owner")
     for previous, current in pairwise(ordered):
         if current.lower_bound_minutes < previous.upper_bound_minutes:
             raise PolicyError("tte_bands must not overlap")
@@ -275,6 +288,8 @@ def _parse_runtime_limits(value: object) -> RuntimeLimits:
         "clock_refresh_interval_ms",
         "clock_stale_deadline_ms",
         "index_source_stale_deadline_ms",
+        "index_history_refresh_interval_ms",
+        "index_history_source_stale_deadline_ms",
         "ticker_source_stale_deadline_ms",
         "notification_queue_lag_deadline_ms",
         "time_boundary_poll_interval_ms",
@@ -299,6 +314,14 @@ def _parse_runtime_limits(value: object) -> RuntimeLimits:
     if parsed["clock_stale_deadline_ms"] <= parsed["clock_refresh_interval_ms"]:
         raise PolicyError(
             "runtime_limits.clock_stale_deadline_ms must exceed clock refresh interval"
+        )
+    if (
+        parsed["index_history_source_stale_deadline_ms"]
+        <= parsed["index_history_refresh_interval_ms"]
+    ):
+        raise PolicyError(
+            "runtime_limits.index_history_source_stale_deadline_ms must exceed "
+            "the index history refresh interval"
         )
     return RuntimeLimits(**parsed)
 

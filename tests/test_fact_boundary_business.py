@@ -14,7 +14,7 @@ from market_monitor import (
     ContinuityGap,
     ContinuousOrderBook,
     IndexAvailabilityState,
-    IndexBaselineState,
+    IndexHistoryState,
     IndexPublicationBoundary,
     MinuteClose,
     PublishedIndexTail,
@@ -200,6 +200,7 @@ def complete_rpc_send(
 
 
 def seed_available_index(reducer: RadarReducer) -> None:
+    reducer.index_history.apply_chart_result([[300_000, 100], [600_000, 100]])
     reducer.index.start_continuous_coverage(600_000)
     for causal_seq, timestamp in enumerate(
         (600_001, 660_000, 720_000, 780_000, 840_000, 900_000, 960_000),
@@ -214,6 +215,7 @@ def seed_available_index(reducer: RadarReducer) -> None:
 
 
 def seed_flat_available_index(reducer: RadarReducer) -> None:
+    reducer.index_history.apply_chart_result([[300_000, 100], [600_000, 100]])
     reducer.index.start_continuous_coverage(600_000)
     for causal_seq, timestamp in enumerate(
         (600_001, 660_000, 720_000, 780_000, 840_000, 900_000, 960_000),
@@ -370,15 +372,10 @@ def test_one_global_index_gap_makes_every_instrument_unknown_in_same_fact_bounda
         first.instrument_name: TickerState(Decimal(100), "index_price", 1),
         second.instrument_name: TickerState(Decimal(100), "index_price", 1),
     }
-    reducer.index.gap()
-
-    reducer.settle_fact(
-        commit=fact_commit(
-            FactBoundary(1, 1, 1_001, 2),
-            CausalCause.INDEX_CONTINUITY_GAP,
-        ),
-        affected_instruments=(first.instrument_name,),
-        countable=False,
+    seed_flat_available_index(reducer)
+    assert not reducer._apply_index(
+        {"timestamp": 500_000, "price": 100, "index_name": "btc_usdc"},
+        FactBoundary(1, 1, 1_001, 2),
     )
 
     assert reducer.trackers[first.instrument_name].detector_state is DetectorState.UNKNOWN
@@ -468,6 +465,7 @@ def test_non_index_boundary_seals_ready_index_minute_before_tail_classification(
         price=100,
         causal_seq=8,
     )
+    reducer.index_history.apply_chart_result([[300_000, 100], [600_000, 100]])
     instrument = make_option(
         "BTC_USDC-08AUG26-100000-C",
         1_020_000 + 60 * 60_000,
@@ -527,7 +525,7 @@ def test_bootstrap_warmup_does_not_report_or_recover_a_real_index_gap(
         countable=False,
     )
 
-    assert reducer.results[instrument.instrument_name].reason == "INDEX_WARMUP"
+    assert reducer.results[instrument.instrument_name].reason == "INDEX_HISTORY_BOOTSTRAP_REQUIRED"
     assert not reducer._index_gap_active
     assert not reducer._index_resubscribe_pending
 
@@ -554,7 +552,7 @@ def test_funnel_partitions_the_real_reducer_index_tail_at_first_availability(
         affected_instruments=(instrument.instrument_name,),
         countable=True,
     )
-    assert reducer.results[instrument.instrument_name].reason == "INDEX_WARMUP"
+    assert reducer.results[instrument.instrument_name].reason == "INDEX_HISTORY_BOOTSTRAP_REQUIRED"
     tracker.observe(reducer=reducer, commit=warmup_commit, new_shadow_records=())
     warmup = tracker.snapshot().radar_knownness
     assert warmup.startup_warmup.applicable_market_scope_count == 1
@@ -623,7 +621,7 @@ def setup_same_millisecond_watermark_phase(
     return reducer, instrument
 
 
-def test_persistent_index_window_gap_restarts_global_continuity_once(
+def test_persistent_history_window_gap_stays_radar_local_without_live_resubscribe(
     tmp_path: Path,
     policy_factory: PolicyFactory,
     monkeypatch: pytest.MonkeyPatch,
@@ -637,12 +635,11 @@ def test_persistent_index_window_gap_restarts_global_continuity_once(
     configure_full_formula_scope(reducer, instrument)
     reducer.index.start_continuous_coverage(0)
     monkeypatch.setattr(
-        reducer.index,
+        reducer.index_history,
         "current_tail",
-        lambda *_args, **_kwargs: IndexBaselineState(
+        lambda *_args, **_kwargs: IndexHistoryState(
             availability=IndexAvailabilityState.WINDOW_GAP,
-            publication_phase=BaselinePublicationPhase.CURRENT,
-            reason="INDEX_WINDOW_GAP",
+            reason="INDEX_HISTORY_WINDOW_GAP",
         ),
     )
 
@@ -655,12 +652,10 @@ def test_persistent_index_window_gap_restarts_global_continuity_once(
         },
         FactBoundary(1, 1, 1_001, 1),
     )
-    assert reducer._global_continuity_epoch == 2
+    assert reducer._global_continuity_epoch == 1
     assert not reducer._index_resubscribe_pending
-    assert reducer._coverage._current_blocking_reason == "INDEX_WINDOW_GAP"
-    assert reducer._coverage._current_affected_scopes == (
-        f"SCOPE:{instrument.expiration_timestamp_ms}:call:{reducer.policy.tte_bands[0].band_id}",
-    )
+    assert reducer.results[instrument.instrument_name].reason == "INDEX_HISTORY_WINDOW_GAP"
+    assert reducer._coverage._current_state is CoverageState.UNKNOWN
 
     reducer._causal_seq = 2
     assert reducer._apply_index(
@@ -671,10 +666,11 @@ def test_persistent_index_window_gap_restarts_global_continuity_once(
         },
         FactBoundary(1, 2, 1_002, 2),
     )
-    assert reducer._global_continuity_epoch == 2
+    assert reducer._global_continuity_epoch == 1
+    assert not reducer._index_resubscribe_pending
 
 
-def test_countable_index_tuple_is_observed_once_without_noncountable_backfill_or_catchup_replay(
+def test_countable_history_tuple_is_observed_once_without_live_index_backfill(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
@@ -744,9 +740,10 @@ def test_countable_index_tuple_is_observed_once_without_noncountable_backfill_or
         3_000,
         stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
     )
+    reducer.index_history.apply_chart_result([[300_000, 100], [600_000, 100], [900_000, 100]])
     reducer._causal_seq = 7
     reducer.settle_fact(
-        commit=fact_commit(FactBoundary(1, 4, 3_000, 7), CausalCause.INDEX_TICK),
+        commit=fact_commit(FactBoundary(1, 4, 3_000, 7), CausalCause.INDEX_HISTORY),
         affected_instruments=(name,),
         countable=True,
     )
@@ -2391,14 +2388,9 @@ def test_noncountable_known_current_advances_active_duration_without_persistence
     assert not reducer.results[instrument.instrument_name].observation_eligible
     assert reducer.trackers[instrument.instrument_name].episode_id == episode_id
 
-    reducer.index.gap()
-    reducer.settle_fact(
-        commit=fact_commit(
-            FactBoundary(1, 2, 2_000, 3),
-            CausalCause.INDEX_CONTINUITY_GAP,
-        ),
-        affected_instruments=(instrument.instrument_name,),
-        countable=False,
+    assert not reducer._apply_index(
+        {"timestamp": 500_000, "price": 100, "index_name": "btc_usdc"},
+        FactBoundary(1, 2, 2_000, 3),
     )
 
     assert reducer._known_active_duration_ms[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 500
