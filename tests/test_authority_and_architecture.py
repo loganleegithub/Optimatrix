@@ -177,16 +177,13 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_only_offline_gated_repair_smoke() -> None:
+def test_current_stage_authorizes_only_one_fixed_long_observation() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`RADAR_CURRENT_INPUT_STABILITY_REPAIR`" in current
+    assert "`RADAR_LONG_OBSERVATION_AUTHORIZED`" in current
+    assert "**Production Short Vol Radar:** `CANDIDATE_GENERATOR_FROZEN_FOR_OBSERVATION`" in current
     assert (
-        "**Production Short Vol Radar:** "
-        "`CANDIDATE_SEMANTICS_FROZEN_INPUT_STABILITY_REPAIR`" in current
-    )
-    assert (
-        "**Live commands:** `ONE_POST_REPAIR_MAX_600_SECOND_SMOKE_PER_OFFLINE_GATED_CANDIDATE`"
+        "**Live commands:** `ONE_FIXED_43200_SECOND_PRODUCTION_PUBLIC_READ_ONLY_OBSERVATION`"
         in current
     )
     assert "**Sole authorized closure:** `SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE`" in current
@@ -194,7 +191,7 @@ def test_current_stage_authorizes_only_offline_gated_repair_smoke() -> None:
     assert "`58,773,561` applicable evaluations" in current
     assert "one legal tick" in current
     assert "`0.05 <= |Delta| <= 0.40`" in current
-    assert "any 43,200-second observation before" in current
+    assert "any second short smoke, second 43,200-second observation" in current
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
     assert (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(

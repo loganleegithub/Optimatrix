@@ -5,13 +5,13 @@
 **Current permission boundary:** `PUBLIC_SHADOW`
 
 **Current implementation status:**
-`RADAR_CURRENT_INPUT_STABILITY_REPAIR`
+`RADAR_LONG_OBSERVATION_AUTHORIZED`
 
-**Production Short Vol Radar:** `CANDIDATE_SEMANTICS_FROZEN_INPUT_STABILITY_REPAIR`
+**Production Short Vol Radar:** `CANDIDATE_GENERATOR_FROZEN_FOR_OBSERVATION`
 
-**Persistent service:** `STOPPED_NO_DEPLOYMENT`
+**Persistent service:** `BOUNDED_OBSERVATION_ONLY_NO_DEPLOYMENT`
 
-**Live commands:** `ONE_POST_REPAIR_MAX_600_SECOND_SMOKE_PER_OFFLINE_GATED_CANDIDATE`
+**Live commands:** `ONE_FIXED_43200_SECOND_PRODUCTION_PUBLIC_READ_ONLY_OBSERVATION`
 
 **Sole authorized closure:** `SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE`
 
@@ -71,15 +71,23 @@ runtime deque bypassed the bounded ingress owner, and WebSocket close shared the
 timeout. This is an input-stability failure, not evidence that the market lacks active combos or
 that Radar thresholds are too strict.
 
+Repair candidate `0dce98481a4facef54112faa5953def2220f6927` then passed the authorized
+540-second production-public smoke. Its readable terminal summary reported post-warmup
+`RADAR_KNOWN / APPLICABLE_MARKET_SCOPE = 90,689 / 91,091` (`99.5587%`) and `21,930` full-formula
+evaluations. All `134` terminal instruments were known, all `134` option books were usable, and
+`30` instruments had current full-formula evaluations. Queue-lag segments, clock-gap post-warmup
+evaluations, transport overflows, reconnects, and durable Shadow Case files were all zero. The
+remaining `402` UNKNOWN evaluations were the fixed startup edge—`OPTION_BOOK_UNKNOWN 268` plus
+`POST_STATUS_BOOTSTRAP_REQUIRED 134`—and did not increase after bootstrap.
+
 ## Active closure
 
-The candidate semantics are frozen, but production-public current-input stability is not yet
-established. The active repair must make one local option fact local, share one causal history tail
-within a transaction, retain one bounded ingress owner with cooperative scheduling, preserve the
-book owner's exact current continuity reason, and return the terminal summary before transport
-shutdown can consume the acceptance window. The five-minute-persistence Radar consumes aggregated
-`agg2` option ticker and book channels rather than every option's dual 100ms feeds. No detector
-formula, target quantity, TTE/Delta universe, or official atomic meaning changes.
+Candidate semantics and production-public current-input stability are now frozen for one business
+observation. The active closure is to measure, over one fixed 43,200-second boundary, how many
+independent volatility clues persist, how many have a reviewable defined-risk structure, how many
+have a current official atomic target-size quote, and where the largest observed funnel loss occurs.
+The observation cannot change detector formula, target quantity, TTE/Delta universe, official
+atomic meaning, or any threshold.
 
 A hard-screen clue requires: official completed average-price history with explicit cadence, age,
 gap and revision truth; target-size bid and ask depth; an uncrossed spread; official price-tick
@@ -93,19 +101,17 @@ atomic availability, Underwriting action, admission, or edge.
 
 ## Allowed work
 
-- authority, Radar contract, Policy, pure calculators, current-state projection, and direct tests for
-  the exact credible-clue freeze;
-- the accepted index-history source-contract probe is not repeated;
-- after all direct checks pass, one production-public read-only integration smoke of at most
-  `600` seconds for each new exact offline-gated repair candidate; an unchanged candidate cannot be
-  rerun, and a rejected smoke returns to offline diagnosis before any further authorization;
-- rebind dependent Underwriting and Position Policy identities only where upstream content identity
-  changes require it.
+- exactly one fixed `43,200`-second production-public read-only observation on one clean commit and
+  the accepted fixed Policy chain;
+- existing in-process reconnect behavior may preserve the same business owner and fixed terminal
+  boundary; no external supervisor or automatic restart may extend or replace the observation;
+- terminal adjudication may report the frozen funnel and any legitimately admitted Shadow Cases;
+- the accepted source probe and accepted repair smoke are consumed and cannot be repeated.
 
 ## Forbidden work
 
-- any 43,200-second observation before one post-repair smoke is accepted and Authority is amended;
-- tuning thresholds to manufacture a natural clue during either short validation command;
+- any second short smoke, second 43,200-second observation, or unchanged restart;
+- tuning thresholds or inputs during or from the observation to manufacture a natural clue;
 - changing target quantity, official atomic admission, Shadow Case, Position, or Outcome semantics;
 - fitted forecasting, SVI/SABR/Heston calibration, machine-learning ranking, event-calendar edge,
   GEX, private RFQ/combo creation, credentials, account, order, fill, capital, or actual exposure;
@@ -114,16 +120,10 @@ atomic availability, Underwriting action, admission, or edge.
 
 ## Acceptance boundary
 
-Direct checks may establish formula correctness, source fail-closed behavior, quote robustness,
-risk-bucket classification, diagnostic context, ranking determinism, fee arithmetic, and strict
-separation between legged references and official atomic availability. The one source probe may
-establish only the current API cadence/revision facts it observes. The one short smoke may establish
-current end-to-end reachability only.
-
-An accepted post-repair smoke must return a readable terminal summary, positive post-warmup scope,
-positive cumulative full-formula evaluations, bounded ingress without queue-lag currentness, and
-zero post-bootstrap clock gaps. It does not require a natural clue. After those gates pass,
-authority may be amended once to permit one fixed 43,200-second production-public read-only
-observation. Neither the short validations nor that later observation
-establish future frequency, expected return, edge, fillability, qualification, deployment, uptime,
-or execution permission.
+The long observation has one precommitted terminal boundary and returns one readable terminal
+summary plus the frozen funnel. It measures observed independent clue Episodes, reviewable
+structures, official atomic target-size quote availability, Underwriting evaluability, Candidate
+and Shadow conversion, and the earliest largest loss. Zero natural clues is a valid result when
+post-warmup scope and full-formula counts are positive. The observation does not establish future
+frequency, expected return, edge, fillability, qualification, deployment, uptime, or execution
+permission.

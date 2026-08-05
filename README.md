@@ -37,14 +37,15 @@ economically credible opportunities. The first 43,200-second A2 observation was 
 360-minute economic feature was tied to one uninterrupted live session, so post-warmup scope and
 full-formula evaluations both remained zero.
 
-The sole active closure is now the credible-clue freeze. The repaired Radar consumes confirmed
+The sole active closure is now the credible-clue observation. The repaired Radar consumes confirmed
 official five-minute average-index history, full target-size bid and ask, official tick rules, a
 one-legal-tick-stressed sell price, explicit TTE/Delta risk buckets, and the existing causal
 persistence rule. Regime, surface-lite, non-atomic protective-vertical references, and transparent
 rank are read-only explanations; they cannot create an official atomic quote or Underwriting
-Candidate. No persistent deployment or 43,200-second observation is authorized. The only current
-live validations are one source-contract probe and one read-only integration smoke of at most 600
-seconds.
+Candidate. Its repair smoke passed with post-warmup `90,689 / 91,091` known evaluations, `21,930`
+full-formula evaluations, and no clock-gap or queue-lag loss. Exactly one fixed 43,200-second
+production-public read-only observation is authorized to measure natural clues and the next funnel
+blocker. It is not deployment or execution permission.
 
 See:
 

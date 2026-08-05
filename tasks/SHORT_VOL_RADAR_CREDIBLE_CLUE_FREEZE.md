@@ -6,10 +6,8 @@
 
 **Runtime implementation:** REQUIRED
 
-**Live commands:** the accepted source-contract probe is consumed; one post-repair
-production-public read-only smoke of at most 600 seconds is authorized for each new exact candidate
-that passes offline gates; no unchanged rerun and no 43,200-second observation before smoke
-acceptance and an Authority amendment
+**Live commands:** the source-contract probe and repair smoke are accepted and consumed; exactly one
+fixed 43,200-second production-public read-only observation is authorized, with no unchanged restart
 
 **Base commit:** `a8a78bc5b35e3359864b5985f3b013b8981896b1`
 
@@ -22,26 +20,25 @@ acceptance and an Authority amendment
 
 ## Product movement
 
-**Current funnel node:** `RADAR_KNOWN`
+**Current funnel node:** `ANOMALY_ACTIVE`
 
-**Baseline:** candidate `cbea7a3` passed its source contract but failed the first 540-second smoke.
-The last readable post-warmup partition was `12,384 / 28,128` known; `OPTION_BOOK_UNKNOWN 11,836`
-was the largest visible loss, nine current samples had zero full-formula instruments, and the
-terminal cumulative result was unreadable.
+**Baseline:** repair candidate `0dce984` passed its 540-second smoke with post-warmup
+`90,689 / 91,091` known, `21,930` full-formula evaluations, terminal `134 / 134` current known, all
+books usable, zero clock-gap evaluations, zero queue-lag segments, zero overflow, and a readable
+terminal summary. Its `402` UNKNOWN evaluations were fixed startup edges and did not continue.
 
-**Primary blocker:** `RADAR_CURRENT_INPUT_BACKLOG`; denominator is every post-warmup applicable
-instrument fact that should retain a current option book, ticker, clock, and history tail. Whole
-scope formula fan-out and a second unbounded pending owner caused the visible
-`OPTION_BOOK_UNKNOWN`; close lifecycle separately withheld the terminal summary.
+**Primary blocker:** `NATURAL_CLUE_AND_STRUCTURE_FREQUENCY_UNMEASURED`; the short smoke proved input
+and formula reachability but was not long enough to measure the frozen ten-minute persistence rule
+or the next conversion loss.
 
-**Expected user-visible delta:** the Radar maintains positive full-formula current state under the
-real public option universe, exposes the current book owner's exact bounded reason when unavailable,
-and returns a readable cumulative terminal summary. Zero natural clues remains valid.
+**Expected user-visible delta:** one fixed observation reports independent persistent volatility
+clues, reviewable defined-risk structures, currently quoted official atomic structures, and whether
+the largest loss is Radar breadth, structure absence, or absent target-size atomic credit.
 
-**Durable-data effect:** `NONE`; all pre-Shadow state remains bounded and in memory.
+**Durable-data effect:** pre-Shadow state remains in memory; only a legitimately admitted
+`SHADOW_CASE_OPENED` may create the already-defined durable Case.
 
-**Complexity added:** no new subsystem; one per-transaction history-tail cache, one bounded transport
-close budget, and exact current book reason in the existing Workbench row.
+**Complexity added:** `NONE`; the observation runs the frozen product.
 
 **Complexity deleted:** scope-wide formula recomputation for local facts, repeated history-contract
 scans, the unbounded runtime ingress deque, and dual 100ms option feeds that have no five-minute
@@ -81,8 +78,9 @@ bid richness. Regime, surface, synthetic structure, and rank fields are diagnost
 **Outcome/evaluation contract change:** NONE. Future qualification remains pre-registered and based
 on strictly future Shadow Case Outcomes.
 
-**Stage/authorization change:** one source probe and one <=600-second integration smoke are
-authorized. No 43,200-second observation, deployment, or execution is authorized by this task.
+**Stage/authorization change:** the accepted source probe and smoke are consumed; one fixed
+43,200-second production-public read-only observation is authorized. Deployment and execution are
+not authorized.
 
 ## Scope
 
@@ -106,15 +104,13 @@ acceptance.
 - direct focused tests for history, policy/math, Radar, review, Workbench, fee arithmetic, and
   Authority;
 - repository gate: `make check` in the exact toolchain;
-- no repeat of the accepted source probe;
-- one <=600-second production-public read-only integration smoke per new offline-gated repair
-  candidate, with no unchanged rerun;
-- no threshold tuning from either short validation.
+- no repeat of the accepted source probe or repair smoke;
+- exactly one fixed 43,200-second production-public read-only observation;
+- no threshold tuning, unchanged restart, external supervisor, or private method.
 
 ## Definition of done
 
 The exact Policy and code satisfy every hard-screen invariant; all diagnostic context and rank are
-transparent and non-gating; direct and repository checks pass; the bounded source probe and short
-smoke report their exact limitations; no pre-Shadow durable object is added; the delivery package
-contains the full source, exact-base patch, checksums, and import instructions; no
-43,200-second observation is authorized by implementation presence.
+transparent and non-gating; direct and repository checks pass; the source probe and smoke are
+accepted; and the fixed long observation returns a readable terminal funnel without changing the
+candidate generator or extending its boundary.
