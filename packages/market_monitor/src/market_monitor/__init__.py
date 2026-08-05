@@ -13,6 +13,7 @@ from market_monitor.index import (
     PublishedIndexTail,
 )
 from market_monitor.index_history import (
+    IndexHistoryContract,
     IndexHistoryPoint,
     IndexHistoryReducer,
     IndexHistoryState,
@@ -26,6 +27,7 @@ __all__ = [
     "ContinuousOrderBook",
     "IndexAvailabilityState",
     "IndexBaselineState",
+    "IndexHistoryContract",
     "IndexHistoryPoint",
     "IndexHistoryReducer",
     "IndexHistoryState",

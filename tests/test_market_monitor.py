@@ -51,6 +51,10 @@ def test_index_history_selects_a_causal_five_minute_suffix_from_finer_chart_poin
         later.timestamp_ms - earlier.timestamp_ms == 5 * 60_000
         for earlier, later in pairwise(tail.points)
     )
+    assert tail.contract is not None
+    assert tail.contract.modal_interval_ms == 60_000
+    assert tail.contract.exact_suffix_point_count == 80
+    assert tail.contract.exact_suffix_minutes == 395
 
 
 def test_index_history_fails_closed_for_gap_staleness_and_invalid_shape() -> None:
@@ -79,6 +83,74 @@ def test_index_history_fails_closed_for_gap_staleness_and_invalid_shape() -> Non
 
     with pytest.raises(SourceDataError, match="strictly increasing"):
         reducer.apply_chart_result([[0, 100], [0, 101]])
+
+
+def test_index_history_contract_reports_cadence_suffix_age_and_revision_confirmation() -> None:
+    reducer = IndexHistoryReducer(
+        maximum_lookback_minutes=30,
+        return_interval_minutes=5,
+    )
+    initial = [[minute * 300_000, 100 + minute] for minute in range(9)]
+    assert reducer.apply_chart_result(initial)
+    state = reducer.current_tail(
+        30,
+        trusted_time=TimeInterval(9 * 300_000, 9 * 300_000),
+        source_stale_deadline_ms=900_000,
+    )
+    assert state.availability is IndexAvailabilityState.AVAILABLE
+    assert state.contract is not None
+    assert state.contract.interval_counts == ((300_000, 8),)
+    assert state.contract.modal_interval_ms == 300_000
+    assert state.contract.newest_response_timestamp_ms == 8 * 300_000
+    assert state.contract.newest_response_age_ms == 300_000
+    assert state.contract.newest_response_point_excluded_by_completion_cutoff is False
+    assert state.contract.exact_suffix_point_count == 9
+    assert state.contract.exact_suffix_minutes == 40
+    assert state.contract.latest_source_age_ms == 300_000
+
+    revised = [list(row) for row in initial]
+    revised[4][1] = 999
+    assert reducer.apply_chart_result(revised)
+    pending = reducer.current_tail(
+        30,
+        trusted_time=TimeInterval(9 * 300_000, 9 * 300_000),
+        source_stale_deadline_ms=900_000,
+    )
+    assert pending.availability is IndexAvailabilityState.REVISION
+    assert pending.reason == "INDEX_HISTORY_REVISION"
+    assert pending.contract is not None
+    assert pending.contract.revision_pending
+    assert pending.contract.revised_timestamps_ms == (4 * 300_000,)
+
+    confirmed_with_append = [*revised, [9 * 300_000, 110]]
+    assert reducer.apply_chart_result(confirmed_with_append)
+    confirmed = reducer.current_tail(
+        30,
+        trusted_time=TimeInterval(10 * 300_000, 10 * 300_000),
+        source_stale_deadline_ms=900_000,
+    )
+    assert confirmed.availability is IndexAvailabilityState.AVAILABLE
+    assert confirmed.contract is not None
+    assert not confirmed.contract.revision_pending
+    assert confirmed.contract.revision_count == 1
+
+
+def test_index_history_open_provider_bucket_may_change_without_revision() -> None:
+    reducer = IndexHistoryReducer(
+        maximum_lookback_minutes=5,
+        return_interval_minutes=5,
+    )
+    assert reducer.apply_chart_result([[0, 100], [300_000, 101], [600_000, 102]])
+    assert reducer.apply_chart_result([[0, 100], [300_000, 101], [600_000, 103]])
+    state = reducer.current_tail(
+        5,
+        trusted_time=TimeInterval(900_000, 900_000),
+        source_stale_deadline_ms=900_000,
+    )
+    assert state.availability is IndexAvailabilityState.AVAILABLE
+    assert state.contract is not None
+    assert state.contract.revision_count == 0
+    assert not state.contract.revision_pending
 
 
 def test_index_history_distinguishes_no_response_from_a_valid_empty_response() -> None:

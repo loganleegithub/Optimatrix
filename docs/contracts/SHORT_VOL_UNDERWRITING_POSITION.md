@@ -45,6 +45,18 @@ Missing or invalid required input is `UNKNOWN`. Known structural/lifecycle unava
 `NOT_EVALUATED` or known ineligible as defined by the owning classifier. Neither creates an
 economic action.
 
+## Radar diagnostic separation
+
+Surface-lite context, semivariance/jump context, transparent attention rank, and
+`LEGGED_REFERENCE_NOT_ATOMIC` are trader diagnostics. They are not Underwriting inputs and cannot
+create `EVALUABLE`, `WATCH`, `ABSTAIN`, `CANDIDATE`, an admission attempt, or a Shadow Case. The
+formal entry path continues to require an active Radar Episode and one visible full-quantity
+official atomic combo quote.
+
+The diagnostic separate-leg fee reserve may use Deribit's published standard fee cap to explain a
+non-atomic reference. Formal atomic Underwriting fee and reserve semantics remain owned by the
+content-identified Underwriting Policy and are not changed by a diagnostic calculation.
+
 ## Entry economics
 
 For exact target quantity `q` and signed official combo levels:

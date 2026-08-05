@@ -5,6 +5,7 @@ import inspect
 import json
 import socket
 import subprocess
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -183,9 +184,25 @@ def test_radar_projection_explains_candidate_baseline_sampling_and_selection() -
         selected_lookback_minutes=120,
     )
     calculation = SimpleNamespace(
-        executable_sell_price_usdc="123.45",
+        clue_eligible=False,
+        band=SimpleNamespace(clue_eligible=True),
+        delta_clue_eligible=False,
+        delta_bucket=SimpleNamespace(value="EXTREME_TAIL_LT_05"),
+        delta=SimpleNamespace(lower=Decimal("0.20"), upper=Decimal("0.21")),
+        executable_sell_price_usdc=Decimal("123.45"),
+        executable_buy_price_usdc=Decimal("124.45"),
+        stressed_executable_sell_price_usdc=Decimal("123.44"),
+        price_tick_usdc=Decimal("0.01"),
+        target_spread_usdc=Decimal("1"),
+        target_spread_ticks=Decimal("100"),
+        bid_premium_ticks=Decimal("12345"),
+        target_bid=SimpleNamespace(consumed=(1,)),
+        target_ask=SimpleNamespace(consumed=(1, 2)),
         executable_bid_iv=SimpleNamespace(lower="0.80", upper="0.81"),
+        executable_ask_iv=SimpleNamespace(lower="0.82", upper="0.83"),
+        stressed_executable_bid_iv=SimpleNamespace(lower="0.79", upper="0.80"),
         baseline=baseline,
+        raw_richness=SimpleNamespace(lower="1.22", upper="1.23"),
         richness=SimpleNamespace(lower="1.20", upper="1.21"),
     )
     reducer = cast(
@@ -224,7 +241,9 @@ def test_radar_projection_explains_candidate_baseline_sampling_and_selection() -
 
     assert row["baseline_return_interval_minutes"] == 5
     assert row["baseline_selected_lookback_minutes"] == 120
-    assert row["baseline_source"] == "OFFICIAL_INDEX_CHART_REALIZED_VARIANCE"
+    assert row["baseline_source"] == "OFFICIAL_INDEX_CHART_AVERAGE_PRICE_RV"
+    assert row["clue_eligible_tte"] is True
+    assert row["clue_eligible_delta"] is False
 
 
 def test_radar_projection_uses_not_evaluated_without_active_detector_truth() -> None:
@@ -292,7 +311,7 @@ def test_initial_snapshot_keeps_empty_panels_separate_from_unknown_zero_claims()
         "observed_count": 0,
     }
     assert value["service"]["data_state"] == "UNKNOWN"
-    assert value["schema_version"] == 2
+    assert value["schema_version"] == 3
     assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in value["non_claims"]
     assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in value["non_claims"]
 
@@ -658,7 +677,7 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "documentValue.publication_sequence" in JS
     assert "if (!response.ok) throw" in JS
     assert "renderUnavailable();" in JS
-    assert "SUPPORTED_SCHEMA_VERSION = 2" in JS
+    assert "SUPPORTED_SCHEMA_VERSION = 3" in JS
     assert ".table-scroll" in CSS
     assert "overflow-x:auto" in CSS
     assert 'class="system-details"' in JS

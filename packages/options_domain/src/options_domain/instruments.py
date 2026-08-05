@@ -65,15 +65,87 @@ class AmountMetadata:
 
 
 @dataclass(frozen=True)
+class PriceTickStep:
+    above_price: Decimal
+    tick_size: Decimal
+
+
+@dataclass(frozen=True)
+class PriceTickMetadata:
+    base_tick_size: Decimal
+    steps: tuple[PriceTickStep, ...] = ()
+
+    def tick_size_for_price(self, price: Decimal) -> Decimal:
+        if not price.is_finite() or price <= 0:
+            raise ValueError("price must be finite and positive")
+        tick = self.base_tick_size
+        for step in self.steps:
+            # Deribit defines above_price as the price *from which* the larger
+            # tick applies. The boundary itself therefore belongs to the new
+            # regime even though the field name contains "above".
+            if price < step.above_price:
+                break
+            tick = step.tick_size
+        return tick
+
+    def previous_legal_price(self, price: Decimal) -> Decimal | None:
+        if not price.is_finite() or price <= 0:
+            raise ValueError("price must be finite and positive")
+        regime_index = self._regime_index(price)
+        lower_boundary = (
+            self.steps[regime_index - 1].above_price if regime_index > 0 else Decimal(0)
+        )
+        current_tick = (
+            self.steps[regime_index - 1].tick_size if regime_index > 0 else self.base_tick_size
+        )
+        candidate = price - current_tick
+        if candidate >= lower_boundary and candidate > 0:
+            return candidate
+        if regime_index == 0:
+            return None
+        previous_tick = (
+            self.steps[regime_index - 2].tick_size if regime_index > 1 else self.base_tick_size
+        )
+        candidate = lower_boundary - previous_tick
+        return candidate if candidate > 0 else None
+
+    def next_legal_price(self, price: Decimal) -> Decimal:
+        if not price.is_finite() or price <= 0:
+            raise ValueError("price must be finite and positive")
+        regime_index = self._regime_index(price)
+        current_tick = (
+            self.steps[regime_index - 1].tick_size if regime_index > 0 else self.base_tick_size
+        )
+        candidate = price + current_tick
+        if regime_index < len(self.steps):
+            next_boundary = self.steps[regime_index].above_price
+            if price < next_boundary <= candidate:
+                return next_boundary
+        return candidate
+
+    def _regime_index(self, price: Decimal) -> int:
+        index = 0
+        for step in self.steps:
+            if price < step.above_price:
+                break
+            index += 1
+        return index
+
+
+@dataclass(frozen=True)
 class OptionInstrument:
     instrument_name: str
     expiration_timestamp_ms: int
     strike: Decimal
     option_type: OptionType
     amount: AmountMetadata | None
+    price_tick: PriceTickMetadata | None = None
     lifecycle_state: InstrumentLifecycleState = InstrumentLifecycleState.OPEN
     is_active: bool = True
     taker_commission: Decimal | None = None
+
+    def legal_tick_size(self, price: Decimal) -> Decimal | None:
+        return self.price_tick.tick_size_for_price(price) if self.price_tick is not None else None
 
 
 @dataclass(frozen=True)
@@ -138,6 +210,10 @@ def parse_option_instrument(payload: object) -> OptionInstrument | None:
         amount = parse_amount_metadata(data, "instrument")
     except SourceDataError:
         amount = None
+    try:
+        price_tick = parse_price_tick_metadata(data, "instrument")
+    except SourceDataError:
+        price_tick = None
     taker_commission: Decimal | None = None
     if "taker_commission" in data:
         taker_commission = decimal_from_source(
@@ -152,6 +228,7 @@ def parse_option_instrument(payload: object) -> OptionInstrument | None:
         strike=strike,
         option_type=option_type,
         amount=amount,
+        price_tick=price_tick,
         lifecycle_state=state,
         is_active=is_active,
         taker_commission=taker_commission,
@@ -228,6 +305,42 @@ def parse_combo_instrument(
         legs=(legs[0], legs[1]),
         amount=combo_amount,
     )
+
+
+def parse_price_tick_metadata(data: dict[str, object], prefix: str) -> PriceTickMetadata:
+    base = decimal_from_source(data.get("tick_size"), f"{prefix}.tick_size")
+    if base <= 0:
+        raise SourceDataError(f"{prefix}.tick_size must be positive")
+    raw_steps = data.get("tick_size_steps", [])
+    if not isinstance(raw_steps, list):
+        raise SourceDataError(f"{prefix}.tick_size_steps must be an array")
+    steps: list[PriceTickStep] = []
+    previous_threshold: Decimal | None = None
+    previous_tick = base
+    for index, raw in enumerate(raw_steps):
+        step = require_mapping(raw, f"{prefix}.tick_size_steps[{index}]")
+        if set(step) != {"above_price", "tick_size"}:
+            raise SourceDataError(
+                f"{prefix}.tick_size_steps[{index}] requires exact above_price/tick_size keys"
+            )
+        above = decimal_from_source(
+            step["above_price"], f"{prefix}.tick_size_steps[{index}].above_price"
+        )
+        tick = decimal_from_source(
+            step["tick_size"], f"{prefix}.tick_size_steps[{index}].tick_size"
+        )
+        if above < 0 or tick <= 0:
+            raise SourceDataError(f"{prefix}.tick_size_steps values are invalid")
+        if previous_threshold is not None and above <= previous_threshold:
+            raise SourceDataError(f"{prefix}.tick_size_steps thresholds must increase")
+        if tick <= previous_tick or tick % base != 0:
+            raise SourceDataError(
+                f"{prefix}.tick_size_steps tick sizes must increase and be multiples of tick_size"
+            )
+        steps.append(PriceTickStep(above, tick))
+        previous_threshold = above
+        previous_tick = tick
+    return PriceTickMetadata(base, tuple(steps))
 
 
 def parse_amount_metadata(data: dict[str, object], prefix: str) -> AmountMetadata:

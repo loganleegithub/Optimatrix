@@ -12,12 +12,18 @@ from options_domain import (
     Applicability,
     InstrumentLifecycleState,
     OptionType,
+    PriceTickMetadata,
+    PriceTickStep,
     check_target_amount,
     monitor_applicability,
     parse_combo_instrument,
     parse_option_instrument,
 )
-from options_domain.quotes import walk_target_depth
+from options_domain.quotes import (
+    stress_depth_walk_down_one_tick,
+    stress_depth_walk_up_one_tick,
+    walk_target_depth,
+)
 
 
 def test_option_filter_uses_official_usdc_product_fields(
@@ -29,6 +35,7 @@ def test_option_filter_uses_official_usdc_product_fields(
     assert instrument.option_type is OptionType.CALL
     assert instrument.amount is not None
     assert instrument.amount.qty_tick_size == Decimal("0.1")
+    assert instrument.price_tick == PriceTickMetadata(Decimal("0.01"))
 
     for field, wrong in (
         ("kind", "future"),
@@ -223,3 +230,65 @@ def test_target_depth_walk_uses_visible_levels_and_known_insufficiency() -> None
     assert walk.vwap == Decimal("9.5")
     assert walk_target_depth(levels, Decimal("0.4")) is None
     assert walk_target_depth((), Decimal("0.1")) is None
+
+
+def test_option_tick_ladder_and_one_legal_tick_stress_are_exact() -> None:
+    metadata = PriceTickMetadata(
+        Decimal("0.0001"),
+        (PriceTickStep(Decimal("0.005"), Decimal("0.0005")),),
+    )
+    assert metadata.tick_size_for_price(Decimal("0.005")) == Decimal("0.0005")
+    assert metadata.tick_size_for_price(Decimal("0.0055")) == Decimal("0.0005")
+    assert metadata.previous_legal_price(Decimal("0.005")) == Decimal("0.0049")
+    assert metadata.previous_legal_price(Decimal("0.0055")) == Decimal("0.0050")
+    assert metadata.next_legal_price(Decimal("0.0049")) == Decimal("0.005")
+    assert metadata.next_legal_price(Decimal("0.005")) == Decimal("0.0055")
+
+    walk = walk_target_depth(
+        (
+            PriceLevel(Decimal("0.0055"), Decimal("0.1")),
+            PriceLevel(Decimal("0.0050"), Decimal("0.1")),
+        ),
+        Decimal("0.2"),
+    )
+    assert walk is not None
+    stressed = stress_depth_walk_down_one_tick(walk, metadata)
+    assert stressed is not None
+    assert stressed.consumed == (
+        PriceLevel(Decimal("0.0050"), Decimal("0.1")),
+        PriceLevel(Decimal("0.0049"), Decimal("0.1")),
+    )
+    assert stressed.vwap == Decimal("0.00495")
+    stressed_ask = stress_depth_walk_up_one_tick(walk, metadata)
+    assert stressed_ask.consumed == (
+        PriceLevel(Decimal("0.0060"), Decimal("0.1")),
+        PriceLevel(Decimal("0.0055"), Decimal("0.1")),
+    )
+    assert stressed_ask.vwap == Decimal("0.00575")
+
+
+def test_invalid_tick_metadata_is_local_unknown_not_an_instrument_rejection(
+    option_payload_factory: OptionPayloadFactory,
+) -> None:
+    payload = option_payload_factory()
+    payload["tick_size_steps"] = [
+        {"above_price": "0.01", "tick_size": "0.001"},
+        {"above_price": "0.005", "tick_size": "0.0005"},
+    ]
+    instrument = parse_option_instrument(payload)
+    assert instrument is not None
+    assert instrument.price_tick is None
+    assert instrument.amount is not None
+
+
+def test_tick_step_must_increase_and_remain_a_multiple_of_base_tick(
+    option_payload_factory: OptionPayloadFactory,
+) -> None:
+    payload = option_payload_factory()
+    payload["tick_size"] = "0.0002"
+    payload["tick_size_steps"] = [
+        {"above_price": "0.005", "tick_size": "0.0005"},
+    ]
+    instrument = parse_option_instrument(payload)
+    assert instrument is not None
+    assert instrument.price_tick is None

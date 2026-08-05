@@ -11,11 +11,20 @@ from options_domain.instruments import (
     InstrumentLifecycleState,
     OptionInstrument,
     OptionType,
+    PriceTickMetadata,
+    PriceTickStep,
     monitor_applicability,
     parse_combo_instrument,
     parse_option_instrument,
 )
-from options_domain.quotes import AmountCheck, AmountState, DepthWalk, check_target_amount
+from options_domain.quotes import (
+    AmountCheck,
+    AmountState,
+    DepthWalk,
+    check_target_amount,
+    stress_depth_walk_down_one_tick,
+    stress_depth_walk_up_one_tick,
+)
 
 __all__ = [
     "FINAL_INSTRUMENT_LIFECYCLE_STATES",
@@ -31,8 +40,12 @@ __all__ = [
     "InstrumentLifecycleState",
     "OptionInstrument",
     "OptionType",
+    "PriceTickMetadata",
+    "PriceTickStep",
     "check_target_amount",
     "monitor_applicability",
     "parse_combo_instrument",
     "parse_option_instrument",
+    "stress_depth_walk_down_one_tick",
+    "stress_depth_walk_up_one_tick",
 ]

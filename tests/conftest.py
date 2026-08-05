@@ -42,7 +42,7 @@ def policy_document(
         "minimum_separation_ms": separation_ms,
     }
     return {
-        "policy_schema_version": 5,
+        "policy_schema_version": 6,
         "policy_family": "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS",
         "target_base_quantity_btc": target,
         "runtime_limits": {
@@ -63,6 +63,7 @@ def policy_document(
                 "band_id": "settlement-clear-to-six-hours",
                 "lower_bound_minutes": 30,
                 "upper_bound_minutes": 360,
+                "clue_eligible": True,
                 "return_interval_minutes": 5,
                 "lookbacks_minutes": [5],
                 "annualized_variance_floor": 0.01,
@@ -72,6 +73,7 @@ def policy_document(
                 "band_id": "six-to-seventy-two-hours",
                 "lower_bound_minutes": 360,
                 "upper_bound_minutes": 4_320,
+                "clue_eligible": True,
                 "return_interval_minutes": 5,
                 "lookbacks_minutes": [5],
                 "annualized_variance_floor": 0.02,
@@ -136,6 +138,8 @@ def option_payload_factory() -> OptionPayloadFactory:
             "strike": strike,
             "contract_size": 1,
             "min_trade_amount": 0.1,
+            "tick_size": 0.01,
+            "tick_size_steps": [],
             "unrelated_future_field": "tolerated",
         }
         if step is not None:

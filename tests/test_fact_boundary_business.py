@@ -28,6 +28,7 @@ from options_domain import (
     ComboLeg,
     OptionInstrument,
     OptionType,
+    PriceTickMetadata,
 )
 from radar_runtime.deribit_public import (
     InboundEnvelope,
@@ -112,6 +113,9 @@ def fact_commit(
     )
 
 
+TEST_PRICE_TICK = PriceTickMetadata(Decimal("0.00000001"))
+
+
 def make_option(name: str, expiry_ms: int, *, amount_known: bool = True) -> OptionInstrument:
     return OptionInstrument(
         name,
@@ -119,11 +123,14 @@ def make_option(name: str, expiry_ms: int, *, amount_known: bool = True) -> Opti
         Decimal("100.01"),
         OptionType.CALL,
         (AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")) if amount_known else None),
+        TEST_PRICE_TICK,
     )
 
 
 def make_book(name: str, price: str | None) -> ContinuousOrderBook:
     book = ContinuousOrderBook(name)
+    bid = None if price is None else Decimal(price)
+    asks = [] if bid is None else [["new", bid + Decimal("0.00000002"), "0.1"]]
     book.apply(
         {
             "type": "snapshot",
@@ -131,7 +138,7 @@ def make_book(name: str, price: str | None) -> ContinuousOrderBook:
             "instrument_name": name,
             "change_id": 1,
             "bids": [] if price is None else [["new", price, "0.1"]],
-            "asks": [],
+            "asks": asks,
         },
         1_000,
     )
@@ -1484,7 +1491,10 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
                 "change_id": 2,
                 "prev_change_id": 1,
                 "bids": [["delete", "1", "0"], ["new", "2", "0.1"]],
-                "asks": [],
+                "asks": [
+                    ["delete", "1.00000002", "0"],
+                    ["new", "2.00000002", "0.1"],
+                ],
             },
             ingress_seq=reducer._last_ingress_seq + 1,
             received_monotonic_ms=2_001,
@@ -2715,6 +2725,8 @@ def test_market_boundary_settles_ttl_crossing_in_an_unrelated_full_scope(
         2_000,
         stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
     )
+    old_bid = reducer.option_books[first.instrument_name].levels("bid")[0].price
+    old_ask = reducer.option_books[first.instrument_name].levels("ask")[0].price
     assert reducer._apply_book(
         first.instrument_name,
         {
@@ -2723,8 +2735,8 @@ def test_market_boundary_settles_ttl_crossing_in_an_unrelated_full_scope(
             "instrument_name": first.instrument_name,
             "change_id": 2,
             "prev_change_id": 1,
-            "bids": [["new", "999", "0.1"]],
-            "asks": [],
+            "bids": [["delete", str(old_bid), "0"], ["new", "999", "0.1"]],
+            "asks": [["delete", str(old_ask), "0"], ["new", "1000", "0.1"]],
         },
         FactBoundary(1, 2, 2_001, 2),
     )
@@ -3250,6 +3262,8 @@ def test_fact_transaction_preserves_trigger_and_concurrent_source_stale_attribut
         return current_scope_truth(snapshot)
 
     monkeypatch.setattr(reducer, "_current_scope_truth", capture_snapshot)
+    old_bid = reducer.option_books[first.instrument_name].levels("bid")[0].price
+    old_ask = reducer.option_books[first.instrument_name].levels("ask")[0].price
     assert reducer._apply_book(
         first.instrument_name,
         {
@@ -3258,8 +3272,8 @@ def test_fact_transaction_preserves_trigger_and_concurrent_source_stale_attribut
             "instrument_name": first.instrument_name,
             "change_id": 2,
             "prev_change_id": 1,
-            "bids": [["new", "999", "0.1"]],
-            "asks": [],
+            "bids": [["delete", str(old_bid), "0"], ["new", "999", "0.1"]],
+            "asks": [["delete", str(old_ask), "0"], ["new", "1000", "0.1"]],
         },
         FactBoundary(1, 2, 2_001, 2),
     )

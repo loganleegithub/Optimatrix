@@ -42,6 +42,7 @@ class TteBand:
     band_id: str
     lower_bound_minutes: int
     upper_bound_minutes: int
+    clue_eligible: bool
     return_interval_minutes: int
     lookbacks_minutes: tuple[int, ...]
     annualized_variance_floor: Decimal
@@ -248,8 +249,8 @@ def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:
         "Policy",
     )
     schema_version = _positive_int(raw["policy_schema_version"], "policy_schema_version")
-    if schema_version != 5:
-        raise PolicyError("policy_schema_version must be exactly 5")
+    if schema_version != 6:
+        raise PolicyError("policy_schema_version must be exactly 6")
     family = raw["policy_family"]
     if family != POLICY_FAMILY:
         raise PolicyError(f"policy_family must be {POLICY_FAMILY}")
@@ -335,6 +336,7 @@ def _parse_band(value: object, index: int) -> TteBand:
             "band_id",
             "lower_bound_minutes",
             "upper_bound_minutes",
+            "clue_eligible",
             "return_interval_minutes",
             "lookbacks_minutes",
             "annualized_variance_floor",
@@ -349,6 +351,9 @@ def _parse_band(value: object, index: int) -> TteBand:
     upper = _positive_int(value["upper_bound_minutes"], f"{band_id}.upper_bound_minutes")
     if lower < MINIMUM_TTE_MINUTES or upper > MAXIMUM_TTE_MINUTES or lower >= upper:
         raise PolicyError(f"{band_id} bounds must satisfy 30 <= lower < upper <= 4320")
+    clue_eligible = value["clue_eligible"]
+    if not isinstance(clue_eligible, bool):
+        raise PolicyError(f"{band_id}.clue_eligible must be boolean")
     return_interval = _positive_int(
         value["return_interval_minutes"],
         f"{band_id}.return_interval_minutes",
@@ -376,6 +381,7 @@ def _parse_band(value: object, index: int) -> TteBand:
         band_id=band_id,
         lower_bound_minutes=lower,
         upper_bound_minutes=upper,
+        clue_eligible=clue_eligible,
         return_interval_minutes=return_interval,
         lookbacks_minutes=lookbacks,
         annualized_variance_floor=_positive_decimal(

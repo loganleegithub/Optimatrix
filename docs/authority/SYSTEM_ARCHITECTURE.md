@@ -123,8 +123,9 @@ Workbench rows; it cannot create an unbounded aggregate reason-key set.
 For Radar knownness, the funnel uses the canonical `IndexHistoryReducer` tail state already owned
 by the settled reducer; it does not recalculate the Radar formula. The history reducer is the sole
 validator and in-memory owner of the official `public/get_index_chart_data` response. It accepts
-only bounded, strictly chronological, positive finite BTC-USDC points and exposes an exact
-completed five-minute suffix without interpolation or synthetic gap filling. The warmup gate is per
+only bounded, strictly chronological, positive finite BTC-USDC average-price points, applies the
+configured completed-interval cutoff, exposes cadence/age/exact-suffix facts including whether the
+newest response point falls outside that cutoff, and detects completed-overlap revision. It never interpolates or fills a gap. The warmup gate is per
 Policy TTE band:
 
 - `IndexHistoryReducer` owns causal sampling and availability; the Radar baseline calculator owns
@@ -135,10 +136,18 @@ Policy TTE band:
 - an applicable countable evaluation with current index availability `WARMUP` is assigned to the
   visible startup/recovery bucket and never to the steady denominator;
 - the boundary at which that band first has an `AVAILABLE` tail is post-warmup;
-- after a band has been available, later history `SOURCE_STALE` or `WINDOW_GAP`, or live index
-  `CONTINUITY_GAP`, evaluations remain post-warmup steady-state UNKNOWNs;
+- after a band has been available, later history `SOURCE_STALE`, `WINDOW_GAP`, or `REVISION`, or
+  live-index `CONTINUITY_GAP`, evaluations remain post-warmup steady-state UNKNOWNs;
 - a later `WARMUP` recovery interval returns to the startup/recovery bucket until availability is
   restored.
+
+
+The hard-screen calculator in `short_vol_radar` is the sole owner of target-size bid/ask use,
+official tick stress, Black inversion, TTE/Delta clue eligibility, and stressed IV/RV detector
+truth. The separate review calculator may derive semivariance/jump context, surface-lite context,
+non-atomic legged vertical references, and transparent attention rank from already settled current
+state. Review output is immutable current projection only: it cannot feed the detector, official
+atomic classifier, Underwriting owner, admission, or Shadow Case store.
 
 The canonical stages are:
 
@@ -171,13 +180,17 @@ immediately; pending state flushes before reconnect or stop.
 
 HTTP handlers read one immutable complete byte snapshot. They never traverse mutable reducer
 state, read Shadow Case files, compute strategy truth, modify Policy, contact Deribit, or expose a
-write route. The server binds only to loopback and supports the declared GET/HEAD surface.
+write route. The server binds only to loopback and supports the declared GET/HEAD surface. The
+snapshot contains a bounded Top-N attention view plus `ALL`, exact rank inputs, source-contract
+facts, hard-screen fields, and diagnostic non-claims. Browser code only renders server-owned typed
+truth; it does not recalculate rank, IV, RV, surface, or structure economics.
 
 ## Failure domains
 
 - malformed or incompatible public protocol: fail the owning session or process as declared;
 - unavailable index-chart refresh: retain the last valid in-memory history until its Policy stale
-  deadline, then expose bounded Radar `UNKNOWN`; do not reconnect the streaming index;
+  deadline, then expose bounded Radar `UNKNOWN`; a completed-point revision is `REVISION/UNKNOWN`
+  until one stable follow-up response; neither condition reconnects the streaming index;
 - local option/book/ticker missingness: `UNKNOWN` at the smallest consumer;
 - reconnect: rebuild current session facts without replacing the same in-process Shadow owner;
 - Workbench publication error: explicit process failure in the current simple topology, not stale

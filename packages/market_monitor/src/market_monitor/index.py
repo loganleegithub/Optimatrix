@@ -45,6 +45,7 @@ class IndexAvailabilityState(StrEnum):
     WINDOW_GAP = "WINDOW_GAP"
     SOURCE_STALE = "SOURCE_STALE"
     CONTINUITY_GAP = "CONTINUITY_GAP"
+    REVISION = "REVISION"
 
 
 class BaselinePublicationPhase(StrEnum):

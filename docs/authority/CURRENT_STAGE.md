@@ -5,15 +5,15 @@
 **Current permission boundary:** `PUBLIC_SHADOW`
 
 **Current implementation status:**
-`RADAR_CANDIDATE_GENERATOR_OBSERVATION_REJECTED`
+`RADAR_CREDIBLE_CLUE_HARDENING`
 
-**Production Short Vol Radar:** `POST_WARMUP_APPLICABLE_SCOPE_NOT_REACHED`
+**Production Short Vol Radar:** `CANDIDATE_SEMANTICS_FREEZE_IN_PROGRESS`
 
 **Persistent service:** `STOPPED_NO_DEPLOYMENT`
 
-**Live commands:** `NONE_AUTHORIZED`
+**Live commands:** `ONE_SOURCE_CONTRACT_PROBE_AND_ONE_MAX_600_SECOND_SMOKE`
 
-**Sole authorized closure:** `SHORT_VOL_RADAR_CANDIDATE_VALIDITY`
+**Sole authorized closure:** `SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE`
 
 ## Current truth
 
@@ -39,12 +39,13 @@ None reached an available official atomic quote because all `146` were blocked b
 `PUBLIC_ATOMIC_QUOTE_AVAILABLE / NO_ACTIVE_COMBO`. No Shadow Case opened and the durable Shadow Case
 file count remained zero.
 
-The A1 observation used the then-current exact Radar, Underwriting, and Position Policy chain. A2
-may replace only the Radar benchmark and activation/clear persistence declared below; the dependent
-Underwriting and Position Policy bytes may change only to bind the new upstream content identities.
-Public source semantics, the TTE/Delta universe, target quantity, option inversion, atomic-combo
-semantics, causality, `UNKNOWN`, and full-quantity official atomic entry/exit requirements remain
-unchanged. No runtime is deployed and no private/account/order/fill/capital capability exists.
+The A1 observation used the then-current exact Radar, Underwriting, and Position Policy chain. The
+rejected first A2 candidate changed only its benchmark and persistence while holding the broad
+TTE/Delta universe fixed; the current explicitly authorized credible-clue closure supersedes that
+restriction only for Radar risk buckets and hard-screen facts. Target quantity, option inversion,
+official atomic semantics, causality, `UNKNOWN`, and full-quantity official atomic entry/exit
+requirements remain unchanged. No runtime is deployed and no private/account/order/fill/capital
+capability exists.
 
 The one authorized 43,200-second A2 observation was consumed at code commit `bf0475982950e860f06bf7dc645e84991fc47e93` and stopped cleanly at the precommitted boundary with a
 `343ms` stop-request offset. It did **not** satisfy A2: no Policy band ever reached the post-warmup
@@ -61,51 +62,51 @@ six-hour session-local index tail is a usable startup boundary for this candidat
 
 ## Active closure
 
-A1 measured `NO_ACTIVE_COMBO` after `146` anomaly Episodes, but its operational-probe Policy used
-one one-minute index return and two changed observations separated by only one second. The first A2
-candidate fixed the economic benchmark but exposed an earlier blocker: the live-only 360-minute
-tail never warmed during the exact 12-hour boundary. Before combo conversion can carry opportunity
-meaning, A2 must make the declared BTC baseline restart-resilient without hiding source gaps, then
-establish `RADAR_CANDIDATE_VALIDITY` at the `ANOMALY_ACTIVE` funnel node.
+Commit `a8a78bc` repaired the rejected A2 observation's session-local history dependency, but source
+reachability alone does not make an economically credible clue. Before another 43,200-second run,
+the Radar must freeze all candidate semantics that can be established from official contracts and
+direct tests.
 
-The authorized implementation keeps the BTC-USDC `30m < TTE <= 72h` OTM call/put universe, target
-quantity, executable-bid IV inversion, activation ratio, and atomic semantics fixed. It replaces
-the operational benchmark with non-overlapping five-minute returns over declared 30-minute,
-120-minute, and 360-minute causal windows, selects the highest realized-variance rate or fixed
-floor, and requires time-persistent activation and clear observations. The rejected observation's
-root cause is repaired offline by assigning the economic baseline to one bounded in-memory owner
-of Deribit's official `public/get_index_chart_data` BTC-USDC history. That owner selects only an
-exact completed five-minute suffix, never fills gaps, and reports bootstrap, warmup, stale, or
-window-gap truth at the Radar consumer. The streaming index remains the current-price/currentness
-owner; a history refresh failure cannot trigger a streaming resubscribe. Exact Policy bytes remain
-content-identified. This repair is not an accepted live result.
+A hard-screen clue requires: official completed average-price history with explicit cadence, age,
+gap and revision truth; target-size bid and ask depth; an uncrossed spread; official price-tick
+metadata; a bid that remains above the activation threshold after every consumed level is moved
+down one legal tick; an actionable TTE band; `0.05 <= |Delta| <= 0.40`; and the existing causal
+multi-horizon persistence rule.
+
+Regime, surface-lite, conservative legged vertical references, and transparent rank are diagnostic
+review context. They may explain and order a known clue but cannot create detector truth, official
+atomic availability, Underwriting action, admission, or edge.
 
 ## Allowed work
 
-- read-only repository and Workbench review;
-- the active A2 offline implementation, official public API documentation review, and deterministic
-  local/GitHub checks on its bounded branch.
+- authority, Radar contract, Policy, pure calculators, current-state projection, and direct tests for
+  the exact credible-clue freeze;
+- one bounded source-contract probe of Deribit's production-public index-chart method, with no
+  product persistence and no strategy-frequency claim;
+- after all direct checks pass, one production-public read-only integration smoke of at most
+  `600` seconds to prove positive post-warmup scope and at least one full-formula evaluation;
+- rebind dependent Underwriting and Position Policy identities only where upstream content identity
+  changes require it.
 
 ## Forbidden work
 
-- changing the Radar TTE/Delta universe, target quantity, IV inversion, or atomic-combo semantics;
-- any Radar Policy or benchmark change outside the exact active A2 task;
-- persistent deployment, automatic restart, or any further production-public observation without
-  new explicit Authority;
-- credentials, account, balance, margin, private API, order, fill, capital, or actual position;
-- durable funnel data, a new persistent diagnostic, database, replay platform, event bus,
-  microservice split, or Docker/Kubernetes requirement;
-- application commissioning, host PID/log inspection, manifest, receipt chain, broad evidence
-  package, 24-hour stability Soak, or anomaly-generation requirement;
-- qualification, promotion, or execution controller.
+- any 43,200-second observation before the credible-clue Policy and projection are frozen;
+- tuning thresholds to manufacture a natural clue during either short validation command;
+- changing target quantity, official atomic admission, Shadow Case, Position, or Outcome semantics;
+- fitted forecasting, SVI/SABR/Heston calibration, machine-learning ranking, event-calendar edge,
+  GEX, private RFQ/combo creation, credentials, account, order, fill, capital, or actual exposure;
+- persistent diagnostics, full-feed capture/replay, database, feature store, event bus,
+  microservice split, deployment, commissioning, host inspection, or a stability Soak.
 
 ## Acceptance boundary
 
-Offline checks may establish that each emitted Radar candidate follows the declared causal,
-multi-horizon and time-persistent screen and that the official-history boundary fails closed. The
-consumed observation established only that the first candidate never reached post-warmup scope and
-preserved the durable-data boundary. A future observation requires new explicit Authority and may
-establish current post-warmup reachability, natural candidate frequency during its fixed interval,
-and the naturally reached next blocker. It would not establish future frequency, expected return,
-strategy edge, general official-combo availability, fillability, qualification, deployment,
-uptime, or execution permission.
+Direct checks may establish formula correctness, source fail-closed behavior, quote robustness,
+risk-bucket classification, diagnostic context, ranking determinism, fee arithmetic, and strict
+separation between legged references and official atomic availability. The one source probe may
+establish only the current API cadence/revision facts it observes. The one short smoke may establish
+current end-to-end reachability only.
+
+After those gates pass, authority may be amended once to permit one fixed 43,200-second
+production-public read-only observation. Neither the short validations nor that later observation
+establish future frequency, expected return, edge, fillability, qualification, deployment, uptime,
+or execution permission.

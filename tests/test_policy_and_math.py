@@ -38,7 +38,7 @@ def _policy_with_ticker_stale_deadline(
 ) -> tuple[bytes, str]:
     exact, _ = policy_factory()
     document: dict[str, Any] = json.loads(exact)
-    document["policy_schema_version"] = 5
+    document["policy_schema_version"] = 6
     runtime_limits = document["runtime_limits"]
     assert isinstance(runtime_limits, dict)
     runtime_limits["ticker_source_stale_deadline_ms"] = deadline_ms
@@ -53,7 +53,7 @@ def test_policy_requires_and_binds_ticker_source_stale_deadline(
 
     policy = load_policy_bytes(exact, digest)
 
-    assert policy.schema_version == 5
+    assert policy.schema_version == 6
     assert policy.runtime_limits.ticker_source_stale_deadline_ms == 5_000
     assert policy.runtime_limits.as_object()["ticker_source_stale_deadline_ms"] == 5_000
 
@@ -88,7 +88,7 @@ def test_policy_loads_exact_bytes_once_and_binds_digest(
     path.write_bytes(exact)
     policy = load_policy(path, digest)
     assert policy.identity == digest
-    assert policy.schema_version == 5
+    assert policy.schema_version == 6
     assert policy.target_base_quantity_btc == Decimal("0.1")
     assert policy.runtime_limits.index_history_refresh_interval_ms == 300_000
     assert policy.runtime_limits.index_history_source_stale_deadline_ms == 900_000
@@ -103,32 +103,42 @@ def test_policy_loads_exact_bytes_once_and_binds_digest(
     assert policy.tte_bands[0].option_rules[OptionType.CALL].activation_ratio == Decimal("1.2")
 
 
-def test_production_a2_policy_is_the_exact_authorized_candidate_screen() -> None:
+def test_production_radar_policy_is_the_exact_credible_clue_screen() -> None:
     path = ROOT / "policies/short-vol-fixed-public-shadow-radar.json"
     exact = path.read_bytes()
     policy = load_policy_bytes(exact, digest_policy_bytes(exact))
 
-    assert policy.schema_version == 5
+    assert policy.schema_version == 6
     assert policy.family == "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS"
     assert policy.target_base_quantity_btc == Decimal("0.1")
     assert policy.runtime_limits.index_history_refresh_interval_ms == 300_000
     assert policy.runtime_limits.index_history_source_stale_deadline_ms == 900_000
-    assert len(policy.tte_bands) == 1
-    band = policy.tte_bands[0]
-    assert (band.lower_bound_minutes, band.upper_bound_minutes) == (30, 4_320)
-    assert band.return_interval_minutes == 5
-    assert band.lookbacks_minutes == (30, 120, 360)
-    assert band.annualized_variance_floor == Decimal("0.01")
-    for option_type in (OptionType.CALL, OptionType.PUT):
-        rule = band.option_rules[option_type]
-        assert (rule.abs_delta_min, rule.abs_delta_max) == (Decimal(0), Decimal(1))
-        assert (rule.activation_ratio, rule.clear_ratio) == (
-            Decimal("1.2"),
-            Decimal("1.05"),
-        )
-        assert rule.activation_observation_count == 3
-        assert rule.clear_observation_count == 2
-        assert rule.minimum_separation_ms == 300_000
+    assert [
+        (band.band_id, band.lower_bound_minutes, band.upper_bound_minutes, band.clue_eligible)
+        for band in policy.tte_bands
+    ] == [
+        ("review-only-30-to-45m", 30, 45, False),
+        ("ultra-short-45m-to-6h", 45, 360, True),
+        ("intraday-6h-to-24h", 360, 1_440, True),
+        ("multiday-24h-to-72h", 1_440, 4_320, True),
+    ]
+    for band in policy.tte_bands:
+        assert band.return_interval_minutes == 5
+        assert band.lookbacks_minutes == (30, 120, 360)
+        assert band.annualized_variance_floor == Decimal("0.01")
+        for option_type in (OptionType.CALL, OptionType.PUT):
+            rule = band.option_rules[option_type]
+            assert (rule.abs_delta_min, rule.abs_delta_max) == (
+                Decimal("0.05"),
+                Decimal("0.4"),
+            )
+            assert (rule.activation_ratio, rule.clear_ratio) == (
+                Decimal("1.2"),
+                Decimal("1.05"),
+            )
+            assert rule.activation_observation_count == 3
+            assert rule.clear_observation_count == 2
+            assert rule.minimum_separation_ms == 300_000
 
 
 def test_two_materially_different_policy_fixtures_change_runtime_values(
@@ -407,6 +417,36 @@ def test_baseline_uses_non_overlapping_five_minute_returns_and_conservative_max(
     )
     assert floored.annualized_volatility == Decimal("0.2")
     assert floored.selected_lookback_minutes is None
+
+
+def test_baseline_exposes_directional_semivariance_and_jump_diagnostics_without_gating() -> None:
+    result = compute_baseline(
+        sampled_prices=(
+            Decimal("100"),
+            Decimal("101"),
+            Decimal("99"),
+            Decimal("104"),
+            Decimal("103"),
+        ),
+        lookbacks=(20,),
+        return_interval_minutes=5,
+        annualized_variance_floor=Decimal("0.000001"),
+        remaining_life_minutes_low=Decimal(60),
+        remaining_life_minutes_high=Decimal(60),
+    )
+    diagnostic = result.diagnostics_for(20)
+    assert diagnostic.return_count == 4
+    assert diagnostic.positive_semivariance_share > 0
+    assert diagnostic.negative_semivariance_share > 0
+    assert (
+        diagnostic.positive_semivariance_share + diagnostic.negative_semivariance_share
+        == Decimal(1)
+    )
+    assert diagnostic.jump_variation_rate_per_minute >= 0
+    assert Decimal(0) <= diagnostic.jump_share <= Decimal(1)
+    assert diagnostic.maximum_absolute_return > 0
+    expected_net_return = Decimal(103).ln() - Decimal(100).ln()
+    assert abs(diagnostic.net_return - expected_net_return) < Decimal("1e-27")
 
 
 def test_baseline_consumes_only_the_owning_five_minute_samples() -> None:

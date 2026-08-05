@@ -100,7 +100,10 @@ Use the cheapest path that can falsify the exact claim:
 
 - pure formula, classifier, identity, or state rule: direct tests;
 - integration/composition: deterministic end-to-end fixture;
-- public source connectivity and current-state reachability: one bounded read-only smoke;
+- public source shape/cadence/revision assumptions: one explicitly authorized bounded source
+  contract probe;
+- public source connectivity and current-state reachability: one explicitly authorized bounded
+  read-only integration smoke;
 - Shadow Case persistence: direct write/read/crash-incomplete tests;
 - Challenger qualification or Policy promotion: later pre-registered independent evaluation;
 - private execution: later account/order/fill reconciliation and capital controls.
@@ -110,7 +113,8 @@ For public-only implementation, the normal gate is:
 ```text
 focused tests
 make check
-at most one explicitly authorized bounded read-only smoke only when natural source reachability is the claim
+at most one explicitly authorized source-contract probe when an undocumented provider behavior is material
+at most one explicitly authorized bounded read-only integration smoke when current reachability is the claim
 ```
 
 Public-only validation does not require a manifest, receipt chain, fresh empty evidence directory,
@@ -118,7 +122,8 @@ commissioning controller, host probe, 24-hour Soak, replay, full-market archive,
 ceremony, or post-push acceptance ledger.
 
 A rare natural market event is not a software-readiness prerequisite unless the user explicitly
-makes that occurrence the product claim.
+makes that occurrence the product claim. Neither a short probe nor a short smoke may be used to tune
+thresholds, demand a clue, or estimate strategy frequency.
 
 ## Single-owner validation rule
 

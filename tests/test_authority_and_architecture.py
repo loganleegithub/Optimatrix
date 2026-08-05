@@ -137,7 +137,7 @@ def test_product_data_boundary_is_unambiguous() -> None:
     assert "The Online Runtime does not own Cohort" in " ".join(product.split())
     assert "No pre-Shadow component may open a file" in architecture
     assert "Pre-Shadow persistence is forbidden by default" in " ".join(delivery.split())
-    assert "does not persist anomaly" in radar
+    assert "No market fact, clue, diagnostic, rank, atomic quote" in radar
     assert "Exactly three record kinds are authorized" in shadow_case
     assert "SHADOW_CASE_OPENED" in shadow_case
     assert "SHADOW_CASE_FIRST_CLOSE" in shadow_case
@@ -164,7 +164,10 @@ def test_online_runtime_has_no_rejected_counterfactual_or_cohort_surface() -> No
 
 def test_public_only_validation_does_not_recreate_commissioning() -> None:
     delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
-    assert "at most one explicitly authorized bounded read-only smoke" in " ".join(delivery.split())
+    assert "at most one explicitly authorized bounded read-only integration smoke" in (
+        " ".join(delivery.split())
+    )
+    assert "source-contract probe" in delivery
     assert "does not require a manifest, receipt chain" in delivery
     assert "Two-strike deletion rule" in delivery
     persistent = (ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md").read_text(
@@ -174,17 +177,20 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_only_a2_candidate_validity_after_a1() -> None:
+def test_current_stage_authorizes_only_credible_clue_freeze_and_two_short_validations() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`RADAR_CANDIDATE_GENERATOR_OBSERVATION_REJECTED`" in current
-    assert "**Production Short Vol Radar:** `POST_WARMUP_APPLICABLE_SCOPE_NOT_REACHED`" in current
-    assert "**Live commands:** `NONE_AUTHORIZED`" in current
-    assert "**Sole authorized closure:** `SHORT_VOL_RADAR_CANDIDATE_VALIDITY`" in current
+    assert "`RADAR_CREDIBLE_CLUE_HARDENING`" in current
+    assert "**Production Short Vol Radar:** `CANDIDATE_SEMANTICS_FREEZE_IN_PROGRESS`" in current
+    assert "**Live commands:** `ONE_SOURCE_CONTRACT_PROBE_AND_ONE_MAX_600_SECOND_SMOKE`" in current
+    assert "**Sole authorized closure:** `SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE`" in current
     assert "`1,556,097` `RADAR_KNOWN` evaluations: `100%`" in current
-    assert "`PUBLIC_ATOMIC_QUOTE_AVAILABLE / NO_ACTIVE_COMBO`" in current
-    assert not (ROOT / "tasks/SHORT_VOL_RADAR_STEADY_STATE_KNOWNNESS.md").exists()
-    assert (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
+    assert "`58,773,561` applicable evaluations" in current
+    assert "one legal tick" in current
+    assert "`0.05 <= |Delta| <= 0.40`" in current
+    assert "any 43,200-second observation before" in current
+    assert not (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
+    assert (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"
     )
@@ -201,8 +207,12 @@ def test_architecture_restores_applicable_scope_and_freezes_warmup_partition() -
     assert "the boundary at which that band first has an `AVAILABLE` tail is post-warmup" in (
         " ".join(architecture.split())
     )
-    assert "`INDEX_WARMUP` therefore remains visible" in " ".join(contract.split())
+    assert "`INDEX_WARMUP` remains visible" in " ".join(contract.split())
     assert "Every Radar UNKNOWN contributes exactly one bounded aggregate reason" in contract
+    assert "configured completed-interval cutoff" in architecture
+    assert "one-tick-stressed executable bid IV" in contract
+    assert "LEGGED_REFERENCE_NOT_ATOMIC" in contract
+    assert "deterministic lexicographic rank" in contract
 
 
 def test_task_template_measures_product_progress_not_proof_volume() -> None:
@@ -244,16 +254,16 @@ def test_internal_package_dependency_direction() -> None:
             assert not forbidden, f"{path} imports higher layers: {sorted(forbidden)}"
 
 
-def test_fixed_policy_files_remain_content_identified_after_a2_chain_rebind() -> None:
+def test_fixed_policy_files_remain_content_identified_after_credible_clue_rebind() -> None:
     expected = {
         "policies/short-vol-fixed-public-shadow-radar.json": (
-            "4781317bb4c71e14dc7a9d24c577be7912f846d4196a5541da0909ab14b6c282"
+            "8076402f51529fe9d26f4c9f7a76872b5f9490581361c9068370d045511bba0c"
         ),
         "policies/short-vol-fixed-public-shadow-underwriting.json": (
-            "b8e14afe67f519f9b159f773fa35a1377a089cc3dec649b15cd8fa52301686bc"
+            "29a295b1579e917229e73f8cb85ef57116032ca7e9a5106404d3144dd5f48989"
         ),
         "policies/short-vol-fixed-public-shadow-position.json": (
-            "17be43bd7bf32f7a6f6c8b15756f34764b864ec7e0d04ada8766599a284064ef"
+            "b99be4299d24db68d9f4734dd755e528a67d7c6f95f38d3db8b47961fe9858af"
         ),
     }
     for relative, digest in expected.items():

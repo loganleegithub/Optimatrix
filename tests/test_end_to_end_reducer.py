@@ -102,6 +102,8 @@ def option_payload(name: str, expiry_ms: int, strike: str) -> dict[str, object]:
         "contract_size": 1,
         "min_trade_amount": 0.1,
         "qty_tick_size": 0.1,
+        "tick_size": 0.00000001,
+        "tick_size_steps": [],
     }
 
 
@@ -381,7 +383,7 @@ def run_nonempty_scenario(
                         "instrument_name": short_name,
                         "change_id": 1,
                         "bids": [["new", first_price, "0.1"]],
-                        "asks": [],
+                        "asks": [["new", first_price + Decimal("0.00000002"), "0.1"]],
                     },
                 },
             },

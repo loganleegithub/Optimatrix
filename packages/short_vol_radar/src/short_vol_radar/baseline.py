@@ -6,10 +6,27 @@ from itertools import pairwise
 
 MINUTES_PER_YEAR = Decimal(365 * 24 * 60)
 DECIMAL_CONTEXT = Context(prec=50, rounding=ROUND_HALF_EVEN)
+PI_OVER_TWO = Decimal("1.5707963267948966192313216916397514420985846996876")
 
 
 class BaselineUnavailable(ValueError):
-    """The causal covered close history cannot produce the configured baseline."""
+    """The causal covered history cannot produce the configured baseline."""
+
+
+@dataclass(frozen=True)
+class WindowDiagnostics:
+    lookback_minutes: int
+    return_count: int
+    variance_rate_per_minute: Decimal
+    positive_semivariance_rate_per_minute: Decimal
+    negative_semivariance_rate_per_minute: Decimal
+    positive_semivariance_share: Decimal
+    negative_semivariance_share: Decimal
+    bipower_variation_rate_per_minute: Decimal
+    jump_variation_rate_per_minute: Decimal
+    jump_share: Decimal
+    maximum_absolute_return: Decimal
+    net_return: Decimal
 
 
 @dataclass(frozen=True)
@@ -21,6 +38,13 @@ class BaselineResult:
     annualized_volatility: Decimal
     total_variance_low: Decimal
     total_variance_high: Decimal
+    window_diagnostics: tuple[WindowDiagnostics, ...] = ()
+
+    def diagnostics_for(self, lookback_minutes: int) -> WindowDiagnostics:
+        for member in self.window_diagnostics:
+            if member.lookback_minutes == lookback_minutes:
+                return member
+        raise KeyError(lookback_minutes)
 
 
 def compute_baseline(
@@ -53,7 +77,7 @@ def compute_baseline(
         raise BaselineUnavailable("remaining life or variance floor is invalid")
     try:
         with localcontext(DECIMAL_CONTEXT) as context:
-            windows: list[tuple[int, Decimal]] = []
+            diagnostics: list[WindowDiagnostics] = []
             for lookback in sorted(lookbacks):
                 sample_count = lookback // return_interval_minutes + 1
                 sampled = sampled_prices[-sample_count:]
@@ -61,13 +85,50 @@ def compute_baseline(
                     context.ln(later) - context.ln(earlier) for earlier, later in pairwise(sampled)
                 )
                 squared = tuple(value * value for value in returns)
-                variance_rate = sum(squared, Decimal(0)) / Decimal(lookback)
-                windows.append((lookback, +variance_rate))
-            floor_per_minute = annualized_variance_floor / MINUTES_PER_YEAR
-            selected = max(
-                windows,
-                key=lambda item: (item[1], item[0]),
+                realized_sum = sum(squared, Decimal(0))
+                positive_sum = sum(
+                    (square for value, square in zip(returns, squared, strict=True) if value > 0),
+                    Decimal(0),
+                )
+                negative_sum = sum(
+                    (square for value, square in zip(returns, squared, strict=True) if value < 0),
+                    Decimal(0),
+                )
+                bipower_sum = PI_OVER_TWO * sum(
+                    (abs(later) * abs(earlier) for earlier, later in pairwise(returns)),
+                    Decimal(0),
+                )
+                jump_sum = max(Decimal(0), realized_sum - bipower_sum)
+                denominator = Decimal(lookback)
+                variance_rate = realized_sum / denominator
+                diagnostics.append(
+                    WindowDiagnostics(
+                        lookback_minutes=lookback,
+                        return_count=len(returns),
+                        variance_rate_per_minute=+variance_rate,
+                        positive_semivariance_rate_per_minute=+(positive_sum / denominator),
+                        negative_semivariance_rate_per_minute=+(negative_sum / denominator),
+                        positive_semivariance_share=(
+                            +(positive_sum / realized_sum) if realized_sum > 0 else Decimal(0)
+                        ),
+                        negative_semivariance_share=(
+                            +(negative_sum / realized_sum) if realized_sum > 0 else Decimal(0)
+                        ),
+                        bipower_variation_rate_per_minute=+(bipower_sum / denominator),
+                        jump_variation_rate_per_minute=+(jump_sum / denominator),
+                        jump_share=(+(jump_sum / realized_sum) if realized_sum > 0 else Decimal(0)),
+                        maximum_absolute_return=+max(
+                            (abs(value) for value in returns),
+                            default=Decimal(0),
+                        ),
+                        net_return=+sum(returns, Decimal(0)),
+                    )
+                )
+            windows = tuple(
+                (member.lookback_minutes, member.variance_rate_per_minute) for member in diagnostics
             )
+            floor_per_minute = annualized_variance_floor / MINUTES_PER_YEAR
+            selected = max(windows, key=lambda item: (item[1], item[0]))
             selected_lookback: int | None = selected[0]
             selected_rate = selected[1]
             if floor_per_minute >= selected_rate:
@@ -80,23 +141,38 @@ def compute_baseline(
             total_high = variance_rate * remaining_life_minutes_high
             result = BaselineResult(
                 return_interval_minutes=return_interval_minutes,
-                window_variances=tuple(windows),
+                window_variances=windows,
                 selected_lookback_minutes=selected_lookback,
                 variance_rate_per_minute=+variance_rate,
                 annualized_volatility=+annualized,
                 total_variance_low=+total_low,
                 total_variance_high=+total_high,
+                window_diagnostics=tuple(diagnostics),
             )
     except (InvalidOperation, OverflowError) as exc:
         raise BaselineUnavailable("baseline arithmetic was not finite") from exc
-    if not all(
-        value.is_finite()
-        for value in (
-            result.variance_rate_per_minute,
-            result.annualized_volatility,
-            result.total_variance_low,
-            result.total_variance_high,
-        )
-    ):
+    scalar_values = (
+        result.variance_rate_per_minute,
+        result.annualized_volatility,
+        result.total_variance_low,
+        result.total_variance_high,
+        *(value for member in result.window_diagnostics for value in _diagnostic_decimals(member)),
+    )
+    if not all(value.is_finite() for value in scalar_values):
         raise BaselineUnavailable("baseline arithmetic was not finite")
     return result
+
+
+def _diagnostic_decimals(member: WindowDiagnostics) -> tuple[Decimal, ...]:
+    return (
+        member.variance_rate_per_minute,
+        member.positive_semivariance_rate_per_minute,
+        member.negative_semivariance_rate_per_minute,
+        member.positive_semivariance_share,
+        member.negative_semivariance_share,
+        member.bipower_variation_rate_per_minute,
+        member.jump_variation_rate_per_minute,
+        member.jump_share,
+        member.maximum_absolute_return,
+        member.net_return,
+    )

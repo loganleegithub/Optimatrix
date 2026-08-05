@@ -5709,6 +5709,31 @@ class RadarReducer:
     def latest_funnel_evaluations(self) -> tuple[RadarFunnelEvaluation, ...]:
         return self._latest_funnel_evaluations
 
+    @property
+    def current_diagnostic_tickers(self) -> dict[str, TickerState]:
+        """Return only tickers whose source currentness was settled as CURRENT."""
+        return {
+            name: settled.ticker
+            for name, settled in self._settled_ticker_currentness.items()
+            if settled.state is TickerAcceptedCurrentness.CURRENT and settled.ticker is not None
+        }
+
+    @property
+    def current_index_price_usdc_per_btc(self) -> Decimal | None:
+        receipt = self.accepted_index_receipt
+        if receipt is None or not self.platform.usable or self.clock is None:
+            return None
+        try:
+            trusted = self.clock.interval_at(self._last_boundary_monotonic_ms)
+        except (ContinuityGap, ValueError):
+            return None
+        if (
+            trusted.lower_ms - receipt.source_timestamp_ms
+            > self.policy.runtime_limits.index_source_stale_deadline_ms
+        ):
+            return None
+        return receipt.price_usdc_per_btc
+
     def episode_started_monotonic_ms(self, episode_identity: str) -> int | None:
         return self._episode_started_ms.get(episode_identity)
 
