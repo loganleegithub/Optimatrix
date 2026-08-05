@@ -6,8 +6,10 @@
 
 **Runtime implementation:** REQUIRED
 
-**Live commands:** exactly one source-contract probe and one production-public read-only integration
-smoke of at most 600 seconds; no 43,200-second observation
+**Live commands:** the accepted source-contract probe is consumed; one post-repair
+production-public read-only smoke of at most 600 seconds is authorized for each new exact candidate
+that passes offline gates; no unchanged rerun and no 43,200-second observation before smoke
+acceptance and an Authority amendment
 
 **Base commit:** `a8a78bc5b35e3359864b5985f3b013b8981896b1`
 
@@ -20,33 +22,30 @@ smoke of at most 600 seconds; no 43,200-second observation
 
 ## Product movement
 
-**Current funnel node:** `ANOMALY_ACTIVE`
+**Current funnel node:** `RADAR_KNOWN`
 
-**Baseline:** A1 produced 146 noisy one-minute Episodes. The first A2 43,200-second observation was
-rejected with post-warmup `RADAR_KNOWN / APPLICABLE_MARKET_SCOPE = 0 / 0` because a 360-minute
-economic feature was tied to one uninterrupted live session. Commit `a8a78bc` repairs bootstrap
-reachability but has not frozen credible clue semantics.
+**Baseline:** candidate `cbea7a3` passed its source contract but failed the first 540-second smoke.
+The last readable post-warmup partition was `12,384 / 28,128` known; `OPTION_BOOK_UNKNOWN 11,836`
+was the largest visible loss, nine current samples had zero full-formula instruments, and the
+terminal cumulative result was unreadable.
 
-**Primary blocker:** `RADAR_CREDIBLE_CLUE_SEMANTICS_INCOMPLETE`; denominator is every formula row
-that could still be a false clue because target ask, official tick stress, actionable TTE/Delta,
-regime context, surface context, structure reference, or transparent rank is absent.
+**Primary blocker:** `RADAR_CURRENT_INPUT_BACKLOG`; denominator is every post-warmup applicable
+instrument fact that should retain a current option book, ticker, clock, and history tail. Whole
+scope formula fan-out and a second unbounded pending owner caused the visible
+`OPTION_BOOK_UNKNOWN`; close lifecycle separately withheld the terminal summary.
 
-**Expected user-visible delta:** a `RICHNESS_CLUE_ACTIVE` row is a target-size, two-sided, uncrossed,
-one-legal-tick-robust executable-bid witness in an actionable TTE/Delta bucket. The row separately
-shows causal RV, path/jump regime, surface-lite context, conservative non-atomic protective-vertical
-references, official atomic state, rank inputs, blocker, upgrade condition, and invalidation
-condition.
+**Expected user-visible delta:** the Radar maintains positive full-formula current state under the
+real public option universe, exposes the current book owner's exact bounded reason when unavailable,
+and returns a readable cumulative terminal summary. Zero natural clues remains valid.
 
 **Durable-data effect:** `NONE`; all pre-Shadow state remains bounded and in memory.
 
-**Complexity added:** one history-response contract projection; official option tick metadata;
-one-tick quote stress; four TTE buckets; five Delta buckets; semivariance/jump diagnostics; one
-surface-lite review calculator; one conservative legged-reference calculator; one deterministic
-lexicographic rank.
+**Complexity added:** no new subsystem; one per-transaction history-tail cache, one bounded transport
+close budget, and exact current book reason in the existing Workbench row.
 
-**Complexity deleted:** the false equivalence between a single-leg IV/RV hit and a downstream
-`CANDIDATE`, the all-Delta/all-TTE candidate universe, and the need to spend 43,200 seconds after
-every formula correction.
+**Complexity deleted:** scope-wide formula recomputation for local facts, repeated history-contract
+scans, the unbounded runtime ingress deque, and dual 100ms option feeds that have no five-minute
+detector purpose.
 
 ## Business closure
 
@@ -69,8 +68,9 @@ context lowers explanation/rank completeness but does not erase a known hard-scr
 
 **Market/Decision input contract change:** official chart history records cadence, completed-suffix
 coverage, response revision, and source age; option metadata additionally consumes official
-`tick_size` and `tick_size_steps`; the detector consumes target-size bid and ask depth. No new
-external provider or durable feed is added.
+`tick_size` and `tick_size_steps`; the detector consumes target-size bid and ask depth. Public option
+ticker and book subscriptions use Deribit's aggregated `agg2` channels. No new external provider or
+durable feed is added.
 
 **Decision Policy change:** Radar Policy schema `6`; TTE bands are `30–45m` review-only,
 `45m–6h`, `6h–24h`, and `24h–72h`; clue-eligible bands use `0.05 <= |Delta| <= 0.40`, the existing
@@ -106,8 +106,9 @@ acceptance.
 - direct focused tests for history, policy/math, Radar, review, Workbench, fee arithmetic, and
   Authority;
 - repository gate: `make check` in the exact toolchain;
-- exactly one source probe; stdout only, no product persistence;
-- exactly one <=600-second production-public read-only integration smoke after direct gates;
+- no repeat of the accepted source probe;
+- one <=600-second production-public read-only integration smoke per new offline-gated repair
+  candidate, with no unchanged rerun;
 - no threshold tuning from either short validation.
 
 ## Definition of done

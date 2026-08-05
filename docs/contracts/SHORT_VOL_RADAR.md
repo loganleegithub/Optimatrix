@@ -22,8 +22,9 @@ official atomic availability, Underwriting action, Shadow admission, or executio
 - active BTC-USDC linear options selected by actual expiry timestamp;
 - trusted-time scope `0 < TTE <= 72 hours`, with the final 30 minutes excluded;
 - Calls and Puts evaluated separately;
-- official option/combo metadata, option ticker, option/combo order books, streaming BTC-USDC index,
-  official BTC-USDC index-chart history, platform status, heartbeat, and public time;
+- official option/combo metadata, aggregated `agg2` option ticker and option order books, combo order
+  books, streaming BTC-USDC index, official BTC-USDC index-chart history, platform status,
+  heartbeat, and public time;
 - one exact target quantity and content-identified Policy chain for the full run.
 
 No private/account, RFQ, combo-creation, order, trade, fill, balance, margin, settlement act, or test

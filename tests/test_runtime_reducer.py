@@ -403,8 +403,8 @@ def test_partial_channel_ack_commits_missing_truth_before_releasing_success_fram
     reducer = make_reducer(tmp_path, policy_factory)
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.pending_rpcs.clear()
-    first = "ticker.FIRST.100ms"
-    second = "ticker.SECOND.100ms"
+    first = "ticker.FIRST.agg2"
+    second = "ticker.SECOND.agg2"
     reducer.options = {
         name: _option_for_combo_test(name, strike)
         for name, strike in (("FIRST", 100), ("SECOND", 110))
@@ -472,8 +472,8 @@ def test_partial_channel_ack_commits_successes_and_scopes_missing_failure(
     reducer = make_reducer(tmp_path, policy_factory)
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.pending_rpcs.clear()
-    first = "ticker.FIRST.100ms"
-    second = "ticker.SECOND.100ms"
+    first = "ticker.FIRST.agg2"
+    second = "ticker.SECOND.agg2"
     reducer._plan_channel_change(
         (first, second),
         subscribe=True,
@@ -520,9 +520,9 @@ def test_partial_ack_does_not_fail_a_channel_owned_by_a_newer_generation(
     reducer = make_reducer(tmp_path, policy_factory)
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.pending_rpcs.clear()
-    first = "ticker.FIRST.100ms"
-    second = "ticker.SECOND.100ms"
-    third = "ticker.THIRD.100ms"
+    first = "ticker.FIRST.agg2"
+    second = "ticker.SECOND.agg2"
+    third = "ticker.THIRD.agg2"
     reducer._plan_channel_change(
         (first, second, third),
         subscribe=True,
@@ -556,7 +556,7 @@ def test_tainted_pending_generation_is_dropped_at_ack_before_resubscribe(
     reducer = make_reducer(tmp_path, policy_factory)
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.pending_rpcs.clear()
-    channel = "ticker.SHORT.100ms"
+    channel = "ticker.SHORT.agg2"
     reducer._plan_channel_change(
         (channel,),
         subscribe=True,
@@ -601,7 +601,7 @@ def test_failed_intentional_unsubscribe_does_not_reopen_frame_admission(
     reducer = make_reducer(tmp_path, policy_factory)
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.pending_rpcs.clear()
-    channel = "ticker.REMOVED.100ms"
+    channel = "ticker.REMOVED.agg2"
     reducer._channels[channel] = runtime_module._ChannelSlot(
         state=ChannelState.ACKNOWLEDGED,
         generation=1,
@@ -669,7 +669,7 @@ def test_removed_option_unsubscribe_failure_does_not_restore_current_result(
         policy_identity=reducer.policy.identity,
         instrument_name="REMOVED",
     )
-    channel = "book.REMOVED.100ms"
+    channel = "book.REMOVED.agg2"
     reducer._channels[channel] = runtime_module._ChannelSlot(
         state=ChannelState.ACKNOWLEDGED,
         generation=1,
@@ -2869,7 +2869,7 @@ def test_metadata_response_commits_after_sustained_market_ingress(
                 {
                     "method": "subscription",
                     "params": {
-                        "channel": f"ticker.{existing}.100ms",
+                        "channel": f"ticker.{existing}.agg2",
                         "data": {
                             "instrument_name": existing,
                             "timestamp": source_timestamp,

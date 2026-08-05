@@ -332,7 +332,7 @@ def run_nonempty_scenario(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": f"book.{long_name}.100ms",
+                    "channel": f"book.{long_name}.agg2",
                     "data": {
                         "type": "snapshot",
                         "timestamp": 1_020_100,
@@ -354,7 +354,7 @@ def run_nonempty_scenario(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": f"ticker.{short_name}.100ms",
+                    "channel": f"ticker.{short_name}.agg2",
                     "data": {
                         "instrument_name": short_name,
                         "timestamp": 1_020_101,
@@ -376,7 +376,7 @@ def run_nonempty_scenario(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": f"book.{short_name}.100ms",
+                    "channel": f"book.{short_name}.agg2",
                     "data": {
                         "type": "snapshot",
                         "timestamp": 1_020_102,

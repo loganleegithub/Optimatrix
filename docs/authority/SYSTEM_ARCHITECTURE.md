@@ -50,8 +50,10 @@ own strategy formulas.
 
 One application-sequence allocator stamps every accepted decoded frame and transport-control fact
 with a session epoch, consecutive ingress sequence, and monotonic receive boundary. One bounded
-queue preserves application order. One synchronous reducer exclusively owns mutable market and
-Radar state and never waits for network I/O.
+transport queue preserves application order; runtime does not drain it into a second unbounded
+pending deque. One synchronous reducer exclusively owns mutable market and Radar state, processes a
+local option fact locally, and never waits for network I/O. Cooperative yielding keeps reader,
+sender, and clock-source tasks schedulable while the queue is non-empty.
 
 The reducer settles one accepted fact completely before calling the downstream owner. The owner
 then settles Underwriting, admission, every open Shadow Position, and Outcome before Workbench or

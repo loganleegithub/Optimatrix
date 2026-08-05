@@ -708,6 +708,99 @@ def test_continuous_inbound_flow_cannot_starve_absolute_time_boundaries(
     assert timer_boundaries == [1_000]
 
 
+def test_prefilled_ingress_stays_single_owner_and_yields_between_facts(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        event_sink=RadarEventSink(
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    stop_event = asyncio.Event()
+    summary = {"object_kind": "RADAR_RUN_SUMMARY"}
+    reduced: list[int] = []
+    fairness_observations: list[int] = []
+    drain_before_stop = 0
+
+    class PrefilledClient:
+        session_epoch = 1
+        queue_high_water_frames = 3
+        overflow_count = 0
+        received_frame_count = 3
+        enqueued_envelope_count = 3
+
+        def __init__(self) -> None:
+            self.stopped = False
+            self.frames = [
+                InboundEnvelope(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "heartbeat",
+                        "params": {"type": "heartbeat"},
+                    },
+                    session_epoch=1,
+                    ingress_seq=seq,
+                    received_monotonic_ms=seq,
+                )
+                for seq in range(1, 4)
+            ]
+
+        async def next_envelope(
+            self,
+            timeout_seconds: float | None = None,
+        ) -> InboundEnvelope:
+            del timeout_seconds
+            return self.frames.pop(0)
+
+        def drain_envelopes(self) -> tuple[InboundEnvelope, ...]:
+            nonlocal drain_before_stop
+            if not self.stopped:
+                drain_before_stop += 1
+            values = tuple(self.frames)
+            self.frames.clear()
+            return values
+
+        async def stop_intake(self) -> None:
+            self.stopped = True
+
+        async def send_request(self, **_kwargs: object) -> None:
+            raise AssertionError("patched reducer must not emit commands")
+
+        def enqueue_send_control(self, event: SendControlEvent) -> None:
+            raise AssertionError(f"patched reducer unexpectedly emitted {event}")
+
+    def reduce_frame(
+        frame: InboundEnvelope,
+        *,
+        processed_monotonic_ms: int,
+    ) -> tuple[object, ...]:
+        del processed_monotonic_ms
+        reduced.append(frame.ingress_seq)
+        if frame.ingress_seq == 1:
+            asyncio.get_running_loop().call_soon(lambda: fairness_observations.append(len(reduced)))
+        if frame.ingress_seq == 3:
+            stop_event.set()
+        return ()
+
+    monkeypatch.setattr(runtime.reducer, "begin_session", lambda **_kwargs: ())
+    monkeypatch.setattr(runtime.reducer, "reduce", reduce_frame)
+    monkeypatch.setattr(runtime.reducer, "advance_time", lambda _boundary_ms: ())
+    monkeypatch.setattr(runtime.reducer, "clean_stop", lambda _stop_ms: summary)
+
+    assert asyncio.run(runtime.run(PrefilledClient(), stop_event)) == summary
+    assert reduced == [1, 2, 3]
+    assert drain_before_stop == 0
+    assert fairness_observations == [1]
+
+
 @pytest.mark.parametrize("outcome", ("SUCCESS", "CANCELLED", "ERROR"))
 def test_sender_reports_transport_completion_without_mutating_reducer(
     outcome: str,

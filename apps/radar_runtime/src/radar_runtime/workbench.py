@@ -778,6 +778,7 @@ def _radar_rows(
         result = reducer.results.get(name)
         tracker = reducer.trackers.get(name)
         calculation = result.calculation if result is not None else None
+        option_book = reducer.option_books.get(name)
         review = contexts.get(name)
         episode = tracker.episode_id if tracker is not None else None
         tte = (
@@ -799,6 +800,12 @@ def _radar_rows(
                     result.detector_state.value if result is not None else "UNKNOWN"
                 ),
                 "detector_reason": result.reason if result is not None else "NOT_SETTLED",
+                "option_book_state": (
+                    option_book.state.value if option_book is not None else "UNKNOWN"
+                ),
+                "option_book_reason": (
+                    option_book.reason if option_book is not None else "BOOK_NOT_CREATED"
+                ),
                 "known_evaluation": (result.known_evaluation if result is not None else False),
                 "tte_band_id": result.band_id if result is not None else None,
                 "clue_eligible_tte": (
@@ -1854,7 +1861,7 @@ const radarCellValue = (row, field, value) => {
   if (['regime_jump_share', 'regime_adverse_semivariance_share'].includes(field)) {
     return isMissing(value) ? 'UNKNOWN' : formatPercent(value);
   }
-  if (field === 'detector_reason') {
+  if (field === 'detector_reason' || field === 'option_book_reason') {
     return isMissing(value) ? unavailableRadarCalculation(row) : reasonText(value);
   }
   if (field === 'active_episode_identity' || field === 'anomaly_started_monotonic_ms') {
@@ -2068,6 +2075,7 @@ function renderRadarPanel(documentValue) {
       ['premium ticks', 'bid_premium_ticks'], ['regime context', 'regime_context'],
       ['surface context', 'surface_context'], ['legged structure', 'legged_structure_context'],
       ['detector reason enum', 'detector_reason'],
+      ['option book state', 'option_book_state'], ['option book reason', 'option_book_reason'],
       ['episode start monotonic ms', 'anomaly_started_monotonic_ms'],
       ['episode duration ms', 'anomaly_active_duration_ms']]);
 }

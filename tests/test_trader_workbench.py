@@ -158,6 +158,12 @@ def test_radar_projection_binds_atomic_state_to_active_episode_identity() -> Non
                 )
             },
             trackers={"BTC-TEST": tracker},
+            option_books={
+                "BTC-TEST": SimpleNamespace(
+                    state=SimpleNamespace(value="UNKNOWN"),
+                    reason="CHANGE_ID_GAP",
+                )
+            },
             atomic_states={episode_identity: PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE},
             episode_started_monotonic_ms=lambda _episode: 100,
             episode_active_duration_ms=lambda _episode, *, observed_monotonic_ms: (
@@ -175,6 +181,8 @@ def test_radar_projection_binds_atomic_state_to_active_episode_identity() -> Non
     (row,) = workbench_module._radar_rows(reducer, commit, None)
 
     assert row["public_atomic_quote_state"] == "PUBLIC_ATOMIC_QUOTE_AVAILABLE"
+    assert row["option_book_state"] == "UNKNOWN"
+    assert row["option_book_reason"] == "CHANGE_ID_GAP"
 
 
 def test_radar_projection_explains_candidate_baseline_sampling_and_selection() -> None:
@@ -225,6 +233,7 @@ def test_radar_projection_explains_candidate_baseline_sampling_and_selection() -
                 )
             },
             trackers={},
+            option_books={},
             atomic_states={},
             episode_started_monotonic_ms=lambda _episode: None,
             episode_active_duration_ms=lambda _episode, *, observed_monotonic_ms: None,
@@ -273,6 +282,7 @@ def test_radar_projection_uses_not_evaluated_without_active_detector_truth() -> 
                     detector_state=DetectorState.UNKNOWN,
                 )
             },
+            option_books={},
             atomic_states={episode_identity: PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE},
             episode_started_monotonic_ms=lambda _episode: 100,
             episode_active_duration_ms=lambda _episode, *, observed_monotonic_ms: (

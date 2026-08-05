@@ -1,6 +1,6 @@
 {
   "policy_semantic_name": "SHORT_VOL_PUBLIC_SHADOW_POSITION_POLICY",
-  "underwriting_policy_identity": "sha256:29a295b1579e917229e73f8cb85ef57116032ca7e9a5106404d3144dd5f48989",
+  "underwriting_policy_identity": "sha256:9fa7ff745052c2ce20ea854a9c5283c43a69349358c847052464dc2ead6f800f",
   "target_base_quantity_btc": 0.1,
   "clock_currentness_budget_ms": 45000,
   "platform_currentness_budget_ms": 90000,

@@ -5,9 +5,9 @@
   "runtime_limits": {
     "heartbeat_interval_seconds": 30,
     "session_liveness_deadline_ms": 90000,
-    "rpc_deadline_ms": 30000,
+    "rpc_deadline_ms": 10000,
     "clock_refresh_interval_ms": 15000,
-    "clock_stale_deadline_ms": 45000,
+    "clock_stale_deadline_ms": 60000,
     "index_source_stale_deadline_ms": 90000,
     "index_history_refresh_interval_ms": 300000,
     "index_history_source_stale_deadline_ms": 900000,

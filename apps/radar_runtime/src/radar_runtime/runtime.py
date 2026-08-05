@@ -18,6 +18,7 @@ from market_monitor import (
     ContinuousOrderBook,
     IndexAvailabilityState,
     IndexHistoryReducer,
+    IndexHistoryState,
     IndexMinuteReducer,
     IndexPublicationBoundary,
     IndexPublicationUpdate,
@@ -274,6 +275,7 @@ class ScopeSnapshot:
     trusted_time: TimeInterval
     clock_revision: int
     current: tuple[ScopeCurrent, ...]
+    scope_results: tuple[tuple[OptionInstrument, EvaluationResult | None], ...]
     boundary_countable: bool
     acceptance_eligible: bool
     catalog_complete: bool
@@ -1960,7 +1962,8 @@ class RadarReducer:
                     self._invalidate_clock_index(boundary, reason="CLOCK_GAP")
                     return
                 self._next_clock_refresh_ms = (
-                    boundary.received_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
+                    boundary.received_monotonic_ms
+                    + self.policy.runtime_limits.time_boundary_poll_interval_ms
                 )
                 return
             self.platform.invalidate_fresh_index_coverage("CLOCK_GAP")
@@ -1973,7 +1976,8 @@ class RadarReducer:
                 )
             )
             self._next_clock_refresh_ms = (
-                boundary.received_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
+                boundary.received_monotonic_ms
+                + self.policy.runtime_limits.time_boundary_poll_interval_ms
             )
             return
         if request.purpose is RpcPurpose.OPTION_METADATA and (
@@ -2514,15 +2518,15 @@ class RadarReducer:
                     )
             elif channel == INDEX_CHANNEL:
                 self._apply_index(data, boundary)
-            elif channel.startswith("ticker.") and channel.endswith(".100ms"):
-                instrument_name = channel[len("ticker.") : -len(".100ms")]
+            elif channel.startswith("ticker.") and channel.endswith(".agg2"):
+                instrument_name = channel[len("ticker.") : -len(".agg2")]
                 self._apply_ticker(
                     instrument_name,
                     data,
                     boundary,
                 )
-            elif channel.startswith("book.") and channel.endswith(".100ms"):
-                instrument_name = channel[len("book.") : -len(".100ms")]
+            elif channel.startswith("book.") and channel.endswith(".agg2"):
+                instrument_name = channel[len("book.") : -len(".agg2")]
                 self._apply_book(
                     instrument_name,
                     data,
@@ -3423,9 +3427,13 @@ class RadarReducer:
             )
             try:
                 changed = book.apply(payload, boundary.received_monotonic_ms)
-            except (ContinuityGap, SourceDataError):
-                book.invalidate("OPTION_BOOK_GAP")
-                self.option_books[instrument_name] = ContinuousOrderBook(instrument_name)
+            except (ContinuityGap, SourceDataError) as exc:
+                reason = (
+                    book.reason
+                    if isinstance(exc, ContinuityGap) or book.reason == "CROSSED_OR_LOCKED_BOOK"
+                    else "BOOK_SOURCE_INVALID"
+                )
+                book.invalidate(reason or "OPTION_BOOK_GAP")
                 self._settle_fact(
                     commit=CausalCommit(
                         boundary=boundary,
@@ -4080,6 +4088,7 @@ class RadarReducer:
         self,
         instrument: OptionInstrument,
         trusted: TimeInterval,
+        tail_by_lookback: dict[int, IndexHistoryState],
     ) -> tuple[object, ...]:
         applicability = classify_time_applicability(
             self.policy,
@@ -4090,12 +4099,10 @@ class RadarReducer:
         if applicability.band is None:
             tail_identity: tuple[object, ...] = ()
         else:
-            tail = self.index_history.current_tail(
+            tail = self._cached_index_tail(
                 max(applicability.band.lookbacks_minutes),
-                trusted_time=trusted,
-                source_stale_deadline_ms=(
-                    self.policy.runtime_limits.index_history_source_stale_deadline_ms
-                ),
+                trusted=trusted,
+                tail_by_lookback=tail_by_lookback,
             )
             tail_identity = (
                 tail.availability.value,
@@ -4112,11 +4119,32 @@ class RadarReducer:
     def _time_currentness_by_instrument(
         self,
         trusted: TimeInterval,
+        tail_by_lookback: dict[int, IndexHistoryState] | None = None,
     ) -> dict[str, tuple[object, ...]]:
+        tails = {} if tail_by_lookback is None else tail_by_lookback
         return {
-            name: self._instrument_time_currentness_token(instrument, trusted)
+            name: self._instrument_time_currentness_token(instrument, trusted, tails)
             for name, instrument in sorted(self.options.items())
         }
+
+    def _cached_index_tail(
+        self,
+        lookback_minutes: int,
+        *,
+        trusted: TimeInterval,
+        tail_by_lookback: dict[int, IndexHistoryState],
+    ) -> IndexHistoryState:
+        tail = tail_by_lookback.get(lookback_minutes)
+        if tail is None:
+            tail = self.index_history.current_tail(
+                lookback_minutes,
+                trusted_time=trusted,
+                source_stale_deadline_ms=(
+                    self.policy.runtime_limits.index_history_source_stale_deadline_ms
+                ),
+            )
+            tail_by_lookback[lookback_minutes] = tail
+        return tail
 
     def _time_currentness_token(
         self,
@@ -4284,39 +4312,35 @@ class RadarReducer:
             )
         )
         countable_names = set(directly_affected_names) if countable else set()
-        current_time_tokens = self._time_currentness_by_instrument(trusted)
+        tail_by_lookback: dict[int, IndexHistoryState] = {}
+        current_time_tokens = self._time_currentness_by_instrument(
+            trusted,
+            tail_by_lookback,
+        )
         time_changed_names = {
             name
             for name, token in current_time_tokens.items()
             if self._last_time_currentness_by_instrument.get(name) != token
         }
+        recalculation_names = set((*directly_affected_names, *time_changed_names))
+        if force_full_currentness:
+            recalculation_names.update(self.options)
+        elif affected_scope_keys:
+            recalculation_names.update(
+                name
+                for name, instrument in self.options.items()
+                if (instrument.expiration_timestamp_ms, instrument.option_type)
+                in affected_scope_keys
+            )
         frozen_scope_keys = set(affected_scope_keys)
         frozen_scope_keys.update(
             (
                 self.options[name].expiration_timestamp_ms,
                 self.options[name].option_type,
             )
-            for name in (*directly_affected_names, *time_changed_names)
+            for name in recalculation_names
         )
-        if force_full_currentness:
-            frozen_scope_keys.update(
-                (
-                    instrument.expiration_timestamp_ms,
-                    instrument.option_type,
-                )
-                for instrument in self.options.values()
-            )
-        names = tuple(
-            sorted(
-                name
-                for name, instrument in self.options.items()
-                if (
-                    instrument.expiration_timestamp_ms,
-                    instrument.option_type,
-                )
-                in frozen_scope_keys
-            )
-        )
+        names = tuple(sorted(recalculation_names))
         for scope_key in frozen_scope_keys:
             if not any(
                 (
@@ -4431,12 +4455,10 @@ class RadarReducer:
                 option_type=instrument.option_type,
             )
             tail = (
-                self.index_history.current_tail(
+                self._cached_index_tail(
                     max(applicability.band.lookbacks_minutes),
-                    trusted_time=trusted,
-                    source_stale_deadline_ms=(
-                        self.policy.runtime_limits.index_history_source_stale_deadline_ms
-                    ),
+                    trusted=trusted,
+                    tail_by_lookback=tail_by_lookback,
                 )
                 if applicability.band is not None
                 else None
@@ -4553,6 +4575,7 @@ class RadarReducer:
                 trusted_time=trusted,
                 clock_revision=self._clock_revision,
                 current=tuple(current),
+                scope_results=(),
                 boundary_countable=countable,
                 acceptance_eligible=acceptance_eligible,
                 catalog_complete=self.option_catalog.complete,
@@ -4665,6 +4688,13 @@ class RadarReducer:
                     )
                     for item in snapshot.current
                 ),
+                scope_results=tuple(
+                    (candidate, self.results.get(candidate.instrument_name))
+                    for candidate in self.options.values()
+                    if candidate.expiration_timestamp_ms
+                    == snapshot.current[0].instrument.expiration_timestamp_ms
+                    and candidate.option_type is snapshot.current[0].instrument.option_type
+                ),
             )
             for snapshot in snapshots
         )
@@ -4714,9 +4744,17 @@ class RadarReducer:
                     counter.applicable_instrument_count,
                     1,
                 )
-                if acceptance_eligible and result.known_evaluation:
+                if (
+                    acceptance_eligible
+                    and instrument.instrument_name in countable_names
+                    and result.known_evaluation
+                ):
                     counter.known_per_instrument_detector_evaluation_count += 1
-                if acceptance_eligible and result.full_formula_evaluation:
+                if (
+                    acceptance_eligible
+                    and instrument.instrument_name in countable_names
+                    and result.full_formula_evaluation
+                ):
                     counter.known_full_detector_formula_evaluation_count += 1
 
         self._latest_funnel_causal_seq = transaction_commit.boundary.causal_seq
@@ -4727,7 +4765,11 @@ class RadarReducer:
                 reason=result.reason,
             )
             for instrument, result, _state, _episode in evaluated
-            if countable and acceptance_eligible and result.band_id is not None
+            if (
+                instrument.instrument_name in countable_names
+                and acceptance_eligible
+                and result.band_id is not None
+            )
         )
 
         for instrument, _result, _state, _episode in evaluated:
@@ -4782,7 +4824,10 @@ class RadarReducer:
             ):
                 raise RuntimeError("scope snapshot contains cross-scope or unsettled current truth")
         states = tuple(
-            item.result.detector_state for item in snapshot.current if item.result is not None
+            result.detector_state
+            if result is not None and result.band_id == band_id
+            else DetectorState.UNKNOWN
+            for _candidate, result in snapshot.scope_results
         )
         counter = self._scope_counter(
             instrument.option_type,
@@ -4790,7 +4835,7 @@ class RadarReducer:
         )
         counter.applicable_instrument_count = max(
             counter.applicable_instrument_count,
-            len(snapshot.current),
+            len(snapshot.scope_results),
         )
         aggregate = aggregate_detector(
             states,
@@ -4806,9 +4851,11 @@ class RadarReducer:
         ] = aggregate
         formula_instrument = next(
             (
-                item.instrument
-                for item in snapshot.current
-                if item.result is not None and item.result.full_formula_evaluation
+                candidate
+                for candidate, result in snapshot.scope_results
+                if result is not None
+                and result.band_id == band_id
+                and result.full_formula_evaluation
             ),
             None,
         )
@@ -6277,7 +6324,6 @@ class LiveRadarRuntime:
         try:
             while True:
                 self._raise_sender_failure(sender_task)
-                buffered.extend(self._drain_client_envelopes(client))
                 now_ms = _monotonic_ms()
                 if stop_event.is_set():
                     break
@@ -6304,6 +6350,7 @@ class LiveRadarRuntime:
                             processed_monotonic_ms=now_ms,
                         ),
                     )
+                    await asyncio.sleep(0)
                     continue
                 next_time_boundary_ms = self._next_runtime_time_boundary_ms(
                     next_poll_ms,
@@ -6315,6 +6362,7 @@ class LiveRadarRuntime:
                     )
                     if next_time_boundary_ms == next_poll_ms:
                         next_poll_ms += poll_ms
+                    await asyncio.sleep(0)
                     continue
                 timeout_seconds = (next_time_boundary_ms - now_ms) / 1_000
                 try:
@@ -6340,6 +6388,11 @@ class LiveRadarRuntime:
             barrier_monotonic_ms,
             terminal=clean_stop_requested,
         )
+        try:
+            await self._stop_client_intake(client)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
         buffered.extend(self._drain_client_envelopes(client))
         barrier_frontier = self._barrier_frontier(
             client,
@@ -6355,11 +6408,6 @@ class LiveRadarRuntime:
             )
 
         sender_cancelled_by_barrier = False
-        try:
-            await self._stop_client_intake(client)
-        except BaseException as exc:
-            if failure is None:
-                failure = exc
         if not sender_task.done():
             sender_cancelled_by_barrier = True
             sender_task.cancel()
@@ -6396,6 +6444,7 @@ class LiveRadarRuntime:
                         envelope.received_monotonic_ms,
                     ),
                 )
+                await asyncio.sleep(0)
             except BaseException as exc:
                 if failure is None:
                     failure = exc
@@ -6709,10 +6758,10 @@ def _source_name_for_channel(channel: str, *, combo_names: set[str]) -> str:
 
 
 def _instrument_from_channel(channel: str) -> str | None:
-    if channel.startswith("ticker.") and channel.endswith(".100ms"):
-        return channel[len("ticker.") : -len(".100ms")]
-    if channel.startswith("book.") and channel.endswith(".100ms"):
-        return channel[len("book.") : -len(".100ms")]
+    if channel.startswith("ticker.") and channel.endswith(".agg2"):
+        return channel[len("ticker.") : -len(".agg2")]
+    if channel.startswith("book.") and channel.endswith(".agg2"):
+        return channel[len("book.") : -len(".agg2")]
     return None
 
 

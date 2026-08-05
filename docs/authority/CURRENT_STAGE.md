@@ -5,13 +5,13 @@
 **Current permission boundary:** `PUBLIC_SHADOW`
 
 **Current implementation status:**
-`RADAR_CREDIBLE_CLUE_HARDENING`
+`RADAR_CURRENT_INPUT_STABILITY_REPAIR`
 
-**Production Short Vol Radar:** `CANDIDATE_SEMANTICS_FREEZE_IN_PROGRESS`
+**Production Short Vol Radar:** `CANDIDATE_SEMANTICS_FROZEN_INPUT_STABILITY_REPAIR`
 
 **Persistent service:** `STOPPED_NO_DEPLOYMENT`
 
-**Live commands:** `ONE_SOURCE_CONTRACT_PROBE_AND_ONE_MAX_600_SECOND_SMOKE`
+**Live commands:** `ONE_POST_REPAIR_MAX_600_SECOND_SMOKE_PER_OFFLINE_GATED_CANDIDATE`
 
 **Sole authorized closure:** `SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE`
 
@@ -60,12 +60,26 @@ instrument candidate Episodes, and zero temporal activation batches. No Shadow C
 durable Shadow Case file count was zero. The observation therefore falsified the assumption that a
 six-hour session-local index tail is a usable startup boundary for this candidate generator.
 
+The credible-clue source-contract probe was accepted at commit `cbea7a3`. Its first 540-second
+integration smoke was rejected. Every readable heartbeat reported zero current full-formula
+instruments; the last readable partition was `12,384 / 28,128` post-warmup known, with
+`OPTION_BOOK_UNKNOWN 11,836`, `CLOCK_GAP 3,372`, and `POST_STATUS_BOOTSTRAP_REQUIRED 536` UNKNOWN
+evaluations. The terminal cumulative count remained `UNKNOWN` because the completed business
+summary did not cross the transport close boundary. Offline tracing proved that a local book fact
+recomputed its whole expiry/type scope, history diagnostics repeated per instrument, an unbounded
+runtime deque bypassed the bounded ingress owner, and WebSocket close shared the outer acceptance
+timeout. This is an input-stability failure, not evidence that the market lacks active combos or
+that Radar thresholds are too strict.
+
 ## Active closure
 
-Commit `a8a78bc` repaired the rejected A2 observation's session-local history dependency, but source
-reachability alone does not make an economically credible clue. Before another 43,200-second run,
-the Radar must freeze all candidate semantics that can be established from official contracts and
-direct tests.
+The candidate semantics are frozen, but production-public current-input stability is not yet
+established. The active repair must make one local option fact local, share one causal history tail
+within a transaction, retain one bounded ingress owner with cooperative scheduling, preserve the
+book owner's exact current continuity reason, and return the terminal summary before transport
+shutdown can consume the acceptance window. The five-minute-persistence Radar consumes aggregated
+`agg2` option ticker and book channels rather than every option's dual 100ms feeds. No detector
+formula, target quantity, TTE/Delta universe, or official atomic meaning changes.
 
 A hard-screen clue requires: official completed average-price history with explicit cadence, age,
 gap and revision truth; target-size bid and ask depth; an uncrossed spread; official price-tick
@@ -81,16 +95,16 @@ atomic availability, Underwriting action, admission, or edge.
 
 - authority, Radar contract, Policy, pure calculators, current-state projection, and direct tests for
   the exact credible-clue freeze;
-- one bounded source-contract probe of Deribit's production-public index-chart method, with no
-  product persistence and no strategy-frequency claim;
+- the accepted index-history source-contract probe is not repeated;
 - after all direct checks pass, one production-public read-only integration smoke of at most
-  `600` seconds to prove positive post-warmup scope and at least one full-formula evaluation;
+  `600` seconds for each new exact offline-gated repair candidate; an unchanged candidate cannot be
+  rerun, and a rejected smoke returns to offline diagnosis before any further authorization;
 - rebind dependent Underwriting and Position Policy identities only where upstream content identity
   changes require it.
 
 ## Forbidden work
 
-- any 43,200-second observation before the credible-clue Policy and projection are frozen;
+- any 43,200-second observation before one post-repair smoke is accepted and Authority is amended;
 - tuning thresholds to manufacture a natural clue during either short validation command;
 - changing target quantity, official atomic admission, Shadow Case, Position, or Outcome semantics;
 - fitted forecasting, SVI/SABR/Heston calibration, machine-learning ranking, event-calendar edge,
@@ -106,7 +120,10 @@ separation between legged references and official atomic availability. The one s
 establish only the current API cadence/revision facts it observes. The one short smoke may establish
 current end-to-end reachability only.
 
-After those gates pass, authority may be amended once to permit one fixed 43,200-second
-production-public read-only observation. Neither the short validations nor that later observation
+An accepted post-repair smoke must return a readable terminal summary, positive post-warmup scope,
+positive cumulative full-formula evaluations, bounded ingress without queue-lag currentness, and
+zero post-bootstrap clock gaps. It does not require a natural clue. After those gates pass,
+authority may be amended once to permit one fixed 43,200-second production-public read-only
+observation. Neither the short validations nor that later observation
 establish future frequency, expected return, edge, fillability, qualification, deployment, uptime,
 or execution permission.

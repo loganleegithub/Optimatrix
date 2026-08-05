@@ -353,6 +353,8 @@ def test_empty_book_is_known_and_crossed_book_fails_closed() -> None:
     crossed = ContinuousOrderBook("OPTION")
     with pytest.raises(SourceDataError, match="crossed"):
         crossed.apply(snapshot(bids=[["new", 11, 1]], asks=[["new", 10, 1]]), 1)
+    assert crossed.state is BookState.UNKNOWN
+    assert crossed.reason == "CROSSED_OR_LOCKED_BOOK"
 
 
 def test_index_minutes_require_full_coverage_and_reject_late_or_regressed_ticks() -> None:
@@ -525,8 +527,8 @@ def test_index_tail_treats_unstarted_bootstrap_as_warmup_not_continuity_gap() ->
 
 def test_exact_channels_bounded_subscriptions_and_acknowledgements() -> None:
     assert INDEX_CHANNEL == "deribit_price_index.btc_usdc"
-    assert ticker_channel("X") == "ticker.X.100ms"
-    assert book_channel("X") == "book.X.100ms"
+    assert ticker_channel("X") == "ticker.X.agg2"
+    assert book_channel("X") == "book.X.agg2"
     assert subscription_batches(["a", "b", "a", "c"], maximum_size=2) == (
         ("a", "b"),
         ("c",),

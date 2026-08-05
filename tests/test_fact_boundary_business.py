@@ -835,6 +835,9 @@ def test_clock_refresh_failure_keeps_fresh_clock_until_real_stale_boundary(
     assert reducer.clock is not None
     assert reducer.index.sealed == sealed_before_failure
     assert reducer.trackers[instrument.instrument_name].episode_id == episode_id
+    assert reducer._next_clock_refresh_ms == (
+        1_001 + reducer.policy.runtime_limits.time_boundary_poll_interval_ms
+    )
 
     stale_commands = reducer.advance_time(61_000)
 
@@ -933,7 +936,7 @@ def test_subscription_evidence_failure_is_not_reclassified_as_public_payload(
         raise EvidenceError("injected local evidence failure")
 
     monkeypatch.setattr(reducer, "_apply_book", fail_evidence_write)
-    channel = "book.BTC_USDC-2AUG26-63000-C.100ms"
+    channel = "book.BTC_USDC-2AUG26-63000-C.agg2"
     acknowledge_channel(reducer, channel)
 
     with pytest.raises(EvidenceError, match="local evidence failure"):
@@ -1933,6 +1936,7 @@ def test_option_book_gap_quarantines_old_generation_snapshot(
         },
         FactBoundary(1, 1, 1_001, 2),
     )
+    assert reducer.option_books["SHORT"].reason == "CHANGE_ID_GAP"
     assert reducer.channel_state(channel) is ChannelState.UNSUBSCRIBE_PENDING
     unsubscribe = next(
         request
@@ -2294,7 +2298,7 @@ def test_one_option_subscribe_failure_is_local_to_that_instrument(
     reducer._last_time_currentness_by_instrument = reducer._time_currentness_by_instrument(trusted)
     reducer._last_time_currentness_token = reducer._time_currentness_token(trusted)
     reducer._plan_channel_change(
-        ("book.FIRST.100ms",),
+        ("book.FIRST.agg2",),
         subscribe=True,
         origin_boundary=FactBoundary(1, 0, 1_000, 1),
         failure_scope=FailureScope.OPTION,
@@ -2751,7 +2755,7 @@ def test_market_boundary_settles_ttl_crossing_in_an_unrelated_full_scope(
     )
 
 
-def test_scope_snapshot_contains_only_every_current_member_of_one_scope(
+def test_local_book_fact_recalculates_only_changed_member_and_refreshes_scope_truth(
     tmp_path: Path,
     policy_factory: PolicyFactory,
     monkeypatch: pytest.MonkeyPatch,
@@ -2792,13 +2796,24 @@ def test_scope_snapshot_contains_only_every_current_member_of_one_scope(
         countable=False,
     )
     captured: list[ScopeSnapshot] = []
+    scope_truths: list[object] = []
     current_scope_truth = reducer._current_scope_truth
+    evaluated_names: list[str] = []
+    calculate = runtime_module.calculate_current_evaluation
 
     def capture_snapshot(snapshot: ScopeSnapshot) -> object:
         captured.append(snapshot)
-        return current_scope_truth(snapshot)
+        value = current_scope_truth(snapshot)
+        scope_truths.append(value)
+        return value
+
+    def capture_calculation(**kwargs: object) -> CurrentEvaluation:
+        instrument = cast(OptionInstrument, kwargs["instrument"])
+        evaluated_names.append(instrument.instrument_name)
+        return calculate(**kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(reducer, "_current_scope_truth", capture_snapshot)
+    monkeypatch.setattr(runtime_module, "calculate_current_evaluation", capture_calculation)
     reducer.settle_fact(
         commit=CausalCommit(
             boundary=FactBoundary(1, 2, 1_002, 2),
@@ -2815,18 +2830,103 @@ def test_scope_snapshot_contains_only_every_current_member_of_one_scope(
     assert isinstance(snapshot, runtime_module.ScopeSnapshot)
     assert snapshot.commit.cause is CausalCause.OPTION_BOOK_CHANGED
     assert snapshot.commit.affected_scopes == ("OPTION:FIRST",)
-    assert tuple(item.instrument.instrument_name for item in snapshot.current) == (
+    assert tuple(item.instrument.instrument_name for item in snapshot.current) == ("FIRST",)
+    assert evaluated_names == ["FIRST"]
+    assert all(item.result is not None for item in snapshot.current)
+    assert tuple(item.instrument_name for item, _result in snapshot.scope_results) == (
         "FIRST",
         "SECOND",
     )
-    assert all(item.result is not None for item in snapshot.current)
+    assert len(scope_truths) == 1
+    assert scope_truths[0].aggregate.instrument_count == 2  # type: ignore[attr-defined]
 
     before = current_scope_truth(snapshot)
     reducer.options.clear()
     reducer.trackers.clear()
     reducer.results.clear()
-    after = current_scope_truth(snapshot)
-    assert after == before
+    assert current_scope_truth(snapshot) == before
+
+
+def test_high_fanout_local_fact_shares_one_history_tail_and_one_formula_call(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    expiry = 1_000_000 + 60 * 60_000
+    instruments = tuple(
+        make_option(f"BTC_USDC-08AUG26-{100_000 + index}-C", expiry) for index in range(320)
+    )
+    reducer.options = {item.instrument_name: item for item in instruments}
+    reducer.catalog_options = dict(reducer.options)
+    for instrument in instruments:
+        reducer.trackers[instrument.instrument_name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=reducer.policy.identity,
+            instrument_name=instrument.instrument_name,
+        )
+        reducer.option_books[instrument.instrument_name] = make_book(
+            instrument.instrument_name,
+            None,
+        )
+        reducer.tickers[instrument.instrument_name] = TickerState(
+            Decimal(100),
+            "index_price",
+            1_000_000,
+        )
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 1, 1_001, 1),
+            CausalCause.TIME_BOUNDARY,
+        ),
+        affected_instruments=tuple(reducer.options),
+        countable=False,
+    )
+
+    tail_calls = 0
+    calculation_calls = 0
+    current_tail = reducer.index_history.current_tail
+    calculate = runtime_module.calculate_current_evaluation
+
+    def count_tail(*args: object, **kwargs: object) -> IndexHistoryState:
+        nonlocal tail_calls
+        tail_calls += 1
+        return current_tail(*args, **kwargs)  # type: ignore[arg-type]
+
+    def count_calculation(**kwargs: object) -> CurrentEvaluation:
+        nonlocal calculation_calls
+        calculation_calls += 1
+        return calculate(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(reducer.index_history, "current_tail", count_tail)
+    monkeypatch.setattr(runtime_module, "calculate_current_evaluation", count_calculation)
+    known_before = sum(
+        scope.known_per_instrument_detector_evaluation_count
+        for scope in reducer._scope_counts.values()
+    )
+    changed = instruments[0]
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 2, 1_002, 2),
+            CausalCause.OPTION_BOOK_CHANGED,
+            failure_domain=FailureScope.OPTION,
+            affected_scopes=(f"OPTION:{changed.instrument_name}",),
+        ),
+        affected_instruments=(changed.instrument_name,),
+        countable=True,
+    )
+
+    assert calculation_calls == 1
+    assert tail_calls == 1
+    assert (
+        sum(
+            scope.known_per_instrument_detector_evaluation_count
+            for scope in reducer._scope_counts.values()
+        )
+        == known_before + 1
+    )
 
 
 def test_option_lifecycle_unknown_recomputes_aggregate_from_one_full_scope_snapshot(

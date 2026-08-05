@@ -112,10 +112,12 @@ stale business tables and displays UNKNOWN until a complete later snapshot succe
 
 ## Stop and failure
 
-Before reconnect or clean stop, every accepted queued fact is drained and pending Workbench state
-is flushed. The owner terminalizes pending Cases as censored when the failure/stop boundary is
-available. An uncatchable process loss may leave only `opened.json`; the Case reader reports it as
-`INCOMPLETE_UNCLEAN_EXIT`.
+Before reconnect or clean stop, intake stops, every accepted fact remaining in the sole bounded
+queue is settled, and pending Workbench state is flushed. A completed business summary is returned
+independently of a bounded best-effort transport close; a WebSocket closing handshake cannot consume
+the outer acceptance window. The owner terminalizes pending Cases as censored when the failure/stop
+boundary is available. An uncatchable process loss may leave only `opened.json`; the Case reader
+reports it as `INCOMPLETE_UNCLEAN_EXIT`.
 
 No terminal manifest, inventory, service receipt, host audit, or automatic restart belongs to this
 contract.

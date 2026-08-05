@@ -177,12 +177,18 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_only_credible_clue_freeze_and_two_short_validations() -> None:
+def test_current_stage_authorizes_only_offline_gated_repair_smoke() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`RADAR_CREDIBLE_CLUE_HARDENING`" in current
-    assert "**Production Short Vol Radar:** `CANDIDATE_SEMANTICS_FREEZE_IN_PROGRESS`" in current
-    assert "**Live commands:** `ONE_SOURCE_CONTRACT_PROBE_AND_ONE_MAX_600_SECOND_SMOKE`" in current
+    assert "`RADAR_CURRENT_INPUT_STABILITY_REPAIR`" in current
+    assert (
+        "**Production Short Vol Radar:** "
+        "`CANDIDATE_SEMANTICS_FROZEN_INPUT_STABILITY_REPAIR`" in current
+    )
+    assert (
+        "**Live commands:** `ONE_POST_REPAIR_MAX_600_SECOND_SMOKE_PER_OFFLINE_GATED_CANDIDATE`"
+        in current
+    )
     assert "**Sole authorized closure:** `SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE`" in current
     assert "`1,556,097` `RADAR_KNOWN` evaluations: `100%`" in current
     assert "`58,773,561` applicable evaluations" in current
@@ -257,13 +263,13 @@ def test_internal_package_dependency_direction() -> None:
 def test_fixed_policy_files_remain_content_identified_after_credible_clue_rebind() -> None:
     expected = {
         "policies/short-vol-fixed-public-shadow-radar.json": (
-            "8076402f51529fe9d26f4c9f7a76872b5f9490581361c9068370d045511bba0c"
+            "74f286e07f8013e6178b44421db1d4d04808e5e0b0c604a80a0fdbc50f276c21"
         ),
         "policies/short-vol-fixed-public-shadow-underwriting.json": (
-            "29a295b1579e917229e73f8cb85ef57116032ca7e9a5106404d3144dd5f48989"
+            "9fa7ff745052c2ce20ea854a9c5283c43a69349358c847052464dc2ead6f800f"
         ),
         "policies/short-vol-fixed-public-shadow-position.json": (
-            "b99be4299d24db68d9f4734dd755e528a67d7c6f95f38d3db8b47961fe9858af"
+            "0585108701584fc223ad6711e37b32ffc8704e1e64c86250c166a66a08f056cd"
         ),
     }
     for relative, digest in expected.items():
@@ -272,6 +278,15 @@ def test_fixed_policy_files_remain_content_identified_after_credible_clue_rebind
         assert hashlib.sha256(raw).hexdigest() == digest
         parsed = json.loads(raw)
         assert raw == json.dumps(parsed, ensure_ascii=False, indent=2).encode() + b"\n"
+
+    radar = json.loads((ROOT / "policies/short-vol-fixed-public-shadow-radar.json").read_bytes())
+    limits = radar["runtime_limits"]
+    assert (
+        limits["clock_refresh_interval_ms"]
+        + 4 * limits["rpc_deadline_ms"]
+        + limits["time_boundary_poll_interval_ms"]
+        < limits["clock_stale_deadline_ms"]
+    )
 
 
 def test_markdown_contract_bytes_are_not_runtime_identity_authority() -> None:

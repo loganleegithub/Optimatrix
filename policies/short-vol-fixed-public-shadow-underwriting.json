@@ -1,6 +1,6 @@
 {
   "policy_semantic_name": "SHORT_VOL_PUBLIC_SHADOW_UNDERWRITING_POLICY",
-  "radar_policy_identity": "sha256:8076402f51529fe9d26f4c9f7a76872b5f9490581361c9068370d045511bba0c",
+  "radar_policy_identity": "sha256:74f286e07f8013e6178b44421db1d4d04808e5e0b0c604a80a0fdbc50f276c21",
   "target_base_quantity_btc": 0.1,
   "clock_currentness_budget_ms": 45000,
   "platform_currentness_budget_ms": 90000,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal
@@ -78,6 +79,11 @@ class IndexHistoryReducer:
         self._revision_count = 0
         self._revised_timestamps: tuple[int, ...] = ()
         self._completed_cutoff_ms: int | None = None
+        self._timestamps: tuple[int, ...] = ()
+        self._point_by_timestamp: dict[int, IndexHistoryPoint] = {}
+        self._exact_suffix_count_by_timestamp: dict[int, int] = {}
+        self._interval_counts: tuple[tuple[int, int], ...] = ()
+        self._modal_interval_ms: int | None = None
 
     @property
     def points(self) -> tuple[IndexHistoryPoint, ...]:
@@ -126,7 +132,25 @@ class IndexHistoryReducer:
         if trusted_time is not None:
             interval_ms = self.return_interval_minutes * MINUTE_MS
             self._completed_cutoff_ms = trusted_time.lower_ms - interval_ms
+        source_intervals = Counter(
+            later.timestamp_ms - earlier.timestamp_ms for earlier, later in pairwise(parsed)
+        )
+        exact_suffix_counts: dict[int, int] = {}
+        exact_interval_ms = self.return_interval_minutes * MINUTE_MS
+        for point in parsed:
+            exact_suffix_counts[point.timestamp_ms] = (
+                exact_suffix_counts.get(point.timestamp_ms - exact_interval_ms, 0) + 1
+            )
         self._points = parsed
+        self._timestamps = tuple(point.timestamp_ms for point in parsed)
+        self._point_by_timestamp = {point.timestamp_ms: point for point in parsed}
+        self._exact_suffix_count_by_timestamp = exact_suffix_counts
+        self._interval_counts = tuple(sorted(source_intervals.items()))
+        self._modal_interval_ms = (
+            min(source_intervals, key=lambda value: (-source_intervals[value], value))
+            if source_intervals
+            else None
+        )
         self._has_response = True
         return changed
 
@@ -185,9 +209,7 @@ class IndexHistoryReducer:
         # Consume only points old enough to represent a completed configured interval. The
         # source probe separately reports whether the provider's newest response point usually
         # falls outside this cutoff; no undocumented open-bucket rule is invented here.
-        eligible = tuple(
-            point for point in self._points if point.timestamp_ms <= completed_cutoff_ms
-        )
+        eligible = self._points[: bisect_right(self._timestamps, completed_cutoff_ms)]
         contract = self._contract(eligible, trusted_time=trusted_time)
 
         if self._revision_pending:
@@ -223,14 +245,13 @@ class IndexHistoryReducer:
             )
 
         required_count = lookback_minutes // self.return_interval_minutes + 1
-        by_timestamp = {point.timestamp_ms: point for point in eligible}
         required_timestamps = tuple(
             latest.timestamp_ms - offset * interval_ms for offset in reversed(range(required_count))
         )
         selected = tuple(
-            by_timestamp[timestamp]
+            self._point_by_timestamp[timestamp]
             for timestamp in required_timestamps
-            if timestamp in by_timestamp
+            if timestamp in self._point_by_timestamp
         )
         if len(selected) != required_count:
             earliest_required = required_timestamps[0]
@@ -263,29 +284,17 @@ class IndexHistoryReducer:
         *,
         trusted_time: TimeInterval,
     ) -> IndexHistoryContract:
-        interval_counts = Counter(
-            later.timestamp_ms - earlier.timestamp_ms for earlier, later in pairwise(self._points)
+        suffix_count = (
+            self._exact_suffix_count_by_timestamp.get(eligible[-1].timestamp_ms, 0)
+            if eligible
+            else 0
         )
-        ordered_counts = tuple(sorted(interval_counts.items()))
-        modal_interval = (
-            min(interval_counts, key=lambda value: (-interval_counts[value], value))
-            if interval_counts
-            else None
-        )
-        suffix_count = 0
-        interval_ms = self.return_interval_minutes * MINUTE_MS
-        if eligible:
-            eligible_timestamps = {point.timestamp_ms for point in eligible}
-            timestamp = eligible[-1].timestamp_ms
-            while timestamp in eligible_timestamps:
-                suffix_count += 1
-                timestamp -= interval_ms
         latest_timestamp = eligible[-1].timestamp_ms if eligible else None
         newest_timestamp = self._points[-1].timestamp_ms if self._points else None
         return IndexHistoryContract(
             source_point_count=len(self._points),
-            interval_counts=ordered_counts,
-            modal_interval_ms=modal_interval,
+            interval_counts=self._interval_counts,
+            modal_interval_ms=self._modal_interval_ms,
             newest_response_timestamp_ms=newest_timestamp,
             newest_response_age_ms=(
                 trusted_time.lower_ms - newest_timestamp if newest_timestamp is not None else None
