@@ -46,8 +46,12 @@ from radar_runtime.runtime import (
     RpcState,
     ShadowRpcIntent,
 )
-from short_vol_radar.black import DecimalInterval
-from short_vol_radar.detector import DetectorObservation, EpisodeTracker, TrackerState
+from short_vol_radar.detector import (
+    DetectorObservation,
+    EpisodeTracker,
+    ObservationSignal,
+    TrackerState,
+)
 from short_vol_radar.evidence import RadarEventSink
 from short_vol_radar.policy import load_policy_bytes
 from short_vol_radar.radar import TickerState
@@ -439,7 +443,7 @@ def _activate_real_episode(reducer: RadarReducer) -> str:
                 causal_seq=causal_seq,
                 trusted_time=TimeInterval(trusted_ms, trusted_ms),
                 band_id=reducer.policy.tte_bands[0].band_id,
-                richness=DecimalInterval(rule.activation_ratio, rule.activation_ratio),
+                signal=ObservationSignal.ACTIVATE,
             ),
             rule,
         )

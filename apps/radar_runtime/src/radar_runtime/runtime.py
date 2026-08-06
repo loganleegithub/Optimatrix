@@ -2534,7 +2534,7 @@ class RadarReducer:
                 )
         except EvidenceError:
             raise
-        except (ContinuityGap, SourceDataError, ValueError) as exc:
+        except (ContinuityGap, SourceDataError) as exc:
             raise PublicProtocolIncompatibility(
                 f"{source} subscription payload is incompatible"
             ) from exc

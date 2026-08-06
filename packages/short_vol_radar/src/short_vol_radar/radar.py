@@ -31,6 +31,7 @@ from short_vol_radar.detector import (
     NumericalBoundaryUnresolved,
     TrackerState,
     TrackerTransition,
+    classify_observation,
     delta_is_eligible,
 )
 from short_vol_radar.policy import (
@@ -515,11 +516,21 @@ def calculate_current_evaluation(
             band_id=band.band_id,
             calculation=calculation,
         )
+    try:
+        signal = classify_observation(stressed_richness, rule)
+    except NumericalBoundaryUnresolved:
+        return current(
+            CurrentDisposition.UNKNOWN,
+            "NUMERICAL_BOUNDARY_UNRESOLVED",
+            known=False,
+            full_formula=False,
+            band_id=band.band_id,
+        )
     observation = DetectorObservation(
         causal_seq=causal_seq,
         trusted_time=trusted_time,
         band_id=band.band_id,
-        richness=stressed_richness,
+        signal=signal,
     )
     return CurrentEvaluation(
         disposition=CurrentDisposition.RICHNESS,

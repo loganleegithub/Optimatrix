@@ -55,7 +55,7 @@ class DetectorObservation:
     causal_seq: int
     trusted_time: TimeInterval
     band_id: str
-    richness: DecimalInterval
+    signal: ObservationSignal
 
 
 @dataclass(frozen=True)
@@ -112,7 +112,7 @@ class EpisodeTracker:
         return DetectorState.UNKNOWN
 
     def observe(self, observation: DetectorObservation, rule: OptionRule) -> TrackerTransition:
-        signal = classify_observation(observation.richness, rule)
+        signal = observation.signal
         previous_state = self.state
         if self.state is TrackerState.UNKNOWN:
             self.state = TrackerState.ARMED

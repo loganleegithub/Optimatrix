@@ -207,6 +207,132 @@ def test_full_baseline_iv_delta_richness_path_can_activate(
     assert result.calculation.baseline.annualized_volatility == Decimal("0.1")
 
 
+def test_activation_boundary_span_is_one_unknown_and_next_fact_can_activate(
+    policy_factory: PolicyFactory,
+) -> None:
+    policy, instrument, tracker, _price = make_engine_inputs(policy_factory)
+    trusted_midpoint_ms = 1_000_000
+    instrument = replace(
+        instrument,
+        expiration_timestamp_ms=trusted_midpoint_ms + 60 * 60 * 1_000,
+    )
+    total_volatility = 0.1199999 * math.sqrt(60 / (365 * 24 * 60))
+    boundary_price = Decimal(
+        str(black_price(100, float(instrument.strike), total_volatility, OptionType.CALL))
+    )
+
+    boundary = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(trusted_midpoint_ms - 10, trusted_midpoint_ms + 10),
+        causal_seq=1,
+        option_book=make_book("SHORT", boundary_price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100),) * 6,
+    )
+
+    assert boundary.reason == "NUMERICAL_BOUNDARY_UNRESOLVED"
+    assert boundary.detector_state is DetectorState.UNKNOWN
+    assert not boundary.known_evaluation
+    assert not boundary.full_formula_evaluation
+    assert boundary.transition.activated_episode_id is None
+    assert boundary.transition.ended_episode is None
+    assert tracker.episode_id is None
+
+    activation_total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
+    activation_price = Decimal(
+        str(
+            black_price(
+                100,
+                float(instrument.strike),
+                activation_total_volatility,
+                OptionType.CALL,
+            )
+        )
+    )
+    recovered = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(trusted_midpoint_ms, trusted_midpoint_ms),
+        causal_seq=2,
+        option_book=make_book("SHORT", activation_price),
+        ticker=TickerState(Decimal(100), "index_price", 2),
+        causal_closes=(Decimal(100),) * 6,
+    )
+
+    assert recovered.detector_state is DetectorState.ANOMALY_ACTIVE
+    assert recovered.transition.activated_episode_id is not None
+
+
+def test_clear_boundary_span_ends_active_episode_as_unknown_not_clear() -> None:
+    document = policy_document(activation_count=1, clear_count=1, separation_ms=0)
+    bands = document["tte_bands"]
+    assert isinstance(bands, list)
+    for band in bands:
+        assert isinstance(band, dict)
+        rules = band["option_rules"]
+        assert isinstance(rules, dict)
+        for rule in rules.values():
+            assert isinstance(rule, dict)
+            rule["clear_ratio"] = 1.05
+    exact, digest = encode_policy(document)
+    policy = load_policy_bytes(exact, digest)
+    trusted_midpoint_ms = 1_000_000
+    strike = Decimal("100.01")
+    instrument = OptionInstrument(
+        "SHORT",
+        trusted_midpoint_ms + 60 * 60 * 1_000,
+        strike,
+        OptionType.CALL,
+        AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+        TEST_PRICE_TICK,
+    )
+    tracker = EpisodeTracker(
+        runtime_identity="run",
+        policy_identity=policy.identity,
+        instrument_name=instrument.instrument_name,
+    )
+    activation_total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
+    activation_price = Decimal(
+        str(black_price(100, float(strike), activation_total_volatility, OptionType.CALL))
+    )
+    activated = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(trusted_midpoint_ms, trusted_midpoint_ms),
+        causal_seq=1,
+        option_book=make_book("SHORT", activation_price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100),) * 6,
+    )
+    assert activated.detector_state is DetectorState.ANOMALY_ACTIVE
+
+    clear_boundary_total_volatility = 0.1049999 * math.sqrt(60 / (365 * 24 * 60))
+    clear_boundary_price = Decimal(
+        str(black_price(100, float(strike), clear_boundary_total_volatility, OptionType.CALL))
+    )
+    unresolved = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(trusted_midpoint_ms - 10, trusted_midpoint_ms + 10),
+        causal_seq=2,
+        option_book=make_book("SHORT", clear_boundary_price),
+        ticker=TickerState(Decimal(100), "index_price", 2),
+        causal_closes=(Decimal(100),) * 6,
+    )
+
+    assert unresolved.reason == "NUMERICAL_BOUNDARY_UNRESOLVED"
+    assert unresolved.detector_state is DetectorState.UNKNOWN
+    assert unresolved.transition.ended_episode is not None
+    assert unresolved.transition.ended_episode.reason is EpisodeEndReason.UNKNOWN_DETECTOR
+    assert unresolved.transition.ended_episode.detail == "NUMERICAL_BOUNDARY_UNRESOLVED"
+    assert tracker.episode_id is None
+
+
 def test_hard_screen_requires_target_ask_and_official_tick_metadata(
     policy_factory: PolicyFactory,
 ) -> None:

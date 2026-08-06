@@ -48,13 +48,14 @@ from radar_runtime.runtime import (
     ScopeSnapshot,
 )
 from short_vol_radar.atomic import PublicAtomicQuoteState
-from short_vol_radar.black import DecimalInterval, black_price
+from short_vol_radar.black import black_price
 from short_vol_radar.detector import (
     DetectorCoverage,
     DetectorObservation,
     DetectorState,
     EpisodeEndReason,
     EpisodeTracker,
+    ObservationSignal,
     TrackerState,
 )
 from short_vol_radar.evidence import (
@@ -312,7 +313,7 @@ def activate_directly(
             causal_seq=1,
             trusted_time=TimeInterval(1_000_000, 1_000_000),
             band_id=reducer.policy.tte_bands[band_index].band_id,
-            richness=DecimalInterval(Decimal(2), Decimal(2)),
+            signal=ObservationSignal.ACTIVATE,
         ),
         rule,
     )
@@ -336,7 +337,7 @@ def test_band_boundary_suspension_resets_partial_detector_persistence(
             causal_seq=1,
             trusted_time=TimeInterval(1_000, 1_000),
             band_id="band",
-            richness=DecimalInterval(Decimal("1.3"), Decimal("1.3")),
+            signal=ObservationSignal.ACTIVATE,
         ),
         rule,
     )
@@ -349,7 +350,7 @@ def test_band_boundary_suspension_resets_partial_detector_persistence(
             causal_seq=2,
             trusted_time=TimeInterval(2_000, 2_000),
             band_id="band",
-            richness=DecimalInterval(Decimal("1.3"), Decimal("1.3")),
+            signal=ObservationSignal.ACTIVATE,
         ),
         rule,
     )
@@ -948,6 +949,40 @@ def test_subscription_evidence_failure_is_not_reclassified_as_public_payload(
                 received_monotonic_ms=1_001,
             ),
             processed_monotonic_ms=1_001,
+        )
+
+
+def test_subscription_does_not_relabel_business_value_error_as_public_payload(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    instrument = make_option("BTC_USDC-2AUG26-63000-C", 10_000_000)
+    reducer.options = {instrument.instrument_name: instrument}
+    channel = f"ticker.{instrument.instrument_name}.agg2"
+    acknowledge_channel(reducer, channel)
+
+    def fail_business_settlement(*_args: object) -> bool:
+        raise ValueError("injected business calculation failure")
+
+    monkeypatch.setattr(reducer, "_apply_ticker", fail_business_settlement)
+    with pytest.raises(ValueError, match="injected business calculation failure"):
+        reducer._apply_acknowledged_subscription(
+            InboundEnvelope(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "subscription",
+                    "params": {
+                        "channel": channel,
+                        "data": {},
+                    },
+                },
+                session_epoch=1,
+                ingress_seq=1,
+                received_monotonic_ms=1_000,
+            )
         )
 
 
