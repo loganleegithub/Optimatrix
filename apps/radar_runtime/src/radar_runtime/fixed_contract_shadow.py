@@ -394,9 +394,12 @@ class FixedContractShadowRuntimeAdapter:
             allocate_request_id=reducer.allocate_shadow_request_id,
         )
         intents = list(self._consume_transition(transition, projected))
-        self._retire_underwriting_scopes(
-            scope_retirements,
-            episode_retirements,
+        intents.extend(
+            self._retire_underwriting_scopes(
+                scope_retirements,
+                episode_retirements,
+                boundary=boundary,
+            )
         )
 
         for anchor in tuple(self._anchors.values()):
@@ -2310,19 +2313,27 @@ class FixedContractShadowRuntimeAdapter:
         self,
         scope_retirements: Sequence[str],
         episode_retirements: Sequence[str],
-    ) -> None:
+        *,
+        boundary: DownstreamFactBoundary,
+    ) -> tuple[ShadowRpcIntent, ...]:
         if not scope_retirements and not episode_retirements:
-            return
+            return ()
+        intents: list[ShadowRpcIntent] = []
         for scope_identity in scope_retirements:
             self._underwriting_by_scope.pop(scope_identity, None)
             self._workbench_underwriting_metadata_by_scope.pop(scope_identity, None)
             self.owner.retire_underwriting_scope(scope_identity)
         for episode_identity in episode_retirements:
-            self.owner.retire_radar_episode(episode_identity)
+            transition = self.owner.retire_radar_episode(
+                episode_identity,
+                boundary=boundary,
+            )
+            intents.extend(self._consume_transition(transition, ()))
             self._frozen_component_by_episode.pop(episode_identity, None)
         self._rebuild_underwriting_metadata()
         self._prune_owner_refs()
         self._prune_semantic_sources()
+        return tuple(intents)
 
     def _rebuild_underwriting_metadata(self) -> None:
         self._workbench_underwriting_metadata = tuple(

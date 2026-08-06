@@ -2185,6 +2185,46 @@ def test_owner_reconnect_retirement_invalidates_pending_admission_as_source_gap(
     )
 
 
+def test_owner_episode_retirement_terminalizes_its_active_candidate(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    origin = _underwriting_facts(
+        boundary=_boundary(1, 110),
+        change_id=10,
+        previous_change_id=None,
+        snapshot_kind="snapshot",
+    )
+    activated = owner.settle_underwriting((origin,), allocate_request_id=lambda: 41)
+    assert any(item.object_kind == "CANDIDATE_ACTIVATION" for item in activated.emitted)
+    episode_identity = origin.active_episode_identity
+    assert episode_identity is not None
+
+    retired = owner.retire_radar_episode(
+        episode_identity,
+        boundary=_boundary(2, 120),
+    )
+
+    assert [item.object_kind for item in retired.emitted] == [
+        "ADMISSION_ATTEMPT_TERMINAL",
+        "CANDIDATE_INVALIDATION",
+    ]
+    assert owner.retained_state_counts["active_candidates"] == 0
+    objects = _written_objects(tmp_path, bindings=bindings)
+    terminal = next(
+        _object(value["payload"])
+        for value in objects.values()
+        if value["object_kind"] == "ADMISSION_ATTEMPT_TERMINAL"
+    )
+    invalidation = next(
+        _object(value["payload"])
+        for value in objects.values()
+        if value["object_kind"] == "CANDIDATE_INVALIDATION"
+    )
+    assert terminal["terminal_outcome"] == "KNOWN_INVALIDATED_BEFORE_REFRESH"
+    assert invalidation["primary_reason"] == ("RADAR_POLICY_OR_EPISODE_PAUSED_ENDED_OR_CHANGED")
+
+
 def test_owner_close_opportunity_deduplicates_receipts_but_reacts_to_consumed_facts(
     tmp_path: Path,
 ) -> None:

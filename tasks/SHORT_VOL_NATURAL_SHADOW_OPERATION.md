@@ -4,7 +4,8 @@
 
 **Task kind:** VALIDATION_ONLY
 
-**Runtime implementation:** NOT_PLANNED — a proven defect requires changing this declaration before editing code
+**Runtime implementation:** COMPLETED — an ended Episode is retired only after its active Candidate
+is terminalized by the Underwriting owner at the same settled boundary; bounded public smoke remains
 
 **Live commands:** REQUIRED — one short public smoke, then one natural public Shadow runtime until human stop
 
@@ -18,21 +19,25 @@
 
 ## Product movement
 
-**Current funnel node:** `COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE → SHADOW_CASE_OUTCOME`
+**Current funnel node:** `CANDIDATE → SHADOW_CASE_OPENED`
 
-**Baseline:** the accepted 600-second smoke reached current public market state but contained no
-natural Radar Episode, Candidate, Shadow Case, or Outcome.
+**Baseline:** the first natural runtime reached `21` Radar Episodes, `17` reviewable/component-book/
+Underwriting-evaluable Episodes, and `1` Candidate. A transport retirement then ended the owning
+Episode while that Candidate remained active, causing a fatal integrity failure before the Case
+opening transition could settle.
 
-**Primary blocker:** no naturally occurring sample has yet exercised the frozen component-book
-Candidate, paired admission, and future Outcome path.
+**Primary blocker:** `ended Radar episode still owns an active Candidate` at the Episode-retirement
+owner boundary.
 
-**Expected user-visible delta:** naturally occurring Radar Episodes either expose an exact bounded
-component/Underwriting blocker or progress into reviewable Shadow Cases and future Outcomes.
+**Expected user-visible delta:** an ended Episode terminalizes its Candidate and paired refresh
+attempt before retirement, so transport recovery cannot kill the runtime or leave admission state
+owned by an ended clue.
 
 **Durable-data effect:** zero writes before admission; only an admitted Case may own opened,
 first-close, and Outcome records.
 
-**Complexity added:** none in the product runtime.
+**Complexity added:** none; the existing Underwriting owner settles its existing Candidate
+lifecycle before releasing Episode-owned state.
 
 **Complexity deleted:** no fixed-duration completion claim, automatic restart, or operational
 acceptance layer.

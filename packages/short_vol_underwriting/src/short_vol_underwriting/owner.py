@@ -376,14 +376,30 @@ class FixedContractShadowOwner:
         self._last_underwriting_action.pop(scope_identity, None)
         self.state_store.retire_scope(scope_identity)
 
-    def retire_radar_episode(self, episode_identity: str) -> None:
-        slots = self._consumed_slots_by_episode.pop(episode_identity, set())
-        self._slot_consumed.difference_update(slots)
+    def retire_radar_episode(
+        self,
+        episode_identity: str,
+        *,
+        boundary: FactBoundary,
+    ) -> OwnerTransition:
+        self._begin_transition()
+        for record in tuple(self._candidates.values()):
+            if record.facts.active_episode_identity != episode_identity:
+                continue
+            self._terminalize_candidate_before_refresh(
+                record,
+                reasons=("RADAR_POLICY_OR_EPISODE_PAUSED_ENDED_OR_CHANGED",),
+                boundary=boundary,
+            )
+        transition = self._finish_transition()
         if any(
             record.facts.active_episode_identity == episode_identity
             for record in self._candidates.values()
         ):
             raise RuntimeError("ended Radar episode still owns an active Candidate")
+        slots = self._consumed_slots_by_episode.pop(episode_identity, set())
+        self._slot_consumed.difference_update(slots)
+        return transition
 
     @property
     def required_combo_instrument_names(self) -> tuple[str, ...]:
