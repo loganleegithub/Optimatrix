@@ -4,15 +4,15 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current implementation status:** `COMPONENT_BOOK_SHADOW_LIFECYCLE_IMPLEMENTATION`
+**Current implementation status:** `COMPONENT_BOOK_SHADOW_LIFECYCLE_ACCEPTED`
 
 **Production Short Vol Radar:** `CREDIBLE_CLUE_GENERATOR_FROZEN`
 
-**Persistent service:** `BOUNDED_OBSERVATION_ONLY_NO_DEPLOYMENT`
+**Persistent service:** `NATURAL_PUBLIC_SHADOW_ACTIVE_NO_DEPLOYMENT`
 
-**Live commands:** `ONE_BOUNDED_PUBLIC_ONLY_SMOKE_AFTER_OFFLINE_GATES`
+**Live commands:** `SHORT_PUBLIC_SMOKE_THEN_NATURAL_SHADOW_UNTIL_HUMAN_STOP`
 
-**Sole authorized closure:** `SHORT_VOL_COMPONENT_BOOK_SHADOW_LIFECYCLE`
+**Sole authorized closure:** `SHORT_VOL_NATURAL_SHADOW_OPERATION`
 
 ## Current truth
 
@@ -69,17 +69,30 @@ It does not create or veto a component-book Candidate, Entry, Close, or Outcome.
 creation, RFQ, account state, margin, orders, fills, capital, and actual exposure remain outside the
 current permission boundary.
 
+The component-book implementation on code identity
+`553f763df77737e15ffe07879ad344070a567111` passed the full repository gate and one bounded
+production-public smoke. That smoke reached current public state with all monitored contracts
+known, opened no natural Radar Episode or Shadow Case, and preserved zero pre-Case business files.
+It established source/runtime reachability only; it did not measure natural Candidate frequency or
+Outcome quality.
+
 ## Allowed work
 
-- direct tests and the full repository gate for the component-book Shadow lifecycle;
-- exactly one bounded production-public read-only smoke of at most `600` seconds after all offline
-  gates pass, on one committed code and Policy identity;
-- inspect whether current public option metadata/books reach the new component stage and whether any
-  naturally occurring Candidate completes the paired refresh;
-- preserve zero durable files when no Shadow Case is admitted.
+- after each committed code identity, run focused tests, the full repository gate, and one short
+  production-public read-only smoke of at most `600` seconds before natural Shadow operation;
+- if that smoke fails, stop at the failure, repair only the owning business or source boundary
+  offline, repeat the gates, and retry the short smoke until it terminates readably;
+- after a passing smoke, run one production-public natural Shadow service with the frozen Policy
+  chain until a human requests stop or a fatal process failure terminates it;
+- inspect its current Workbench facts, funnel movement, admitted Case records, and Outcomes without
+  host/PID/resource inspection, automatic restart, or runtime tuning;
+- after a fatal failure, preserve any admitted Case truth, diagnose and repair offline, pass the
+  same gates and short smoke, then start a new runtime identity;
+- preserve zero durable business files whenever no Shadow Case is admitted.
 
-The bounded smoke validates public-source integration and funnel plumbing. Zero natural Episodes,
-Candidates, or Cases is a valid smoke result and does not authorize threshold changes.
+Natural Shadow is ordinary product observation, not a duration-based acceptance ceremony. Zero
+Episodes, Candidates, Cases, or Outcomes remains a valid market result and does not authorize
+threshold changes.
 
 ## Forbidden work
 
@@ -92,13 +105,12 @@ Candidates, or Cases is a valid smoke result and does not authorize threshold ch
   reservation, or proof of strategy edge;
 - database, replay platform, full-feed persistence, ML, SVI/Heston, GEX, microservice split,
   deployment, commissioning, host inspection, or operational control;
-- a second smoke or long production observation without new explicit authority.
+- automatic restart, application supervision, or a second concurrent natural Shadow runtime.
 
 ## Acceptance boundary
 
-Implementation acceptance requires focused lifecycle tests and the full repository gate to pass,
-Policy identities to match their exact JSON bytes, pre-Case durability to remain zero, and the one
-bounded public-only smoke to terminate readably without changing Policy. The smoke may validate
-source availability and component-funnel movement; it cannot by itself establish candidate
-frequency, fillability, profitability, Policy edge, qualification, deployment readiness, or private
-execution permission.
+The short smoke must terminate readably before each natural runtime starts. During natural Shadow,
+each admitted Case and Outcome must retain the frozen component pair, strictly later paired books,
+full-quantity adverse stress, both fees, exact code/Policy identities, and explicit non-claims.
+Elapsed runtime is not acceptance. Natural observations cannot by themselves establish fillability,
+profitability, Policy edge, qualification, deployment readiness, or private execution permission.

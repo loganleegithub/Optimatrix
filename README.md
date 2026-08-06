@@ -37,8 +37,10 @@ stressed up one tick; close reverses those sides with the same adverse tick stre
 cover `0.1 BTC`, both standard fees are included, and admission/close each require a strictly later
 paired refresh. The result is explicitly a Shadow counterfactual—not an order, fill, atomic quote,
 or liquidity reservation. Existing Combo availability remains visible only as a parallel
-diagnostic. One bounded public-only smoke of at most 600 seconds is authorized after offline gates;
-it is not deployment or execution permission.
+diagnostic. The component lifecycle has passed its offline gates and bounded public smoke. The
+current authorization is one short public-only smoke after each new committed identity, followed by
+one natural public Shadow runtime until a human requests stop or a fatal failure ends that runtime.
+It is not deployment or execution permission, and elapsed runtime is not product acceptance.
 
 See:
 
