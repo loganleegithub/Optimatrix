@@ -26,10 +26,11 @@ One process owns:
 Recoverable transport failure starts a new session epoch without replacing the in-process owners.
 A process restart creates a fresh runtime and does not resume prior open Cases.
 
-The long-lived process retains only current option/combo sources, active Underwriting scopes,
-active Candidates and requests, open Shadow Cases, and one latest terminal Case for trader display.
-Terminal identities are evicted at their owning boundary. Durable Case files remain the source for
-historical research; neither the owner nor Workbench keeps a second in-memory event history.
+The long-lived process retains only current option/Combo sources, frozen protective-leg bindings,
+active Underwriting scopes, active Candidates and their bounded paired requests, open Shadow Cases,
+and one latest terminal Case for trader display. Terminal identities are evicted at their owning
+boundary. Durable Case files remain the source for historical research; neither the owner nor
+Workbench keeps a second in-memory event history.
 
 ## State root
 
@@ -125,8 +126,9 @@ contract.
 ## Direct verification
 
 Offline tests cover one owner graph, fixed Policies, reconnect without owner replacement,
-pre-Shadow file count zero, Case open/first-close/outcome persistence, minimal reader states,
-Workbench coalescing/status bypass/flush, loopback HTTP, truthful zero/UNKNOWN, and public-method
-allowlisting. Repeated Episode, Candidate, scope-replacement, and completed-Case tests must prove
-that retained collections return to the active-set bound. A later bounded public smoke may prove
-current-state reachability only.
+pre-Shadow file count zero, paired component admission/close, Case open/first-close/outcome
+persistence, minimal reader states, Workbench coalescing/status bypass/flush, loopback HTTP,
+truthful zero/UNKNOWN, and public-method allowlisting. Repeated Episode, Candidate,
+scope-replacement, and completed-Case tests must prove that retained collections return to the
+active-set bound. One explicitly authorized bounded public smoke may prove current-state
+reachability only.

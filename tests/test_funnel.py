@@ -77,11 +77,20 @@ def _record(
     identity: str | None = None,
     payload: Mapping[str, object] | None = None,
 ) -> Mapping[str, object]:
+    resolved_payload = dict(payload or {})
+    if kind == "UNDERWRITING_AVAILABILITY_EVALUATION":
+        resolved_payload = {
+            "structure_reviewable": True,
+            "component_state": "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE",
+            "component_blockers": [],
+            "component_book_counterfactual_evaluable": True,
+            **resolved_payload,
+        }
     value: dict[str, object] = {
         "object_kind": kind,
         "payload": {
             **({"active_episode_identity": episode} if episode is not None else {}),
-            **dict(payload or {}),
+            **resolved_payload,
         },
     }
     if identity is not None:
@@ -273,7 +282,7 @@ def test_funnel_reports_natural_no_anomaly_only_after_known_radar_evaluation() -
     assert snapshot.primary_blocker.reason == "NO_ANOMALY_ACTIVATION_OBSERVED"
 
 
-def test_funnel_attributes_atomic_unknown_and_known_negative_states() -> None:
+def test_funnel_keeps_atomic_combo_state_as_a_parallel_diagnostic() -> None:
     episode = "episode-1"
     unknown = _observe(
         FunnelTracker(),
@@ -286,12 +295,29 @@ def test_funnel_attributes_atomic_unknown_and_known_negative_states() -> None:
         causal_seq=1,
         episode=episode,
         atomic_state=PublicAtomicQuoteState.NO_ACTIVE_COMBO,
+        records=(
+            _record(
+                "UNDERWRITING_AVAILABILITY_EVALUATION",
+                episode=episode,
+                payload={"availability": "EVALUABLE", "unknown_reasons": []},
+            ),
+            _record(
+                "UNDERWRITING_ACTION",
+                episode=episode,
+                payload={
+                    "economic_action": "WATCH",
+                    "decision_blockers": ["MINIMUM_NET_ENTRY_CREDIT"],
+                },
+            ),
+        ),
     )
 
     assert unknown.primary_blocker.stage == "STRUCTURE_REVIEWABLE"
-    assert unknown.primary_blocker.reason == "ATOMIC_AVAILABILITY_UNKNOWN"
-    assert known_negative.primary_blocker.stage == "PUBLIC_ATOMIC_QUOTE_AVAILABLE"
-    assert known_negative.primary_blocker.reason == "NO_ACTIVE_COMBO"
+    assert unknown.primary_blocker.reason == "STRUCTURE_NOT_EVALUATED"
+    assert unknown.atomic_combo_diagnostic_counts == {"UNKNOWN": 1}
+    assert known_negative.primary_blocker.stage == "CANDIDATE"
+    assert known_negative.primary_blocker.reason == "MINIMUM_NET_ENTRY_CREDIT"
+    assert known_negative.atomic_combo_diagnostic_counts == {"NO_ACTIVE_COMBO": 1}
 
 
 def test_funnel_reports_the_earliest_material_loss_not_the_largest_later_fraction() -> None:
@@ -324,7 +350,7 @@ def test_funnel_attributes_underwriting_and_candidate_losses() -> None:
                 episode=episode,
                 payload={
                     "availability": "UNKNOWN",
-                    "unknown_reasons": ["COMBO_QUOTE_RECEIPT_UNKNOWN"],
+                    "unknown_reasons": ["COMPONENT_BOOK_SOURCE_UNKNOWN"],
                 },
             ),
         ),
@@ -352,7 +378,7 @@ def test_funnel_attributes_underwriting_and_candidate_losses() -> None:
     )
 
     assert underwriting_unknown.primary_blocker.stage == "UNDERWRITING_EVALUABLE"
-    assert underwriting_unknown.primary_blocker.reason == "COMBO_QUOTE_RECEIPT_UNKNOWN"
+    assert underwriting_unknown.primary_blocker.reason == "COMPONENT_BOOK_SOURCE_UNKNOWN"
     assert watch.primary_blocker.stage == "CANDIDATE"
     assert watch.primary_blocker.reason == "MINIMUM_NET_ENTRY_CREDIT"
 

@@ -1,5 +1,15 @@
 """BTC-USDC option facts and target-size public quote arithmetic."""
 
+from options_domain.component import (
+    COMPONENT_BOOK_EXECUTION_MODEL,
+    ComponentBookAction,
+    ComponentBookLegQuote,
+    ComponentBookQuoteKind,
+    ComponentBookVerticalQuote,
+    evaluate_component_book_vertical,
+    is_protective_vertical,
+    standard_option_fee_usdc,
+)
 from options_domain.instruments import (
     FINAL_INSTRUMENT_LIFECYCLE_STATES,
     INSTRUMENT_LIFECYCLE_STATES,
@@ -27,6 +37,7 @@ from options_domain.quotes import (
 )
 
 __all__ = [
+    "COMPONENT_BOOK_EXECUTION_MODEL",
     "FINAL_INSTRUMENT_LIFECYCLE_STATES",
     "INSTRUMENT_LIFECYCLE_STATES",
     "TEMPORARILY_UNAVAILABLE_INSTRUMENT_STATES",
@@ -36,6 +47,10 @@ __all__ = [
     "Applicability",
     "ComboInstrument",
     "ComboLeg",
+    "ComponentBookAction",
+    "ComponentBookLegQuote",
+    "ComponentBookQuoteKind",
+    "ComponentBookVerticalQuote",
     "DepthWalk",
     "InstrumentLifecycleState",
     "OptionInstrument",
@@ -43,9 +58,12 @@ __all__ = [
     "PriceTickMetadata",
     "PriceTickStep",
     "check_target_amount",
+    "evaluate_component_book_vertical",
+    "is_protective_vertical",
     "monitor_applicability",
     "parse_combo_instrument",
     "parse_option_instrument",
+    "standard_option_fee_usdc",
     "stress_depth_walk_down_one_tick",
     "stress_depth_walk_up_one_tick",
 ]

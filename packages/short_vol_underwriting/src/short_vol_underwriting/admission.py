@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 
@@ -20,6 +20,11 @@ class RefreshClassification(StrEnum):
 class AdmissionRefreshKind(StrEnum):
     SUBSCRIPTION = "SUBSCRIPTION"
     RPC = "RPC"
+
+
+class ComponentLegRole(StrEnum):
+    SHORT = "SHORT"
+    LONG = "LONG"
 
 
 def _require_non_negative_integer(value: object, field: str) -> int:
@@ -144,6 +149,104 @@ class RpcAdmissionRefreshWitness:
 
 
 AdmissionRefreshWitness = SubscriptionAdmissionRefreshWitness | RpcAdmissionRefreshWitness
+
+
+@dataclass(frozen=True)
+class RpcComponentLegRefreshWitness:
+    """One matched public option-book response for a frozen component leg."""
+
+    source_identity: str
+    boundary: FactBoundary
+    role: ComponentLegRole
+    canonical_option_identity: str
+    instrument_name: str
+    request_params: Mapping[str, object]
+    change_id: int
+    source_timestamp_ms: int
+    request_id: int
+    owner_origin_boundary: FactBoundary
+    sent_boundary: FactBoundary
+    response_covers_full_quantity: bool
+    payload_matches_request: bool = True
+    payload_well_formed: bool = True
+
+    def __post_init__(self) -> None:
+        require_identity(self.source_identity, "source_identity")
+        require_identity(self.canonical_option_identity, "canonical_option_identity")
+        if not self.instrument_name:
+            raise ValueError("instrument_name must be non-empty")
+        for field_name in (
+            "change_id",
+            "source_timestamp_ms",
+            "request_id",
+        ):
+            _require_non_negative_integer(getattr(self, field_name), field_name)
+        if dict(self.request_params) != {
+            "instrument_name": self.instrument_name,
+            "depth": 10000,
+        }:
+            raise ValueError("component refresh request params must be exact")
+        expected_identity = canonical_identity(
+            "RpcComponentLegRefreshSourceIdentity",
+            self.boundary.runtime_identity,
+            self.request_id,
+            self.role.value,
+            "public/get_order_book",
+            self.canonical_option_identity,
+            dict(self.request_params),
+            self.owner_origin_boundary.as_object(),
+            self.sent_boundary.as_object(),
+            self.change_id,
+            self.source_timestamp_ms,
+            self.boundary.as_object(),
+        )
+        if self.source_identity != expected_identity:
+            raise ValueError("component RPC source identity mismatch")
+
+
+@dataclass(frozen=True)
+class ComponentBookPairWitness:
+    pair_identity: str
+    boundary: FactBoundary
+    short: RpcComponentLegRefreshWitness
+    long: RpcComponentLegRefreshWitness
+
+    def __post_init__(self) -> None:
+        require_identity(self.pair_identity, "pair_identity")
+        if self.short.role is not ComponentLegRole.SHORT:
+            raise ValueError("component pair short witness has the wrong role")
+        if self.long.role is not ComponentLegRole.LONG:
+            raise ValueError("component pair long witness has the wrong role")
+        if (
+            self.short.owner_origin_boundary != self.long.owner_origin_boundary
+            or self.short.boundary.runtime_identity != self.long.boundary.runtime_identity
+            or self.boundary
+            != max((self.short.boundary, self.long.boundary), key=lambda value: value.causal_seq)
+        ):
+            raise ValueError("component pair witnesses do not share one causal owner")
+        expected = canonical_identity(
+            "ComponentBookPairWitnessIdentity",
+            self.short.source_identity,
+            self.long.source_identity,
+            self.boundary.as_object(),
+        )
+        if self.pair_identity != expected:
+            raise ValueError("component pair witness identity mismatch")
+
+
+def component_pair_witness(
+    *,
+    short: RpcComponentLegRefreshWitness,
+    long: RpcComponentLegRefreshWitness,
+) -> ComponentBookPairWitness:
+    boundary = max((short.boundary, long.boundary), key=lambda value: value.causal_seq)
+    identity = canonical_identity(
+        "ComponentBookPairWitnessIdentity",
+        short.source_identity,
+        long.source_identity,
+        boundary.as_object(),
+    )
+    return ComponentBookPairWitness(identity, boundary, short, long)
 
 
 @dataclass(frozen=True)
@@ -397,6 +500,258 @@ class AdmissionAttempt:
         self.terminal_source_identity = source_identity
         self.terminal_identity = canonical_identity(
             "ADMISSION_ATTEMPT_TERMINAL",
+            self.scheduled_identity,
+            outcome.value,
+            boundary.as_object(),
+        )
+        return True
+
+
+@dataclass
+class ComponentAdmissionAttempt:
+    candidate_identity: str
+    short_option_identity: str
+    long_option_identity: str
+    short_instrument_name: str
+    long_instrument_name: str
+    short_request_id: int
+    long_request_id: int
+    origin_boundary: FactBoundary
+    scheduled_identity: str
+    _intents_taken: bool = False
+    sent_boundaries: dict[int, FactBoundary] = field(default_factory=dict)
+    terminal_outcome: AdmissionTerminalOutcome | None = None
+    terminal_identity: str | None = None
+    terminal_boundary: FactBoundary | None = None
+    terminal_source_identity: str | None = None
+
+    @classmethod
+    def schedule(
+        cls,
+        *,
+        candidate_identity: str,
+        short_option_identity: str,
+        long_option_identity: str,
+        short_request_id: int,
+        long_request_id: int,
+        boundary: FactBoundary,
+        short_instrument_name: str,
+        long_instrument_name: str,
+    ) -> ComponentAdmissionAttempt:
+        for value, field_name in (
+            (candidate_identity, "candidate_identity"),
+            (short_option_identity, "short_option_identity"),
+            (long_option_identity, "long_option_identity"),
+        ):
+            require_identity(value, field_name)
+        if short_request_id == long_request_id:
+            raise ValueError("component admission request ids must be distinct")
+        for request_id in (short_request_id, long_request_id):
+            _require_non_negative_integer(request_id, "request_id")
+        if not short_instrument_name or not long_instrument_name:
+            raise ValueError("component admission instrument names must be non-empty")
+        params = (
+            {"instrument_name": short_instrument_name, "depth": 10000},
+            {"instrument_name": long_instrument_name, "depth": 10000},
+        )
+        scheduled = canonical_identity(
+            "ScheduledComponentAdmissionAttemptIdentity",
+            candidate_identity,
+            [short_request_id, long_request_id],
+            "public/get_order_book",
+            params,
+            boundary.as_object(),
+        )
+        return cls(
+            candidate_identity=candidate_identity,
+            short_option_identity=short_option_identity,
+            long_option_identity=long_option_identity,
+            short_instrument_name=short_instrument_name,
+            long_instrument_name=long_instrument_name,
+            short_request_id=short_request_id,
+            long_request_id=long_request_id,
+            origin_boundary=boundary,
+            scheduled_identity=scheduled,
+        )
+
+    @property
+    def request_ids(self) -> tuple[int, int]:
+        return self.short_request_id, self.long_request_id
+
+    def take_request_intents(self) -> tuple[RpcRequestIntent, ...]:
+        if self._intents_taken or self.terminal_outcome is not None:
+            return ()
+        self._intents_taken = True
+        values = (
+            (
+                self.short_request_id,
+                "COMPONENT_ADMISSION_SHORT_REFRESH",
+                self.short_instrument_name,
+            ),
+            (
+                self.long_request_id,
+                "COMPONENT_ADMISSION_LONG_REFRESH",
+                self.long_instrument_name,
+            ),
+        )
+        return tuple(
+            RpcRequestIntent(
+                request_id=request_id,
+                purpose=purpose,
+                method="public/get_order_book",
+                params=MappingProxyType({"instrument_name": name, "depth": 10000}),
+                scheduled_identity=self.scheduled_identity,
+                origin_boundary=self.origin_boundary,
+                owner_identity=self.candidate_identity,
+            )
+            for request_id, purpose, name in values
+        )
+
+    def mark_sent(
+        self,
+        *,
+        request_id: int,
+        boundary: FactBoundary,
+        send_budget_ms: int,
+    ) -> bool:
+        if (
+            request_id not in self.request_ids
+            or request_id in self.sent_boundaries
+            or self.terminal_outcome is not None
+        ):
+            return False
+        if not boundary.is_strictly_after(self.origin_boundary):
+            raise ValueError("component admission SENT must be strictly after Candidate")
+        if (
+            boundary.received_monotonic_ms - self.origin_boundary.received_monotonic_ms
+            > send_budget_ms
+        ):
+            return self._terminalize(
+                source_identity=canonical_identity(
+                    "ComponentAdmissionSendDeadlineLateIdentity",
+                    self.scheduled_identity,
+                    request_id,
+                    boundary.as_object(),
+                ),
+                boundary=boundary,
+                classification=RefreshClassification.UNKNOWN,
+            )
+        self.sent_boundaries[request_id] = boundary
+        return True
+
+    def accept_pair(
+        self,
+        *,
+        witness: ComponentBookPairWitness,
+        response_budget_ms: int,
+        classification: RefreshClassification,
+    ) -> bool:
+        if self.terminal_outcome is not None:
+            return False
+        short = witness.short
+        long = witness.long
+        expected = (
+            (
+                short,
+                self.short_request_id,
+                self.short_option_identity,
+                self.short_instrument_name,
+            ),
+            (
+                long,
+                self.long_request_id,
+                self.long_option_identity,
+                self.long_instrument_name,
+            ),
+        )
+        invalid = witness.boundary != max(
+            (short.boundary, long.boundary), key=lambda value: value.causal_seq
+        )
+        for member, request_id, option_identity, instrument_name in expected:
+            sent = self.sent_boundaries.get(request_id)
+            invalid = invalid or (
+                sent is None
+                or member.request_id != request_id
+                or member.canonical_option_identity != option_identity
+                or member.instrument_name != instrument_name
+                or member.owner_origin_boundary != self.origin_boundary
+                or member.sent_boundary != sent
+                or not member.payload_matches_request
+                or not member.payload_well_formed
+            )
+            if sent is not None:
+                if not member.boundary.is_strictly_after(sent):
+                    raise ValueError("component admission response must be strictly after SENT")
+                if (
+                    member.boundary.received_monotonic_ms - sent.received_monotonic_ms
+                    > response_budget_ms
+                ):
+                    invalid = True
+        if invalid:
+            classification = RefreshClassification.UNKNOWN
+        return self._terminalize(
+            source_identity=witness.pair_identity,
+            boundary=witness.boundary,
+            classification=classification,
+        )
+
+    def fail_request(
+        self,
+        *,
+        request_id: int,
+        source_identity: str,
+        boundary: FactBoundary,
+    ) -> bool:
+        if request_id not in self.request_ids or self.terminal_outcome is not None:
+            return False
+        lower = self.sent_boundaries.get(request_id, self.origin_boundary)
+        if not boundary.is_strictly_after(lower):
+            raise ValueError("component admission failure must be causally later")
+        return self._terminalize(
+            source_identity=source_identity,
+            boundary=boundary,
+            classification=RefreshClassification.UNKNOWN,
+        )
+
+    def invalidate_before_refresh(
+        self,
+        *,
+        source_identity: str,
+        boundary: FactBoundary,
+    ) -> bool:
+        if self.terminal_outcome is not None:
+            return False
+        if not boundary.is_strictly_after(self.origin_boundary):
+            raise ValueError("Candidate invalidation must be causally later")
+        return self._terminalize(
+            source_identity=source_identity,
+            boundary=boundary,
+            classification=RefreshClassification.KNOWN_INVALIDATED,
+        )
+
+    def _terminalize(
+        self,
+        *,
+        source_identity: str,
+        boundary: FactBoundary,
+        classification: RefreshClassification,
+    ) -> bool:
+        require_identity(source_identity, "terminal_source_identity")
+        outcome = {
+            RefreshClassification.COMPLETE_CANDIDATE: AdmissionTerminalOutcome.ENTRY_EMITTED,
+            RefreshClassification.COMPLETE_NO_ENTRY: (
+                AdmissionTerminalOutcome.KNOWN_COMPLETE_NO_ENTRY
+            ),
+            RefreshClassification.KNOWN_INVALIDATED: (
+                AdmissionTerminalOutcome.KNOWN_INVALIDATED_BEFORE_REFRESH
+            ),
+            RefreshClassification.UNKNOWN: AdmissionTerminalOutcome.UNKNOWN_CONSUMED,
+        }[classification]
+        self.terminal_outcome = outcome
+        self.terminal_boundary = boundary
+        self.terminal_source_identity = source_identity
+        self.terminal_identity = canonical_identity(
+            "COMPONENT_ADMISSION_ATTEMPT_TERMINAL",
             self.scheduled_identity,
             outcome.value,
             boundary.as_object(),

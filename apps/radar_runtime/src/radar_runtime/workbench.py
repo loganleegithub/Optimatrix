@@ -1062,6 +1062,11 @@ def _underwriting_rows(
                 "underwriting_action_identity": action_identity,
                 "availability": availability,
                 "unknown_reasons": unknown_reasons,
+                "component_state": availability_payload.get("component_state", "UNKNOWN"),
+                "component_blockers": availability_payload.get("component_blockers", []),
+                "atomic_state_diagnostic": availability_payload.get(
+                    "atomic_state_diagnostic", "NOT_EVALUATED"
+                ),
                 "action": payload.get("economic_action"),
                 "gross_entry_credit_usdc": payload.get("gross_entry_credit_usdc"),
                 "entry_fee_reserve_usdc": payload.get("entry_fee_reserve_usdc"),
@@ -1146,6 +1151,9 @@ def _shadow_rows(
                 "admission_refresh_terminal_outcome": None,
                 "matched_refresh_source_identity": None,
                 "shadow_entry_identity": None,
+                "execution_model": None,
+                "entry_component_pair_identity": None,
+                "entry_component_legs": None,
                 "simulated_entry_price_usdc_per_btc": None,
                 "simulated_entry_price_availability": "UNKNOWN",
                 "simulated_entry_price_basis": None,
@@ -1162,8 +1170,8 @@ def _shadow_rows(
         target_quantity = entry_payload.get("full_quantity_btc") or str(
             policies.underwriting.target_base_quantity_btc
         )
-        entry_price = _consumed_levels_vwap(
-            entry_payload.get("entry_consumed_levels"),
+        entry_price = _component_vertical_credit_per_btc(
+            entry_payload.get("entry_component_legs"),
             target_quantity,
         )
         rows.append(
@@ -1171,22 +1179,26 @@ def _shadow_rows(
                 "candidate_identity": candidate_identity,
                 "candidate_formed_fact_boundary": None,
                 "admission_refresh_terminal_outcome": "ENTRY_EMITTED",
-                "matched_refresh_source_identity": None,
+                "matched_refresh_source_identity": entry_payload.get(
+                    "entry_component_pair_identity"
+                ),
                 "shadow_entry_identity": str(entry["object_identity"]),
+                "execution_model": entry_payload.get("execution_model"),
+                "entry_component_pair_identity": entry_payload.get("entry_component_pair_identity"),
+                "entry_component_legs": entry_payload.get("entry_component_legs"),
                 "simulated_entry_price_usdc_per_btc": entry_price,
                 "simulated_entry_price_availability": (
-                    "AVAILABLE_FROM_SHADOW_ENTRY_ATOMIC_CONSUMED_LEVELS"
+                    "AVAILABLE_FROM_SHADOW_ENTRY_STRESSED_COMPONENT_LEGS"
                     if entry_price is not None
                     else "UNKNOWN"
                 ),
                 "simulated_entry_price_basis": (
-                    "SHADOW_ENTRY_ATOMIC_COMBO_CONSUMED_LEVELS_VWAP"
+                    "SHORT_STRESSED_SELL_VWAP_MINUS_LONG_STRESSED_BUY_VWAP"
                     if entry_price is not None
                     else None
                 ),
                 "simulated_entry_credit_usdc": entry_payload.get("gross_entry_credit_usdc"),
                 "target_quantity_btc": target_quantity,
-                "entry_consumed_levels": entry_payload.get("entry_consumed_levels"),
                 "no_entry_reason": None,
                 "simulation_label": SIMULATION_LABEL,
             }
@@ -1284,7 +1296,7 @@ def _position_rows(
                 "position_action": action_payload.get("serialized_action", "UNKNOWN"),
                 "remaining_premium_usdc": remaining_premium,
                 "remaining_premium_availability": (
-                    "AVAILABLE_FROM_PERSISTED_ATOMIC_CLOSE_ECONOMICS"
+                    "AVAILABLE_FROM_PERSISTED_COMPONENT_CLOSE_ECONOMICS"
                     if remaining_premium is not None
                     else "UNKNOWN"
                 ),
@@ -1293,8 +1305,8 @@ def _position_rows(
                     if remaining_premium is not None
                     else None
                 ),
-                "atomic_close_quote_state": quote_payload.get("close_quote_state", "UNKNOWN"),
-                "current_atomic_close_debit_usdc": opportunity_payload.get("net_close_debit_usdc"),
+                "close_quote_state": quote_payload.get("close_quote_state", "UNKNOWN"),
+                "current_close_debit_usdc": opportunity_payload.get("net_close_debit_usdc"),
                 "projected_shadow_pnl_usdc": opportunity_payload.get(
                     "projected_shadow_net_pnl_usdc"
                 ),
@@ -1591,24 +1603,32 @@ def _decimal_or_none(value: object) -> Decimal | None:
     return parsed if parsed.is_finite() else None
 
 
-def _consumed_levels_vwap(levels: object, full_quantity: object) -> str | None:
+def _component_vertical_credit_per_btc(legs: object, full_quantity: object) -> str | None:
     quantity = _decimal_or_none(full_quantity)
-    if quantity is None or quantity <= 0 or not isinstance(levels, list) or not levels:
+    if quantity is None or quantity <= 0 or not isinstance(legs, list) or len(legs) != 2:
         return None
-    amount_sum = Decimal(0)
-    total = Decimal(0)
-    for level in levels:
-        if not isinstance(level, Mapping):
+    by_role: dict[str, Mapping[str, object]] = {}
+    for leg in legs:
+        if not isinstance(leg, Mapping):
             return None
-        price = _decimal_or_none(level.get("price_usdc_per_btc"))
-        amount = _decimal_or_none(level.get("amount_btc"))
-        if price is None or amount is None or amount <= 0:
+        role = leg.get("canonical_leg_role")
+        if not isinstance(role, str) or role in by_role:
             return None
-        amount_sum += amount
-        total += price * amount
-    if amount_sum != quantity:
+        by_role[role] = leg
+    short = by_role.get("SHORT")
+    long = by_role.get("LONG")
+    if (
+        short is None
+        or long is None
+        or short.get("action") != "SELL"
+        or long.get("action") != "BUY"
+    ):
         return None
-    return canonical_decimal(total / quantity)
+    short_price = _decimal_or_none(short.get("stressed_vwap_usdc_per_btc"))
+    long_price = _decimal_or_none(long.get("stressed_vwap_usdc_per_btc"))
+    if short_price is None or long_price is None:
+        return None
+    return canonical_decimal(short_price - long_price)
 
 
 def _runtime_boundary_object(commit: CausalCommit) -> dict[str, object]:
@@ -1757,8 +1777,11 @@ const reasonLabels = {
   SESSION_GAP: '公共行情会话中断',
   SESSION_RPC_FAILURE: '公共接口响应超时',
   COMBO_QUOTE_RECEIPT_UNKNOWN: '组合报价回执不可确认',
-  NO_ACTIVE_COMBO: '无活跃组合可供承保评估',
-  NO_TARGET_SIZE_CREDIT_QUOTE: '目标数量的组合权利金报价不可用',
+  NO_ACTIVE_COMBO: '无现成官方组合 - 仅诊断; 不阻塞双腿 Shadow',
+  NO_TARGET_SIZE_CREDIT_QUOTE: '现成官方组合没有目标数量正信用报价 - 仅诊断',
+  NO_PROTECTIVE_COMPONENT: '没有可冻结的同到期保护腿',
+  NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE: '双腿盘口不能同时覆盖目标数量',
+  COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN: '双腿保守成交反事实不可确认',
   NO_APPLICABLE_MARKET_SCOPE_OBSERVED: '尚未观察到适用的市场范围',
   NO_ANOMALY_ACTIVATION_OBSERVED: '已完成 Radar 计算, 尚未出现异常激活',
   ATOMIC_AVAILABILITY_UNKNOWN: '异常已激活, 但组合可用性仍不可确认',
@@ -1768,7 +1791,7 @@ const reasonLabels = {
   MINIMUM_NET_CREDIT_TO_PAYOFF_CAP: '净权利金相对保护宽度不足',
   CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE: '净权利金未覆盖未来成本准备',
   UNDERWRITING_RESERVED_LOSS_LIMIT: '承保准备损失超过 Policy 上限',
-  ADMISSION_PENDING_OR_NOT_REFRESHED: 'Candidate 尚未获得严格未来原子报价刷新',
+  ADMISSION_PENDING_OR_NOT_REFRESHED: 'Candidate 尚未获得严格未来的成对双腿盘口刷新',
   OUTCOME_PENDING: 'Shadow Case 已打开, Outcome 尚未终结',
   NO_MATERIAL_BLOCKER_OBSERVED: '当前已观察漏斗没有实质转换阻塞',
   POSITION_SLOT_CONSUMED_BY_SHADOW_ENTRY: '该承保槽位已被 Shadow Entry 使用',
@@ -2088,7 +2111,8 @@ function renderUnderwritingPanel(documentValue) {
     table(documentValue.underwriting, [
       ['Short leg', 'short_leg_instrument_name', underwritingCellValue],
       ['Long leg', 'long_leg_instrument_name', underwritingCellValue],
-      ['Combo', 'combo_instrument_name', underwritingCellValue],
+      ['Component 状态', 'component_state', underwritingCellValue],
+      ['Combo 诊断', 'atomic_state_diagnostic', underwritingCellValue],
       ['到期(北京时间)', 'expiry_timestamp_ms', underwritingCellValue],
       ['Availability', 'availability', underwritingCellValue],
       ['Action', 'action', underwritingCellValue],
@@ -2103,6 +2127,7 @@ function renderUnderwritingPanel(documentValue) {
       ['availability identity', 'underwriting_availability_evaluation_identity'],
       ['action identity', 'underwriting_action_identity'], ['availability enum', 'availability'],
       ['decision reason enum', 'decision_reason'], ['unknown reasons', 'unknown_reasons'],
+      ['component blockers', 'component_blockers'],
       ['gross entry credit exact', 'gross_entry_credit_usdc'],
       ['entry fee reserve exact', 'entry_fee_reserve_usdc'],
       ['net entry credit exact', 'net_entry_credit_usdc'],
@@ -2117,7 +2142,7 @@ const funnelStageLabels = {
   RADAR_KNOWN: 'Radar 已知评估',
   ANOMALY_ACTIVE: '异常 Episode',
   STRUCTURE_REVIEWABLE: '结构可审查',
-  PUBLIC_ATOMIC_QUOTE_AVAILABLE: '目标数量原子报价',
+  COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE: '双腿盘口保守成交反事实',
   UNDERWRITING_EVALUABLE: 'Underwriting 可评估',
   CANDIDATE: 'Candidate',
   SHADOW_CASE_OPENED: 'Shadow Case',
@@ -2246,7 +2271,7 @@ function render(documentValue) {
   document.getElementById('shadow').innerHTML = table(documentValue.shadow_entries, [
     ['刷新结果', 'admission_refresh_terminal_outcome', shadowCellValue],
     ['目标数量 (BTC)', 'target_quantity_btc', shadowCellValue],
-    ['模拟入场价 (USDC/BTC)', 'simulated_entry_price_usdc_per_btc', shadowCellValue],
+    ['模拟垂直毛信用 (USDC/BTC)', 'simulated_entry_price_usdc_per_btc', shadowCellValue],
     ['模拟入场价状态', 'simulated_entry_price_availability'],
     ['模拟权利金 (USDC)', 'simulated_entry_credit_usdc', shadowCellValue],
     ['未入场原因', 'no_entry_reason', shadowCellValue], ['声明', 'simulation_label']
@@ -2256,14 +2281,16 @@ function render(documentValue) {
     ['shadow entry identity', 'shadow_entry_identity'], ['target quantity exact', 'target_quantity_btc'],
     ['simulated entry price exact', 'simulated_entry_price_usdc_per_btc'],
     ['simulated entry credit exact', 'simulated_entry_credit_usdc'],
-    ['consumed levels', 'entry_consumed_levels']
+    ['execution model', 'execution_model'],
+    ['component pair identity', 'entry_component_pair_identity'],
+    ['component legs', 'entry_component_legs']
   ]);
   document.getElementById('positions').innerHTML = table(documentValue.positions, [
     ['Action', 'position_action'],
     ['剩余权利金 (USDC)', 'remaining_premium_usdc', positionCellValue],
     ['剩余权利金状态', 'remaining_premium_availability'],
-    ['Atomic close', 'atomic_close_quote_state'],
-    ['Close debit (USDC)', 'current_atomic_close_debit_usdc', positionCellValue],
+    ['Component close', 'close_quote_state'],
+    ['Close debit (USDC)', 'current_close_debit_usdc', positionCellValue],
     ['Shadow PnL (USDC)', 'projected_shadow_pnl_usdc', positionCellValue],
     ['Hard-close 倒计时', 'hard_close_countdown_interval_ms', positionCellValue],
     ['首要退出规则', 'primary_exit_rule'],
@@ -2274,7 +2301,7 @@ function render(documentValue) {
   ], documentValue.positions.rows, [
     ['shadow entry identity', 'shadow_entry_identity'],
     ['remaining premium exact', 'remaining_premium_usdc'],
-    ['close debit exact', 'current_atomic_close_debit_usdc'],
+    ['close debit exact', 'current_close_debit_usdc'],
     ['projected Shadow PnL exact', 'projected_shadow_pnl_usdc'],
     ['hard-close interval ms', 'hard_close_countdown_interval_ms'],
     ['remaining premium basis', 'remaining_premium_basis'],

@@ -7,7 +7,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from market_monitor import ContinuityGap, IndexAvailabilityState
-from short_vol_radar.atomic import PublicAtomicQuoteState
 from short_vol_radar.detector import DetectorState
 from short_vol_radar.evidence import CoverageBlockingReason
 
@@ -19,19 +18,11 @@ FUNNEL_STAGE_ORDER = (
     "RADAR_KNOWN",
     "ANOMALY_ACTIVE",
     "STRUCTURE_REVIEWABLE",
-    "PUBLIC_ATOMIC_QUOTE_AVAILABLE",
+    "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE",
     "UNDERWRITING_EVALUABLE",
     "CANDIDATE",
     "SHADOW_CASE_OPENED",
     "SHADOW_CASE_OUTCOME",
-)
-
-_KNOWN_STRUCTURE_STATES = frozenset(
-    {
-        PublicAtomicQuoteState.NO_ACTIVE_COMBO.value,
-        PublicAtomicQuoteState.NO_TARGET_SIZE_CREDIT_QUOTE.value,
-        PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE.value,
-    }
 )
 
 _BOUNDED_INSTRUMENT_REASON_SUFFIXES = frozenset(
@@ -188,12 +179,22 @@ class FunnelSnapshot:
     stages: tuple[FunnelStageSnapshot, ...]
     primary_blocker: PrimaryFunnelBlocker
     radar_knownness: RadarKnownnessSnapshot
+    atomic_combo_diagnostic_counts: Mapping[str, int]
 
     def as_object(self) -> dict[str, object]:
         return {
             "stages": [stage.as_object() for stage in self.stages],
             "primary_blocker": self.primary_blocker.as_object(),
             "radar_knownness": self.radar_knownness.as_object(),
+            "atomic_combo_diagnostic": {
+                "unit": "DISTINCT_ANOMALY_EPISODE_EVER_OBSERVED_IN_STATE",
+                "counts": dict(sorted(self.atomic_combo_diagnostic_counts.items())),
+                "non_claims": [
+                    "NOT_A_SHADOW_ADMISSION_GATE",
+                    "NO_SINGLE_LEG_LIQUIDITY_CLAIM",
+                    "NO_ON_DEMAND_COMBO_CLAIM",
+                ],
+            },
             "non_claims": [
                 "NON_DURABLE_RUNTIME_DIAGNOSTIC",
                 "NO_POLICY_QUALITY_OR_PROFITABILITY_CLAIM",
@@ -205,10 +206,11 @@ class FunnelSnapshot:
 @dataclass
 class _EpisodeState:
     atomic_states: set[str] = field(default_factory=set)
+    component: tuple[str, tuple[str, ...]] = ("NOT_EVALUATED", ())
     availability: tuple[str, tuple[str, ...]] = ("NOT_EVALUATED", ())
     action: tuple[str, tuple[str, ...]] = ("NOT_EMITTED", ())
     structure_reviewable: bool = False
-    atomic_available: bool = False
+    component_evaluable: bool = False
     underwriting_evaluable: bool = False
     candidate: bool = False
     case_opened: bool = False
@@ -232,7 +234,8 @@ class FunnelTracker:
 
         self._anomaly_episode_count = 0
         self._structure_episode_count = 0
-        self._atomic_episode_count = 0
+        self._component_evaluable_episode_count = 0
+        self._atomic_diagnostic_episode_counts: Counter[str] = Counter()
         self._evaluable_episode_count = 0
         self._candidate_episode_count = 0
         self._case_opened_count = 0
@@ -318,18 +321,18 @@ class FunnelTracker:
                 blockers["STRUCTURE_REVIEWABLE"],
             ),
             FunnelStageSnapshot(
-                "PUBLIC_ATOMIC_QUOTE_AVAILABLE",
-                self._atomic_episode_count,
+                "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE",
+                self._component_evaluable_episode_count,
                 "DISTINCT_ANOMALY_EPISODE",
                 self._structure_episode_count,
                 "DISTINCT_ANOMALY_EPISODE",
-                blockers["PUBLIC_ATOMIC_QUOTE_AVAILABLE"],
+                blockers["COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE"],
             ),
             FunnelStageSnapshot(
                 "UNDERWRITING_EVALUABLE",
                 self._evaluable_episode_count,
                 "DISTINCT_ANOMALY_EPISODE",
-                self._atomic_episode_count,
+                self._component_evaluable_episode_count,
                 "DISTINCT_ANOMALY_EPISODE",
                 blockers["UNDERWRITING_EVALUABLE"],
             ),
@@ -373,7 +376,12 @@ class FunnelTracker:
             ),
             warmed_band_ids=tuple(sorted(self._warmed_band_ids)),
         )
-        return FunnelSnapshot(stages, self._primary_blocker(stages), knownness)
+        return FunnelSnapshot(
+            stages,
+            self._primary_blocker(stages),
+            knownness,
+            self._atomic_diagnostic_episode_counts,
+        )
 
     def _observe_radar(self, reducer: RadarReducer, commit: CausalCommit) -> set[str]:
         causal_seq = reducer.latest_funnel_causal_seq
@@ -426,17 +434,9 @@ class FunnelTracker:
             atomic_state = reducer.atomic_states.get(episode)
             if atomic_state is None:
                 continue
-            state.atomic_states.add(atomic_state.value)
-            if not state.structure_reviewable and state.atomic_states & _KNOWN_STRUCTURE_STATES:
-                state.structure_reviewable = True
-                self._structure_episode_count += 1
-            if (
-                not state.atomic_available
-                and PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE.value
-                in state.atomic_states
-            ):
-                state.atomic_available = True
-                self._atomic_episode_count += 1
+            if atomic_state.value not in state.atomic_states:
+                state.atomic_states.add(atomic_state.value)
+                self._atomic_diagnostic_episode_counts[atomic_state.value] += 1
         return active
 
     def _is_post_warmup(
@@ -474,6 +474,18 @@ class FunnelTracker:
                 availability = _string_or(payload.get("availability"), "UNKNOWN")
                 reasons = _string_tuple(payload.get("unknown_reasons"))
                 state.availability = (availability, reasons)
+                component_state = _string_or(payload.get("component_state"), "UNKNOWN")
+                component_blockers = _string_tuple(payload.get("component_blockers"))
+                state.component = (component_state, component_blockers)
+                if payload.get("structure_reviewable") is True and not state.structure_reviewable:
+                    state.structure_reviewable = True
+                    self._structure_episode_count += 1
+                if (
+                    payload.get("component_book_counterfactual_evaluable") is True
+                    and not state.component_evaluable
+                ):
+                    state.component_evaluable = True
+                    self._component_evaluable_episode_count += 1
                 if availability == "EVALUABLE" and not state.underwriting_evaluable:
                     state.underwriting_evaluable = True
                     self._evaluable_episode_count += 1
@@ -546,20 +558,27 @@ class FunnelTracker:
     @staticmethod
     def _current_loss(state: _EpisodeState) -> tuple[str | None, str | None]:
         if not state.structure_reviewable:
+            component_state, reasons = state.component
             reason = (
-                "ATOMIC_AVAILABILITY_UNKNOWN"
-                if PublicAtomicQuoteState.UNKNOWN.value in state.atomic_states
-                else "ATOMIC_AVAILABILITY_NOT_SETTLED"
+                _bounded_blocker_reason(
+                    reasons[0],
+                    fallback="OTHER_STRUCTURE_REVIEW_BLOCKER",
+                )
+                if reasons
+                else f"STRUCTURE_{component_state}"
             )
             return "STRUCTURE_REVIEWABLE", reason
-        if not state.atomic_available:
-            if PublicAtomicQuoteState.NO_TARGET_SIZE_CREDIT_QUOTE.value in state.atomic_states:
-                reason = PublicAtomicQuoteState.NO_TARGET_SIZE_CREDIT_QUOTE.value
-            elif PublicAtomicQuoteState.NO_ACTIVE_COMBO.value in state.atomic_states:
-                reason = PublicAtomicQuoteState.NO_ACTIVE_COMBO.value
-            else:
-                reason = "PUBLIC_ATOMIC_QUOTE_NOT_OBSERVED"
-            return "PUBLIC_ATOMIC_QUOTE_AVAILABLE", reason
+        if not state.component_evaluable:
+            component_state, reasons = state.component
+            reason = (
+                _bounded_blocker_reason(
+                    reasons[0],
+                    fallback="OTHER_COMPONENT_BOOK_BLOCKER",
+                )
+                if reasons
+                else component_state
+            )
+            return "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE", reason
         if not state.underwriting_evaluable:
             availability, reasons = state.availability
             return (

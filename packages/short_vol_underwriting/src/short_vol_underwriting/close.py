@@ -1,22 +1,30 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 from types import MappingProxyType
 
+from options_domain import ComponentBookQuoteKind, ComponentBookVerticalQuote
+
 from short_vol_underwriting.admission import (
     AdmissionRefreshWitness,
+    ComponentBookPairWitness,
     RpcAdmissionRefreshWitness,
     RpcRequestIntent,
     SubscriptionAdmissionRefreshWitness,
 )
-from short_vol_underwriting.domain import CloseEconomics, compute_close_economics
+from short_vol_underwriting.domain import (
+    CloseEconomics,
+    compute_close_economics,
+    compute_component_close_economics,
+)
 from short_vol_underwriting.identity import canonical_identity, require_identity
 from short_vol_underwriting.model import FactBoundary, PredicateTruth
 
 
 class CloseQuoteState(StrEnum):
+    COMPONENT_BOOK_CLOSE_QUOTE = "COMPONENT_BOOK_CLOSE_QUOTE"
     ATOMIC_COMBO_CLOSE_QUOTE = "ATOMIC_COMBO_CLOSE_QUOTE"
     LEGGED_CLOSE_REFERENCE = "LEGGED_CLOSE_REFERENCE"
     UNEXECUTABLE = "UNEXECUTABLE"
@@ -70,6 +78,7 @@ class CloseQuoteFacts:
     component_reference: PredicateTruth
     book_availability: CloseBookAvailability
     consumed_levels: tuple[tuple[Decimal, Decimal], ...]
+    component_quote: ComponentBookVerticalQuote | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +97,24 @@ class NormalizedCloseQuote:
 
 def normalize_close_quote(facts: CloseQuoteFacts) -> NormalizedCloseQuote:
     """Apply the first matching quote rule and retain only facts that rule consumed."""
+    if facts.component_quote is not None:
+        quote = facts.component_quote
+        if quote.kind is not ComponentBookQuoteKind.CLOSE:
+            return NormalizedCloseQuote(
+                CloseQuoteState.UNKNOWN,
+                (),
+                ("COMPONENT_QUOTE_KIND_MISMATCH",),
+            )
+        levels = tuple(
+            (level.price, level.amount)
+            for leg in (quote.short_leg, quote.long_leg)
+            for level in leg.stressed.consumed
+        )
+        return NormalizedCloseQuote(
+            CloseQuoteState.COMPONENT_BOOK_CLOSE_QUOTE,
+            levels,
+            (quote.fingerprint_members,),
+        )
     if facts.option_availability is CloseOptionAvailability.UNEXECUTABLE:
         return NormalizedCloseQuote(
             CloseQuoteState.UNEXECUTABLE,
@@ -182,6 +209,7 @@ def evaluate_close_opportunity(
     fee_rate_index_fraction: Decimal,
     close_index_usdc_per_btc: Decimal | None,
     net_entry_credit_usdc: Decimal,
+    component_quote: ComponentBookVerticalQuote | None = None,
 ) -> CloseOpportunity:
     """Apply the frozen eligibility rules without consulting ignored later facts."""
     if quote_state in {
@@ -224,6 +252,22 @@ def evaluate_close_opportunity(
             CloseOpportunityEligibility.UNKNOWN,
             "CLOSE_INDEX_UNKNOWN",
             None,
+        )
+    if quote_state is CloseQuoteState.COMPONENT_BOOK_CLOSE_QUOTE:
+        if component_quote is None or component_quote.kind is not ComponentBookQuoteKind.CLOSE:
+            return CloseOpportunity(
+                CloseOpportunityEligibility.UNKNOWN,
+                "COMPONENT_CLOSE_QUOTE_UNKNOWN",
+                None,
+            )
+        economics = compute_component_close_economics(
+            quote=component_quote,
+            net_entry_credit_usdc=net_entry_credit_usdc,
+        )
+        return CloseOpportunity(
+            CloseOpportunityEligibility.ELIGIBLE,
+            "FULL_QUANTITY_COMPONENT_BOOK_QUOTE",
+            economics,
         )
     economics = compute_close_economics(
         direction=close_direction,
@@ -590,6 +634,256 @@ class PostCloseAttempt:
         self.matched_response_identity = matched_response_identity
         self.terminal_identity = canonical_identity(
             "PostCloseAttemptTerminalIdentity",
+            self.scheduled_identity,
+            status.value,
+            owner.value,
+            boundary.as_object(),
+        )
+        return True
+
+
+@dataclass
+class ComponentPostCloseAttempt:
+    anchor_identity: str
+    first_close_action_identity: str
+    short_option_identity: str
+    long_option_identity: str
+    short_instrument_name: str
+    long_instrument_name: str
+    short_request_id: int
+    long_request_id: int
+    origin_boundary: FactBoundary
+    scheduled_identity: str
+    _intents_taken: bool = False
+    sent_boundaries: dict[int, FactBoundary] = field(default_factory=dict)
+    terminal_status: PostCloseAttemptStatus | None = None
+    terminal_owner: PostCloseAttemptOwner | None = None
+    terminal_identity: str | None = None
+    terminal_boundary: FactBoundary | None = None
+    matched_response_identity: str | None = None
+
+    @classmethod
+    def schedule(
+        cls,
+        *,
+        anchor_identity: str,
+        first_close_action_identity: str,
+        short_option_identity: str,
+        long_option_identity: str,
+        short_instrument_name: str,
+        long_instrument_name: str,
+        short_request_id: int,
+        long_request_id: int,
+        boundary: FactBoundary,
+    ) -> ComponentPostCloseAttempt:
+        for value, field_name in (
+            (anchor_identity, "anchor_identity"),
+            (first_close_action_identity, "first_close_action_identity"),
+            (short_option_identity, "short_option_identity"),
+            (long_option_identity, "long_option_identity"),
+        ):
+            require_identity(value, field_name)
+        if short_request_id == long_request_id:
+            raise ValueError("component post-CLOSE request ids must be distinct")
+        for request_id in (short_request_id, long_request_id):
+            if isinstance(request_id, bool) or not isinstance(request_id, int) or request_id < 0:
+                raise ValueError("request_id must be a non-negative integer")
+        if not short_instrument_name or not long_instrument_name:
+            raise ValueError("component post-CLOSE instrument names must be non-empty")
+        params = (
+            {"instrument_name": short_instrument_name, "depth": 10000},
+            {"instrument_name": long_instrument_name, "depth": 10000},
+        )
+        identity = canonical_identity(
+            "ScheduledComponentPostCloseAttemptIdentity",
+            anchor_identity,
+            first_close_action_identity,
+            [short_request_id, long_request_id],
+            "public/get_order_book",
+            params,
+            boundary.as_object(),
+        )
+        return cls(
+            anchor_identity=anchor_identity,
+            first_close_action_identity=first_close_action_identity,
+            short_option_identity=short_option_identity,
+            long_option_identity=long_option_identity,
+            short_instrument_name=short_instrument_name,
+            long_instrument_name=long_instrument_name,
+            short_request_id=short_request_id,
+            long_request_id=long_request_id,
+            origin_boundary=boundary,
+            scheduled_identity=identity,
+        )
+
+    @property
+    def request_ids(self) -> tuple[int, int]:
+        return self.short_request_id, self.long_request_id
+
+    def take_request_intents(self) -> tuple[RpcRequestIntent, ...]:
+        if self._intents_taken or self.terminal_status is not None:
+            return ()
+        self._intents_taken = True
+        values = (
+            (
+                self.short_request_id,
+                "COMPONENT_POST_CLOSE_SHORT_REFRESH",
+                self.short_instrument_name,
+            ),
+            (
+                self.long_request_id,
+                "COMPONENT_POST_CLOSE_LONG_REFRESH",
+                self.long_instrument_name,
+            ),
+        )
+        return tuple(
+            RpcRequestIntent(
+                request_id=request_id,
+                purpose=purpose,
+                method="public/get_order_book",
+                params=MappingProxyType({"instrument_name": name, "depth": 10000}),
+                scheduled_identity=self.scheduled_identity,
+                origin_boundary=self.origin_boundary,
+                owner_identity=self.anchor_identity,
+            )
+            for request_id, purpose, name in values
+        )
+
+    def mark_sent(
+        self,
+        *,
+        request_id: int,
+        boundary: FactBoundary,
+        send_budget_ms: int,
+    ) -> bool:
+        if (
+            request_id not in self.request_ids
+            or request_id in self.sent_boundaries
+            or self.terminal_status is not None
+        ):
+            return False
+        if not boundary.is_strictly_after(self.origin_boundary):
+            raise ValueError("component post-CLOSE SENT must be strictly after first CLOSE")
+        if (
+            boundary.received_monotonic_ms - self.origin_boundary.received_monotonic_ms
+            > send_budget_ms
+        ):
+            return self._terminalize(
+                status=PostCloseAttemptStatus.DEADLINE_LATE,
+                owner=PostCloseAttemptOwner.ORDINARY,
+                boundary=boundary,
+                matched_response_identity=None,
+            )
+        self.sent_boundaries[request_id] = boundary
+        return True
+
+    def accept_pair(
+        self,
+        *,
+        witness: ComponentBookPairWitness,
+        response_budget_ms: int,
+    ) -> bool:
+        if self.terminal_status is not None:
+            return False
+        expected = (
+            (
+                witness.short,
+                self.short_request_id,
+                self.short_option_identity,
+                self.short_instrument_name,
+            ),
+            (
+                witness.long,
+                self.long_request_id,
+                self.long_option_identity,
+                self.long_instrument_name,
+            ),
+        )
+        invalid = False
+        for member, request_id, option_identity, instrument_name in expected:
+            sent = self.sent_boundaries.get(request_id)
+            invalid = invalid or (
+                sent is None
+                or member.request_id != request_id
+                or member.canonical_option_identity != option_identity
+                or member.instrument_name != instrument_name
+                or member.owner_origin_boundary != self.origin_boundary
+                or member.sent_boundary != sent
+                or not member.payload_matches_request
+                or not member.payload_well_formed
+            )
+            if sent is not None:
+                if not member.boundary.is_strictly_after(sent):
+                    raise ValueError("component post-CLOSE response must be strictly after SENT")
+                if (
+                    member.boundary.received_monotonic_ms - sent.received_monotonic_ms
+                    > response_budget_ms
+                ):
+                    invalid = True
+        return self._terminalize(
+            status=(PostCloseAttemptStatus.ERROR if invalid else PostCloseAttemptStatus.SUCCESS),
+            owner=PostCloseAttemptOwner.ORDINARY,
+            boundary=witness.boundary,
+            matched_response_identity=(None if invalid else witness.pair_identity),
+        )
+
+    def fail(
+        self,
+        *,
+        request_id: int,
+        status: PostCloseAttemptStatus,
+        boundary: FactBoundary,
+    ) -> bool:
+        if status not in {
+            PostCloseAttemptStatus.ERROR,
+            PostCloseAttemptStatus.DEADLINE_LATE,
+            PostCloseAttemptStatus.RETIRED,
+        }:
+            raise ValueError("ordinary request failure status is invalid")
+        if request_id not in self.request_ids or self.terminal_status is not None:
+            return False
+        lower = self.sent_boundaries.get(request_id, self.origin_boundary)
+        if not boundary.is_strictly_after(lower):
+            raise ValueError("component post-CLOSE failure must be causally later")
+        return self._terminalize(
+            status=status,
+            owner=PostCloseAttemptOwner.ORDINARY,
+            boundary=boundary,
+            matched_response_identity=None,
+        )
+
+    def censor(self, *, boundary: FactBoundary, owner: PostCloseAttemptOwner) -> bool:
+        if owner not in {PostCloseAttemptOwner.STOP, PostCloseAttemptOwner.FAILURE}:
+            raise ValueError("censor owner must be STOP or FAILURE")
+        if self.terminal_status is not None:
+            return False
+        return self._terminalize(
+            status=PostCloseAttemptStatus.CENSORED,
+            owner=owner,
+            boundary=boundary,
+            matched_response_identity=None,
+        )
+
+    def _terminalize(
+        self,
+        *,
+        status: PostCloseAttemptStatus,
+        owner: PostCloseAttemptOwner,
+        boundary: FactBoundary,
+        matched_response_identity: str | None,
+    ) -> bool:
+        if self.terminal_status is not None:
+            return False
+        if not boundary.is_strictly_after(self.origin_boundary):
+            raise ValueError("component post-CLOSE terminal must be causally later")
+        if matched_response_identity is not None:
+            require_identity(matched_response_identity, "matched_response_identity")
+        self.terminal_status = status
+        self.terminal_owner = owner
+        self.terminal_boundary = boundary
+        self.matched_response_identity = matched_response_identity
+        self.terminal_identity = canonical_identity(
+            "ComponentPostCloseAttemptTerminalIdentity",
             self.scheduled_identity,
             status.value,
             owner.value,

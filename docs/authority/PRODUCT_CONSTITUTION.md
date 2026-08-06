@@ -13,9 +13,10 @@ trader. It must turn current public market facts into a bounded, ranked, explain
 view, decide whether an opportunity merits Shadow observation under one fixed Policy chain, and
 learn only from facts observed strictly after that decision.
 
-Market facts, Radar calculations, anomaly state, official combo availability, Underwriting state,
-Candidate state, and Workbench projections are **real-time decision state** before Shadow
-admission. They may be known, degraded, or `UNKNOWN`; they are not durable research records.
+Market facts, Radar calculations, anomaly state, component-book counterfactuals, official combo
+diagnostics, Underwriting state, Candidate state, and Workbench projections are **real-time
+decision state** before Shadow admission. They may be known, degraded, or `UNKNOWN`; they are not
+durable research records.
 
 The first durable business object is `SHADOW_CASE_OPENED`. It exists only after one admitted
 counterfactual trade, or a future explicitly selected no-trade control, is enrolled for strictly
@@ -50,7 +51,7 @@ APPLICABLE_MARKET_SCOPE
 → RADAR_KNOWN
 → ANOMALY_ACTIVE
 → STRUCTURE_REVIEWABLE
-→ PUBLIC_ATOMIC_QUOTE_AVAILABLE
+→ COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE
 → UNDERWRITING_EVALUABLE
 → CANDIDATE
 → SHADOW_CASE_OPENED
@@ -63,8 +64,10 @@ funnel. Test count, object count, evidence count, runtime duration, and document
 product progress.
 
 The primary blocker is the earliest material loss in this funnel. It may be `UNKNOWN`, but it may
-also be known absence such as `NO_ACTIVE_COMBO`, `NO_TARGET_SIZE_CREDIT_QUOTE`, known
-ineligibility, WATCH thresholds, or admission-refresh failure.
+also be known absence such as `NO_PROTECTIVE_COMPONENT`,
+`NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE`, known ineligibility, WATCH thresholds, or paired
+admission-refresh failure. `NO_ACTIVE_COMBO` is a parallel exchange diagnostic, not a Shadow-funnel
+loss.
 
 ## Stage-specific loss functions
 
@@ -99,17 +102,17 @@ memory. Normal ticks and full books are not persisted.
 
 ### Current opportunity state
 
-Radar hard-screen calculations, diagnostic regime/surface/legged/rank context, atomic availability,
-Underwriting, Candidate, admission, current Position assessment, health, readiness, and funnel
-diagnostics are current in-memory state. Workbench snapshots are immutable bytes for readers but
-are not durable records.
+Radar hard-screen calculations, diagnostic regime/surface/legged/rank context, component-book
+counterfactuals, atomic diagnostics, Underwriting, Candidate, admission, current Position
+assessment, health, readiness, and funnel diagnostics are current in-memory state. Workbench
+snapshots are immutable bytes for readers but are not durable records.
 
 ### Shadow Case data
 
 An admitted `SHADOW_CASE_OPENED` freezes the exact code and three Policy identities, decision
-boundary, structure, target quantity, visible full-quantity official atomic entry quote, and the
-minimum consumed decision facts. Strictly future bounded transitions and one terminal Outcome may
-then be stored.
+boundary, frozen two-leg structure, target quantity, one strictly later paired public option-book
+snapshot, conservative stressed leg prices, standard public fees, and the minimum consumed decision
+facts. Strictly future bounded transitions and one terminal Outcome may then be stored.
 
 An opened Case without a terminal record after an unclean process loss is
 `INCOMPLETE_UNCLEAN_EXIT`. It is never silently completed, resumed by a new runtime, or removed from
@@ -129,14 +132,19 @@ The first Radar asks:
 > deployed conservative multi-horizon BTC realized-volatility baseline, and has that richness
 > persisted long enough to merit structure review?
 
-It separately reports whether an existing official Deribit combo exposes the required target-size
-1:1 protective credit vertical. Detector truth and atomic availability remain distinct:
+It separately reports whether an existing official Deribit combo happens to expose the required
+target-size 1:1 protective credit vertical. Detector truth and the atomic diagnostic remain
+distinct:
 
 ```text
 detector = UNKNOWN | NO_ANOMALY | ANOMALY_ACTIVE
 atomic = NOT_EVALUATED | UNKNOWN | NO_ACTIVE_COMBO |
          NO_TARGET_SIZE_CREDIT_QUOTE | PUBLIC_ATOMIC_QUOTE_AVAILABLE
 ```
+
+`NO_ACTIVE_COMBO` means only that the exact exchange-managed combo is not currently active. It does
+not mean the two option legs lack public depth, the defined-risk structure cannot be priced, or the
+Shadow counterfactual is unavailable.
 
 The Radar must show the trader what was found, which causal sampling interval and conservative
 horizon produced the benchmark, why it matters, what is missing, and what would upgrade or
@@ -148,14 +156,18 @@ profitability.
 
 ## Underwriting and admission
 
-A fixed Underwriting Policy compares visible net premium with declared path, jump, tail, liquidity,
-cost, and uncertainty reserves. It returns `CANDIDATE | WATCH | ABSTAIN` only when evaluable;
-unavailable Underwriting has no economic action.
+A fixed Underwriting Policy compares the conservative full-quantity two-leg net premium with
+declared path, jump, tail, liquidity, cost, and uncertainty reserves. The entry counterfactual sells
+the short leg at bid stressed down one official tick, buys the frozen protective leg at ask stressed
+up one official tick, and reserves both standard option fees. It returns
+`CANDIDATE | WATCH | ABSTAIN` only when evaluable; unavailable Underwriting has no economic action.
 
-`SHADOW_ENTRY` requires a still-valid Candidate and a strictly later official full-quantity atomic
-quote. That transition opens the admitted Shadow Case. Ordinary WATCH and ABSTAIN results remain
-current state and do not automatically create rejected-counterfactual trades or durable controls.
-A no-trade control requires a future explicit pre-outcome selection rule and separate authority.
+`SHADOW_ENTRY` requires a still-valid Candidate and exactly two strictly later, causally bound public
+option-book responses for the frozen short and protective long. Both legs must cover the full target
+quantity under the same conservative pricing rule. That transition opens the admitted Shadow Case.
+Ordinary WATCH and ABSTAIN results remain current state and do not automatically create
+rejected-counterfactual trades or durable controls. A no-trade control requires a future explicit
+pre-outcome selection rule and separate authority.
 
 ## Position and Outcome
 
@@ -163,10 +175,12 @@ After Case opening, one fixed Position Policy continuously returns `HOLD | CLOSE
 strictly later public facts. `CLOSE` is an instruction, not a closing fact. The first CLOSE may
 produce at most one durable `FIRST_CLOSE_LATCHED` Case transition.
 
-A known Shadow Outcome requires the first eligible strictly later full-quantity official atomic
-close quote. Natural maturity without such an exit may be `MATURE_UNKNOWN`. Clean stop, handled
-failure, and unclean process loss remain distinct censoring/incomplete states. Unknown and censored
-post-enrollment results are valid research data and must not be discarded as failed software.
+A known Shadow Outcome requires the first eligible strictly later paired component-book close
+snapshot: buy back the short at ask stressed up one tick and sell the same frozen protective long at
+bid stressed down one tick, both at full quantity with both standard fees. Natural maturity without
+such an exit may be `MATURE_UNKNOWN`. Clean stop, handled failure, and unclean process loss remain
+distinct censoring/incomplete states. Unknown and censored post-enrollment results are valid
+research data and must not be discarded as failed software.
 
 ## AI Researcher and qualification
 
@@ -186,11 +200,13 @@ requirements.
    the smallest consumer.
 4. A known positive witness is not erased by unrelated missingness; negative absence claims require
    complete relevant scope.
-5. Detector truth, diagnostic review/rank, official atomic availability, Underwriting action,
+5. Detector truth, diagnostic review/rank, component-book counterfactual, official atomic
+   diagnostic, Underwriting action,
    admission, Position action, Shadow Outcome, future order state, and actual fill state remain
    distinct; diagnostic context cannot create downstream truth.
-6. Executable Shadow entry and close economics require visible full-quantity official atomic combo
-   depth. Component-leg prices may be trader diagnostics only.
+6. Shadow entry and close economics require full-quantity public depth on both frozen option legs,
+   the declared one-tick adverse stress, both standard fees, and strictly later paired snapshots.
+   They are counterfactuals, not orders, fills, atomic quotes, or liquidity reservations.
 7. Pre-Shadow durable business record count is exactly zero.
 8. The Online Runtime persists only bounded Shadow Case records; it does not persist Cohort,
    aligned-pair, Workbench, service, host, or full-market records.

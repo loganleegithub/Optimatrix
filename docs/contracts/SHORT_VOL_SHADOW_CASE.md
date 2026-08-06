@@ -63,18 +63,19 @@ The opened record contains:
 - `record_kind`, `schema_version`, and `case_id`;
 - exact code/runtime/three-Policy identities;
 - opened/entry and Underwriting decision boundaries;
-- canonical combo and two canonical option-leg identities;
+- execution model and two frozen canonical option-leg identities;
 - display instrument names, expiry, option type, strikes, entry direction, and full BTC quantity;
-- exact full-quantity official consumed entry levels;
+- paired component-book source identity and exact raw/stressed full-quantity levels for both legs;
 - gross credit, entry fee reserve, net credit, payoff cap, future-cost reserve, and reserved loss;
-- the minimal consumed Radar state: active episode identity, band, richness interval, and official
-  atomic state;
+- the minimal consumed Radar state: active episode identity, band, richness interval, component
+  state, and official atomic diagnostic;
 - the Underwriting action and thresholds actually consumed;
-- explicit `PUBLIC_QUOTE_NOT_FILL`, `SIMULATED_NOT_ACTUAL_POSITION`, and
-  `UNQUALIFIED_POLICY` non-claims.
+- exact non-claims: `NOT_AN_ORDER`, `NOT_A_FILL`, `NOT_AN_ATOMIC_QUOTE`,
+  `NO_LIQUIDITY_RESERVATION`, and `ATOMIC_EXECUTABILITY_UNPROVEN`.
 
-Entry consumed amounts must sum exactly to the full quantity. The record may not contain the full
-option chain or unrelated market state.
+Each entry leg's consumed amounts must sum exactly to the full quantity. Stored gross credit, both
+fee reserves, net credit, width, payoff cap, and loss values must conserve against the stored
+stressed legs. The record may not contain the full option chain or unrelated market state.
 
 ## `SHADOW_CASE_FIRST_CLOSE`
 
@@ -99,12 +100,14 @@ CENSORED_AT_STOP
 CENSORED_AT_FAILURE
 ```
 
-`MATURE_KNOWN` requires the first eligible strictly post-CLOSE full-quantity official atomic exit
-and stores its consumed levels, gross close cashflow, close fee reserve, net close cashflow, gross
-PnL, total public fee reserve, net PnL after reserve, and net loss.
+`MATURE_KNOWN` requires the first eligible strictly post-CLOSE paired component-book exit for the
+same frozen legs. It stores the pair/source identities, raw/stressed full-quantity levels for both
+legs, gross close cashflow, both close fee reserves, net close cashflow, gross PnL, total public fee
+reserve, net PnL after reserve, and net loss.
 
-`MATURE_UNKNOWN` means the Case reached its natural terminal condition without an eligible public
-atomic exit under the frozen contract. Economic exit/PnL fields are null.
+`MATURE_UNKNOWN` means the Case reached its natural terminal condition without an eligible paired
+component-book exit under the frozen contract. Component close facts and economic exit/PnL fields
+are absent or null.
 
 A handled clean stop or failure that ends a still-pending Case produces the matching censored
 state with null outcome economics. Censoring is valid research data, not software success or a
@@ -142,10 +145,10 @@ The product reader validates only the one requested Case:
 
 - exact record key/type shape;
 - identity format and same Case/code/runtime/Policy binding;
-- opened quantity and consumed-level conservation;
+- opened pair identity, per-leg quantity, stress direction, fee, and economic conservation;
 - strictly later first-close/outcome boundaries;
 - state-specific null/economic requirements;
-- recomputable public-quote PnL arithmetic;
+- recomputable paired component-book PnL arithmetic;
 - no conflicting duplicate files.
 
 It returns `OPEN`, `COMPLETE`, or `INCOMPLETE_UNCLEAN_EXIT`. It does not rebuild a repository graph,
@@ -163,5 +166,6 @@ pre-registered evaluator. The Online Runtime never writes Cohort or aligned-pair
 ## Required verification
 
 Direct tests prove zero pre-Shadow files, exact one-open/one-first-close/one-outcome cardinality,
-atomic publication, duplicate handling, identity/boundary binding, arithmetic, censoring, and
-unclean incomplete readback. No manifest, receipt, full graph, legacy reader, or replay is required.
+atomic file publication, duplicate handling, pair/source identity and boundary binding, both-leg
+arithmetic, censoring, and unclean incomplete readback. No manifest, receipt, full graph, legacy
+reader, or replay is required.

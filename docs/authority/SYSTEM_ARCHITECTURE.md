@@ -31,10 +31,10 @@ market_monitor
     public source parsing, clock, catalogs, books, index continuity
         ↓
 options_domain
-    instruments, amount rules, target-depth arithmetic
+    instruments, amount rules, target-depth arithmetic, component-book stress and fees
         ↓
 short_vol_radar
-    detector, episode, official atomic availability, Policy parsing
+    detector, episode, protective-leg review, official atomic diagnostic, Policy parsing
         ↓
 short_vol_underwriting
     Underwriting, Candidate, admission, Position, Outcome, Shadow Case store
@@ -65,8 +65,8 @@ business truth.
 The following remain bounded in memory:
 
 - platform, clock, catalog, ticker, book, index, RPC, and continuity state;
-- Radar calculations, detector episodes, atomic availability, Underwriting, Candidate, admission,
-  and current Position state;
+- Radar calculations, detector episodes, component-book counterfactuals, atomic diagnostics,
+  Underwriting, Candidate, admission, and current Position state;
 - internal typed transitions used by the owner and Workbench;
 - service status and funnel diagnostics.
 
@@ -76,7 +76,7 @@ Workbench may retain only the current live set plus one latest terminal Case pro
 diagnostics retain cumulative scalar counts and a fixed blocker-reason vocabulary, while completed
 Episode, Candidate, and Case identities are discarded.
 
-Normal market facts, anomalies, atomic quotes, Underwriting decisions, Candidates, admission
+Normal market facts, anomalies, component quotes, atomic diagnostics, Underwriting decisions, Candidates, admission
 attempts, run summaries, and Workbench snapshots are not written to disk.
 
 An immutable in-memory snapshot is allowed for lock-free HTTP reads. Immutability for readers does
@@ -147,9 +147,23 @@ Policy TTE band:
 The hard-screen calculator in `short_vol_radar` is the sole owner of target-size bid/ask use,
 official tick stress, Black inversion, TTE/Delta clue eligibility, and stressed IV/RV detector
 truth. The separate review calculator may derive semivariance/jump context, surface-lite context,
-non-atomic legged vertical references, and transparent attention rank from already settled current
-state. Review output is immutable current projection only: it cannot feed the detector, official
-atomic classifier, Underwriting owner, admission, or Shadow Case store.
+protective vertical references, and transparent attention rank from already settled current state.
+For each active Episode, the composition layer freezes one protective long from that review and
+does not switch it. Review output cannot feed detector truth. The frozen two-leg identity may feed
+the sole component-book calculator; official Combo availability remains a separate diagnostic.
+
+`options_domain` owns the one component-book calculator. Entry walks short bids and long asks at
+the full target quantity, stresses short sells down one legal tick and long buys up one legal tick,
+then applies both standard fees. Close walks short asks and long bids, stresses short buys up one
+tick and long sells down one tick, then applies both fees. The same value object owns the canonical
+scalar fingerprint projection used by Underwriting and Position; no second leg-price calculator or
+schema is permitted.
+
+Candidate admission and post-CLOSE each schedule exactly two bounded
+`public/get_order_book` requests for the frozen legs. The downstream owner accepts a quote only
+after both strictly later responses share one causal owner and each covers the full quantity. A
+single response cannot open or close a Case. Failure of either response retires the sibling and
+settles the one paired attempt.
 
 The canonical stages are:
 
@@ -158,7 +172,7 @@ APPLICABLE_MARKET_SCOPE
 RADAR_KNOWN
 ANOMALY_ACTIVE
 STRUCTURE_REVIEWABLE
-PUBLIC_ATOMIC_QUOTE_AVAILABLE
+COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE
 UNDERWRITING_EVALUABLE
 CANDIDATE
 SHADOW_CASE_OPENED
@@ -169,7 +183,8 @@ SHADOW_CASE_OUTCOME
 separate `radar_knownness.startup_warmup` projection retains startup/recovery counts and reasons, so
 `INDEX_WARMUP` remains visible without becoming the steady-state primary blocker. Every Radar
 UNKNOWN contributes exactly one finite aggregate reason. The primary-blocker function identifies
-the earliest material post-warmup conversion loss and its largest reason.
+the earliest material post-warmup conversion loss and its largest reason. Official Combo outcomes
+are counted in a separate diagnostic projection and never enter the canonical Shadow funnel.
 
 Funnel diagnostics may be displayed and logged externally, but they are not business evidence or
 qualification data.

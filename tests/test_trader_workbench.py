@@ -326,7 +326,7 @@ def test_initial_snapshot_keeps_empty_panels_separate_from_unknown_zero_claims()
     assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in value["non_claims"]
 
 
-def test_shadow_projection_derives_exact_entry_vwap_only_from_persisted_atomic_levels() -> None:
+def test_shadow_projection_derives_vertical_credit_only_from_persisted_component_legs() -> None:
     candidate_identity = "sha256:" + "1" * 64
     entry_identity = "sha256:" + "2" * 64
     kinds: dict[str, list[dict[str, object]]] = {
@@ -352,11 +352,21 @@ def test_shadow_projection_derives_exact_entry_vwap_only_from_persisted_atomic_l
                 "payload": {
                     "candidate_identity": candidate_identity,
                     "full_quantity_btc": "0.1",
-                    "entry_consumed_levels": [
-                        {"price_usdc_per_btc": "100", "amount_btc": "0.04"},
-                        {"price_usdc_per_btc": "110", "amount_btc": "0.06"},
+                    "execution_model": "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL",
+                    "entry_component_pair_identity": "sha256:" + "4" * 64,
+                    "entry_component_legs": [
+                        {
+                            "canonical_leg_role": "SHORT",
+                            "action": "SELL",
+                            "stressed_vwap_usdc_per_btc": "299",
+                        },
+                        {
+                            "canonical_leg_role": "LONG",
+                            "action": "BUY",
+                            "stressed_vwap_usdc_per_btc": "102",
+                        },
                     ],
-                    "gross_entry_credit_usdc": "10.6",
+                    "gross_entry_credit_usdc": "19.7",
                 },
             }
         ],
@@ -364,12 +374,15 @@ def test_shadow_projection_derives_exact_entry_vwap_only_from_persisted_atomic_l
 
     (row,) = workbench_module._shadow_rows(kinds, _policies())
 
-    assert row["simulated_entry_price_usdc_per_btc"] == "106"
+    assert row["simulated_entry_price_usdc_per_btc"] == "197"
     assert (
         row["simulated_entry_price_availability"]
-        == "AVAILABLE_FROM_SHADOW_ENTRY_ATOMIC_CONSUMED_LEVELS"
+        == "AVAILABLE_FROM_SHADOW_ENTRY_STRESSED_COMPONENT_LEGS"
     )
-    assert row["simulated_entry_price_basis"] == ("SHADOW_ENTRY_ATOMIC_COMBO_CONSUMED_LEVELS_VWAP")
+    assert row["simulated_entry_price_basis"] == (
+        "SHORT_STRESSED_SELL_VWAP_MINUS_LONG_STRESSED_BUY_VWAP"
+    )
+    assert row["matched_refresh_source_identity"] == "sha256:" + "4" * 64
     assert row["simulation_label"] == SIMULATION_LABEL
 
 
@@ -501,10 +514,10 @@ def test_position_projection_separates_gross_remaining_premium_from_net_close_de
 
     assert row["remaining_premium_usdc"] == "25"
     assert row["remaining_premium_availability"] == (
-        "AVAILABLE_FROM_PERSISTED_ATOMIC_CLOSE_ECONOMICS"
+        "AVAILABLE_FROM_PERSISTED_COMPONENT_CLOSE_ECONOMICS"
     )
     assert row["remaining_premium_basis"] == ("MAX_ZERO_NEGATIVE_GROSS_CLOSE_CASHFLOW_USDC")
-    assert row["current_atomic_close_debit_usdc"] == "26"
+    assert row["current_close_debit_usdc"] == "26"
     assert row["projected_shadow_pnl_usdc"] == "8"
 
 
@@ -763,7 +776,7 @@ assert.equal(api.underwritingCellValue({{
   availability: 'NOT_EVALUATED', action: null,
   unknown_reasons: ['NO_ACTIVE_COMBO']
 }}, 'decision_reason', 'UNDERWRITING_NOT_EVALUATED:NO_ACTIVE_COMBO'),
-  '无活跃组合可供承保评估');
+  '无现成官方组合 - 仅诊断; 不阻塞双腿 Shadow');
 assert.equal(api.underwritingCellValue({{
   availability: 'NOT_EVALUATED', action: null, unknown_reasons: []
 }}, 'decision_reason', 'UNDERWRITING_NOT_EVALUATED:NO_ADDITIONAL_REASON_PERSISTED'),
@@ -777,11 +790,13 @@ assert.equal(api.shadowCellValue({{
 assert.equal(api.positionCellValue({{}}, 'hard_close_countdown_interval_ms', {{
   lower_ms: 60000, upper_ms: 120000
 }}), '1.0 分钟 - 2.0 分钟');
-assert.equal(api.funnelStageLabel('PUBLIC_ATOMIC_QUOTE_AVAILABLE'), '目标数量原子报价');
+assert.equal(api.funnelStageLabel('COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE'),
+  '双腿盘口保守成交反事实');
 assert.equal(api.funnelBlockerText({{
   NO_ACTIVE_COMBO: 2,
   NO_TARGET_SIZE_CREDIT_QUOTE: 1
-}}), '无活跃组合可供承保评估: 2; 目标数量的组合权利金报价不可用: 1');
+}}), '无现成官方组合 - 仅诊断; 不阻塞双腿 Shadow: 2; ' +
+  '现成官方组合没有目标数量正信用报价 - 仅诊断: 1');
 assert.equal(api.knownnessRatioText({{
   radar_known_over_applicable: {{numerator: 3, denominator: 4, ratio: '0.75'}}
 }}), '3/4 (75.00%)');

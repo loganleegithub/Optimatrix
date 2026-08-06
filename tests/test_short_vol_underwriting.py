@@ -38,8 +38,8 @@ from short_vol_underwriting import (
     RefreshClassification,
     RpcAdmissionRefreshWitness,
     RuntimeBindings,
-    ShadowCaseReadStatus,
     ShadowCaseStore,
+    ShadowCaseStoreError,
     ShadowStateError,
     ShadowStateStore,
     SourceFact,
@@ -3037,7 +3037,7 @@ def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_p
     assert attempt.scheduled_identity in _written_objects(tmp_path, bindings=bindings)
 
 
-def test_actual_owner_shadow_entry_opens_one_durable_case(tmp_path: Path) -> None:
+def test_legacy_atomic_shadow_entry_cannot_open_a_component_book_case(tmp_path: Path) -> None:
     policies = load_policy_chain(
         radar_path=ROOT / "policies/short-vol-fixed-public-shadow-radar.json",
         underwriting_path=ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json",
@@ -3063,12 +3063,11 @@ def test_actual_owner_shadow_entry_opens_one_durable_case(tmp_path: Path) -> Non
         state_store=state_store,
     )
 
-    entry_identity = _admit_owner(owner)
-    case_id = case_store.case_id_for_entry(entry_identity)
+    with pytest.raises(ShadowCaseStoreError, match="execution_model"):
+        _admit_owner(owner)
 
-    assert case_id is not None
-    assert case_store.case_count == 1
-    assert case_store.read_case(case_id, runtime_active=True).status is ShadowCaseReadStatus.OPEN
+    assert case_store.case_count == 0
+    assert list(cases.iterdir()) == []
 
 
 def test_close_quote_classifier_follows_the_frozen_first_match_order() -> None:

@@ -12,9 +12,10 @@ exact causal, conservative multi-horizon BTC realized-volatility baseline. A pos
 state is a selective `RICHNESS_CLUE`, not a downstream Underwriting `CANDIDATE`, forecast, trade, or
 profitability claim.
 
-The Radar separately reports official atomic-combo availability and diagnostic review context.
-Diagnostic context may explain and rank a known formula row but cannot create detector truth,
-official atomic availability, Underwriting action, Shadow admission, or execution permission.
+The Radar separately supplies a ranked protective-vertical review and reports official
+atomic-combo availability as a diagnostic. Review context cannot create detector truth. One frozen
+protective-leg identity may feed the separate component-book Underwriting calculator; it still does
+not create admission or execution permission by itself.
 
 ## Authorized sources and universe
 
@@ -28,7 +29,8 @@ official atomic availability, Underwriting action, Shadow admission, or executio
 - one exact target quantity and content-identified Policy chain for the full run.
 
 No private/account, RFQ, combo-creation, order, trade, fill, balance, margin, settlement act, or test
-environment method is authorized. Component-leg prices cannot create official atomic availability.
+environment method is authorized. Component-leg prices cannot create official atomic availability,
+but may create the explicitly non-atomic Shadow counterfactual defined by the Underwriting contract.
 
 ## Source contract
 
@@ -132,20 +134,27 @@ Mark IV is diagnostic, not executable. Missing neighbours produce `PARTIAL/UNKNO
 erase a known executable-bid witness. No fitted SVI, SABR, Heston, calendar forecast, or surface
 mispricing claim is part of this slice.
 
-## Non-atomic protective-vertical reference
+## Protective-vertical structure review
 
-For trader diagnosis only, the review layer may enumerate at most three same-expiry, same-type 1:1
-protective legs. It uses target-size short bid and long ask, stresses the short bid down and long ask
-up by one legal tick, applies the public standard option fee formula including the premium cap, and
-shows net credit, width, payoff cap, max loss after fee reserve, and credit/payoff-cap ratio.
+The review layer may enumerate at most three same-expiry, same-type 1:1 protective legs. It uses
+target-size short bid and long ask, stresses the short bid down and long ask up by one legal tick,
+applies the public standard option fee formula including the premium cap, and shows net credit,
+width, payoff cap, max loss after fee reserve, and credit/payoff-cap ratio. Ordering is descending
+credit/payoff-cap ratio, descending stressed net credit, narrower width, then instrument name.
+
+When an Episode first reaches this boundary, composition freezes the first ranked protective leg.
+It does not switch to a later apparently better leg during that Episode. Its economics are
+recomputed by the sole component-book calculator; the review object itself cannot create a
+Candidate or Case.
 
 This state is exactly `LEGGED_REFERENCE_NOT_ATOMIC`. It carries explicit non-claims:
 
 ```text
-DIAGNOSTIC_ONLY
-NOT_AN_OFFICIAL_COMBO_QUOTE
-NOT_SIMULTANEOUSLY_EXECUTABLE
-CANNOT_CREATE_CANDIDATE_OR_SHADOW_ADMISSION
+NOT_AN_ORDER
+NOT_A_FILL
+NOT_AN_ATOMIC_QUOTE
+NO_LIQUIDITY_RESERVATION
+CANDIDATE_REQUIRES_STRICTLY_LATER_PAIRED_REFRESH
 ```
 
 ## Transparent attention rank
@@ -174,7 +183,7 @@ An Episode ends on clear, known ineligibility, transition into a review-only buc
 scope loss, hard-screen fact loss, history revision/gap/staleness, continuity loss, or run stop.
 After any source loss, fresh activation observations are required.
 
-## Official atomic availability
+## Official atomic diagnostic
 
 While no Episode is active, atomic state is `NOT_EVALUATED`. While active it is exactly:
 
@@ -187,7 +196,9 @@ PUBLIC_ATOMIC_QUOTE_AVAILABLE
 
 An official match requires one active two-leg Deribit combo, same expiry/type, exact protective
 orientation and ratio, valid target quantity, current continuous combo book, full target depth on
-the required side, and positive signed gross credit. Component-leg references remain diagnostic.
+the required side, and positive signed gross credit. This state does not create or veto the
+component-book Shadow funnel. In particular, `NO_ACTIVE_COMBO` is not evidence of absent single-leg
+liquidity or absent strategy economics.
 
 ## Funnel diagnostics
 
@@ -201,25 +212,25 @@ loss remain post-warmup UNKNOWN. Every Radar UNKNOWN contributes exactly one bou
 After each settled transaction the Radar exposes typed current state to the in-process Underwriting
 adapter, read-only Workbench, and bounded funnel diagnostics. A row states source contract,
 TTE/Delta bucket, target bid/ask, tick stress, raw and stressed IV/richness, selected baseline,
-regime, surface, legged reference, official atomic state, rank, blocker, and invalidation condition.
+regime, surface, protective structure, official atomic diagnostic, rank, blocker, and invalidation
+condition.
 
 No market fact, clue, diagnostic, rank, atomic quote, funnel counter, probe result, or Workbench
 snapshot is a durable product record. Only a later admitted `SHADOW_CASE_OPENED` may freeze consumed
-Radar and official atomic facts.
+Radar, frozen structure, component-book, and atomic-diagnostic facts.
 
 ## Required verification
 
 Direct tests own source shape/cadence/revision state, tick regimes, two-sided target depth, one-tick
 stress, Black inversion, TTE/Delta review buckets, five-minute multi-horizon baseline, regime
-statistics, surface-lite limitations, fee-cap arithmetic, non-atomic separation, ranking
+statistics, surface-lite limitations, fee-cap arithmetic, frozen protective-leg selection, ranking
 determinism, episode persistence/end reasons, official combo semantics, reducer ordering, and
 bounded UNKNOWN reasons.
 
-After direct tests and `make check`, one source-contract probe and one production-public read-only
+After direct tests and `make check`, one explicitly authorized production-public read-only
 integration smoke of at most 600 seconds may establish only current API behavior and end-to-end
-formula reachability. A later separately authorized 43,200-second observation may measure natural
-clue frequency and the next funnel blocker. None proves future frequency, fillability, Edge,
-profitability, qualification, deployment, or execution permission.
+component-funnel reachability. It may not tune Policy or require a natural clue. It proves no future
+frequency, fillability, Edge, profitability, qualification, deployment, or execution permission.
 
 ## Design references
 

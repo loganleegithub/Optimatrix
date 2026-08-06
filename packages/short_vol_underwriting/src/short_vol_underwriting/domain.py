@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
+from options_domain import ComponentBookQuoteKind, ComponentBookVerticalQuote
+
 from short_vol_underwriting.constants import (
     CANDIDATE_INVALIDATION_REASONS,
     POSITION_CLOSE_REASONS,
@@ -352,6 +354,38 @@ def compute_entry_economics(
     )
 
 
+def compute_component_entry_economics(
+    *,
+    quote: ComponentBookVerticalQuote,
+    future_cost_reserve_usdc: Decimal,
+) -> EntryEconomics:
+    """Project the component-book calculator result into frozen Underwriting reserves."""
+    if quote.kind is not ComponentBookQuoteKind.ENTRY:
+        raise ValueError("component entry economics requires an ENTRY quote")
+    _require_non_negative(future_cost_reserve_usdc, "future_cost_reserve_usdc")
+    contractual = max(Decimal(0), quote.payoff_cap_usdc - quote.gross_cashflow_usdc)
+    fee_reserved = max(Decimal(0), quote.payoff_cap_usdc - quote.net_cashflow_usdc)
+    underwriting_reserved = max(
+        Decimal(0),
+        quote.payoff_cap_usdc - quote.net_cashflow_usdc + future_cost_reserve_usdc,
+    )
+    return EntryEconomics(
+        full_quantity_btc=quote.full_quantity_btc,
+        required_side_total_quote_usdc=(
+            quote.short_leg.stressed.total_value + quote.long_leg.stressed.total_value
+        ),
+        gross_entry_credit_usdc=quote.gross_cashflow_usdc,
+        entry_fee_reserve_usdc=quote.total_fee_reserve_usdc,
+        net_entry_credit_usdc=quote.net_cashflow_usdc,
+        width_usdc_per_btc=quote.width_usdc_per_btc,
+        payoff_cap_usdc=quote.payoff_cap_usdc,
+        contractual_payoff_max_loss_ex_fees_usdc=contractual,
+        entry_fee_reserved_payoff_loss_usdc=fee_reserved,
+        future_cost_reserve_usdc=future_cost_reserve_usdc,
+        underwriting_reserved_loss_usdc=underwriting_reserved,
+    )
+
+
 def compute_close_economics(
     *,
     direction: str,
@@ -380,6 +414,29 @@ def compute_close_economics(
         net_close_debit_usdc=net_debit,
         projected_shadow_net_pnl_usdc=projected_pnl,
         projected_net_loss_usdc=projected_loss,
+    )
+
+
+def compute_component_close_economics(
+    *,
+    quote: ComponentBookVerticalQuote,
+    net_entry_credit_usdc: Decimal,
+) -> CloseEconomics:
+    """Project a CLOSE component-book quote without recalculating price or fees."""
+    if quote.kind is not ComponentBookQuoteKind.CLOSE:
+        raise ValueError("component close economics requires a CLOSE quote")
+    projected_pnl = net_entry_credit_usdc + quote.net_cashflow_usdc
+    return CloseEconomics(
+        full_quantity_btc=quote.full_quantity_btc,
+        required_close_side_total_quote_usdc=(
+            quote.short_leg.stressed.total_value + quote.long_leg.stressed.total_value
+        ),
+        gross_close_cashflow_usdc=quote.gross_cashflow_usdc,
+        close_fee_reserve_usdc=quote.total_fee_reserve_usdc,
+        net_close_cashflow_usdc=quote.net_cashflow_usdc,
+        net_close_debit_usdc=max(Decimal(0), -quote.net_cashflow_usdc),
+        projected_shadow_net_pnl_usdc=projected_pnl,
+        projected_net_loss_usdc=max(Decimal(0), -projected_pnl),
     )
 
 

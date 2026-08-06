@@ -10,11 +10,14 @@ from options_domain import (
     AmountMetadata,
     AmountState,
     Applicability,
+    ComponentBookAction,
+    ComponentBookQuoteKind,
     InstrumentLifecycleState,
     OptionType,
     PriceTickMetadata,
     PriceTickStep,
     check_target_amount,
+    evaluate_component_book_vertical,
     monitor_applicability,
     parse_combo_instrument,
     parse_option_instrument,
@@ -265,6 +268,70 @@ def test_option_tick_ladder_and_one_legal_tick_stress_are_exact() -> None:
         PriceLevel(Decimal("0.0055"), Decimal("0.1")),
     )
     assert stressed_ask.vwap == Decimal("0.00575")
+
+
+def test_component_vertical_uses_two_full_books_two_tick_stresses_and_two_fee_caps(
+    option_payload_factory: OptionPayloadFactory,
+) -> None:
+    short_payload = option_payload_factory(
+        name="BTC-SHORT",
+        strike=100_000,
+        option_type="call",
+    )
+    long_payload = option_payload_factory(
+        name="BTC-LONG",
+        strike=101_000,
+        option_type="call",
+    )
+    for payload in (short_payload, long_payload):
+        payload["taker_commission"] = "0.0003"
+        payload["tick_size"] = "1"
+        payload["tick_size_steps"] = []
+    short = parse_option_instrument(short_payload)
+    long = parse_option_instrument(long_payload)
+    assert short is not None and long is not None
+
+    entry, reasons = evaluate_component_book_vertical(
+        kind=ComponentBookQuoteKind.ENTRY,
+        short_instrument=short,
+        long_instrument=long,
+        short_side_levels=(PriceLevel(Decimal("300"), Decimal("0.1")),),
+        long_side_levels=(PriceLevel(Decimal("100"), Decimal("0.1")),),
+        index_usdc_per_btc=Decimal("100000"),
+        target_quantity_btc=Decimal("0.1"),
+        fee_rate_index_fraction=Decimal("0.0003"),
+    )
+
+    assert reasons == ()
+    assert entry is not None
+    assert entry.short_leg.action is ComponentBookAction.SELL
+    assert entry.long_leg.action is ComponentBookAction.BUY
+    assert entry.short_leg.stressed.vwap == Decimal("299")
+    assert entry.long_leg.stressed.vwap == Decimal("101")
+    assert entry.gross_cashflow_usdc == Decimal("19.8")
+    # The rich short pays the index fee; the cheap hedge is premium-capped.
+    assert entry.short_leg.fee_reserve_usdc == Decimal("3.00000")
+    assert entry.long_leg.fee_reserve_usdc == Decimal("1.2625")
+    assert entry.net_cashflow_usdc == Decimal("15.53750")
+
+    close, close_reasons = evaluate_component_book_vertical(
+        kind=ComponentBookQuoteKind.CLOSE,
+        short_instrument=short,
+        long_instrument=long,
+        short_side_levels=(PriceLevel(Decimal("250"), Decimal("0.1")),),
+        long_side_levels=(PriceLevel(Decimal("80"), Decimal("0.1")),),
+        index_usdc_per_btc=Decimal("100000"),
+        target_quantity_btc=Decimal("0.1"),
+        fee_rate_index_fraction=Decimal("0.0003"),
+    )
+    assert close_reasons == ()
+    assert close is not None
+    assert close.short_leg.action is ComponentBookAction.BUY
+    assert close.long_leg.action is ComponentBookAction.SELL
+    assert close.short_leg.stressed.vwap == Decimal("251")
+    assert close.long_leg.stressed.vwap == Decimal("79")
+    assert close.gross_cashflow_usdc == Decimal("-17.2")
+    assert close.net_cashflow_usdc == Decimal("-21.1875")
 
 
 def test_invalid_tick_metadata_is_local_unknown_not_an_instrument_rejection(
