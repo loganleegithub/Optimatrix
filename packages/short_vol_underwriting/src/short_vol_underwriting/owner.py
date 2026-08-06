@@ -2124,6 +2124,7 @@ class FixedContractShadowOwner:
             "gross_entry_credit_usdc": economics.gross_entry_credit_usdc,
             "entry_fee_reserve_usdc": economics.entry_fee_reserve_usdc,
             "net_entry_credit_usdc": economics.net_entry_credit_usdc,
+            "width_usdc_per_btc": economics.width_usdc_per_btc,
             "payoff_cap_usdc": economics.payoff_cap_usdc,
             "contractual_payoff_max_loss_ex_fees_usdc": (
                 economics.contractual_payoff_max_loss_ex_fees_usdc

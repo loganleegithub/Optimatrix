@@ -63,6 +63,7 @@ from short_vol_underwriting import (
     CloseOptionAvailability,
     FixedContractShadowOwner,
     RuntimeBindings,
+    ShadowCaseStore,
     ShadowStateStore,
     SourceFact,
     SubscriptionAdmissionRefreshWitness,
@@ -1340,6 +1341,35 @@ def test_component_candidate_requires_both_strictly_later_option_book_responses(
         "ATOMIC_EXECUTABILITY_UNPROVEN",
     ]
     assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 1
+
+
+def test_component_shadow_entry_opens_its_durable_case(tmp_path: Path) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    cases = tmp_path / "cases"
+    cases.mkdir()
+    case_store = ShadowCaseStore(
+        cases,
+        bindings=owner.bindings,
+        policies=owner.policies,
+    )
+    owner.state_store.observer = case_store
+
+    _admit_component_shadow(reducer, adapter)
+
+    entry = next(
+        value for value in owner.state_store.objects if value["object_kind"] == "SHADOW_ENTRY"
+    )
+    entry_identity = str(entry["object_identity"])
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+    assert case_store.case_count == 1
+    assert case_store.active_case_count == 1
+    assert owner.retained_state_counts["active_candidates"] == 0
+    assert owner.retained_state_counts["active_trades"] == 1
+    opened = case_store.read_case(case_id, runtime_active=True).opened
+    economics = opened["entry_economics"]
+    assert isinstance(economics, Mapping)
+    assert economics["width_usdc_per_btc"] == "1000"
 
 
 def test_no_active_combo_is_only_a_diagnostic_and_does_not_block_shadow_entry(

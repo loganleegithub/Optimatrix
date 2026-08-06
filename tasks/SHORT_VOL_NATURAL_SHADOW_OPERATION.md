@@ -4,8 +4,8 @@
 
 **Task kind:** VALIDATION_ONLY
 
-**Runtime implementation:** COMPLETED — an ended Episode is retired only after its active Candidate
-is terminalized by the Underwriting owner at the same settled boundary; bounded public smoke remains
+**Runtime implementation:** COMPLETED — component-book `SHADOW_ENTRY` carries the owner-calculated
+Vertical width required by the durable Case contract; bounded public smoke remains
 
 **Live commands:** REQUIRED — one short public smoke, then one natural public Shadow runtime until human stop
 
@@ -21,17 +21,18 @@ is terminalized by the Underwriting owner at the same settled boundary; bounded 
 
 **Current funnel node:** `CANDIDATE → SHADOW_CASE_OPENED`
 
-**Baseline:** the first natural runtime reached `21` Radar Episodes, `17` reviewable/component-book/
-Underwriting-evaluable Episodes, and `1` Candidate. A transport retirement then ended the owning
-Episode while that Candidate remained active, causing a fatal integrity failure before the Case
-opening transition could settle.
+**Baseline:** the replacement natural runtime reached `6` Radar Episodes, `4` reviewable/
+component-book/Underwriting-evaluable Episodes, and `1` Candidate with `0` durable Cases. At
+`606.661` seconds the durable Case observer rejected `SHADOW_ENTRY` because
+`width_usdc_per_btc` was absent. That left a terminal Attempt and Candidate split; when the owning
+Episode later ended, the integrity guard censored the run with
+`ended Radar episode still owns an active Candidate`.
 
-**Primary blocker:** `ended Radar episode still owns an active Candidate` at the Episode-retirement
-owner boundary.
+**Primary blocker:** `SHADOW_ENTRY` omits the owner-calculated `width_usdc_per_btc`, so the durable
+Case owner correctly refuses to open the Case.
 
-**Expected user-visible delta:** an ended Episode terminalizes its Candidate and paired refresh
-attempt before retirement, so transport recovery cannot kill the runtime or leave admission state
-owned by an ended clue.
+**Expected user-visible delta:** a qualifying component-book Candidate opens one durable Case with
+complete conserved entry economics; the existing fail-closed lifecycle guard remains unchanged.
 
 **Durable-data effect:** zero writes before admission; only an admitted Case may own opened,
 first-close, and Outcome records.
