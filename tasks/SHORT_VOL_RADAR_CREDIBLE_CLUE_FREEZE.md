@@ -6,8 +6,8 @@
 
 **Runtime implementation:** REQUIRED
 
-**Live commands:** the source-contract probe and repair smoke are accepted and consumed; exactly one
-fixed 43,200-second production-public read-only observation is authorized, with no unchanged restart
+**Live commands:** `NONE_AUTHORIZED`; the prior fixed observation is consumed and
+`REJECTED_CENSORED_AT_FAILURE`
 
 **Base commit:** `a8a78bc5b35e3359864b5985f3b013b8981896b1`
 
@@ -20,42 +20,41 @@ fixed 43,200-second production-public read-only observation is authorized, with 
 
 ## Product movement
 
-**Current funnel node:** `ANOMALY_ACTIVE`
+**Current funnel node:** `RADAR_KNOWN`
 
-**Baseline:** repair candidate `0dce984` passed its 540-second smoke with post-warmup
-`90,689 / 91,091` known, `21,930` full-formula evaluations, terminal `134 / 134` current known, all
-books usable, zero clock-gap evaluations, zero queue-lag segments, zero overflow, and a readable
-terminal summary. Its `402` UNKNOWN evaluations were fixed startup edges and did not continue.
+**Baseline:** the failed long observation's last readable slice had post-warmup
+`1,291,464 / 1,294,841` known (`99.7392%`), terminal `134 / 134` current known, all books usable,
+`28` current full-formula evaluations, zero queue lag/overflow/pending RPC, zero anomalies, and zero
+durable Case files. It then terminated before the fixed boundary.
 
-**Primary blocker:** `NATURAL_CLUE_AND_STRUCTURE_FREQUENCY_UNMEASURED`; the short smoke proved input
-and formula reachability but was not long enough to measure the frozen ten-minute persistence rule
-or the next conversion loss.
+**Primary blocker:** `NUMERICAL_BOUNDARY_OWNERSHIP_GAP`; a legitimate richness interval spanning the
+activation or clear threshold escaped the Tracker, was mislabeled as source-protocol failure, and
+fatally censored the observation.
 
-**Expected user-visible delta:** one fixed observation reports independent persistent volatility
-clues, reviewable defined-risk structures, currently quoted official atomic structures, and whether
-the largest loss is Radar breadth, structure absence, or absent target-size atomic credit.
+**Expected user-visible delta:** a threshold-spanning interval becomes one bounded
+`NUMERICAL_BOUNDARY_UNRESOLVED` Radar UNKNOWN without activation, clear, reconnect, or process exit;
+the next valid market fact remains processable.
 
 **Durable-data effect:** pre-Shadow state remains in memory; only a legitimately admitted
 `SHADOW_CASE_OPENED` may create the already-defined durable Case.
 
-**Complexity added:** `NONE`; the observation runs the frozen product.
+**Complexity added:** one already-classified detector signal field; no module, exception hierarchy,
+validator, persistence, retry policy, or diagnostic subsystem.
 
-**Complexity deleted:** scope-wide formula recomputation for local facts, repeated history-contract
-scans, the unbounded runtime ingress deque, and dual 100ms option feeds that have no five-minute
-detector purpose.
+**Complexity deleted:** Tracker-side duplicate threshold classification and transport-wide generic
+business-`ValueError` relabeling.
 
 ## Business closure
 
 **Given:** official completed BTC-USDC index-chart points; current public option metadata, ticker,
 and target-size books; one fixed Policy chain.
 
-**When:** the source validator establishes cadence/age/revision truth, the detector evaluates
-bid/ask depth and one-tick-stressed executable IV in an actionable bucket, and the review layer adds
-non-gating regime, surface, legged-reference, and rank context.
+**When:** the hard-screen calculator derives a conservative one-tick-stressed richness interval and
+that interval spans activation or clear.
 
-**Then:** every active Radar clue is causally reproducible and robust to one legal tick; incomplete
-context stays explicit and cannot create an official atomic quote, Underwriting Candidate, Shadow
-Case, order, fill, or profitability claim.
+**Then:** the calculator owns the one threshold classification, returns bounded UNKNOWN when
+unresolved, and the Tracker consumes only a resolved signal. No Episode, downstream object,
+reconnect, or process exit is created by the unresolved boundary.
 
 **Valid zero/UNKNOWN:** zero active clues is valid when post-warmup scope and full-formula counts are
 positive. Missing required hard-screen facts are `UNKNOWN` or known ineligibility. Missing review
@@ -63,30 +62,21 @@ context lowers explanation/rank completeness but does not erase a known hard-scr
 
 ## Change declarations
 
-**Market/Decision input contract change:** official chart history records cadence, completed-suffix
-coverage, response revision, and source age; option metadata additionally consumes official
-`tick_size` and `tick_size_steps`; the detector consumes target-size bid and ask depth. Public option
-ticker and book subscriptions use Deribit's aggregated `agg2` channels. No new external provider or
-durable feed is added.
+**Market/Decision input contract change:** NONE.
 
-**Decision Policy change:** Radar Policy schema `6`; TTE bands are `30–45m` review-only,
-`45m–6h`, `6h–24h`, and `24h–72h`; clue-eligible bands use `0.05 <= |Delta| <= 0.40`, the existing
-`1.20 / 1.05` richness hysteresis, three/two observations, five-minute separation, and the same
-30/120/360-minute conservative maximum. Activation richness is the one-tick-stressed executable
-bid richness. Regime, surface, synthetic structure, and rank fields are diagnostic only.
+**Decision Policy change:** NONE. The exact `1.20 / 1.05`, TTE/Delta buckets, persistence,
+benchmark, target quantity, and downstream semantics remain frozen.
 
 **Outcome/evaluation contract change:** NONE. Future qualification remains pre-registered and based
 on strictly future Shadow Case Outcomes.
 
-**Stage/authorization change:** the accepted source probe and smoke are consumed; one fixed
-43,200-second production-public read-only observation is authorized. Deployment and execution are
-not authorized.
+**Stage/authorization change:** the failed observation is consumed; offline repair only. No live
+command, deployment, or execution is authorized until a fresh post-gate Authority change.
 
 ## Scope
 
-**In:** Authority/contract/task text; index-history validator; option tick metadata; Radar Policy,
-baseline, detector input, review diagnostics, Workbench projection; official fee-cap arithmetic for
-non-atomic legged references; dependent Policy identities; and focused tests.
+**In:** Authority/task text; hard-screen detector classification; Episode Tracker consumption;
+subscription exception boundary; direct pricing-path and source-boundary tests.
 
 **Out:** target quantity changes, fitted models, event forecasts, full surface calibration,
 qualification, private combo creation, real execution, persistence, replay, deployment, or host
@@ -101,16 +91,15 @@ acceptance.
 
 ## Validation
 
-- direct focused tests for history, policy/math, Radar, review, Workbench, fee arithmetic, and
-  Authority;
+- direct real-pricing-path tests for activation and clear boundary spans, source/business error
+  identity, funnel reason, and episode behavior;
 - repository gate: `make check` in the exact toolchain;
-- no repeat of the accepted source probe or repair smoke;
-- exactly one fixed 43,200-second production-public read-only observation;
-- no threshold tuning, unchanged restart, external supervisor, or private method.
+- no public probe, smoke, or long observation during the repair gate;
+- no threshold tuning, transport diagnostic expansion, external supervisor, or private method.
 
 ## Definition of done
 
-The exact Policy and code satisfy every hard-screen invariant; all diagnostic context and rank are
-transparent and non-gating; direct and repository checks pass; the source probe and smoke are
-accepted; and the fixed long observation returns a readable terminal funnel without changing the
-candidate generator or extending its boundary.
+Real pricing paths project activation/clear boundary spans to exactly one bounded UNKNOWN; no
+business uncertainty is renamed as source-protocol incompatibility; active Episodes end as UNKNOWN
+rather than CLEAR; direct and repository checks pass; and pre-Shadow durable business files remain
+zero. Green checks do not authorize a live run.

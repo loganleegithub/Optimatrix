@@ -5,15 +5,15 @@
 **Current permission boundary:** `PUBLIC_SHADOW`
 
 **Current implementation status:**
-`RADAR_LONG_OBSERVATION_AUTHORIZED`
+`RADAR_NUMERICAL_BOUNDARY_REPAIR_AUTHORIZED`
 
-**Production Short Vol Radar:** `CANDIDATE_GENERATOR_FROZEN_FOR_OBSERVATION`
+**Production Short Vol Radar:** `NUMERICAL_BOUNDARY_OWNERSHIP_GAP`
 
-**Persistent service:** `BOUNDED_OBSERVATION_ONLY_NO_DEPLOYMENT`
+**Persistent service:** `STOPPED_NO_DEPLOYMENT`
 
-**Live commands:** `ONE_FIXED_43200_SECOND_PRODUCTION_PUBLIC_READ_ONLY_OBSERVATION`
+**Live commands:** `NONE_AUTHORIZED`
 
-**Sole authorized closure:** `SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE`
+**Sole authorized closure:** `SHORT_VOL_RADAR_NUMERICAL_BOUNDARY_OWNERSHIP_REPAIR`
 
 ## Current truth
 
@@ -80,14 +80,30 @@ evaluations, transport overflows, reconnects, and durable Shadow Case files were
 remaining `402` UNKNOWN evaluations were the fixed startup edge—`OPTION_BOOK_UNKNOWN 268` plus
 `POST_STATUS_BOOTSTRAP_REQUIRED 134`—and did not increase after bootstrap.
 
+The one subsequently authorized 43,200-second observation on commit
+`d0bfd99b105a5961aace0df2285789f66b2a3b6e` was consumed and is
+`REJECTED_CENSORED_AT_FAILURE`. It terminated after about 2 hours 15 minutes, before the fixed
+boundary and without a terminal business summary. Its last readable slice still had all `134`
+current instruments known, all `134` option books usable, `28` current full-formula evaluations,
+post-warmup knownness of `1,291,464 / 1,294,841` (`99.7392%`), zero queue-lag segments, zero
+overflows, zero pending RPCs, zero anomalies, and zero durable Shadow Case files.
+
+The fatal path was not malformed Deribit data. A legitimate conservative richness interval crossed
+the `1.20` activation or `1.05` clear boundary. The hard-screen calculator had not yet frozen that
+last classification, so `EpisodeTracker` classified it again and raised
+`NumericalBoundaryUnresolved`. The subscription wrapper then mislabeled that business uncertainty
+as `PublicProtocolIncompatibility` because it caught every `ValueError`; the service correctly
+treated the falsely named protocol failure as fatal. The bounded business truth should instead
+have been one `UNKNOWN / NUMERICAL_BOUNDARY_UNRESOLVED`, with no activation, clear, reconnect, or
+process exit.
+
 ## Active closure
 
-Candidate semantics and production-public current-input stability are now frozen for one business
-observation. The active closure is to measure, over one fixed 43,200-second boundary, how many
-independent volatility clues persist, how many have a reviewable defined-risk structure, how many
-have a current official atomic target-size quote, and where the largest observed funnel loss occurs.
-The observation cannot change detector formula, target quantity, TTE/Delta universe, official
-atomic meaning, or any threshold.
+Candidate semantics remain frozen, but the failed observation exposed one business ownership gap.
+The active closure is to classify activation/clear/neutral exactly once in the owning hard-screen
+calculator, project a boundary-spanning interval to the existing bounded `UNKNOWN` reason, and let
+the Episode tracker consume the already-classified signal. The source adapter must not relabel an
+arbitrary business `ValueError` as public-protocol incompatibility.
 
 A hard-screen clue requires: official completed average-price history with explicit cadence, age,
 gap and revision truth; target-size bid and ask depth; an uncrossed spread; official price-tick
@@ -101,29 +117,29 @@ atomic availability, Underwriting action, admission, or edge.
 
 ## Allowed work
 
-- exactly one fixed `43,200`-second production-public read-only observation on one clean commit and
-  the accepted fixed Policy chain;
-- existing in-process reconnect behavior may preserve the same business owner and fixed terminal
-  boundary; no external supervisor or automatic restart may extend or replace the observation;
-- terminal adjudication may report the frozen funnel and any legitimately admitted Shadow Cases;
-- the accepted source probe and accepted repair smoke are consumed and cannot be repeated.
+- one direct real-pricing-path regression for activation and clear boundary spans;
+- the smallest single-owner detector/Tracker repair and removal of the subscription wrapper's
+  generic business-`ValueError` relabeling;
+- focused tests and `make check` on one clean commit;
+- Authority may authorize a new fixed observation only after those offline gates pass.
 
 ## Forbidden work
 
-- any second short smoke, second 43,200-second observation, or unchanged restart;
+- any live smoke, second 43,200-second observation, or unchanged restart before fresh Authority;
 - tuning thresholds or inputs during or from the observation to manufacture a natural clue;
 - changing target quantity, official atomic admission, Shadow Case, Position, or Outcome semantics;
 - fitted forecasting, SVI/SABR/Heston calibration, machine-learning ranking, event-calendar edge,
   GEX, private RFQ/combo creation, credentials, account, order, fill, capital, or actual exposure;
+- changing transport retry semantics or adding close-code persistence merely to explain the earlier
+  startup reconnects;
 - persistent diagnostics, full-feed capture/replay, database, feature store, event bus,
   microservice split, deployment, commissioning, host inspection, or a stability Soak.
 
 ## Acceptance boundary
 
-The long observation has one precommitted terminal boundary and returns one readable terminal
-summary plus the frozen funnel. It measures observed independent clue Episodes, reviewable
-structures, official atomic target-size quote availability, Underwriting evaluability, Candidate
-and Shadow conversion, and the earliest largest loss. Zero natural clues is a valid result when
-post-warmup scope and full-formula counts are positive. The observation does not establish future
-frequency, expected return, edge, fillability, qualification, deployment, uptime, or execution
-permission.
+For a real pricing path whose conservative richness interval spans activation or clear, evaluation
+returns exactly `UNKNOWN / NUMERICAL_BOUNDARY_UNRESOLVED`, is not counted known or full-formula,
+does not activate or clear an Episode, does not become public-protocol incompatibility, and leaves
+the same runtime able to process the next valid fact. Existing malformed-source behavior remains
+fail-closed. Pre-Shadow durable business files remain zero. Direct tests and `make check` are the
+repair gate; no live command is implied by green checks.
