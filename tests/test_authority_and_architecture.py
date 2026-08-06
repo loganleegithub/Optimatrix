@@ -177,22 +177,26 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_only_numerical_boundary_offline_repair() -> None:
+def test_current_stage_authorizes_one_repaired_fixed_long_observation() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`RADAR_NUMERICAL_BOUNDARY_REPAIR_AUTHORIZED`" in current
-    assert "**Production Short Vol Radar:** `NUMERICAL_BOUNDARY_OWNERSHIP_GAP`" in current
-    assert "**Persistent service:** `STOPPED_NO_DEPLOYMENT`" in current
-    assert "**Live commands:** `NONE_AUTHORIZED`" in current
+    assert "`RADAR_LONG_OBSERVATION_AUTHORIZED`" in current
     assert (
-        "**Sole authorized closure:** `SHORT_VOL_RADAR_NUMERICAL_BOUNDARY_OWNERSHIP_REPAIR`"
+        "**Production Short Vol Radar:** `CANDIDATE_GENERATOR_FROZEN_WITH_BOUNDARY_REPAIR`"
         in current
     )
+    assert "**Persistent service:** `BOUNDED_OBSERVATION_ONLY_NO_DEPLOYMENT`" in current
+    assert (
+        "**Live commands:** `ONE_FIXED_43200_SECOND_PRODUCTION_PUBLIC_READ_ONLY_OBSERVATION`"
+        in current
+    )
+    assert "**Sole authorized closure:** `SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE`" in current
     assert "`1,556,097` `RADAR_KNOWN` evaluations: `100%`" in current
     assert "`58,773,561` applicable evaluations" in current
     assert "one legal tick" in current
     assert "`0.05 <= |Delta| <= 0.40`" in current
-    assert "any live smoke, second 43,200-second observation" in current
+    assert "any new smoke, second 43,200-second observation" in current
+    assert "`608` tests" in current
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
     assert (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(

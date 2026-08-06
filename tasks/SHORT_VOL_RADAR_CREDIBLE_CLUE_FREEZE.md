@@ -6,8 +6,9 @@
 
 **Runtime implementation:** REQUIRED
 
-**Live commands:** `NONE_AUTHORIZED`; the prior fixed observation is consumed and
-`REJECTED_CENSORED_AT_FAILURE`
+**Live commands:** the prior fixed observation is `REJECTED_CENSORED_AT_FAILURE`; after the accepted
+offline repair gates, exactly one new fixed 43,200-second production-public read-only observation is
+authorized, with no unchanged restart
 
 **Base commit:** `a8a78bc5b35e3359864b5985f3b013b8981896b1`
 
@@ -20,20 +21,23 @@
 
 ## Product movement
 
-**Current funnel node:** `RADAR_KNOWN`
+**Current funnel node:** `ANOMALY_ACTIVE`
 
 **Baseline:** the failed long observation's last readable slice had post-warmup
 `1,291,464 / 1,294,841` known (`99.7392%`), terminal `134 / 134` current known, all books usable,
 `28` current full-formula evaluations, zero queue lag/overflow/pending RPC, zero anomalies, and zero
-durable Case files. It then terminated before the fixed boundary.
+durable Case files. It then terminated before the fixed boundary. Repair `6244c1f` passed its two
+real-pricing-path boundary regressions, exact business/source error-identity test, and full
+repository gate with `608` tests.
 
-**Primary blocker:** `NUMERICAL_BOUNDARY_OWNERSHIP_GAP`; a legitimate richness interval spanning the
-activation or clear threshold escaped the Tracker, was mislabeled as source-protocol failure, and
-fatally censored the observation.
+**Primary blocker:** `NATURAL_CLUE_AND_STRUCTURE_FREQUENCY_UNMEASURED`; the numerical-boundary
+runtime blocker is repaired offline, but the censored observation did not reach the frozen terminal
+boundary needed to measure the next product-funnel loss.
 
-**Expected user-visible delta:** a threshold-spanning interval becomes one bounded
-`NUMERICAL_BOUNDARY_UNRESOLVED` Radar UNKNOWN without activation, clear, reconnect, or process exit;
-the next valid market fact remains processable.
+**Expected user-visible delta:** one fixed observation reports independent persistent volatility
+clues, reviewable defined-risk structures, currently quoted official atomic structures, and whether
+the largest loss is Radar breadth, structure absence, or absent target-size atomic credit; every
+threshold span remains one non-fatal bounded UNKNOWN.
 
 **Durable-data effect:** pre-Shadow state remains in memory; only a legitimately admitted
 `SHADOW_CASE_OPENED` may create the already-defined durable Case.
@@ -70,8 +74,9 @@ benchmark, target quantity, and downstream semantics remain frozen.
 **Outcome/evaluation contract change:** NONE. Future qualification remains pre-registered and based
 on strictly future Shadow Case Outcomes.
 
-**Stage/authorization change:** the failed observation is consumed; offline repair only. No live
-command, deployment, or execution is authorized until a fresh post-gate Authority change.
+**Stage/authorization change:** the failed observation and offline repair gates are consumed; one
+new fixed 43,200-second production-public read-only observation is authorized. Deployment and
+execution remain unauthorized.
 
 ## Scope
 
@@ -94,12 +99,15 @@ acceptance.
 - direct real-pricing-path tests for activation and clear boundary spans, source/business error
   identity, funnel reason, and episode behavior;
 - repository gate: `make check` in the exact toolchain;
-- no public probe, smoke, or long observation during the repair gate;
+- no repeat public probe or smoke;
+- exactly one fixed 43,200-second production-public read-only observation after the clean repair
+  commit and remote identity gate;
 - no threshold tuning, transport diagnostic expansion, external supervisor, or private method.
 
 ## Definition of done
 
 Real pricing paths project activation/clear boundary spans to exactly one bounded UNKNOWN; no
-business uncertainty is renamed as source-protocol incompatibility; active Episodes end as UNKNOWN
-rather than CLEAR; direct and repository checks pass; and pre-Shadow durable business files remain
-zero. Green checks do not authorize a live run.
+business uncertainty is renamed as source-protocol incompatibility; direct and repository checks
+pass; and the fixed long observation returns a readable terminal funnel without changing the
+candidate generator or extending its boundary. Pre-Shadow durable business files remain zero when
+no Shadow Case is admitted.
