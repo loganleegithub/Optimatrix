@@ -8,7 +8,7 @@ import pytest
 import radar_runtime.deribit_public as public_module
 import radar_runtime.runtime as runtime_module
 from conftest import OptionPayloadFactory, PolicyFactory
-from market_monitor import ContinuousOrderBook, TrustedClock
+from market_monitor import ContinuousOrderBook, IndexHistoryState, TrustedClock
 from options_domain import AmountMetadata, OptionInstrument, OptionType
 from radar_runtime.deribit_public import (
     InboundEnvelope,
@@ -210,6 +210,58 @@ def complete_empty_option_bootstrap(reducer: RadarReducer) -> int:
         processed_monotonic_ms=1_000 + seq + 2,
     )
     return seq + 3
+
+
+def test_time_currentness_tokens_reuse_one_frozen_index_tail_identity(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    server_ms = 1_000_000
+    reducer.clock = TrustedClock.from_response(
+        server_ms,
+        1_000,
+        1_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    first = _option_for_combo_test("FIRST", 100, expiry_ms=server_ms + 3_600_000)
+    second = _option_for_combo_test("SECOND", 110, expiry_ms=server_ms + 3_600_000)
+    reducer.options = {first.instrument_name: first, second.instrument_name: second}
+    initial_points = [
+        [server_ms - 900_000, 100],
+        [server_ms - 600_000, 100],
+        [server_ms - 300_000, 100],
+        [server_ms, 100],
+    ]
+    trusted = reducer.clock.interval_at(1_000)
+    reducer.index_history.apply_chart_result(initial_points, trusted_time=trusted)
+
+    tails: dict[int, IndexHistoryState] = {}
+    tokens = reducer._time_currentness_by_instrument(trusted, tails)
+    tail_identity = tails[reducer.policy.largest_lookback_minutes].points
+    first_tail_token = tokens["FIRST"][2]
+    second_tail_token = tokens["SECOND"][2]
+
+    assert tail_identity
+    assert isinstance(first_tail_token, tuple)
+    assert isinstance(second_tail_token, tuple)
+    assert first_tail_token[3] is tail_identity
+    assert second_tail_token[3] is tail_identity
+
+    later_server_ms = server_ms + 300_000
+    reducer.clock = TrustedClock.from_response(
+        later_server_ms,
+        2_000,
+        2_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    later_trusted = reducer.clock.interval_at(2_000)
+    reducer.index_history.apply_chart_result(
+        [*initial_points, [later_server_ms, 101]],
+        trusted_time=later_trusted,
+    )
+
+    assert reducer._time_currentness_by_instrument(later_trusted) != tokens
 
 
 def test_each_accepted_clock_fact_advances_explicit_revision_and_causal_sequence(
