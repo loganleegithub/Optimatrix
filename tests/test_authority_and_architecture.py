@@ -172,17 +172,16 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_selects_decision_outcome_after_natural_stop() -> None:
+def test_current_stage_authorizes_one_selected_decision_natural_validation() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`COMPONENT_BOOK_SHADOW_LIFECYCLE_ACCEPTED`" in current
-    assert "`SELECTED_UNDERWRITING_DECISION_OUTCOME_ACTIVE`" in current
+    assert "`SELECTED_UNDERWRITING_DECISION_OUTCOME_ACCEPTED`" in current
     assert "**Production Short Vol Radar:** `CREDIBLE_CLUE_GENERATOR_FROZEN`" in current
-    assert "**Persistent service:** `NATURAL_PUBLIC_SHADOW_STOPPED_NO_DEPLOYMENT`" in current
-    assert "**Live commands:** `NONE_AUTHORIZED_PAIR_TIMING_PROBE_EXHAUSTED`" in current
+    assert "**Persistent service:** `ONE_NATURAL_PUBLIC_SHADOW_AUTHORIZED_NO_DEPLOYMENT`" in current
+    assert "**Live commands:** `ONE_PRODUCTION_PUBLIC_SERVE_SHADOW_AUTHORIZED`" in current
     assert (
-        "**Sole authorized closure:** `SHORT_VOL_SELECTED_UNDERWRITING_DECISION_OUTCOME`" in current
+        "**Sole authorized closure:** `SHORT_VOL_SELECTED_DECISION_NATURAL_VALIDATION`" in current
     )
     assert "1,812,600 contract evaluations" in current
     assert "1,811,662 contract evaluations" in current
@@ -193,7 +192,8 @@ def test_current_stage_selects_decision_outcome_after_natural_stop() -> None:
     assert "`NO_ACTIVE_COMBO 10`" in current
     assert "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE" in current
     assert "exactly two strictly later `public/get_order_book` responses" in normalized
-    assert "no live command or Shadow runtime is authorized" in normalized
+    assert "execute exactly one" in normalized
+    assert "there is no separate smoke/restart boundary" in normalized.lower()
     assert "before action or margin is known" in normalized
     assert "selected as Candidate and still Candidate reuses ordinary admission" in normalized
     assert "refreshed WATCH/ABSTAIN may open" in normalized
@@ -204,7 +204,14 @@ def test_current_stage_selects_decision_outcome_after_natural_stop() -> None:
     assert not (ROOT / "tasks/SHORT_VOL_COMPONENT_BOOK_SHADOW_LIFECYCLE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_NATURAL_SHADOW_OPERATION.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH.md").exists()
-    assert (ROOT / "tasks/SHORT_VOL_SELECTED_UNDERWRITING_DECISION_OUTCOME.md").exists()
+    assert not (ROOT / "tasks/SHORT_VOL_SELECTED_UNDERWRITING_DECISION_OUTCOME.md").exists()
+    validation_task = ROOT / "tasks/SHORT_VOL_SELECTED_DECISION_NATURAL_VALIDATION.md"
+    assert validation_task.exists()
+    task = validation_task.read_text(encoding="utf-8")
+    assert "**Task kind:** VALIDATION_ONLY" in task
+    assert "**Runtime implementation:** FORBIDDEN" in task
+    assert "**Decision Policy change:** NONE" in task
+    assert "There is no separate smoke process" in task
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"
     )

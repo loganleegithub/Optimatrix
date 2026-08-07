@@ -36,7 +36,7 @@ not veto the component-book path. The formal whole-funnel primary loss still sta
 `938 / 1,812,600` Radar-knownness gap; the active task intentionally owns the Authority-selected
 downstream `7 → 0` closure.
 
-The active task now closes the selective-label gap without changing economic thresholds. For each
+The accepted implementation closes the selective-label gap without changing economic thresholds. For each
 causal Radar activation batch it designates at most one Episode before action or future facts are
 known, with no `UNKNOWN` fallback. The designated Episode's first evaluable decision receives one
 strictly later paired refresh: a decision selected as Candidate and still Candidate reuses ordinary
@@ -46,8 +46,10 @@ lifecycle before a later paired admission.
 Original/refreshed predicate-margin vectors and the
 strictly future Outcome appear in a separate Workbench research panel and never alter the canonical
 Candidate funnel.
-The one calibration probe is exhausted; no public smoke, natural runtime, deployment, private API,
-order, fill, or actual exposure is currently authorized.
+The active validation task authorizes one production-public natural Shadow service from the clean
+merged main tree. It uses the frozen three-Policy chain and a fresh external state root until the
+first selected-decision Outcome, explicit human stop, or fatal process failure. It authorizes no
+private API, order, fill, capital exposure, automatic restart, or Policy change.
 
 See:
 
