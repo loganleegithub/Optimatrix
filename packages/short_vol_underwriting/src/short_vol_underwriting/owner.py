@@ -5,9 +5,13 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
 
+from options_domain import ComponentBookLegQuote, ComponentBookQuoteKind, ComponentBookVerticalQuote
+
 from short_vol_underwriting.admission import (
     AdmissionAttempt,
     AdmissionRefreshWitness,
+    ComponentAdmissionAttempt,
+    ComponentBookPairWitness,
     RefreshClassification,
     RpcAdmissionRefreshWitness,
     RpcRequestIntent,
@@ -21,6 +25,7 @@ from short_vol_underwriting.close import (
     CloseOptionAvailability,
     CloseQuoteFacts,
     CloseQuoteState,
+    ComponentPostCloseAttempt,
     NormalizedCloseQuote,
     PostCloseAttempt,
     PostCloseAttemptOwner,
@@ -42,6 +47,7 @@ from short_vol_underwriting.domain import (
     UnderwritingAction,
     UnderwritingAvailability,
     classify_underwriting_action,
+    compute_component_entry_economics,
     compute_entry_economics,
     compute_shadow_outcome_economics,
 )
@@ -58,6 +64,11 @@ from short_vol_underwriting.model import (
 )
 from short_vol_underwriting.observation import Observation
 from short_vol_underwriting.policy import PolicyChain
+
+COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE = "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE"
+COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN = "COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN"
+NO_PROTECTIVE_COMPONENT = "NO_PROTECTIVE_COMPONENT"
+NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE = "NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE"
 
 
 @dataclass(frozen=True)
@@ -150,6 +161,12 @@ class UnderwritingFacts:
     radar_richness_lower: Decimal | None = None
     radar_richness_upper: Decimal | None = None
     unknown_reasons: tuple[str, ...] = ()
+    component_state: str = "NOT_EVALUATED"
+    component_blockers: tuple[str, ...] = ()
+    component_quote: ComponentBookVerticalQuote | None = None
+    component_short_quote_source: SourceFact | None = None
+    component_long_quote_source: SourceFact | None = None
+    component_pair_witness: ComponentBookPairWitness | None = None
 
     def __post_init__(self) -> None:
         require_identity(self.radar_scope_identity, "radar_scope_identity")
@@ -204,6 +221,10 @@ class PositionFacts:
     current_combo_subscription_witness: SubscriptionAdmissionRefreshWitness | None = None
     lifecycle_short_source: SourceFact | None = None
     lifecycle_long_source: SourceFact | None = None
+    component_quote: ComponentBookVerticalQuote | None = None
+    component_short_quote_source: SourceFact | None = None
+    component_long_quote_source: SourceFact | None = None
+    component_pair_witness: ComponentBookPairWitness | None = None
 
     def __post_init__(self) -> None:
         if self.close_direction not in {"BUY", "SELL"}:
@@ -262,7 +283,7 @@ class _CandidateRecord:
     facts: UnderwritingFacts
     state: CandidateState
     slot_identity: str
-    attempt: AdmissionAttempt
+    attempt: AdmissionAttempt | ComponentAdmissionAttempt
     availability_fingerprint: str
     economic_fingerprint: str
 
@@ -286,7 +307,7 @@ class _TradeRecord:
     last_accepted_subscription_witness: SubscriptionAdmissionRefreshWitness | None = None
     last_opportunity_key: tuple[str, str] | None = None
     first_close_decision: PositionDecision | None = None
-    post_close_attempt: PostCloseAttempt | None = None
+    post_close_attempt: PostCloseAttempt | ComponentPostCloseAttempt | None = None
     terminal_written: bool = False
 
 
@@ -355,14 +376,30 @@ class FixedContractShadowOwner:
         self._last_underwriting_action.pop(scope_identity, None)
         self.state_store.retire_scope(scope_identity)
 
-    def retire_radar_episode(self, episode_identity: str) -> None:
-        slots = self._consumed_slots_by_episode.pop(episode_identity, set())
-        self._slot_consumed.difference_update(slots)
+    def retire_radar_episode(
+        self,
+        episode_identity: str,
+        *,
+        boundary: FactBoundary,
+    ) -> OwnerTransition:
+        self._begin_transition()
+        for record in tuple(self._candidates.values()):
+            if record.facts.active_episode_identity != episode_identity:
+                continue
+            self._terminalize_candidate_before_refresh(
+                record,
+                reasons=("RADAR_POLICY_OR_EPISODE_PAUSED_ENDED_OR_CHANGED",),
+                boundary=boundary,
+            )
+        transition = self._finish_transition()
         if any(
             record.facts.active_episode_identity == episode_identity
             for record in self._candidates.values()
         ):
             raise RuntimeError("ended Radar episode still owns an active Candidate")
+        slots = self._consumed_slots_by_episode.pop(episode_identity, set())
+        self._slot_consumed.difference_update(slots)
+        return transition
 
     @property
     def required_combo_instrument_names(self) -> tuple[str, ...]:
@@ -450,6 +487,19 @@ class FixedContractShadowOwner:
             if current is None or not current.boundary.is_strictly_after(record.facts.boundary):
                 continue
             evaluation = self._evaluate_underwriting(current)
+            if isinstance(record.attempt, ComponentAdmissionAttempt):
+                component_reasons = self._component_candidate_pre_refresh_reasons(
+                    record,
+                    current,
+                )
+                if component_reasons:
+                    self._terminalize_candidate_before_refresh(
+                        record,
+                        reasons=component_reasons,
+                        boundary=current.boundary,
+                    )
+                handled_scopes.add(current.radar_scope_identity)
+                continue
             pre_refresh_reasons = self._candidate_invalidation_reasons(
                 record,
                 current,
@@ -555,6 +605,95 @@ class FixedContractShadowOwner:
         )
         return self._finish_transition()
 
+    def settle_component_admission(
+        self,
+        *,
+        candidate_identity: str,
+        refreshed_facts: UnderwritingFacts,
+        pair_witness: ComponentBookPairWitness,
+    ) -> OwnerTransition:
+        """Consume exactly one strictly later two-option snapshot pair."""
+        self._require_target_quantity_integrity(refreshed_facts)
+        self._require_radar_episode_binding(refreshed_facts)
+        self._begin_transition()
+        record = self._candidates.get(candidate_identity)
+        if (
+            record is None
+            or record.state.lifecycle.value != "VALID"
+            or not isinstance(record.attempt, ComponentAdmissionAttempt)
+        ):
+            return self._finish_transition()
+        short_source = refreshed_facts.component_short_quote_source
+        long_source = refreshed_facts.component_long_quote_source
+        if (
+            refreshed_facts.boundary != pair_witness.boundary
+            or refreshed_facts.component_pair_witness != pair_witness
+            or short_source is None
+            or long_source is None
+            or short_source.source_identity != pair_witness.short.source_identity
+            or short_source.boundary != pair_witness.short.boundary
+            or long_source.source_identity != pair_witness.long.source_identity
+            or long_source.boundary != pair_witness.long.boundary
+        ):
+            raise ValueError("component admission facts and paired witnesses must be identical")
+        evaluation = self._evaluate_underwriting(refreshed_facts)
+        pre_refresh_reasons = self._component_candidate_pre_refresh_reasons(
+            record,
+            refreshed_facts,
+        )
+        if pre_refresh_reasons:
+            self._terminalize_candidate_before_refresh(
+                record,
+                reasons=pre_refresh_reasons,
+                boundary=refreshed_facts.boundary,
+            )
+            return self._finish_transition()
+        same_opportunity = (
+            evaluation.slot_identity == record.slot_identity
+            and refreshed_facts.short_leg_identity == record.facts.short_leg_identity
+            and refreshed_facts.long_leg_identity == record.facts.long_leg_identity
+            and refreshed_facts.target_quantity_btc == record.facts.target_quantity_btc
+        )
+        if (
+            same_opportunity
+            and evaluation.availability is UnderwritingAvailability.EVALUABLE
+            and evaluation.action is UnderwritingAction.CANDIDATE
+        ):
+            classification = RefreshClassification.COMPLETE_CANDIDATE
+        elif evaluation.availability is UnderwritingAvailability.EVALUABLE:
+            classification = RefreshClassification.COMPLETE_NO_ENTRY
+        elif evaluation.availability is UnderwritingAvailability.NOT_EVALUATED:
+            classification = RefreshClassification.KNOWN_INVALIDATED
+        else:
+            classification = RefreshClassification.UNKNOWN
+        accepted = record.attempt.accept_pair(
+            witness=pair_witness,
+            response_budget_ms=(
+                self.policies.underwriting.component_book_snapshot_response_budget_ms
+            ),
+            classification=classification,
+        )
+        if not accepted:
+            return self._finish_transition()
+        self._emit_admission_terminal(record)
+        if record.attempt.terminal_outcome is AdmissionTerminalOutcome.ENTRY_EMITTED:
+            record.state.admit(refreshed_facts.boundary)
+            if evaluation.economics is None:
+                raise RuntimeError("component Candidate admission lacks complete economics")
+            self._create_admitted_trade(record, refreshed_facts, evaluation.economics)
+        else:
+            reasons = self._candidate_invalidation_reasons(
+                record,
+                refreshed_facts,
+                evaluation,
+                include_non_admission_change=False,
+                include_reunderwriting=True,
+                include_failed_admission=True,
+            )
+            self._invalidate_candidate(record, reasons, refreshed_facts.boundary)
+        self._candidate_retirements.add(record.state.candidate_identity)
+        return self._finish_transition()
+
     def _settle_admission_record(
         self,
         record: _CandidateRecord,
@@ -563,6 +702,8 @@ class FixedContractShadowOwner:
         refresh_witness: AdmissionRefreshWitness,
         evaluation: _UnderwritingEvaluation,
     ) -> None:
+        if not isinstance(record.attempt, AdmissionAttempt):
+            raise TypeError("legacy admission settlement requires an atomic AdmissionAttempt")
         pre_refresh_reasons = self._candidate_invalidation_reasons(
             record,
             refreshed_facts,
@@ -607,7 +748,9 @@ class FixedContractShadowOwner:
         elif isinstance(refresh_witness, RpcAdmissionRefreshWitness):
             accepted = record.attempt.accept_response(
                 witness=refresh_witness,
-                response_budget_ms=(self.policies.underwriting.combo_snapshot_response_budget_ms),
+                response_budget_ms=(
+                    self.policies.underwriting.component_book_snapshot_response_budget_ms
+                ),
                 classification=classification,
             )
         else:
@@ -650,9 +793,10 @@ class FixedContractShadowOwner:
             if candidate.attempt.mark_sent(
                 request_id=request_id,
                 boundary=boundary,
-                send_budget_ms=self.policies.underwriting.combo_snapshot_send_budget_ms,
+                send_budget_ms=(self.policies.underwriting.component_book_snapshot_send_budget_ms),
             ):
                 if candidate.attempt.terminal_outcome is not None:
+                    self._retire_sibling_requests(candidate.attempt, request_id, boundary)
                     self._emit_admission_terminal(candidate)
                     self._invalidate_candidate(
                         candidate,
@@ -665,12 +809,41 @@ class FixedContractShadowOwner:
             if attempt is not None and attempt.mark_sent(
                 request_id=request_id,
                 boundary=boundary,
-                send_budget_ms=self.policies.position.combo_snapshot_send_budget_ms,
+                send_budget_ms=self.policies.position.component_book_snapshot_send_budget_ms,
             ):
                 if attempt.terminal_status is not None:
+                    self._retire_sibling_requests(attempt, request_id, boundary)
                     self._emit_post_close_terminal(trade)
                 return self._finish_transition()
         return self._finish_transition()
+
+    @staticmethod
+    def _request_ids(
+        attempt: (
+            AdmissionAttempt
+            | ComponentAdmissionAttempt
+            | PostCloseAttempt
+            | ComponentPostCloseAttempt
+        ),
+    ) -> tuple[int, ...]:
+        if isinstance(attempt, (ComponentAdmissionAttempt, ComponentPostCloseAttempt)):
+            return attempt.request_ids
+        return (attempt.request_id,) if attempt.request_id is not None else ()
+
+    def _retire_sibling_requests(
+        self,
+        attempt: (
+            AdmissionAttempt
+            | ComponentAdmissionAttempt
+            | PostCloseAttempt
+            | ComponentPostCloseAttempt
+        ),
+        terminal_request_id: int,
+        boundary: FactBoundary,
+    ) -> None:
+        for request_id in self._request_ids(attempt):
+            if request_id != terminal_request_id:
+                self._retirements.append(RpcRetirementIntent(request_id, boundary))
 
     def accept_post_close_response(
         self,
@@ -684,7 +857,7 @@ class FixedContractShadowOwner:
         attempt = trade.post_close_attempt if trade is not None else None
         if (
             trade is None
-            or attempt is None
+            or not isinstance(attempt, PostCloseAttempt)
             or attempt.request_id != refresh_witness.request_id
             or refreshed_facts.quote_refresh_witness != refresh_witness
         ):
@@ -693,6 +866,33 @@ class FixedContractShadowOwner:
 
         def reject_second_attempt() -> int:
             raise RuntimeError("post-CLOSE response cannot schedule another attempt")
+
+        return self.settle_position(
+            anchor_identity=anchor_identity,
+            facts=refreshed_facts,
+            allocate_request_id=reject_second_attempt,
+        )
+
+    def accept_component_post_close_response(
+        self,
+        *,
+        anchor_identity: str,
+        refreshed_facts: PositionFacts,
+        pair_witness: ComponentBookPairWitness,
+    ) -> OwnerTransition:
+        trade = self._trades.get(anchor_identity)
+        attempt = trade.post_close_attempt if trade is not None else None
+        if (
+            trade is None
+            or not isinstance(attempt, ComponentPostCloseAttempt)
+            or refreshed_facts.component_pair_witness != pair_witness
+            or refreshed_facts.boundary != pair_witness.boundary
+        ):
+            self._begin_transition()
+            return self._finish_transition()
+
+        def reject_second_attempt() -> int:
+            raise RuntimeError("component post-CLOSE response cannot schedule another attempt")
 
         return self.settle_position(
             anchor_identity=anchor_identity,
@@ -721,7 +921,7 @@ class FixedContractShadowOwner:
             boundary.as_object(),
         )
         for record in self._candidates.values():
-            if record.attempt.request_id != request_id:
+            if request_id not in self._request_ids(record.attempt):
                 continue
             if terminal_status is PostCloseAttemptStatus.RETIRED:
                 transitioned = record.attempt.invalidate_before_refresh(
@@ -737,6 +937,7 @@ class FixedContractShadowOwner:
                 )
                 invalidation_reasons = ("FAILED_ADMISSION_EVALUATION_CONSUMED",)
             if transitioned:
+                self._retire_sibling_requests(record.attempt, request_id, boundary)
                 self._emit_admission_terminal(record)
                 self._invalidate_candidate(
                     record,
@@ -751,6 +952,7 @@ class FixedContractShadowOwner:
                 status=terminal_status,
                 boundary=boundary,
             ):
+                self._retire_sibling_requests(attempt, request_id, boundary)
                 self._emit_post_close_terminal(trade)
                 return self._finish_transition()
         return self._finish_transition()
@@ -771,6 +973,27 @@ class FixedContractShadowOwner:
         facts = self._normalize_position_facts(facts)
         attempt = trade.post_close_attempt
         refresh_terminalized = False
+        pair_witness = facts.component_pair_witness
+        if (
+            isinstance(attempt, ComponentPostCloseAttempt)
+            and pair_witness is not None
+            and facts.component_short_quote_source is not None
+            and facts.component_long_quote_source is not None
+            and facts.component_short_quote_source.source_identity
+            == pair_witness.short.source_identity
+            and facts.component_short_quote_source.boundary == pair_witness.short.boundary
+            and facts.component_long_quote_source.source_identity
+            == pair_witness.long.source_identity
+            and facts.component_long_quote_source.boundary == pair_witness.long.boundary
+            and pair_witness.boundary == facts.boundary
+            and attempt.accept_pair(
+                witness=pair_witness,
+                response_budget_ms=(
+                    self.policies.position.component_book_snapshot_response_budget_ms
+                ),
+            )
+        ):
+            refresh_terminalized = True
         witness = facts.quote_refresh_witness
         if (
             witness is not None
@@ -784,12 +1007,15 @@ class FixedContractShadowOwner:
             )
         ):
             if (
-                attempt is not None
+                not isinstance(attempt, ComponentPostCloseAttempt)
+                and attempt is not None
                 and attempt.terminal_status is None
                 and facts.boundary.is_strictly_after(attempt.origin_boundary)
                 and attempt.accept_refresh(
                     witness=witness,
-                    response_budget_ms=self.policies.position.combo_snapshot_response_budget_ms,
+                    response_budget_ms=(
+                        self.policies.position.component_book_snapshot_response_budget_ms
+                    ),
                 )
             ):
                 refresh_terminalized = True
@@ -940,9 +1166,13 @@ class FixedContractShadowOwner:
         quote_identity = trade.last_quote_identity
         attempt = trade.post_close_attempt
         if refresh_terminalized:
-            if attempt is None or attempt.request_id is None:
+            if attempt is None or not self._request_ids(attempt):
                 raise RuntimeError("terminalized post-CLOSE refresh lacks its attempt")
-            if isinstance(witness, SubscriptionAdmissionRefreshWitness):
+            if (
+                isinstance(attempt, PostCloseAttempt)
+                and isinstance(witness, SubscriptionAdmissionRefreshWitness)
+                and attempt.request_id is not None
+            ):
                 self._retirements.append(
                     RpcRetirementIntent(
                         request_id=attempt.request_id,
@@ -1067,6 +1297,8 @@ class FixedContractShadowOwner:
 
     def _evaluate_underwriting(self, facts: UnderwritingFacts) -> _UnderwritingEvaluation:
         self._require_target_quantity_integrity(facts)
+        if self._uses_component_books(facts):
+            return self._evaluate_component_underwriting(facts)
         slot_identity = self._slot_identity(facts)
         slot_consumed = slot_identity is not None and slot_identity in self._slot_consumed
         known_negative = (
@@ -1211,6 +1443,145 @@ class FixedContractShadowOwner:
         )
 
     @staticmethod
+    def _uses_component_books(facts: UnderwritingFacts) -> bool:
+        return (
+            facts.component_state != "NOT_EVALUATED"
+            or facts.component_quote is not None
+            or bool(facts.component_blockers)
+        )
+
+    def _evaluate_component_underwriting(
+        self,
+        facts: UnderwritingFacts,
+    ) -> _UnderwritingEvaluation:
+        slot_identity = self._slot_identity(facts)
+        slot_consumed = slot_identity is not None and slot_identity in self._slot_consumed
+        known_negative = (
+            facts.active_episode_identity is None
+            or slot_consumed
+            or facts.component_state
+            in {NO_PROTECTIVE_COMPONENT, NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE}
+            or self._known_structural_unavailability(facts)
+            or (
+                facts.expiry_ms is not None
+                and facts.trusted_time_upper_ms is not None
+                and facts.trusted_time_upper_ms >= facts.expiry_ms - ADMISSION_CUTOFF_LEAD_MS
+            )
+        )
+        if known_negative:
+            availability = UnderwritingAvailability.NOT_EVALUATED
+        elif (
+            facts.component_state != COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE
+            or not self._facts_complete(facts)
+        ):
+            availability = UnderwritingAvailability.UNKNOWN
+        else:
+            availability = UnderwritingAvailability.EVALUABLE
+        availability_fingerprint = canonical_identity(
+            "ConsumedComponentAvailabilityFactFingerprint",
+            facts.active_episode_identity,
+            slot_identity,
+            "CONSUMED_BY_SHADOW_ENTRY" if slot_consumed else "AVAILABLE",
+            facts.component_state,
+            facts.component_blockers,
+            facts.option_catalog_complete,
+            facts.short_leg_state,
+            facts.long_leg_state,
+            facts.short_leg_active,
+            facts.long_leg_active,
+            facts.option_amounts_aligned,
+            facts.platform_usable,
+            self._admission_time_class(facts),
+            facts.short_leg_taker_commission_fraction,
+            facts.long_leg_taker_commission_fraction,
+            facts.unknown_reasons,
+        )
+        if availability is not UnderwritingAvailability.EVALUABLE:
+            return _UnderwritingEvaluation(
+                facts,
+                availability,
+                availability_fingerprint,
+                slot_identity,
+                None,
+                None,
+                None,
+                None,
+            )
+        quote = facts.component_quote
+        if (
+            quote is None
+            or slot_identity is None
+            or facts.short_leg_identity is None
+            or facts.long_leg_identity is None
+        ):
+            raise RuntimeError("EVALUABLE component-book Underwriting is incomplete")
+        opportunity = canonical_identity(
+            "ComponentBookUnderwritingOpportunityKeyIdentity",
+            slot_identity,
+            quote.execution_model,
+            [facts.short_leg_identity, facts.long_leg_identity],
+        )
+        economics = compute_component_entry_economics(
+            quote=quote,
+            future_cost_reserve_usdc=self.policies.underwriting.future_cost_reserve_usdc,
+        )
+        economic_fingerprint = canonical_identity(
+            "ConsumedComponentEconomicFactFingerprint",
+            opportunity,
+            self._component_quote_fingerprint_members(quote),
+            facts.short_delta,
+            facts.short_mark_iv_fraction,
+            facts.short_leg_taker_commission_fraction,
+            facts.long_leg_taker_commission_fraction,
+            {
+                "contractual_payoff_max_loss_ex_fees_usdc": (
+                    economics.contractual_payoff_max_loss_ex_fees_usdc
+                ),
+                "entry_fee_reserved_payoff_loss_usdc": (
+                    economics.entry_fee_reserved_payoff_loss_usdc
+                ),
+                "future_cost_reserve_usdc": economics.future_cost_reserve_usdc,
+                "underwriting_reserved_loss_usdc": economics.underwriting_reserved_loss_usdc,
+            },
+        )
+        action = classify_underwriting_action(
+            availability=availability,
+            net_entry_credit_usdc=economics.net_entry_credit_usdc,
+            future_cost_reserve_usdc=economics.future_cost_reserve_usdc,
+            underwriting_reserved_loss_usdc=economics.underwriting_reserved_loss_usdc,
+            maximum_underwriting_reserved_loss_usdc=(
+                self.policies.underwriting.maximum_underwriting_reserved_loss_usdc
+            ),
+            minimum_net_entry_credit_usdc=(
+                self.policies.underwriting.minimum_net_entry_credit_usdc
+            ),
+            payoff_cap_usdc=economics.payoff_cap_usdc,
+            minimum_net_credit_to_payoff_cap_fraction=(
+                self.policies.underwriting.minimum_net_credit_to_payoff_cap_fraction
+            ),
+            consumed_level_count=quote.consumed_level_count,
+            maximum_entry_consumed_level_count=(
+                self.policies.underwriting.maximum_entry_consumed_level_count
+            ),
+        )
+        return _UnderwritingEvaluation(
+            facts,
+            availability,
+            availability_fingerprint,
+            slot_identity,
+            opportunity,
+            economics,
+            economic_fingerprint,
+            action,
+        )
+
+    @staticmethod
+    def _component_quote_fingerprint_members(
+        quote: ComponentBookVerticalQuote,
+    ) -> dict[str, object]:
+        return quote.fingerprint_members
+
+    @staticmethod
     def _admission_time_class(facts: UnderwritingFacts) -> str:
         if facts.expiry_ms is None or facts.trusted_time_upper_ms is None:
             return "UNKNOWN"
@@ -1246,6 +1617,50 @@ class FixedContractShadowOwner:
             short_delta,
             short_iv,
         )
+        if self._uses_component_books(facts):
+            quote = facts.component_quote
+            return (
+                facts.active_episode_identity is not None
+                and facts.short_leg_identity is not None
+                and facts.long_leg_identity is not None
+                and facts.short_leg_instrument_name is not None
+                and facts.long_leg_instrument_name is not None
+                and facts.expiry_ms is not None
+                and facts.entry_direction == "SELL"
+                and quote is not None
+                and quote.kind is ComponentBookQuoteKind.ENTRY
+                and quote.execution_model == self.policies.underwriting.execution_model
+                and quote.full_quantity_btc == facts.target_quantity_btc
+                and quote.short_leg.instrument_name == facts.short_leg_instrument_name
+                and quote.long_leg.instrument_name == facts.long_leg_instrument_name
+                and facts.option_catalog_complete
+                and facts.short_leg_state == "open"
+                and facts.long_leg_state == "open"
+                and facts.short_leg_active is True
+                and facts.long_leg_active is True
+                and facts.option_amounts_aligned is True
+                and facts.platform_usable is True
+                and facts.trusted_time_lower_ms is not None
+                and facts.trusted_time_upper_ms is not None
+                and facts.component_short_quote_source is not None
+                and facts.component_long_quote_source is not None
+                and facts.short_instrument_source is not None
+                and facts.long_instrument_source is not None
+                and facts.index_source is not None
+                and facts.ticker_source is not None
+                and not facts.unknown_reasons
+                and all(value is not None and value.is_finite() for value in decimals)
+                and short_commission is not None
+                and 0 <= short_commission <= self.policies.underwriting.fee_rate_index_fraction
+                and long_commission is not None
+                and 0 <= long_commission <= self.policies.underwriting.fee_rate_index_fraction
+                and index is not None
+                and index > 0
+                and short_delta is not None
+                and abs(short_delta) <= 1
+                and short_iv is not None
+                and short_iv >= 0
+            )
         return (
             facts.active_episode_identity is not None
             and facts.short_leg_identity is not None
@@ -1303,12 +1718,17 @@ class FixedContractShadowOwner:
             "locked",
             "halted",
         }
-        return (
+        common = (
             facts.short_leg_state in known_states - {"open"}
             or facts.long_leg_state in known_states - {"open"}
             or facts.short_leg_active is False
             or facts.long_leg_active is False
             or facts.option_amounts_aligned is False
+        )
+        if FixedContractShadowOwner._uses_component_books(facts):
+            return common
+        return (
+            common
             or facts.combo_state in known_states - {"open"}
             or facts.combo_active is False
             or facts.combo_amount_aligned is False
@@ -1358,6 +1778,15 @@ class FixedContractShadowOwner:
             "consumed_availability_fact_fingerprint": evaluation.availability_fingerprint,
             "availability": evaluation.availability.value,
             "availability_evaluation_fact_boundary": facts.boundary.as_object(),
+            "component_state": facts.component_state,
+            "component_blockers": list(facts.component_blockers),
+            "structure_reviewable": (
+                facts.short_leg_identity is not None and facts.long_leg_identity is not None
+            ),
+            "component_book_counterfactual_evaluable": (
+                facts.component_state == COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE
+            ),
+            "atomic_state_diagnostic": facts.atomic_state,
             "unknown_reasons": list(facts.unknown_reasons),
         }
         self._emit(
@@ -1414,11 +1843,12 @@ class FixedContractShadowOwner:
             "consumed_economic_fact_fingerprint": evaluation.economic_fingerprint,
             "economic_action": evaluation.action.value,
             "decision_blockers": list(self._underwriting_decision_blockers(evaluation)),
-            "entry_consumed_level_count": len(facts.entry_consumed_levels),
+            "entry_consumed_level_count": self._entry_consumed_level_count(facts),
             "evaluation_fact_boundary": facts.boundary.as_object(),
             "gross_entry_credit_usdc": economics.gross_entry_credit_usdc,
             "entry_fee_reserve_usdc": economics.entry_fee_reserve_usdc,
             "net_entry_credit_usdc": economics.net_entry_credit_usdc,
+            "width_usdc_per_btc": economics.width_usdc_per_btc,
             "payoff_cap_usdc": economics.payoff_cap_usdc,
             "contractual_payoff_max_loss_ex_fees_usdc": (
                 economics.contractual_payoff_max_loss_ex_fees_usdc
@@ -1475,11 +1905,17 @@ class FixedContractShadowOwner:
             ):
                 blockers.append("MINIMUM_NET_CREDIT_TO_PAYOFF_CAP")
             if (
-                len(evaluation.facts.entry_consumed_levels)
+                self._entry_consumed_level_count(evaluation.facts)
                 > self.policies.underwriting.maximum_entry_consumed_level_count
             ):
                 blockers.append("ENTRY_CONSUMED_LEVEL_LIMIT")
         return tuple(blockers)
+
+    @staticmethod
+    def _entry_consumed_level_count(facts: UnderwritingFacts) -> int:
+        if facts.component_quote is not None:
+            return facts.component_quote.consumed_level_count
+        return len(facts.entry_consumed_levels)
 
     def _activate_candidate(
         self,
@@ -1488,16 +1924,9 @@ class FixedContractShadowOwner:
         action_identity: str,
         allocate_request_id: Callable[[], int],
     ) -> None:
-        if (
-            evaluation.slot_identity is None
-            or evaluation.facts.canonical_combo_identity is None
-            or evaluation.facts.combo_instrument_name is None
-            or evaluation.economic_fingerprint is None
-        ):
-            raise RuntimeError(
-                "Candidate requires slot, combo, instrument, and economic identities"
-            )
         facts = evaluation.facts
+        if evaluation.slot_identity is None or evaluation.economic_fingerprint is None:
+            raise RuntimeError("Candidate requires slot and economic identities")
         candidate_identity = canonical_identity(
             "CandidateIdentity",
             action_identity,
@@ -1505,14 +1934,38 @@ class FixedContractShadowOwner:
         )
         if candidate_identity in self._candidates:
             return
-        request_id = allocate_request_id()
-        attempt = AdmissionAttempt.schedule(
-            candidate_identity=candidate_identity,
-            canonical_combo_identity=evaluation.facts.canonical_combo_identity,
-            request_id=request_id,
-            boundary=facts.boundary,
-            request_instrument_name=evaluation.facts.combo_instrument_name,
-        )
+        if self._uses_component_books(facts):
+            if (
+                facts.short_leg_identity is None
+                or facts.long_leg_identity is None
+                or facts.short_leg_instrument_name is None
+                or facts.long_leg_instrument_name is None
+            ):
+                raise RuntimeError("component Candidate requires one frozen two-leg structure")
+            component_attempt = ComponentAdmissionAttempt.schedule(
+                candidate_identity=candidate_identity,
+                short_option_identity=facts.short_leg_identity,
+                long_option_identity=facts.long_leg_identity,
+                short_request_id=allocate_request_id(),
+                long_request_id=allocate_request_id(),
+                boundary=facts.boundary,
+                short_instrument_name=facts.short_leg_instrument_name,
+                long_instrument_name=facts.long_leg_instrument_name,
+            )
+            attempt: AdmissionAttempt | ComponentAdmissionAttempt = component_attempt
+            intents = component_attempt.take_request_intents()
+        else:
+            if facts.canonical_combo_identity is None or facts.combo_instrument_name is None:
+                raise RuntimeError("atomic Candidate requires combo and instrument identities")
+            attempt = AdmissionAttempt.schedule(
+                candidate_identity=candidate_identity,
+                canonical_combo_identity=facts.canonical_combo_identity,
+                request_id=allocate_request_id(),
+                boundary=facts.boundary,
+                request_instrument_name=facts.combo_instrument_name,
+            )
+            intent = attempt.take_request_intent()
+            intents = () if intent is None else (intent,)
         record = _CandidateRecord(
             facts=facts,
             state=CandidateState(candidate_identity),
@@ -1522,9 +1975,8 @@ class FixedContractShadowOwner:
             economic_fingerprint=evaluation.economic_fingerprint,
         )
         self._candidates[candidate_identity] = record
-        intent = attempt.take_request_intent()
-        if intent is None:
-            raise RuntimeError("new admission attempt did not expose one request intent")
+        if not intents:
+            raise RuntimeError("new admission attempt did not expose request intents")
         self._emit(
             "CANDIDATE_ACTIVATION",
             candidate_identity,
@@ -1544,13 +1996,20 @@ class FixedContractShadowOwner:
             {
                 "scheduled_admission_attempt_identity": attempt.scheduled_identity,
                 "candidate_identity": candidate_identity,
-                "request_id": request_id,
+                "execution_model": (
+                    facts.component_quote.execution_model
+                    if facts.component_quote is not None
+                    else "PUBLIC_ATOMIC_COMBO"
+                ),
                 "request_method": "public/get_order_book",
-                "request_params": dict(intent.params),
+                "requests": [
+                    {"request_id": intent.request_id, "request_params": dict(intent.params)}
+                    for intent in intents
+                ],
                 "schedule_fact_boundary": facts.boundary.as_object(),
             },
         )
-        self._intents.append(intent)
+        self._intents.extend(intents)
         self._counts["candidate_count"] += 1
 
     def _create_admitted_trade(
@@ -1563,11 +2022,23 @@ class FixedContractShadowOwner:
         quote_source = facts.quote_source
         index_source = facts.index_source
         ticker_source = facts.ticker_source
+        component_quote = facts.component_quote
+        component_sources = (
+            facts.component_short_quote_source,
+            facts.component_long_quote_source,
+        )
         if (
             attempt.terminal_identity is None
-            or quote_source is None
             or index_source is None
             or ticker_source is None
+            or (component_quote is None and quote_source is None)
+            or (
+                component_quote is not None
+                and (
+                    any(source is None for source in component_sources)
+                    or facts.component_pair_witness is None
+                )
+            )
         ):
             raise RuntimeError("Entry requires terminal admission identity and complete sources")
         entry_identity = canonical_identity(
@@ -1583,7 +2054,13 @@ class FixedContractShadowOwner:
             "entry_fact_boundary": facts.boundary.as_object(),
             "active_episode_identity": facts.active_episode_identity,
             "radar_scope_identity": facts.radar_scope_identity,
-            "atomic_state": facts.atomic_state,
+            "execution_model": (
+                component_quote.execution_model
+                if component_quote is not None
+                else "PUBLIC_ATOMIC_COMBO"
+            ),
+            "component_state": facts.component_state,
+            "atomic_state_diagnostic": facts.atomic_state,
             "radar_band_id": facts.radar_band_id,
             "radar_richness_interval": (
                 {
@@ -1607,8 +2084,38 @@ class FixedContractShadowOwner:
             ],
             "entry_direction": facts.entry_direction,
             "full_quantity_btc": facts.target_quantity_btc,
-            "entry_consumed_levels": self._levels(facts.entry_consumed_levels),
-            "entry_combo_quote_source_ref": quote_source.as_ref(),
+            "entry_consumed_levels": (
+                self._levels(facts.entry_consumed_levels) if component_quote is None else []
+            ),
+            "entry_combo_quote_source_ref": (
+                quote_source.as_ref() if quote_source is not None else None
+            ),
+            "entry_component_pair_identity": (
+                facts.component_pair_witness.pair_identity
+                if facts.component_pair_witness is not None
+                else None
+            ),
+            "entry_component_legs": (
+                [
+                    self._component_leg_payload("SHORT", component_quote.short_leg),
+                    self._component_leg_payload("LONG", component_quote.long_leg),
+                ]
+                if component_quote is not None
+                else []
+            ),
+            "entry_component_quote_source_refs": (
+                [
+                    {"canonical_leg_role": role, **source.as_ref()}
+                    for role, source in zip(
+                        ("SHORT", "LONG"),
+                        component_sources,
+                        strict=True,
+                    )
+                    if source is not None
+                ]
+                if component_quote is not None
+                else []
+            ),
             "entry_commission_source_refs": self._commission_refs(facts),
             "entry_index_usdc_per_btc": facts.index_usdc_per_btc,
             "entry_index_source_ref": index_source.as_ref(),
@@ -1617,6 +2124,7 @@ class FixedContractShadowOwner:
             "gross_entry_credit_usdc": economics.gross_entry_credit_usdc,
             "entry_fee_reserve_usdc": economics.entry_fee_reserve_usdc,
             "net_entry_credit_usdc": economics.net_entry_credit_usdc,
+            "width_usdc_per_btc": economics.width_usdc_per_btc,
             "payoff_cap_usdc": economics.payoff_cap_usdc,
             "contractual_payoff_max_loss_ex_fees_usdc": (
                 economics.contractual_payoff_max_loss_ex_fees_usdc
@@ -1626,6 +2134,17 @@ class FixedContractShadowOwner:
             "underwriting_reserved_loss_usdc": economics.underwriting_reserved_loss_usdc,
             "actual_all_in_max_loss_usdc": None,
             "actual_all_in_max_loss_availability": "UNKNOWN",
+            "non_claims": (
+                [
+                    "NOT_AN_ORDER",
+                    "NOT_A_FILL",
+                    "NOT_AN_ATOMIC_QUOTE",
+                    "NO_LIQUIDITY_RESERVATION",
+                    "ATOMIC_EXECUTABILITY_UNPROVEN",
+                ]
+                if component_quote is not None
+                else []
+            ),
         }
         self._emit(
             "SHADOW_ENTRY",
@@ -1930,6 +2449,7 @@ class FixedContractShadowOwner:
                 facts.current_index_usdc_per_btc if facts.index_source is not None else None
             ),
             net_entry_credit_usdc=trade.entry_economics.net_entry_credit_usdc,
+            component_quote=facts.component_quote,
         )
 
     def _emit_position(
@@ -2022,7 +2542,32 @@ class FixedContractShadowOwner:
         *,
         quote_source_accepted: bool,
         allocate_request_id: Callable[[], int],
-    ) -> PostCloseAttempt:
+    ) -> PostCloseAttempt | ComponentPostCloseAttempt:
+        if self._uses_component_books(trade.entry_facts):
+            entry = trade.entry_facts
+            if (
+                entry.short_leg_identity is None
+                or entry.long_leg_identity is None
+                or entry.short_leg_instrument_name is None
+                or entry.long_leg_instrument_name is None
+            ):
+                raise RuntimeError("component post-CLOSE attempt lacks its frozen legs")
+            component_attempt = ComponentPostCloseAttempt.schedule(
+                anchor_identity=trade.anchor_identity,
+                first_close_action_identity=decision.position_action_identity,
+                short_option_identity=entry.short_leg_identity,
+                long_option_identity=entry.long_leg_identity,
+                short_instrument_name=entry.short_leg_instrument_name,
+                long_instrument_name=entry.long_leg_instrument_name,
+                short_request_id=allocate_request_id(),
+                long_request_id=allocate_request_id(),
+                boundary=facts.boundary,
+            )
+            intents = component_attempt.take_request_intents()
+            if len(intents) != 2:
+                raise RuntimeError("component post-CLOSE attempt lacks two request intents")
+            self._intents.extend(intents)
+            return component_attempt
         combo_identity = trade.entry_facts.canonical_combo_identity
         combo_name = trade.entry_facts.combo_instrument_name
         current_witness = facts.current_combo_subscription_witness
@@ -2071,23 +2616,38 @@ class FixedContractShadowOwner:
         trade: _TradeRecord,
         facts: PositionFacts,
         decision: PositionDecision,
-        attempt: PostCloseAttempt,
+        attempt: PostCloseAttempt | ComponentPostCloseAttempt,
     ) -> None:
         terminal_status = attempt.terminal_status
-        if attempt.request_id is not None:
-            request_member: object = attempt.request_id
+        request_ids = self._request_ids(attempt)
+        if request_ids:
+            request_member: object = list(request_ids)
         elif terminal_status is not None:
             request_member = terminal_status.value
         else:
             raise RuntimeError("non-requestable post-close attempt requires a terminal status")
         params: object = (
-            {
-                "instrument_name": trade.entry_facts.combo_instrument_name,
-                "depth": 10000,
-            }
-            if attempt.request_id is not None
-            else None
+            [
+                {"instrument_name": name, "depth": 10000}
+                for name in (
+                    trade.entry_facts.short_leg_instrument_name,
+                    trade.entry_facts.long_leg_instrument_name,
+                )
+            ]
+            if isinstance(attempt, ComponentPostCloseAttempt)
+            else (
+                {
+                    "instrument_name": trade.entry_facts.combo_instrument_name,
+                    "depth": 10000,
+                }
+                if request_ids
+                else None
+            )
         )
+        if isinstance(attempt, ComponentPostCloseAttempt):
+            execution_model: object = self.policies.position.execution_model
+        else:
+            execution_model = "PUBLIC_ATOMIC_COMBO"
         self._emit(
             "POST_CLOSE_ATTEMPT_SCHEDULED",
             attempt.scheduled_identity,
@@ -2097,6 +2657,7 @@ class FixedContractShadowOwner:
                 "shadow_entry_identity": trade.anchor_identity,
                 "first_latched_close_action_identity": decision.position_action_identity,
                 "request_id_or_marker": request_member,
+                "execution_model": execution_model,
                 "request_method": "public/get_order_book",
                 "request_params": params,
                 "schedule_fact_boundary": facts.boundary.as_object(),
@@ -2115,8 +2676,8 @@ class FixedContractShadowOwner:
     ) -> str:
         quote_state = quote.state
         structure = canonical_identity(
-            "OfficialComboAndCanonicalLegIdentity",
-            trade.entry_facts.canonical_combo_identity,
+            "ComponentBookAndCanonicalLegIdentity",
+            self.policies.position.execution_model,
             [
                 trade.entry_facts.short_leg_identity,
                 trade.entry_facts.long_leg_identity,
@@ -2141,6 +2702,11 @@ class FixedContractShadowOwner:
                 Decimal(0),
             )
             gross = -total if facts.close_direction == "BUY" else total
+        elif (
+            quote_state is CloseQuoteState.COMPONENT_BOOK_CLOSE_QUOTE
+            and facts.component_quote is not None
+        ):
+            gross = facts.component_quote.gross_cashflow_usdc
         payload: dict[str, object] = {
             "close_quote_evaluation_identity": identity,
             "shadow_entry_identity": trade.anchor_identity,
@@ -2160,8 +2726,40 @@ class FixedContractShadowOwner:
             "close_quote_state": quote_state.value,
             "close_conditioning": conditioning,
             "consumed_levels": self._levels(quote.consumed_levels),
+            "component_pair_identity": (
+                facts.component_pair_witness.pair_identity
+                if facts.component_pair_witness is not None
+                else None
+            ),
+            "component_legs": (
+                [
+                    self._component_leg_payload("SHORT", facts.component_quote.short_leg),
+                    self._component_leg_payload("LONG", facts.component_quote.long_leg),
+                ]
+                if facts.component_quote is not None
+                else []
+            ),
+            "component_quote_source_refs": [
+                {"canonical_leg_role": role, **source.as_ref()}
+                for role, source in (
+                    ("SHORT", facts.component_short_quote_source),
+                    ("LONG", facts.component_long_quote_source),
+                )
+                if source is not None
+            ],
             "gross_close_cashflow_usdc": gross,
             "evaluation_fact_boundary": facts.boundary.as_object(),
+            "non_claims": (
+                [
+                    "NOT_AN_ORDER",
+                    "NOT_A_FILL",
+                    "NOT_AN_ATOMIC_QUOTE",
+                    "NO_LIQUIDITY_RESERVATION",
+                    "ATOMIC_EXECUTABILITY_UNPROVEN",
+                ]
+                if facts.component_quote is not None
+                else []
+            ),
         }
         self._emit("CLOSE_QUOTE_EVALUATION", identity, facts.boundary, payload)
         self._counts[f"close_quote_{self._quote_count_suffix(quote_state)}_count"] += 1
@@ -2199,7 +2797,10 @@ class FixedContractShadowOwner:
         )
         derived_known = economics is not None
         eligibility_reason = self._eligibility_reason(opportunity)
-        quote_is_atomic = quote_state is CloseQuoteState.ATOMIC_COMBO_CLOSE_QUOTE
+        quote_has_known_cashflow = quote_state in {
+            CloseQuoteState.ATOMIC_COMBO_CLOSE_QUOTE,
+            CloseQuoteState.COMPONENT_BOOK_CLOSE_QUOTE,
+        }
         gross_cashflow = (
             (
                 -sum(price * amount for price, amount in facts.close_quote_facts.consumed_levels)
@@ -2208,8 +2809,13 @@ class FixedContractShadowOwner:
                     price * amount for price, amount in facts.close_quote_facts.consumed_levels
                 )
             )
-            if quote_is_atomic
-            else None
+            if quote_state is CloseQuoteState.ATOMIC_COMBO_CLOSE_QUOTE
+            else (
+                facts.component_quote.gross_cashflow_usdc
+                if quote_state is CloseQuoteState.COMPONENT_BOOK_CLOSE_QUOTE
+                and facts.component_quote is not None
+                else None
+            )
         )
         consumes_commissions = eligibility_reason in {
             "COMMISSION_UNKNOWN",
@@ -2241,7 +2847,11 @@ class FixedContractShadowOwner:
                 economics.gross_close_cashflow_usdc if economics is not None else gross_cashflow
             ),
             "gross_cashflow_availability": (
-                "KNOWN" if quote_is_atomic else "NOT_APPLICABLE" if not_applicable else "UNKNOWN"
+                "KNOWN"
+                if quote_has_known_cashflow
+                else "NOT_APPLICABLE"
+                if not_applicable
+                else "UNKNOWN"
             ),
             "short_leg_taker_commission_fraction": (
                 facts.short_leg_taker_commission_fraction if serializes_commissions else None
@@ -2360,6 +2970,18 @@ class FixedContractShadowOwner:
             else None
         )
         close_economics = opportunity.economics if opportunity is not None else None
+        component_close_facts = (
+            facts
+            if (
+                known_economics is not None
+                and facts is not None
+                and facts.component_quote is not None
+                and facts.component_pair_witness is not None
+                and facts.component_short_quote_source is not None
+                and facts.component_long_quote_source is not None
+            )
+            else None
+        )
         witnesses = (
             self._lifecycle_witnesses(trade, facts)
             if state is OutcomeState.MATURE_UNKNOWN and facts is not None
@@ -2369,6 +2991,11 @@ class FixedContractShadowOwner:
             "shadow_outcome_identity": trade.observation.terminal_outcome_identity,
             "shadow_observation_identity": trade.observation.observation_identity,
             "shadow_entry_identity": trade.anchor_identity,
+            "execution_model": (
+                trade.entry_facts.component_quote.execution_model
+                if trade.entry_facts.component_quote is not None
+                else "PUBLIC_ATOMIC_COMBO"
+            ),
             "terminal_state": state.value,
             "terminal_fact_boundary": boundary.as_object(),
             "selected_exit_identity": selected_exit,
@@ -2459,6 +3086,37 @@ class FixedContractShadowOwner:
                 known_economics.net_loss_usdc if known_economics is not None else None
             ),
             "economic_availability": "KNOWN" if known_economics is not None else "UNKNOWN",
+            "close_component_pair_identity": (
+                component_close_facts.component_pair_witness.pair_identity
+                if component_close_facts is not None
+                and component_close_facts.component_pair_witness is not None
+                else None
+            ),
+            "close_component_quote_source_refs": (
+                [
+                    {"canonical_leg_role": role, **source.as_ref()}
+                    for role, source in (
+                        ("SHORT", component_close_facts.component_short_quote_source),
+                        ("LONG", component_close_facts.component_long_quote_source),
+                    )
+                    if source is not None
+                ]
+                if component_close_facts is not None
+                else []
+            ),
+            "close_component_legs": (
+                [
+                    self._component_leg_payload(
+                        "SHORT", component_close_facts.component_quote.short_leg
+                    ),
+                    self._component_leg_payload(
+                        "LONG", component_close_facts.component_quote.long_leg
+                    ),
+                ]
+                if component_close_facts is not None
+                and component_close_facts.component_quote is not None
+                else []
+            ),
             "actual_entry_fee_usdc": None,
             "actual_close_fee_usdc": None,
             "actual_total_fee_usdc": None,
@@ -2481,6 +3139,17 @@ class FixedContractShadowOwner:
                 "actual_fill_identity": "UNKNOWN",
                 "actual_settlement_cashflow_usdc": "UNKNOWN",
             },
+            "non_claims": (
+                [
+                    "NOT_AN_ORDER",
+                    "NOT_A_FILL",
+                    "NOT_AN_ATOMIC_QUOTE",
+                    "NO_LIQUIDITY_RESERVATION",
+                    "ATOMIC_EXECUTABILITY_UNPROVEN",
+                ]
+                if trade.entry_facts.component_quote is not None
+                else []
+            ),
         }
         self._emit(
             "SHADOW_OUTCOME",
@@ -2537,12 +3206,31 @@ class FixedContractShadowOwner:
     ) -> dict[str, object]:
         base = self._exit_economics_payload(trade, facts, opportunity)
         first_close = trade.first_close_decision
-        if (
-            first_close is None
-            or trade.last_quote_facts is None
-            or trade.last_quote_facts.quote_source is None
-        ):
-            raise RuntimeError("selected exit lacks its accepted combo quote source")
+        retained = trade.last_quote_facts
+        if first_close is None or retained is None:
+            raise RuntimeError("selected exit lacks its accepted quote source")
+        if retained.component_quote is not None:
+            if (
+                retained.component_pair_witness is None
+                or retained.component_short_quote_source is None
+                or retained.component_long_quote_source is None
+            ):
+                raise RuntimeError("selected component exit lacks its paired quote sources")
+            component_pair_identity: object = retained.component_pair_witness.pair_identity
+            component_source_refs: object = [
+                {"canonical_leg_role": role, **source.as_ref()}
+                for role, source in (
+                    ("SHORT", retained.component_short_quote_source),
+                    ("LONG", retained.component_long_quote_source),
+                )
+            ]
+            combo_source_ref: object = None
+        else:
+            if retained.quote_source is None:
+                raise RuntimeError("selected exit lacks its accepted combo quote source")
+            component_pair_identity = None
+            component_source_refs = []
+            combo_source_ref = retained.quote_source.as_ref()
         return {
             "shadow_counterfactual_exit_identity": exit_identity,
             "shadow_observation_identity": trade.observation.observation_identity,
@@ -2554,7 +3242,9 @@ class FixedContractShadowOwner:
                 first_close.action_fact_boundary.as_object()
             ),
             "close_opportunity_evaluation_fact_boundary": facts.boundary.as_object(),
-            "combo_quote_source_ref": trade.last_quote_facts.quote_source.as_ref(),
+            "combo_quote_source_ref": combo_source_ref,
+            "component_pair_identity": component_pair_identity,
+            "component_quote_source_refs": component_source_refs,
             **base,
         }
 
@@ -2579,6 +3269,14 @@ class FixedContractShadowOwner:
             "close_direction": facts.close_direction,
             "full_quantity_btc": trade.entry_facts.target_quantity_btc,
             "consumed_levels": self._levels(facts.close_quote_facts.consumed_levels),
+            "component_legs": (
+                [
+                    self._component_leg_payload("SHORT", facts.component_quote.short_leg),
+                    self._component_leg_payload("LONG", facts.component_quote.long_leg),
+                ]
+                if facts.component_quote is not None
+                else []
+            ),
             "short_leg_taker_commission_fraction": (
                 trade.entry_facts.short_leg_taker_commission_fraction
             ),
@@ -2697,12 +3395,17 @@ class FixedContractShadowOwner:
         if facts.active_episode_identity != record.facts.active_episode_identity:
             reasons.append("RADAR_POLICY_OR_EPISODE_PAUSED_ENDED_OR_CHANGED")
         if (
-            facts.canonical_combo_identity != record.facts.canonical_combo_identity
-            or facts.combo_instrument_name != record.facts.combo_instrument_name
-            or facts.short_leg_identity != record.facts.short_leg_identity
+            facts.short_leg_identity != record.facts.short_leg_identity
             or facts.long_leg_identity != record.facts.long_leg_identity
             or facts.target_quantity_btc != record.facts.target_quantity_btc
             or facts.entry_direction != record.facts.entry_direction
+            or (
+                not isinstance(record.attempt, ComponentAdmissionAttempt)
+                and (
+                    facts.canonical_combo_identity != record.facts.canonical_combo_identity
+                    or facts.combo_instrument_name != record.facts.combo_instrument_name
+                )
+            )
         ):
             reasons.append("STRUCTURE_LEG_LIFECYCLE_OR_TARGET_QUANTITY_CHANGED")
         candidate_witness = record.facts.quote_refresh_witness
@@ -2744,6 +3447,44 @@ class FixedContractShadowOwner:
             reasons.append("FAILED_ADMISSION_EVALUATION_CONSUMED")
         return tuple(dict.fromkeys(reasons))
 
+    def _component_candidate_pre_refresh_reasons(
+        self,
+        record: _CandidateRecord,
+        facts: UnderwritingFacts,
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
+        if facts.active_episode_identity != record.facts.active_episode_identity:
+            reasons.append("RADAR_POLICY_OR_EPISODE_PAUSED_ENDED_OR_CHANGED")
+        if (
+            facts.short_leg_identity != record.facts.short_leg_identity
+            or facts.long_leg_identity != record.facts.long_leg_identity
+            or facts.short_leg_instrument_name != record.facts.short_leg_instrument_name
+            or facts.long_leg_instrument_name != record.facts.long_leg_instrument_name
+            or facts.target_quantity_btc != record.facts.target_quantity_btc
+            or self._known_structural_unavailability(facts)
+        ):
+            reasons.append("STRUCTURE_LEG_LIFECYCLE_OR_TARGET_QUANTITY_CHANGED")
+        if record.slot_identity in self._slot_consumed:
+            reasons.append("POSITION_SLOT_CONSUMED_BY_SHADOW_ENTRY")
+        if (
+            not facts.option_catalog_complete
+            or facts.platform_usable is not True
+            or facts.trusted_time_lower_ms is None
+            or facts.trusted_time_upper_ms is None
+            or facts.short_instrument_source is None
+            or facts.long_instrument_source is None
+            or facts.index_source is None
+            or facts.ticker_source is None
+        ):
+            reasons.append("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN")
+        if (
+            facts.expiry_ms is not None
+            and facts.trusted_time_upper_ms is not None
+            and facts.trusted_time_upper_ms >= facts.expiry_ms - ADMISSION_CUTOFF_LEAD_MS
+        ):
+            reasons.append("LATEST_ADMISSION_BOUNDARY_REACHED")
+        return tuple(dict.fromkeys(reasons))
+
     def _terminalize_candidate_before_refresh(
         self,
         record: _CandidateRecord,
@@ -2777,7 +3518,7 @@ class FixedContractShadowOwner:
         self,
         trade: _TradeRecord,
         *,
-        attempt: PostCloseAttempt | None = None,
+        attempt: PostCloseAttempt | ComponentPostCloseAttempt | None = None,
     ) -> None:
         attempt = attempt or trade.post_close_attempt
         if attempt is None or attempt.terminal_identity is None:
@@ -2814,7 +3555,7 @@ class FixedContractShadowOwner:
     def _emit_attempt_close_opportunity(
         self,
         trade: _TradeRecord,
-        attempt: PostCloseAttempt,
+        attempt: PostCloseAttempt | ComponentPostCloseAttempt,
     ) -> None:
         if (
             trade.first_close_decision is None
@@ -3014,6 +3755,31 @@ class FixedContractShadowOwner:
         trade: _TradeRecord,
         facts: PositionFacts,
     ) -> bool:
+        if facts.component_quote is not None:
+            short_source = facts.component_short_quote_source
+            long_source = facts.component_long_quote_source
+            if short_source is None or long_source is None:
+                return False
+            first_close = trade.first_close_decision
+            if first_close is None:
+                return (
+                    short_source.boundary.runtime_identity == trade.entry_boundary.runtime_identity
+                    and long_source.boundary.runtime_identity
+                    == trade.entry_boundary.runtime_identity
+                )
+            attempt = trade.post_close_attempt
+            pair = facts.component_pair_witness
+            return bool(
+                isinstance(attempt, ComponentPostCloseAttempt)
+                and pair is not None
+                and pair.boundary.is_strictly_after(first_close.action_fact_boundary)
+                and attempt.terminal_status is PostCloseAttemptStatus.SUCCESS
+                and attempt.matched_response_identity == pair.pair_identity
+                and short_source.source_identity == pair.short.source_identity
+                and short_source.boundary == pair.short.boundary
+                and long_source.source_identity == pair.long.source_identity
+                and long_source.boundary == pair.long.boundary
+            )
         source = facts.quote_source
         if source is None:
             return False
@@ -3027,7 +3793,7 @@ class FixedContractShadowOwner:
             )
         attempt = trade.post_close_attempt
         if (
-            attempt is None
+            not isinstance(attempt, PostCloseAttempt)
             or attempt.terminal_owner is not PostCloseAttemptOwner.ORDINARY
             or not source.boundary.is_strictly_after(first_close.action_fact_boundary)
         ):
@@ -3190,6 +3956,26 @@ class FixedContractShadowOwner:
             for price, amount in levels
         ]
 
+    def _component_leg_payload(
+        self,
+        role: str,
+        leg: ComponentBookLegQuote,
+    ) -> dict[str, object]:
+        return {
+            "canonical_leg_role": role,
+            "instrument_name": leg.instrument_name,
+            "action": leg.action.value,
+            "raw_consumed_levels": self._levels(
+                tuple((level.price, level.amount) for level in leg.raw.consumed)
+            ),
+            "raw_vwap_usdc_per_btc": leg.raw.vwap,
+            "stressed_consumed_levels": self._levels(
+                tuple((level.price, level.amount) for level in leg.stressed.consumed)
+            ),
+            "stressed_vwap_usdc_per_btc": leg.stressed.vwap,
+            "fee_reserve_usdc": leg.fee_reserve_usdc,
+        }
+
     @staticmethod
     def _commission_refs(facts: UnderwritingFacts) -> list[dict[str, object]]:
         if facts.short_instrument_source is None or facts.long_instrument_source is None:
@@ -3222,6 +4008,7 @@ class FixedContractShadowOwner:
     @staticmethod
     def _quote_count_suffix(state: CloseQuoteState) -> str:
         return {
+            CloseQuoteState.COMPONENT_BOOK_CLOSE_QUOTE: "component_book",
             CloseQuoteState.ATOMIC_COMBO_CLOSE_QUOTE: "atomic",
             CloseQuoteState.LEGGED_CLOSE_REFERENCE: "legged_reference",
             CloseQuoteState.UNEXECUTABLE: "unexecutable",

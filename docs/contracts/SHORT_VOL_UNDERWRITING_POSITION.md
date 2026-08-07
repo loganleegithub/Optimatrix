@@ -6,9 +6,9 @@
 
 ## Purpose
 
-Consume settled current Radar state, decide whether visible official atomic entry economics merit
-review or admission under one fixed Underwriting Policy, admit only a refreshed valid Candidate,
-and manage an admitted Shadow Case under one fixed Position Policy.
+Consume settled current Radar state, decide whether one conservative frozen two-leg public-book
+counterfactual merits review or admission under one fixed Underwriting Policy, admit only a paired
+refreshed valid Candidate, and manage an admitted Shadow Case under one fixed Position Policy.
 
 Before Shadow admission, every evaluation, action, Candidate, request attempt, and display row is
 in-memory current state. None is a durable business record. `SHADOW_ENTRY` hands one admitted unit
@@ -34,9 +34,9 @@ Policy files are content-identified. Markdown contract bytes are not runtime bus
 Underwriting consumes one settled scope containing, when applicable:
 
 - active Radar episode and short leg;
-- exact official combo and protective long leg;
-- full target-size official atomic entry levels and direction;
-- current option/combo lifecycle and amount rules;
+- frozen short and protective long identities;
+- full target-size public option-book depth for both legs;
+- current option lifecycle, amount, and official price-tick rules;
 - trusted time, current platform, index, short-leg Delta and mark IV;
 - public taker-commission facts and fixed reserves;
 - exact code, runtime, and three Policy identities.
@@ -47,32 +47,36 @@ economic action.
 
 ## Radar diagnostic separation
 
-Surface-lite context, semivariance/jump context, transparent attention rank, and
-`LEGGED_REFERENCE_NOT_ATOMIC` are trader diagnostics. They are not Underwriting inputs and cannot
-create `EVALUABLE`, `WATCH`, `ABSTAIN`, `CANDIDATE`, an admission attempt, or a Shadow Case. The
-formal entry path continues to require an active Radar Episode and one visible full-quantity
-official atomic combo quote.
+Surface-lite context, semivariance/jump context, and transparent attention rank are trader
+diagnostics. They cannot create `EVALUABLE`, `WATCH`, `ABSTAIN`, `CANDIDATE`, an admission attempt,
+or a Shadow Case. The ranked protective-vertical review supplies only the frozen long identity;
+the formal component-book calculator independently validates and prices both current books.
 
-The diagnostic separate-leg fee reserve may use Deribit's published standard fee cap to explain a
-non-atomic reference. Formal atomic Underwriting fee and reserve semantics remain owned by the
-content-identified Underwriting Policy and are not changed by a diagnostic calculation.
+Official Combo state is a parallel diagnostic. `NO_ACTIVE_COMBO`,
+`NO_TARGET_SIZE_CREDIT_QUOTE`, and `PUBLIC_ATOMIC_QUOTE_AVAILABLE` neither create nor veto a
+component-book Underwriting action.
 
 ## Entry economics
 
-For exact target quantity `q` and signed official combo levels:
+For exact target quantity `q`:
 
 ```text
-required_side_total_quote_usdc = Σ(price × consumed_amount)
-gross_entry_credit_usdc = -direction_sign × required_side_total_quote_usdc
-entry_fee_reserve_usdc = fee_rate × index × q
+short_entry = walk short bids for q, then stress each level down one official tick
+long_entry  = walk long asks for q, then stress each level up one official tick
+gross_entry_credit_usdc = short_entry_total - long_entry_total
+leg_fee = min(fee_rate × index × q, 0.125 × stressed_leg_price × q)
+entry_fee_reserve_usdc = short_fee + long_fee
 net_entry_credit_usdc = gross_entry_credit_usdc - entry_fee_reserve_usdc
 payoff_cap_usdc = abs(long_strike - short_strike) × q
 underwriting_reserved_loss_usdc =
-    max(0, payoff_cap_usdc - net_entry_credit_usdc + future_cost_reserve_usdc)
+    max(0, payoff_cap_usdc - gross_entry_credit_usdc)
+    + entry_fee_reserve_usdc
+    + future_cost_reserve_usdc
 ```
 
-Consumed amounts must sum exactly to `q`. No rounding, mark, mid, theoretical price, component-leg
-synthetic fill, or imagined maker price may enter admission economics.
+Each leg's consumed amounts must sum exactly to `q`. No rounding, mark, mid, theoretical price,
+imagined maker price, or official-Combo assumption may enter admission economics. These prices are
+conservative public-book counterfactuals, not simultaneous fills.
 
 ## Underwriting action
 
@@ -99,17 +103,18 @@ quantity, and activation boundary. It is invalidated by identity/scope change, e
 structure or quantity change, source degradation, admission cutoff, slot consumption, changed
 business facts that no longer qualify, or a consumed failed admission.
 
-Admission schedules at most one bounded public `get_order_book` refresh. Entry is emitted only when
-one strictly later official subscription refresh or matched public response:
+Admission schedules exactly two bounded public `get_order_book` refreshes: one for the frozen short
+and one for the frozen protective long. Entry is emitted only after both matched responses:
 
-- belongs to the same runtime, Candidate, combo, and quantity;
-- is causally later than Candidate activation;
-- satisfies send/response budgets;
-- is current at the accepted market frontier;
-- contains full target quantity;
-- remains an evaluable Candidate under the same Policies.
+- belong to the same runtime, Candidate, frozen pair, and quantity;
+- are causally later than Candidate activation;
+- each satisfies send/response budgets;
+- each contains full target quantity on its required side;
+- form one paired witness owned by the same Candidate origin;
+- remain an evaluable Candidate under the same Policies after adverse tick stress and both fees.
 
-Every other terminal race consumes the attempt without Entry. A public response is not a fill.
+One response alone cannot emit Entry. Failure or retirement of either request retires its sibling
+and consumes the attempt without Entry. A public response is not a fill or liquidity reservation.
 
 ## Shadow admission handoff
 
@@ -119,8 +124,8 @@ required to reconstruct the admitted counterfactual:
 
 - code, runtime, and three Policy identities;
 - entry and decision boundaries;
-- canonical combo, legs, direction, expiry, strikes, and full quantity;
-- official consumed entry levels;
+- frozen canonical legs, directions, expiry, strikes, and full quantity;
+- paired source identity and both raw/stressed consumed leg levels;
 - entry economics and fixed reserve components;
 - the consumed Radar/Underwriting state required to explain the admission;
 - explicit public-quote/not-fill non-claims.
@@ -159,20 +164,22 @@ CLOSE creates at most one durable `SHADOW_CASE_FIRST_CLOSE` transition.
 Close-quote state remains separate from Position action:
 
 ```text
-ATOMIC_COMBO_CLOSE_QUOTE
+COMPONENT_BOOK_CLOSE_QUOTE
 LEGGED_CLOSE_REFERENCE
 UNEXECUTABLE
 UNKNOWN
 ```
 
-Only a strictly later full-remaining-quantity official atomic combo quote can create an eligible
-Shadow close opportunity. Component-leg references are diagnostic and cannot close the Case.
+Only a strictly later paired component-book snapshot for the same frozen legs can create an
+eligible Shadow close opportunity. The short is bought from asks stressed up one tick and the long
+is sold from bids stressed down one tick. Each leg must cover the full remaining quantity. One
+response cannot close the Case.
 
 For an eligible atomic close:
 
 ```text
-gross_close_cashflow_usdc = -close_direction_sign × Σ(price × amount)
-close_fee_reserve_usdc = fee_rate × close_index × q
+gross_close_cashflow_usdc = long_stressed_sale_total - short_stressed_buy_total
+close_fee_reserve_usdc = short_fee + long_fee
 net_close_cashflow_usdc = gross_close_cashflow_usdc - close_fee_reserve_usdc
 projected_shadow_net_pnl_usdc = net_entry_credit_usdc + net_close_cashflow_usdc
 projected_net_loss_usdc = max(0, -projected_shadow_net_pnl_usdc)
@@ -195,15 +202,17 @@ The owner may retain typed current state needed by Workbench and active Shadow C
 use a filesystem writer as an event bus, registry, or Workbench datastore. Funnel counts are
 non-durable and derived from current owner transitions.
 
-When an atomic structure scope is replaced, the prior scope is settled once as no longer current,
-its Candidate is invalidated, and its current-state indexes are removed. Candidate terminalization
-removes admission/request ownership; Outcome terminalization removes the active Position owner.
+When an Episode or frozen component structure is replaced, the prior scope is settled once as no
+longer current, its Candidate is invalidated, and its current-state indexes are removed. Candidate
+terminalization removes both admission-request owners; Outcome terminalization removes the active
+Position owner.
 Only one latest terminal Case may remain in the Workbench projection; all historical terminal truth
 comes from the bounded Shadow Case files.
 
 ## Required verification
 
-Direct tests cover Policy compatibility, signed economics, action boundaries, Candidate
-invalidation, admission races, strictly post-entry Position order, first CLOSE latching, close
-classification, and no pre-Shadow durable writes. Full graph manifests, second schemas, and
-automatic rejected-counterfactual persistence are not required.
+Direct tests cover Policy compatibility, both-leg target depth, adverse tick direction, both fees,
+signed economics, action boundaries, frozen-leg identity, paired admission races, strictly
+post-entry Position order, first CLOSE latching, paired close classification, and no pre-Shadow
+durable writes. Full graph manifests, second schemas, and automatic rejected-counterfactual
+persistence are not required.

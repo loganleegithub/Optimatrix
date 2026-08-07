@@ -9,8 +9,11 @@ from market_monitor import BookState, ContinuityGap, PriceLevel, TimeInterval, T
 from options_domain import (
     AmountState,
     ComboInstrument,
+    ComponentBookQuoteKind,
+    ComponentBookVerticalQuote,
     OptionInstrument,
     check_target_amount,
+    evaluate_component_book_vertical,
 )
 from options_domain.quotes import walk_target_depth
 from short_vol_radar.atomic import (
@@ -18,28 +21,39 @@ from short_vol_radar.atomic import (
     PublicAtomicQuoteState,
 )
 from short_vol_radar.radar import TickerState
+from short_vol_radar.review import LeggedReferenceState, ReviewContext, build_review_contexts
 from short_vol_underwriting import (
     CloseAtomicAvailability,
     CloseBookAvailability,
     CloseOptionAvailability,
     CloseQuoteFacts,
+    ComponentBookPairWitness,
+    ComponentLegRole,
     FixedContractShadowOwner,
     PositionFacts,
     PostCloseAttemptStatus,
     PredicateTruth,
     RpcAdmissionRefreshWitness,
+    RpcComponentLegRefreshWitness,
     SourceFact,
     SubscriptionAdmissionRefreshWitness,
     TerminalSource,
     UnderwritingFacts,
     canonical_identity,
+    component_pair_witness,
 )
 from short_vol_underwriting import (
     FactBoundary as DownstreamFactBoundary,
 )
 from short_vol_underwriting.admission import RpcRequestIntent
 from short_vol_underwriting.constants import ADMISSION_CUTOFF_LEAD_MS
-from short_vol_underwriting.owner import OwnerTransition
+from short_vol_underwriting.owner import (
+    COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE,
+    COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN,
+    NO_PROTECTIVE_COMPONENT,
+    NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE,
+    OwnerTransition,
+)
 
 from radar_runtime.runtime import (
     AtomicScopeSnapshot,
@@ -76,10 +90,10 @@ class _TickerSource:
 class _Anchor:
     anchor_identity: str
     entry_boundary: DownstreamFactBoundary
-    canonical_combo_identity: str
     short_leg_identity: str
     long_leg_identity: str
-    entry_direction: str
+    short_instrument_name: str
+    long_instrument_name: str
     target_quantity_btc: Decimal
 
 
@@ -89,6 +103,7 @@ class _RequestContext:
     owner_identity: str
     instrument_name: str
     origin_boundary: DownstreamFactBoundary
+    role: ComponentLegRole | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +115,12 @@ class _RestBook:
     bids: tuple[PriceLevel, ...]
     asks: tuple[PriceLevel, ...]
     well_formed: bool
+
+
+@dataclass(frozen=True)
+class _ComponentRestResponse:
+    witness: RpcComponentLegRefreshWitness
+    book: _RestBook
 
 
 class FixedContractShadowRuntimeAdapter:
@@ -123,6 +144,10 @@ class FixedContractShadowRuntimeAdapter:
         self._candidate_origins: dict[str, UnderwritingFacts] = {}
         self._anchors: dict[str, _Anchor] = {}
         self._requests: dict[int, _RequestContext] = {}
+        self._paired_responses: dict[
+            tuple[str, str], dict[ComponentLegRole, _ComponentRestResponse]
+        ] = {}
+        self._frozen_component_by_episode: dict[str, str] = {}
         self._last_reducer: RadarReducer | None = None
 
     def bind_reducer(self, reducer: RadarReducer) -> None:
@@ -170,8 +195,8 @@ class FixedContractShadowRuntimeAdapter:
         """Copy display-only structure facts from the settled Underwriting projection."""
         return self._workbench_underwriting_metadata
 
-    @staticmethod
     def _underwriting_display_metadata(
+        self,
         scope_identity: str,
         facts: UnderwritingFacts,
     ) -> Mapping[str, object]:
@@ -180,6 +205,14 @@ class FixedContractShadowRuntimeAdapter:
                 "radar_scope_identity": scope_identity,
                 "short_leg_instrument_name": facts.short_leg_instrument_name,
                 "long_leg_instrument_name": facts.long_leg_instrument_name,
+                "execution_model": (
+                    facts.component_quote.execution_model
+                    if facts.component_quote is not None
+                    else self.owner.policies.underwriting.execution_model
+                ),
+                "component_state": facts.component_state,
+                "component_blockers": list(facts.component_blockers),
+                "atomic_state_diagnostic": facts.atomic_state,
                 "combo_instrument_name": facts.combo_instrument_name,
                 "expiry_timestamp_ms": facts.expiry_ms,
                 "option_type": facts.option_type,
@@ -361,9 +394,12 @@ class FixedContractShadowRuntimeAdapter:
             allocate_request_id=reducer.allocate_shadow_request_id,
         )
         intents = list(self._consume_transition(transition, projected))
-        self._retire_underwriting_scopes(
-            scope_retirements,
-            episode_retirements,
+        intents.extend(
+            self._retire_underwriting_scopes(
+                scope_retirements,
+                episode_retirements,
+                boundary=boundary,
+            )
         )
 
         for anchor in tuple(self._anchors.values()):
@@ -456,6 +492,15 @@ class FixedContractShadowRuntimeAdapter:
                 request_id=request_id,
                 boundary=accepted_boundary,
                 transition=transition,
+            )
+        if context.role is not None:
+            return self._on_component_rpc_response(
+                reducer=reducer,
+                request_id=request_id,
+                context=context,
+                parsed=parsed,
+                sent_boundary=downstream_sent,
+                accepted_boundary=accepted_boundary,
             )
         combo = self._combo_sources.get(context.instrument_name)
         combo_identity = combo.semantic_identity if combo is not None else None
@@ -583,6 +628,358 @@ class FixedContractShadowRuntimeAdapter:
         result_intents = self._consume_transition(transition, ())
         self._requests.pop(request_id, None)
         return result_intents
+
+    def _on_component_rpc_response(
+        self,
+        *,
+        reducer: RadarReducer,
+        request_id: int,
+        context: _RequestContext,
+        parsed: _RestBook,
+        sent_boundary: DownstreamFactBoundary,
+        accepted_boundary: DownstreamFactBoundary,
+    ) -> tuple[ShadowRpcIntent, ...]:
+        role = context.role
+        option = self._option_sources.get(context.instrument_name)
+        if role is None or option is None:
+            return self._fail_component_response(
+                reducer=reducer,
+                request_id=request_id,
+                boundary=accepted_boundary,
+            )
+        side, target = self._component_request_side_and_quantity(context)
+        levels = parsed.asks if side == "ask" else parsed.bids
+        walk = (
+            walk_target_depth(levels, target)
+            if parsed.well_formed and parsed.state == "open"
+            else None
+        )
+        source_identity = canonical_identity(
+            "RpcComponentLegRefreshSourceIdentity",
+            accepted_boundary.runtime_identity,
+            request_id,
+            role.value,
+            "public/get_order_book",
+            option.semantic_identity,
+            {"instrument_name": context.instrument_name, "depth": 10000},
+            context.origin_boundary.as_object(),
+            sent_boundary.as_object(),
+            parsed.change_id,
+            parsed.source_timestamp_ms,
+            accepted_boundary.as_object(),
+        )
+        witness = RpcComponentLegRefreshWitness(
+            source_identity=source_identity,
+            boundary=accepted_boundary,
+            role=role,
+            canonical_option_identity=option.semantic_identity,
+            instrument_name=context.instrument_name,
+            request_params={"instrument_name": context.instrument_name, "depth": 10000},
+            change_id=parsed.change_id,
+            source_timestamp_ms=parsed.source_timestamp_ms,
+            request_id=request_id,
+            owner_origin_boundary=context.origin_boundary,
+            sent_boundary=sent_boundary,
+            response_covers_full_quantity=walk is not None,
+            payload_matches_request=parsed.instrument_name == context.instrument_name,
+            payload_well_formed=parsed.well_formed and parsed.state == "open",
+        )
+        family = self._component_request_family(context.purpose)
+        key = (family, context.owner_identity)
+        members = self._paired_responses.setdefault(key, {})
+        members[role] = _ComponentRestResponse(witness=witness, book=parsed)
+        if set(members) != {ComponentLegRole.SHORT, ComponentLegRole.LONG}:
+            return ()
+        short_response = members[ComponentLegRole.SHORT]
+        long_response = members[ComponentLegRole.LONG]
+        pair = component_pair_witness(
+            short=short_response.witness,
+            long=long_response.witness,
+        )
+        self._refresh_sources(reducer, pair.boundary)
+        if family == "COMPONENT_ADMISSION":
+            origin = self._candidate_origins.get(context.owner_identity)
+            if origin is None:
+                self._retire_component_response_pair(key)
+                return ()
+            refreshed = self._refresh_component_admission_facts(
+                reducer=reducer,
+                origin=origin,
+                pair=pair,
+                short_book=short_response.book,
+                long_book=long_response.book,
+            )
+            transition = self.owner.settle_component_admission(
+                candidate_identity=context.owner_identity,
+                refreshed_facts=refreshed,
+                pair_witness=pair,
+            )
+            intents = self._consume_transition(transition, (refreshed,))
+        else:
+            anchor = self._anchor_for_owner_identity(context.owner_identity)
+            if anchor is None:
+                self._retire_component_response_pair(key)
+                return ()
+            quote = self._component_quote_from_rest_pair(
+                reducer=reducer,
+                anchor=anchor,
+                kind=ComponentBookQuoteKind.CLOSE,
+                short_book=short_response.book,
+                long_book=long_response.book,
+                boundary=pair.boundary,
+            )
+            facts = self._project_position(
+                reducer=reducer,
+                anchor=anchor,
+                boundary=pair.boundary,
+                component_pair=pair,
+                component_quote=quote,
+                component_short_quote_source=SourceFact(
+                    pair.short.source_identity,
+                    pair.short.boundary,
+                ),
+                component_long_quote_source=SourceFact(
+                    pair.long.source_identity,
+                    pair.long.boundary,
+                ),
+            )
+            transition = self.owner.accept_component_post_close_response(
+                anchor_identity=anchor.anchor_identity,
+                refreshed_facts=facts,
+                pair_witness=pair,
+            )
+            intents = self._consume_transition(transition, ())
+        self._retire_component_response_pair(key)
+        return intents
+
+    def _fail_component_response(
+        self,
+        *,
+        reducer: RadarReducer,
+        request_id: int,
+        boundary: DownstreamFactBoundary,
+    ) -> tuple[ShadowRpcIntent, ...]:
+        transition = self.owner.note_request_failure(
+            request_id=request_id,
+            boundary=boundary,
+            terminal_status=PostCloseAttemptStatus.ERROR,
+        )
+        return self._consume_ordinary_post_close_terminal(
+            reducer=reducer,
+            request_id=request_id,
+            boundary=boundary,
+            transition=transition,
+        )
+
+    @staticmethod
+    def _component_request_family(purpose: str) -> str:
+        if purpose.startswith("COMPONENT_ADMISSION_"):
+            return "COMPONENT_ADMISSION"
+        if purpose.startswith("COMPONENT_POST_CLOSE_"):
+            return "COMPONENT_POST_CLOSE"
+        raise ValueError("component request purpose is outside the bounded route")
+
+    def _retire_component_response_pair(self, key: tuple[str, str]) -> None:
+        members = self._paired_responses.pop(key, {})
+        for member in members.values():
+            self._requests.pop(member.witness.request_id, None)
+
+    def _refresh_component_admission_facts(
+        self,
+        *,
+        reducer: RadarReducer,
+        origin: UnderwritingFacts,
+        pair: ComponentBookPairWitness,
+        short_book: _RestBook,
+        long_book: _RestBook,
+    ) -> UnderwritingFacts:
+        short_name = origin.short_leg_instrument_name
+        long_name = origin.long_leg_instrument_name
+        short = self._option_sources.get(short_name) if short_name is not None else None
+        long = self._option_sources.get(long_name) if long_name is not None else None
+        tracker = reducer.trackers.get(short_name) if short_name is not None else None
+        active_episode = (
+            tracker.episode_id
+            if tracker is not None and tracker.episode_id == origin.active_episode_identity
+            else None
+        )
+        trusted = self._trusted_interval(
+            reducer,
+            pair.boundary,
+            budget_ms=self.owner.policies.underwriting.clock_currentness_budget_ms,
+        )
+        index, index_source = self._current_index(
+            reducer,
+            trusted,
+            budget_ms=self.owner.policies.underwriting.index_currentness_budget_ms,
+        )
+        ticker, ticker_source = self._current_ticker(
+            short_name or "",
+            trusted,
+            budget_ms=self.owner.policies.underwriting.option_ticker_currentness_budget_ms,
+        )
+        platform_current = self._platform_currentness(
+            reducer,
+            pair.boundary,
+            budget_ms=self.owner.policies.underwriting.platform_currentness_budget_ms,
+        )
+        catalog_complete = reducer.option_catalog.complete and bool(
+            getattr(reducer, "_option_positive_scope_safe", False)
+        )
+        quote: ComponentBookVerticalQuote | None = None
+        quote_reasons: tuple[str, ...] = ()
+        if short is not None and long is not None and index is not None:
+            quote, quote_reasons = evaluate_component_book_vertical(
+                kind=ComponentBookQuoteKind.ENTRY,
+                short_instrument=short.instrument,
+                long_instrument=long.instrument,
+                short_side_levels=short_book.bids,
+                long_side_levels=long_book.asks,
+                index_usdc_per_btc=index,
+                target_quantity_btc=origin.target_quantity_btc,
+                fee_rate_index_fraction=self.owner.policies.underwriting.fee_rate_index_fraction,
+            )
+        unknown: list[str] = []
+        for condition, reason in (
+            (active_episode is None, "RADAR_EPISODE_NOT_ACTIVE"),
+            (not catalog_complete, "OPTION_CATALOG_INCOMPLETE"),
+            (short is None, "SHORT_OPTION_METADATA_UNKNOWN"),
+            (long is None, "LONG_OPTION_METADATA_UNKNOWN"),
+            (platform_current is None, "PLATFORM_CURRENTNESS_UNKNOWN"),
+            (trusted is None, "TRUSTED_TIME_UNKNOWN"),
+            (index is None, "INDEX_UNKNOWN"),
+            (ticker is None, "SHORT_TICKER_UNKNOWN"),
+            (
+                not pair.short.payload_well_formed or not pair.long.payload_well_formed,
+                "COMPONENT_RPC_PAYLOAD_UNKNOWN",
+            ),
+        ):
+            if condition:
+                unknown.append(reason)
+        if quote is not None and not unknown:
+            component_state = COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE
+        elif quote_reasons and not unknown:
+            component_state = NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE
+        else:
+            component_state = COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN
+            unknown.extend(quote_reasons)
+        short_instrument = short.instrument if short is not None else None
+        long_instrument = long.instrument if long is not None else None
+        return replace(
+            origin,
+            boundary=pair.boundary,
+            active_episode_identity=active_episode,
+            short_leg_identity=(
+                short.semantic_identity if short is not None else origin.short_leg_identity
+            ),
+            long_leg_identity=(
+                long.semantic_identity if long is not None else origin.long_leg_identity
+            ),
+            option_type=(
+                short_instrument.option_type.value if short_instrument is not None else None
+            ),
+            short_strike_usdc_per_btc=(
+                short_instrument.strike if short_instrument is not None else None
+            ),
+            long_strike_usdc_per_btc=(
+                long_instrument.strike if long_instrument is not None else None
+            ),
+            expiry_ms=(
+                short_instrument.expiration_timestamp_ms if short_instrument is not None else None
+            ),
+            short_leg_state=(
+                short_instrument.lifecycle_state.value if short_instrument is not None else None
+            ),
+            long_leg_state=(
+                long_instrument.lifecycle_state.value if long_instrument is not None else None
+            ),
+            short_leg_active=(short_instrument.is_active if short_instrument is not None else None),
+            long_leg_active=(long_instrument.is_active if long_instrument is not None else None),
+            option_amounts_aligned=_both_amounts_aligned(
+                short_instrument,
+                long_instrument,
+                origin.target_quantity_btc,
+            ),
+            platform_usable=platform_current,
+            trusted_time_lower_ms=(trusted.lower_ms if trusted is not None else None),
+            trusted_time_upper_ms=(trusted.upper_ms if trusted is not None else None),
+            short_leg_taker_commission_fraction=(
+                short_instrument.taker_commission if short_instrument is not None else None
+            ),
+            long_leg_taker_commission_fraction=(
+                long_instrument.taker_commission if long_instrument is not None else None
+            ),
+            index_usdc_per_btc=index,
+            short_delta=(ticker.signed_delta if ticker is not None else None),
+            short_mark_iv_fraction=(ticker.mark_iv_fraction if ticker is not None else None),
+            short_instrument_source=(short.source if short is not None else None),
+            long_instrument_source=(long.source if long is not None else None),
+            index_source=index_source,
+            ticker_source=ticker_source,
+            quote_source=None,
+            quote_refresh_witness=None,
+            unknown_reasons=tuple(sorted(set(unknown))),
+            component_state=component_state,
+            component_blockers=tuple(sorted(quote_reasons)),
+            component_quote=quote,
+            component_short_quote_source=SourceFact(
+                pair.short.source_identity,
+                pair.short.boundary,
+            ),
+            component_long_quote_source=SourceFact(
+                pair.long.source_identity,
+                pair.long.boundary,
+            ),
+            component_pair_witness=pair,
+        )
+
+    def _component_quote_from_rest_pair(
+        self,
+        *,
+        reducer: RadarReducer,
+        anchor: _Anchor,
+        kind: ComponentBookQuoteKind,
+        short_book: _RestBook,
+        long_book: _RestBook,
+        boundary: DownstreamFactBoundary,
+    ) -> ComponentBookVerticalQuote | None:
+        short = self._options_by_identity.get(anchor.short_leg_identity)
+        long = self._options_by_identity.get(anchor.long_leg_identity)
+        trusted = self._trusted_interval(
+            reducer,
+            boundary,
+            budget_ms=self.owner.policies.position.clock_currentness_budget_ms,
+        )
+        index, _ = self._current_index(
+            reducer,
+            trusted,
+            budget_ms=self.owner.policies.position.index_currentness_budget_ms,
+        )
+        if (
+            short is None
+            or long is None
+            or index is None
+            or not short_book.well_formed
+            or not long_book.well_formed
+            or short_book.state != "open"
+            or long_book.state != "open"
+        ):
+            return None
+        quote, _ = evaluate_component_book_vertical(
+            kind=kind,
+            short_instrument=short.instrument,
+            long_instrument=long.instrument,
+            short_side_levels=(
+                short_book.bids if kind is ComponentBookQuoteKind.ENTRY else short_book.asks
+            ),
+            long_side_levels=(
+                long_book.asks if kind is ComponentBookQuoteKind.ENTRY else long_book.bids
+            ),
+            index_usdc_per_btc=index,
+            target_quantity_btc=anchor.target_quantity_btc,
+            fee_rate_index_fraction=self.owner.policies.position.fee_rate_index_fraction,
+        )
+        return quote
 
     def _refresh_admission_facts(
         self,
@@ -870,29 +1267,16 @@ class FixedContractShadowRuntimeAdapter:
                 self._require_episode_snapshot_binding(reducer, snapshot)
                 snapshots.append(snapshot)
         by_episode = {snapshot.episode_identity: snapshot for snapshot in snapshots}
+        review_contexts = self._review_contexts(reducer)
         for snapshot in snapshots:
-            if snapshot.result.quotes:
-                for quote in snapshot.result.quotes:
-                    facts = self._underwriting_quote(reducer, snapshot, quote, boundary)
-                    current[facts.radar_scope_identity] = facts
-            else:
-                matching_prior = tuple(
-                    facts
-                    for facts in self._underwriting_by_scope.values()
-                    if facts.active_episode_identity == snapshot.episode_identity
-                )
-                if matching_prior:
-                    for prior in matching_prior:
-                        facts = self._replace_unknown_underwriting(
-                            reducer,
-                            prior,
-                            snapshot,
-                            boundary,
-                        )
-                        current[facts.radar_scope_identity] = facts
-                else:
-                    facts = self._underwriting_unknown(reducer, snapshot, boundary)
-                    current[facts.radar_scope_identity] = facts
+            context = review_contexts.get(snapshot.short_leg.instrument_name)
+            facts = self._underwriting_component(
+                reducer=reducer,
+                snapshot=snapshot,
+                context=context,
+                boundary=boundary,
+            )
+            current[facts.radar_scope_identity] = facts
         for scope, prior in self._underwriting_by_scope.items():
             if scope in current:
                 continue
@@ -914,6 +1298,16 @@ class FixedContractShadowRuntimeAdapter:
                 trusted_time_upper_ms=(trusted.upper_ms if trusted is not None else None),
                 quote_source=None,
                 quote_refresh_witness=None,
+                component_state=COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN,
+                component_blockers=(
+                    "RADAR_SCOPE_NOT_CURRENT"
+                    if episode_still_active
+                    else "RADAR_EPISODE_NOT_ACTIVE",
+                ),
+                component_quote=None,
+                component_short_quote_source=None,
+                component_long_quote_source=None,
+                component_pair_witness=None,
                 unknown_reasons=(
                     "RADAR_SCOPE_NOT_CURRENT"
                     if episode_still_active
@@ -923,6 +1317,7 @@ class FixedContractShadowRuntimeAdapter:
             scope_retirements.append(scope)
             if not episode_still_active:
                 episode_retirements.add(prior.active_episode_identity)
+                self._frozen_component_by_episode.pop(prior.active_episode_identity, None)
         metadata_changed = False
         for scope, facts in current.items():
             self._underwriting_by_scope[scope] = facts
@@ -940,6 +1335,307 @@ class FixedContractShadowRuntimeAdapter:
             tuple(sorted(scope_retirements)),
             tuple(sorted(episode_retirements)),
         )
+
+    def _review_contexts(self, reducer: RadarReducer) -> dict[str, ReviewContext]:
+        calculations = {
+            name: result.calculation
+            for name, result in reducer.results.items()
+            if result.calculation is not None
+        }
+        return build_review_contexts(
+            options=reducer.options,
+            calculations=calculations,
+            detector_states={
+                name: result.detector_state for name, result in reducer.results.items()
+            },
+            detector_reasons={name: result.reason for name, result in reducer.results.items()},
+            tickers=reducer.current_diagnostic_tickers,
+            option_books=reducer.option_books,
+            option_catalog_complete=reducer.option_catalog.complete,
+            index_usdc_per_btc=reducer.current_index_price_usdc_per_btc,
+            target_quantity_btc=self.owner.policies.underwriting.target_base_quantity_btc,
+            fee_rate_index_fraction=self.owner.policies.underwriting.fee_rate_index_fraction,
+        )
+
+    def _underwriting_component(
+        self,
+        *,
+        reducer: RadarReducer,
+        snapshot: AtomicScopeSnapshot,
+        context: ReviewContext | None,
+        boundary: DownstreamFactBoundary,
+    ) -> UnderwritingFacts:
+        short_name = snapshot.short_leg.instrument_name
+        short = self._option_sources.get(short_name)
+        frozen_long_name = self._frozen_component_by_episode.get(snapshot.episode_identity)
+        if frozen_long_name is None and context is not None and context.legged_structure.references:
+            frozen_long_name = context.legged_structure.references[0].long_instrument_name
+            self._frozen_component_by_episode[snapshot.episode_identity] = frozen_long_name
+        long = self._option_sources.get(frozen_long_name) if frozen_long_name is not None else None
+        short_identity = short.semantic_identity if short is not None else None
+        long_identity = long.semantic_identity if long is not None else None
+        scope_identity = canonical_identity(
+            "RadarComponentUnderwritingScopeIdentity",
+            self.owner.bindings.runtime_identity,
+            self.owner.bindings.radar_policy_identity,
+            snapshot.episode_identity,
+            short_identity,
+            long_identity or "NO_FROZEN_PROTECTIVE_COMPONENT",
+        )
+        trusted = self._trusted_interval(
+            reducer,
+            boundary,
+            budget_ms=self.owner.policies.underwriting.clock_currentness_budget_ms,
+        )
+        index, index_source = self._current_index(
+            reducer,
+            trusted,
+            budget_ms=self.owner.policies.underwriting.index_currentness_budget_ms,
+        )
+        ticker, ticker_source = self._current_ticker(
+            short_name,
+            trusted,
+            budget_ms=self.owner.policies.underwriting.option_ticker_currentness_budget_ms,
+        )
+        platform_current = self._platform_currentness(
+            reducer,
+            boundary,
+            budget_ms=self.owner.policies.underwriting.platform_currentness_budget_ms,
+        )
+        catalog_complete = reducer.option_catalog.complete and bool(
+            getattr(reducer, "_option_positive_scope_safe", False)
+        )
+        short_book = reducer.option_books.get(short_name)
+        long_book = (
+            reducer.option_books.get(frozen_long_name) if frozen_long_name is not None else None
+        )
+        short_book_source = self._option_book_source(
+            reducer,
+            short_name,
+            short_identity,
+        )
+        long_book_source = (
+            self._option_book_source(reducer, frozen_long_name, long_identity)
+            if frozen_long_name is not None
+            else None
+        )
+        component_state = COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN
+        component_blockers: list[str] = []
+        quote: ComponentBookVerticalQuote | None = None
+        if frozen_long_name is None:
+            legged_state = context.legged_structure.state if context is not None else None
+            if legged_state is LeggedReferenceState.NO_PROTECTIVE_LEG:
+                component_state = NO_PROTECTIVE_COMPONENT
+                component_blockers.append(NO_PROTECTIVE_COMPONENT)
+            elif legged_state is LeggedReferenceState.NO_TARGET_SIZE_REFERENCE:
+                component_state = NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE
+                component_blockers.append(NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE)
+            else:
+                component_blockers.extend(
+                    context.legged_structure.missing_reasons
+                    if context is not None
+                    else ("REVIEW_CONTEXT_UNKNOWN",)
+                )
+        else:
+            component_blockers.extend(
+                self._component_quote_prerequisite_reasons(
+                    catalog_complete=catalog_complete,
+                    platform_current=platform_current,
+                    trusted=trusted,
+                    index=index,
+                    short=short,
+                    long=long,
+                    short_book=short_book,
+                    long_book=long_book,
+                    short_book_source=short_book_source,
+                    long_book_source=long_book_source,
+                )
+            )
+            if not component_blockers:
+                assert short is not None
+                assert long is not None
+                assert short_book is not None
+                assert long_book is not None
+                assert index is not None
+                quote, quote_reasons = evaluate_component_book_vertical(
+                    kind=ComponentBookQuoteKind.ENTRY,
+                    short_instrument=short.instrument,
+                    long_instrument=long.instrument,
+                    short_side_levels=short_book.levels("bid"),
+                    long_side_levels=long_book.levels("ask"),
+                    index_usdc_per_btc=index,
+                    target_quantity_btc=(self.owner.policies.underwriting.target_base_quantity_btc),
+                    fee_rate_index_fraction=(
+                        self.owner.policies.underwriting.fee_rate_index_fraction
+                    ),
+                )
+                if quote is not None:
+                    component_state = COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE
+                elif any(
+                    reason.endswith("METADATA_UNKNOWN")
+                    or reason == "SHORT_STRESSED_PRICE_NON_POSITIVE"
+                    or reason == "LONG_STRESSED_PRICE_NON_POSITIVE"
+                    for reason in quote_reasons
+                ):
+                    component_blockers.extend(quote_reasons)
+                elif any(
+                    reason
+                    in {
+                        "NOT_A_PROTECTIVE_VERTICAL",
+                        "SHORT_LEG_NOT_OPEN_ACTIVE",
+                        "LONG_LEG_NOT_OPEN_ACTIVE",
+                        "SHORT_TARGET_AMOUNT_INELIGIBLE",
+                        "LONG_TARGET_AMOUNT_INELIGIBLE",
+                    }
+                    for reason in quote_reasons
+                ):
+                    component_state = NO_PROTECTIVE_COMPONENT
+                    component_blockers.extend(quote_reasons)
+                else:
+                    component_state = NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE
+                    component_blockers.extend(quote_reasons)
+
+        unknown: list[str] = []
+        for condition, reason in (
+            (not catalog_complete, "OPTION_CATALOG_INCOMPLETE"),
+            (short is None, "SHORT_OPTION_METADATA_UNKNOWN"),
+            (
+                frozen_long_name is not None and long is None,
+                "LONG_OPTION_METADATA_UNKNOWN",
+            ),
+            (platform_current is None, "PLATFORM_CURRENTNESS_UNKNOWN"),
+            (trusted is None, "TRUSTED_TIME_UNKNOWN"),
+            (index is None, "INDEX_UNKNOWN"),
+            (ticker is None, "SHORT_TICKER_UNKNOWN"),
+        ):
+            if condition:
+                unknown.append(reason)
+        if component_state == COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN:
+            unknown.extend(component_blockers)
+        short_instrument = short.instrument if short is not None else None
+        long_instrument = long.instrument if long is not None else None
+        return UnderwritingFacts(
+            boundary=boundary,
+            radar_scope_identity=scope_identity,
+            active_episode_identity=snapshot.episode_identity,
+            short_leg_identity=short_identity,
+            long_leg_identity=long_identity,
+            canonical_combo_identity=None,
+            combo_instrument_name=None,
+            option_type=(
+                short_instrument.option_type.value if short_instrument is not None else None
+            ),
+            short_strike_usdc_per_btc=(
+                short_instrument.strike if short_instrument is not None else None
+            ),
+            long_strike_usdc_per_btc=(
+                long_instrument.strike if long_instrument is not None else None
+            ),
+            expiry_ms=(
+                short_instrument.expiration_timestamp_ms if short_instrument is not None else None
+            ),
+            target_quantity_btc=self.owner.policies.underwriting.target_base_quantity_btc,
+            entry_direction="SELL" if frozen_long_name is not None else None,
+            entry_consumed_levels=(),
+            atomic_state=snapshot.result.state.value,
+            option_catalog_complete=catalog_complete,
+            combo_catalog_complete=snapshot.combo_catalog_complete,
+            short_leg_state=(
+                short_instrument.lifecycle_state.value if short_instrument is not None else None
+            ),
+            long_leg_state=(
+                long_instrument.lifecycle_state.value if long_instrument is not None else None
+            ),
+            short_leg_active=(short_instrument.is_active if short_instrument is not None else None),
+            long_leg_active=(long_instrument.is_active if long_instrument is not None else None),
+            option_amounts_aligned=_both_amounts_aligned(
+                short_instrument,
+                long_instrument,
+                self.owner.policies.underwriting.target_base_quantity_btc,
+            ),
+            combo_state=None,
+            combo_active=None,
+            combo_amount_aligned=None,
+            platform_usable=platform_current,
+            trusted_time_lower_ms=(trusted.lower_ms if trusted is not None else None),
+            trusted_time_upper_ms=(trusted.upper_ms if trusted is not None else None),
+            short_leg_taker_commission_fraction=(
+                short_instrument.taker_commission if short_instrument is not None else None
+            ),
+            long_leg_taker_commission_fraction=(
+                long_instrument.taker_commission if long_instrument is not None else None
+            ),
+            index_usdc_per_btc=index,
+            short_delta=(ticker.signed_delta if ticker is not None else None),
+            short_mark_iv_fraction=(ticker.mark_iv_fraction if ticker is not None else None),
+            quote_source=None,
+            quote_refresh_witness=None,
+            short_instrument_source=(short.source if short is not None else None),
+            long_instrument_source=(long.source if long is not None else None),
+            index_source=index_source,
+            ticker_source=ticker_source,
+            short_leg_instrument_name=short_name,
+            long_leg_instrument_name=frozen_long_name,
+            radar_band_id=snapshot.activation_band_id,
+            radar_richness_lower=(
+                snapshot.short_current.calculation.richness.lower
+                if snapshot.short_current is not None
+                and snapshot.short_current.calculation is not None
+                else None
+            ),
+            radar_richness_upper=(
+                snapshot.short_current.calculation.richness.upper
+                if snapshot.short_current is not None
+                and snapshot.short_current.calculation is not None
+                else None
+            ),
+            unknown_reasons=tuple(sorted(set(unknown))),
+            component_state=component_state,
+            component_blockers=tuple(sorted(set(component_blockers))),
+            component_quote=quote,
+            component_short_quote_source=short_book_source,
+            component_long_quote_source=long_book_source,
+            component_pair_witness=None,
+        )
+
+    @staticmethod
+    def _component_quote_prerequisite_reasons(
+        *,
+        catalog_complete: bool,
+        platform_current: bool | None,
+        trusted: TimeInterval | None,
+        index: Decimal | None,
+        short: _OptionSource | None,
+        long: _OptionSource | None,
+        short_book: object,
+        long_book: object,
+        short_book_source: SourceFact | None,
+        long_book_source: SourceFact | None,
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
+        for condition, reason in (
+            (not catalog_complete, "OPTION_CATALOG_INCOMPLETE"),
+            (platform_current is None, "PLATFORM_CURRENTNESS_UNKNOWN"),
+            (trusted is None, "TRUSTED_TIME_UNKNOWN"),
+            (index is None, "INDEX_UNKNOWN"),
+            (short is None, "SHORT_OPTION_METADATA_UNKNOWN"),
+            (long is None, "LONG_OPTION_METADATA_UNKNOWN"),
+            (
+                short_book is None
+                or getattr(short_book, "state", None) is not BookState.USABLE
+                or short_book_source is None,
+                "SHORT_OPTION_BOOK_UNKNOWN",
+            ),
+            (
+                long_book is None
+                or getattr(long_book, "state", None) is not BookState.USABLE
+                or long_book_source is None,
+                "LONG_OPTION_BOOK_UNKNOWN",
+            ),
+        ):
+            if condition:
+                reasons.append(reason)
+        return tuple(reasons)
 
     def _underwriting_quote(
         self,
@@ -1222,10 +1918,13 @@ class FixedContractShadowRuntimeAdapter:
         rpc_witness: RpcAdmissionRefreshWitness | None = None,
         rpc_levels: tuple[tuple[Decimal, Decimal], ...] = (),
         rpc_quote_known: bool = False,
+        component_pair: ComponentBookPairWitness | None = None,
+        component_quote: ComponentBookVerticalQuote | None = None,
+        component_short_quote_source: SourceFact | None = None,
+        component_long_quote_source: SourceFact | None = None,
     ) -> PositionFacts:
         short = self._options_by_identity.get(anchor.short_leg_identity)
         long = self._options_by_identity.get(anchor.long_leg_identity)
-        combo = self._combos_by_identity.get(anchor.canonical_combo_identity)
         short_live = (
             self._option_sources.get(short.instrument.instrument_name)
             if short is not None
@@ -1233,9 +1932,6 @@ class FixedContractShadowRuntimeAdapter:
         )
         long_live = (
             self._option_sources.get(long.instrument.instrument_name) if long is not None else None
-        )
-        combo_live = (
-            self._combo_sources.get(combo.instrument.instrument_name) if combo is not None else None
         )
         structure_values: tuple[bool | None, ...] = (
             (
@@ -1246,11 +1942,6 @@ class FixedContractShadowRuntimeAdapter:
             (
                 long_live.semantic_identity == anchor.long_leg_identity
                 if long_live is not None
-                else None
-            ),
-            (
-                combo_live.semantic_identity == anchor.canonical_combo_identity
-                if combo_live is not None
                 else None
             ),
         )
@@ -1285,88 +1976,99 @@ class FixedContractShadowRuntimeAdapter:
             trusted,
             budget_ms=self.owner.policies.position.option_ticker_currentness_budget_ms,
         )
-        close_direction = "BUY" if anchor.entry_direction == "SELL" else "SELL"
-        retained_witness = (
-            self._subscription_witness(
-                reducer,
-                combo.instrument.instrument_name,
-                anchor.canonical_combo_identity,
-            )
-            if combo is not None
-            else None
-        )
-        fresh_witness: SubscriptionAdmissionRefreshWitness | RpcAdmissionRefreshWitness | None = (
-            retained_witness
-            if retained_witness is not None and retained_witness.boundary == boundary
-            else None
-        )
-        quote_source = (
-            SourceFact(retained_witness.source_identity, retained_witness.boundary)
-            if retained_witness is not None
-            else None
-        )
-        if rpc_witness is not None:
-            fresh_witness = rpc_witness
-            quote_source = SourceFact(rpc_witness.source_identity, rpc_witness.boundary)
+        close_direction = "BUY"
         option_availability = _option_availability(
             short_live,
             long_live,
             anchor.target_quantity_btc,
         )
-        atomic_availability = _atomic_availability(
-            reducer,
-            combo_live,
-            retained_witness,
-            anchor.target_quantity_btc,
+        atomic_availability = (
+            CloseAtomicAvailability.KNOWN_UNAVAILABLE
+            if reducer.combo_catalog.complete
+            else CloseAtomicAvailability.UNKNOWN
         )
-        levels: tuple[tuple[Decimal, Decimal], ...] = ()
-        book_availability = CloseBookAvailability.UNKNOWN
-        if rpc_witness is not None:
-            if rpc_quote_known:
-                atomic_availability = CloseAtomicAvailability.ACTIVE
-                levels = rpc_levels
-                book_availability = CloseBookAvailability.FULL_QUANTITY
-            else:
-                atomic_availability = CloseAtomicAvailability.UNKNOWN
-        elif (
-            atomic_availability is CloseAtomicAvailability.ACTIVE
-            and combo is not None
-            and (book := reducer.combo_books.get(combo.instrument.instrument_name)) is not None
-            and book.state is BookState.USABLE
-        ):
-            walk = walk_target_depth(
-                book.levels("ask" if close_direction == "BUY" else "bid"),
-                anchor.target_quantity_btc,
+        short_book = (
+            reducer.option_books.get(short.instrument.instrument_name)
+            if short is not None
+            else None
+        )
+        long_book = (
+            reducer.option_books.get(long.instrument.instrument_name) if long is not None else None
+        )
+        if component_pair is None:
+            component_short_quote_source = (
+                self._option_book_source(
+                    reducer,
+                    short.instrument.instrument_name,
+                    anchor.short_leg_identity,
+                )
+                if short is not None
+                else None
             )
-            if walk is None:
-                book_availability = CloseBookAvailability.INSUFFICIENT
-            else:
-                levels = tuple((level.price, level.amount) for level in walk.consumed)
-                book_availability = CloseBookAvailability.FULL_QUANTITY
-        component_reference = _component_reference(
-            reducer,
-            short_live,
-            long_live,
-            anchor.target_quantity_btc,
+            component_long_quote_source = (
+                self._option_book_source(
+                    reducer,
+                    long.instrument.instrument_name,
+                    anchor.long_leg_identity,
+                )
+                if long is not None
+                else None
+            )
+            if (
+                component_quote is None
+                and short is not None
+                and long is not None
+                and short_book is not None
+                and long_book is not None
+                and short_book.state is BookState.USABLE
+                and long_book.state is BookState.USABLE
+                and component_short_quote_source is not None
+                and component_long_quote_source is not None
+                and index is not None
+            ):
+                component_quote, _ = evaluate_component_book_vertical(
+                    kind=ComponentBookQuoteKind.CLOSE,
+                    short_instrument=short.instrument,
+                    long_instrument=long.instrument,
+                    short_side_levels=short_book.levels("ask"),
+                    long_side_levels=long_book.levels("bid"),
+                    index_usdc_per_btc=index,
+                    target_quantity_btc=anchor.target_quantity_btc,
+                    fee_rate_index_fraction=self.owner.policies.position.fee_rate_index_fraction,
+                )
+        component_books_known = (
+            (component_pair.short.payload_well_formed and component_pair.long.payload_well_formed)
+            if component_pair is not None
+            else (
+                short_book is not None
+                and long_book is not None
+                and short_book.state is BookState.USABLE
+                and long_book.state is BookState.USABLE
+                and component_short_quote_source is not None
+                and component_long_quote_source is not None
+            )
         )
+        if component_quote is not None:
+            component_reference = PredicateTruth.TRUE
+            book_availability = CloseBookAvailability.FULL_QUANTITY
+        elif component_books_known:
+            component_reference = PredicateTruth.FALSE
+            book_availability = CloseBookAvailability.INSUFFICIENT
+        else:
+            component_reference = PredicateTruth.UNKNOWN
+            book_availability = CloseBookAvailability.UNKNOWN
         platform_current = self._platform_currentness(
             reducer,
             boundary,
             budget_ms=self.owner.policies.position.platform_currentness_budget_ms,
         )
-        required_sources = _required_sources_continuous(
+        required_sources = _required_component_sources_continuous(
             platform_current=platform_current,
             trusted=trusted,
             index=index,
             ticker=ticker,
             short=short_live,
             long=long_live,
-            combo=combo_live,
-            witness=retained_witness,
-            atomic_availability=atomic_availability,
-            previously_accepted_combo_quote=True,
-            previously_accepted_index=True,
-            previously_accepted_ticker=True,
             natural_terminal_boundary_reached=natural_terminal_boundary_reached,
         )
         return PositionFacts(
@@ -1394,11 +2096,12 @@ class FixedContractShadowRuntimeAdapter:
                 atomic_availability=atomic_availability,
                 component_reference=component_reference,
                 book_availability=book_availability,
-                consumed_levels=levels,
+                consumed_levels=(),
+                component_quote=component_quote,
             ),
             close_direction=close_direction,
-            quote_source=quote_source,
-            quote_refresh_witness=fresh_witness,
+            quote_source=None,
+            quote_refresh_witness=None,
             short_leg_taker_commission_fraction=(
                 short_live.instrument.taker_commission if short_live is not None else None
             ),
@@ -1409,7 +2112,7 @@ class FixedContractShadowRuntimeAdapter:
             long_commission_source=(long_live.source if long_live is not None else None),
             index_source=index_source,
             ticker_source=ticker_source,
-            current_combo_subscription_witness=retained_witness,
+            current_combo_subscription_witness=None,
             lifecycle_short_source=(
                 short_live.source
                 if short_live is not None
@@ -1422,6 +2125,10 @@ class FixedContractShadowRuntimeAdapter:
                 and long_live.instrument.lifecycle_state.value in {"delivered", "archivized"}
                 else None
             ),
+            component_quote=component_quote,
+            component_short_quote_source=component_short_quote_source,
+            component_long_quote_source=component_long_quote_source,
+            component_pair_witness=component_pair,
         )
 
     def _consume_transition(
@@ -1440,7 +2147,15 @@ class FixedContractShadowRuntimeAdapter:
                     causal_seq=retirement.boundary.causal_seq,
                 ),
             )
-            self._requests.pop(retirement.request_id, None)
+            retired_context = self._requests.pop(retirement.request_id, None)
+            if retired_context is not None and retired_context.role is not None:
+                self._paired_responses.pop(
+                    (
+                        self._component_request_family(retired_context.purpose),
+                        retired_context.owner_identity,
+                    ),
+                    None,
+                )
         facts_by_slot = {
             canonical_identity(
                 "UnderwritingPositionSlotKeyIdentity",
@@ -1467,11 +2182,17 @@ class FixedContractShadowRuntimeAdapter:
                 self._remember_anchor(value)
         result: list[ShadowRpcIntent] = []
         for intent in transition.request_intents:
+            role = (
+                ComponentLegRole.SHORT
+                if "_SHORT_" in intent.purpose
+                else (ComponentLegRole.LONG if "_LONG_" in intent.purpose else None)
+            )
             context = _RequestContext(
                 purpose=intent.purpose,
                 owner_identity=intent.owner_identity,
                 instrument_name=str(intent.params["instrument_name"]),
                 origin_boundary=intent.origin_boundary,
+                role=role,
             )
             self._requests[intent.request_id] = context
             result.append(self._shadow_intent(intent))
@@ -1489,18 +2210,29 @@ class FixedContractShadowRuntimeAdapter:
     ) -> tuple[ShadowRpcIntent, ...]:
         context = self._requests.get(request_id)
         intents = list(self._consume_transition(transition, ()))
-        if (
-            context is None
-            or context.purpose != "POST_CLOSE_QUOTE"
-            or not any(
-                emitted.object_kind == "POST_CLOSE_ATTEMPT_TERMINAL"
-                for emitted in transition.emitted
+        terminal_kinds = {
+            emitted.object_kind
+            for emitted in transition.emitted
+            if emitted.object_kind in {"ADMISSION_ATTEMPT_TERMINAL", "POST_CLOSE_ATTEMPT_TERMINAL"}
+        }
+        if context is None or not terminal_kinds:
+            return tuple(intents)
+        if context.role is not None:
+            self._paired_responses.pop(
+                (
+                    self._component_request_family(context.purpose),
+                    context.owner_identity,
+                ),
+                None,
             )
-        ):
+        self._requests.pop(request_id, None)
+        is_post_close = context.purpose == "POST_CLOSE_QUOTE" or context.purpose.startswith(
+            "COMPONENT_POST_CLOSE_"
+        )
+        if not is_post_close or "POST_CLOSE_ATTEMPT_TERMINAL" not in terminal_kinds:
             return tuple(intents)
         anchor = self._anchors.get(context.owner_identity)
         if anchor is None:
-            self._requests.pop(request_id, None)
             return tuple(intents)
         self._refresh_sources(reducer, boundary)
         facts = self._project_position(
@@ -1518,18 +2250,29 @@ class FixedContractShadowRuntimeAdapter:
             allocate_request_id=reject_second_attempt,
         )
         intents.extend(self._consume_transition(settlement, ()))
-        self._requests.pop(request_id, None)
         return tuple(intents)
 
     def _shadow_intent(self, intent: RpcRequestIntent) -> ShadowRpcIntent:
-        if intent.purpose == "ADMISSION_REFRESH":
+        if intent.purpose in {
+            "ADMISSION_REFRESH",
+            "COMPONENT_ADMISSION_SHORT_REFRESH",
+            "COMPONENT_ADMISSION_LONG_REFRESH",
+        }:
             purpose = RpcPurpose.ADMISSION_REFRESH
-            send_budget = self.owner.policies.underwriting.combo_snapshot_send_budget_ms
-            response_budget = self.owner.policies.underwriting.combo_snapshot_response_budget_ms
-        elif intent.purpose == "POST_CLOSE_QUOTE":
+            send_budget = self.owner.policies.underwriting.component_book_snapshot_send_budget_ms
+            response_budget = (
+                self.owner.policies.underwriting.component_book_snapshot_response_budget_ms
+            )
+        elif intent.purpose in {
+            "POST_CLOSE_QUOTE",
+            "COMPONENT_POST_CLOSE_SHORT_REFRESH",
+            "COMPONENT_POST_CLOSE_LONG_REFRESH",
+        }:
             purpose = RpcPurpose.POST_CLOSE_REFRESH
-            send_budget = self.owner.policies.position.combo_snapshot_send_budget_ms
-            response_budget = self.owner.policies.position.combo_snapshot_response_budget_ms
+            send_budget = self.owner.policies.position.component_book_snapshot_send_budget_ms
+            response_budget = (
+                self.owner.policies.position.component_book_snapshot_response_budget_ms
+            )
         else:
             raise ValueError("owner returned an unknown typed request purpose")
         return ShadowRpcIntent(
@@ -1559,10 +2302,10 @@ class FixedContractShadowRuntimeAdapter:
         self._anchors[identity] = _Anchor(
             anchor_identity=identity,
             entry_boundary=DownstreamFactBoundary.from_object(value["fact_boundary"]),
-            canonical_combo_identity=str(payload["canonical_combo_identity"]),
             short_leg_identity=str(leg_ids[0]),
             long_leg_identity=str(leg_ids[1]),
-            entry_direction=str(payload["entry_direction"]),
+            short_instrument_name=str(payload["short_leg_instrument_name"]),
+            long_instrument_name=str(payload["long_leg_instrument_name"]),
             target_quantity_btc=_decimal(payload["full_quantity_btc"]),
         )
 
@@ -1570,18 +2313,27 @@ class FixedContractShadowRuntimeAdapter:
         self,
         scope_retirements: Sequence[str],
         episode_retirements: Sequence[str],
-    ) -> None:
+        *,
+        boundary: DownstreamFactBoundary,
+    ) -> tuple[ShadowRpcIntent, ...]:
         if not scope_retirements and not episode_retirements:
-            return
+            return ()
+        intents: list[ShadowRpcIntent] = []
         for scope_identity in scope_retirements:
             self._underwriting_by_scope.pop(scope_identity, None)
             self._workbench_underwriting_metadata_by_scope.pop(scope_identity, None)
             self.owner.retire_underwriting_scope(scope_identity)
         for episode_identity in episode_retirements:
-            self.owner.retire_radar_episode(episode_identity)
+            transition = self.owner.retire_radar_episode(
+                episode_identity,
+                boundary=boundary,
+            )
+            intents.extend(self._consume_transition(transition, ()))
+            self._frozen_component_by_episode.pop(episode_identity, None)
         self._rebuild_underwriting_metadata()
         self._prune_owner_refs()
         self._prune_semantic_sources()
+        return tuple(intents)
 
     def _rebuild_underwriting_metadata(self) -> None:
         self._workbench_underwriting_metadata = tuple(
@@ -1599,16 +2351,25 @@ class FixedContractShadowRuntimeAdapter:
             if anchor_identity not in active_trades:
                 self._anchors.pop(anchor_identity, None)
         for request_id, context in tuple(self._requests.items()):
-            owners = active_candidates if context.purpose == "ADMISSION_REFRESH" else active_trades
+            owners = (
+                active_candidates
+                if context.purpose == "ADMISSION_REFRESH"
+                or context.purpose.startswith("COMPONENT_ADMISSION_")
+                else active_trades
+            )
             if context.owner_identity not in owners:
                 self._requests.pop(request_id, None)
+        for key in tuple(self._paired_responses):
+            family, owner_identity = key
+            owners = active_candidates if family == "COMPONENT_ADMISSION" else active_trades
+            if owner_identity not in owners:
+                self._paired_responses.pop(key, None)
 
     def _prune_semantic_sources(self) -> None:
         retained_option_ids = {source.semantic_identity for source in self._option_sources.values()}
         retained_combo_ids = {source.semantic_identity for source in self._combo_sources.values()}
         for anchor in self._anchors.values():
             retained_option_ids.update({anchor.short_leg_identity, anchor.long_leg_identity})
-            retained_combo_ids.add(anchor.canonical_combo_identity)
         self._options_by_identity = {
             identity: source
             for identity, source in self._options_by_identity.items()
@@ -1664,6 +2425,39 @@ class FixedContractShadowRuntimeAdapter:
             session_epoch=receipt.session_epoch,
             subscription_generation=receipt.subscription_generation,
             prev_change_id=receipt.prev_change_id,
+        )
+
+    def _option_book_source(
+        self,
+        reducer: RadarReducer,
+        instrument_name: str,
+        option_identity: str | None,
+    ) -> SourceFact | None:
+        if option_identity is None:
+            return None
+        receipt = reducer.accepted_book_receipts.get(instrument_name)
+        book = reducer.option_books.get(instrument_name)
+        if (
+            receipt is None
+            or book is None
+            or book.state is not BookState.USABLE
+            or receipt.session_epoch != self._session_epoch
+        ):
+            return None
+        boundary = self._boundary(reducer, receipt.boundary)
+        return SourceFact(
+            canonical_identity(
+                "OptionBookSourceIdentity",
+                option_identity,
+                receipt.session_epoch,
+                receipt.subscription_generation,
+                receipt.snapshot_kind,
+                receipt.prev_change_id,
+                receipt.change_id,
+                receipt.source_timestamp_ms,
+                boundary.as_object(),
+            ),
+            boundary,
         )
 
     def _trusted_interval(
@@ -1758,10 +2552,35 @@ class FixedContractShadowRuntimeAdapter:
         anchor = self._anchor_for_owner_identity(context.owner_identity)
         if anchor is None:
             return "ask", self.owner.policies.position.target_base_quantity_btc
-        close_direction = "BUY" if anchor.entry_direction == "SELL" else "SELL"
+        return "ask", anchor.target_quantity_btc
+
+    def _component_request_side_and_quantity(
+        self,
+        context: _RequestContext,
+    ) -> tuple[str, Decimal]:
+        role = context.role
+        if role is None:
+            raise ValueError("component request context lacks a leg role")
+        if context.purpose.startswith("COMPONENT_ADMISSION_"):
+            origin = self._candidate_origins.get(context.owner_identity)
+            target = (
+                origin.target_quantity_btc
+                if origin is not None
+                else self.owner.policies.underwriting.target_base_quantity_btc
+            )
+            return (
+                "bid" if role is ComponentLegRole.SHORT else "ask",
+                target,
+            )
+        anchor = self._anchor_for_owner_identity(context.owner_identity)
+        target = (
+            anchor.target_quantity_btc
+            if anchor is not None
+            else self.owner.policies.position.target_base_quantity_btc
+        )
         return (
-            "ask" if close_direction == "BUY" else "bid",
-            anchor.target_quantity_btc,
+            "ask" if role is ComponentLegRole.SHORT else "bid",
+            target,
         )
 
     def _require_bindings(self, reducer: RadarReducer) -> None:
@@ -1971,6 +2790,27 @@ def _required_sources_continuous(
             return None
         return True
     return None
+
+
+def _required_component_sources_continuous(
+    *,
+    platform_current: bool | None,
+    trusted: TimeInterval | None,
+    index: Decimal | None,
+    ticker: TickerState | None,
+    short: _OptionSource | None,
+    long: _OptionSource | None,
+    natural_terminal_boundary_reached: bool = False,
+) -> bool | None:
+    if platform_current is False or index is None or ticker is None:
+        return False
+    if platform_current is None or trusted is None or short is None or long is None:
+        if not natural_terminal_boundary_reached:
+            return None
+    if natural_terminal_boundary_reached:
+        if platform_current is None or short is None or long is None:
+            return None
+    return True
 
 
 def _first_trusted_time_crossing(

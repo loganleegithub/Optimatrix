@@ -25,12 +25,13 @@ class PolicyChainError(ValueError):
 class UnderwritingPolicy:
     identity: str
     policy_semantic_name: str
+    execution_model: str
     radar_policy_identity: str
     target_base_quantity_btc: Decimal
     clock_currentness_budget_ms: int
     platform_currentness_budget_ms: int
-    combo_snapshot_send_budget_ms: int
-    combo_snapshot_response_budget_ms: int
+    component_book_snapshot_send_budget_ms: int
+    component_book_snapshot_response_budget_ms: int
     index_currentness_budget_ms: int
     option_ticker_currentness_budget_ms: int
     fee_role: str
@@ -65,12 +66,13 @@ class UnderwritingPolicy:
 class PositionPolicy:
     identity: str
     policy_semantic_name: str
+    execution_model: str
     underwriting_policy_identity: str
     target_base_quantity_btc: Decimal
     clock_currentness_budget_ms: int
     platform_currentness_budget_ms: int
-    combo_snapshot_send_budget_ms: int
-    combo_snapshot_response_budget_ms: int
+    component_book_snapshot_send_budget_ms: int
+    component_book_snapshot_response_budget_ms: int
     index_currentness_budget_ms: int
     option_ticker_currentness_budget_ms: int
     fee_role: str
@@ -195,6 +197,11 @@ def _parse_underwriting(raw: dict[str, object], identity: str) -> UnderwritingPo
             "SHORT_VOL_PUBLIC_SHADOW_UNDERWRITING_POLICY",
             "policy_semantic_name",
         ),
+        execution_model=_exact_string(
+            raw["execution_model"],
+            "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL",
+            "execution_model",
+        ),
         radar_policy_identity=_require_identity(
             raw["radar_policy_identity"], "radar_policy_identity"
         ),
@@ -207,11 +214,13 @@ def _parse_underwriting(raw: dict[str, object], identity: str) -> UnderwritingPo
         platform_currentness_budget_ms=_positive_ms(
             raw["platform_currentness_budget_ms"], "platform_currentness_budget_ms"
         ),
-        combo_snapshot_send_budget_ms=_positive_ms(
-            raw["combo_snapshot_send_budget_ms"], "combo_snapshot_send_budget_ms"
+        component_book_snapshot_send_budget_ms=_positive_ms(
+            raw["component_book_snapshot_send_budget_ms"],
+            "component_book_snapshot_send_budget_ms",
         ),
-        combo_snapshot_response_budget_ms=_positive_ms(
-            raw["combo_snapshot_response_budget_ms"], "combo_snapshot_response_budget_ms"
+        component_book_snapshot_response_budget_ms=_positive_ms(
+            raw["component_book_snapshot_response_budget_ms"],
+            "component_book_snapshot_response_budget_ms",
         ),
         index_currentness_budget_ms=_positive_ms(
             raw["index_currentness_budget_ms"], "index_currentness_budget_ms"
@@ -278,6 +287,11 @@ def _parse_position(raw: dict[str, object], identity: str) -> PositionPolicy:
             "SHORT_VOL_PUBLIC_SHADOW_POSITION_POLICY",
             "policy_semantic_name",
         ),
+        execution_model=_exact_string(
+            raw["execution_model"],
+            "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL",
+            "execution_model",
+        ),
         underwriting_policy_identity=_require_identity(
             raw["underwriting_policy_identity"], "underwriting_policy_identity"
         ),
@@ -290,11 +304,13 @@ def _parse_position(raw: dict[str, object], identity: str) -> PositionPolicy:
         platform_currentness_budget_ms=_positive_ms(
             raw["platform_currentness_budget_ms"], "platform_currentness_budget_ms"
         ),
-        combo_snapshot_send_budget_ms=_positive_ms(
-            raw["combo_snapshot_send_budget_ms"], "combo_snapshot_send_budget_ms"
+        component_book_snapshot_send_budget_ms=_positive_ms(
+            raw["component_book_snapshot_send_budget_ms"],
+            "component_book_snapshot_send_budget_ms",
         ),
-        combo_snapshot_response_budget_ms=_positive_ms(
-            raw["combo_snapshot_response_budget_ms"], "combo_snapshot_response_budget_ms"
+        component_book_snapshot_response_budget_ms=_positive_ms(
+            raw["component_book_snapshot_response_budget_ms"],
+            "component_book_snapshot_response_budget_ms",
         ),
         index_currentness_budget_ms=_positive_ms(
             raw["index_currentness_budget_ms"], "index_currentness_budget_ms"
@@ -352,11 +368,12 @@ def _validate_shared_policy_members(
     underwriting: UnderwritingPolicy, position: PositionPolicy
 ) -> None:
     shared = (
+        "execution_model",
         "target_base_quantity_btc",
         "clock_currentness_budget_ms",
         "platform_currentness_budget_ms",
-        "combo_snapshot_send_budget_ms",
-        "combo_snapshot_response_budget_ms",
+        "component_book_snapshot_send_budget_ms",
+        "component_book_snapshot_response_budget_ms",
         "index_currentness_budget_ms",
         "option_ticker_currentness_budget_ms",
         "fee_role",

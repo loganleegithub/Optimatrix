@@ -29,6 +29,13 @@ from short_vol_underwriting.model import FactBoundary
 ROOT = Path(__file__).resolve().parents[1]
 CODE = "a" * 40
 RUNTIME = "sha256:" + "b" * 64
+COMPONENT_NON_CLAIMS = [
+    "NOT_AN_ORDER",
+    "NOT_A_FILL",
+    "NOT_AN_ATOMIC_QUOTE",
+    "NO_LIQUIDITY_RESERVATION",
+    "ATOMIC_EXECUTABILITY_UNPROVEN",
+]
 
 
 def _boundary(causal_seq: int) -> FactBoundary:
@@ -67,6 +74,53 @@ def _system(tmp_path: Path) -> tuple[ShadowStateStore, ShadowCaseStore, RuntimeB
 
 def _scope_identity(suffix: str) -> str:
     return canonical_identity("RadarScope", suffix)
+
+
+def _component_source_refs(*, suffix: str, causal_seq: int) -> list[dict[str, object]]:
+    return [
+        {
+            "canonical_leg_role": role,
+            "source_identity": canonical_identity("ComponentSource", suffix, role, causal_seq),
+            "receipt_fact_boundary": _boundary(causal_seq).as_object(),
+        }
+        for role in ("SHORT", "LONG")
+    ]
+
+
+def _component_legs(*, close: bool = False) -> list[dict[str, object]]:
+    specifications = (
+        (
+            "SHORT",
+            "BTC_USDC-8AUG26-100000-C",
+            "BUY" if close else "SELL",
+            "50" if close else "300",
+            "51" if close else "299",
+            "0.6375" if close else "3",
+        ),
+        (
+            "LONG",
+            "BTC_USDC-8AUG26-105000-C",
+            "SELL" if close else "BUY",
+            "20" if close else "100",
+            "19" if close else "101",
+            "0.2375" if close else "1.2625",
+        ),
+    )
+    return [
+        {
+            "canonical_leg_role": role,
+            "instrument_name": instrument_name,
+            "action": action,
+            "raw_consumed_levels": [{"price_usdc_per_btc": raw_price, "amount_btc": "0.1"}],
+            "raw_vwap_usdc_per_btc": raw_price,
+            "stressed_consumed_levels": [
+                {"price_usdc_per_btc": stressed_price, "amount_btc": "0.1"}
+            ],
+            "stressed_vwap_usdc_per_btc": stressed_price,
+            "fee_reserve_usdc": fee,
+        }
+        for role, instrument_name, action, raw_price, stressed_price, fee in specifications
+    ]
 
 
 def _seed_pre_shadow(
@@ -139,15 +193,15 @@ def _open_case(
                 f"{RUNTIME}:{RADAR_POLICY}:BTC_USDC-8AUG26-100000-C:{causal_seq}"
             ),
             "radar_scope_identity": _scope_identity(suffix),
-            "atomic_state": "PUBLIC_ATOMIC_QUOTE_AVAILABLE",
+            "execution_model": "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL",
+            "component_state": "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE",
+            "atomic_state_diagnostic": "NO_ACTIVE_COMBO",
             "radar_band_id": "six-to-twenty-four-hours",
             "radar_richness_interval": {"lower": "1.3", "upper": "1.31"},
-            "canonical_combo_identity": canonical_identity("Combo", suffix),
             "canonical_leg_identities": [
                 canonical_identity("Leg", f"{suffix}-short"),
                 canonical_identity("Leg", f"{suffix}-long"),
             ],
-            "combo_instrument_name": "BTC_USDC-CS-8AUG26-100000_105000",
             "short_leg_instrument_name": "BTC_USDC-8AUG26-100000-C",
             "long_leg_instrument_name": "BTC_USDC-8AUG26-105000-C",
             "expiry_ms": 1_786_150_800_000,
@@ -156,13 +210,22 @@ def _open_case(
             "long_strike_usdc_per_btc": "105000",
             "entry_direction": "SELL",
             "full_quantity_btc": "0.1",
-            "entry_consumed_levels": [{"price_usdc_per_btc": "300", "amount_btc": "0.1"}],
-            "gross_entry_credit_usdc": "30",
-            "entry_fee_reserve_usdc": "3",
-            "net_entry_credit_usdc": "27",
+            "entry_component_pair_identity": canonical_identity("ComponentPair", suffix, "entry"),
+            "entry_component_quote_source_refs": _component_source_refs(
+                suffix=f"{suffix}-entry",
+                causal_seq=causal_seq,
+            ),
+            "entry_component_legs": _component_legs(),
+            "gross_entry_credit_usdc": "19.8",
+            "entry_fee_reserve_usdc": "4.2625",
+            "net_entry_credit_usdc": "15.5375",
+            "width_usdc_per_btc": "5000",
             "payoff_cap_usdc": "500",
+            "contractual_payoff_max_loss_ex_fees_usdc": "480.2",
+            "entry_fee_reserved_payoff_loss_usdc": "484.4625",
             "future_cost_reserve_usdc": "12",
-            "underwriting_reserved_loss_usdc": "485",
+            "underwriting_reserved_loss_usdc": "496.4625",
+            "non_claims": COMPONENT_NON_CLAIMS,
         },
     )
     return entry_identity
@@ -194,7 +257,11 @@ def _censor_case(
             "net_pnl_after_public_standard_fee_reserve_usdc": None,
             "net_loss_usdc": None,
             "economic_availability": "UNKNOWN",
+            "close_component_pair_identity": None,
+            "close_component_quote_source_refs": [],
+            "close_component_legs": [],
             "censor_mask": ["STOP"],
+            "non_claims": COMPONENT_NON_CLAIMS,
         },
     )
 
@@ -323,15 +390,22 @@ def test_first_close_and_known_outcome_complete_case_with_recomputable_economics
             "terminal_state": "MATURE_KNOWN",
             "selected_exit_identity": canonical_identity("ShadowExit", "one"),
             "first_latched_close_action_identity": close_identity,
-            "gross_close_cashflow_usdc": "-5",
-            "close_fee_reserve_usdc": "3",
-            "net_close_cashflow_usdc": "-8",
-            "gross_pnl_usdc": "25",
-            "total_public_fee_reserve_usdc": "6",
-            "net_pnl_after_public_standard_fee_reserve_usdc": "19",
+            "gross_close_cashflow_usdc": "-3.2",
+            "close_fee_reserve_usdc": "0.875",
+            "net_close_cashflow_usdc": "-4.075",
+            "gross_pnl_usdc": "16.6",
+            "total_public_fee_reserve_usdc": "5.1375",
+            "net_pnl_after_public_standard_fee_reserve_usdc": "11.4625",
             "net_loss_usdc": "0",
             "economic_availability": "KNOWN",
+            "close_component_pair_identity": canonical_identity("ComponentPair", "one", "close"),
+            "close_component_quote_source_refs": _component_source_refs(
+                suffix="one-close",
+                causal_seq=6,
+            ),
+            "close_component_legs": _component_legs(close=True),
             "censor_mask": [],
+            "non_claims": COMPONENT_NON_CLAIMS,
         },
     )
 
@@ -345,7 +419,7 @@ def test_first_close_and_known_outcome_complete_case_with_recomputable_economics
     assert read.status is ShadowCaseReadStatus.COMPLETE
     assert read.first_close is not None
     assert read.outcome is not None
-    assert read.outcome["net_pnl_after_public_standard_fee_reserve_usdc"] == "19"
+    assert read.outcome["net_pnl_after_public_standard_fee_reserve_usdc"] == "11.4625"
 
     for filename in ("first-close.json", "outcome.json"):
         path = case_directory / filename
@@ -385,7 +459,7 @@ def test_case_reader_rejects_tampered_known_outcome_arithmetic(tmp_path: Path) -
     opened_boundary = _boundary(4)
     tampered = {
         "record_kind": "SHADOW_CASE_OUTCOME",
-        "schema_version": 1,
+        "schema_version": 2,
         "case_id": case_id,
         "code_identity": CODE,
         "runtime_identity": RUNTIME,
@@ -397,16 +471,22 @@ def test_case_reader_rejects_tampered_known_outcome_arithmetic(tmp_path: Path) -
         "terminal_state": "MATURE_KNOWN",
         "selected_exit_identity": canonical_identity("ShadowExit", "tampered"),
         "first_latched_close_action_identity": canonical_identity("PositionAction", "tampered"),
-        "gross_close_cashflow_usdc": "-5",
-        "close_fee_reserve_usdc": "3",
-        "net_close_cashflow_usdc": "-8",
+        "gross_close_cashflow_usdc": "-3.2",
+        "close_fee_reserve_usdc": "0.875",
+        "net_close_cashflow_usdc": "-4.075",
         "gross_pnl_usdc": "999",
-        "total_public_fee_reserve_usdc": "6",
-        "net_pnl_after_public_standard_fee_reserve_usdc": "19",
+        "total_public_fee_reserve_usdc": "5.1375",
+        "net_pnl_after_public_standard_fee_reserve_usdc": "11.4625",
         "net_loss_usdc": "0",
         "economic_availability": "KNOWN",
+        "close_component_pair_identity": canonical_identity("ComponentPair", "tampered", "close"),
+        "close_component_quote_source_refs": _component_source_refs(
+            suffix="tampered-close",
+            causal_seq=6,
+        ),
+        "close_component_legs": _component_legs(close=True),
         "censor_mask": [],
-        "non_claims": ["NOT_ACTUAL_PNL"],
+        "non_claims": COMPONENT_NON_CLAIMS,
     }
     assert _boundary(6).is_strictly_after(opened_boundary)
     (case_directory / "outcome.json").write_text(json.dumps(tampered), encoding="utf-8")

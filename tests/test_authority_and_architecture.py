@@ -177,28 +177,30 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_one_repaired_fixed_long_observation() -> None:
+def test_current_stage_closes_natural_public_shadow_after_human_stop() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
+    normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`RADAR_LONG_OBSERVATION_AUTHORIZED`" in current
-    assert (
-        "**Production Short Vol Radar:** `CANDIDATE_GENERATOR_FROZEN_WITH_BOUNDARY_REPAIR`"
-        in current
-    )
-    assert "**Persistent service:** `BOUNDED_OBSERVATION_ONLY_NO_DEPLOYMENT`" in current
-    assert (
-        "**Live commands:** `ONE_FIXED_43200_SECOND_PRODUCTION_PUBLIC_READ_ONLY_OBSERVATION`"
-        in current
-    )
-    assert "**Sole authorized closure:** `SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE`" in current
-    assert "`1,556,097` `RADAR_KNOWN` evaluations: `100%`" in current
-    assert "`58,773,561` applicable evaluations" in current
-    assert "one legal tick" in current
-    assert "`0.05 <= |Delta| <= 0.40`" in current
-    assert "any new smoke, second 43,200-second observation" in current
-    assert "`608` tests" in current
+    assert "`COMPONENT_BOOK_SHADOW_LIFECYCLE_ACCEPTED`" in current
+    assert "**Production Short Vol Radar:** `CREDIBLE_CLUE_GENERATOR_FROZEN`" in current
+    assert "**Persistent service:** `NATURAL_PUBLIC_SHADOW_STOPPED_NO_DEPLOYMENT`" in current
+    assert "**Live commands:** `NONE_AUTHORIZED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
+    assert "1,812,600 contract evaluations" in current
+    assert "1,811,662 contract evaluations" in current
+    assert "10 distinct Episodes" in current
+    assert "7 distinct Episodes" in current
+    assert "`NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE 3`" in current
+    assert "`CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE 7`" in current
+    assert "`NO_ACTIVE_COMBO 10`" in current
+    assert "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE" in current
+    assert "exactly two strictly later `public/get_order_book` responses" in normalized
+    assert "no runtime command is currently authorized" in normalized
+    assert "automatic restart" in current
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
-    assert (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()
+    assert not (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()
+    assert not (ROOT / "tasks/SHORT_VOL_COMPONENT_BOOK_SHADOW_LIFECYCLE.md").exists()
+    assert not (ROOT / "tasks/SHORT_VOL_NATURAL_SHADOW_OPERATION.md").exists()
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"
     )
@@ -262,16 +264,16 @@ def test_internal_package_dependency_direction() -> None:
             assert not forbidden, f"{path} imports higher layers: {sorted(forbidden)}"
 
 
-def test_fixed_policy_files_remain_content_identified_after_credible_clue_rebind() -> None:
+def test_fixed_policy_files_remain_content_identified_after_component_book_rebind() -> None:
     expected = {
         "policies/short-vol-fixed-public-shadow-radar.json": (
             "74f286e07f8013e6178b44421db1d4d04808e5e0b0c604a80a0fdbc50f276c21"
         ),
         "policies/short-vol-fixed-public-shadow-underwriting.json": (
-            "9fa7ff745052c2ce20ea854a9c5283c43a69349358c847052464dc2ead6f800f"
+            "3fe5d0991bc3e5505a647625929caf680855a3d580c1388864d41036f611340d"
         ),
         "policies/short-vol-fixed-public-shadow-position.json": (
-            "0585108701584fc223ad6711e37b32ffc8704e1e64c86250c166a66a08f056cd"
+            "7f21b36a69996da3d0217c2f73ad30ca289d56f3cd49b022ccfa5d7dc6d5b00d"
         ),
     }
     for relative, digest in expected.items():

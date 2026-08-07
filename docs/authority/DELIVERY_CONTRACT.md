@@ -59,8 +59,8 @@ Green tests alone never satisfy this gate.
 Pre-Shadow persistence is forbidden by default.
 
 Before `SHADOW_CASE_OPENED`, durable business writes are forbidden by default. Market facts,
-Radar, anomalies, atomic availability, Underwriting, Candidate, admission attempts, Workbench,
-funnel metrics, service state, and run summaries remain non-durable.
+Radar, anomalies, component-book counterfactuals, atomic diagnostics, Underwriting, Candidate,
+admission attempts, Workbench, funnel metrics, service state, and run summaries remain non-durable.
 
 A new durable record is permitted only when both answers are explicit:
 
@@ -91,7 +91,7 @@ Keep these distinct:
 
 - source/currentness `UNKNOWN`: repair or expose the source blocker;
 - model/forecast uncertainty: lower confidence without erasing a reviewable opportunity;
-- executable-quote `UNKNOWN`: block Shadow admission, not trader display;
+- component-book counterfactual `UNKNOWN`: block Shadow admission, not trader display;
 - post-enrollment unknown/censoring: valid durable research result.
 
 ## Validation proportionality

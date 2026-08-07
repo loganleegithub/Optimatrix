@@ -7,30 +7,29 @@ from enum import StrEnum
 
 from market_monitor import BookState, ContinuousOrderBook
 from options_domain import (
-    AmountState,
+    ComponentBookQuoteKind,
     InstrumentLifecycleState,
     OptionInstrument,
     OptionType,
-    check_target_amount,
-    stress_depth_walk_up_one_tick,
+    evaluate_component_book_vertical,
+    standard_option_fee_usdc,
 )
-from options_domain.quotes import walk_target_depth
 
 from short_vol_radar.detector import DetectorState
 from short_vol_radar.radar import DetectorCalculation, TickerState
 
 DEFAULT_ATTENTION_TOP_N = 20
-PREMIUM_FEE_CAP_FRACTION = Decimal("0.125")
 FIVE_DELTA_POINTS = Decimal("0.05")
 TARGET_TWENTY_FIVE_DELTA = Decimal("0.25")
 TARGET_ATM_DELTA = Decimal("0.50")
 _LARGE_RANK_VALUE = Decimal("1e100")
 
 LEGGED_REFERENCE_NON_CLAIMS = (
-    "DIAGNOSTIC_ONLY",
-    "NOT_AN_OFFICIAL_COMBO_QUOTE",
-    "NOT_SIMULTANEOUSLY_EXECUTABLE",
-    "CANNOT_CREATE_CANDIDATE_OR_SHADOW_ADMISSION",
+    "NOT_AN_ORDER",
+    "NOT_A_FILL",
+    "NOT_AN_ATOMIC_QUOTE",
+    "NO_LIQUIDITY_RESERVATION",
+    "CANDIDATE_REQUIRES_STRICTLY_LATER_PAIRED_REFRESH",
 )
 
 
@@ -292,30 +291,6 @@ class _HardScreenExplanation:
     blocker: str
     upgrade_condition: str
     invalidation_condition: str
-
-
-def standard_option_fee_usdc(
-    *,
-    index_usdc_per_btc: Decimal,
-    option_price_usdc_per_btc: Decimal,
-    quantity_btc: Decimal,
-    fee_rate_index_fraction: Decimal,
-) -> Decimal:
-    """Return the public standard option fee reserve, including the premium cap."""
-    for value, field in (
-        (index_usdc_per_btc, "index_usdc_per_btc"),
-        (option_price_usdc_per_btc, "option_price_usdc_per_btc"),
-        (quantity_btc, "quantity_btc"),
-    ):
-        if not value.is_finite() or value <= 0:
-            raise ValueError(f"{field} must be finite and positive")
-    if not fee_rate_index_fraction.is_finite() or fee_rate_index_fraction < 0:
-        raise ValueError("fee_rate_index_fraction must be finite and non-negative")
-    fee_per_btc = min(
-        fee_rate_index_fraction * index_usdc_per_btc,
-        PREMIUM_FEE_CAP_FRACTION * option_price_usdc_per_btc,
-    )
-    return fee_per_btc * quantity_btc
 
 
 def build_review_contexts(
@@ -653,7 +628,7 @@ def _legged_structure_context(
             reference, reasons = _legged_reference(
                 short_instrument=short_instrument,
                 long_instrument=long_instrument,
-                calculation=calculation,
+                short_book=option_books.get(short_instrument.instrument_name),
                 long_book=option_books.get(long_instrument.instrument_name),
                 index_usdc_per_btc=index_usdc_per_btc,
                 target_quantity_btc=target_quantity_btc,
@@ -690,74 +665,55 @@ def _legged_reference(
     *,
     short_instrument: OptionInstrument,
     long_instrument: OptionInstrument,
-    calculation: DetectorCalculation,
+    short_book: ContinuousOrderBook | None,
     long_book: ContinuousOrderBook | None,
     index_usdc_per_btc: Decimal,
     target_quantity_btc: Decimal,
     fee_rate_index_fraction: Decimal,
 ) -> tuple[LeggedVerticalReference | None, tuple[str, ...]]:
     reasons: list[str] = []
-    if long_instrument.amount is None:
-        reasons.append(f"{long_instrument.instrument_name}:AMOUNT_METADATA_UNKNOWN")
-    elif (
-        check_target_amount(target_quantity_btc, long_instrument.amount).state
-        is AmountState.INELIGIBLE
-    ):
-        reasons.append(f"{long_instrument.instrument_name}:TARGET_AMOUNT_INELIGIBLE")
-    if long_instrument.price_tick is None:
-        reasons.append(f"{long_instrument.instrument_name}:PRICE_TICK_METADATA_UNKNOWN")
+    if short_book is None or short_book.state is not BookState.USABLE:
+        reasons.append(f"{short_instrument.instrument_name}:BOOK_UNKNOWN")
     if long_book is None or long_book.state is not BookState.USABLE:
         reasons.append(f"{long_instrument.instrument_name}:BOOK_UNKNOWN")
     if reasons:
         return None, tuple(reasons)
-    assert long_instrument.price_tick is not None
+    assert short_book is not None
     assert long_book is not None
-    target_ask = walk_target_depth(long_book.levels("ask"), target_quantity_btc)
-    if target_ask is None:
-        return None, (f"{long_instrument.instrument_name}:TARGET_ASK_DEPTH_INSUFFICIENT",)
-    stressed_ask = stress_depth_walk_up_one_tick(target_ask, long_instrument.price_tick)
-    stressed_gross_credit = calculation.stressed_target_bid.total_value - stressed_ask.total_value
-    if stressed_gross_credit <= 0:
-        return None, (f"{long_instrument.instrument_name}:NON_POSITIVE_STRESSED_GROSS_CREDIT",)
-    short_fee = standard_option_fee_usdc(
+    quote, quote_reasons = evaluate_component_book_vertical(
+        kind=ComponentBookQuoteKind.ENTRY,
+        short_instrument=short_instrument,
+        long_instrument=long_instrument,
+        short_side_levels=short_book.levels("bid"),
+        long_side_levels=long_book.levels("ask"),
         index_usdc_per_btc=index_usdc_per_btc,
-        option_price_usdc_per_btc=calculation.stressed_target_bid.vwap,
-        quantity_btc=target_quantity_btc,
+        target_quantity_btc=target_quantity_btc,
         fee_rate_index_fraction=fee_rate_index_fraction,
     )
-    long_fee = standard_option_fee_usdc(
-        index_usdc_per_btc=index_usdc_per_btc,
-        option_price_usdc_per_btc=stressed_ask.vwap,
-        quantity_btc=target_quantity_btc,
-        fee_rate_index_fraction=fee_rate_index_fraction,
-    )
-    total_fee = short_fee + long_fee
-    net_credit = stressed_gross_credit - total_fee
-    if net_credit <= 0:
-        return None, (f"{long_instrument.instrument_name}:NON_POSITIVE_STRESSED_NET_CREDIT",)
-    width = abs(long_instrument.strike - short_instrument.strike)
-    payoff_cap = width * target_quantity_btc
-    if payoff_cap <= 0:
-        return None, (f"{long_instrument.instrument_name}:INVALID_VERTICAL_WIDTH",)
-    maximum_loss = max(Decimal(0), payoff_cap - net_credit)
+    if quote is None:
+        return None, tuple(
+            f"{long_instrument.instrument_name}:{reason}" for reason in quote_reasons
+        )
     return (
         LeggedVerticalReference(
             long_instrument_name=long_instrument.instrument_name,
             short_strike_usdc_per_btc=short_instrument.strike,
             long_strike_usdc_per_btc=long_instrument.strike,
-            raw_short_bid_vwap_usdc_per_btc=calculation.target_bid.vwap,
-            stressed_short_bid_vwap_usdc_per_btc=calculation.stressed_target_bid.vwap,
-            raw_long_ask_vwap_usdc_per_btc=target_ask.vwap,
-            stressed_long_ask_vwap_usdc_per_btc=stressed_ask.vwap,
-            stressed_gross_credit_usdc=stressed_gross_credit,
-            short_fee_reserve_usdc=short_fee,
-            long_fee_reserve_usdc=long_fee,
-            total_fee_reserve_usdc=total_fee,
-            stressed_net_credit_usdc=net_credit,
-            width_usdc_per_btc=width,
-            payoff_cap_usdc=payoff_cap,
-            maximum_loss_after_fee_reserve_usdc=maximum_loss,
-            credit_to_payoff_cap_fraction=net_credit / payoff_cap,
+            raw_short_bid_vwap_usdc_per_btc=quote.short_leg.raw.vwap,
+            stressed_short_bid_vwap_usdc_per_btc=quote.short_leg.stressed.vwap,
+            raw_long_ask_vwap_usdc_per_btc=quote.long_leg.raw.vwap,
+            stressed_long_ask_vwap_usdc_per_btc=quote.long_leg.stressed.vwap,
+            stressed_gross_credit_usdc=quote.gross_cashflow_usdc,
+            short_fee_reserve_usdc=quote.short_leg.fee_reserve_usdc,
+            long_fee_reserve_usdc=quote.long_leg.fee_reserve_usdc,
+            total_fee_reserve_usdc=quote.total_fee_reserve_usdc,
+            stressed_net_credit_usdc=quote.net_cashflow_usdc,
+            width_usdc_per_btc=quote.width_usdc_per_btc,
+            payoff_cap_usdc=quote.payoff_cap_usdc,
+            maximum_loss_after_fee_reserve_usdc=max(
+                Decimal(0), quote.payoff_cap_usdc - quote.net_cashflow_usdc
+            ),
+            credit_to_payoff_cap_fraction=(quote.net_cashflow_usdc / quote.payoff_cap_usdc),
         ),
         (),
     )

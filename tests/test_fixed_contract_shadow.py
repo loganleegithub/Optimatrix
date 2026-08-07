@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from conftest import PolicyFactory
@@ -20,9 +22,9 @@ from options_domain import (
     InstrumentLifecycleState,
     OptionInstrument,
     OptionType,
+    PriceTickMetadata,
 )
 from radar_runtime.deribit_public import (
-    InboundEnvelope,
     SendControlEvent,
     SendControlKind,
 )
@@ -48,6 +50,7 @@ from radar_runtime.runtime import (
 )
 from short_vol_radar.detector import (
     DetectorObservation,
+    DetectorState,
     EpisodeTracker,
     ObservationSignal,
     TrackerState,
@@ -60,6 +63,7 @@ from short_vol_underwriting import (
     CloseOptionAvailability,
     FixedContractShadowOwner,
     RuntimeBindings,
+    ShadowCaseStore,
     ShadowStateStore,
     SourceFact,
     SubscriptionAdmissionRefreshWitness,
@@ -345,6 +349,7 @@ def _shadow_system(
         lifecycle_state=InstrumentLifecycleState.OPEN,
         is_active=True,
         taker_commission=Decimal("0.0003"),
+        price_tick=PriceTickMetadata(Decimal("1")),
     )
     long = OptionInstrument(
         instrument_name="BTC-LONG",
@@ -355,6 +360,7 @@ def _shadow_system(
         lifecycle_state=InstrumentLifecycleState.OPEN,
         is_active=True,
         taker_commission=Decimal("0.0003"),
+        price_tick=PriceTickMetadata(Decimal("1")),
     )
     reducer.catalog_options = {short.instrument_name: short, long.instrument_name: long}
     reducer.options = dict(reducer.catalog_options)
@@ -418,10 +424,55 @@ def _shadow_system(
     tracker.activation_band_id = policies.radar.tte_bands[0].band_id
     tracker.activation_causal_seq = 1
     reducer.trackers["BTC-SHORT"] = tracker
-    reducer.option_books = {
-        "BTC-SHORT": ContinuousOrderBook("BTC-SHORT"),
-        "BTC-LONG": ContinuousOrderBook("BTC-LONG"),
-    }
+    calculation = SimpleNamespace(
+        baseline=SimpleNamespace(window_diagnostics=()),
+        delta=SimpleNamespace(lower=Decimal("0.19"), upper=Decimal("0.21")),
+        executable_bid_iv=SimpleNamespace(lower=Decimal("0.49"), upper=Decimal("0.51")),
+        richness=SimpleNamespace(lower=Decimal("1.30"), upper=Decimal("1.31")),
+        band=SimpleNamespace(clue_eligible=True),
+        delta_clue_eligible=True,
+        target_spread_ticks=Decimal("2"),
+        target_bid=SimpleNamespace(consumed=()),
+        target_ask=SimpleNamespace(consumed=()),
+    )
+    reducer.results["BTC-SHORT"] = cast(
+        Any,
+        SimpleNamespace(
+            calculation=calculation,
+            current_evaluation=SimpleNamespace(calculation=calculation),
+            detector_state=DetectorState.ANOMALY_ACTIVE,
+            reason=None,
+            band_id=policies.radar.tte_bands[0].band_id,
+        ),
+    )
+    reducer.option_books = {}
+    for instrument_name, bid, ask in (
+        ("BTC-SHORT", "300", "301"),
+        ("BTC-LONG", "100", "101"),
+    ):
+        option_book = ContinuousOrderBook(instrument_name)
+        option_book.apply(
+            {
+                "type": "snapshot",
+                "instrument_name": instrument_name,
+                "change_id": 10,
+                "timestamp": 1_000_010,
+                "bids": [["new", bid, "0.1"]],
+                "asks": [["new", ask, "0.1"]],
+            },
+            110,
+        )
+        reducer.option_books[instrument_name] = option_book
+        reducer.accepted_book_receipts[instrument_name] = AcceptedBookReceipt(
+            instrument_name=instrument_name,
+            snapshot_kind="snapshot",
+            prev_change_id=None,
+            change_id=10,
+            source_timestamp_ms=1_000_010,
+            session_epoch=1,
+            subscription_generation=1,
+            boundary=first_boundary,
+        )
     return reducer, adapter, owner
 
 
@@ -510,11 +561,15 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
         monotonic_ms=110,
         cause=CausalCause.COMBO_BOOK_CHANGED,
     )
-    (admission_intent,) = adapter.on_settled_transaction(
+    admission_intents = adapter.on_settled_transaction(
         reducer=reducer,
         commit=active_commit,
     )
-    assert admission_intent.request_id > 0
+    assert len(admission_intents) == 2
+    assert {str(intent.params["instrument_name"]) for intent in admission_intents} == {
+        "BTC-SHORT",
+        "BTC-LONG",
+    }
     (active,) = adapter._underwriting_by_scope.values()
     assert active.active_episode_identity is not None
 
@@ -533,13 +588,8 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
     )
     assert adapter._underwriting_by_scope == {}
     assert adapter.workbench_underwriting_metadata() == ()
-    inactive_availability = [
-        payload
-        for payload in _object_payloads(owner, "UNDERWRITING_AVAILABILITY_EVALUATION")
-        if payload["unknown_reasons"] == ["RADAR_EPISODE_NOT_ACTIVE"]
-    ]
-    assert len(inactive_availability) == 1
-    assert len(_object_payloads(owner, "CANDIDATE_INVALIDATION")) == 1
+    (invalidation,) = _object_payloads(owner, "CANDIDATE_INVALIDATION")
+    assert invalidation["primary_reason"] == "RADAR_POLICY_OR_EPISODE_PAUSED_ENDED_OR_CHANGED"
     assert owner.retained_state_counts["active_candidates"] == 0
     assert owner.retained_state_counts["availability_scopes"] == 0
     assert adapter.retained_state_counts["underwriting_scopes"] == 0
@@ -583,11 +633,11 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
     )
 
 
-def test_replaced_atomic_quote_scopes_remain_bounded_across_many_candidates(
+def test_frozen_component_structure_does_not_switch_to_a_later_protective_leg(
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    (first_intent,) = adapter.on_settled_transaction(
+    first_intents = adapter.on_settled_transaction(
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -595,65 +645,57 @@ def test_replaced_atomic_quote_scopes_remain_bounded_across_many_candidates(
             cause=CausalCause.COMBO_BOOK_CHANGED,
         ),
     )
-    assert first_intent.request_id > 0
-    (first_scope,) = adapter._underwriting_by_scope
-    template = reducer.combos["BTC-COMBO"]
-    replacement_count = 200
-    last_name = ""
+    assert len(first_intents) == 2
+    (current_facts,) = adapter._underwriting_by_scope.values()
+    assert current_facts.long_leg_instrument_name == "BTC-LONG"
 
-    for causal_seq in range(2, replacement_count + 2):
-        last_name = f"BTC-COMBO-{causal_seq}"
-        combo = replace(template, instrument_name=last_name)
-        book = ContinuousOrderBook(last_name)
-        book.apply(
-            {
-                "type": "snapshot",
-                "instrument_name": last_name,
-                "change_id": causal_seq * 10,
-                "timestamp": 1_000_000 + causal_seq * 10,
-                "bids": [["new", "300", "0.1"]],
-                "asks": [["new", "301", "0.1"]],
-            },
-            100 + causal_seq * 10,
-        )
-        boundary = FactBoundary(1, causal_seq, 100 + causal_seq * 10, causal_seq)
-        reducer.combos = {last_name: combo}
-        reducer.combo_books = {last_name: book}
-        reducer.accepted_book_receipts = {
-            last_name: AcceptedBookReceipt(
-                instrument_name=last_name,
-                snapshot_kind="snapshot",
-                prev_change_id=None,
-                change_id=causal_seq * 10,
-                source_timestamp_ms=1_000_000 + causal_seq * 10,
-                session_epoch=1,
-                subscription_generation=1,
-                boundary=boundary,
-            )
-        }
+    original = reducer.options["BTC-LONG"]
+    alternative = replace(
+        original,
+        instrument_name="BTC-LONG-ALT",
+        strike=Decimal("101500"),
+    )
+    reducer.options[alternative.instrument_name] = alternative
+    reducer.catalog_options[alternative.instrument_name] = alternative
+    alternative_book = ContinuousOrderBook(alternative.instrument_name)
+    alternative_book.apply(
+        {
+            "type": "snapshot",
+            "instrument_name": alternative.instrument_name,
+            "change_id": 20,
+            "timestamp": 1_000_020,
+            "bids": [["new", "120", "0.1"]],
+            "asks": [["new", "121", "0.1"]],
+        },
+        120,
+    )
+    reducer.option_books[alternative.instrument_name] = alternative_book
+    reducer.accepted_book_receipts[alternative.instrument_name] = AcceptedBookReceipt(
+        instrument_name=alternative.instrument_name,
+        snapshot_kind="snapshot",
+        prev_change_id=None,
+        change_id=20,
+        source_timestamp_ms=1_000_020,
+        session_epoch=1,
+        subscription_generation=1,
+        boundary=FactBoundary(1, 2, 120, 2),
+    )
 
-        (replacement_intent,) = adapter.on_settled_transaction(
+    assert (
+        adapter.on_settled_transaction(
             reducer=reducer,
             commit=_commit(
-                causal_seq=causal_seq,
-                monotonic_ms=100 + causal_seq * 10,
-                cause=CausalCause.COMBO_BOOK_CHANGED,
+                causal_seq=2,
+                monotonic_ms=120,
+                cause=CausalCause.OPTION_BOOK_FACT,
             ),
         )
-        assert replacement_intent.request_id > first_intent.request_id
-        assert owner.retained_state_counts["active_candidates"] == 1
-        assert owner.retained_state_counts["availability_scopes"] == 1
-        assert adapter.retained_state_counts["underwriting_scopes"] == 1
-        assert adapter.retained_state_counts["candidate_origins"] == 1
-        assert adapter.retained_state_counts["request_contexts"] == 1
-        assert adapter.retained_state_counts["current_combo_sources"] == 1
-        assert adapter.retained_state_counts["retained_combo_identities"] == 1
-
-    assert len(adapter._underwriting_by_scope) == 1
-    assert first_scope not in adapter._underwriting_by_scope
+        == ()
+    )
     (current_facts,) = adapter._underwriting_by_scope.values()
-    assert current_facts.combo_instrument_name == last_name
-    assert len(_object_payloads(owner, "CANDIDATE_INVALIDATION")) == replacement_count
+    assert current_facts.long_leg_instrument_name == "BTC-LONG"
+    assert owner.retained_state_counts["active_candidates"] == 1
+    assert adapter.retained_state_counts["request_contexts"] == 2
 
 
 def test_workbench_underwriting_metadata_reuses_unchanged_snapshot(
@@ -1102,8 +1144,8 @@ def _set_trusted_source_time(
 def _object_payloads(
     owner: FixedContractShadowOwner,
     kind: str,
-) -> list[dict[str, object]]:
-    payloads: list[tuple[int, dict[str, object]]] = []
+) -> list[dict[str, Any]]:
+    payloads: list[tuple[int, dict[str, Any]]] = []
     for value in _HISTORY_BY_OWNER[id(owner)].records:
         if value["object_kind"] != kind:
             continue
@@ -1132,954 +1174,427 @@ def _set_natural_lifecycle_ready(reducer: RadarReducer) -> None:
     reducer.catalog_options = dict(reducer.options)
 
 
-def _replace_entry_bid(reducer: RadarReducer, price: str) -> None:
-    book = ContinuousOrderBook("BTC-COMBO")
-    book.apply(
-        {
-            "type": "snapshot",
-            "instrument_name": "BTC-COMBO",
-            "change_id": 10,
-            "timestamp": 1_000_010,
-            "bids": [["new", price, "0.1"]],
-            "asks": [["new", "301", "0.1"]],
-        },
-        110,
-    )
-    reducer.combo_books["BTC-COMBO"] = book
+def _rest_option_book(
+    instrument_name: str,
+    *,
+    bid_price: str,
+    ask_price: str,
+    change_id: int,
+    amount: str = "0.1",
+) -> dict[str, object]:
+    return {
+        "instrument_name": instrument_name,
+        "state": "open",
+        "change_id": change_id,
+        "timestamp": 1_000_000 + change_id,
+        "bids": [[bid_price, amount]],
+        "asks": [[ask_price, amount]],
+    }
 
 
-def _admit_and_latch_close(
-    reducer: RadarReducer,
+def _settle_component_pair(
+    *,
     adapter: FixedContractShadowRuntimeAdapter,
-) -> int:
-    (admission_intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
-    )
-    adapter.on_request_sent(
-        request_id=admission_intent.request_id,
-        boundary=FactBoundary(1, 2, 120, 2),
-    )
-    _apply_combo_change(
-        reducer,
-        boundary=FactBoundary(1, 3, 130, 3),
-        previous_change_id=10,
-        change_id=11,
-    )
-    adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=3, monotonic_ms=130, cause=CausalCause.COMBO_BOOK_FACT),
-    )
-    _set_platform_usable(reducer, False)
-    _apply_combo_change(
-        reducer,
-        boundary=FactBoundary(1, 4, 140, 4),
-        previous_change_id=11,
-        change_id=12,
-    )
-    (post_close_intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=4, monotonic_ms=140, cause=CausalCause.COMBO_BOOK_FACT),
-    )
-    return post_close_intent.request_id
-
-
-def _reject_and_latch_close(
-    reducer: RadarReducer,
-    adapter: FixedContractShadowRuntimeAdapter,
-) -> int:
-    _replace_entry_bid(reducer, "170")
-    assert (
-        adapter.on_settled_transaction(
-            reducer=reducer,
-            commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
+    intents: tuple[ShadowRpcIntent, ...],
+    first_causal_seq: int,
+    change_id: int,
+    short_bid: str,
+    short_ask: str,
+    long_bid: str,
+    long_ask: str,
+    long_amount: str = "0.1",
+) -> None:
+    assert len(intents) == 2
+    sent_boundaries: dict[int, FactBoundary] = {}
+    for offset, intent in enumerate(intents):
+        sent = FactBoundary(
+            1,
+            first_causal_seq + offset,
+            100 + (first_causal_seq + offset) * 10,
+            first_causal_seq + offset,
         )
-        == ()
-    )
-    _set_platform_usable(reducer, False)
-    _apply_combo_change(
-        reducer,
-        boundary=FactBoundary(1, 2, 120, 2),
-        previous_change_id=10,
-        change_id=11,
-    )
-    (post_close_intent,) = adapter.on_settled_transaction(
+        sent_boundaries[intent.request_id] = sent
+        adapter.on_request_sent(request_id=intent.request_id, boundary=sent)
+
+    for offset, intent in enumerate(intents):
+        instrument_name = str(intent.params["instrument_name"])
+        is_short = instrument_name == "BTC-SHORT"
+        amount = "0.1" if is_short else long_amount
+        accepted_seq = first_causal_seq + 2 + offset
+        adapter.on_rpc_response(
+            request_id=intent.request_id,
+            result=_rest_option_book(
+                instrument_name,
+                bid_price=short_bid if is_short else long_bid,
+                ask_price=short_ask if is_short else long_ask,
+                change_id=change_id,
+                amount=amount,
+            ),
+            sent_boundary=sent_boundaries[intent.request_id],
+            boundary=FactBoundary(
+                1,
+                accepted_seq,
+                100 + accepted_seq * 10,
+                accepted_seq,
+            ),
+        )
+
+
+def _admit_component_shadow(
+    reducer: RadarReducer,
+    adapter: FixedContractShadowRuntimeAdapter,
+) -> tuple[ShadowRpcIntent, ...]:
+    intents = adapter.on_settled_transaction(
         reducer=reducer,
-        commit=_commit(causal_seq=2, monotonic_ms=120, cause=CausalCause.COMBO_BOOK_FACT),
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
     )
-    return post_close_intent.request_id
+    _settle_component_pair(
+        adapter=adapter,
+        intents=intents,
+        first_causal_seq=2,
+        change_id=11,
+        short_bid="300",
+        short_ask="301",
+        long_bid="100",
+        long_ask="101",
+    )
+    return intents
 
 
-def test_ordinary_post_close_failure_settles_admitted_natural_mature_unknown(
+def test_component_candidate_requires_both_strictly_later_option_book_responses(
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    request_id = _admit_and_latch_close(reducer, adapter)
-    _set_natural_lifecycle_ready(reducer)
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    assert len(intents) == 2
+    assert {str(intent.params["instrument_name"]) for intent in intents} == {
+        "BTC-SHORT",
+        "BTC-LONG",
+    }
+    assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 0
 
-    adapter.on_request_failure(
-        request_id=request_id,
-        terminal_state=RpcState.ERROR,
+    sent = FactBoundary(1, 2, 120, 2)
+    first = next(intent for intent in intents if intent.params["instrument_name"] == "BTC-SHORT")
+    adapter.on_request_sent(request_id=first.request_id, boundary=sent)
+    assert (
+        adapter.on_rpc_response(
+            request_id=first.request_id,
+            result=_rest_option_book(
+                "BTC-SHORT",
+                bid_price="300",
+                ask_price="301",
+                change_id=11,
+            ),
+            sent_boundary=sent,
+            boundary=FactBoundary(1, 3, 130, 3),
+        )
+        == ()
+    )
+    assert not _object_payloads(owner, "SHADOW_ENTRY")
+    assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 0
+
+    second = next(intent for intent in intents if intent.params["instrument_name"] == "BTC-LONG")
+    second_sent = FactBoundary(1, 4, 140, 4)
+    adapter.on_request_sent(request_id=second.request_id, boundary=second_sent)
+    adapter.on_rpc_response(
+        request_id=second.request_id,
+        result=_rest_option_book(
+            "BTC-LONG",
+            bid_price="100",
+            ask_price="101",
+            change_id=11,
+        ),
+        sent_boundary=second_sent,
         boundary=FactBoundary(1, 5, 150, 5),
     )
 
-    outcome = next(
-        value for value in owner.state_store.objects if value["object_kind"] == "SHADOW_OUTCOME"
-    )
-    payload = outcome["payload"]
-    assert isinstance(payload, dict)
-    assert payload["terminal_state"] == "MATURE_UNKNOWN"
-    assert payload["selected_exit_identity"] is None
-    assert payload["post_close_attempt_terminal_owner"] == "ORDINARY"
-    witnesses = payload["natural_terminal_lifecycle_witnesses"]
-    assert isinstance(witnesses, list)
-    assert [value["canonical_leg_role"] for value in witnesses] == ["SHORT", "LONG"]
-    assert not any(
-        value["object_kind"] == "ALIGNED_POLICY_NO_TRADE_PAIR"
-        for value in owner.state_store.objects
-    )
-
-
-def test_first_close_same_boundary_as_natural_lifecycle_cannot_mature(
-    tmp_path: Path,
-) -> None:
-    reducer, adapter, owner = _shadow_system(tmp_path)
-    (admission_intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
-    )
-    adapter.on_request_sent(
-        request_id=admission_intent.request_id,
-        boundary=FactBoundary(1, 2, 120, 2),
-    )
-    _apply_combo_change(
-        reducer,
-        boundary=FactBoundary(1, 3, 130, 3),
-        previous_change_id=10,
-        change_id=11,
-    )
-    adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=3, monotonic_ms=130, cause=CausalCause.COMBO_BOOK_FACT),
-    )
-    _set_natural_lifecycle_ready(reducer)
-    _set_platform_usable(reducer, False)
-    _apply_combo_change(
-        reducer,
-        boundary=FactBoundary(1, 4, 140, 4),
-        previous_change_id=11,
-        change_id=12,
-    )
-    adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=4, monotonic_ms=140, cause=CausalCause.COMBO_BOOK_FACT),
-    )
-
-    assert not any(value["object_kind"] == "SHADOW_OUTCOME" for value in owner.state_store.objects)
-
-
-def test_equal_change_id_with_different_rest_depth_is_unknown_not_entry(
-    tmp_path: Path,
-) -> None:
-    reducer, adapter, owner = _shadow_system(tmp_path)
-    (intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
-    )
-    sent = FactBoundary(1, 2, 120, 2)
-    adapter.on_request_sent(request_id=intent.request_id, boundary=sent)
-
-    adapter.on_rpc_response(
-        request_id=intent.request_id,
-        result=_rest_combo_book(bid_price="299"),
-        sent_boundary=sent,
-        boundary=FactBoundary(1, 3, 130, 3),
-    )
-
-    kinds = [str(value["object_kind"]) for value in owner.state_store.objects]
-    assert "SHADOW_ENTRY" not in kinds
-    assert _terminal_outcomes(owner) == ["UNKNOWN_CONSUMED"]
-
-
-def test_admission_response_reprojects_contemporaneous_ancillary_facts(
-    tmp_path: Path,
-) -> None:
-    reducer, adapter, owner = _shadow_system(tmp_path)
-    (intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
-    )
-    sent = FactBoundary(1, 2, 120, 2)
-    adapter.on_request_sent(request_id=intent.request_id, boundary=sent)
-
-    prior = reducer.tickers["BTC-SHORT"]
-    reducer.tickers["BTC-SHORT"] = TickerState(
-        forward_usdc=prior.forward_usdc,
-        underlying_index=prior.underlying_index,
-        source_timestamp_ms=prior.source_timestamp_ms,
-        signed_delta=None,
-        mark_iv_fraction=prior.mark_iv_fraction,
-    )
-    adapter.on_rpc_response(
-        request_id=intent.request_id,
-        result=_rest_combo_book(),
-        sent_boundary=sent,
-        boundary=FactBoundary(1, 3, 130, 3),
-    )
-
-    kinds = [str(value["object_kind"]) for value in owner.state_store.objects]
-    assert "SHADOW_ENTRY" not in kinds
-    assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
-    (payload,) = _object_payloads(owner, "CANDIDATE_INVALIDATION")
-    assert payload["primary_reason"] == ("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN")
-
-
-def test_retired_admission_request_keeps_typed_source_gap_semantics(
-    tmp_path: Path,
-) -> None:
-    reducer, adapter, owner = _shadow_system(tmp_path)
-    (intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
-    )
-    sent = FactBoundary(1, 2, 120, 2)
-    adapter.on_request_sent(request_id=intent.request_id, boundary=sent)
-
-    adapter.on_request_failure(
-        request_id=intent.request_id,
-        terminal_state=RpcState.RETIRED,
-        boundary=FactBoundary(1, 3, 130, 3),
-    )
-
-    assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
-    (payload,) = _object_payloads(owner, "CANDIDATE_INVALIDATION")
-    assert payload["primary_reason"] == ("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN")
-
-
-def test_platform_currentness_budget_is_inclusive_then_unknown_at_budget_plus_one(
-    tmp_path: Path,
-) -> None:
-    reducer, adapter, owner = _shadow_system(tmp_path)
-    observed = FactBoundary(1, 1, 1_000, 1)
-    reducer.accepted_platform_continuity_boundary = observed
-    budget_ms = owner.policies.underwriting.platform_currentness_budget_ms
-
-    def boundary(age_ms: int) -> DownstreamFactBoundary:
-        return DownstreamFactBoundary(
-            code_identity=reducer.code_identity,
-            runtime_identity=reducer.runtime_identity,
-            session_epoch=1,
-            ingress_seq=2,
-            received_monotonic_ms=observed.received_monotonic_ms + age_ms,
-            causal_seq=2,
-        )
-
-    assert adapter._platform_currentness(
-        reducer,
-        boundary(budget_ms),
-        budget_ms=budget_ms,
-    )
-    assert (
-        adapter._platform_currentness(
-            reducer,
-            boundary(budget_ms + 1),
-            budget_ms=budget_ms,
-        )
-        is None
-    )
-    _set_platform_usable(reducer, False)
-    assert (
-        adapter._platform_currentness(
-            reducer,
-            boundary(budget_ms + 1),
-            budget_ms=budget_ms,
-        )
-        is False
-    )
-
-
-def test_concrete_adapter_runs_candidate_admission_position_and_future_exit_once(
-    tmp_path: Path,
-) -> None:
-    reducer, adapter, owner = _shadow_system(tmp_path)
-
-    (admission_intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
-    )
-    assert admission_intent.purpose.value == "ADMISSION_REFRESH"
-    adapter.on_request_sent(
-        request_id=admission_intent.request_id,
-        boundary=FactBoundary(1, 2, 120, 2),
-    )
-
-    admission_boundary = FactBoundary(1, 3, 130, 3)
-    _apply_combo_change(
-        reducer,
-        boundary=admission_boundary,
-        previous_change_id=10,
-        change_id=11,
-    )
-    assert (
-        adapter.on_settled_transaction(
-            reducer=reducer,
-            commit=_commit(
-                causal_seq=3,
-                monotonic_ms=130,
-                cause=CausalCause.COMBO_BOOK_FACT,
-            ),
-        )
-        == ()
-    )
-    kinds = [str(value["object_kind"]) for value in owner.state_store.objects]
-    assert kinds.count("SHADOW_ENTRY") == 1
-
-    _set_platform_usable(reducer, False)
-    close_boundary = FactBoundary(1, 4, 140, 4)
-    _apply_combo_change(
-        reducer,
-        boundary=close_boundary,
-        previous_change_id=11,
-        change_id=12,
-    )
-    (post_close_intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=4, monotonic_ms=140, cause=CausalCause.COMBO_BOOK_FACT),
-    )
-    assert post_close_intent.purpose.value == "POST_CLOSE_REFRESH"
-
-    _set_platform_usable(reducer, True)
-    exit_boundary = FactBoundary(1, 5, 150, 5)
-    _apply_combo_change(
-        reducer,
-        boundary=exit_boundary,
-        previous_change_id=12,
-        change_id=13,
-        asks=[["delete", "301", "0"], ["new", "302", "0.1"]],
-    )
-    assert (
-        adapter.on_settled_transaction(
-            reducer=reducer,
-            commit=_commit(
-                causal_seq=5,
-                monotonic_ms=150,
-                cause=CausalCause.COMBO_BOOK_CHANGED,
-            ),
-        )
-        == ()
-    )
-    kinds = [str(value["object_kind"]) for value in owner.state_store.objects]
-    assert kinds.count("SHADOW_ENTRY") == 1
-    assert kinds.count("POSITION_ACTION") == 1
-    assert len(_object_payloads(owner, "POSITION_ACTION")) == 2
-    assert len(_object_payloads(owner, "POST_CLOSE_ATTEMPT_SCHEDULED")) == 1
-    assert len(_object_payloads(owner, "POST_CLOSE_ATTEMPT_TERMINAL")) == 1
-    assert len(_object_payloads(owner, "SHADOW_CLOSE_OPPORTUNITY")) == 1
-    assert len(_object_payloads(owner, "SHADOW_OUTCOME")) == 1
-    assert owner.retained_state_counts["active_candidates"] == 0
-    assert owner.retained_state_counts["active_trades"] == 0
-    assert adapter.retained_state_counts["candidate_origins"] == 0
-    assert adapter.retained_state_counts["active_anchors"] == 0
-    assert adapter.retained_state_counts["request_contexts"] == 0
+    (entry,) = _object_payloads(owner, "SHADOW_ENTRY")
+    assert entry["execution_model"] == "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL"
+    assert entry["canonical_combo_identity"] is None
+    assert entry["combo_instrument_name"] is None
+    assert entry["entry_component_pair_identity"]
+    assert [leg["action"] for leg in entry["entry_component_legs"]] == ["SELL", "BUY"]
+    assert [leg["stressed_vwap_usdc_per_btc"] for leg in entry["entry_component_legs"]] == [
+        "299",
+        "102",
+    ]
+    assert len(entry["entry_component_quote_source_refs"]) == 2
+    assert entry["gross_entry_credit_usdc"] == "19.7"
+    assert entry["entry_fee_reserve_usdc"] == "4.275"
+    assert entry["net_entry_credit_usdc"] == "15.425"
+    assert entry["non_claims"] == [
+        "NOT_AN_ORDER",
+        "NOT_A_FILL",
+        "NOT_AN_ATOMIC_QUOTE",
+        "NO_LIQUIDITY_RESERVATION",
+        "ATOMIC_EXECUTABILITY_UNPROVEN",
+    ]
     assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 1
+
+
+def test_component_shadow_entry_opens_its_durable_case(tmp_path: Path) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    cases = tmp_path / "cases"
+    cases.mkdir()
+    case_store = ShadowCaseStore(
+        cases,
+        bindings=owner.bindings,
+        policies=owner.policies,
+    )
+    owner.state_store.observer = case_store
+
+    _admit_component_shadow(reducer, adapter)
+
+    entry = next(
+        value for value in owner.state_store.objects if value["object_kind"] == "SHADOW_ENTRY"
+    )
+    entry_identity = str(entry["object_identity"])
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+    assert case_store.case_count == 1
+    assert case_store.active_case_count == 1
+    assert owner.retained_state_counts["active_candidates"] == 0
+    assert owner.retained_state_counts["active_trades"] == 1
+    opened = case_store.read_case(case_id, runtime_active=True).opened
+    economics = opened["entry_economics"]
+    assert isinstance(economics, Mapping)
+    assert economics["width_usdc_per_btc"] == "1000"
+
+
+def test_no_active_combo_is_only_a_diagnostic_and_does_not_block_shadow_entry(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    reducer.combos.clear()
+    reducer.combo_books.clear()
+    reducer.accepted_book_receipts.pop("BTC-COMBO")
+    reducer.combo_catalog.complete = True
+    reducer.combo_catalog.source_complete = True
+
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.COMBO_CATALOG,
+        ),
+    )
+    (facts,) = adapter._underwriting_by_scope.values()
+    assert facts.atomic_state == "NO_ACTIVE_COMBO"
+    assert facts.component_state == "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE"
+    assert len(intents) == 2
+
+    _settle_component_pair(
+        adapter=adapter,
+        intents=intents,
+        first_causal_seq=2,
+        change_id=11,
+        short_bid="300",
+        short_ask="301",
+        long_bid="100",
+        long_ask="101",
+    )
+    (entry,) = _object_payloads(owner, "SHADOW_ENTRY")
+    assert entry["atomic_state_diagnostic"] == "NO_ACTIVE_COMBO"
+    assert entry["execution_model"] == "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL"
+
+
+def test_component_admission_with_insufficient_long_depth_is_known_no_entry(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+
+    _settle_component_pair(
+        adapter=adapter,
+        intents=intents,
+        first_causal_seq=2,
+        change_id=11,
+        short_bid="300",
+        short_ask="301",
+        long_bid="100",
+        long_ask="101",
+        long_amount="0.05",
+    )
+
+    assert not _object_payloads(owner, "SHADOW_ENTRY")
+    assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
+    (invalidation,) = _object_payloads(owner, "CANDIDATE_INVALIDATION")
+    assert invalidation["primary_reason"] == "REUNDERWRITING_NO_LONGER_CANDIDATE"
+    assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 0
+
+
+def test_one_component_admission_rpc_failure_retires_the_pair_without_case(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    first = intents[0]
+    adapter.on_request_sent(
+        request_id=first.request_id,
+        boundary=FactBoundary(1, 2, 120, 2),
+    )
+    adapter.on_request_failure(
+        request_id=first.request_id,
+        terminal_state=RpcState.ERROR,
+        boundary=FactBoundary(1, 3, 130, 3),
+    )
+
+    assert not _object_payloads(owner, "SHADOW_ENTRY")
+    assert _terminal_outcomes(owner) == ["UNKNOWN_CONSUMED"]
+    assert owner.retained_state_counts["active_candidates"] == 0
+    assert adapter.retained_state_counts["request_contexts"] == 0
+    assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 0
+
+
+def test_component_shadow_entry_closes_from_a_new_paired_snapshot_and_writes_known_outcome(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    _admit_component_shadow(reducer, adapter)
+
+    _set_platform_usable(reducer, False)
+    close_intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=6,
+            monotonic_ms=160,
+            cause=CausalCause.TIME_BOUNDARY,
+        ),
+    )
+    assert len(close_intents) == 2
+    assert {str(intent.params["instrument_name"]) for intent in close_intents} == {
+        "BTC-SHORT",
+        "BTC-LONG",
+    }
+
+    _settle_component_pair(
+        adapter=adapter,
+        intents=close_intents,
+        first_causal_seq=7,
+        change_id=12,
+        short_bid="249",
+        short_ask="250",
+        long_bid="149",
+        long_ask="150",
+    )
+
+    (outcome,) = _object_payloads(owner, "SHADOW_OUTCOME")
+    assert outcome["terminal_state"] == "MATURE_KNOWN"
+    assert outcome["execution_model"] == "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL"
+    assert outcome["close_component_pair_identity"]
+    assert [leg["action"] for leg in outcome["close_component_legs"]] == ["BUY", "SELL"]
+    assert [leg["stressed_vwap_usdc_per_btc"] for leg in outcome["close_component_legs"]] == [
+        "251",
+        "148",
+    ]
+    assert outcome["gross_close_cashflow_usdc"] == "-10.3"
+    assert outcome["close_fee_reserve_usdc"] == "4.85"
+    assert outcome["net_close_cashflow_usdc"] == "-15.15"
+    assert outcome["net_pnl_after_public_standard_fee_reserve_usdc"] == "0.275"
+    assert outcome["actual_pnl_usdc"] is None
+    assert owner.retained_state_counts["active_trades"] == 0
+    assert adapter.retained_state_counts["active_anchors"] == 0
     assert owner.state_store.retained_state_counts["latest_terminal_cases"] == 1
+
+
+def test_partial_component_close_then_rpc_failure_matures_unknown_without_fake_close(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    _admit_component_shadow(reducer, adapter)
+
+    _set_platform_usable(reducer, False)
+    close_intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=6,
+            monotonic_ms=160,
+            cause=CausalCause.TIME_BOUNDARY,
+        ),
+    )
+    sent_boundaries: dict[int, FactBoundary] = {}
+    for offset, intent in enumerate(close_intents):
+        sent = FactBoundary(1, 7 + offset, 170 + offset * 10, 7 + offset)
+        sent_boundaries[intent.request_id] = sent
+        adapter.on_request_sent(request_id=intent.request_id, boundary=sent)
+
+    first = close_intents[0]
+    first_name = str(first.params["instrument_name"])
+    adapter.on_rpc_response(
+        request_id=first.request_id,
+        result=_rest_option_book(
+            first_name,
+            bid_price="249",
+            ask_price="250",
+            change_id=12,
+        ),
+        sent_boundary=sent_boundaries[first.request_id],
+        boundary=FactBoundary(1, 9, 190, 9),
+    )
+    assert not _object_payloads(owner, "SHADOW_OUTCOME")
+
+    _set_natural_lifecycle_ready(reducer)
+    second = close_intents[1]
+    adapter.on_request_failure(
+        request_id=second.request_id,
+        terminal_state=RpcState.ERROR,
+        boundary=FactBoundary(1, 10, 200, 10),
+    )
+
+    (outcome,) = _object_payloads(owner, "SHADOW_OUTCOME")
+    assert outcome["terminal_state"] == "MATURE_UNKNOWN"
+    assert outcome["economic_availability"] == "UNKNOWN"
+    assert outcome["selected_exit_identity"] is None
+    assert outcome["close_component_pair_identity"] is None
+    assert outcome["close_component_quote_source_refs"] == []
+    assert outcome["close_component_legs"] == []
+    assert outcome["gross_close_cashflow_usdc"] is None
+    assert adapter.retained_state_counts["request_contexts"] == 0
+
+
+def test_component_quote_fingerprint_is_stable_scalar_identity_input(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    _admit_component_shadow(reducer, adapter)
 
     before = tuple(owner.state_store.objects)
     assert (
         adapter.on_settled_transaction(
             reducer=reducer,
             commit=_commit(
-                causal_seq=5,
-                monotonic_ms=150,
-                cause=CausalCause.COMBO_BOOK_FACT,
-            ),
-        )
-        == ()
-    )
-    assert tuple(owner.state_store.objects) == before
-
-
-def test_time_polls_use_discrete_business_classes_and_exact_crossings_once(
-    tmp_path: Path,
-) -> None:
-    reducer, adapter, owner = _shadow_system(tmp_path)
-    (admission_intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
-    )
-
-    before_same_class = tuple(owner.state_store.objects)
-    assert (
-        adapter.on_settled_transaction(
-            reducer=reducer,
-            commit=_commit(causal_seq=2, monotonic_ms=111, cause=CausalCause.TIME_BOUNDARY),
-        )
-        == ()
-    )
-    assert tuple(owner.state_store.objects) == before_same_class
-
-    expiry_ms = reducer.options["BTC-SHORT"].expiration_timestamp_ms
-    admission_cutoff_ms = expiry_ms - 1_800_000
-    _set_trusted_source_time(
-        reducer,
-        server_ms=admission_cutoff_ms - 10,
-        monotonic_ms=111,
-    )
-    reducer._causal_seq = 2
-    reducer._last_boundary_monotonic_ms = 111
-    cutoff_crossing = adapter.next_time_boundary_monotonic_ms(
-        reducer=reducer,
-        after_monotonic_ms=111,
-    )
-    assert cutoff_crossing is not None
-    assert reducer.next_shadow_time_boundary_monotonic_ms(after_monotonic_ms=111) == cutoff_crossing
-    assert reducer.clock is not None
-    assert reducer.clock.interval_at(cutoff_crossing - 1).upper_ms < admission_cutoff_ms
-    assert reducer.clock.interval_at(cutoff_crossing).upper_ms >= admission_cutoff_ms
-
-    reducer._last_wire_received_ms = cutoff_crossing
-    reducer.advance_time(cutoff_crossing)
-    invalidations = _object_payloads(owner, "CANDIDATE_INVALIDATION")
-    assert len(invalidations) == 1
-    reasons = invalidations[0]["ordered_applicable_reason_vector"]
-    assert isinstance(reasons, list)
-    assert "LATEST_ADMISSION_BOUNDARY_REACHED" in reasons
-    after_cutoff = tuple(owner.state_store.objects)
-    reducer._last_wire_received_ms = cutoff_crossing + 1
-    reducer.advance_time(cutoff_crossing + 1)
-    assert tuple(owner.state_store.objects) == after_cutoff
-    assert admission_intent.request_id in reducer._reserved_shadow_request_ids
-
-
-def test_position_latest_exit_and_expiry_cross_at_exact_time_once(
-    tmp_path: Path,
-) -> None:
-    reducer, adapter, owner = _shadow_system(tmp_path)
-    (admission_intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
-    )
-    assert admission_intent.purpose.value == "ADMISSION_REFRESH"
-    admission_boundary = FactBoundary(1, 2, 120, 2)
-    _apply_combo_change(
-        reducer,
-        boundary=admission_boundary,
-        previous_change_id=10,
-        change_id=11,
-    )
-    assert (
-        adapter.on_settled_transaction(
-            reducer=reducer,
-            commit=_commit(
-                causal_seq=2,
-                monotonic_ms=120,
-                cause=CausalCause.COMBO_BOOK_FACT,
-            ),
-        )
-        == ()
-    )
-
-    assert (
-        adapter.on_settled_transaction(
-            reducer=reducer,
-            commit=_commit(causal_seq=3, monotonic_ms=130, cause=CausalCause.TIME_BOUNDARY),
-        )
-        == ()
-    )
-    assert len(_object_payloads(owner, "POSITION_ACTION")) == 1
-    before_same_class = tuple(owner.state_store.objects)
-    assert (
-        adapter.on_settled_transaction(
-            reducer=reducer,
-            commit=_commit(causal_seq=4, monotonic_ms=131, cause=CausalCause.TIME_BOUNDARY),
-        )
-        == ()
-    )
-    assert tuple(owner.state_store.objects) == before_same_class
-
-    expiry_ms = reducer.options["BTC-SHORT"].expiration_timestamp_ms
-    latest_exit_ms = expiry_ms - owner.policies.position.latest_exit_lead_ms
-    _set_trusted_source_time(
-        reducer,
-        server_ms=latest_exit_ms - 10,
-        monotonic_ms=131,
-    )
-    reducer._causal_seq = 4
-    reducer._last_boundary_monotonic_ms = 131
-    latest_crossing = adapter.next_time_boundary_monotonic_ms(
-        reducer=reducer,
-        after_monotonic_ms=131,
-    )
-    assert latest_crossing is not None
-    assert reducer.clock is not None
-    assert reducer.clock.interval_at(latest_crossing - 1).upper_ms < latest_exit_ms
-    assert reducer.clock.interval_at(latest_crossing).upper_ms >= latest_exit_ms
-
-    reducer._last_wire_received_ms = latest_crossing
-    reducer.advance_time(latest_crossing)
-    position_actions = _object_payloads(owner, "POSITION_ACTION")
-    assert len(position_actions) == 2
-    assert position_actions[-1]["primary_close_reason"] == "LATEST_EXIT_BOUNDARY_REACHED"
-    assert position_actions[-1]["secondary_close_reasons"] == ["PLATFORM_OR_SOURCE_DISCONTINUITY"]
-    after_latest = tuple(owner.state_store.objects)
-    reducer._last_wire_received_ms = latest_crossing + 1
-    reducer.advance_time(latest_crossing + 1)
-    assert tuple(owner.state_store.objects) == after_latest
-
-    expiry_base_ms = latest_crossing + 2
-    _set_trusted_source_time(
-        reducer,
-        server_ms=expiry_ms - 10,
-        monotonic_ms=expiry_base_ms,
-    )
-    reducer._last_boundary_monotonic_ms = expiry_base_ms
-    expiry_crossing = adapter.next_time_boundary_monotonic_ms(
-        reducer=reducer,
-        after_monotonic_ms=expiry_base_ms,
-    )
-    assert expiry_crossing is not None
-    assert reducer.clock.interval_at(expiry_crossing - 1).lower_ms < expiry_ms
-    assert reducer.clock.interval_at(expiry_crossing).lower_ms >= expiry_ms
-
-    reducer._last_wire_received_ms = expiry_crossing
-    reducer.advance_time(expiry_crossing)
-    position_actions = _object_payloads(owner, "POSITION_ACTION")
-    assert len(position_actions) == 3
-    assert position_actions[-1]["primary_close_reason"] == ("SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED")
-    assert position_actions[-1]["secondary_close_reasons"] == [
-        "LATEST_EXIT_BOUNDARY_REACHED",
-        "PLATFORM_OR_SOURCE_DISCONTINUITY",
-    ]
-    after_expiry = tuple(owner.state_store.objects)
-    reducer._last_wire_received_ms = expiry_crossing + 1
-    reducer.advance_time(expiry_crossing + 1)
-    assert tuple(owner.state_store.objects) == after_expiry
-
-
-@pytest.mark.parametrize("deadline", ["CLOCK", "PLATFORM", "INDEX", "TICKER"])
-def test_currentness_deadlines_cross_exactly_once_and_invalidate_candidate(
-    tmp_path: Path,
-    deadline: str,
-) -> None:
-    reducer, adapter, owner = _shadow_system(tmp_path)
-    reducer.pending_rpcs.clear()
-    reducer._commands = []
-    adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
-    )
-
-    if deadline == "CLOCK":
-        after_ms = 110
-        expected_crossing_ms = 45_100
-    elif deadline == "PLATFORM":
-        after_ms = 100_000
-        expected_crossing_ms = 100_001
-        server_ms = 2_000_000
-        reducer.clock = TrustedClock.from_response(
-            server_ms,
-            after_ms,
-            after_ms,
-            stale_deadline_ms=45_000,
-        )
-        reducer.accepted_platform_continuity_boundary = FactBoundary(
-            1,
-            1,
-            after_ms - owner.policies.underwriting.platform_currentness_budget_ms,
-            1,
-        )
-        reducer.accepted_index_receipt = AcceptedIndexReceipt(
-            price_usdc_per_btc=Decimal("100000"),
-            source_timestamp_ms=server_ms,
-            boundary=FactBoundary(1, 2, after_ms, 2),
-        )
-        reducer.tickers["BTC-SHORT"] = replace(
-            reducer.tickers["BTC-SHORT"],
-            source_timestamp_ms=server_ms,
-        )
-    elif deadline == "INDEX":
-        after_ms = 1_000
-        expected_crossing_ms = 1_001
-        index_receipt = reducer.accepted_index_receipt
-        assert index_receipt is not None
-        server_ms = (
-            index_receipt.source_timestamp_ms
-            + owner.policies.underwriting.index_currentness_budget_ms
-            - 2
-        )
-        reducer.clock = TrustedClock.from_response(
-            server_ms,
-            after_ms,
-            after_ms,
-            stale_deadline_ms=45_000,
-        )
-        reducer.accepted_platform_continuity_boundary = FactBoundary(
-            1,
-            2,
-            after_ms,
-            2,
-        )
-        reducer.tickers["BTC-SHORT"] = replace(
-            reducer.tickers["BTC-SHORT"],
-            source_timestamp_ms=server_ms,
-        )
-    else:
-        after_ms = 1_000
-        expected_crossing_ms = 1_001
-        ticker_timestamp_ms = reducer.tickers["BTC-SHORT"].source_timestamp_ms
-        server_ms = (
-            ticker_timestamp_ms
-            + owner.policies.underwriting.option_ticker_currentness_budget_ms
-            - 2
-        )
-        reducer.clock = TrustedClock.from_response(
-            server_ms,
-            after_ms,
-            after_ms,
-            stale_deadline_ms=45_000,
-        )
-        reducer.accepted_platform_continuity_boundary = FactBoundary(
-            1,
-            2,
-            after_ms,
-            2,
-        )
-        reducer.accepted_index_receipt = AcceptedIndexReceipt(
-            price_usdc_per_btc=Decimal("100000"),
-            source_timestamp_ms=server_ms,
-            boundary=FactBoundary(1, 2, after_ms, 2),
-        )
-
-    if after_ms != 110:
-        adapter.on_settled_transaction(
-            reducer=reducer,
-            commit=_commit(
-                causal_seq=2,
-                monotonic_ms=after_ms,
+                causal_seq=6,
+                monotonic_ms=160,
                 cause=CausalCause.TIME_BOUNDARY,
             ),
         )
-    before_crossing = tuple(owner.state_store.objects)
-    assert (
-        adapter.next_time_boundary_monotonic_ms(
-            reducer=reducer,
-            after_monotonic_ms=after_ms,
-        )
-        == expected_crossing_ms
-    )
-
-    reducer._causal_seq = 2
-    reducer._last_boundary_monotonic_ms = after_ms
-    reducer._last_wire_received_ms = expected_crossing_ms
-    reducer.advance_time(expected_crossing_ms)
-    invalidations = _object_payloads(owner, "CANDIDATE_INVALIDATION")
-    assert len(invalidations) == 1
-    assert tuple(owner.state_store.objects) != before_crossing
-
-    after_crossing = tuple(owner.state_store.objects)
-    reducer._last_wire_received_ms = expected_crossing_ms + 1
-    reducer.advance_time(expected_crossing_ms + 1)
-    assert tuple(owner.state_store.objects) == after_crossing
-
-
-def test_session_gap_settles_hold_to_close_before_first_reconnect_quote(
-    tmp_path: Path,
-) -> None:
-    reducer, adapter, owner = _shadow_system(tmp_path)
-    adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
-    )
-    admission_boundary = FactBoundary(1, 2, 120, 2)
-    _apply_combo_change(
-        reducer,
-        boundary=admission_boundary,
-        previous_change_id=10,
-        change_id=11,
-    )
-    adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=2, monotonic_ms=120, cause=CausalCause.COMBO_BOOK_FACT),
-    )
-    adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=3, monotonic_ms=130, cause=CausalCause.TIME_BOUNDARY),
-    )
-    assert [
-        payload["serialized_action"] for payload in _object_payloads(owner, "POSITION_ACTION")
-    ] == ["HOLD"]
-
-    saved_options = dict(reducer.options)
-    saved_combos = dict(reducer.combos)
-    reducer._causal_seq = 3
-    reducer._last_ingress_seq = 3
-    reducer._last_boundary_monotonic_ms = 130
-    reducer._last_wire_received_ms = 130
-    reducer._commands = []
-    reducer.prepare_reconnect(CausalCause.TRANSPORT_READ_FAILURE.value)
-
-    position_actions = _object_payloads(owner, "POSITION_ACTION")
-    assert [payload["serialized_action"] for payload in position_actions] == [
-        "HOLD",
-        "CLOSE",
-    ]
-    assert position_actions[-1]["primary_close_reason"] == ("PLATFORM_OR_SOURCE_DISCONTINUITY")
-    position_objects = [
-        value for value in owner.state_store.objects if value["object_kind"] == "POSITION_ACTION"
-    ]
-    gap_close_boundary = max(
-        (DownstreamFactBoundary.from_object(value["fact_boundary"]) for value in position_objects),
-        key=lambda boundary: boundary.causal_seq,
-    )
-    assert reducer.pending_rpcs == {}
-    assert reducer._take_commands() == ()
-
-    reconnect_ms = 140
-    reducer.begin_session(session_epoch=2, monotonic_ms=reconnect_ms)
-    reducer.pending_rpcs.clear()
-    reducer._commands = []
-    reducer.catalog_options = dict(saved_options)
-    reducer.options = dict(saved_options)
-    reducer.option_catalog.source_complete = True
-    reducer.option_catalog.complete = True
-    reducer.combos = dict(saved_combos)
-    reducer.combo_catalog.source_complete = True
-    reducer.combo_catalog.complete = True
-    _set_platform_usable(reducer, True)
-    reducer.clock = TrustedClock.from_response(
-        1_000_030,
-        reconnect_ms,
-        reconnect_ms,
-        stale_deadline_ms=45_000,
-    )
-    quote_boundary = FactBoundary(
-        2,
-        1,
-        reconnect_ms + 1,
-        gap_close_boundary.causal_seq + 1,
-    )
-    reducer._causal_seq = quote_boundary.causal_seq
-    reducer._last_ingress_seq = quote_boundary.ingress_seq
-    reducer._last_boundary_monotonic_ms = quote_boundary.received_monotonic_ms
-    reducer.accepted_platform_continuity_boundary = quote_boundary
-    reducer.accepted_index_receipt = AcceptedIndexReceipt(
-        price_usdc_per_btc=Decimal("100000"),
-        source_timestamp_ms=1_000_030,
-        boundary=quote_boundary,
-    )
-    reducer.tickers["BTC-SHORT"] = TickerState(
-        forward_usdc=Decimal("100000"),
-        underlying_index="index_price",
-        source_timestamp_ms=1_000_030,
-        signed_delta=Decimal("0.2"),
-        mark_iv_fraction=Decimal("0.5"),
-    )
-    reconnect_book = ContinuousOrderBook("BTC-COMBO")
-    reconnect_book.apply(
-        {
-            "type": "snapshot",
-            "instrument_name": "BTC-COMBO",
-            "change_id": 20,
-            "timestamp": 1_000_030,
-            "bids": [["new", "300", "0.1"]],
-            "asks": [["new", "302", "0.1"]],
-        },
-        quote_boundary.received_monotonic_ms,
-    )
-    reducer.combo_books["BTC-COMBO"] = reconnect_book
-    reducer.accepted_book_receipts["BTC-COMBO"] = AcceptedBookReceipt(
-        instrument_name="BTC-COMBO",
-        snapshot_kind="snapshot",
-        prev_change_id=None,
-        change_id=20,
-        source_timestamp_ms=1_000_030,
-        session_epoch=2,
-        subscription_generation=1,
-        boundary=quote_boundary,
-    )
-
-    adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=CausalCommit(
-            boundary=quote_boundary,
-            cause=CausalCause.COMBO_BOOK_FACT,
-            failure_domain=FailureScope.COMBO_LAYER,
-            affected_scopes=("GLOBAL",),
-        ),
-    )
-
-    assert quote_boundary.causal_seq > gap_close_boundary.causal_seq
-    assert len(_object_payloads(owner, "SHADOW_CLOSE_OPPORTUNITY")) == 1
-    assert len(_object_payloads(owner, "SHADOW_OUTCOME")) == 1
-
-
-@pytest.mark.parametrize("request_state", [RpcState.SCHEDULED, RpcState.SENT])
-def test_candidate_subscription_winner_retires_runtime_rpc_and_late_wire_is_orphan_only(
-    tmp_path: Path,
-    request_state: RpcState,
-) -> None:
-    reducer, adapter, owner = _shadow_system(tmp_path)
-    (intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
-    )
-    request = _install_shadow_intent(reducer, intent)
-    next_causal = 2
-    next_monotonic = 120
-    if request_state is RpcState.SENT:
-        _mark_shadow_request_sent(
-            reducer,
-            request_id=request.request_id,
-            boundary=FactBoundary(1, next_causal, next_monotonic, next_causal),
-        )
-        next_causal += 1
-        next_monotonic += 10
-
-    winner = FactBoundary(1, next_causal, next_monotonic, next_causal)
-    _apply_combo_change(
-        reducer,
-        boundary=winner,
-        previous_change_id=10,
-        change_id=11,
-    )
-    assert (
-        adapter.on_settled_transaction(
-            reducer=reducer,
-            commit=_commit(
-                causal_seq=next_causal,
-                monotonic_ms=next_monotonic,
-                cause=CausalCause.COMBO_BOOK_FACT,
-            ),
-        )
         == ()
     )
-
-    lifecycle = reducer._rpc_lifecycles[request.request_id]
-    assert lifecycle.state is RpcState.RETIRED
-    assert lifecycle.terminal_from_state is request_state
-    assert request.request_id not in reducer.pending_rpcs
-    assert request.request_id not in adapter._requests
-    assert _terminal_outcomes(owner) == ["ENTRY_EMITTED"]
-    assert len(_object_payloads(owner, "SHADOW_ENTRY")) == 1
-
-    after_winner = tuple(owner.state_store.objects)
-    late_boundary = FactBoundary(1, next_causal + 1, next_monotonic + 10, next_causal + 1)
-    _mark_shadow_request_sent(
-        reducer,
-        request_id=request.request_id,
-        boundary=late_boundary,
-    )
-    reducer._apply_response(
-        InboundEnvelope(
-            {
-                "jsonrpc": "2.0",
-                "id": request.request_id,
-                "result": _rest_combo_book(change_id=11),
-            },
-            session_epoch=1,
-            ingress_seq=next_causal + 2,
-            received_monotonic_ms=next_monotonic + 20,
-        )
-    )
-    assert tuple(owner.state_store.objects) == after_winner
-
-
-@pytest.mark.parametrize("request_state", [RpcState.SCHEDULED, RpcState.SENT])
-def test_post_close_subscription_winner_retires_runtime_rpc_and_late_wire_is_orphan_only(
-    tmp_path: Path,
-    request_state: RpcState,
-) -> None:
-    reducer, adapter, owner = _shadow_system(tmp_path)
-    (admission_intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=1, monotonic_ms=110, cause=CausalCause.COMBO_BOOK_CHANGED),
-    )
-    _install_shadow_intent(reducer, admission_intent)
-    admission_boundary = FactBoundary(1, 2, 120, 2)
-    _apply_combo_change(
-        reducer,
-        boundary=admission_boundary,
-        previous_change_id=10,
-        change_id=11,
-    )
-    assert (
-        adapter.on_settled_transaction(
-            reducer=reducer,
-            commit=_commit(causal_seq=2, monotonic_ms=120, cause=CausalCause.COMBO_BOOK_FACT),
-        )
-        == ()
-    )
-
-    _set_platform_usable(reducer, False)
-    close_boundary = FactBoundary(1, 3, 130, 3)
-    _apply_combo_change(
-        reducer,
-        boundary=close_boundary,
-        previous_change_id=11,
-        change_id=12,
-    )
-    (post_close_intent,) = adapter.on_settled_transaction(
-        reducer=reducer,
-        commit=_commit(causal_seq=3, monotonic_ms=130, cause=CausalCause.COMBO_BOOK_FACT),
-    )
-    request = _install_shadow_intent(reducer, post_close_intent)
-    next_causal = 4
-    next_monotonic = 140
-    if request_state is RpcState.SENT:
-        _mark_shadow_request_sent(
-            reducer,
-            request_id=request.request_id,
-            boundary=FactBoundary(1, next_causal, next_monotonic, next_causal),
-        )
-        next_causal += 1
-        next_monotonic += 10
-
-    _set_platform_usable(reducer, True)
-    winner = FactBoundary(1, next_causal, next_monotonic, next_causal)
-    _apply_combo_change(
-        reducer,
-        boundary=winner,
-        previous_change_id=12,
-        change_id=13,
-        asks=[["delete", "301", "0"], ["new", "302", "0.1"]],
-    )
-    assert (
-        adapter.on_settled_transaction(
-            reducer=reducer,
-            commit=_commit(
-                causal_seq=next_causal,
-                monotonic_ms=next_monotonic,
-                cause=CausalCause.COMBO_BOOK_FACT,
-            ),
-        )
-        == ()
-    )
-
-    lifecycle = reducer._rpc_lifecycles[request.request_id]
-    assert lifecycle.state is RpcState.RETIRED
-    assert lifecycle.terminal_from_state is request_state
-    assert request.request_id not in reducer.pending_rpcs
-    assert request.request_id not in adapter._requests
-    assert len(_object_payloads(owner, "POST_CLOSE_ATTEMPT_TERMINAL")) == 1
-    assert len(_object_payloads(owner, "SHADOW_OUTCOME")) == 1
-
-    after_winner = tuple(owner.state_store.objects)
-    late_boundary = FactBoundary(1, next_causal + 1, next_monotonic + 10, next_causal + 1)
-    _mark_shadow_request_sent(
-        reducer,
-        request_id=request.request_id,
-        boundary=late_boundary,
-    )
-    reducer._apply_response(
-        InboundEnvelope(
-            {
-                "jsonrpc": "2.0",
-                "id": request.request_id,
-                "result": _rest_combo_book(change_id=13),
-            },
-            session_epoch=1,
-            ingress_seq=next_causal + 2,
-            received_monotonic_ms=next_monotonic + 20,
-        )
-    )
-    assert tuple(owner.state_store.objects) == after_winner
+    assert tuple(owner.state_store.objects) != before
+    assert _object_payloads(owner, "POSITION_ACTION")[-1]["serialized_action"] == "HOLD"

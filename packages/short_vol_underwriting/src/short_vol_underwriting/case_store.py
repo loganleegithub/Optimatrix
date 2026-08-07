@@ -20,7 +20,7 @@ from short_vol_underwriting.identity import (
 from short_vol_underwriting.model import FactBoundary
 from short_vol_underwriting.policy import PolicyChain
 
-SHADOW_CASE_SCHEMA_VERSION = 1
+SHADOW_CASE_SCHEMA_VERSION = 2
 OPENED_KIND = "SHADOW_CASE_OPENED"
 FIRST_CLOSE_KIND = "SHADOW_CASE_FIRST_CLOSE"
 OUTCOME_KIND = "SHADOW_CASE_OUTCOME"
@@ -160,9 +160,8 @@ class ShadowCaseStore:
             "underwriting_action_identity": action_identity,
             "decision_fact_boundary": action_payload.get("evaluation_fact_boundary"),
             "structure": {
-                "canonical_combo_identity": payload.get("canonical_combo_identity"),
+                "execution_model": payload.get("execution_model"),
                 "canonical_leg_identities": payload.get("canonical_leg_identities"),
-                "combo_instrument_name": payload.get("combo_instrument_name"),
                 "short_leg_instrument_name": payload.get("short_leg_instrument_name"),
                 "long_leg_instrument_name": payload.get("long_leg_instrument_name"),
                 "expiry_ms": payload.get("expiry_ms"),
@@ -171,12 +170,17 @@ class ShadowCaseStore:
                 "long_strike_usdc_per_btc": payload.get("long_strike_usdc_per_btc"),
                 "entry_direction": payload.get("entry_direction"),
                 "full_quantity_btc": payload.get("full_quantity_btc"),
-                "entry_consumed_levels": payload.get("entry_consumed_levels"),
+                "entry_component_pair_identity": payload.get("entry_component_pair_identity"),
+                "entry_component_quote_source_refs": payload.get(
+                    "entry_component_quote_source_refs"
+                ),
+                "entry_component_legs": payload.get("entry_component_legs"),
             },
             "radar": {
                 "active_episode_identity": payload.get("active_episode_identity"),
                 "radar_scope_identity": payload.get("radar_scope_identity"),
-                "atomic_state": payload.get("atomic_state"),
+                "component_state": payload.get("component_state"),
+                "atomic_state_diagnostic": payload.get("atomic_state_diagnostic"),
                 "band_id": payload.get("radar_band_id"),
                 "richness_interval": payload.get("radar_richness_interval"),
             },
@@ -199,15 +203,18 @@ class ShadowCaseStore:
                 "gross_entry_credit_usdc": payload.get("gross_entry_credit_usdc"),
                 "entry_fee_reserve_usdc": payload.get("entry_fee_reserve_usdc"),
                 "net_entry_credit_usdc": payload.get("net_entry_credit_usdc"),
+                "width_usdc_per_btc": payload.get("width_usdc_per_btc"),
                 "payoff_cap_usdc": payload.get("payoff_cap_usdc"),
+                "contractual_payoff_max_loss_ex_fees_usdc": payload.get(
+                    "contractual_payoff_max_loss_ex_fees_usdc"
+                ),
+                "entry_fee_reserved_payoff_loss_usdc": payload.get(
+                    "entry_fee_reserved_payoff_loss_usdc"
+                ),
                 "future_cost_reserve_usdc": payload.get("future_cost_reserve_usdc"),
                 "underwriting_reserved_loss_usdc": payload.get("underwriting_reserved_loss_usdc"),
             },
-            "non_claims": [
-                "PUBLIC_QUOTE_NOT_FILL",
-                "SIMULATED_NOT_ACTUAL_POSITION",
-                "UNQUALIFIED_POLICY",
-            ],
+            "non_claims": payload.get("non_claims"),
         }
         normalized = _normalized_mapping(opened)
         _validate_opened(normalized, expected_case_id=case_id, bindings=self.bindings)
@@ -277,12 +284,13 @@ class ShadowCaseStore:
                 ),
                 "net_loss_usdc": payload.get("net_loss_usdc"),
                 "economic_availability": payload.get("economic_availability"),
+                "close_component_pair_identity": payload.get("close_component_pair_identity"),
+                "close_component_quote_source_refs": payload.get(
+                    "close_component_quote_source_refs"
+                ),
+                "close_component_legs": payload.get("close_component_legs"),
                 "censor_mask": payload.get("censor_mask"),
-                "non_claims": [
-                    "COUNTERFACTUAL_PUBLIC_QUOTE_ECONOMICS",
-                    "NOT_ACTUAL_PNL",
-                    "PUBLIC_QUOTE_NOT_FILL",
-                ],
+                "non_claims": payload.get("non_claims"),
             }
         )
         opened = self._opened_by_case[case_id]
@@ -373,7 +381,10 @@ def _validate_opened(
     }
     if set(value) != required:
         raise ShadowCaseStoreError("opened record has an invalid key set")
-    if value.get("record_kind") != OPENED_KIND or value.get("schema_version") != 1:
+    if (
+        value.get("record_kind") != OPENED_KIND
+        or value.get("schema_version") != SHADOW_CASE_SCHEMA_VERSION
+    ):
         raise ShadowCaseStoreError("opened record kind/schema is invalid")
     if value.get("case_id") != expected_case_id:
         raise ShadowCaseStoreError("opened record Case identity mismatch")
@@ -428,9 +439,8 @@ def _validate_opened(
     _exact_keys(
         structure,
         {
-            "canonical_combo_identity",
+            "execution_model",
             "canonical_leg_identities",
-            "combo_instrument_name",
             "short_leg_instrument_name",
             "long_leg_instrument_name",
             "expiry_ms",
@@ -439,11 +449,14 @@ def _validate_opened(
             "long_strike_usdc_per_btc",
             "entry_direction",
             "full_quantity_btc",
-            "entry_consumed_levels",
+            "entry_component_pair_identity",
+            "entry_component_quote_source_refs",
+            "entry_component_legs",
         },
         "opened structure",
     )
-    _identity(structure.get("canonical_combo_identity"), "canonical_combo_identity")
+    if structure.get("execution_model") != "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL":
+        raise ShadowCaseStoreError("opened execution_model is invalid")
     leg_identities = _sequence(
         structure.get("canonical_leg_identities"), "canonical_leg_identities"
     )
@@ -451,11 +464,7 @@ def _validate_opened(
         raise ShadowCaseStoreError("opened structure must contain exactly two leg identities")
     for index, identity in enumerate(leg_identities):
         _identity(identity, f"canonical_leg_identities[{index}]")
-    for field in (
-        "combo_instrument_name",
-        "short_leg_instrument_name",
-        "long_leg_instrument_name",
-    ):
+    for field in ("short_leg_instrument_name", "long_leg_instrument_name"):
         _text(structure.get(field), field)
     expiry_ms = structure.get("expiry_ms")
     if isinstance(expiry_ms, bool) or not isinstance(expiry_ms, int) or expiry_ms <= 0:
@@ -469,16 +478,37 @@ def _validate_opened(
     quantity = _decimal(structure.get("full_quantity_btc"), "full_quantity_btc")
     if quantity <= 0:
         raise ShadowCaseStoreError("opened quantity must be positive")
-    levels = _sequence(structure.get("entry_consumed_levels"), "entry_consumed_levels")
-    if _levels_amount(levels) != quantity:
-        raise ShadowCaseStoreError("opened levels do not sum to full quantity")
+    _identity(
+        structure.get("entry_component_pair_identity"),
+        "entry_component_pair_identity",
+    )
+    _validate_component_source_refs(
+        structure.get("entry_component_quote_source_refs"),
+        owner_boundary=opened_boundary,
+        field="entry_component_quote_source_refs",
+    )
+    entry_component_gross, entry_component_fee = _validate_component_legs(
+        structure.get("entry_component_legs"),
+        quantity=quantity,
+        short_name=_text(
+            structure.get("short_leg_instrument_name"),
+            "short_leg_instrument_name",
+        ),
+        long_name=_text(
+            structure.get("long_leg_instrument_name"),
+            "long_leg_instrument_name",
+        ),
+        expected_actions=("SELL", "BUY"),
+        field="entry_component_legs",
+    )
     radar = _mapping(value.get("radar"), "radar")
     _exact_keys(
         radar,
         {
             "active_episode_identity",
             "radar_scope_identity",
-            "atomic_state",
+            "component_state",
+            "atomic_state_diagnostic",
             "band_id",
             "richness_interval",
         },
@@ -486,8 +516,9 @@ def _validate_opened(
     )
     _text(radar.get("active_episode_identity"), "active_episode_identity")
     _identity(radar.get("radar_scope_identity"), "radar_scope_identity")
-    if radar.get("atomic_state") != "PUBLIC_ATOMIC_QUOTE_AVAILABLE":
-        raise ShadowCaseStoreError("opened atomic_state is invalid")
+    if radar.get("component_state") != "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE":
+        raise ShadowCaseStoreError("opened component_state is invalid")
+    _text(radar.get("atomic_state_diagnostic"), "atomic_state_diagnostic")
     _text(radar.get("band_id"), "band_id")
     richness = _mapping(radar.get("richness_interval"), "richness_interval")
     _exact_keys(richness, {"lower", "upper"}, "richness_interval")
@@ -531,7 +562,10 @@ def _validate_opened(
             "gross_entry_credit_usdc",
             "entry_fee_reserve_usdc",
             "net_entry_credit_usdc",
+            "width_usdc_per_btc",
             "payoff_cap_usdc",
+            "contractual_payoff_max_loss_ex_fees_usdc",
+            "entry_fee_reserved_payoff_loss_usdc",
             "future_cost_reserve_usdc",
             "underwriting_reserved_loss_usdc",
         },
@@ -544,13 +578,35 @@ def _validate_opened(
     net_entry = _decimal(economics.get("net_entry_credit_usdc"), "net entry credit")
     if net_entry != gross_entry - entry_fee:
         raise ShadowCaseStoreError("opened entry economics do not conserve")
-    for field in (
-        "payoff_cap_usdc",
-        "future_cost_reserve_usdc",
-        "underwriting_reserved_loss_usdc",
-    ):
+    if gross_entry != entry_component_gross or entry_fee != entry_component_fee:
+        raise ShadowCaseStoreError("opened entry economics do not match component legs")
+    width = _decimal(economics.get("width_usdc_per_btc"), "width_usdc_per_btc")
+    payoff_cap = _decimal(economics.get("payoff_cap_usdc"), "payoff_cap_usdc")
+    contractual = _decimal(
+        economics.get("contractual_payoff_max_loss_ex_fees_usdc"),
+        "contractual_payoff_max_loss_ex_fees_usdc",
+    )
+    fee_reserved = _decimal(
+        economics.get("entry_fee_reserved_payoff_loss_usdc"),
+        "entry_fee_reserved_payoff_loss_usdc",
+    )
+    if width <= 0 or payoff_cap != width * quantity:
+        raise ShadowCaseStoreError("opened vertical width/payoff cap do not conserve")
+    if contractual != max(Decimal(0), payoff_cap - gross_entry):
+        raise ShadowCaseStoreError("opened contractual maximum loss does not conserve")
+    if fee_reserved != max(Decimal(0), payoff_cap - net_entry):
+        raise ShadowCaseStoreError("opened fee-reserved maximum loss does not conserve")
+    for field in ("future_cost_reserve_usdc", "underwriting_reserved_loss_usdc"):
         _decimal(economics.get(field), field)
-    _string_sequence(value.get("non_claims"), "non_claims")
+    non_claims = _string_sequence(value.get("non_claims"), "non_claims")
+    if non_claims != (
+        "NOT_AN_ORDER",
+        "NOT_A_FILL",
+        "NOT_AN_ATOMIC_QUOTE",
+        "NO_LIQUIDITY_RESERVATION",
+        "ATOMIC_EXECUTABILITY_UNPROVEN",
+    ):
+        raise ShadowCaseStoreError("opened component non_claims are invalid")
 
     decision_boundary = FactBoundary.from_object(
         _boundary(value.get("decision_fact_boundary"), "decision_fact_boundary")
@@ -608,12 +664,18 @@ def _validate_followup(
             "net_pnl_after_public_standard_fee_reserve_usdc",
             "net_loss_usdc",
             "economic_availability",
+            "close_component_pair_identity",
+            "close_component_quote_source_refs",
+            "close_component_legs",
             "censor_mask",
             "non_claims",
         }
     )
     _exact_keys(value, expected_keys, "Case follow-up")
-    if value.get("record_kind") != expected_kind or value.get("schema_version") != 1:
+    if (
+        value.get("record_kind") != expected_kind
+        or value.get("schema_version") != SHADOW_CASE_SCHEMA_VERSION
+    ):
         raise ShadowCaseStoreError("Case follow-up kind/schema is invalid")
     if value.get("case_id") != opened.get("case_id"):
         raise ShadowCaseStoreError("Case follow-up identity mismatch")
@@ -656,6 +718,45 @@ def _validate_followup(
                 _identity(identity, identity_field)
         _string_sequence(value.get("censor_mask"), "censor_mask")
         _string_sequence(value.get("non_claims"), "non_claims")
+        terminal_state = value.get("terminal_state")
+        if terminal_state == "MATURE_KNOWN":
+            _identity(
+                value.get("close_component_pair_identity"),
+                "close_component_pair_identity",
+            )
+            _validate_component_source_refs(
+                value.get("close_component_quote_source_refs"),
+                owner_boundary=later,
+                field="close_component_quote_source_refs",
+            )
+            structure = _mapping(opened.get("structure"), "structure")
+            close_component_gross, close_component_fee = _validate_component_legs(
+                value.get("close_component_legs"),
+                quantity=_decimal(structure.get("full_quantity_btc"), "full_quantity_btc"),
+                short_name=_text(
+                    structure.get("short_leg_instrument_name"),
+                    "short_leg_instrument_name",
+                ),
+                long_name=_text(
+                    structure.get("long_leg_instrument_name"),
+                    "long_leg_instrument_name",
+                ),
+                expected_actions=("BUY", "SELL"),
+                field="close_component_legs",
+            )
+            if (
+                _decimal(value.get("gross_close_cashflow_usdc"), "gross close cashflow")
+                != close_component_gross
+                or _decimal(value.get("close_fee_reserve_usdc"), "close fee reserve")
+                != close_component_fee
+            ):
+                raise ShadowCaseStoreError("Outcome economics do not match component close legs")
+        elif (
+            value.get("close_component_pair_identity") is not None
+            or value.get("close_component_quote_source_refs") != []
+            or value.get("close_component_legs") != []
+        ):
+            raise ShadowCaseStoreError("unknown/censored Outcome carries component close facts")
 
 
 def _validate_outcome_economics(
@@ -791,6 +892,119 @@ def _levels_amount(levels: Sequence[object]) -> Decimal:
         if amount <= 0 or price <= 0:
             raise ShadowCaseStoreError("consumed level amount and price must be positive")
         total += amount
+    return total
+
+
+def _validate_component_source_refs(
+    value: object,
+    *,
+    owner_boundary: FactBoundary,
+    field: str,
+) -> None:
+    refs = _sequence(value, field)
+    if len(refs) != 2:
+        raise ShadowCaseStoreError("component entry requires exactly two quote source refs")
+    for expected_role, raw in zip(("SHORT", "LONG"), refs, strict=True):
+        ref = _mapping(raw, f"{expected_role} component quote source ref")
+        _exact_keys(
+            ref,
+            {"canonical_leg_role", "source_identity", "receipt_fact_boundary"},
+            f"{expected_role} component quote source ref",
+        )
+        if ref.get("canonical_leg_role") != expected_role:
+            raise ShadowCaseStoreError("component quote source role/order is invalid")
+        _identity(ref.get("source_identity"), "component quote source identity")
+        source_boundary = FactBoundary.from_object(
+            _boundary(ref.get("receipt_fact_boundary"), "receipt_fact_boundary")
+        )
+        if (
+            source_boundary.code_identity != owner_boundary.code_identity
+            or source_boundary.runtime_identity != owner_boundary.runtime_identity
+            or (
+                source_boundary != owner_boundary
+                and not owner_boundary.is_strictly_after(source_boundary)
+            )
+        ):
+            raise ShadowCaseStoreError("component quote source boundary is not owned by Entry")
+
+
+def _validate_component_legs(
+    value: object,
+    *,
+    quantity: Decimal,
+    short_name: str,
+    long_name: str,
+    expected_actions: tuple[str, str],
+    field: str,
+) -> tuple[Decimal, Decimal]:
+    legs = _sequence(value, field)
+    if len(legs) != 2:
+        raise ShadowCaseStoreError("component entry requires exactly two leg quotes")
+    expected = (
+        ("SHORT", expected_actions[0], short_name),
+        ("LONG", expected_actions[1], long_name),
+    )
+    gross_cashflow = Decimal(0)
+    total_fee = Decimal(0)
+    for raw, (role, action, instrument_name) in zip(legs, expected, strict=True):
+        leg = _mapping(raw, f"{role} component leg")
+        _exact_keys(
+            leg,
+            {
+                "canonical_leg_role",
+                "instrument_name",
+                "action",
+                "raw_consumed_levels",
+                "raw_vwap_usdc_per_btc",
+                "stressed_consumed_levels",
+                "stressed_vwap_usdc_per_btc",
+                "fee_reserve_usdc",
+            },
+            f"{role} component leg",
+        )
+        if (
+            leg.get("canonical_leg_role") != role
+            or leg.get("action") != action
+            or leg.get("instrument_name") != instrument_name
+        ):
+            raise ShadowCaseStoreError("component leg role/action/instrument is invalid")
+        raw_levels = _sequence(leg.get("raw_consumed_levels"), "raw_consumed_levels")
+        stressed_levels = _sequence(
+            leg.get("stressed_consumed_levels"),
+            "stressed_consumed_levels",
+        )
+        if _levels_amount(raw_levels) != quantity or _levels_amount(stressed_levels) != quantity:
+            raise ShadowCaseStoreError("component leg levels do not cover full quantity")
+        raw_vwap = _decimal(leg.get("raw_vwap_usdc_per_btc"), "raw component VWAP")
+        stressed_vwap = _decimal(
+            leg.get("stressed_vwap_usdc_per_btc"),
+            "stressed component VWAP",
+        )
+        fee = _decimal(leg.get("fee_reserve_usdc"), "component fee reserve")
+        if raw_vwap <= 0 or stressed_vwap <= 0 or fee < 0:
+            raise ShadowCaseStoreError("component leg economics must be non-negative")
+        if raw_vwap * quantity != _levels_value(
+            raw_levels
+        ) or stressed_vwap * quantity != _levels_value(stressed_levels):
+            raise ShadowCaseStoreError("component leg VWAP does not match consumed levels")
+        if (action == "SELL" and stressed_vwap > raw_vwap) or (
+            action == "BUY" and stressed_vwap < raw_vwap
+        ):
+            raise ShadowCaseStoreError("component stress direction is not conservative")
+        gross_cashflow += (
+            stressed_vwap * quantity if action == "SELL" else -stressed_vwap * quantity
+        )
+        total_fee += fee
+    return gross_cashflow, total_fee
+
+
+def _levels_value(levels: Sequence[object]) -> Decimal:
+    total = Decimal(0)
+    for index, raw in enumerate(levels):
+        level = _mapping(raw, f"level[{index}]")
+        total += _decimal(level.get("amount_btc"), "amount_btc") * _decimal(
+            level.get("price_usdc_per_btc"), "price_usdc_per_btc"
+        )
     return total
 
 
