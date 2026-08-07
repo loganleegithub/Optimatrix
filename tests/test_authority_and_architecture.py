@@ -174,17 +174,33 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_closes_the_consumed_funnel_smoke_authority() -> None:
+def test_current_stage_closes_a1_at_the_measured_downstream_blocker() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`SHADOW_CASE_DATA_BOUNDARY_AND_FUNNEL_DIAGNOSTICS_IMPLEMENTED`" in current
-    assert (
-        "**Production Short Vol Radar:** `OFFLINE_READY_BOUNDED_PUBLIC_REACHABILITY_OBSERVED`"
-        in current
-    )
+    assert "`RADAR_STEADY_STATE_KNOWNNESS_IMPLEMENTED`" in current
+    assert "**Production Short Vol Radar:** `POST_WARMUP_KNOWNNESS_OBSERVED`" in current
     assert "**Live commands:** `NONE_AUTHORIZED`" in current
     assert "**Sole authorized closure:** `NONE`" in current
-    assert not (ROOT / "tasks/SHORT_VOL_FUNNEL_PRIMARY_BLOCKER.md").exists()
+    assert "`1,556,097` `RADAR_KNOWN` evaluations: `100%`" in current
+    assert "`PUBLIC_ATOMIC_QUOTE_AVAILABLE / NO_ACTIVE_COMBO`" in current
+    assert not (ROOT / "tasks/SHORT_VOL_RADAR_STEADY_STATE_KNOWNNESS.md").exists()
+    entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
+        encoding="utf-8"
+    )
+    assert "observe-radar-knownness" not in entrypoint
+
+
+def test_architecture_restores_applicable_scope_and_freezes_warmup_partition() -> None:
+    architecture = (ROOT / "docs/authority/SYSTEM_ARCHITECTURE.md").read_text(encoding="utf-8")
+    contract = (ROOT / "docs/contracts/SHORT_VOL_RADAR.md").read_text(encoding="utf-8")
+    stage_block = architecture.split("The canonical stages are:", 1)[1].split("```", 2)[1]
+
+    assert "APPLICABLE_MARKET_SCOPE\nRADAR_KNOWN" in stage_block
+    assert "the boundary at which that band first has an `AVAILABLE` tail is post-warmup" in (
+        " ".join(architecture.split())
+    )
+    assert "`INDEX_WARMUP` therefore remains visible" in " ".join(contract.split())
+    assert "Every Radar UNKNOWN contributes exactly one bounded aggregate reason" in contract
 
 
 def test_task_template_measures_product_progress_not_proof_volume() -> None:
@@ -199,6 +215,8 @@ def test_task_template_measures_product_progress_not_proof_volume() -> None:
         "**Complexity deleted:**",
     ):
         assert field in template
+    assert "VALIDATION_ONLY" in template
+    assert "EVIDENCE_ONLY" not in template
     assert "Tests alone do not satisfy the task" in template
 
 

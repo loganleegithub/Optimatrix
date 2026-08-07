@@ -1487,7 +1487,21 @@ const card = (label, value) =>
 const reasonLabels = {
   QUEUE_LAG_CURRENTNESS: '处理队列延迟, 行情时效性不可确认',
   CLOCK_GAP: '可信时间不连续',
+  INDEX_WARMUP: '指数基线处于启动或恢复 warmup',
+  INDEX_WINDOW_GAP: '指数基线窗口存在缺口',
+  INDEX_SOURCE_STALE: '指数来源已陈旧',
   INDEX_CONTINUITY_GAP: '指数行情连续性中断',
+  OPTION_BOOK_UNKNOWN: '期权簿不可确认',
+  OPTION_AMOUNT_METADATA_UNKNOWN: '期权数量元数据不可确认',
+  FORWARD_TICKER_UNKNOWN: '远期价格 ticker 不可确认',
+  INVALID_FORWARD: '远期价格无效',
+  NUMERICAL_BOUNDARY_UNRESOLVED: '数值区间跨越决策边界',
+  NUMERICAL_UNKNOWN: '数值模型输入不可确认',
+  OTHER_INDEX_UNKNOWN: '其他指数输入不可确认',
+  OTHER_TICKER_UNKNOWN: '其他 ticker 输入不可确认',
+  OTHER_OPTION_UNKNOWN: '其他期权输入不可确认',
+  OTHER_RUNTIME_UNKNOWN: '其他运行时输入不可确认',
+  OTHER_RADAR_UNKNOWN: '其他 Radar 输入不可确认',
   SESSION_GAP: '公共行情会话中断',
   SESSION_RPC_FAILURE: '公共接口响应超时',
   COMBO_QUOTE_RECEIPT_UNKNOWN: '组合报价回执不可确认',
@@ -1828,17 +1842,37 @@ const funnelBlockerText = values => {
     .map(([reason, count]) => `${reasonText(reason)}: ${count}`)
     .join('; ');
 };
+const knownnessRatioText = slice => {
+  const value = slice && slice.radar_known_over_applicable;
+  if (!value) return 'UNKNOWN';
+  const counts = `${displayText(value.numerator)}/${displayText(value.denominator)}`;
+  if (Number(value.denominator) === 0 || isMissing(value.ratio)) {
+    return `${counts} (UNKNOWN)`;
+  }
+  const percentage = Number(value.ratio) * 100;
+  return Number.isFinite(percentage)
+    ? `${counts} (${percentage.toFixed(2)}%)`
+    : `${counts} (UNKNOWN)`;
+};
 function renderFunnel(documentValue) {
   const funnel = documentValue.funnel;
-  if (!funnel || !Array.isArray(funnel.stages) || !funnel.primary_blocker) {
+  const knownness = funnel && funnel.radar_knownness;
+  if (!funnel || !Array.isArray(funnel.stages) || !funnel.primary_blocker ||
+      !knownness || !knownness.startup_warmup || !knownness.post_warmup) {
     throw new Error('invalid funnel projection');
   }
   const primary = funnel.primary_blocker;
+  const startup = knownness.startup_warmup;
+  const steady = knownness.post_warmup;
   const summary = '<div class="grid">' +
     card('首要漏斗阻塞阶段', funnelStageLabel(primary.stage)) +
     card('首要阻塞原因', reasonText(primary.reason)) +
     card('受阻数量', primary.blocked_count) +
     card('该阶段上游/已通过', `${primary.upstream_count}/${primary.observed_count}`) +
+    card('启动/恢复 warmup Radar known / applicable', knownnessRatioText(startup)) +
+    card('启动/恢复 warmup UNKNOWN', funnelBlockerText(startup.blocker_counts)) +
+    card('稳态 Radar known / applicable', knownnessRatioText(steady)) +
+    card('稳态 Radar UNKNOWN', funnelBlockerText(steady.blocker_counts)) +
     '</div>';
   const header = '<tr><th>阶段</th><th>已观察</th><th>单位</th>' +
     '<th>上游</th><th>阻塞归因</th></tr>';

@@ -27,10 +27,15 @@ offline from Shadow Cases.
 ## Current stage
 
 The active permission remains `PUBLIC_SHADOW`. The minimal Shadow Case data boundary is implemented
-offline: pre-Shadow state is memory-only and only an admitted Case can create durable files. The
-sole active closure is to expose and measure the primary funnel blocker. Persistent deployment
-remains forbidden; exactly one bounded public-only funnel smoke is conditionally authorized after
-the exact candidate passes repository checks.
+offline: pre-Shadow state is memory-only and only an admitted Case can create durable files. A1 now
+separates startup/recovery index warmup from the steady denominator. Its bounded public observation
+reported post-warmup `RADAR_KNOWN / APPLICABLE_MARKET_SCOPE` of
+`1,556,097 / 1,556,097` (`100%`) with zero steady-state Radar UNKNOWN.
+
+The earliest material funnel loss moved to
+`PUBLIC_ATOMIC_QUOTE_AVAILABLE / NO_ACTIVE_COMBO`: all `146` reviewable anomaly Episodes lacked an
+active official combo. No Shadow Case opened and no durable Case file was written. Persistent
+deployment and further live commands remain forbidden.
 
 See:
 

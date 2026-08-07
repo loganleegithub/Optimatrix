@@ -120,9 +120,22 @@ Instrument-specific source labels are normalized into bounded blocker categories
 cumulative counters. Exact current instrument/scope detail remains available in the ordinary
 Workbench rows; it cannot create an unbounded aggregate reason-key set.
 
+For Radar knownness, the funnel uses the canonical `IndexMinuteReducer` tail state already owned by
+the settled reducer; it does not recalculate the Radar formula. The warmup gate is per Policy TTE
+band:
+
+- an applicable countable evaluation with current index availability `WARMUP` is assigned to the
+  visible startup/recovery bucket and never to the steady denominator;
+- the boundary at which that band first has an `AVAILABLE` tail is post-warmup;
+- after a band has been available, later `SOURCE_STALE`, `WINDOW_GAP`, or `CONTINUITY_GAP`
+  evaluations remain post-warmup steady-state UNKNOWNs;
+- a later `WARMUP` recovery interval returns to the startup/recovery bucket until availability is
+  restored.
+
 The canonical stages are:
 
 ```text
+APPLICABLE_MARKET_SCOPE
 RADAR_KNOWN
 ANOMALY_ACTIVE
 STRUCTURE_REVIEWABLE
@@ -133,9 +146,14 @@ SHADOW_CASE_OPENED
 SHADOW_CASE_OUTCOME
 ```
 
-A deterministic primary-blocker function identifies the earliest material conversion loss and its
-largest reason. Funnel diagnostics may be displayed and logged externally, but they are not
-business evidence or qualification data.
+`APPLICABLE_MARKET_SCOPE` and `RADAR_KNOWN` use post-warmup countable instrument evaluations. The
+separate `radar_knownness.startup_warmup` projection retains startup/recovery counts and reasons, so
+`INDEX_WARMUP` remains visible without becoming the steady-state primary blocker. Every Radar
+UNKNOWN contributes exactly one finite aggregate reason. The primary-blocker function identifies
+the earliest material post-warmup conversion loss and its largest reason.
+
+Funnel diagnostics may be displayed and logged externally, but they are not business evidence or
+qualification data.
 
 ## Workbench boundary
 

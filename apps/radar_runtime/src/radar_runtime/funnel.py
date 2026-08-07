@@ -3,10 +3,13 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
+from market_monitor import ContinuityGap, IndexAvailabilityState
 from short_vol_radar.atomic import PublicAtomicQuoteState
 from short_vol_radar.detector import DetectorState
+from short_vol_radar.evidence import CoverageBlockingReason
 
 if TYPE_CHECKING:
     from radar_runtime.runtime import CausalCommit, RadarFunnelEvaluation, RadarReducer
@@ -35,6 +38,39 @@ _BOUNDED_INSTRUMENT_REASON_SUFFIXES = frozenset(
     {
         "AMOUNT_METADATA_UNKNOWN",
         "BOOK_UNKNOWN",
+    }
+)
+
+_RADAR_UNKNOWN_REASON_ALIASES = {
+    "INDEX_BASELINE_WARMUP": "INDEX_WARMUP",
+    "INDEX_BASELINE_STALE": "INDEX_SOURCE_STALE",
+    "INDEX_BASELINE_GAP": "INDEX_WINDOW_GAP",
+}
+
+_RADAR_UNKNOWN_REASON_CATEGORIES = frozenset(
+    {
+        *(item.value for item in CoverageBlockingReason if item is not CoverageBlockingReason.NONE),
+        "OPTION_BOOK_UNKNOWN",
+        "OPTION_AMOUNT_METADATA_UNKNOWN",
+        "FORWARD_TICKER_UNKNOWN",
+        "INVALID_FORWARD",
+        "NUMERICAL_BOUNDARY_UNRESOLVED",
+    }
+)
+
+_NUMERICAL_UNKNOWN_REASONS = frozenset(
+    {
+        "forward and strike must be finite and positive",
+        "total volatility must be finite and non-negative",
+        "price, forward, and strike must be finite and positive",
+        "target option price is outside the finite formula domain",
+        "total-volatility bracket overflowed",
+        "target option price was not bracketed",
+        "invalid total-volatility interval",
+        "time interval must be strictly positive",
+        "implied-volatility interval is not finite",
+        "ratio denominator must be finite and positive",
+        "binary64 model result is not finite",
     }
 )
 
@@ -78,14 +114,80 @@ class PrimaryFunnelBlocker:
 
 
 @dataclass(frozen=True)
+class RadarKnownnessSlice:
+    phase: str
+    applicable_market_scope_count: int
+    radar_known_count: int
+    blocker_counts: Mapping[str, int]
+
+    def __post_init__(self) -> None:
+        if self.phase not in {"STARTUP_WARMUP", "POST_WARMUP"}:
+            raise ValueError("Radar knownness phase is unsupported")
+        if self.applicable_market_scope_count < 0 or self.radar_known_count < 0:
+            raise ValueError("Radar knownness counts must be non-negative")
+        if self.radar_known_count > self.applicable_market_scope_count:
+            raise ValueError("Radar known count cannot exceed applicable scope")
+        invalid_blocker = any(
+            not isinstance(reason, str)
+            or not reason
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count <= 0
+            for reason, count in self.blocker_counts.items()
+        )
+        if invalid_blocker:
+            raise ValueError("Radar blocker counts must have positive bounded members")
+        unknown_count = self.applicable_market_scope_count - self.radar_known_count
+        if sum(self.blocker_counts.values()) != unknown_count:
+            raise ValueError("Every Radar UNKNOWN must have exactly one bounded blocker reason")
+
+    def as_object(self) -> dict[str, object]:
+        denominator = self.applicable_market_scope_count
+        ratio = (
+            None
+            if denominator == 0
+            else format(Decimal(self.radar_known_count) / Decimal(denominator), "f")
+        )
+        return {
+            "phase": self.phase,
+            "applicable_market_scope_count": denominator,
+            "radar_known_count": self.radar_known_count,
+            "radar_unknown_count": denominator - self.radar_known_count,
+            "radar_known_over_applicable": {
+                "numerator": self.radar_known_count,
+                "denominator": denominator,
+                "ratio": ratio,
+            },
+            "blocker_counts": dict(sorted(self.blocker_counts.items())),
+        }
+
+
+@dataclass(frozen=True)
+class RadarKnownnessSnapshot:
+    startup_warmup: RadarKnownnessSlice
+    post_warmup: RadarKnownnessSlice
+    warmed_band_ids: tuple[str, ...]
+
+    def as_object(self) -> dict[str, object]:
+        return {
+            "warmup_gate": "PER_POLICY_TTE_BAND_INDEX_TAIL_AVAILABLE",
+            "startup_warmup": self.startup_warmup.as_object(),
+            "post_warmup": self.post_warmup.as_object(),
+            "warmed_band_ids": list(self.warmed_band_ids),
+        }
+
+
+@dataclass(frozen=True)
 class FunnelSnapshot:
     stages: tuple[FunnelStageSnapshot, ...]
     primary_blocker: PrimaryFunnelBlocker
+    radar_knownness: RadarKnownnessSnapshot
 
     def as_object(self) -> dict[str, object]:
         return {
             "stages": [stage.as_object() for stage in self.stages],
             "primary_blocker": self.primary_blocker.as_object(),
+            "radar_knownness": self.radar_knownness.as_object(),
             "non_claims": [
                 "NON_DURABLE_RUNTIME_DIAGNOSTIC",
                 "NO_POLICY_QUALITY_OR_PROFITABILITY_CLAIM",
@@ -114,9 +216,13 @@ class FunnelTracker:
 
     def __init__(self) -> None:
         self._last_radar_causal_seq = 0
-        self._applicable_evaluation_count = 0
-        self._radar_known_evaluation_count = 0
-        self._radar_blockers: Counter[str] = Counter()
+        self._startup_applicable_evaluation_count = 0
+        self._startup_radar_known_evaluation_count = 0
+        self._startup_radar_blockers: Counter[str] = Counter()
+        self._post_warmup_applicable_evaluation_count = 0
+        self._post_warmup_radar_known_evaluation_count = 0
+        self._post_warmup_radar_blockers: Counter[str] = Counter()
+        self._warmed_band_ids: set[str] = set()
 
         self._anomaly_episode_count = 0
         self._structure_episode_count = 0
@@ -166,29 +272,34 @@ class FunnelTracker:
         stages = (
             FunnelStageSnapshot(
                 "APPLICABLE_MARKET_SCOPE",
-                self._applicable_evaluation_count,
-                "COUNTABLE_INSTRUMENT_EVALUATION",
+                self._post_warmup_applicable_evaluation_count,
+                "POST_WARMUP_COUNTABLE_INSTRUMENT_EVALUATION",
                 None,
                 None,
                 {},
             ),
             FunnelStageSnapshot(
                 "RADAR_KNOWN",
-                self._radar_known_evaluation_count,
-                "KNOWN_INSTRUMENT_EVALUATION",
-                self._applicable_evaluation_count,
-                "COUNTABLE_INSTRUMENT_EVALUATION",
-                self._radar_blockers,
+                self._post_warmup_radar_known_evaluation_count,
+                "POST_WARMUP_KNOWN_INSTRUMENT_EVALUATION",
+                self._post_warmup_applicable_evaluation_count,
+                "POST_WARMUP_COUNTABLE_INSTRUMENT_EVALUATION",
+                self._post_warmup_radar_blockers,
             ),
             FunnelStageSnapshot(
                 "ANOMALY_ACTIVE",
                 self._anomaly_episode_count,
                 "DISTINCT_ANOMALY_EPISODE",
-                self._radar_known_evaluation_count,
-                "KNOWN_INSTRUMENT_EVALUATION",
+                self._post_warmup_radar_known_evaluation_count,
+                "POST_WARMUP_KNOWN_INSTRUMENT_EVALUATION",
                 (
-                    {"NO_ANOMALY_ACTIVATION_OBSERVED": self._radar_known_evaluation_count}
-                    if self._radar_known_evaluation_count > 0 and self._anomaly_episode_count == 0
+                    {
+                        "NO_ANOMALY_ACTIVATION_OBSERVED": (
+                            self._post_warmup_radar_known_evaluation_count
+                        )
+                    }
+                    if self._post_warmup_radar_known_evaluation_count > 0
+                    and self._anomaly_episode_count == 0
                     else {}
                 ),
             ),
@@ -241,7 +352,22 @@ class FunnelTracker:
                 blockers["SHADOW_CASE_OUTCOME"],
             ),
         )
-        return FunnelSnapshot(stages, self._primary_blocker(stages))
+        knownness = RadarKnownnessSnapshot(
+            startup_warmup=RadarKnownnessSlice(
+                "STARTUP_WARMUP",
+                self._startup_applicable_evaluation_count,
+                self._startup_radar_known_evaluation_count,
+                self._startup_radar_blockers,
+            ),
+            post_warmup=RadarKnownnessSlice(
+                "POST_WARMUP",
+                self._post_warmup_applicable_evaluation_count,
+                self._post_warmup_radar_known_evaluation_count,
+                self._post_warmup_radar_blockers,
+            ),
+            warmed_band_ids=tuple(sorted(self._warmed_band_ids)),
+        )
+        return FunnelSnapshot(stages, self._primary_blocker(stages), knownness)
 
     def _observe_radar(self, reducer: RadarReducer, commit: CausalCommit) -> set[str]:
         causal_seq = reducer.latest_funnel_causal_seq
@@ -253,17 +379,32 @@ class FunnelTracker:
             evaluations = reducer.latest_funnel_evaluations
         else:
             evaluations = ()
+
+        availability_by_band: dict[str, IndexAvailabilityState] = {}
         for evaluation in evaluations:
-            self._applicable_evaluation_count += 1
-            if evaluation.known_evaluation:
-                self._radar_known_evaluation_count += 1
+            band_id, availability = _radar_baseline_availability(
+                reducer,
+                commit,
+                evaluation,
+                availability_by_band=availability_by_band,
+            )
+            post_warmup = self._is_post_warmup(band_id, availability)
+            if post_warmup:
+                self._post_warmup_applicable_evaluation_count += 1
+                if evaluation.known_evaluation:
+                    self._post_warmup_radar_known_evaluation_count += 1
+                else:
+                    self._post_warmup_radar_blockers[
+                        _bounded_radar_unknown_reason(evaluation.reason)
+                    ] += 1
             else:
-                self._radar_blockers[
-                    _bounded_blocker_reason(
-                        evaluation.reason,
-                        fallback="OTHER_RADAR_UNKNOWN",
-                    )
-                ] += 1
+                self._startup_applicable_evaluation_count += 1
+                if evaluation.known_evaluation:
+                    self._startup_radar_known_evaluation_count += 1
+                else:
+                    self._startup_radar_blockers[
+                        _bounded_radar_unknown_reason(evaluation.reason)
+                    ] += 1
 
         active: set[str] = set()
         for tracker in reducer.trackers.values():
@@ -291,6 +432,18 @@ class FunnelTracker:
                 state.atomic_available = True
                 self._atomic_episode_count += 1
         return active
+
+    def _is_post_warmup(
+        self,
+        band_id: str,
+        availability: IndexAvailabilityState,
+    ) -> bool:
+        if availability is IndexAvailabilityState.WARMUP:
+            return False
+        if availability is IndexAvailabilityState.AVAILABLE:
+            self._warmed_band_ids.add(band_id)
+            return True
+        return band_id in self._warmed_band_ids
 
     def _observe_shadow_records(
         self,
@@ -476,6 +629,39 @@ class FunnelTracker:
         return PrimaryFunnelBlocker("NONE", "NO_MATERIAL_BLOCKER_OBSERVED", 0, 0, 0)
 
 
+def _radar_baseline_availability(
+    reducer: RadarReducer,
+    commit: CausalCommit,
+    evaluation: RadarFunnelEvaluation,
+    *,
+    availability_by_band: dict[str, IndexAvailabilityState],
+) -> tuple[str, IndexAvailabilityState]:
+    result = reducer.results.get(evaluation.instrument_name)
+    band_id = result.band_id if result is not None else None
+    if not isinstance(band_id, str) or not band_id:
+        raise RuntimeError("countable Radar funnel evaluation lacks its Policy band")
+    cached = availability_by_band.get(band_id)
+    if cached is not None:
+        return band_id, cached
+    band = next((item for item in reducer.policy.tte_bands if item.band_id == band_id), None)
+    if band is None:
+        raise RuntimeError("Radar funnel evaluation references an unknown Policy band")
+    clock = reducer.clock
+    if clock is None:
+        raise RuntimeError("countable Radar funnel evaluation lacks trusted time")
+    try:
+        trusted_time = clock.interval_at(commit.boundary.received_monotonic_ms)
+    except (ContinuityGap, ValueError) as exc:
+        raise RuntimeError("countable Radar funnel evaluation cannot recover trusted time") from exc
+    baseline = reducer.index.current_tail(
+        max(band.lookbacks_minutes),
+        trusted_time=trusted_time,
+        source_stale_deadline_ms=reducer.policy.runtime_limits.index_source_stale_deadline_ms,
+    )
+    availability_by_band[band_id] = baseline.availability
+    return band_id, baseline.availability
+
+
 def _largest_reason(values: Mapping[str, int]) -> str:
     positive = ((count, reason) for reason, count in values.items() if count > 0)
     try:
@@ -483,6 +669,43 @@ def _largest_reason(values: Mapping[str, int]) -> str:
     except ValueError:
         return "UNATTRIBUTED_FUNNEL_LOSS"
     return reason
+
+
+def _bounded_radar_unknown_reason(value: str | None) -> str:
+    if value is None:
+        return "OTHER_RADAR_UNKNOWN"
+    normalized = _RADAR_UNKNOWN_REASON_ALIASES.get(value, value)
+    if normalized in _RADAR_UNKNOWN_REASON_CATEGORIES:
+        return normalized
+    if normalized in _NUMERICAL_UNKNOWN_REASONS:
+        return "NUMERICAL_UNKNOWN"
+    suffix = normalized.rsplit(":", 1)[-1]
+    if suffix == "BOOK_UNKNOWN":
+        return "OPTION_BOOK_UNKNOWN"
+    if suffix == "AMOUNT_METADATA_UNKNOWN":
+        return "OPTION_AMOUNT_METADATA_UNKNOWN"
+    if normalized.startswith("INDEX_"):
+        return "OTHER_INDEX_UNKNOWN"
+    if normalized.startswith(("TICKER_", "FORWARD_")):
+        return "OTHER_TICKER_UNKNOWN"
+    if normalized.startswith(("OPTION_LIFECYCLE_", "OPTION_METADATA_", "OPTION_SNAPSHOT_")):
+        return CoverageBlockingReason.OPTION_LIFECYCLE_UNAVAILABLE.value
+    if normalized.startswith("OPTION_"):
+        return "OTHER_OPTION_UNKNOWN"
+    if normalized.startswith(
+        (
+            "CLOCK_",
+            "SESSION_",
+            "REMOTE_",
+            "TRANSPORT_",
+            "PLATFORM_",
+            "PROTOCOL_",
+            "INGRESS_",
+            "QUEUE_",
+        )
+    ):
+        return "OTHER_RUNTIME_UNKNOWN"
+    return "OTHER_RADAR_UNKNOWN"
 
 
 def _bounded_blocker_reason(value: str | None, *, fallback: str) -> str:

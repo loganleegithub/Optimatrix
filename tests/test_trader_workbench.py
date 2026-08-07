@@ -619,7 +619,7 @@ def test_browser_formats_business_states_and_orders_rows_without_recomputing() -
         "globalThis.__workbenchTest = { radarCellValue, underwritingCellValue, "
         "shadowCellValue, positionCellValue, outcomeCellValue, "
         "orderedRadarRows, orderedUnderwritingRows, filterRows, "
-        "funnelStageLabel, funnelBlockerText };",
+        "funnelStageLabel, funnelBlockerText, knownnessRatioText };",
     )
     assert test_js != JS
     harness = f"""
@@ -691,6 +691,12 @@ assert.equal(api.funnelBlockerText({{
   NO_ACTIVE_COMBO: 2,
   NO_TARGET_SIZE_CREDIT_QUOTE: 1
 }}), '无活跃组合可供承保评估: 2; 目标数量的组合权利金报价不可用: 1');
+assert.equal(api.knownnessRatioText({{
+  radar_known_over_applicable: {{numerator: 3, denominator: 4, ratio: '0.75'}}
+}}), '3/4 (75.00%)');
+assert.equal(api.knownnessRatioText({{
+  radar_known_over_applicable: {{numerator: 0, denominator: 0, ratio: null}}
+}}), '0/0 (UNKNOWN)');
 
 const radar = api.orderedRadarRows([
   {{instrument_name:'N', detector_state:'NO_ANOMALY', expiration_timestamp_ms:2, strike_usdc_per_btc:'2'}},
@@ -743,6 +749,36 @@ def test_browser_executes_fail_closed_and_recovery_paths() -> None:
     document["published_fact_boundary"] = {
         "causal_seq": 42,
         "received_monotonic_ms": 1_234,
+    }
+    funnel = document["funnel"]
+    assert isinstance(funnel, dict)
+    funnel["radar_knownness"] = {
+        "warmup_gate": "PER_POLICY_TTE_BAND_INDEX_TAIL_AVAILABLE",
+        "startup_warmup": {
+            "phase": "STARTUP_WARMUP",
+            "applicable_market_scope_count": 2,
+            "radar_known_count": 0,
+            "radar_unknown_count": 2,
+            "radar_known_over_applicable": {
+                "numerator": 0,
+                "denominator": 2,
+                "ratio": "0",
+            },
+            "blocker_counts": {"INDEX_WARMUP": 2},
+        },
+        "post_warmup": {
+            "phase": "POST_WARMUP",
+            "applicable_market_scope_count": 4,
+            "radar_known_count": 3,
+            "radar_unknown_count": 1,
+            "radar_known_over_applicable": {
+                "numerator": 3,
+                "denominator": 4,
+                "ratio": "0.75",
+            },
+            "blocker_counts": {"OPTION_BOOK_UNKNOWN": 1},
+        },
+        "warmed_band_ids": ["operational-soak-30m-to-72h"],
     }
     restarted_document = json.loads(json.dumps(document))
     restarted_document["runtime_identity"] = "sha256:" + "f" * 64
@@ -817,6 +853,11 @@ const markStalePanels = () => {{
   assert.match(elements.system.innerHTML, /Published fact boundary/);
   assert.match(elements.system.innerHTML, /causal_seq/);
   assert.match(elements.system.innerHTML, /received_monotonic_ms/);
+  assert.match(elements.funnel.innerHTML, /启动\\/恢复 warmup Radar known \\/ applicable/);
+  assert.match(elements.funnel.innerHTML, /指数基线处于启动或恢复 warmup: 2/);
+  assert.match(elements.funnel.innerHTML, /稳态 Radar known \\/ applicable/);
+  assert.match(elements.funnel.innerHTML, /3\\/4 \\(75.00%\\)/);
+  assert.match(elements.funnel.innerHTML, /期权簿不可确认: 1/);
   assert.ok(systemHas('最近成功获取 age', '0 ms'));
   assert.ok(systemHas('Publication 未变化 age', '0 ms'));
 
