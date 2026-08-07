@@ -15,7 +15,7 @@ learn only from facts observed strictly after that decision.
 
 Market facts, Radar calculations, anomaly state, component-book counterfactuals, official combo
 diagnostics, Underwriting state, Candidate state, and Workbench projections are **real-time
-decision state** before Shadow admission. They may be known, degraded, or `UNKNOWN`; they are not
+decision state** before Shadow enrollment. They may be known, degraded, or `UNKNOWN`; they are not
 durable research records.
 
 The first durable business object is `SHADOW_CASE_OPENED`. It exists only after one admitted
@@ -57,6 +57,9 @@ APPLICABLE_MARKET_SCOPE
 → SHADOW_CASE_OPENED
 → SHADOW_CASE_OUTCOME
 ```
+
+The canonical Case stages count admitted Candidates. Selected no-trade Cases use a separate
+research projection and cannot change those conversion counts.
 
 Every stage has an explicit numerator, denominator, and blocker reason. A task must move one stage,
 reduce the largest measured blocker, or remove a proven non-product subsystem that blocks the
@@ -109,10 +112,14 @@ snapshots are immutable bytes for readers but are not durable records.
 
 ### Shadow Case data
 
-An admitted `SHADOW_CASE_OPENED` freezes the exact code and three Policy identities, decision
+An enrolled `SHADOW_CASE_OPENED` freezes the exact code and three Policy identities, decision
 boundary, frozen two-leg structure, target quantity, one strictly later paired public option-book
 snapshot, conservative stressed leg prices, standard public fees, and the minimum consumed decision
-facts. Strictly future bounded transitions and one terminal Outcome may then be stored.
+facts, including the protective-leg selector-rule identity and Candidate protective-leg count that
+cannot be reconstructed after option scope is released. `enrollment_kind` discriminates an admitted
+Candidate trade from one pre-outcome selected no-trade decision control; a control has no Candidate
+or `SHADOW_ENTRY` identity. Strictly future bounded transitions and one terminal Outcome may then be
+stored.
 
 An opened Case without a terminal record after an unclean process loss is
 `INCOMPLETE_UNCLEAN_EXIT`. It is never silently completed, resumed by a new runtime, or removed from
@@ -172,8 +179,16 @@ option-book responses for the frozen short and protective long. Both legs must c
 quantity under the same conservative pricing rule and satisfy the pair session, continuity, and
 skew budgets frozen in the Policy chain. That transition opens the admitted Shadow Case.
 Ordinary WATCH and ABSTAIN results remain current state and do not automatically create
-rejected-counterfactual trades or durable controls. A no-trade control requires a future explicit
-pre-outcome selection rule and separate authority.
+rejected-counterfactual trades or durable controls. The authorized selected-decision rule freezes
+one action-blind designation per Radar activation causal batch before Underwriting action or future
+facts are known, with no fallback if that Episode remains `UNKNOWN` or ends. Its first evaluable
+decision receives one strictly later paired refresh. A decision selected as Candidate and still
+Candidate reuses ordinary admission. A refresh classified as WATCH or ABSTAIN may open one
+explicitly tagged no-trade Case. A selected WATCH/ABSTAIN that refreshes to Candidate opens no
+control and terminalizes as `REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`; only a later
+ordinary Candidate activation followed by its own strictly later pair may admit it. This research
+branch is projected separately and never increments canonical Candidate, `SHADOW_ENTRY`, or
+admitted-trade counts.
 
 ## Position and Outcome
 
@@ -201,7 +216,8 @@ requirements.
 ## Hard invariants
 
 1. Current decision facts are known at or before their causal boundary.
-2. Shadow observations and Outcomes are strictly after `SHADOW_CASE_OPENED`.
+2. Shadow observations and Outcomes are strictly after `SHADOW_CASE_OPENED`; the enrollment
+   decision and its paired witness are strictly pre-open.
 3. Missing, stale, discontinuous, incomplete, or contaminated required facts remain `UNKNOWN` at
    the smallest consumer.
 4. A known positive witness is not erased by unrelated missingness; negative absence claims require
@@ -213,7 +229,8 @@ requirements.
 6. Shadow entry and close economics require full-quantity public depth on both frozen option legs,
    the declared one-tick adverse stress, both standard fees, and strictly later paired snapshots.
    They are counterfactuals, not orders, fills, atomic quotes, or liquidity reservations.
-7. Pre-Shadow durable business record count is exactly zero.
+7. Pre-Shadow durable business record count is exactly zero; Shadow begins only at explicit Case
+   enrollment.
 8. The Online Runtime persists only bounded Shadow Case records; it does not persist Cohort,
    aligned-pair, Workbench, service, host, or full-market records.
 9. One run binds one exact three-Policy chain and cannot hot-reload, train, promote, or tune it.

@@ -10,6 +10,14 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 
+from short_vol_underwriting.control import (
+    selected_decision_batch_identity,
+    selected_decision_rule_identity,
+)
+from short_vol_underwriting.domain import (
+    UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
+    UnderwritingThresholdMargins,
+)
 from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
 from short_vol_underwriting.identity import (
     canonical_identity,
@@ -20,7 +28,7 @@ from short_vol_underwriting.identity import (
 from short_vol_underwriting.model import FactBoundary
 from short_vol_underwriting.policy import PolicyChain
 
-SHADOW_CASE_SCHEMA_VERSION = 2
+SHADOW_CASE_SCHEMA_VERSION = 3
 OPENED_KIND = "SHADOW_CASE_OPENED"
 FIRST_CLOSE_KIND = "SHADOW_CASE_FIRST_CLOSE"
 OUTCOME_KIND = "SHADOW_CASE_OUTCOME"
@@ -44,8 +52,19 @@ class ShadowCaseRead:
     outcome: Mapping[str, object] | None
 
 
+@dataclass(frozen=True)
+class _ComponentSourceEvidence:
+    source_identity: str
+    boundary: FactBoundary
+    source_timestamp_ms: int | None
+    global_continuity_epoch: int | None
+    request_id: int | None
+    owner_origin_boundary: FactBoundary | None
+    sent_boundary: FactBoundary | None
+
+
 class ShadowCaseStore:
-    """Persist only admitted Shadow Cases and their bounded future result."""
+    """Persist admitted trades and explicitly selected no-trade decision Cases."""
 
     def __init__(
         self,
@@ -59,7 +78,7 @@ class ShadowCaseStore:
         self.directory = directory
         self.bindings = bindings
         self.policies = policies
-        self._case_by_entry: dict[str, str] = {}
+        self._case_by_enrollment: dict[str, str] = {}
         self._opened_by_case: dict[str, Mapping[str, object]] = {}
         self._case_count = 0
 
@@ -72,7 +91,10 @@ class ShadowCaseStore:
         return len(self._opened_by_case)
 
     def case_id_for_entry(self, entry_identity: str) -> str | None:
-        return self._case_by_entry.get(entry_identity)
+        return self._case_by_enrollment.get(entry_identity)
+
+    def case_id_for_enrollment(self, enrollment_identity: str) -> str | None:
+        return self._case_by_enrollment.get(enrollment_identity)
 
     def on_record(
         self,
@@ -80,18 +102,23 @@ class ShadowCaseStore:
         state: ShadowStateStore,
     ) -> None:
         kind = value.get("object_kind")
-        if kind == "SHADOW_ENTRY":
+        if kind in {"SHADOW_ENTRY", "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN"}:
             self._open_case(value, state)
         elif kind == "POSITION_ACTION":
             self._record_first_close(value)
-        elif kind == "SHADOW_OUTCOME":
+        elif kind in {"SHADOW_OUTCOME", "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME"}:
             self._record_outcome(value)
 
     def read_case(self, case_id: str, *, runtime_active: bool = False) -> ShadowCaseRead:
         require_identity(case_id, "case_id")
         case_directory = self._case_directory(case_id)
         opened = _read_json(case_directory / "opened.json")
-        _validate_opened(opened, expected_case_id=case_id, bindings=self.bindings)
+        _validate_opened(
+            opened,
+            expected_case_id=case_id,
+            bindings=self.bindings,
+            policies=self.policies,
+        )
         first_close_path = case_directory / "first-close.json"
         outcome_path = case_directory / "outcome.json"
         first_close = _read_json(first_close_path) if first_close_path.exists() else None
@@ -122,9 +149,68 @@ class ShadowCaseStore:
         value: Mapping[str, object],
         state: ShadowStateStore,
     ) -> None:
-        payload = _mapping(value.get("payload"), "SHADOW_ENTRY.payload")
-        entry_identity = _identity(value.get("object_identity"), "shadow_entry_identity")
+        object_kind = value.get("object_kind")
+        payload = _mapping(value.get("payload"), f"{object_kind}.payload")
+        enrollment_identity = _identity(
+            value.get("object_identity"),
+            "enrollment_identity",
+        )
         boundary = _boundary(value.get("fact_boundary"), "opened_fact_boundary")
+        if object_kind == "SHADOW_ENTRY":
+            enrollment_kind = "ADMITTED_SHADOW_TRADE"
+            if payload.get("enrollment_kind") != enrollment_kind:
+                raise ShadowCaseStoreError("Shadow Entry enrollment kind is invalid")
+            shadow_entry_identity: str | None = enrollment_identity
+            candidate_value = _identity(
+                payload.get("candidate_identity"),
+                "candidate_identity",
+            )
+            candidate_identity: str | None = candidate_value
+            candidate = state.get_object("CANDIDATE_ACTIVATION", candidate_value)
+            if candidate is None:
+                raise ShadowCaseStoreError(
+                    "Shadow Entry lacks its Candidate in current owner state"
+                )
+            candidate_payload = _mapping(candidate.get("payload"), "Candidate.payload")
+            action_value = _identity(
+                candidate_payload.get("underwriting_action_identity"),
+                "underwriting_action_identity",
+            )
+            action_identity: str | None = action_value
+            action = state.get_object("UNDERWRITING_ACTION", action_value)
+            if action is None:
+                raise ShadowCaseStoreError("Shadow Entry lacks its Underwriting action")
+            selected_decision = payload.get("selected_underwriting_decision")
+        elif object_kind == "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN":
+            enrollment_kind = "SELECTED_UNDERWRITING_DECISION_CONTROL"
+            if payload.get("enrollment_kind") != enrollment_kind:
+                raise ShadowCaseStoreError("decision-control enrollment kind is invalid")
+            shadow_entry_identity = None
+            candidate_identity = None
+            action_identity = None
+            selection_identity = _identity(
+                payload.get("selected_underwriting_decision_identity"),
+                "selected_underwriting_decision_identity",
+            )
+            if state.get_object("SELECTED_UNDERWRITING_DECISION", selection_identity) is None:
+                raise ShadowCaseStoreError(
+                    "decision-control open lacks its current selected decision"
+                )
+            selected_decision = payload.get("selected_underwriting_decision")
+        else:
+            raise ShadowCaseStoreError("unsupported Shadow Case enrollment kind")
+        entry_underwriting_action_identity = _identity(
+            payload.get("entry_underwriting_action_identity"),
+            "entry_underwriting_action_identity",
+        )
+        entry_underwriting_economic_fingerprint = _identity(
+            payload.get("entry_underwriting_consumed_economic_fact_fingerprint"),
+            "entry_underwriting_consumed_economic_fact_fingerprint",
+        )
+        decision_boundary = payload.get("entry_underwriting_decision_fact_boundary")
+        underwriting_action = payload.get("entry_underwriting_economic_action")
+        failed_predicates = payload.get("entry_underwriting_failed_predicates")
+        predicate_margin_vector = payload.get("entry_underwriting_predicate_margin_vector")
         case_id = canonical_identity(
             "ShadowCaseIdentity",
             self.bindings.code_identity,
@@ -132,22 +218,9 @@ class ShadowCaseStore:
             self.bindings.radar_policy_identity,
             self.bindings.underwriting_policy_identity,
             self.bindings.position_policy_identity,
-            entry_identity,
+            enrollment_identity,
             boundary,
         )
-        candidate_identity = _identity(payload.get("candidate_identity"), "candidate_identity")
-        candidate = state.get_object("CANDIDATE_ACTIVATION", candidate_identity)
-        if candidate is None:
-            raise ShadowCaseStoreError("Shadow Entry lacks its Candidate in current owner state")
-        candidate_payload = _mapping(candidate.get("payload"), "Candidate.payload")
-        action_identity = _identity(
-            candidate_payload.get("underwriting_action_identity"),
-            "underwriting_action_identity",
-        )
-        action = state.get_object("UNDERWRITING_ACTION", action_identity)
-        if action is None:
-            raise ShadowCaseStoreError("Shadow Entry lacks its Underwriting action")
-        action_payload = _mapping(action.get("payload"), "UnderwritingAction.payload")
         opened: dict[str, object] = {
             "record_kind": OPENED_KIND,
             "schema_version": SHADOW_CASE_SCHEMA_VERSION,
@@ -155,10 +228,13 @@ class ShadowCaseStore:
             **self._binding_object(),
             "shadow_case_contract_identity": self.bindings.shadow_case_contract_identity,
             "opened_fact_boundary": boundary,
-            "shadow_entry_identity": entry_identity,
+            "enrollment_kind": enrollment_kind,
+            "enrollment_identity": enrollment_identity,
+            "shadow_entry_identity": shadow_entry_identity,
             "candidate_identity": candidate_identity,
             "underwriting_action_identity": action_identity,
-            "decision_fact_boundary": action_payload.get("evaluation_fact_boundary"),
+            "decision_fact_boundary": decision_boundary,
+            "selected_underwriting_decision": selected_decision,
             "structure": {
                 "execution_model": payload.get("execution_model"),
                 "canonical_leg_identities": payload.get("canonical_leg_identities"),
@@ -171,6 +247,8 @@ class ShadowCaseStore:
                 "entry_direction": payload.get("entry_direction"),
                 "full_quantity_btc": payload.get("full_quantity_btc"),
                 "entry_component_pair_identity": payload.get("entry_component_pair_identity"),
+                "entry_component_pair_timing": payload.get("entry_component_pair_timing"),
+                "entry_component_pair_limits": payload.get("entry_component_pair_limits"),
                 "entry_component_quote_source_refs": payload.get(
                     "entry_component_quote_source_refs"
                 ),
@@ -185,7 +263,17 @@ class ShadowCaseStore:
                 "richness_interval": payload.get("radar_richness_interval"),
             },
             "underwriting": {
-                "action": action_payload.get("economic_action"),
+                "action_identity": entry_underwriting_action_identity,
+                "consumed_economic_fact_fingerprint": (entry_underwriting_economic_fingerprint),
+                "action": underwriting_action,
+                "failed_predicates": failed_predicates,
+                "predicate_margin_vector": predicate_margin_vector,
+                "protective_leg_selection_rule_identity": payload.get(
+                    "entry_underwriting_protective_leg_selection_rule_identity"
+                ),
+                "candidate_protective_leg_count": payload.get(
+                    "entry_underwriting_candidate_protective_leg_count"
+                ),
                 "minimum_net_entry_credit_usdc": str(
                     self.policies.underwriting.minimum_net_entry_credit_usdc
                 ),
@@ -217,9 +305,14 @@ class ShadowCaseStore:
             "non_claims": payload.get("non_claims"),
         }
         normalized = _normalized_mapping(opened)
-        _validate_opened(normalized, expected_case_id=case_id, bindings=self.bindings)
+        _validate_opened(
+            normalized,
+            expected_case_id=case_id,
+            bindings=self.bindings,
+            policies=self.policies,
+        )
         self._publish(case_id, "opened.json", normalized)
-        self._case_by_entry[entry_identity] = case_id
+        self._case_by_enrollment[enrollment_identity] = case_id
         self._opened_by_case[case_id] = normalized
         self._case_count += 1
 
@@ -232,7 +325,7 @@ class ShadowCaseStore:
         ):
             return
         entry_identity = _identity(payload.get("shadow_entry_identity"), "shadow_entry_identity")
-        case_id = self._case_by_entry.get(entry_identity)
+        case_id = self._case_by_enrollment.get(entry_identity)
         if case_id is None:
             raise ShadowCaseStoreError("first CLOSE belongs to an unopened Shadow Case")
         record = _normalized_mapping(
@@ -258,7 +351,7 @@ class ShadowCaseStore:
     def _record_outcome(self, value: Mapping[str, object]) -> None:
         payload = _mapping(value.get("payload"), "SHADOW_OUTCOME.payload")
         entry_identity = _identity(payload.get("shadow_entry_identity"), "shadow_entry_identity")
-        case_id = self._case_by_entry.get(entry_identity)
+        case_id = self._case_by_enrollment.get(entry_identity)
         if case_id is None:
             raise ShadowCaseStoreError("Outcome belongs to an unopened Shadow Case")
         record = _normalized_mapping(
@@ -297,7 +390,7 @@ class ShadowCaseStore:
         _validate_followup(opened, record, expected_kind=OUTCOME_KIND)
         _validate_outcome_economics(opened, record)
         self._publish(case_id, "outcome.json", record)
-        self._case_by_entry.pop(entry_identity, None)
+        self._case_by_enrollment.pop(entry_identity, None)
         self._opened_by_case.pop(case_id, None)
 
     def _binding_object(self) -> dict[str, str]:
@@ -357,6 +450,7 @@ def _validate_opened(
     *,
     expected_case_id: str,
     bindings: RuntimeBindings,
+    policies: PolicyChain,
 ) -> None:
     required = {
         "record_kind",
@@ -369,10 +463,13 @@ def _validate_opened(
         "position_policy_identity",
         "shadow_case_contract_identity",
         "opened_fact_boundary",
+        "enrollment_kind",
+        "enrollment_identity",
         "shadow_entry_identity",
         "candidate_identity",
         "underwriting_action_identity",
         "decision_fact_boundary",
+        "selected_underwriting_decision",
         "structure",
         "radar",
         "underwriting",
@@ -410,11 +507,32 @@ def _validate_opened(
         "underwriting_policy_identity",
         "position_policy_identity",
         "shadow_case_contract_identity",
-        "shadow_entry_identity",
-        "candidate_identity",
-        "underwriting_action_identity",
     ):
         _identity(value.get(field), field)
+    enrollment_kind = value.get("enrollment_kind")
+    if enrollment_kind not in {
+        "ADMITTED_SHADOW_TRADE",
+        "SELECTED_UNDERWRITING_DECISION_CONTROL",
+    }:
+        raise ShadowCaseStoreError("opened enrollment_kind is invalid")
+    enrollment_identity = _identity(
+        value.get("enrollment_identity"),
+        "enrollment_identity",
+    )
+    if enrollment_kind == "ADMITTED_SHADOW_TRADE":
+        if value.get("shadow_entry_identity") != enrollment_identity:
+            raise ShadowCaseStoreError("trade enrollment identity mismatch")
+        _identity(value.get("candidate_identity"), "candidate_identity")
+        _identity(value.get("underwriting_action_identity"), "underwriting_action_identity")
+    elif any(
+        value.get(field) is not None
+        for field in (
+            "shadow_entry_identity",
+            "candidate_identity",
+            "underwriting_action_identity",
+        )
+    ):
+        raise ShadowCaseStoreError("decision control masquerades as a Candidate or Shadow Entry")
     opened_boundary = FactBoundary.from_object(
         _boundary(value.get("opened_fact_boundary"), "opened_fact_boundary")
     )
@@ -430,7 +548,7 @@ def _validate_opened(
         bindings.radar_policy_identity,
         bindings.underwriting_policy_identity,
         bindings.position_policy_identity,
-        value.get("shadow_entry_identity"),
+        enrollment_identity,
         opened_boundary,
     )
     if recomputed_case_id != expected_case_id:
@@ -450,6 +568,8 @@ def _validate_opened(
             "entry_direction",
             "full_quantity_btc",
             "entry_component_pair_identity",
+            "entry_component_pair_timing",
+            "entry_component_pair_limits",
             "entry_component_quote_source_refs",
             "entry_component_legs",
         },
@@ -462,10 +582,18 @@ def _validate_opened(
     )
     if len(leg_identities) != 2:
         raise ShadowCaseStoreError("opened structure must contain exactly two leg identities")
-    for index, identity in enumerate(leg_identities):
+    canonical_leg_identities = tuple(
         _identity(identity, f"canonical_leg_identities[{index}]")
-    for field in ("short_leg_instrument_name", "long_leg_instrument_name"):
-        _text(structure.get(field), field)
+        for index, identity in enumerate(leg_identities)
+    )
+    short_instrument_name = _text(
+        structure.get("short_leg_instrument_name"),
+        "short_leg_instrument_name",
+    )
+    long_instrument_name = _text(
+        structure.get("long_leg_instrument_name"),
+        "long_leg_instrument_name",
+    )
     expiry_ms = structure.get("expiry_ms")
     if isinstance(expiry_ms, bool) or not isinstance(expiry_ms, int) or expiry_ms <= 0:
         raise ShadowCaseStoreError("expiry_ms must be a positive integer")
@@ -478,28 +606,35 @@ def _validate_opened(
     quantity = _decimal(structure.get("full_quantity_btc"), "full_quantity_btc")
     if quantity <= 0:
         raise ShadowCaseStoreError("opened quantity must be positive")
-    _identity(
+    entry_component_pair_identity = _identity(
         structure.get("entry_component_pair_identity"),
         "entry_component_pair_identity",
     )
-    _validate_component_source_refs(
+    component_source_boundaries = _validate_component_source_refs(
         structure.get("entry_component_quote_source_refs"),
         owner_boundary=opened_boundary,
         field="entry_component_quote_source_refs",
+        require_pair_timing_inputs=True,
+        expected_leg_identities=(canonical_leg_identities[0], canonical_leg_identities[1]),
+        expected_instrument_names=(short_instrument_name, long_instrument_name),
     )
-    entry_component_gross, entry_component_fee = _validate_component_legs(
-        structure.get("entry_component_legs"),
-        quantity=quantity,
-        short_name=_text(
-            structure.get("short_leg_instrument_name"),
-            "short_leg_instrument_name",
-        ),
-        long_name=_text(
-            structure.get("long_leg_instrument_name"),
-            "long_leg_instrument_name",
-        ),
-        expected_actions=("SELL", "BUY"),
-        field="entry_component_legs",
+    _validate_component_pair_timing(
+        structure.get("entry_component_pair_timing"),
+        structure.get("entry_component_pair_limits"),
+        source_boundaries=component_source_boundaries,
+        pair_identity=entry_component_pair_identity,
+        owner_boundary=opened_boundary,
+        policies=policies,
+    )
+    entry_component_gross, entry_component_fee, entry_consumed_level_count = (
+        _validate_component_legs(
+            structure.get("entry_component_legs"),
+            quantity=quantity,
+            short_name=short_instrument_name,
+            long_name=long_instrument_name,
+            expected_actions=("SELL", "BUY"),
+            field="entry_component_legs",
+        )
     )
     radar = _mapping(value.get("radar"), "radar")
     _exact_keys(
@@ -531,7 +666,13 @@ def _validate_opened(
     _exact_keys(
         underwriting,
         {
+            "action_identity",
+            "consumed_economic_fact_fingerprint",
             "action",
+            "failed_predicates",
+            "predicate_margin_vector",
+            "protective_leg_selection_rule_identity",
+            "candidate_protective_leg_count",
             "minimum_net_entry_credit_usdc",
             "minimum_net_credit_to_payoff_cap_fraction",
             "maximum_underwriting_reserved_loss_usdc",
@@ -539,14 +680,57 @@ def _validate_opened(
         },
         "opened underwriting",
     )
-    if underwriting.get("action") != "CANDIDATE":
+    entry_underwriting_action_identity = _identity(
+        underwriting.get("action_identity"),
+        "entry underwriting action_identity",
+    )
+    entry_underwriting_economic_fingerprint = _identity(
+        underwriting.get("consumed_economic_fact_fingerprint"),
+        "entry underwriting consumed_economic_fact_fingerprint",
+    )
+    underwriting_action = underwriting.get("action")
+    if underwriting_action not in {"CANDIDATE", "WATCH", "ABSTAIN"}:
         raise ShadowCaseStoreError("opened Underwriting action is invalid")
-    for field in (
-        "minimum_net_entry_credit_usdc",
-        "minimum_net_credit_to_payoff_cap_fraction",
-        "maximum_underwriting_reserved_loss_usdc",
+    if enrollment_kind == "ADMITTED_SHADOW_TRADE" and underwriting_action != "CANDIDATE":
+        raise ShadowCaseStoreError("admitted trade must remain a Candidate at open")
+    failed_predicates = _string_sequence(
+        underwriting.get("failed_predicates"),
+        "failed_predicates",
+    )
+    predicate_margins = _validate_predicate_margin_vector(
+        underwriting.get("predicate_margin_vector"),
+        "predicate_margin_vector",
+    )
+    _validate_margin_decision(
+        action=underwriting_action,
+        failed_predicates=failed_predicates,
+        margins=predicate_margins,
+        field="opened underwriting",
+    )
+    if (
+        underwriting.get("protective_leg_selection_rule_identity")
+        != UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY
     ):
-        _decimal(underwriting.get(field), field)
+        raise ShadowCaseStoreError("opened protective-leg selection rule identity mismatch")
+    candidate_protective_leg_count = underwriting.get("candidate_protective_leg_count")
+    if (
+        isinstance(candidate_protective_leg_count, bool)
+        or not isinstance(candidate_protective_leg_count, int)
+        or candidate_protective_leg_count < 0
+    ):
+        raise ShadowCaseStoreError("opened Candidate protective-leg count is invalid")
+    expected_thresholds = {
+        "minimum_net_entry_credit_usdc": policies.underwriting.minimum_net_entry_credit_usdc,
+        "minimum_net_credit_to_payoff_cap_fraction": (
+            policies.underwriting.minimum_net_credit_to_payoff_cap_fraction
+        ),
+        "maximum_underwriting_reserved_loss_usdc": (
+            policies.underwriting.maximum_underwriting_reserved_loss_usdc
+        ),
+    }
+    for field, expected_threshold in expected_thresholds.items():
+        if _decimal(underwriting.get(field), field) != expected_threshold:
+            raise ShadowCaseStoreError(f"opened underwriting Policy threshold mismatch: {field}")
     maximum_levels = underwriting.get("maximum_entry_consumed_level_count")
     if (
         isinstance(maximum_levels, bool)
@@ -554,6 +738,8 @@ def _validate_opened(
         or maximum_levels <= 0
     ):
         raise ShadowCaseStoreError("maximum_entry_consumed_level_count must be positive")
+    if maximum_levels != policies.underwriting.maximum_entry_consumed_level_count:
+        raise ShadowCaseStoreError("opened underwriting level limit Policy mismatch")
 
     economics = _mapping(value.get("entry_economics"), "entry_economics")
     _exact_keys(
@@ -596,17 +782,104 @@ def _validate_opened(
         raise ShadowCaseStoreError("opened contractual maximum loss does not conserve")
     if fee_reserved != max(Decimal(0), payoff_cap - net_entry):
         raise ShadowCaseStoreError("opened fee-reserved maximum loss does not conserve")
-    for field in ("future_cost_reserve_usdc", "underwriting_reserved_loss_usdc"):
-        _decimal(economics.get(field), field)
+    future_cost_reserve = _decimal(
+        economics.get("future_cost_reserve_usdc"),
+        "future_cost_reserve_usdc",
+    )
+    underwriting_reserved_loss = _decimal(
+        economics.get("underwriting_reserved_loss_usdc"),
+        "underwriting_reserved_loss_usdc",
+    )
+    if future_cost_reserve != policies.underwriting.future_cost_reserve_usdc:
+        raise ShadowCaseStoreError("opened future cost reserve does not match Policy")
+    if underwriting_reserved_loss != fee_reserved + future_cost_reserve:
+        raise ShadowCaseStoreError("opened Underwriting reserved loss does not conserve")
+    expected_margins = UnderwritingThresholdMargins(
+        positive_net_credit_usdc=net_entry,
+        credit_above_future_cost_reserve_usdc=net_entry - future_cost_reserve,
+        reserved_loss_limit_headroom_usdc=(
+            policies.underwriting.maximum_underwriting_reserved_loss_usdc
+            - underwriting_reserved_loss
+        ),
+        minimum_net_credit_headroom_usdc=(
+            net_entry - policies.underwriting.minimum_net_entry_credit_usdc
+        ),
+        minimum_credit_ratio_headroom=(
+            net_entry / payoff_cap - policies.underwriting.minimum_net_credit_to_payoff_cap_fraction
+        ),
+        entry_consumed_level_headroom=(
+            policies.underwriting.maximum_entry_consumed_level_count - entry_consumed_level_count
+        ),
+    )
+    if predicate_margins != expected_margins:
+        raise ShadowCaseStoreError("opened predicate margins do not match entry economics")
     non_claims = _string_sequence(value.get("non_claims"), "non_claims")
-    if non_claims != (
+    component_non_claims = (
         "NOT_AN_ORDER",
         "NOT_A_FILL",
         "NOT_AN_ATOMIC_QUOTE",
         "NO_LIQUIDITY_RESERVATION",
         "ATOMIC_EXECUTABILITY_UNPROVEN",
-    ):
+    )
+    expected_non_claims = (
+        component_non_claims
+        if enrollment_kind == "ADMITTED_SHADOW_TRADE"
+        else (
+            *component_non_claims,
+            "NOT_A_CANDIDATE_ACTIVATION",
+            "NOT_A_SHADOW_ENTRY",
+            "NOT_AN_ADMITTED_TRADE",
+            "NO_CAPITAL_EXPOSURE",
+        )
+    )
+    if non_claims != expected_non_claims:
         raise ShadowCaseStoreError("opened component non_claims are invalid")
+
+    selected_decision = value.get("selected_underwriting_decision")
+    selected_decision_identity: str | None = None
+    if selected_decision is None:
+        if enrollment_kind == "SELECTED_UNDERWRITING_DECISION_CONTROL":
+            raise ShadowCaseStoreError("decision control lacks its selected-decision witness")
+    else:
+        selected_decision_mapping = _mapping(
+            selected_decision,
+            "selected_underwriting_decision",
+        )
+        _validate_selected_decision(
+            selected_decision_mapping,
+            opened_boundary=opened_boundary,
+            enrollment_kind=enrollment_kind,
+            active_episode_identity=_text(
+                radar.get("active_episode_identity"),
+                "active_episode_identity",
+            ),
+            bindings=bindings,
+            protective_leg_selection_rule_identity=_identity(
+                underwriting.get("protective_leg_selection_rule_identity"),
+                "protective_leg_selection_rule_identity",
+            ),
+            candidate_protective_leg_count=candidate_protective_leg_count,
+        )
+        selected_decision_identity = _identity(
+            selected_decision_mapping.get("selected_underwriting_decision_identity"),
+            "selected_underwriting_decision_identity",
+        )
+        refreshed_projection = {
+            "refreshed_underwriting_action_identity": underwriting.get("action_identity"),
+            "refreshed_consumed_economic_fact_fingerprint": underwriting.get(
+                "consumed_economic_fact_fingerprint"
+            ),
+            "refreshed_economic_action": underwriting.get("action"),
+            "refreshed_failed_predicates": underwriting.get("failed_predicates"),
+            "refreshed_predicate_margin_vector": underwriting.get("predicate_margin_vector"),
+        }
+        if any(
+            selected_decision_mapping.get(field) != expected
+            for field, expected in refreshed_projection.items()
+        ):
+            raise ShadowCaseStoreError(
+                "selected decision refreshed Underwriting projection is inconsistent"
+            )
 
     decision_boundary = FactBoundary.from_object(
         _boundary(value.get("decision_fact_boundary"), "decision_fact_boundary")
@@ -614,9 +887,25 @@ def _validate_opened(
     if (
         decision_boundary.code_identity != bindings.code_identity
         or decision_boundary.runtime_identity != bindings.runtime_identity
-        or not opened_boundary.is_strictly_after(decision_boundary)
+        or decision_boundary != opened_boundary
     ):
         raise ShadowCaseStoreError("decision FactBoundary binding/order mismatch")
+    entry_underwriting_owner_identity = (
+        selected_decision_identity
+        if selected_decision_identity is not None
+        else _identity(value.get("candidate_identity"), "candidate_identity")
+    )
+    expected_entry_underwriting_action_identity = canonical_identity(
+        "CaseOpenRefreshedUnderwritingActionIdentity",
+        entry_underwriting_owner_identity,
+        entry_underwriting_economic_fingerprint,
+        underwriting_action,
+        underwriting.get("protective_leg_selection_rule_identity"),
+        candidate_protective_leg_count,
+        decision_boundary.as_object(),
+    )
+    if entry_underwriting_action_identity != expected_entry_underwriting_action_identity:
+        raise ShadowCaseStoreError("entry Underwriting action identity mismatch")
 
 
 def _validate_followup(
@@ -730,19 +1019,21 @@ def _validate_followup(
                 field="close_component_quote_source_refs",
             )
             structure = _mapping(opened.get("structure"), "structure")
-            close_component_gross, close_component_fee = _validate_component_legs(
-                value.get("close_component_legs"),
-                quantity=_decimal(structure.get("full_quantity_btc"), "full_quantity_btc"),
-                short_name=_text(
-                    structure.get("short_leg_instrument_name"),
-                    "short_leg_instrument_name",
-                ),
-                long_name=_text(
-                    structure.get("long_leg_instrument_name"),
-                    "long_leg_instrument_name",
-                ),
-                expected_actions=("BUY", "SELL"),
-                field="close_component_legs",
+            close_component_gross, close_component_fee, _close_level_count = (
+                _validate_component_legs(
+                    value.get("close_component_legs"),
+                    quantity=_decimal(structure.get("full_quantity_btc"), "full_quantity_btc"),
+                    short_name=_text(
+                        structure.get("short_leg_instrument_name"),
+                        "short_leg_instrument_name",
+                    ),
+                    long_name=_text(
+                        structure.get("long_leg_instrument_name"),
+                        "long_leg_instrument_name",
+                    ),
+                    expected_actions=("BUY", "SELL"),
+                    field="close_component_legs",
+                )
             )
             if (
                 _decimal(value.get("gross_close_cashflow_usdc"), "gross close cashflow")
@@ -900,20 +1191,43 @@ def _validate_component_source_refs(
     *,
     owner_boundary: FactBoundary,
     field: str,
-) -> None:
+    require_pair_timing_inputs: bool = False,
+    expected_leg_identities: tuple[str, str] | None = None,
+    expected_instrument_names: tuple[str, str] | None = None,
+) -> tuple[_ComponentSourceEvidence, _ComponentSourceEvidence]:
     refs = _sequence(value, field)
     if len(refs) != 2:
         raise ShadowCaseStoreError("component entry requires exactly two quote source refs")
+    evidence: list[_ComponentSourceEvidence] = []
     for expected_role, raw in zip(("SHORT", "LONG"), refs, strict=True):
         ref = _mapping(raw, f"{expected_role} component quote source ref")
+        expected_keys = {
+            "canonical_leg_role",
+            "source_identity",
+            "receipt_fact_boundary",
+        }
+        if require_pair_timing_inputs:
+            expected_keys.update(
+                {
+                    "source_timestamp_ms",
+                    "global_continuity_epoch",
+                    "request_id",
+                    "owner_origin_boundary",
+                    "sent_boundary",
+                    "change_id",
+                }
+            )
         _exact_keys(
             ref,
-            {"canonical_leg_role", "source_identity", "receipt_fact_boundary"},
+            expected_keys,
             f"{expected_role} component quote source ref",
         )
         if ref.get("canonical_leg_role") != expected_role:
             raise ShadowCaseStoreError("component quote source role/order is invalid")
-        _identity(ref.get("source_identity"), "component quote source identity")
+        source_identity = _identity(
+            ref.get("source_identity"),
+            "component quote source identity",
+        )
         source_boundary = FactBoundary.from_object(
             _boundary(ref.get("receipt_fact_boundary"), "receipt_fact_boundary")
         )
@@ -926,6 +1240,442 @@ def _validate_component_source_refs(
             )
         ):
             raise ShadowCaseStoreError("component quote source boundary is not owned by Entry")
+        source_timestamp_ms = (
+            _non_negative_integer(
+                ref.get("source_timestamp_ms"),
+                f"{expected_role} component source_timestamp_ms",
+            )
+            if require_pair_timing_inputs
+            else None
+        )
+        global_continuity_epoch = (
+            _non_negative_integer(
+                ref.get("global_continuity_epoch"),
+                f"{expected_role} component global_continuity_epoch",
+            )
+            if require_pair_timing_inputs
+            else None
+        )
+        request_id: int | None = None
+        origin_boundary: FactBoundary | None = None
+        sent_boundary: FactBoundary | None = None
+        if require_pair_timing_inputs:
+            if expected_leg_identities is None or expected_instrument_names is None:
+                raise ShadowCaseStoreError("component source identity expectations are missing")
+            request_id = _non_negative_integer(
+                ref.get("request_id"),
+                f"{expected_role} component request_id",
+            )
+            change_id = _non_negative_integer(
+                ref.get("change_id"),
+                f"{expected_role} component change_id",
+            )
+            origin_boundary = FactBoundary.from_object(
+                _boundary(
+                    ref.get("owner_origin_boundary"),
+                    f"{expected_role} owner_origin_boundary",
+                )
+            )
+            sent_boundary = FactBoundary.from_object(
+                _boundary(
+                    ref.get("sent_boundary"),
+                    f"{expected_role} sent_boundary",
+                )
+            )
+            boundaries = (origin_boundary, sent_boundary, source_boundary)
+            if any(
+                member.code_identity != owner_boundary.code_identity
+                or member.runtime_identity != owner_boundary.runtime_identity
+                for member in boundaries
+            ):
+                raise ShadowCaseStoreError("component source causal boundary binding is invalid")
+            if (
+                sent_boundary.causal_seq <= origin_boundary.causal_seq
+                or source_boundary.causal_seq <= sent_boundary.causal_seq
+            ):
+                raise ShadowCaseStoreError("component source causal boundaries are invalid")
+            expected_source_identity = canonical_identity(
+                "RpcComponentLegRefreshSourceIdentity",
+                source_boundary.runtime_identity,
+                request_id,
+                expected_role,
+                "public/get_order_book",
+                expected_leg_identities[len(evidence)],
+                {
+                    "instrument_name": expected_instrument_names[len(evidence)],
+                    "depth": 10000,
+                },
+                origin_boundary.as_object(),
+                sent_boundary.as_object(),
+                global_continuity_epoch,
+                change_id,
+                source_timestamp_ms,
+                source_boundary.as_object(),
+            )
+            if source_identity != expected_source_identity:
+                raise ShadowCaseStoreError("component quote source identity mismatch")
+        evidence.append(
+            _ComponentSourceEvidence(
+                source_identity=source_identity,
+                boundary=source_boundary,
+                source_timestamp_ms=source_timestamp_ms,
+                global_continuity_epoch=global_continuity_epoch,
+                request_id=request_id,
+                owner_origin_boundary=origin_boundary,
+                sent_boundary=sent_boundary,
+            )
+        )
+    if require_pair_timing_inputs:
+        request_ids = tuple(member.request_id for member in evidence)
+        if request_ids[0] == request_ids[1]:
+            raise ShadowCaseStoreError("component pair request identities are not distinct")
+        if evidence[0].owner_origin_boundary != evidence[1].owner_origin_boundary:
+            raise ShadowCaseStoreError("component pair source owners do not match")
+    return evidence[0], evidence[1]
+
+
+def _validate_component_pair_timing(
+    timing_value: object,
+    limits_value: object,
+    *,
+    source_boundaries: tuple[_ComponentSourceEvidence, _ComponentSourceEvidence],
+    pair_identity: str,
+    owner_boundary: FactBoundary,
+    policies: PolicyChain,
+) -> None:
+    timing = _mapping(timing_value, "entry_component_pair_timing")
+    _exact_keys(
+        timing,
+        {
+            "session_epochs",
+            "global_continuity_epochs",
+            "source_timestamp_skew_ms",
+            "receive_skew_ms",
+        },
+        "entry_component_pair_timing",
+    )
+    session_epochs = _non_negative_integer_pair(
+        timing.get("session_epochs"),
+        "entry_component_pair_timing.session_epochs",
+    )
+    continuity_epochs = _non_negative_integer_pair(
+        timing.get("global_continuity_epochs"),
+        "entry_component_pair_timing.global_continuity_epochs",
+    )
+    if session_epochs[0] != session_epochs[1]:
+        raise ShadowCaseStoreError("entry component pair session epochs do not match")
+    if continuity_epochs[0] != continuity_epochs[1]:
+        raise ShadowCaseStoreError("entry component pair continuity epochs do not match")
+    if session_epochs != tuple(value.boundary.session_epoch for value in source_boundaries):
+        raise ShadowCaseStoreError("entry component pair session evidence is inconsistent")
+    if (
+        max(source_boundaries, key=lambda value: value.boundary.causal_seq).boundary
+        != owner_boundary
+    ):
+        raise ShadowCaseStoreError("entry component pair does not own the Case-open boundary")
+    expected_pair_identity = canonical_identity(
+        "ComponentBookPairWitnessIdentity",
+        source_boundaries[0].source_identity,
+        source_boundaries[1].source_identity,
+        owner_boundary.as_object(),
+    )
+    if pair_identity != expected_pair_identity:
+        raise ShadowCaseStoreError("entry component pair identity mismatch")
+    source_skew = _non_negative_integer(
+        timing.get("source_timestamp_skew_ms"),
+        "entry_component_pair_timing.source_timestamp_skew_ms",
+    )
+    receive_skew = _non_negative_integer(
+        timing.get("receive_skew_ms"),
+        "entry_component_pair_timing.receive_skew_ms",
+    )
+    expected_receive_skew = abs(
+        source_boundaries[0].boundary.received_monotonic_ms
+        - source_boundaries[1].boundary.received_monotonic_ms
+    )
+    if receive_skew != expected_receive_skew:
+        raise ShadowCaseStoreError("entry component pair receive skew is inconsistent")
+    source_timestamps = tuple(value.source_timestamp_ms for value in source_boundaries)
+    continuity_sources = tuple(value.global_continuity_epoch for value in source_boundaries)
+    if any(value is None for value in (*source_timestamps, *continuity_sources)):
+        raise ShadowCaseStoreError("entry component pair timing sources are incomplete")
+    assert source_timestamps[0] is not None and source_timestamps[1] is not None
+    assert continuity_sources[0] is not None and continuity_sources[1] is not None
+    if source_skew != abs(source_timestamps[0] - source_timestamps[1]):
+        raise ShadowCaseStoreError("entry component pair source skew is inconsistent")
+    if continuity_epochs != continuity_sources:
+        raise ShadowCaseStoreError("entry component pair continuity evidence is inconsistent")
+
+    limits = _mapping(limits_value, "entry_component_pair_limits")
+    _exact_keys(
+        limits,
+        {"maximum_source_skew_ms", "maximum_receive_skew_ms"},
+        "entry_component_pair_limits",
+    )
+    maximum_source_skew = _positive_integer(
+        limits.get("maximum_source_skew_ms"),
+        "entry_component_pair_limits.maximum_source_skew_ms",
+    )
+    maximum_receive_skew = _positive_integer(
+        limits.get("maximum_receive_skew_ms"),
+        "entry_component_pair_limits.maximum_receive_skew_ms",
+    )
+    if (
+        maximum_source_skew != policies.underwriting.maximum_component_pair_source_skew_ms
+        or maximum_receive_skew != policies.underwriting.maximum_component_pair_receive_skew_ms
+    ):
+        raise ShadowCaseStoreError("entry component pair limits do not match Underwriting Policy")
+    if source_skew > maximum_source_skew or receive_skew > maximum_receive_skew:
+        raise ShadowCaseStoreError("entry component pair timing exceeds its Policy limits")
+
+
+def _non_negative_integer_pair(value: object, field: str) -> tuple[int, int]:
+    members = _sequence(value, field)
+    if len(members) != 2:
+        raise ShadowCaseStoreError(f"{field} must contain exactly two members")
+    return (
+        _non_negative_integer(members[0], f"{field}[0]"),
+        _non_negative_integer(members[1], f"{field}[1]"),
+    )
+
+
+def _non_negative_integer(value: object, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ShadowCaseStoreError(f"{field} must be a non-negative integer")
+    return value
+
+
+def _positive_integer(value: object, field: str) -> int:
+    integer = _non_negative_integer(value, field)
+    if integer == 0:
+        raise ShadowCaseStoreError(f"{field} must be positive")
+    return integer
+
+
+def _validate_predicate_margin_vector(
+    value: object,
+    field: str,
+) -> UnderwritingThresholdMargins:
+    members = _sequence(value, field)
+    specifications = (
+        ("POSITIVE_NET_ENTRY_CREDIT", "USDC", True),
+        ("CREDIT_ABOVE_FUTURE_COST_RESERVE", "USDC", True),
+        ("UNDERWRITING_RESERVED_LOSS_WITHIN_LIMIT", "USDC", False),
+        ("MINIMUM_NET_ENTRY_CREDIT", "USDC", False),
+        ("MINIMUM_NET_CREDIT_TO_PAYOFF_CAP", "FRACTION", False),
+        ("ENTRY_CONSUMED_LEVEL_LIMIT", "LEVEL_COUNT", False),
+    )
+    if len(members) != len(specifications):
+        raise ShadowCaseStoreError(f"{field} must contain all six predicates")
+    decimal_margins: list[Decimal] = []
+    level_margin: int | None = None
+    for index, (raw, specification) in enumerate(zip(members, specifications, strict=True)):
+        expected_predicate, expected_unit, strictly_positive = specification
+        margin = _mapping(raw, f"{field}[{index}]")
+        _exact_keys(
+            margin,
+            {"predicate", "signed_margin", "unit", "passes"},
+            f"{field}[{index}]",
+        )
+        if margin.get("predicate") != expected_predicate or margin.get("unit") != expected_unit:
+            raise ShadowCaseStoreError(f"{field} predicate order/unit is invalid")
+        raw_signed_margin = margin.get("signed_margin")
+        if expected_unit == "LEVEL_COUNT":
+            signed_margin = _non_negative_or_negative_integer(
+                raw_signed_margin,
+                f"{field}[{index}].signed_margin",
+            )
+            level_margin = signed_margin
+            numeric_margin = Decimal(signed_margin)
+        else:
+            if not isinstance(raw_signed_margin, str):
+                raise ShadowCaseStoreError(
+                    f"{field}[{index}].signed_margin must be a decimal string"
+                )
+            numeric_margin = _decimal(
+                raw_signed_margin,
+                f"{field}[{index}].signed_margin",
+            )
+            decimal_margins.append(numeric_margin)
+        passes = margin.get("passes")
+        if not isinstance(passes, bool):
+            raise ShadowCaseStoreError(f"{field}[{index}].passes must be boolean")
+        expected_passes = numeric_margin > 0 if strictly_positive else numeric_margin >= 0
+        if passes is not expected_passes:
+            raise ShadowCaseStoreError(f"{field}[{index}].passes contradicts signed_margin")
+    if len(decimal_margins) != 5 or level_margin is None:
+        raise ShadowCaseStoreError(f"{field} is incomplete")
+    return UnderwritingThresholdMargins(
+        positive_net_credit_usdc=decimal_margins[0],
+        credit_above_future_cost_reserve_usdc=decimal_margins[1],
+        reserved_loss_limit_headroom_usdc=decimal_margins[2],
+        minimum_net_credit_headroom_usdc=decimal_margins[3],
+        minimum_credit_ratio_headroom=decimal_margins[4],
+        entry_consumed_level_headroom=level_margin,
+    )
+
+
+def _non_negative_or_negative_integer(value: object, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ShadowCaseStoreError(f"{field} must be an integer")
+    return value
+
+
+def _validate_margin_decision(
+    *,
+    action: object,
+    failed_predicates: tuple[str, ...],
+    margins: UnderwritingThresholdMargins,
+    field: str,
+) -> None:
+    if failed_predicates != margins.failed_predicates:
+        raise ShadowCaseStoreError(f"{field} failed predicates contradict its margin vector")
+    abstain_failures = {
+        "NON_POSITIVE_NET_ENTRY_CREDIT",
+        "CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE",
+        "UNDERWRITING_RESERVED_LOSS_LIMIT",
+    }
+    expected_action = (
+        "ABSTAIN"
+        if abstain_failures.intersection(failed_predicates)
+        else "WATCH"
+        if failed_predicates
+        else "CANDIDATE"
+    )
+    if action != expected_action:
+        raise ShadowCaseStoreError(f"{field} action contradicts its margin vector")
+
+
+def _validate_selected_decision(
+    value: Mapping[str, object],
+    *,
+    opened_boundary: FactBoundary,
+    enrollment_kind: object,
+    active_episode_identity: str,
+    bindings: RuntimeBindings,
+    protective_leg_selection_rule_identity: str,
+    candidate_protective_leg_count: int,
+) -> None:
+    _exact_keys(
+        value,
+        {
+            "selected_underwriting_decision_identity",
+            "decision_control_rule_identity",
+            "activation_batch_identity",
+            "selected_underwriting_action_identity",
+            "selected_economic_action",
+            "selected_consumed_economic_fact_fingerprint",
+            "selected_failed_predicates",
+            "selected_predicate_margin_vector",
+            "selection_fact_boundary",
+            "refreshed_underwriting_action_identity",
+            "refreshed_economic_action",
+            "refreshed_consumed_economic_fact_fingerprint",
+            "refreshed_failed_predicates",
+            "refreshed_predicate_margin_vector",
+            "refreshed_fact_boundary",
+        },
+        "selected_underwriting_decision",
+    )
+    for field in (
+        "selected_underwriting_decision_identity",
+        "decision_control_rule_identity",
+        "activation_batch_identity",
+        "selected_underwriting_action_identity",
+        "selected_consumed_economic_fact_fingerprint",
+        "refreshed_underwriting_action_identity",
+        "refreshed_consumed_economic_fact_fingerprint",
+    ):
+        _identity(value.get(field), field)
+    expected_rule = selected_decision_rule_identity(bindings=bindings)
+    if value.get("decision_control_rule_identity") != expected_rule:
+        raise ShadowCaseStoreError("selected decision rule binding mismatch")
+    for field in ("selected_economic_action", "refreshed_economic_action"):
+        if value.get(field) not in {"CANDIDATE", "WATCH", "ABSTAIN"}:
+            raise ShadowCaseStoreError(f"{field} is invalid")
+    selected_failed_predicates = _string_sequence(
+        value.get("selected_failed_predicates"),
+        "selected_failed_predicates",
+    )
+    refreshed_failed_predicates = _string_sequence(
+        value.get("refreshed_failed_predicates"),
+        "refreshed_failed_predicates",
+    )
+    selected_margins = _validate_predicate_margin_vector(
+        value.get("selected_predicate_margin_vector"),
+        "selected_predicate_margin_vector",
+    )
+    refreshed_margins = _validate_predicate_margin_vector(
+        value.get("refreshed_predicate_margin_vector"),
+        "refreshed_predicate_margin_vector",
+    )
+    _validate_margin_decision(
+        action=value.get("selected_economic_action"),
+        failed_predicates=selected_failed_predicates,
+        margins=selected_margins,
+        field="selected Underwriting decision",
+    )
+    _validate_margin_decision(
+        action=value.get("refreshed_economic_action"),
+        failed_predicates=refreshed_failed_predicates,
+        margins=refreshed_margins,
+        field="refreshed Underwriting decision",
+    )
+    selection_boundary = FactBoundary.from_object(
+        _boundary(value.get("selection_fact_boundary"), "selection_fact_boundary")
+    )
+    refreshed_boundary = FactBoundary.from_object(
+        _boundary(value.get("refreshed_fact_boundary"), "refreshed_fact_boundary")
+    )
+    if (
+        selection_boundary.code_identity != opened_boundary.code_identity
+        or selection_boundary.runtime_identity != opened_boundary.runtime_identity
+        or not opened_boundary.is_strictly_after(selection_boundary)
+        or refreshed_boundary != opened_boundary
+    ):
+        raise ShadowCaseStoreError("selected decision boundary/order mismatch")
+    _episode_prefix, separator, activation_seq_text = active_episode_identity.rpartition(":")
+    if (
+        not separator
+        or not activation_seq_text.isdigit()
+        or str(int(activation_seq_text)) != activation_seq_text
+    ):
+        raise ShadowCaseStoreError("selected decision Episode identity is invalid")
+    expected_batch = selected_decision_batch_identity(
+        bindings=bindings,
+        activation_causal_seq=int(activation_seq_text),
+    )
+    if value.get("activation_batch_identity") != expected_batch:
+        raise ShadowCaseStoreError("selected decision batch binding mismatch")
+    expected_selection = canonical_identity(
+        "SelectedUnderwritingDecisionIdentity",
+        expected_rule,
+        expected_batch,
+        active_episode_identity,
+        value.get("selected_underwriting_action_identity"),
+        value.get("selected_economic_action"),
+        selected_margins.as_vector(),
+        value.get("selected_consumed_economic_fact_fingerprint"),
+        selection_boundary.as_object(),
+    )
+    if value.get("selected_underwriting_decision_identity") != expected_selection:
+        raise ShadowCaseStoreError("selected decision identity mismatch")
+    expected_refreshed_action = canonical_identity(
+        "CaseOpenRefreshedUnderwritingActionIdentity",
+        expected_selection,
+        value.get("refreshed_consumed_economic_fact_fingerprint"),
+        value.get("refreshed_economic_action"),
+        protective_leg_selection_rule_identity,
+        candidate_protective_leg_count,
+        refreshed_boundary.as_object(),
+    )
+    if value.get("refreshed_underwriting_action_identity") != expected_refreshed_action:
+        raise ShadowCaseStoreError("refreshed Underwriting action identity mismatch")
+    if (
+        enrollment_kind == "ADMITTED_SHADOW_TRADE"
+        and value.get("refreshed_economic_action") != "CANDIDATE"
+    ):
+        raise ShadowCaseStoreError("selected admitted trade did not remain Candidate")
 
 
 def _validate_component_legs(
@@ -936,7 +1686,7 @@ def _validate_component_legs(
     long_name: str,
     expected_actions: tuple[str, str],
     field: str,
-) -> tuple[Decimal, Decimal]:
+) -> tuple[Decimal, Decimal, int]:
     legs = _sequence(value, field)
     if len(legs) != 2:
         raise ShadowCaseStoreError("component entry requires exactly two leg quotes")
@@ -946,6 +1696,7 @@ def _validate_component_legs(
     )
     gross_cashflow = Decimal(0)
     total_fee = Decimal(0)
+    consumed_level_count = 0
     for raw, (role, action, instrument_name) in zip(legs, expected, strict=True):
         leg = _mapping(raw, f"{role} component leg")
         _exact_keys(
@@ -975,6 +1726,7 @@ def _validate_component_legs(
         )
         if _levels_amount(raw_levels) != quantity or _levels_amount(stressed_levels) != quantity:
             raise ShadowCaseStoreError("component leg levels do not cover full quantity")
+        consumed_level_count += len(stressed_levels)
         raw_vwap = _decimal(leg.get("raw_vwap_usdc_per_btc"), "raw component VWAP")
         stressed_vwap = _decimal(
             leg.get("stressed_vwap_usdc_per_btc"),
@@ -995,7 +1747,7 @@ def _validate_component_legs(
             stressed_vwap * quantity if action == "SELL" else -stressed_vwap * quantity
         )
         total_fee += fee
-    return gross_cashflow, total_fee
+    return gross_cashflow, total_fee, consumed_level_count
 
 
 def _levels_value(levels: Sequence[object]) -> Decimal:

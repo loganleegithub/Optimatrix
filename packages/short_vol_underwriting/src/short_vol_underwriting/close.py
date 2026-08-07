@@ -440,6 +440,7 @@ class PostCloseAttempt:
             boundary.received_monotonic_ms - self.origin_boundary.received_monotonic_ms
             > send_budget_ms
         ):
+            self.terminal_unknown_reasons = ("COMPONENT_POST_CLOSE_SEND_BUDGET_EXCEEDED",)
             return self._terminalize(
                 status=PostCloseAttemptStatus.DEADLINE_LATE,
                 owner=PostCloseAttemptOwner.ORDINARY,
@@ -791,21 +792,16 @@ class ComponentPostCloseAttempt:
     ) -> bool:
         if self.terminal_status is not None:
             return False
-        expected = (
-            (
-                witness.short,
-                self.short_request_id,
-                self.short_option_identity,
-                self.short_instrument_name,
-            ),
-            (
-                witness.long,
-                self.long_request_id,
-                self.long_option_identity,
-                self.long_instrument_name,
-            ),
-        )
-        timing_unknown_reasons = witness.timing_unknown_reasons(
+        invalid_reasons = witness.attempt_unknown_reasons(
+            origin_boundary=self.origin_boundary,
+            sent_boundaries=self.sent_boundaries,
+            short_request_id=self.short_request_id,
+            long_request_id=self.long_request_id,
+            short_option_identity=self.short_option_identity,
+            long_option_identity=self.long_option_identity,
+            short_instrument_name=self.short_instrument_name,
+            long_instrument_name=self.long_instrument_name,
+            response_budget_ms=response_budget_ms,
             maximum_source_skew_ms=maximum_source_skew_ms,
             maximum_receive_skew_ms=maximum_receive_skew_ms,
         )
@@ -814,29 +810,9 @@ class ComponentPostCloseAttempt:
             "maximum_source_skew_ms": maximum_source_skew_ms,
             "maximum_receive_skew_ms": maximum_receive_skew_ms,
         }
-        invalid = bool(timing_unknown_reasons)
-        for member, request_id, option_identity, instrument_name in expected:
-            sent = self.sent_boundaries.get(request_id)
-            invalid = invalid or (
-                sent is None
-                or member.request_id != request_id
-                or member.canonical_option_identity != option_identity
-                or member.instrument_name != instrument_name
-                or member.owner_origin_boundary != self.origin_boundary
-                or member.sent_boundary != sent
-                or not member.payload_matches_request
-                or not member.payload_well_formed
-            )
-            if sent is not None:
-                if not member.boundary.is_strictly_after(sent):
-                    raise ValueError("component post-CLOSE response must be strictly after SENT")
-                if (
-                    member.boundary.received_monotonic_ms - sent.received_monotonic_ms
-                    > response_budget_ms
-                ):
-                    invalid = True
+        invalid = bool(invalid_reasons)
         if invalid:
-            self.terminal_unknown_reasons = timing_unknown_reasons
+            self.terminal_unknown_reasons = invalid_reasons
         return self._terminalize(
             status=(PostCloseAttemptStatus.ERROR if invalid else PostCloseAttemptStatus.SUCCESS),
             owner=PostCloseAttemptOwner.ORDINARY,
@@ -850,6 +826,7 @@ class ComponentPostCloseAttempt:
         request_id: int,
         status: PostCloseAttemptStatus,
         boundary: FactBoundary,
+        unknown_reason: str,
     ) -> bool:
         if status not in {
             PostCloseAttemptStatus.ERROR,
@@ -859,9 +836,12 @@ class ComponentPostCloseAttempt:
             raise ValueError("ordinary request failure status is invalid")
         if request_id not in self.request_ids or self.terminal_status is not None:
             return False
+        if not isinstance(unknown_reason, str) or not unknown_reason:
+            raise ValueError("unknown_reason must be a non-empty string")
         lower = self.sent_boundaries.get(request_id, self.origin_boundary)
         if not boundary.is_strictly_after(lower):
             raise ValueError("component post-CLOSE failure must be causally later")
+        self.terminal_unknown_reasons = (unknown_reason,)
         return self._terminalize(
             status=status,
             owner=PostCloseAttemptOwner.ORDINARY,
@@ -895,6 +875,12 @@ class ComponentPostCloseAttempt:
             raise ValueError("component post-CLOSE terminal must be causally later")
         if matched_response_identity is not None:
             require_identity(matched_response_identity, "matched_response_identity")
+        if (
+            owner is PostCloseAttemptOwner.ORDINARY
+            and status not in {PostCloseAttemptStatus.SUCCESS, PostCloseAttemptStatus.CENSORED}
+            and not self.terminal_unknown_reasons
+        ):
+            self.terminal_unknown_reasons = ("COMPONENT_POST_CLOSE_UNCLASSIFIED_UNKNOWN",)
         self.terminal_status = status
         self.terminal_owner = owner
         self.terminal_boundary = boundary

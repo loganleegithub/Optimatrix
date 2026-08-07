@@ -146,6 +146,103 @@ def test_funnel_reports_no_post_warmup_scope_without_inventing_a_later_blocker()
     }
 
 
+def test_selected_decision_research_funnel_is_separate_from_canonical_candidate_counts() -> None:
+    tracker = FunnelTracker()
+    selection = "selection-1"
+    enrollment = "control-1"
+    opened = _observe(
+        tracker,
+        causal_seq=1,
+        records=(
+            _record("UNDERWRITING_DECISION_BATCH_DESIGNATION"),
+            _record(
+                "SELECTED_UNDERWRITING_DECISION",
+                identity=selection,
+                payload={"economic_action": "ABSTAIN"},
+            ),
+            _record(
+                "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
+                payload={"terminal_outcome": "CONTROL_OPENED"},
+            ),
+            _record(
+                "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN",
+                identity=enrollment,
+                payload={"selected_underwriting_decision_identity": selection},
+            ),
+        ),
+    )
+
+    assert _stage(opened, "CANDIDATE")["observed_count"] == 0
+    assert _stage(opened, "SHADOW_CASE_OPENED")["observed_count"] == 0
+    assert opened.decision_control_research.as_object() == {
+        "unit": "PRE_OUTCOME_SELECTED_UNDERWRITING_DECISION",
+        "activation_batch_count": 1,
+        "selected_decision_count": 1,
+        "decision_case_opened_count": 1,
+        "decision_outcome_count": 0,
+        "selected_action_counts": {"ABSTAIN": 1},
+        "attempt_terminal_counts": {"CONTROL_OPENED": 1},
+        "pending_counts": {
+            "batch_without_selected_evaluable_decision": 0,
+            "selected_without_case": 0,
+            "case_without_outcome": 1,
+        },
+        "non_claims": [
+            "NOT_THE_CANONICAL_CANDIDATE_FUNNEL",
+            "NON_CANDIDATE_CASE_IS_NOT_A_TRADE",
+            "DESCRIPTIVE_OUTCOME_NOT_CAUSAL_EFFECT",
+        ],
+    }
+
+    complete = _observe(
+        tracker,
+        causal_seq=2,
+        records=(
+            _record(
+                "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME",
+                payload={"shadow_entry_identity": enrollment},
+            ),
+        ),
+    )
+    research = complete.decision_control_research.as_object()
+    assert research["decision_outcome_count"] == 1
+    assert research["pending_counts"] == {
+        "batch_without_selected_evaluable_decision": 0,
+        "selected_without_case": 0,
+        "case_without_outcome": 0,
+    }
+
+
+def test_selected_candidate_reuses_admission_terminal_in_research_funnel() -> None:
+    tracker = FunnelTracker()
+    snapshot = _observe(
+        tracker,
+        causal_seq=1,
+        records=(
+            _record("UNDERWRITING_DECISION_BATCH_DESIGNATION"),
+            _record(
+                "SELECTED_UNDERWRITING_DECISION",
+                identity="selection-1",
+                payload={
+                    "economic_action": "CANDIDATE",
+                    "entry_refresh_attempt_kind": "CANDIDATE_ADMISSION",
+                    "entry_refresh_owner_identity": "candidate-1",
+                },
+            ),
+            _record(
+                "ADMISSION_ATTEMPT_TERMINAL",
+                payload={
+                    "candidate_identity": "candidate-1",
+                    "terminal_outcome": "ENTRY_EMITTED",
+                },
+            ),
+        ),
+    )
+
+    assert snapshot.decision_control_research.attempt_terminal_counts == {"ENTRY_EMITTED": 1}
+    assert tracker.retained_state_counts["selected_candidate_identities"] == 0
+
+
 def test_funnel_separates_startup_warmup_from_steady_state_knownness() -> None:
     tracker = FunnelTracker()
     startup = _observe(
@@ -520,6 +617,8 @@ def test_funnel_retires_completed_identity_state_across_many_cases() -> None:
         "episodes": 0,
         "candidate_identities": 0,
         "entry_identities": 0,
+        "decision_case_identities": 0,
+        "selected_candidate_identities": 0,
     }
     assert _stage(snapshot, "ANOMALY_ACTIVE")["observed_count"] == case_count
     assert _stage(snapshot, "SHADOW_CASE_OPENED")["observed_count"] == case_count
@@ -558,6 +657,8 @@ def test_funnel_normalizes_instrument_specific_blockers_to_bounded_categories() 
         "episodes": 0,
         "candidate_identities": 0,
         "entry_identities": 0,
+        "decision_case_identities": 0,
+        "selected_candidate_identities": 0,
     }
 
 

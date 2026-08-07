@@ -172,18 +172,17 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_selects_underwriting_margin_truth_after_natural_stop() -> None:
+def test_current_stage_selects_decision_outcome_after_natural_stop() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "`COMPONENT_BOOK_SHADOW_LIFECYCLE_ACCEPTED`" in current
-    assert "`UNDERWRITING_SELECTION_AND_MARGIN_TRUTH_ACTIVE`" in current
+    assert "`SELECTED_UNDERWRITING_DECISION_OUTCOME_ACTIVE`" in current
     assert "**Production Short Vol Radar:** `CREDIBLE_CLUE_GENERATOR_FROZEN`" in current
     assert "**Persistent service:** `NATURAL_PUBLIC_SHADOW_STOPPED_NO_DEPLOYMENT`" in current
     assert "**Live commands:** `NONE_AUTHORIZED_PAIR_TIMING_PROBE_EXHAUSTED`" in current
     assert (
-        "**Sole authorized closure:** `SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH`"
-        in current
+        "**Sole authorized closure:** `SHORT_VOL_SELECTED_UNDERWRITING_DECISION_OUTCOME`" in current
     )
     assert "1,812,600 contract evaluations" in current
     assert "1,811,662 contract evaluations" in current
@@ -195,14 +194,17 @@ def test_current_stage_selects_underwriting_margin_truth_after_natural_stop() ->
     assert "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE" in current
     assert "exactly two strictly later `public/get_order_book` responses" in normalized
     assert "no live command or Shadow runtime is authorized" in normalized
-    assert "maximum pair source-timestamp skew at `6000 ms`" in normalized
-    assert "receive skew at `4000 ms`" in normalized
+    assert "before action or margin is known" in normalized
+    assert "selected as Candidate and still Candidate reuses ordinary admission" in normalized
+    assert "refreshed WATCH/ABSTAIN may open" in normalized
+    assert "REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION" in normalized
     assert "automatic restart" in current
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_COMPONENT_BOOK_SHADOW_LIFECYCLE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_NATURAL_SHADOW_OPERATION.md").exists()
-    assert (ROOT / "tasks/SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH.md").exists()
+    assert not (ROOT / "tasks/SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH.md").exists()
+    assert (ROOT / "tasks/SHORT_VOL_SELECTED_UNDERWRITING_DECISION_OUTCOME.md").exists()
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"
     )

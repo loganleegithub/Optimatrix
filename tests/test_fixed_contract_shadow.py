@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import replace
 from decimal import Decimal
@@ -65,11 +66,14 @@ from short_vol_underwriting import (
     FixedContractShadowOwner,
     RuntimeBindings,
     ShadowCaseStore,
+    ShadowCaseStoreError,
     ShadowStateStore,
     SourceFact,
     SubscriptionAdmissionRefreshWitness,
     canonical_identity,
+    designate_selected_decision_episode,
     load_policy_chain,
+    selected_decision_batch_identity,
 )
 from short_vol_underwriting import (
     FactBoundary as DownstreamFactBoundary,
@@ -549,8 +553,95 @@ def test_real_episode_identity_round_trips_without_economic_action(
     assert facts.short_leg_instrument_name == "BTC-SHORT"
     assert facts.atomic_state == expected_atomic_state
     assert [value["object_kind"] for value in owner.state_store.objects] == [
-        "UNDERWRITING_AVAILABILITY_EVALUATION"
+        "UNDERWRITING_AVAILABILITY_EVALUATION",
+        "UNDERWRITING_DECISION_BATCH_DESIGNATION",
     ]
+    assert _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION") == []
+
+
+def test_same_activation_batch_designates_before_action_and_unknown_has_no_fallback(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    second_name = "BTC-SHORT-2"
+    second = replace(
+        reducer.options["BTC-SHORT"],
+        instrument_name=second_name,
+        strike=Decimal("100500"),
+    )
+    reducer.options[second_name] = second
+    reducer.catalog_options[second_name] = second
+    reducer.tickers[second_name] = replace(reducer.tickers["BTC-SHORT"])
+    second_book = ContinuousOrderBook(second_name)
+    second_book.apply(
+        {
+            "type": "snapshot",
+            "instrument_name": second_name,
+            "change_id": 10,
+            "timestamp": 1_000_010,
+            "bids": [["new", "300", "0.1"]],
+            "asks": [["new", "301", "0.1"]],
+        },
+        110,
+    )
+    reducer.option_books[second_name] = second_book
+    reducer.accepted_book_receipts[second_name] = AcceptedBookReceipt(
+        instrument_name=second_name,
+        snapshot_kind="snapshot",
+        prev_change_id=None,
+        change_id=10,
+        source_timestamp_ms=1_000_010,
+        session_epoch=1,
+        subscription_generation=1,
+        boundary=FactBoundary(1, 1, 110, 1),
+    )
+    second_tracker = EpisodeTracker(
+        runtime_identity=owner.bindings.runtime_identity,
+        policy_identity=RADAR_POLICY_IDENTITY,
+        instrument_name=second_name,
+    )
+    second_tracker.state = TrackerState.ACTIVE
+    second_tracker.episode_id = (
+        f"{owner.bindings.runtime_identity}:{RADAR_POLICY_IDENTITY}:{second_name}:1"
+    )
+    second_tracker.activation_band_id = reducer.policy.tte_bands[0].band_id
+    second_tracker.activation_causal_seq = 1
+    reducer.trackers[second_name] = second_tracker
+    reducer.results[second_name] = reducer.results["BTC-SHORT"]
+    episodes = tuple(
+        sorted(
+            tracker.episode_id
+            for tracker in reducer.trackers.values()
+            if tracker.episode_id is not None
+        )
+    )
+    batch_identity = selected_decision_batch_identity(
+        bindings=owner.bindings,
+        activation_causal_seq=1,
+    )
+    designated = designate_selected_decision_episode(
+        bindings=owner.bindings,
+        batch_identity=batch_identity,
+        episode_identities=episodes,
+    )
+    designated_instrument = designated.rsplit(":", 2)[-2]
+    reducer.tickers.pop(designated_instrument)
+
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+
+    (designation,) = _object_payloads(owner, "UNDERWRITING_DECISION_BATCH_DESIGNATION")
+    assert designation["batch_member_episode_identities"] == list(episodes)
+    assert designation["designated_episode_identity"] == designated
+    assert _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION") == []
+    assert len(_object_payloads(owner, "CANDIDATE_ACTIVATION")) == 1
+    assert len(intents) == 2
 
 
 def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
@@ -1534,6 +1625,9 @@ def test_component_candidate_requires_both_strictly_later_option_book_responses(
         "BTC-LONG",
     }
     assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 0
+    (selected,) = _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION")
+    assert selected["economic_action"] == "CANDIDATE"
+    assert selected["enrollment_route"] == "ADMITTED_SHADOW_TRADE"
 
     sent = FactBoundary(1, 2, 120, 2)
     first = next(intent for intent in intents if intent.params["instrument_name"] == "BTC-SHORT")
@@ -1591,7 +1685,340 @@ def test_component_candidate_requires_both_strictly_later_option_book_responses(
         "NO_LIQUIDITY_RESERVATION",
         "ATOMIC_EXECUTABILITY_UNPROVEN",
     ]
+    assert entry["selected_underwriting_decision"]["selected_economic_action"] == "CANDIDATE"
+    assert entry["selected_underwriting_decision"]["refreshed_economic_action"] == "CANDIDATE"
+    assert entry["entry_refresh_terminal_outcome"] == "ENTRY_EMITTED"
+    assert entry["entry_refresh_terminal_unknown_reasons"] == []
+    (research_row,) = workbench_module._decision_control_rows(
+        workbench_module._objects_by_kind(owner.state_store.objects)
+    )
+    assert research_row["refresh_terminal_outcome"] == "ENTRY_EMITTED"
+    assert research_row["refresh_unknown_reasons"] == []
+    assert research_row["protective_leg_selection_rule_identity"] is not None
+    assert research_row["candidate_protective_leg_count"] == 1
+    assert _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN") == []
     assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 1
+
+
+def test_selected_abstain_uses_one_future_pair_without_candidate_or_shadow_entry(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    boundary = FactBoundary(1, 1, 110, 1)
+    short_book = ContinuousOrderBook("BTC-SHORT")
+    short_book.apply(
+        {
+            "type": "snapshot",
+            "instrument_name": "BTC-SHORT",
+            "change_id": 10,
+            "timestamp": 1_000_010,
+            "bids": [["new", "150", "0.1"]],
+            "asks": [["new", "151", "0.1"]],
+        },
+        110,
+    )
+    reducer.option_books["BTC-SHORT"] = short_book
+    reducer.accepted_book_receipts["BTC-SHORT"] = AcceptedBookReceipt(
+        instrument_name="BTC-SHORT",
+        snapshot_kind="snapshot",
+        prev_change_id=None,
+        change_id=10,
+        source_timestamp_ms=1_000_010,
+        session_epoch=1,
+        subscription_generation=1,
+        boundary=boundary,
+    )
+
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+
+    assert len(intents) == 2
+    (selection,) = _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION")
+    assert selection["economic_action"] == "ABSTAIN"
+    assert selection["enrollment_route"] == "SELECTED_UNDERWRITING_DECISION_CONTROL"
+    assert _object_payloads(owner, "CANDIDATE_ACTIVATION") == []
+
+    _settle_component_pair(
+        adapter=adapter,
+        intents=intents,
+        first_causal_seq=2,
+        change_id=11,
+        short_bid="150",
+        short_ask="151",
+        long_bid="100",
+        long_ask="101",
+    )
+
+    (opened,) = _object_payloads(
+        owner,
+        "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN",
+    )
+    observation = opened["selected_underwriting_decision"]
+    assert observation["selected_economic_action"] == "ABSTAIN"
+    assert observation["refreshed_economic_action"] == "ABSTAIN"
+    assert opened["enrollment_kind"] == "SELECTED_UNDERWRITING_DECISION_CONTROL"
+    assert _object_payloads(owner, "SHADOW_ENTRY") == []
+    assert owner.retained_state_counts["active_trades"] == 1
+
+
+def test_selected_candidate_that_fails_refresh_uses_that_same_pair_for_no_trade_case(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    assert len(intents) == 2
+
+    _settle_component_pair(
+        adapter=adapter,
+        intents=intents,
+        first_causal_seq=2,
+        change_id=11,
+        short_bid="150",
+        short_ask="151",
+        long_bid="100",
+        long_ask="101",
+    )
+
+    assert len(_object_payloads(owner, "CANDIDATE_ACTIVATION")) == 1
+    assert _object_payloads(owner, "SHADOW_ENTRY") == []
+    (opened,) = _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN")
+    observation = opened["selected_underwriting_decision"]
+    assert observation["selected_economic_action"] == "CANDIDATE"
+    assert observation["refreshed_economic_action"] == "ABSTAIN"
+    assert opened["entry_refresh_attempt_kind"] == "CANDIDATE_ADMISSION"
+    assert opened["entry_refresh_terminal_outcome"] == "KNOWN_COMPLETE_NO_ENTRY"
+    (research_row,) = workbench_module._decision_control_rows(
+        workbench_module._objects_by_kind(owner.state_store.objects)
+    )
+    assert research_row["refresh_terminal_outcome"] == "KNOWN_COMPLETE_NO_ENTRY"
+    assert owner.retained_state_counts["active_decision_control_attempts"] == 0
+
+
+def test_selected_control_full_quantity_failure_is_exact_workbench_unknown(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    short_book = ContinuousOrderBook("BTC-SHORT")
+    short_book.apply(
+        {
+            "type": "snapshot",
+            "instrument_name": "BTC-SHORT",
+            "change_id": 10,
+            "timestamp": 1_000_010,
+            "bids": [["new", "150", "0.1"]],
+            "asks": [["new", "151", "0.1"]],
+        },
+        110,
+    )
+    reducer.option_books["BTC-SHORT"] = short_book
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+
+    _settle_component_pair(
+        adapter=adapter,
+        intents=intents,
+        first_causal_seq=2,
+        change_id=11,
+        short_bid="150",
+        short_ask="151",
+        long_bid="100",
+        long_ask="101",
+        long_amount="0.05",
+    )
+
+    (terminal,) = _object_payloads(
+        owner,
+        "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
+    )
+    assert terminal["terminal_outcome"] == "UNKNOWN_CONSUMED"
+    assert terminal["terminal_unknown_reasons"] == ["COMPONENT_PAIR_LONG_FULL_QUANTITY_NOT_COVERED"]
+    assert _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN") == []
+    (research_row,) = workbench_module._decision_control_rows(
+        workbench_module._objects_by_kind(owner.state_store.objects)
+    )
+    assert research_row["refresh_terminal_outcome"] == "UNKNOWN_CONSUMED"
+    assert research_row["refresh_unknown_reasons"] == terminal["terminal_unknown_reasons"]
+
+
+def test_selected_abstain_that_refreshes_to_candidate_requires_canonical_admission(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    short_book = ContinuousOrderBook("BTC-SHORT")
+    short_book.apply(
+        {
+            "type": "snapshot",
+            "instrument_name": "BTC-SHORT",
+            "change_id": 10,
+            "timestamp": 1_000_010,
+            "bids": [["new", "150", "0.1"]],
+            "asks": [["new", "151", "0.1"]],
+        },
+        110,
+    )
+    reducer.option_books["BTC-SHORT"] = short_book
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+
+    _settle_component_pair(
+        adapter=adapter,
+        intents=intents,
+        first_causal_seq=2,
+        change_id=11,
+        short_bid="300",
+        short_ask="301",
+        long_bid="100",
+        long_ask="101",
+    )
+
+    (terminal,) = _object_payloads(
+        owner,
+        "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
+    )
+    assert terminal["terminal_outcome"] == ("REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION")
+    assert terminal["refreshed_economic_action"] == "CANDIDATE"
+    assert terminal["refreshed_failed_predicates"] == []
+    assert len(terminal["refreshed_predicate_margin_vector"]) == 6
+    assert all(item["passes"] for item in terminal["refreshed_predicate_margin_vector"])
+    assert _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN") == []
+    assert _object_payloads(owner, "CANDIDATE_ACTIVATION") == []
+    assert _object_payloads(owner, "SHADOW_ENTRY") == []
+    (research_row,) = workbench_module._decision_control_rows(
+        workbench_module._objects_by_kind(owner.state_store.objects)
+    )
+    assert research_row["refresh_terminal_outcome"] == (
+        "REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION"
+    )
+    assert research_row["selected_economic_action"] == "ABSTAIN"
+    assert research_row["refreshed_economic_action"] == "CANDIDATE"
+    assert research_row["refreshed_failed_predicates"] == []
+    assert (
+        research_row["refreshed_predicate_margin_vector"]
+        == terminal["refreshed_predicate_margin_vector"]
+    )
+    assert research_row["case_state"] == "NOT_OPENED"
+    assert research_row["protective_leg_selection_rule_identity"] is not None
+    assert research_row["candidate_protective_leg_count"] == 0
+    assert owner.retained_state_counts["active_trades"] == 0
+
+
+def test_selected_abstain_opens_one_durable_control_case(tmp_path: Path) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    short_book = ContinuousOrderBook("BTC-SHORT")
+    short_book.apply(
+        {
+            "type": "snapshot",
+            "instrument_name": "BTC-SHORT",
+            "change_id": 10,
+            "timestamp": 1_000_010,
+            "bids": [["new", "150", "0.1"]],
+            "asks": [["new", "151", "0.1"]],
+        },
+        110,
+    )
+    reducer.option_books["BTC-SHORT"] = short_book
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    cases = tmp_path / "cases"
+    cases.mkdir()
+    case_store = ShadowCaseStore(
+        cases,
+        bindings=owner.bindings,
+        policies=owner.policies,
+    )
+    owner.state_store.observer = case_store
+
+    _settle_component_pair(
+        adapter=adapter,
+        intents=intents,
+        first_causal_seq=2,
+        change_id=11,
+        short_bid="150",
+        short_ask="151",
+        long_bid="100",
+        long_ask="101",
+    )
+
+    assert case_store.case_count == 1
+    (case_directory,) = cases.iterdir()
+    opened = json.loads((case_directory / "opened.json").read_text())
+    assert opened["enrollment_kind"] == "SELECTED_UNDERWRITING_DECISION_CONTROL"
+    assert opened["shadow_entry_identity"] is None
+    assert opened["selected_underwriting_decision"]["selected_economic_action"] == "ABSTAIN"
+    assert opened["selected_underwriting_decision"]["refreshed_economic_action"] == "ABSTAIN"
+    assert opened["structure"]["entry_component_pair_timing"] == {
+        "global_continuity_epochs": [1, 1],
+        "receive_skew_ms": 10,
+        "session_epochs": [1, 1],
+        "source_timestamp_skew_ms": 0,
+    }
+    assert opened["structure"]["entry_component_pair_limits"] == {
+        "maximum_receive_skew_ms": 4_000,
+        "maximum_source_skew_ms": 6_000,
+    }
+
+    original_opened = json.dumps(opened)
+    selected = opened["selected_underwriting_decision"]
+    selected["selected_economic_action"] = "CANDIDATE"
+    selected["selected_failed_predicates"] = []
+    for margin in selected["selected_predicate_margin_vector"]:
+        value = abs(Decimal(str(margin["signed_margin"]))) + 1
+        margin["signed_margin"] = int(value) if margin["unit"] == "LEVEL_COUNT" else str(value)
+        margin["passes"] = True
+    (case_directory / "opened.json").write_text(json.dumps(opened), encoding="utf-8")
+    with pytest.raises(ShadowCaseStoreError, match="selected decision identity mismatch"):
+        case_store.read_case(str(opened["case_id"]))
+
+    opened = json.loads(original_opened)
+    selected = opened["selected_underwriting_decision"]
+    refreshed_fingerprint = canonical_identity("TamperedRefreshedEconomicFingerprint")
+    selected["refreshed_consumed_economic_fact_fingerprint"] = refreshed_fingerprint
+    selected["refreshed_underwriting_action_identity"] = canonical_identity(
+        "CaseOpenRefreshedUnderwritingActionIdentity",
+        selected["selected_underwriting_decision_identity"],
+        refreshed_fingerprint,
+        selected["refreshed_economic_action"],
+        opened["underwriting"]["protective_leg_selection_rule_identity"],
+        opened["underwriting"]["candidate_protective_leg_count"],
+        DownstreamFactBoundary.from_object(selected["refreshed_fact_boundary"]).as_object(),
+    )
+    (case_directory / "opened.json").write_text(json.dumps(opened), encoding="utf-8")
+    with pytest.raises(
+        ShadowCaseStoreError,
+        match="refreshed Underwriting projection is inconsistent",
+    ):
+        case_store.read_case(str(opened["case_id"]))
 
 
 def test_component_admission_pair_over_skew_budget_is_exact_unknown_without_case(
@@ -1659,16 +2086,22 @@ def test_component_admission_pair_over_skew_budget_is_exact_unknown_without_case
 
 
 @pytest.mark.parametrize(
-    ("variant", "expected_reason"),
+    ("variant", "expected_reasons"),
     (
-        ("session", "COMPONENT_PAIR_SESSION_EPOCH_MISMATCH"),
-        ("continuity", "COMPONENT_PAIR_CONTINUITY_EPOCH_MISMATCH"),
+        (
+            "session",
+            (
+                "COMPONENT_PAIR_SESSION_EPOCH_MISMATCH",
+                "PLATFORM_CURRENTNESS_UNKNOWN",
+            ),
+        ),
+        ("continuity", ("COMPONENT_PAIR_CONTINUITY_EPOCH_MISMATCH",)),
     ),
 )
 def test_component_admission_pair_epoch_mismatch_is_exact_unknown_without_case(
     tmp_path: Path,
     variant: str,
-    expected_reason: str,
+    expected_reasons: tuple[str, ...],
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
     intents = adapter.on_settled_transaction(
@@ -1715,7 +2148,7 @@ def test_component_admission_pair_epoch_mismatch_is_exact_unknown_without_case(
     assert not _object_payloads(owner, "SHADOW_ENTRY")
     assert _terminal_outcomes(owner) == ["UNKNOWN_CONSUMED"]
     terminal = _object_payloads(owner, "ADMISSION_ATTEMPT_TERMINAL")[-1]
-    assert terminal["terminal_unknown_reasons"] == [expected_reason]
+    assert terminal["terminal_unknown_reasons"] == list(expected_reasons)
 
 
 def test_component_shadow_entry_opens_its_durable_case(tmp_path: Path) -> None:
@@ -1729,7 +2162,24 @@ def test_component_shadow_entry_opens_its_durable_case(tmp_path: Path) -> None:
     )
     owner.state_store.observer = case_store
 
-    _admit_component_shadow(reducer, adapter)
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    _settle_component_pair(
+        adapter=adapter,
+        intents=intents,
+        first_causal_seq=2,
+        change_id=11,
+        short_bid="310",
+        short_ask="311",
+        long_bid="100",
+        long_ask="101",
+    )
 
     entry = next(
         value for value in owner.state_store.objects if value["object_kind"] == "SHADOW_ENTRY"
@@ -1745,6 +2195,19 @@ def test_component_shadow_entry_opens_its_durable_case(tmp_path: Path) -> None:
     economics = opened["entry_economics"]
     assert isinstance(economics, Mapping)
     assert economics["width_usdc_per_btc"] == "1000"
+    underwriting = opened["underwriting"]
+    selected = opened["selected_underwriting_decision"]
+    assert isinstance(underwriting, Mapping)
+    assert isinstance(selected, Mapping)
+    assert underwriting["predicate_margin_vector"] == selected["refreshed_predicate_margin_vector"]
+    assert underwriting["predicate_margin_vector"] != selected["selected_predicate_margin_vector"]
+    entry_payload = entry["payload"]
+    assert isinstance(entry_payload, Mapping)
+    assert (
+        underwriting["protective_leg_selection_rule_identity"]
+        == entry_payload["entry_underwriting_protective_leg_selection_rule_identity"]
+    )
+    assert underwriting["candidate_protective_leg_count"] == 1
 
 
 def test_no_active_combo_is_only_a_diagnostic_and_does_not_block_shadow_entry(
@@ -1785,7 +2248,7 @@ def test_no_active_combo_is_only_a_diagnostic_and_does_not_block_shadow_entry(
     assert entry["execution_model"] == "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL"
 
 
-def test_component_admission_with_insufficient_long_depth_is_known_no_entry(
+def test_selected_candidate_insufficient_long_depth_is_exact_current_unknown(
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
@@ -1811,9 +2274,21 @@ def test_component_admission_with_insufficient_long_depth_is_known_no_entry(
     )
 
     assert not _object_payloads(owner, "SHADOW_ENTRY")
-    assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
-    (invalidation,) = _object_payloads(owner, "CANDIDATE_INVALIDATION")
-    assert invalidation["primary_reason"] == "REUNDERWRITING_NO_LONGER_CANDIDATE"
+    assert _terminal_outcomes(owner) == ["UNKNOWN_CONSUMED"]
+    (terminal,) = _object_payloads(owner, "ADMISSION_ATTEMPT_TERMINAL")
+    assert terminal["terminal_unknown_reasons"] == ["COMPONENT_PAIR_LONG_FULL_QUANTITY_NOT_COVERED"]
+    assert terminal["selected_underwriting_decision_identity"]
+    assert terminal["activation_batch_identity"]
+    assert all(
+        value["object_kind"] != "CANDIDATE_INVALIDATION" for value in owner.state_store.objects
+    )
+    (research_row,) = workbench_module._decision_control_rows(
+        workbench_module._objects_by_kind(owner.state_store.objects)
+    )
+    assert research_row["refresh_terminal_outcome"] == "UNKNOWN_CONSUMED"
+    assert research_row["refresh_unknown_reasons"] == terminal["terminal_unknown_reasons"]
+    assert research_row["case_state"] == "NOT_OPENED"
+    assert research_row["enrollment_identity"] is None
     assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 0
 
 
@@ -1896,6 +2371,94 @@ def test_component_shadow_entry_closes_from_a_new_paired_snapshot_and_writes_kno
     assert owner.retained_state_counts["active_trades"] == 0
     assert adapter.retained_state_counts["active_anchors"] == 0
     assert owner.state_store.retained_state_counts["latest_terminal_cases"] == 1
+
+
+def test_selected_abstain_case_reuses_strictly_future_position_outcome_without_canonical_counts(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    short_book = ContinuousOrderBook("BTC-SHORT")
+    short_book.apply(
+        {
+            "type": "snapshot",
+            "instrument_name": "BTC-SHORT",
+            "change_id": 10,
+            "timestamp": 1_000_010,
+            "bids": [["new", "150", "0.1"]],
+            "asks": [["new", "151", "0.1"]],
+        },
+        110,
+    )
+    reducer.option_books["BTC-SHORT"] = short_book
+    cases = tmp_path / "cases"
+    cases.mkdir()
+    case_store = ShadowCaseStore(
+        cases,
+        bindings=owner.bindings,
+        policies=owner.policies,
+    )
+    owner.state_store.observer = case_store
+
+    enrollment_intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    _settle_component_pair(
+        adapter=adapter,
+        intents=enrollment_intents,
+        first_causal_seq=2,
+        change_id=11,
+        short_bid="150",
+        short_ask="151",
+        long_bid="100",
+        long_ask="101",
+    )
+    control_open = next(
+        value
+        for value in owner.state_store.objects
+        if value["object_kind"] == "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN"
+    )
+    control_identity = str(control_open["object_identity"])
+    case_id = case_store.case_id_for_enrollment(control_identity)
+    assert case_id is not None
+
+    _set_platform_usable(reducer, False)
+    close_intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=6,
+            monotonic_ms=160,
+            cause=CausalCause.TIME_BOUNDARY,
+        ),
+    )
+    _settle_component_pair(
+        adapter=adapter,
+        intents=close_intents,
+        first_causal_seq=7,
+        change_id=12,
+        short_bid="149",
+        short_ask="150",
+        long_bid="99",
+        long_ask="100",
+    )
+
+    result = case_store.read_case(case_id)
+    assert result.status.value == "COMPLETE"
+    assert result.opened["enrollment_kind"] == "SELECTED_UNDERWRITING_DECISION_CONTROL"
+    assert result.outcome is not None
+    assert result.outcome["terminal_state"] == "MATURE_KNOWN"
+    assert not any(
+        value["object_kind"] in {"CANDIDATE_ACTIVATION", "SHADOW_ENTRY", "SHADOW_OUTCOME"}
+        for value in owner.state_store.objects
+    )
+    assert any(
+        value["object_kind"] == "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME"
+        for value in owner.state_store.objects
+    )
 
 
 def test_component_close_pair_over_skew_is_workbench_visible_business_unknown(

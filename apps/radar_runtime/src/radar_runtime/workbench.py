@@ -30,7 +30,7 @@ from short_vol_underwriting.policy import PolicyChain
 from radar_runtime.funnel import FunnelSnapshot, FunnelTracker
 from radar_runtime.runtime import CausalCommit, RadarReducer
 
-WORKBENCH_SCHEMA_VERSION = 3
+WORKBENCH_SCHEMA_VERSION = 4
 WORKBENCH_PUBLICATION_INTERVAL_MS = 500
 SIMULATION_LABEL = "模拟入场, 不是订单或成交"
 EMPTY_PANEL_LABEL = "无已结算对象; 这不是业务零值"
@@ -157,6 +157,7 @@ class _DownstreamProjection:
     underwriting_rows: Sequence[Mapping[str, object]]
     shadow_rows: Sequence[Mapping[str, object]]
     outcome_rows: Sequence[Mapping[str, object]]
+    decision_control_rows: Sequence[Mapping[str, object]]
     underwriting_counts: Mapping[str, int]
 
 
@@ -742,6 +743,11 @@ def _build_business_projection(
             "predicate_margin_summary": _underwriting_margin_summary(downstream.underwriting_rows),
             "rows": downstream.underwriting_rows,
         },
+        "decision_controls": {
+            "panel_state": panel_state(downstream.decision_control_rows).value,
+            "empty_label": (EMPTY_PANEL_LABEL if not downstream.decision_control_rows else None),
+            "rows": downstream.decision_control_rows,
+        },
         "shadow_entries": {
             "panel_state": panel_state(downstream.shadow_rows).value,
             "empty_label": EMPTY_PANEL_LABEL if not downstream.shadow_rows else None,
@@ -787,6 +793,7 @@ def _build_downstream_projection(
         ),
         shadow_rows=_shadow_rows(kinds, policies),
         outcome_rows=_outcome_rows(kinds),
+        decision_control_rows=_decision_control_rows(kinds),
         underwriting_counts=_underwriting_counts(objects),
     )
 
@@ -1257,6 +1264,164 @@ def _underwriting_margin_summary(
     return result
 
 
+def _decision_control_rows(
+    kinds: Mapping[str, Sequence[Mapping[str, object]]],
+) -> list[dict[str, object]]:
+    selections = {
+        str(value["object_identity"]): value
+        for value in kinds.get("SELECTED_UNDERWRITING_DECISION", ())
+    }
+    terminals = {
+        str(_payload(value).get("selected_underwriting_decision_identity")): value
+        for value in _latest_by_payload_key(
+            kinds.get("UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL", ()),
+            "selected_underwriting_decision_identity",
+        )
+    }
+    refresh_terminals_by_identity = {
+        str(value["object_identity"]): value
+        for kind in (
+            "ADMISSION_ATTEMPT_TERMINAL",
+            "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
+        )
+        for value in kinds.get(kind, ())
+    }
+    admission_terminals_by_candidate = {
+        str(_payload(value).get("candidate_identity")): value
+        for value in _latest_by_payload_key(
+            kinds.get("ADMISSION_ATTEMPT_TERMINAL", ()),
+            "candidate_identity",
+        )
+    }
+    enrollments: dict[str, Mapping[str, object]] = {}
+    for kind in ("SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN", "SHADOW_ENTRY"):
+        for value in kinds.get(kind, ()):
+            payload = _payload(value)
+            selected = payload.get("selected_underwriting_decision")
+            if not isinstance(selected, Mapping):
+                continue
+            selection_identity = selected.get("selected_underwriting_decision_identity")
+            if isinstance(selection_identity, str):
+                enrollments[selection_identity] = value
+    outcomes_by_enrollment = {
+        str(_payload(value).get("shadow_entry_identity")): value
+        for kind in ("SHADOW_OUTCOME", "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME")
+        for value in kinds.get(kind, ())
+    }
+    rows: list[dict[str, object]] = []
+    for selection_identity in sorted(set(selections) | set(enrollments)):
+        selection = selections.get(selection_identity)
+        selection_payload = _payload(selection) if selection is not None else {}
+        enrollment = enrollments.get(selection_identity)
+        enrollment_payload = _payload(enrollment) if enrollment is not None else {}
+        selected_observation = enrollment_payload.get("selected_underwriting_decision")
+        if not isinstance(selected_observation, Mapping):
+            selected_observation = selection_payload
+        terminal = terminals.get(selection_identity)
+        if (
+            terminal is None
+            and selection_payload.get("entry_refresh_attempt_kind") == "CANDIDATE_ADMISSION"
+        ):
+            refresh_owner = selection_payload.get("entry_refresh_owner_identity")
+            if isinstance(refresh_owner, str):
+                terminal = admission_terminals_by_candidate.get(refresh_owner)
+        if terminal is None:
+            terminal_identity = enrollment_payload.get("entry_refresh_attempt_terminal_identity")
+            if isinstance(terminal_identity, str):
+                terminal = refresh_terminals_by_identity.get(terminal_identity)
+        terminal_payload = _payload(terminal) if terminal is not None else {}
+        refreshed_observation = (
+            selected_observation
+            if isinstance(selected_observation.get("refreshed_economic_action"), str)
+            else terminal_payload
+        )
+        direct_terminal_outcome = enrollment_payload.get("entry_refresh_terminal_outcome")
+        refresh_terminal_outcome = (
+            direct_terminal_outcome
+            if isinstance(direct_terminal_outcome, str)
+            else terminal_payload.get("terminal_outcome")
+        )
+        direct_unknown_reasons = enrollment_payload.get("entry_refresh_terminal_unknown_reasons")
+        refresh_unknown_reasons = (
+            direct_unknown_reasons
+            if isinstance(direct_unknown_reasons, list)
+            else terminal_payload.get("terminal_unknown_reasons", [])
+        )
+        enrollment_identity = str(enrollment["object_identity"]) if enrollment is not None else None
+        outcome = (
+            outcomes_by_enrollment.get(enrollment_identity)
+            if enrollment_identity is not None
+            else None
+        )
+        outcome_payload = _payload(outcome) if outcome is not None else {}
+        rows.append(
+            {
+                "selected_underwriting_decision_identity": selection_identity,
+                "activation_batch_identity": selected_observation.get("activation_batch_identity"),
+                "active_episode_identity": selection_payload.get("active_episode_identity")
+                or enrollment_payload.get("active_episode_identity"),
+                "selected_economic_action": selected_observation.get("selected_economic_action")
+                or selection_payload.get("economic_action"),
+                "selected_failed_predicates": selected_observation.get("selected_failed_predicates")
+                or selection_payload.get("failed_predicates", []),
+                "selected_predicate_margin_vector": selected_observation.get(
+                    "selected_predicate_margin_vector"
+                )
+                or selection_payload.get("predicate_margin_vector", []),
+                "protective_leg_selection_rule_identity": selection_payload.get(
+                    "protective_leg_selection_rule_identity"
+                )
+                or enrollment_payload.get(
+                    "entry_underwriting_protective_leg_selection_rule_identity"
+                ),
+                "candidate_protective_leg_count": selection_payload.get(
+                    "candidate_protective_leg_count"
+                )
+                if selection_payload.get("candidate_protective_leg_count") is not None
+                else enrollment_payload.get("entry_underwriting_candidate_protective_leg_count"),
+                "selection_fact_boundary": selected_observation.get("selection_fact_boundary")
+                or selection_payload.get("selection_fact_boundary"),
+                "refresh_terminal_outcome": refresh_terminal_outcome,
+                "refresh_unknown_reasons": refresh_unknown_reasons,
+                "refresh_component_pair_timing": enrollment_payload.get(
+                    "entry_refresh_component_pair_timing"
+                )
+                or terminal_payload.get("component_pair_timing")
+                or enrollment_payload.get("entry_component_pair_timing"),
+                "refresh_component_pair_limits": enrollment_payload.get(
+                    "entry_refresh_component_pair_limits"
+                )
+                or terminal_payload.get("component_pair_limits")
+                or enrollment_payload.get("entry_component_pair_limits"),
+                "refreshed_economic_action": refreshed_observation.get("refreshed_economic_action"),
+                "refreshed_failed_predicates": refreshed_observation.get(
+                    "refreshed_failed_predicates",
+                    [],
+                ),
+                "refreshed_predicate_margin_vector": refreshed_observation.get(
+                    "refreshed_predicate_margin_vector",
+                    [],
+                ),
+                "refreshed_fact_boundary": refreshed_observation.get("refreshed_fact_boundary"),
+                "enrollment_kind": enrollment_payload.get("enrollment_kind"),
+                "enrollment_identity": enrollment_identity,
+                "case_state": (
+                    outcome_payload.get("terminal_state")
+                    if outcome is not None
+                    else "PENDING_OUTCOME"
+                    if enrollment is not None
+                    else "NOT_OPENED"
+                ),
+                "net_pnl_after_public_standard_fee_reserve_usdc": outcome_payload.get(
+                    "net_pnl_after_public_standard_fee_reserve_usdc"
+                ),
+                "non_claims": enrollment_payload.get("non_claims")
+                or selection_payload.get("non_claims", []),
+            }
+        )
+    return rows
+
+
 def _shadow_rows(
     kinds: Mapping[str, Sequence[Mapping[str, object]]],
     policies: PolicyChain,
@@ -1705,6 +1870,7 @@ def _empty_business_projection() -> dict[str, object]:
         },
         "radar": dict(empty),
         "underwriting": {**empty, "predicate_margin_summary": []},
+        "decision_controls": dict(empty),
         "shadow_entries": {**empty, "simulation_label": SIMULATION_LABEL},
         "positions": dict(empty),
         "outcomes": dict(empty),
@@ -1925,6 +2091,7 @@ HTML = """<!doctype html>
   <main>
     <section><h2>交易摘要</h2><div id="system" class="grid"></div></section>
     <section><h2>业务漏斗</h2><div id="funnel"></div></section>
+    <section><h2>Selected Decision 研究闭环</h2><p class="warning">独立研究样本, 非 Candidate 的 Case 不是交易。</p><div id="decision-control"></div></section>
     <section><h2>业务零值证明</h2><div id="zero" class="grid"></div></section>
     <section><h2>Radar 可信候选</h2><div id="radar"></div></section>
     <section><h2>承保详情</h2><div id="underwriting"></div></section>
@@ -1940,7 +2107,7 @@ HTML = """<!doctype html>
 
 CSS = """*{box-sizing:border-box}[hidden]{display:none!important}html,body{max-width:100%;overflow-x:hidden}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3}header,footer{padding:20px 5vw;background:#161b22}main{max-width:1600px;margin:0 auto;padding:20px 5vw}section{min-width:0;margin:0 0 24px;padding:18px;background:#161b22;border:1px solid #30363d;border-radius:10px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.card{min-width:0;padding:12px;background:#0d1117;border:1px solid #30363d;border-radius:8px;overflow-wrap:anywhere}.label{color:#8b949e;font-size:.85rem}.value{font-weight:650;margin-top:4px}.warning{padding:10px;border:1px solid #d29922;background:#2d2308;border-radius:8px}.system-details{margin-top:12px}.system-details>summary{cursor:pointer;color:#58a6ff}.system-details>.grid{margin-top:10px}.panel-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px}.panel-toolbar label{color:#8b949e}.panel-toolbar select{margin-left:8px;padding:6px 8px;color:#e6edf3;background:#0d1117;border:1px solid #30363d;border-radius:6px}.table-scroll{max-width:100%;overflow-x:auto}.table-scroll table{min-width:900px;width:100%;border-collapse:collapse;font-size:.88rem}th,td{padding:8px;border-bottom:1px solid #30363d;text-align:left;vertical-align:top}th{position:sticky;top:0;color:#8b949e;background:#161b22;z-index:1}.empty{color:#d29922}.UNKNOWN,.STALE,.INTERRUPTED,.state-unknown{color:#f0883e}.CURRENT,.PROVEN_ZERO,.ANOMALY_ACTIVE,.EVALUABLE{color:#3fb950}.DEGRADED,.NOT_EVALUATED{color:#d29922}.na{color:#8b949e}.raw-details{max-width:360px}.raw-details summary{cursor:pointer;color:#58a6ff}.raw-details dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 8px}.raw-details dt{color:#8b949e}.raw-details dd{margin:0;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem}@media(max-width:800px){header,footer,main{padding-left:16px;padding-right:16px}.grid{grid-template-columns:1fr}}"""
 
-JS = r"""const SUPPORTED_SCHEMA_VERSION = 3;
+JS = r"""const SUPPORTED_SCHEMA_VERSION = 4;
 const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;',
   '<': '&lt;',
@@ -2245,7 +2412,8 @@ const table = (panel, columns, rows = panel.rows, detailFields = []) => {
     `<tbody>${body}</tbody></table></div>`;
 };
 const businessPanelIds = [
-  'funnel', 'zero', 'radar', 'underwriting', 'shadow', 'positions', 'outcomes'
+  'funnel', 'decision-control', 'zero', 'radar', 'underwriting', 'shadow', 'positions',
+  'outcomes'
 ];
 let lastSuccessfulFetchAtMs = null;
 let lastPublicationRuntimeIdentity = null;
@@ -2433,6 +2601,53 @@ function renderFunnel(documentValue) {
   document.getElementById('funnel').innerHTML = summary +
     `<div class="table-scroll"><table><thead>${header}</thead><tbody>${rows}</tbody></table></div>`;
 }
+function renderDecisionControlResearch(documentValue) {
+  const research = documentValue.funnel && documentValue.funnel.decision_control_research;
+  const panel = documentValue.decision_controls;
+  if (!research || !research.pending_counts || !research.selected_action_counts ||
+      !research.attempt_terminal_counts || !Array.isArray(research.non_claims) ||
+      !panel || !Array.isArray(panel.rows)) {
+    throw new Error('invalid selected-decision research projection');
+  }
+  const summary = '<div class="grid">' +
+    card('因果 activation batch', research.activation_batch_count) +
+    card('预先选定决策', research.selected_decision_count) +
+    card('Decision Case 已开', research.decision_case_opened_count) +
+    card('严格未来 Outcome', research.decision_outcome_count) +
+    card('选定 action', funnelBlockerText(research.selected_action_counts)) +
+    card('刷新终局', funnelBlockerText(research.attempt_terminal_counts)) +
+    card('尚无可评估选定决策', research.pending_counts.batch_without_selected_evaluable_decision) +
+    card('选定但未开 Case', research.pending_counts.selected_without_case) +
+    card('Case 等待 Outcome', research.pending_counts.case_without_outcome) +
+    card('边界声明', research.non_claims.join('; ')) +
+    '</div>';
+  const rows = table(panel, [
+    ['选定 action', 'selected_economic_action'],
+    ['刷新后 action', 'refreshed_economic_action'],
+    ['刷新终局', 'refresh_terminal_outcome'],
+    ['Enrollment', 'enrollment_kind'],
+    ['Case / Outcome', 'case_state'],
+    ['Public-quote PnL (USDC)', 'net_pnl_after_public_standard_fee_reserve_usdc']
+  ], panel.rows, [
+    ['selection identity', 'selected_underwriting_decision_identity'],
+    ['activation batch identity', 'activation_batch_identity'],
+    ['active episode', 'active_episode_identity'],
+    ['selected failed predicates', 'selected_failed_predicates'],
+    ['selected predicate margin vector', 'selected_predicate_margin_vector'],
+    ['protective-leg selection rule identity', 'protective_leg_selection_rule_identity'],
+    ['Candidate protective-leg count', 'candidate_protective_leg_count'],
+    ['selection fact boundary', 'selection_fact_boundary'],
+    ['refresh unknown reasons', 'refresh_unknown_reasons'],
+    ['refresh pair timing', 'refresh_component_pair_timing'],
+    ['refresh pair limits', 'refresh_component_pair_limits'],
+    ['refreshed failed predicates', 'refreshed_failed_predicates'],
+    ['refreshed predicate margin vector', 'refreshed_predicate_margin_vector'],
+    ['refreshed fact boundary', 'refreshed_fact_boundary'],
+    ['enrollment identity', 'enrollment_identity'],
+    ['non claims', 'non_claims']
+  ]);
+  document.getElementById('decision-control').innerHTML = summary + rows;
+}
 function render(documentValue) {
   if (!documentValue || documentValue.schema_version !== SUPPORTED_SCHEMA_VERSION) {
     throw new Error('unsupported workbench projection schema');
@@ -2495,6 +2710,7 @@ function render(documentValue) {
       : `${zero.candidate.value} (${zero.candidate.state})`) +
     card('Underwriting-evaluable 分母', zero.candidate.denominator);
   renderFunnel(documentValue);
+  renderDecisionControlResearch(documentValue);
   renderRadarPanel(documentValue);
   renderUnderwritingPanel(documentValue);
   document.getElementById('shadow').innerHTML = table(documentValue.shadow_entries, [

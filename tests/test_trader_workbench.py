@@ -323,7 +323,7 @@ def test_initial_snapshot_keeps_empty_panels_separate_from_unknown_zero_claims()
         "observed_count": 0,
     }
     assert value["service"]["data_state"] == "UNKNOWN"
-    assert value["schema_version"] == 3
+    assert value["schema_version"] == 4
     assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in value["non_claims"]
     assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in value["non_claims"]
 
@@ -394,6 +394,71 @@ def test_shadow_projection_derives_vertical_credit_only_from_persisted_component
     )
     assert row["matched_refresh_source_identity"] == "sha256:" + "4" * 64
     assert row["simulation_label"] == SIMULATION_LABEL
+
+
+def test_selected_decision_projection_keeps_original_refresh_and_outcome_together() -> None:
+    selection_identity = "sha256:" + "1" * 64
+    enrollment_identity = "sha256:" + "2" * 64
+    observation = {
+        "selected_underwriting_decision_identity": selection_identity,
+        "activation_batch_identity": "sha256:" + "3" * 64,
+        "selected_economic_action": "ABSTAIN",
+        "selected_failed_predicates": ["CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE"],
+        "selected_predicate_margin_vector": [{"predicate": "CREDIT", "signed_margin": "-1"}],
+        "selection_fact_boundary": {"causal_seq": 1},
+        "refreshed_economic_action": "WATCH",
+        "refreshed_failed_predicates": ["MINIMUM_NET_ENTRY_CREDIT"],
+        "refreshed_predicate_margin_vector": [{"predicate": "CREDIT", "signed_margin": "1"}],
+        "refreshed_fact_boundary": {"causal_seq": 5},
+    }
+    kinds: dict[str, list[dict[str, object]]] = {
+        "SELECTED_UNDERWRITING_DECISION": [
+            {
+                "object_identity": selection_identity,
+                "payload": {
+                    "active_episode_identity": "episode-1",
+                    "economic_action": "ABSTAIN",
+                    "failed_predicates": ["CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE"],
+                    "predicate_margin_vector": observation["selected_predicate_margin_vector"],
+                },
+            }
+        ],
+        "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN": [
+            {
+                "object_identity": enrollment_identity,
+                "payload": {
+                    "enrollment_kind": "SELECTED_UNDERWRITING_DECISION_CONTROL",
+                    "selected_underwriting_decision": observation,
+                    "entry_component_pair_timing": {"source_timestamp_skew_ms": 1},
+                    "non_claims": ["NOT_AN_ADMITTED_TRADE"],
+                },
+            }
+        ],
+        "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME": [
+            {
+                "object_identity": "sha256:" + "4" * 64,
+                "payload": {
+                    "shadow_entry_identity": enrollment_identity,
+                    "terminal_state": "MATURE_KNOWN",
+                    "net_pnl_after_public_standard_fee_reserve_usdc": "-3.5",
+                },
+            }
+        ],
+    }
+
+    (row,) = workbench_module._decision_control_rows(kinds)
+
+    assert row["selected_economic_action"] == "ABSTAIN"
+    assert row["refreshed_economic_action"] == "WATCH"
+    assert row["enrollment_kind"] == "SELECTED_UNDERWRITING_DECISION_CONTROL"
+    assert row["case_state"] == "MATURE_KNOWN"
+    assert row["net_pnl_after_public_standard_fee_reserve_usdc"] == "-3.5"
+    assert (
+        row["selected_predicate_margin_vector"] == observation["selected_predicate_margin_vector"]
+    )
+    assert (
+        row["refreshed_predicate_margin_vector"] == observation["refreshed_predicate_margin_vector"]
+    )
 
 
 def test_shadow_projection_exposes_exact_pair_timing_no_entry_reason() -> None:
@@ -969,6 +1034,7 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert 'class="value ${' not in JS
     assert 'id="connection"' in HTML
     assert 'id="funnel"' in HTML
+    assert 'id="decision-control"' in HTML
     assert 'role="alert"' in HTML
     assert "function renderUnavailable" in JS
     assert "businessPanelIds" in JS
@@ -978,7 +1044,7 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "documentValue.publication_sequence" in JS
     assert "if (!response.ok) throw" in JS
     assert "renderUnavailable();" in JS
-    assert "SUPPORTED_SCHEMA_VERSION = 3" in JS
+    assert "SUPPORTED_SCHEMA_VERSION = 4" in JS
     assert ".table-scroll" in CSS
     assert "overflow-x:auto" in CSS
     assert 'class="system-details"' in JS
@@ -1181,7 +1247,7 @@ def test_browser_executes_fail_closed_and_recovery_paths() -> None:
     assert test_js != JS
     harness = f"""
 const assert = require('node:assert/strict');
-const panelIds = ['funnel', 'zero', 'radar', 'underwriting', 'shadow', 'positions', 'outcomes'];
+const panelIds = ['funnel', 'decision-control', 'zero', 'radar', 'underwriting', 'shadow', 'positions', 'outcomes'];
 const elementIds = ['connection', 'runtime', 'system', ...panelIds];
 const elements = Object.fromEntries(elementIds.map(id => [id, {{
   hidden: id === 'connection', textContent: '', innerHTML: ''

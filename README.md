@@ -15,7 +15,8 @@ Deribit public facts
 → Underwriting-selected frozen protective vertical
 → conservative full-quantity component-book counterfactual
 → Underwriting: CANDIDATE | WATCH | ABSTAIN when evaluable
-→ explicit Shadow admission
+→ at most one action-blind selected decision per causal activation batch
+→ ordinary Candidate admission, or selected WATCH/ABSTAIN no-trade enrollment
 → Position: HOLD | CLOSE | UNKNOWN
 → strictly future Shadow Case Outcome
 ```
@@ -35,12 +36,16 @@ not veto the component-book path. The formal whole-funnel primary loss still sta
 `938 / 1,812,600` Radar-knownness gap; the active task intentionally owns the Authority-selected
 downstream `7 → 0` closure.
 
-That task replaces the Radar display-first leg choice with an Underwriting-owned selection across
-every legal target-size protective quote after complete positive option scope. It keeps potentially
-legal input gaps `UNKNOWN`, excludes known-illegal legs, keeps the economic thresholds unchanged,
-publishes the complete signed predicate-margin vector, and requires paired admission/close refreshes
-to share one session and continuity epoch within `6000 ms` source-timestamp skew and `4000 ms`
-receive skew.
+The active task now closes the selective-label gap without changing economic thresholds. For each
+causal Radar activation batch it designates at most one Episode before action or future facts are
+known, with no `UNKNOWN` fallback. The designated Episode's first evaluable decision receives one
+strictly later paired refresh: a decision selected as Candidate and still Candidate reuses ordinary
+admission, while a refreshed WATCH/ABSTAIN may open an explicitly tagged no-trade Case. A selected
+WATCH/ABSTAIN that refreshes to Candidate opens no control and must enter the ordinary Candidate
+lifecycle before a later paired admission.
+Original/refreshed predicate-margin vectors and the
+strictly future Outcome appear in a separate Workbench research panel and never alter the canonical
+Candidate funnel.
 The one calibration probe is exhausted; no public smoke, natural runtime, deployment, private API,
 order, fill, or actual exposure is currently authorized.
 

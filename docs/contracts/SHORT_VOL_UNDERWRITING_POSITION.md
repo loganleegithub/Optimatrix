@@ -8,11 +8,13 @@
 
 Consume settled current Radar state, decide whether one conservative frozen two-leg public-book
 counterfactual merits review or admission under one fixed Underwriting Policy, admit only a paired
-refreshed valid Candidate, and manage an admitted Shadow Case under one fixed Position Policy.
+refreshed valid Candidate, select at most one future-blind decision observation per causal
+activation batch, and manage either enrolled Case variant under one fixed Position Policy.
 
-Before Shadow admission, every evaluation, action, Candidate, request attempt, and display row is
+Before Shadow enrollment, every evaluation, action, Candidate, request attempt, and display row is
 in-memory current state. None is a durable business record. `SHADOW_ENTRY` hands one admitted unit
-to the Shadow Case owner, which creates the first durable record.
+to the Shadow Case owner; the separately typed decision-control open hands one selected no-trade
+unit. Either creates the first durable record only after its paired entry witness.
 
 ## Fixed Policy chain
 
@@ -116,8 +118,38 @@ evaluable opportunity below the Candidate credit/ratio/depth thresholds. `CANDID
 current thresholds.
 
 A WATCH or ABSTAIN remains current trader state. It does not automatically open a rejected
-counterfactual, no-trade control, aligned pair, Cohort unit, or durable file. A future no-trade
-control requires explicit pre-outcome selection authority.
+counterfactual, no-trade control, aligned pair, Cohort unit, or durable file. Only the following
+pre-outcome selected-decision rule may enroll one.
+
+## Selected-decision research enrollment
+
+Every Episode newly activated in the same settled reducer transaction belongs to one batch
+identified by runtime, Radar Policy, and its shared activation causal sequence. Before any member's
+Underwriting action or future facts are consulted, the batch designates the unique Episode with the
+minimum canonical hash over batch identity, Episode identity, and the frozen Underwriting/Position
+Policy identities. Input order cannot affect the result. If the designated Episode is `UNKNOWN` or
+ends, there is no fallback to another member. At most one decision is selected per batch.
+
+The designated Episode's first fully evaluable `CANDIDATE | WATCH | ABSTAIN` freezes the original
+complete predicate-margin vector and schedules one future-blind paired refresh. WATCH/ABSTAIN use
+exactly two control-owned `public/get_order_book` requests under the same quantity, send/response,
+session, continuity, and skew rules as Candidate admission. A Candidate reuses its ordinary
+admission pair; scheduling a duplicate control pair is forbidden.
+
+At the refresh boundary, `UNKNOWN`, invalid pair timing, missing full quantity, or a no-longer
+evaluable structure opens no Case. A decision selected as Candidate and still Candidate opens the
+ordinary admitted `SHADOW_ENTRY` Case. Any refreshed WATCH or ABSTAIN may open one
+`SELECTED_UNDERWRITING_DECISION_CONTROL` Case without a Candidate, `SHADOW_ENTRY`, slot consumption,
+order, fill, or capital exposure. A selected WATCH/ABSTAIN that refreshes to Candidate instead opens
+no Case and terminalizes as `REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`; the same refresh
+cannot retroactively become the strictly later admission pair for a newly activated Candidate.
+Both Case variants freeze original and refreshed actions/margins, then
+use the same strictly future Position, paired-close, and Outcome calculators. The no-trade variant
+is projected in a separate research funnel and never increments the canonical Candidate or
+admitted-Case funnel. Because a settled Candidate and its admission terminal leave bounded current
+state, either enrollment variant directly carries the consumed refresh terminal outcome, exact
+unknown reasons, pair timing, and Policy limits needed by Workbench; the projection never depends
+on retired Candidate history.
 
 ## Candidate lifecycle and admission
 
@@ -146,7 +178,7 @@ a Case. A public response is not a fill or liquidity reservation. The same pair 
 post-CLOSE component refreshes; its transport attempt may terminalize `ERROR`, while the owned
 close opportunity and Workbench business state remain explicitly `UNKNOWN`.
 
-## Shadow admission handoff
+## Shadow enrollment handoff
 
 A successful admission creates one in-memory `SHADOW_ENTRY` and immediately asks the Shadow Case
 store to publish exactly one `SHADOW_CASE_OPENED`. The opened record freezes only the minimal facts
@@ -158,10 +190,17 @@ required to reconstruct the admitted counterfactual:
 - paired source identity and both raw/stressed consumed leg levels;
 - entry economics and fixed reserve components;
 - the consumed Radar/Underwriting state required to explain the admission;
+- the frozen protective-leg selector-rule identity and Candidate protective-leg count;
 - explicit public-quote/not-fill non-claims.
 
 If durable Case opening fails, admission fails visibly; the runtime must not silently manage an
 unrecorded Shadow Case.
+
+A successful selected WATCH/ABSTAIN refresh creates the separately typed no-trade control open and
+immediately requests the same durable `SHADOW_CASE_OPENED` record with
+`enrollment_kind=SELECTED_UNDERWRITING_DECISION_CONTROL`. Its Candidate and `SHADOW_ENTRY` fields
+must be null, and its additional non-claims must state `NOT_A_CANDIDATE_ACTIVATION`,
+`NOT_A_SHADOW_ENTRY`, `NOT_AN_ADMITTED_TRADE`, and `NO_CAPITAL_EXPOSURE`.
 
 ## Position state
 
@@ -228,7 +267,8 @@ open durable Case in a new runtime.
 
 ## In-memory owner view
 
-The owner may retain typed current state needed by Workbench and active Shadow Cases. It must not
+The owner may retain typed current state needed by Workbench, the bounded selected-decision batch,
+and active Shadow Cases. It must not
 use a filesystem writer as an event bus, registry, or Workbench datastore. Funnel counts are
 non-durable and derived from current owner transitions.
 
@@ -236,8 +276,8 @@ When an Episode or frozen component structure is replaced, the prior scope is se
 longer current, its Candidate is invalidated, and its current-state indexes are removed. Candidate
 terminalization removes both admission-request owners; Outcome terminalization removes the active
 Position owner.
-Only one latest terminal Case may remain in the Workbench projection; all historical terminal truth
-comes from the bounded Shadow Case files.
+Only one latest terminal Case and one latest terminal selected-decision batch may remain in the
+Workbench projection; all historical terminal truth comes from the bounded Shadow Case files.
 
 ## Required verification
 
