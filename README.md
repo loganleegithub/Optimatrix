@@ -12,7 +12,7 @@ position capability.
 Deribit public facts
 → bounded current market state
 → Short Vol Radar
-→ frozen protective vertical
+→ Underwriting-selected frozen protective vertical
 → conservative full-quantity component-book counterfactual
 → Underwriting: CANDIDATE | WATCH | ABSTAIN when evaluable
 → explicit Shadow admission
@@ -27,20 +27,22 @@ offline from Shadow Cases.
 
 ## Current stage
 
-The active permission remains `PUBLIC_SHADOW`. The completed fixed 43,200-second observation found
-`84` reviewable contract-level Radar Episodes, but all were stopped by `NO_ACTIVE_COMBO`. That is a
-truthful Deribit Combo diagnostic, not proof that the two option legs lacked usable public books.
+The active permission remains `PUBLIC_SHADOW`. The completed natural run observed `10` Radar
+Episodes, `7` reviewable/component-book/Underwriting-evaluable Episodes, and zero Candidates,
+Cases, or Outcomes. All seven selected structures first failed
+`CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE`; `NO_ACTIVE_COMBO 10` remained a parallel diagnostic and did
+not veto the component-book path. The formal whole-funnel primary loss still starts earlier at the
+`938 / 1,812,600` Radar-knownness gap; the active task intentionally owns the Authority-selected
+downstream `7 → 0` closure.
 
-The active closure therefore prices one frozen protective vertical directly from the two public
-option books. Entry sells the short at bid stressed down one official tick and buys the long at ask
-stressed up one tick; close reverses those sides with the same adverse tick stress. Both legs must
-cover `0.1 BTC`, both standard fees are included, and admission/close each require a strictly later
-paired refresh. The result is explicitly a Shadow counterfactual—not an order, fill, atomic quote,
-or liquidity reservation. Existing Combo availability remains visible only as a parallel
-diagnostic. The component lifecycle has passed its offline gates and bounded public smoke. The
-current authorization is one short public-only smoke after each new committed identity, followed by
-one natural public Shadow runtime until a human requests stop or a fatal failure ends that runtime.
-It is not deployment or execution permission, and elapsed runtime is not product acceptance.
+That task replaces the Radar display-first leg choice with an Underwriting-owned selection across
+every legal target-size protective quote after complete positive option scope. It keeps potentially
+legal input gaps `UNKNOWN`, excludes known-illegal legs, keeps the economic thresholds unchanged,
+publishes the complete signed predicate-margin vector, and requires paired admission/close refreshes
+to share one session and continuity epoch within `6000 ms` source-timestamp skew and `4000 ms`
+receive skew.
+The one calibration probe is exhausted; no public smoke, natural runtime, deployment, private API,
+order, fill, or actual exposure is currently authorized.
 
 See:
 

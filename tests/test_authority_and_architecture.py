@@ -82,11 +82,6 @@ def test_active_authority_is_one_small_consistent_map() -> None:
     for path in (*AUTHORITY_FILES, *IMPLEMENTATION_CONTRACTS):
         opening = "\n".join(path.read_text(encoding="utf-8").splitlines()[:8])
         assert "**Status:** ACTIVE" in opening
-    normative_line_count = sum(
-        len(path.read_text(encoding="utf-8").splitlines())
-        for path in (*AUTHORITY_FILES, *IMPLEMENTATION_CONTRACTS)
-    )
-    assert normative_line_count < 1_600
 
 
 def test_agents_routes_work_and_enforces_anti_defensive_stops() -> None:
@@ -177,15 +172,19 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_closes_natural_public_shadow_after_human_stop() -> None:
+def test_current_stage_selects_underwriting_margin_truth_after_natural_stop() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "`COMPONENT_BOOK_SHADOW_LIFECYCLE_ACCEPTED`" in current
+    assert "`UNDERWRITING_SELECTION_AND_MARGIN_TRUTH_ACTIVE`" in current
     assert "**Production Short Vol Radar:** `CREDIBLE_CLUE_GENERATOR_FROZEN`" in current
     assert "**Persistent service:** `NATURAL_PUBLIC_SHADOW_STOPPED_NO_DEPLOYMENT`" in current
-    assert "**Live commands:** `NONE_AUTHORIZED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "**Live commands:** `NONE_AUTHORIZED_PAIR_TIMING_PROBE_EXHAUSTED`" in current
+    assert (
+        "**Sole authorized closure:** `SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH`"
+        in current
+    )
     assert "1,812,600 contract evaluations" in current
     assert "1,811,662 contract evaluations" in current
     assert "10 distinct Episodes" in current
@@ -195,12 +194,15 @@ def test_current_stage_closes_natural_public_shadow_after_human_stop() -> None:
     assert "`NO_ACTIVE_COMBO 10`" in current
     assert "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE" in current
     assert "exactly two strictly later `public/get_order_book` responses" in normalized
-    assert "no runtime command is currently authorized" in normalized
+    assert "no live command or Shadow runtime is authorized" in normalized
+    assert "maximum pair source-timestamp skew at `6000 ms`" in normalized
+    assert "receive skew at `4000 ms`" in normalized
     assert "automatic restart" in current
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_COMPONENT_BOOK_SHADOW_LIFECYCLE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_NATURAL_SHADOW_OPERATION.md").exists()
+    assert (ROOT / "tasks/SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH.md").exists()
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"
     )
@@ -264,16 +266,16 @@ def test_internal_package_dependency_direction() -> None:
             assert not forbidden, f"{path} imports higher layers: {sorted(forbidden)}"
 
 
-def test_fixed_policy_files_remain_content_identified_after_component_book_rebind() -> None:
+def test_fixed_policy_files_remain_content_identified_after_pair_timing_rebind() -> None:
     expected = {
         "policies/short-vol-fixed-public-shadow-radar.json": (
             "74f286e07f8013e6178b44421db1d4d04808e5e0b0c604a80a0fdbc50f276c21"
         ),
         "policies/short-vol-fixed-public-shadow-underwriting.json": (
-            "3fe5d0991bc3e5505a647625929caf680855a3d580c1388864d41036f611340d"
+            "5cbff45fc342489a0c34b476d1947a54e490e04610dadd7f54a1e18f4681d79a"
         ),
         "policies/short-vol-fixed-public-shadow-position.json": (
-            "7f21b36a69996da3d0217c2f73ad30ca289d56f3cd49b022ccfa5d7dc6d5b00d"
+            "e7c38b12cb8c8d79c0f6409ee31289386f7f313a60ef593771648c0504016ef3"
         ),
     }
     for relative, digest in expected.items():

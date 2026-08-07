@@ -32,6 +32,8 @@ class UnderwritingPolicy:
     platform_currentness_budget_ms: int
     component_book_snapshot_send_budget_ms: int
     component_book_snapshot_response_budget_ms: int
+    maximum_component_pair_source_skew_ms: int
+    maximum_component_pair_receive_skew_ms: int
     index_currentness_budget_ms: int
     option_ticker_currentness_budget_ms: int
     fee_role: str
@@ -73,6 +75,8 @@ class PositionPolicy:
     platform_currentness_budget_ms: int
     component_book_snapshot_send_budget_ms: int
     component_book_snapshot_response_budget_ms: int
+    maximum_component_pair_source_skew_ms: int
+    maximum_component_pair_receive_skew_ms: int
     index_currentness_budget_ms: int
     option_ticker_currentness_budget_ms: int
     fee_role: str
@@ -222,6 +226,14 @@ def _parse_underwriting(raw: dict[str, object], identity: str) -> UnderwritingPo
             raw["component_book_snapshot_response_budget_ms"],
             "component_book_snapshot_response_budget_ms",
         ),
+        maximum_component_pair_source_skew_ms=_positive_ms(
+            raw["maximum_component_pair_source_skew_ms"],
+            "maximum_component_pair_source_skew_ms",
+        ),
+        maximum_component_pair_receive_skew_ms=_positive_ms(
+            raw["maximum_component_pair_receive_skew_ms"],
+            "maximum_component_pair_receive_skew_ms",
+        ),
         index_currentness_budget_ms=_positive_ms(
             raw["index_currentness_budget_ms"], "index_currentness_budget_ms"
         ),
@@ -312,6 +324,14 @@ def _parse_position(raw: dict[str, object], identity: str) -> PositionPolicy:
             raw["component_book_snapshot_response_budget_ms"],
             "component_book_snapshot_response_budget_ms",
         ),
+        maximum_component_pair_source_skew_ms=_positive_ms(
+            raw["maximum_component_pair_source_skew_ms"],
+            "maximum_component_pair_source_skew_ms",
+        ),
+        maximum_component_pair_receive_skew_ms=_positive_ms(
+            raw["maximum_component_pair_receive_skew_ms"],
+            "maximum_component_pair_receive_skew_ms",
+        ),
         index_currentness_budget_ms=_positive_ms(
             raw["index_currentness_budget_ms"], "index_currentness_budget_ms"
         ),
@@ -374,6 +394,8 @@ def _validate_shared_policy_members(
         "platform_currentness_budget_ms",
         "component_book_snapshot_send_budget_ms",
         "component_book_snapshot_response_budget_ms",
+        "maximum_component_pair_source_skew_ms",
+        "maximum_component_pair_receive_skew_ms",
         "index_currentness_budget_ms",
         "option_ticker_currentness_budget_ms",
         "fee_role",

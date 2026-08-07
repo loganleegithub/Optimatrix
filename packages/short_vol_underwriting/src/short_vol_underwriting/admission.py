@@ -166,6 +166,7 @@ class RpcComponentLegRefreshWitness:
     request_id: int
     owner_origin_boundary: FactBoundary
     sent_boundary: FactBoundary
+    global_continuity_epoch: int
     response_covers_full_quantity: bool
     payload_matches_request: bool = True
     payload_well_formed: bool = True
@@ -179,6 +180,7 @@ class RpcComponentLegRefreshWitness:
             "change_id",
             "source_timestamp_ms",
             "request_id",
+            "global_continuity_epoch",
         ):
             _require_non_negative_integer(getattr(self, field_name), field_name)
         if dict(self.request_params) != {
@@ -196,6 +198,7 @@ class RpcComponentLegRefreshWitness:
             dict(self.request_params),
             self.owner_origin_boundary.as_object(),
             self.sent_boundary.as_object(),
+            self.global_continuity_epoch,
             self.change_id,
             self.source_timestamp_ms,
             self.boundary.as_object(),
@@ -232,6 +235,54 @@ class ComponentBookPairWitness:
         )
         if self.pair_identity != expected:
             raise ValueError("component pair witness identity mismatch")
+
+    @property
+    def source_timestamp_skew_ms(self) -> int:
+        return abs(self.short.source_timestamp_ms - self.long.source_timestamp_ms)
+
+    @property
+    def receive_skew_ms(self) -> int:
+        return abs(
+            self.short.boundary.received_monotonic_ms - self.long.boundary.received_monotonic_ms
+        )
+
+    def timing_unknown_reasons(
+        self,
+        *,
+        maximum_source_skew_ms: int,
+        maximum_receive_skew_ms: int,
+    ) -> tuple[str, ...]:
+        for value, field_name in (
+            (maximum_source_skew_ms, "maximum_source_skew_ms"),
+            (maximum_receive_skew_ms, "maximum_receive_skew_ms"),
+        ):
+            _require_non_negative_integer(value, field_name)
+            if value == 0:
+                raise ValueError(f"{field_name} must be positive")
+        reasons: list[str] = []
+        if self.short.boundary.session_epoch != self.long.boundary.session_epoch:
+            reasons.append("COMPONENT_PAIR_SESSION_EPOCH_MISMATCH")
+        if self.short.global_continuity_epoch != self.long.global_continuity_epoch:
+            reasons.append("COMPONENT_PAIR_CONTINUITY_EPOCH_MISMATCH")
+        if self.source_timestamp_skew_ms > maximum_source_skew_ms:
+            reasons.append("COMPONENT_PAIR_SOURCE_TIMESTAMP_SKEW_EXCEEDED")
+        if self.receive_skew_ms > maximum_receive_skew_ms:
+            reasons.append("COMPONENT_PAIR_RECEIVE_SKEW_EXCEEDED")
+        return tuple(reasons)
+
+    def timing_as_object(self) -> dict[str, object]:
+        return {
+            "session_epochs": [
+                self.short.boundary.session_epoch,
+                self.long.boundary.session_epoch,
+            ],
+            "global_continuity_epochs": [
+                self.short.global_continuity_epoch,
+                self.long.global_continuity_epoch,
+            ],
+            "source_timestamp_skew_ms": self.source_timestamp_skew_ms,
+            "receive_skew_ms": self.receive_skew_ms,
+        }
 
 
 def component_pair_witness(
@@ -274,6 +325,7 @@ class AdmissionAttempt:
     terminal_identity: str | None = None
     terminal_boundary: FactBoundary | None = None
     terminal_source_identity: str | None = None
+    terminal_unknown_reasons: tuple[str, ...] = ()
 
     @classmethod
     def schedule(
@@ -524,6 +576,9 @@ class ComponentAdmissionAttempt:
     terminal_identity: str | None = None
     terminal_boundary: FactBoundary | None = None
     terminal_source_identity: str | None = None
+    terminal_unknown_reasons: tuple[str, ...] = ()
+    terminal_pair_timing: dict[str, object] | None = None
+    terminal_pair_limits: dict[str, int] | None = None
 
     @classmethod
     def schedule(
@@ -644,6 +699,8 @@ class ComponentAdmissionAttempt:
         *,
         witness: ComponentBookPairWitness,
         response_budget_ms: int,
+        maximum_source_skew_ms: int,
+        maximum_receive_skew_ms: int,
         classification: RefreshClassification,
     ) -> bool:
         if self.terminal_outcome is not None:
@@ -664,9 +721,19 @@ class ComponentAdmissionAttempt:
                 self.long_instrument_name,
             ),
         )
+        timing_unknown_reasons = witness.timing_unknown_reasons(
+            maximum_source_skew_ms=maximum_source_skew_ms,
+            maximum_receive_skew_ms=maximum_receive_skew_ms,
+        )
+        self.terminal_pair_timing = witness.timing_as_object()
+        self.terminal_pair_limits = {
+            "maximum_source_skew_ms": maximum_source_skew_ms,
+            "maximum_receive_skew_ms": maximum_receive_skew_ms,
+        }
         invalid = witness.boundary != max(
             (short.boundary, long.boundary), key=lambda value: value.causal_seq
         )
+        invalid = invalid or bool(timing_unknown_reasons)
         for member, request_id, option_identity, instrument_name in expected:
             sent = self.sent_boundaries.get(request_id)
             invalid = invalid or (
@@ -689,6 +756,7 @@ class ComponentAdmissionAttempt:
                     invalid = True
         if invalid:
             classification = RefreshClassification.UNKNOWN
+            self.terminal_unknown_reasons = timing_unknown_reasons
         return self._terminalize(
             source_identity=witness.pair_identity,
             boundary=witness.boundary,

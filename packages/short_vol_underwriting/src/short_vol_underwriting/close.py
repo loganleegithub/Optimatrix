@@ -301,6 +301,7 @@ class PostCloseAttempt:
     terminal_identity: str | None = None
     terminal_boundary: FactBoundary | None = None
     matched_response_identity: str | None = None
+    terminal_unknown_reasons: tuple[str, ...] = ()
 
     @classmethod
     def schedule(
@@ -661,6 +662,9 @@ class ComponentPostCloseAttempt:
     terminal_identity: str | None = None
     terminal_boundary: FactBoundary | None = None
     matched_response_identity: str | None = None
+    terminal_unknown_reasons: tuple[str, ...] = ()
+    terminal_pair_timing: dict[str, object] | None = None
+    terminal_pair_limits: dict[str, int] | None = None
 
     @classmethod
     def schedule(
@@ -782,6 +786,8 @@ class ComponentPostCloseAttempt:
         *,
         witness: ComponentBookPairWitness,
         response_budget_ms: int,
+        maximum_source_skew_ms: int,
+        maximum_receive_skew_ms: int,
     ) -> bool:
         if self.terminal_status is not None:
             return False
@@ -799,7 +805,16 @@ class ComponentPostCloseAttempt:
                 self.long_instrument_name,
             ),
         )
-        invalid = False
+        timing_unknown_reasons = witness.timing_unknown_reasons(
+            maximum_source_skew_ms=maximum_source_skew_ms,
+            maximum_receive_skew_ms=maximum_receive_skew_ms,
+        )
+        self.terminal_pair_timing = witness.timing_as_object()
+        self.terminal_pair_limits = {
+            "maximum_source_skew_ms": maximum_source_skew_ms,
+            "maximum_receive_skew_ms": maximum_receive_skew_ms,
+        }
+        invalid = bool(timing_unknown_reasons)
         for member, request_id, option_identity, instrument_name in expected:
             sent = self.sent_boundaries.get(request_id)
             invalid = invalid or (
@@ -820,6 +835,8 @@ class ComponentPostCloseAttempt:
                     > response_budget_ms
                 ):
                     invalid = True
+        if invalid:
+            self.terminal_unknown_reasons = timing_unknown_reasons
         return self._terminalize(
             status=(PostCloseAttemptStatus.ERROR if invalid else PostCloseAttemptStatus.SUCCESS),
             owner=PostCloseAttemptOwner.ORDINARY,

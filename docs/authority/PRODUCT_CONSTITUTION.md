@@ -161,10 +161,16 @@ declared path, jump, tail, liquidity, cost, and uncertainty reserves. The entry 
 the short leg at bid stressed down one official tick, buys the frozen protective leg at ask stressed
 up one official tick, and reserves both standard option fees. It returns
 `CANDIDATE | WATCH | ABSTAIN` only when evaluable; unavailable Underwriting has no economic action.
+Radar's Top-3 protective review is display-only. After complete positive option scope, the formal
+Underwriting selector classifies every legal target-size protective quote, prefers `CANDIDATE` over
+`WATCH` over `ABSTAIN`, then applies one declared deterministic predicate-margin order before
+freezing the chosen long for the Episode. A potentially legal leg with unknown required input keeps
+selection `UNKNOWN`; known inactive or quantity-ineligible legs are excluded.
 
 `SHADOW_ENTRY` requires a still-valid Candidate and exactly two strictly later, causally bound public
 option-book responses for the frozen short and protective long. Both legs must cover the full target
-quantity under the same conservative pricing rule. That transition opens the admitted Shadow Case.
+quantity under the same conservative pricing rule and satisfy the pair session, continuity, and
+skew budgets frozen in the Policy chain. That transition opens the admitted Shadow Case.
 Ordinary WATCH and ABSTAIN results remain current state and do not automatically create
 rejected-counterfactual trades or durable controls. A no-trade control requires a future explicit
 pre-outcome selection rule and separate authority.

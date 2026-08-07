@@ -4,15 +4,17 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current implementation status:** `COMPONENT_BOOK_SHADOW_LIFECYCLE_ACCEPTED`
+**Current implementation status:** `UNDERWRITING_SELECTION_AND_MARGIN_TRUTH_ACTIVE`
+
+**Accepted implementation boundary:** `COMPONENT_BOOK_SHADOW_LIFECYCLE_ACCEPTED`
 
 **Production Short Vol Radar:** `CREDIBLE_CLUE_GENERATOR_FROZEN`
 
 **Persistent service:** `NATURAL_PUBLIC_SHADOW_STOPPED_NO_DEPLOYMENT`
 
-**Live commands:** `NONE_AUTHORIZED`
+**Live commands:** `NONE_AUTHORIZED_PAIR_TIMING_PROBE_EXHAUSTED`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** `SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH`
 
 ## Current truth
 
@@ -56,12 +58,14 @@ qualification, deployment readiness, or private execution permission.
 
 - inspect the repository, accepted contracts, and final aggregate Shadow facts read-only;
 - run deterministic offline tests and repository checks that do not contact a live venue;
-- draft one new explicit active task that names the measured funnel blocker, expected product
-  movement, durable-data effect, and smallest owning-boundary change.
+- implement the one active task
+  [`SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH`](../../tasks/SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH.md)
+  without changing any economic threshold, fee, target quantity, or persistence boundary.
 
 ## Forbidden work
 
-- any public smoke, natural Shadow runtime, private/account API call, Combo creation, RFQ, order,
+- any public probe, public smoke, natural Shadow runtime, private/account API call,
+  Combo creation, RFQ, order,
   fill, margin, balance, capital, deployment, commissioning, or actual exposure without a new
   active task and explicit authorization;
 - changing Radar thresholds, benchmark, TTE/Delta universe, target quantity, reserve thresholds,
@@ -75,5 +79,8 @@ qualification, deployment readiness, or private execution permission.
 
 The component-book lifecycle and its fail-closed data boundary are accepted implementation. The
 completed observation is a measured zero-Candidate market result, not a strategy qualification.
-Any next closure starts from the `7 → 0` Underwriting-to-Candidate loss and requires a new active
-task; no runtime command is currently authorized.
+The sole active closure starts from the `7 → 0` Underwriting-to-Candidate loss. Its one timing probe
+completed with `30` pairs and is exhausted. It froze maximum pair source-timestamp skew at `6000 ms`
+and receive skew at `4000 ms`; this is input-contract calibration, not Candidate evidence or
+strategy evaluation. Completion requires offline direct tests and repository checks; no live
+command or Shadow runtime is authorized.

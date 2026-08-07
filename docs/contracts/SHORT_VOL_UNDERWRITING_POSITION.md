@@ -49,8 +49,9 @@ economic action.
 
 Surface-lite context, semivariance/jump context, and transparent attention rank are trader
 diagnostics. They cannot create `EVALUABLE`, `WATCH`, `ABSTAIN`, `CANDIDATE`, an admission attempt,
-or a Shadow Case. The ranked protective-vertical review supplies only the frozen long identity;
-the formal component-book calculator independently validates and prices both current books.
+or a Shadow Case. Radar's ranked protective-vertical Top 3 is display-only. Composition uses the
+formal component-book calculator on every legal target-size protective leg and supplies those
+economics to the Underwriting-owned selector.
 
 Official Combo state is a parallel diagnostic. `NO_ACTIVE_COMBO`,
 `NO_TARGET_SIZE_CREDIT_QUOTE`, and `PUBLIC_ATOMIC_QUOTE_AVAILABLE` neither create nor veto a
@@ -77,6 +78,28 @@ underwriting_reserved_loss_usdc =
 Each leg's consumed amounts must sum exactly to `q`. No rounding, mark, mid, theoretical price,
 imagined maker price, or official-Combo assumption may enter admission economics. These prices are
 conservative public-book counterfactuals, not simultaneous fills.
+
+## Protective-leg selection and margin truth
+
+Underwriting does not freeze a leg until the option catalog and positive option scope are complete.
+It excludes known inactive or target-quantity-ineligible legs, but any amount/tick/book/source fact
+that is unknown for a still-potentially-legal leg keeps the whole selection `UNKNOWN` with the exact
+instrument/reason. At the first settled boundary where every potential leg is classifiable,
+Underwriting classifies every legal target-size quote under the same Policy and selects
+lexicographically by:
+
+1. action class `CANDIDATE > WATCH > ABSTAIN`;
+2. signed margin for positive credit, credit above future-cost reserve, reserved-loss headroom,
+   minimum credit, minimum credit/payoff ratio, and consumed-level headroom, in that order;
+3. narrower width;
+4. protective instrument name.
+
+The chosen long is frozen for the Episode and is not switched by later market movement. Workbench
+projects the selector-rule identity, the number of legal quotes classified as Candidate, the same
+owner-generated six-member signed margin vector, and every failed predicate. It also reports exact
+`count/min/p50/max` over the bounded current Underwriting rows; it does not retain Episode history.
+Workbench does not recalculate thresholds or replace them with one generic reason. Radar Top-3
+order, mark IV, or official Combo state cannot affect this selection.
 
 ## Underwriting action
 
@@ -111,10 +134,17 @@ and one for the frozen protective long. Entry is emitted only after both matched
 - each satisfies send/response budgets;
 - each contains full target quantity on its required side;
 - form one paired witness owned by the same Candidate origin;
+- share one session epoch and one global continuity epoch;
+- have source timestamps no more than `6000 ms` apart and local receive boundaries no more than
+  `4000 ms` apart;
 - remain an evaluable Candidate under the same Policies after adverse tick stress and both fees.
 
 One response alone cannot emit Entry. Failure or retirement of either request retires its sibling
-and consumes the attempt without Entry. A public response is not a fill or liquidity reservation.
+and consumes the attempt without Entry. Pair session, continuity, or skew mismatch settles
+`UNKNOWN_CONSUMED` with its exact bounded reason, measured values, and Policy limits and cannot open
+a Case. A public response is not a fill or liquidity reservation. The same pair contract applies to
+post-CLOSE component refreshes; its transport attempt may terminalize `ERROR`, while the owned
+close opportunity and Workbench business state remain explicitly `UNKNOWN`.
 
 ## Shadow admission handoff
 
@@ -212,7 +242,8 @@ comes from the bounded Shadow Case files.
 ## Required verification
 
 Direct tests cover Policy compatibility, both-leg target depth, adverse tick direction, both fees,
-signed economics, action boundaries, frozen-leg identity, paired admission races, strictly
+signed economics, action boundaries, all-legal-leg selection outside Radar Top 3, complete predicate
+margins, frozen-leg identity, pair session/continuity/skew boundaries, paired admission races, strictly
 post-entry Position order, first CLOSE latching, paired close classification, and no pre-Shadow
 durable writes. Full graph manifests, second schemas, and automatic rejected-counterfactual
 persistence are not required.

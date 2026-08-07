@@ -31,6 +31,7 @@ from radar_runtime.workbench import (
     ServicePhase,
     ServiceStatus,
     SnapshotStore,
+    WorkbenchPublisher,
     WorkbenchRequestHandler,
     initial_workbench_document,
     panel_state,
@@ -39,12 +40,13 @@ from radar_runtime.workbench import (
 )
 from short_vol_radar.atomic import PublicAtomicQuoteState
 from short_vol_radar.detector import DetectorState
+from short_vol_underwriting import FactBoundary as DownstreamFactBoundary
 from short_vol_underwriting.constants import (
     POSITION_POLICY_IDENTITY,
     RADAR_POLICY_IDENTITY,
     UNDERWRITING_POLICY_IDENTITY,
 )
-from short_vol_underwriting.evidence import RuntimeBindings
+from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
 from short_vol_underwriting.policy import PolicyChain, load_policy_chain
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -339,6 +341,14 @@ def test_shadow_projection_derives_vertical_credit_only_from_persisted_component
         "ADMISSION_ATTEMPT_TERMINAL": [
             {
                 "object_identity": "sha256:" + "3" * 64,
+                "fact_boundary": {
+                    "code_identity": "a" * 40,
+                    "runtime_identity": "sha256:" + "b" * 64,
+                    "session_epoch": 1,
+                    "ingress_seq": 2,
+                    "received_monotonic_ms": 3,
+                    "causal_seq": 4,
+                },
                 "payload": {
                     "candidate_identity": candidate_identity,
                     "terminal_outcome": "ENTRY_EMITTED",
@@ -386,6 +396,130 @@ def test_shadow_projection_derives_vertical_credit_only_from_persisted_component
     assert row["simulation_label"] == SIMULATION_LABEL
 
 
+def test_shadow_projection_exposes_exact_pair_timing_no_entry_reason() -> None:
+    candidate_identity = "sha256:" + "1" * 64
+    boundary = {
+        "code_identity": "a" * 40,
+        "runtime_identity": "sha256:" + "b" * 64,
+        "session_epoch": 1,
+        "ingress_seq": 2,
+        "received_monotonic_ms": 3,
+        "causal_seq": 4,
+    }
+    kinds: dict[str, list[dict[str, object]]] = {
+        "CANDIDATE_ACTIVATION": [
+            {
+                "object_identity": candidate_identity,
+                "fact_boundary": boundary,
+                "payload": {"candidate_activation_fact_boundary": boundary},
+            }
+        ],
+        "ADMISSION_ATTEMPT_TERMINAL": [
+            {
+                "object_identity": "sha256:" + "3" * 64,
+                "fact_boundary": boundary,
+                "payload": {
+                    "candidate_identity": candidate_identity,
+                    "terminal_outcome": "UNKNOWN_CONSUMED",
+                    "matched_response_identity": None,
+                    "terminal_unknown_reasons": [
+                        "COMPONENT_PAIR_SOURCE_TIMESTAMP_SKEW_EXCEEDED",
+                        "COMPONENT_PAIR_RECEIVE_SKEW_EXCEEDED",
+                    ],
+                },
+            }
+        ],
+    }
+
+    (row,) = workbench_module._shadow_rows(kinds, _policies())
+
+    assert row["admission_refresh_terminal_outcome"] == "UNKNOWN_CONSUMED"
+    assert row["admission_refresh_unknown_reasons"] == [
+        "COMPONENT_PAIR_SOURCE_TIMESTAMP_SKEW_EXCEEDED",
+        "COMPONENT_PAIR_RECEIVE_SKEW_EXCEEDED",
+    ]
+    assert row["no_entry_reason"] == (
+        "COMPONENT_PAIR_SOURCE_TIMESTAMP_SKEW_EXCEEDED,COMPONENT_PAIR_RECEIVE_SKEW_EXCEEDED"
+    )
+
+
+def test_publisher_keeps_retired_admission_terminal_only_for_its_active_episode() -> None:
+    bindings = _bindings()
+    state = ShadowStateStore(bindings=bindings)
+    boundary = DownstreamFactBoundary(
+        code_identity=bindings.code_identity,
+        runtime_identity=bindings.runtime_identity,
+        session_epoch=1,
+        ingress_seq=1,
+        received_monotonic_ms=2,
+        causal_seq=3,
+    )
+    episode_identity = "sha256:" + "1" * 64
+    scope_identity = "sha256:" + "2" * 64
+    candidate_identity = "sha256:" + "3" * 64
+    state.record(
+        object_kind="UNDERWRITING_AVAILABILITY_EVALUATION",
+        object_identity="sha256:" + "4" * 64,
+        fact_boundary=boundary,
+        payload={
+            "radar_scope_or_short_leg_identity": scope_identity,
+            "active_episode_identity": episode_identity,
+            "availability": "EVALUABLE",
+        },
+    )
+    state.record(
+        object_kind="CANDIDATE_ACTIVATION",
+        object_identity=candidate_identity,
+        fact_boundary=boundary,
+        payload={
+            "candidate_identity": candidate_identity,
+            "active_episode_identity": episode_identity,
+            "candidate_activation_fact_boundary": boundary.as_object(),
+        },
+    )
+    state.record(
+        object_kind="ADMISSION_ATTEMPT_TERMINAL",
+        object_identity="sha256:" + "5" * 64,
+        fact_boundary=boundary,
+        payload={
+            "candidate_identity": candidate_identity,
+            "active_episode_identity": episode_identity,
+            "terminal_outcome": "UNKNOWN_CONSUMED",
+            "terminal_unknown_reasons": ["COMPONENT_PAIR_SOURCE_TIMESTAMP_SKEW_EXCEEDED"],
+            "component_pair_timing": {"source_timestamp_skew_ms": 7_000},
+            "component_pair_limits": {"maximum_source_skew_ms": 6_000},
+        },
+    )
+    state.retire_candidate(candidate_identity)
+    assert all(value["object_kind"] != "ADMISSION_ATTEMPT_TERMINAL" for value in state.objects)
+    publisher = WorkbenchPublisher(
+        store=SnapshotStore(initial_workbench_document(bindings)),
+        bindings=bindings,
+        policies=_policies(),
+        shadow_state=state,
+        shadow_metadata=cast(workbench_module.ShadowMetadataSource, SimpleNamespace()),
+    )
+
+    publisher._update_admission_terminal_diagnostics(state.take_pending_records())
+    diagnostics = tuple(publisher._admission_terminal_diagnostics_by_episode.values())
+    projection = workbench_module._build_downstream_projection(
+        objects=state.objects,
+        diagnostic_records=diagnostics,
+        policies=_policies(),
+        underwriting_metadata=(),
+    )
+
+    (row,) = projection.shadow_rows
+    assert row["candidate_identity"] == candidate_identity
+    assert row["active_episode_identity"] == episode_identity
+    assert row["admission_refresh_terminal_outcome"] == "UNKNOWN_CONSUMED"
+    assert row["admission_component_pair_timing"] == {"source_timestamp_skew_ms": 7_000}
+    assert row["admission_component_pair_limits"] == {"maximum_source_skew_ms": 6_000}
+    state.retire_scope(scope_identity)
+    publisher._update_admission_terminal_diagnostics(())
+    assert publisher._admission_terminal_diagnostics_by_episode == {}
+
+
 def test_underwriting_projection_keeps_unknown_availability_without_an_action() -> None:
     availability_identity = "sha256:" + "7" * 64
     scope_identity = "sha256:" + "8" * 64
@@ -418,6 +552,125 @@ def test_underwriting_projection_keeps_unknown_availability_without_an_action() 
     assert row["action"] is None
     assert row["candidate_identity"] is None
     assert row["decision_reason"] == ("UNDERWRITING_UNKNOWN:COMBO_QUOTE_RECEIPT_UNKNOWN")
+
+
+def test_underwriting_projection_exposes_owner_margin_vector_and_exact_failures() -> None:
+    availability_identity = "sha256:" + "7" * 64
+    scope_identity = "sha256:" + "8" * 64
+    margin_vector = [
+        {
+            "predicate": "CREDIT_ABOVE_FUTURE_COST_RESERVE",
+            "signed_margin": "-1",
+            "unit": "USDC",
+            "passes": False,
+        },
+        {
+            "predicate": "MINIMUM_NET_ENTRY_CREDIT",
+            "signed_margin": "-4",
+            "unit": "USDC",
+            "passes": False,
+        },
+    ]
+    kinds: dict[str, list[dict[str, object]]] = {
+        "UNDERWRITING_AVAILABILITY_EVALUATION": [
+            {
+                "object_identity": availability_identity,
+                "fact_boundary": {
+                    "code_identity": "a" * 40,
+                    "runtime_identity": "sha256:" + "b" * 64,
+                    "session_epoch": 1,
+                    "ingress_seq": 1,
+                    "received_monotonic_ms": 2,
+                    "causal_seq": 3,
+                },
+                "payload": {
+                    "radar_scope_or_short_leg_identity": scope_identity,
+                    "availability": "EVALUABLE",
+                    "unknown_reasons": [],
+                },
+            }
+        ],
+        "UNDERWRITING_ACTION": [
+            {
+                "object_identity": "sha256:" + "9" * 64,
+                "fact_boundary": {
+                    "code_identity": "a" * 40,
+                    "runtime_identity": "sha256:" + "b" * 64,
+                    "session_epoch": 1,
+                    "ingress_seq": 1,
+                    "received_monotonic_ms": 2,
+                    "causal_seq": 3,
+                },
+                "payload": {
+                    "underwriting_availability_evaluation_identity": availability_identity,
+                    "economic_action": "ABSTAIN",
+                    "decision_blockers": ["CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE"],
+                    "failed_predicates": [
+                        "CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE",
+                        "MINIMUM_NET_ENTRY_CREDIT",
+                    ],
+                    "predicate_margin_vector": margin_vector,
+                    "selected_long_leg_instrument_name": "BTC-SELECTED-LONG",
+                    "protective_leg_selection_rule_identity": "sha256:" + "a" * 64,
+                    "candidate_protective_leg_count": 0,
+                },
+            }
+        ],
+    }
+
+    (row,) = workbench_module._underwriting_rows(kinds, _policies())
+
+    assert row["failed_predicates"] == [
+        "CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE",
+        "MINIMUM_NET_ENTRY_CREDIT",
+    ]
+    assert row["predicate_margin_vector"] == margin_vector
+    assert row["long_leg_instrument_name"] == "BTC-SELECTED-LONG"
+    assert row["protective_leg_selection_rule_identity"] == "sha256:" + "a" * 64
+    assert row["candidate_protective_leg_count"] == 0
+    assert row["decision_reason"] == (
+        "UNDERWRITING_ACTION:ABSTAIN;FAILED:"
+        "CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE,MINIMUM_NET_ENTRY_CREDIT"
+    )
+
+
+def test_underwriting_margin_summary_is_exact_over_the_bounded_current_rows() -> None:
+    rows = [
+        {
+            "predicate_margin_vector": [
+                {
+                    "predicate": "CREDIT_ABOVE_FUTURE_COST_RESERVE",
+                    "signed_margin": margin,
+                    "unit": "USDC",
+                },
+                {
+                    "predicate": "ENTRY_CONSUMED_LEVEL_LIMIT",
+                    "signed_margin": levels,
+                    "unit": "LEVEL_COUNT",
+                },
+            ]
+        }
+        for margin, levels in (("-1", 8), ("3", 4))
+    ]
+
+    assert workbench_module._underwriting_margin_summary(rows) == [
+        {
+            "predicate": "CREDIT_ABOVE_FUTURE_COST_RESERVE",
+            "unit": "USDC",
+            "count": 2,
+            "min": "-1",
+            "p50": "1",
+            "max": "3",
+        },
+        {
+            "predicate": "ENTRY_CONSUMED_LEVEL_LIMIT",
+            "unit": "LEVEL_COUNT",
+            "count": 2,
+            "min": "4",
+            "p50": "6",
+            "max": "8",
+        },
+    ]
 
 
 def test_underwriting_projection_joins_only_settled_display_metadata() -> None:
@@ -500,6 +753,18 @@ def test_position_projection_separates_gross_remaining_premium_from_net_close_de
                     "projected_shadow_net_pnl_usdc": "8",
                     "eligibility": "ELIGIBLE",
                     "eligibility_reason": "ALL_RULES_MET",
+                    "component_pair_timing": {
+                        "source_timestamp_skew_ms": 7_000,
+                        "receive_skew_ms": 5_000,
+                    },
+                    "component_pair_limits": {
+                        "maximum_source_skew_ms": 6_000,
+                        "maximum_receive_skew_ms": 4_000,
+                    },
+                    "component_pair_unknown_reasons": [
+                        "COMPONENT_PAIR_SOURCE_TIMESTAMP_SKEW_EXCEEDED",
+                        "COMPONENT_PAIR_RECEIVE_SKEW_EXCEEDED",
+                    ],
                 },
             }
         ],
@@ -519,6 +784,19 @@ def test_position_projection_separates_gross_remaining_premium_from_net_close_de
     assert row["remaining_premium_basis"] == ("MAX_ZERO_NEGATIVE_GROSS_CLOSE_CASHFLOW_USDC")
     assert row["current_close_debit_usdc"] == "26"
     assert row["projected_shadow_pnl_usdc"] == "8"
+    assert row["component_pair_timing"] == {
+        "source_timestamp_skew_ms": 7_000,
+        "receive_skew_ms": 5_000,
+    }
+    assert row["component_pair_limits"] == {
+        "maximum_source_skew_ms": 6_000,
+        "maximum_receive_skew_ms": 4_000,
+    }
+    assert row["component_pair_business_state"] == "UNKNOWN"
+    assert row["component_pair_unknown_reasons"] == [
+        "COMPONENT_PAIR_SOURCE_TIMESTAMP_SKEW_EXCEEDED",
+        "COMPONENT_PAIR_RECEIVE_SKEW_EXCEEDED",
+    ]
 
 
 def test_snapshot_store_serializes_before_publication_and_does_not_retain_mutable_input() -> None:

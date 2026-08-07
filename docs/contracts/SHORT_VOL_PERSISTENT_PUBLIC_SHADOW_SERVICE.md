@@ -92,8 +92,19 @@ The service exposes non-durable funnel counts and a primary blocker in the Workb
 computed from current reducer/owner transitions and reset with the runtime. They do not create Case
 files or qualify a Policy.
 
-Completed funnel identities are retired. Only cumulative scalar counts and bounded normalized
-reason categories survive, so diagnostic memory is independent of completed opportunity count.
+For each evaluable Underwriting row, Workbench projects the owner-generated selected protective leg,
+complete signed six-predicate margin vector, and all failed predicates. Admission and close rows
+project exact pair-timing failures, measured values, and frozen limits. Because a failed Candidate
+is retired in the same owner transaction, the publisher keeps at most one non-durable admission
+terminal per still-active Radar Episode; it is pruned when the Episode scope retires or replaced by
+a new Candidate. Close timing truth is copied into the existing attempt-owned `UNKNOWN` opportunity.
+The server derives exact `count/min/p50/max` only over bounded current Underwriting rows, never
+retained Episode history. Browser code does not select a leg, recalculate a threshold, or turn a
+pair-timing `UNKNOWN` into known economics.
+
+Completed funnel identities are retired. Apart from the per-active-Episode terminal above, only
+cumulative scalar counts and bounded normalized reason categories survive, so diagnostic memory is
+bounded by current market scope rather than completed opportunity count.
 
 ## HTTP surface
 

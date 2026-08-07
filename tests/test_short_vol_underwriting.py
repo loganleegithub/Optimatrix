@@ -12,6 +12,7 @@ from short_vol_underwriting import (
     CANDIDATE_INVALIDATION_REASONS,
     OUTCOME_OBJECT_KINDS,
     POSITION_CLOSE_REASONS,
+    UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
     UNDERWRITING_OBJECT_KINDS,
     AdmissionAttempt,
     AdmissionTerminalOutcome,
@@ -22,6 +23,8 @@ from short_vol_underwriting import (
     CloseOptionAvailability,
     CloseQuoteFacts,
     CloseQuoteState,
+    ComponentLegRole,
+    EntryEconomics,
     FactBoundary,
     FixedContractShadowOwner,
     Observation,
@@ -37,6 +40,7 @@ from short_vol_underwriting import (
     PredicateTruth,
     RefreshClassification,
     RpcAdmissionRefreshWitness,
+    RpcComponentLegRefreshWitness,
     RuntimeBindings,
     ShadowCaseStore,
     ShadowCaseStoreError,
@@ -45,14 +49,18 @@ from short_vol_underwriting import (
     SourceFact,
     SubscriptionAdmissionRefreshWitness,
     TerminalSource,
+    UnderwritingComponentCandidate,
     UnderwritingFacts,
     canonical_identity,
     classify_close_quote,
+    component_pair_witness,
     compute_close_economics,
     compute_entry_economics,
     evaluate_close_opportunity,
     load_policy_chain,
     ordered_candidate_invalidation,
+    select_underwriting_component,
+    underwriting_threshold_margins,
 )
 from short_vol_underwriting.constants import (
     POSITION_POLICY_IDENTITY,
@@ -558,6 +566,10 @@ def test_exact_policy_chain_loads_before_runtime() -> None:
     )
     assert chain.underwriting.target_base_quantity_btc == Decimal("0.1")
     assert chain.underwriting.future_cost_reserve_usdc == Decimal("12")
+    assert chain.underwriting.maximum_component_pair_source_skew_ms == 6_000
+    assert chain.underwriting.maximum_component_pair_receive_skew_ms == 4_000
+    assert chain.position.maximum_component_pair_source_skew_ms == 6_000
+    assert chain.position.maximum_component_pair_receive_skew_ms == 4_000
     assert chain.position.latest_exit_lead_ms == 1_800_000
     assert chain.position.underwriting_policy_identity == UNDERWRITING_POLICY_IDENTITY
 
@@ -579,6 +591,232 @@ def test_policy_loader_rejects_unknown_member_and_cross_identity(tmp_path: Path)
             underwriting_identity="sha256:" + "0" * 64,
             position_identity=POSITION_POLICY_IDENTITY,
         )
+
+
+def _selection_economics(
+    *,
+    net_credit: str,
+    payoff_cap: str,
+    reserved_loss: str,
+) -> EntryEconomics:
+    net = Decimal(net_credit)
+    payoff = Decimal(payoff_cap)
+    return EntryEconomics(
+        full_quantity_btc=Decimal("0.1"),
+        required_side_total_quote_usdc=Decimal("1"),
+        gross_entry_credit_usdc=net + Decimal("1"),
+        entry_fee_reserve_usdc=Decimal("1"),
+        net_entry_credit_usdc=net,
+        width_usdc_per_btc=payoff / Decimal("0.1"),
+        payoff_cap_usdc=payoff,
+        contractual_payoff_max_loss_ex_fees_usdc=max(Decimal(0), payoff - net - 1),
+        entry_fee_reserved_payoff_loss_usdc=max(Decimal(0), payoff - net),
+        future_cost_reserve_usdc=Decimal("12"),
+        underwriting_reserved_loss_usdc=Decimal(reserved_loss),
+    )
+
+
+def test_underwriting_margin_vector_reports_every_signed_predicate_distance() -> None:
+    margins = underwriting_threshold_margins(
+        economics=_selection_economics(
+            net_credit="11",
+            payoff_cap="100",
+            reserved_loss="260",
+        ),
+        consumed_level_count=10_001,
+        maximum_underwriting_reserved_loss_usdc=Decimal("250"),
+        minimum_net_entry_credit_usdc=Decimal("15"),
+        minimum_net_credit_to_payoff_cap_fraction=Decimal("0.1"),
+        maximum_entry_consumed_level_count=10_000,
+    )
+
+    assert margins.failed_predicates == (
+        "CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE",
+        "UNDERWRITING_RESERVED_LOSS_LIMIT",
+        "MINIMUM_NET_ENTRY_CREDIT",
+        "ENTRY_CONSUMED_LEVEL_LIMIT",
+    )
+    assert margins.as_vector() == (
+        {
+            "predicate": "POSITIVE_NET_ENTRY_CREDIT",
+            "signed_margin": "11",
+            "unit": "USDC",
+            "passes": True,
+        },
+        {
+            "predicate": "CREDIT_ABOVE_FUTURE_COST_RESERVE",
+            "signed_margin": "-1",
+            "unit": "USDC",
+            "passes": False,
+        },
+        {
+            "predicate": "UNDERWRITING_RESERVED_LOSS_WITHIN_LIMIT",
+            "signed_margin": "-10",
+            "unit": "USDC",
+            "passes": False,
+        },
+        {
+            "predicate": "MINIMUM_NET_ENTRY_CREDIT",
+            "signed_margin": "-4",
+            "unit": "USDC",
+            "passes": False,
+        },
+        {
+            "predicate": "MINIMUM_NET_CREDIT_TO_PAYOFF_CAP",
+            "signed_margin": "0.01",
+            "unit": "FRACTION",
+            "passes": True,
+        },
+        {
+            "predicate": "ENTRY_CONSUMED_LEVEL_LIMIT",
+            "signed_margin": -1,
+            "unit": "LEVEL_COUNT",
+            "passes": False,
+        },
+    )
+
+
+def test_underwriting_selector_prefers_action_class_then_full_margin_vector() -> None:
+    abstain_with_more_credit = UnderwritingComponentCandidate(
+        long_instrument_name="BTC-LONG-ABSTAIN",
+        economics=_selection_economics(
+            net_credit="100",
+            payoff_cap="1000",
+            reserved_loss="912",
+        ),
+        consumed_level_count=2,
+    )
+    candidate = UnderwritingComponentCandidate(
+        long_instrument_name="BTC-LONG-CANDIDATE",
+        economics=_selection_economics(
+            net_credit="20",
+            payoff_cap="100",
+            reserved_loss="92",
+        ),
+        consumed_level_count=2,
+    )
+    watch_b = UnderwritingComponentCandidate(
+        long_instrument_name="BTC-LONG-WATCH-B",
+        economics=_selection_economics(
+            net_credit="14",
+            payoff_cap="80",
+            reserved_loss="78",
+        ),
+        consumed_level_count=2,
+    )
+    watch_a = replace(watch_b, long_instrument_name="BTC-LONG-WATCH-A")
+
+    selection = select_underwriting_component(
+        (abstain_with_more_credit, watch_b, candidate, watch_a),
+        maximum_underwriting_reserved_loss_usdc=Decimal("250"),
+        minimum_net_entry_credit_usdc=Decimal("15"),
+        minimum_net_credit_to_payoff_cap_fraction=Decimal("0.1"),
+        maximum_entry_consumed_level_count=10_000,
+    )
+    reordered = select_underwriting_component(
+        (watch_a, candidate, watch_b, abstain_with_more_credit),
+        maximum_underwriting_reserved_loss_usdc=Decimal("250"),
+        minimum_net_entry_credit_usdc=Decimal("15"),
+        minimum_net_credit_to_payoff_cap_fraction=Decimal("0.1"),
+        maximum_entry_consumed_level_count=10_000,
+    )
+    watches = select_underwriting_component(
+        (watch_b, watch_a),
+        maximum_underwriting_reserved_loss_usdc=Decimal("250"),
+        minimum_net_entry_credit_usdc=Decimal("15"),
+        minimum_net_credit_to_payoff_cap_fraction=Decimal("0.1"),
+        maximum_entry_consumed_level_count=10_000,
+    )
+
+    assert selection is not None
+    assert selection.candidate.long_instrument_name == "BTC-LONG-CANDIDATE"
+    assert selection.action.value == "CANDIDATE"
+    assert selection.selection_rule_identity == UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY
+    assert selection.candidate_protective_leg_count == 1
+    assert reordered == selection
+    assert watches is not None
+    assert watches.candidate.long_instrument_name == "BTC-LONG-WATCH-A"
+    assert watches.candidate_protective_leg_count == 0
+
+
+def _component_leg_witness(
+    *,
+    role: ComponentLegRole,
+    request_id: int,
+    boundary: FactBoundary,
+    sent_boundary: FactBoundary,
+    source_timestamp_ms: int,
+    global_continuity_epoch: int,
+) -> RpcComponentLegRefreshWitness:
+    origin = _boundary(1, 100)
+    option_identity = "sha256:" + ("6" if role is ComponentLegRole.SHORT else "7") * 64
+    instrument_name = "BTC-SHORT" if role is ComponentLegRole.SHORT else "BTC-LONG"
+    params = {"instrument_name": instrument_name, "depth": 10000}
+    source_identity = canonical_identity(
+        "RpcComponentLegRefreshSourceIdentity",
+        boundary.runtime_identity,
+        request_id,
+        role.value,
+        "public/get_order_book",
+        option_identity,
+        params,
+        origin.as_object(),
+        sent_boundary.as_object(),
+        global_continuity_epoch,
+        11,
+        source_timestamp_ms,
+        boundary.as_object(),
+    )
+    return RpcComponentLegRefreshWitness(
+        source_identity=source_identity,
+        boundary=boundary,
+        role=role,
+        canonical_option_identity=option_identity,
+        instrument_name=instrument_name,
+        request_params=params,
+        change_id=11,
+        source_timestamp_ms=source_timestamp_ms,
+        request_id=request_id,
+        owner_origin_boundary=origin,
+        sent_boundary=sent_boundary,
+        global_continuity_epoch=global_continuity_epoch,
+        response_covers_full_quantity=True,
+    )
+
+
+def test_component_pair_exposes_session_continuity_and_skew_unknown_reasons() -> None:
+    short_sent = _boundary(2, 110)
+    long_sent = replace(_boundary(3, 120), session_epoch=2)
+    short = _component_leg_witness(
+        role=ComponentLegRole.SHORT,
+        request_id=41,
+        boundary=_boundary(4, 130),
+        sent_boundary=short_sent,
+        source_timestamp_ms=1_000,
+        global_continuity_epoch=7,
+    )
+    long = _component_leg_witness(
+        role=ComponentLegRole.LONG,
+        request_id=42,
+        boundary=replace(_boundary(5, 5_500), session_epoch=2),
+        sent_boundary=long_sent,
+        source_timestamp_ms=8_000,
+        global_continuity_epoch=8,
+    )
+
+    pair = component_pair_witness(short=short, long=long)
+
+    assert pair.source_timestamp_skew_ms == 7_000
+    assert pair.receive_skew_ms == 5_370
+    assert pair.timing_unknown_reasons(
+        maximum_source_skew_ms=6_000,
+        maximum_receive_skew_ms=4_000,
+    ) == (
+        "COMPONENT_PAIR_SESSION_EPOCH_MISMATCH",
+        "COMPONENT_PAIR_CONTINUITY_EPOCH_MISMATCH",
+        "COMPONENT_PAIR_SOURCE_TIMESTAMP_SKEW_EXCEEDED",
+        "COMPONENT_PAIR_RECEIVE_SKEW_EXCEEDED",
+    )
 
 
 def test_kind_registries_are_exact_and_disjoint() -> None:
@@ -1242,6 +1480,40 @@ def test_owner_explicit_unknown_reasons_prevent_economic_action(
     payload = _object(next(iter(objects.values()))["payload"])
     assert payload["availability"] == "UNKNOWN"
     assert payload["unknown_reasons"] == ["INDEX_SOURCE_UNKNOWN"]
+
+
+def test_owner_action_carries_complete_margin_truth_beyond_primary_blocker(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    facts = replace(
+        _underwriting_facts(
+            boundary=_boundary(1, 110),
+            change_id=10,
+            previous_change_id=None,
+            snapshot_kind="snapshot",
+        ),
+        entry_consumed_levels=((Decimal("150"), Decimal("0.1")),),
+    )
+
+    owner.settle_underwriting((facts,), allocate_request_id=lambda: 41)
+
+    action = next(
+        value
+        for value in _written_objects(tmp_path, bindings=bindings).values()
+        if value["object_kind"] == "UNDERWRITING_ACTION"
+    )
+    payload = _object(action["payload"])
+    assert payload["economic_action"] == "ABSTAIN"
+    assert payload["decision_blockers"] == ["CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE"]
+    assert payload["failed_predicates"] == [
+        "CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE",
+        "MINIMUM_NET_ENTRY_CREDIT",
+    ]
+    vector = payload["predicate_margin_vector"]
+    assert isinstance(vector, list)
+    assert len(vector) == 6
+    assert payload["selected_long_leg_instrument_name"] == "BTC-LONG"
 
 
 def test_owner_unknown_refresh_invalidates_candidate_before_admission(
