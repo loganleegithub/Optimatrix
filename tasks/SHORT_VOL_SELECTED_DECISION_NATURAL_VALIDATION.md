@@ -10,7 +10,8 @@
 
 **Base commit:** `92cb0fe2663db4ed9c2d99d87895c903ce4e58f7`
 
-**Target branch/PR:** `codex/selected-decision-natural-validation`; Draft PR against `main`
+**Target branch/PR:** `codex/selected-decision-natural-validation`; Draft PR
+[#24](https://github.com/loganleegithub/Optimatrix/pull/24) against `main`
 
 **Owning authority/contract:**
 [`CURRENT_STAGE`](../docs/authority/CURRENT_STAGE.md),
