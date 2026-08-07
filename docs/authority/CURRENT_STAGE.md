@@ -4,17 +4,17 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current implementation status:** `QUEUE_LAG_CURRENTNESS_THROUGHPUT_REPAIR_AUTHORIZED`
+**Current implementation status:** `QUEUE_LAG_CURRENTNESS_THROUGHPUT_ACCEPTED`
 
-**Accepted implementation boundary:** `SELECTED_UNDERWRITING_DECISION_OUTCOME_ACCEPTED`
+**Accepted implementation boundary:** `QUEUE_LAG_CURRENTNESS_THROUGHPUT_ACCEPTED`
 
 **Production Short Vol Radar:** `CREDIBLE_CLUE_GENERATOR_FROZEN`
 
-**Persistent service:** `STOPPED_CLEANLY_CURRENTNESS_REPAIR_REQUIRED`
+**Persistent service:** `REPAIRED_NATURAL_PUBLIC_SHADOW_RUNNING`
 
-**Live commands:** `ONE_POST_MERGE_PRODUCTION_PUBLIC_SERVE_SHADOW_AUTHORIZED`
+**Live commands:** `CURRENT_PRODUCTION_PUBLIC_SERVE_SHADOW_ONLY_NO_RESTART`
 
-**Sole authorized closure:** `SHORT_VOL_QUEUE_LAG_CURRENTNESS_THROUGHPUT`
+**Sole authorized closure:** `SHORT_VOL_SELECTED_DECISION_NATURAL_VALIDATION`
 
 ## Current truth
 
@@ -72,27 +72,39 @@ facts/second in the same A/B fixture. Workbench review construction and JSON enc
 separately and are not the owning repair. The accepted Decision, persistence, Workbench schema, and
 three Policies remain frozen.
 
+The repair merged through PR #25 as code identity
+`6dee819961d76b622dbc6b77997e1f987451a096`. The one authorized post-merge process has runtime
+identity `sha256:fdb4f0b3eadfc0f892cfad210142d14c521394cfeb6fbd5c761554228c45998f`
+and state root `/private/tmp/optimatrix-natural-shadow-currentness-repair-T6MhNA`. It reached
+`RUNNING/CURRENT` with exact frozen Policy identities, current `128/128` coverage, session/global
+continuity epoch `1`, and zero reconnects or session gaps. An external 1 Hz observation produced
+`600/600` CURRENT samples, zero STALE samples, zero unavailable reads, one initial state marker, and
+maximum observed data delay `4,783 ms`. The final sampled funnel had `128,075` applicable and
+`127,563` Radar-known evaluations, zero Episode, and zero selected-decision Outcome.
+
+This accepts the currentness-throughput repair: the frozen three-observation path now has one proven
+uninterrupted 600-second window. It does not prove market frequency or strategy quality. The same
+process remains the sole authorized natural validation and continues without restart toward the
+first selected-decision Outcome.
+
 ## Allowed work
 
 - inspect the repository, accepted contracts, final aggregate Shadow facts, loopback Workbench, and
   any Case records owned by the authorized runtime;
 - run deterministic offline tests and repository checks that do not contact a live venue;
-- implement exactly the bounded
-  [queue-lag currentness throughput repair](../../tasks/SHORT_VOL_QUEUE_LAG_CURRENTNESS_THROUGHPUT.md)
-  without changing Policy, business formulas, persistence, external schemas, subscription cadence,
-  or topology;
-- run deterministic offline profiling, focused tests, and the repository gate;
-- after the repair PR is merged, execute exactly one production-public `serve-shadow` process from
-  clean merged `main`, the frozen three-Policy chain, one fresh absolute state root outside the
-  repository, and loopback Workbench;
-- externally observe that same process through one uninterrupted 600-second CURRENT window, then
-  leave it running naturally toward the first selected-decision Outcome unless queue lag, fatal
-  failure, or explicit human stop provides a terminal boundary.
+- inspect the repository, loopback Workbench, and Case records owned by the exact current runtime;
+- run deterministic offline tests and repository checks that do not contact a live venue;
+- keep exactly the current
+  [selected-decision natural validation](../../tasks/SHORT_VOL_SELECTED_DECISION_NATURAL_VALIDATION.md)
+  process running without restart through recoverable public-transport reconnects until the first
+  selected-decision Outcome, explicit human stop, renewed queue-lag failure, or fatal process
+  failure, then obtain its clean terminal summary when the process can do so.
 
 ## Forbidden work
 
-- any public probe or Shadow process before the repair is merged; any second post-merge process, or
-  any restart after terminal failure without new explicit authorization;
+- any probe, smoke, second Shadow process, or restart after terminal failure without new explicit
+  authorization;
+- any further runtime implementation or Policy edit inside this validation-only closure;
 - any private/account API call, Combo creation, RFQ, order, fill, margin, balance, capital,
   supervised deployment, commissioning, or actual exposure; this task authorizes none of them;
 - changing Radar thresholds, benchmark, TTE/Delta universe, target quantity, reserve thresholds,
@@ -126,8 +138,7 @@ then continues naturally; there is no separate smoke/restart boundary. A zero sa
 `NOT_YET_OBSERVED`, not 0% Outcome quality. Candidate and selected-control funnels, original and
 refreshed actions/margins, exact refresh terminals, Case enrollment, Outcome/censoring, reconnects,
 and the canonical post-warmup funnel must remain separate. No threshold, fee, target quantity,
-Radar screen, private execution permission, or capital authority changes. The only authorized
-implementation delta is reuse of the existing frozen index-tail points inside the
-reducer's non-durable currentness comparison token. The post-merge 600-second CURRENT observation
-establishes temporal reachability only and does not require or prove an Episode, Candidate, Case,
-Outcome, edge, profitability, or deployability.
+Radar screen, private execution permission, or capital authority changes. Reuse of the existing
+frozen index-tail points inside the reducer's non-durable currentness comparison token is accepted.
+The current 600-second CURRENT observation establishes temporal reachability only and does not
+require or prove an Episode, Candidate, Case, Outcome, edge, profitability, or deployability.
