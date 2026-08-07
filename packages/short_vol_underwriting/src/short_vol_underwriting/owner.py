@@ -889,7 +889,11 @@ class FixedContractShadowOwner:
             and evaluation.availability is UnderwritingAvailability.EVALUABLE
             and evaluation.action is not None
         ):
-            classification = DecisionControlRefreshClassification.EVALUABLE
+            classification = (
+                DecisionControlRefreshClassification.REFRESHED_CANDIDATE
+                if evaluation.action is UnderwritingAction.CANDIDATE
+                else DecisionControlRefreshClassification.REFRESHED_WATCH_OR_ABSTAIN
+            )
         elif evaluation.availability is UnderwritingAvailability.NOT_EVALUATED:
             classification = DecisionControlRefreshClassification.NOT_EVALUATED
         else:
@@ -915,7 +919,16 @@ class FixedContractShadowOwner:
         )
         if not accepted:
             return self._finish_transition()
-        self._emit_decision_control_terminal(record)
+        terminal_refresh = (
+            evaluation
+            if record.attempt.terminal_outcome
+            is DecisionControlAttemptOutcome.REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION
+            else None
+        )
+        self._emit_decision_control_terminal(
+            record,
+            non_enrolled_refresh=terminal_refresh,
+        )
         if record.attempt.terminal_outcome is DecisionControlAttemptOutcome.CONTROL_OPENED:
             if evaluation.economics is None or evaluation.action is None:
                 raise RuntimeError("evaluable decision control lacks economics/action")
@@ -2450,6 +2463,10 @@ class FixedContractShadowOwner:
                 "predicate_margin_vector": list(margins.as_vector()),
                 "selected_short_leg_instrument_name": facts.short_leg_instrument_name,
                 "selected_long_leg_instrument_name": facts.long_leg_instrument_name,
+                "protective_leg_selection_rule_identity": (
+                    facts.protective_leg_selection_rule_identity
+                ),
+                "candidate_protective_leg_count": facts.candidate_protective_leg_count,
                 "enrollment_route": enrollment_route,
                 "entry_refresh_attempt_kind": entry_refresh_attempt_kind,
                 "entry_refresh_owner_identity": entry_refresh_owner_identity,
@@ -2499,7 +2516,12 @@ class FixedContractShadowOwner:
         )
         self._intents.extend(intents)
 
-    def _emit_decision_control_terminal(self, record: _DecisionControlRecord) -> None:
+    def _emit_decision_control_terminal(
+        self,
+        record: _DecisionControlRecord,
+        *,
+        non_enrolled_refresh: _UnderwritingEvaluation | None = None,
+    ) -> None:
         attempt = record.attempt
         if (
             attempt.terminal_identity is None
@@ -2508,22 +2530,35 @@ class FixedContractShadowOwner:
             or attempt.terminal_source_identity is None
         ):
             raise RuntimeError("decision-control terminal is incomplete")
+        payload: dict[str, object] = {
+            "decision_control_attempt_terminal_identity": attempt.terminal_identity,
+            "scheduled_decision_control_attempt_identity": attempt.scheduled_identity,
+            "selected_underwriting_decision_identity": record.selection_identity,
+            "activation_batch_identity": record.batch_identity,
+            "terminal_outcome": attempt.terminal_outcome.value,
+            "terminal_source_identity": attempt.terminal_source_identity,
+            "terminal_unknown_reasons": list(attempt.terminal_unknown_reasons),
+            "component_pair_timing": attempt.terminal_pair_timing,
+            "component_pair_limits": attempt.terminal_pair_limits,
+            "terminal_fact_boundary": attempt.terminal_boundary.as_object(),
+        }
+        if non_enrolled_refresh is not None:
+            if (
+                attempt.terminal_outcome
+                is not DecisionControlAttemptOutcome.REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION
+            ):
+                raise RuntimeError("only a non-enrolled Candidate refresh carries terminal margins")
+            payload.update(
+                self._refreshed_underwriting_observation_payload(
+                    non_enrolled_refresh,
+                    owner_identity=record.selection_identity,
+                )
+            )
         self._emit(
             "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
             attempt.terminal_identity,
             attempt.terminal_boundary,
-            {
-                "decision_control_attempt_terminal_identity": attempt.terminal_identity,
-                "scheduled_decision_control_attempt_identity": attempt.scheduled_identity,
-                "selected_underwriting_decision_identity": record.selection_identity,
-                "activation_batch_identity": record.batch_identity,
-                "terminal_outcome": attempt.terminal_outcome.value,
-                "terminal_source_identity": attempt.terminal_source_identity,
-                "terminal_unknown_reasons": list(attempt.terminal_unknown_reasons),
-                "component_pair_timing": attempt.terminal_pair_timing,
-                "component_pair_limits": attempt.terminal_pair_limits,
-                "terminal_fact_boundary": attempt.terminal_boundary.as_object(),
-            },
+            payload,
         )
         self._counts[
             f"decision_control_attempt_{attempt.terminal_outcome.value.lower()}_count"
@@ -2924,19 +2959,33 @@ class FixedContractShadowOwner:
         *,
         owner_identity: str,
     ) -> dict[str, object]:
+        is_component_entry = refreshed.facts.component_quote is not None
         if (
             refreshed.action is None
             or refreshed.economics is None
             or refreshed.economic_fingerprint is None
+            or (
+                is_component_entry
+                and (
+                    refreshed.facts.protective_leg_selection_rule_identity is None
+                    or refreshed.facts.candidate_protective_leg_count is None
+                )
+            )
         ):
-            raise RuntimeError("Case-open Underwriting requires evaluable refreshed facts")
+            raise RuntimeError(
+                "Case-open Underwriting requires evaluable facts and frozen selector provenance"
+            )
         require_identity(owner_identity, "Case-open Underwriting owner_identity")
         margins = self._underwriting_threshold_margins(refreshed)
+        selection_rule_identity = refreshed.facts.protective_leg_selection_rule_identity
+        candidate_protective_leg_count = refreshed.facts.candidate_protective_leg_count
         action_identity = canonical_identity(
             "CaseOpenRefreshedUnderwritingActionIdentity",
             owner_identity,
             refreshed.economic_fingerprint,
             refreshed.action.value,
+            selection_rule_identity,
+            candidate_protective_leg_count,
             refreshed.facts.boundary.as_object(),
         )
         return {
@@ -2947,6 +2996,8 @@ class FixedContractShadowOwner:
             ),
             "entry_underwriting_failed_predicates": list(margins.failed_predicates),
             "entry_underwriting_predicate_margin_vector": list(margins.as_vector()),
+            "entry_underwriting_protective_leg_selection_rule_identity": selection_rule_identity,
+            "entry_underwriting_candidate_protective_leg_count": candidate_protective_leg_count,
             "entry_underwriting_decision_fact_boundary": (refreshed.facts.boundary.as_object()),
         }
 
@@ -2954,6 +3005,20 @@ class FixedContractShadowOwner:
         self,
         selection: _SelectedDecisionRecord,
         refreshed: _UnderwritingEvaluation,
+    ) -> dict[str, object]:
+        return {
+            **self._selected_decision_payload(selection),
+            **self._refreshed_underwriting_observation_payload(
+                refreshed,
+                owner_identity=selection.selection_identity,
+            ),
+        }
+
+    def _refreshed_underwriting_observation_payload(
+        self,
+        refreshed: _UnderwritingEvaluation,
+        *,
+        owner_identity: str,
     ) -> dict[str, object]:
         if (
             refreshed.action is None
@@ -2963,10 +3028,9 @@ class FixedContractShadowOwner:
             raise RuntimeError("selected decision observation requires evaluable refreshed facts")
         entry_underwriting = self._case_open_underwriting_payload(
             refreshed,
-            owner_identity=selection.selection_identity,
+            owner_identity=owner_identity,
         )
         return {
-            **self._selected_decision_payload(selection),
             "refreshed_underwriting_action_identity": entry_underwriting[
                 "entry_underwriting_action_identity"
             ],
@@ -3026,7 +3090,7 @@ class FixedContractShadowOwner:
         payload = {
             "selected_decision_control_open_identity": open_identity,
             "enrollment_kind": "SELECTED_UNDERWRITING_DECISION_CONTROL",
-            **observation_payload,
+            "selected_underwriting_decision_identity": selection.selection_identity,
             "selected_underwriting_decision": observation_payload,
             "entry_refresh_attempt_kind": refresh_attempt_kind,
             "scheduled_entry_refresh_attempt_identity": attempt.scheduled_identity,

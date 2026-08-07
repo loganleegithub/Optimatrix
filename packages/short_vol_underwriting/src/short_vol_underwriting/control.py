@@ -14,13 +14,17 @@ from short_vol_underwriting.model import FactBoundary
 
 
 class DecisionControlRefreshClassification(StrEnum):
-    EVALUABLE = "EVALUABLE"
+    REFRESHED_WATCH_OR_ABSTAIN = "REFRESHED_WATCH_OR_ABSTAIN"
+    REFRESHED_CANDIDATE = "REFRESHED_CANDIDATE"
     NOT_EVALUATED = "NOT_EVALUATED"
     UNKNOWN = "UNKNOWN"
 
 
 class DecisionControlAttemptOutcome(StrEnum):
     CONTROL_OPENED = "CONTROL_OPENED"
+    REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION = (
+        "REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION"
+    )
     KNOWN_NO_CONTROL = "KNOWN_NO_CONTROL"
     UNKNOWN_CONSUMED = "UNKNOWN_CONSUMED"
 
@@ -343,8 +347,11 @@ class DecisionControlAttempt:
     ) -> bool:
         require_identity(source_identity, "terminal_source_identity")
         outcome = {
-            DecisionControlRefreshClassification.EVALUABLE: (
+            DecisionControlRefreshClassification.REFRESHED_WATCH_OR_ABSTAIN: (
                 DecisionControlAttemptOutcome.CONTROL_OPENED
+            ),
+            DecisionControlRefreshClassification.REFRESHED_CANDIDATE: (
+                DecisionControlAttemptOutcome.REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION
             ),
             DecisionControlRefreshClassification.NOT_EVALUATED: (
                 DecisionControlAttemptOutcome.KNOWN_NO_CONTROL

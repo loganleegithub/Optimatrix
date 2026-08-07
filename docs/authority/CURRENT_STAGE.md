@@ -86,7 +86,9 @@ seven decisions predate the formal selector and cannot calibrate the new path. T
 closure removes the selective-label dead end by designating at most one Episode from each causal
 Radar activation batch before action or margin is known. Its first evaluable decision is observed
 only after a strictly later valid paired refresh: a decision selected as Candidate and still
-Candidate reuses ordinary admission, while every other evaluable selection may open an explicitly
-tagged no-trade control Case. The canonical
+Candidate reuses ordinary admission, while a refreshed WATCH/ABSTAIN may open an explicitly tagged
+no-trade control Case. A selected WATCH/ABSTAIN that refreshes to Candidate opens no Case and reports
+`REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`; a later canonical Candidate still requires its
+own strictly later admission pair. The canonical
 Candidate funnel remains unchanged. Completion requires offline direct tests and repository checks;
 no live command or Shadow runtime is authorized.

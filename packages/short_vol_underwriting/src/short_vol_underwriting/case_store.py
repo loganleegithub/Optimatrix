@@ -14,7 +14,10 @@ from short_vol_underwriting.control import (
     selected_decision_batch_identity,
     selected_decision_rule_identity,
 )
-from short_vol_underwriting.domain import UnderwritingThresholdMargins
+from short_vol_underwriting.domain import (
+    UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
+    UnderwritingThresholdMargins,
+)
 from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
 from short_vol_underwriting.identity import (
     canonical_identity,
@@ -265,6 +268,12 @@ class ShadowCaseStore:
                 "action": underwriting_action,
                 "failed_predicates": failed_predicates,
                 "predicate_margin_vector": predicate_margin_vector,
+                "protective_leg_selection_rule_identity": payload.get(
+                    "entry_underwriting_protective_leg_selection_rule_identity"
+                ),
+                "candidate_protective_leg_count": payload.get(
+                    "entry_underwriting_candidate_protective_leg_count"
+                ),
                 "minimum_net_entry_credit_usdc": str(
                     self.policies.underwriting.minimum_net_entry_credit_usdc
                 ),
@@ -662,6 +671,8 @@ def _validate_opened(
             "action",
             "failed_predicates",
             "predicate_margin_vector",
+            "protective_leg_selection_rule_identity",
+            "candidate_protective_leg_count",
             "minimum_net_entry_credit_usdc",
             "minimum_net_credit_to_payoff_cap_fraction",
             "maximum_underwriting_reserved_loss_usdc",
@@ -696,6 +707,18 @@ def _validate_opened(
         margins=predicate_margins,
         field="opened underwriting",
     )
+    if (
+        underwriting.get("protective_leg_selection_rule_identity")
+        != UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY
+    ):
+        raise ShadowCaseStoreError("opened protective-leg selection rule identity mismatch")
+    candidate_protective_leg_count = underwriting.get("candidate_protective_leg_count")
+    if (
+        isinstance(candidate_protective_leg_count, bool)
+        or not isinstance(candidate_protective_leg_count, int)
+        or candidate_protective_leg_count < 0
+    ):
+        raise ShadowCaseStoreError("opened Candidate protective-leg count is invalid")
     expected_thresholds = {
         "minimum_net_entry_credit_usdc": policies.underwriting.minimum_net_entry_credit_usdc,
         "minimum_net_credit_to_payoff_cap_fraction": (
@@ -831,6 +854,11 @@ def _validate_opened(
                 "active_episode_identity",
             ),
             bindings=bindings,
+            protective_leg_selection_rule_identity=_identity(
+                underwriting.get("protective_leg_selection_rule_identity"),
+                "protective_leg_selection_rule_identity",
+            ),
+            candidate_protective_leg_count=candidate_protective_leg_count,
         )
         selected_decision_identity = _identity(
             selected_decision_mapping.get("selected_underwriting_decision_identity"),
@@ -872,6 +900,8 @@ def _validate_opened(
         entry_underwriting_owner_identity,
         entry_underwriting_economic_fingerprint,
         underwriting_action,
+        underwriting.get("protective_leg_selection_rule_identity"),
+        candidate_protective_leg_count,
         decision_boundary.as_object(),
     )
     if entry_underwriting_action_identity != expected_entry_underwriting_action_identity:
@@ -1523,6 +1553,8 @@ def _validate_selected_decision(
     enrollment_kind: object,
     active_episode_identity: str,
     bindings: RuntimeBindings,
+    protective_leg_selection_rule_identity: str,
+    candidate_protective_leg_count: int,
 ) -> None:
     _exact_keys(
         value,
@@ -1633,6 +1665,8 @@ def _validate_selected_decision(
         expected_selection,
         value.get("refreshed_consumed_economic_fact_fingerprint"),
         value.get("refreshed_economic_action"),
+        protective_leg_selection_rule_identity,
+        candidate_protective_leg_count,
         refreshed_boundary.as_object(),
     )
     if value.get("refreshed_underwriting_action_identity") != expected_refreshed_action:

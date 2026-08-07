@@ -178,7 +178,9 @@ continuity, or skew mismatch is a bounded `UNKNOWN` with an exact reason, not an
 When the selected decision is already a Candidate, its ordinary admission pair is the selection's
 future-blind pair; a duplicate control refresh is forbidden. If that refresh remains Candidate it
 opens the ordinary admitted Case, while a refreshed WATCH/ABSTAIN opens the discriminated no-trade
-Case. A selected `UNKNOWN` opens nothing and has no fallback Episode.
+Case. A selected WATCH/ABSTAIN that refreshes to Candidate opens nothing, reports
+`REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`, and cannot bypass a later Candidate's own
+strictly later admission pair. A selected `UNKNOWN` opens nothing and has no fallback Episode.
 
 The canonical stages are:
 

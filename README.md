@@ -40,7 +40,9 @@ The active task now closes the selective-label gap without changing economic thr
 causal Radar activation batch it designates at most one Episode before action or future facts are
 known, with no `UNKNOWN` fallback. The designated Episode's first evaluable decision receives one
 strictly later paired refresh: a decision selected as Candidate and still Candidate reuses ordinary
-admission, while every other evaluable selection may open an explicitly tagged no-trade Case.
+admission, while a refreshed WATCH/ABSTAIN may open an explicitly tagged no-trade Case. A selected
+WATCH/ABSTAIN that refreshes to Candidate opens no control and must enter the ordinary Candidate
+lifecycle before a later paired admission.
 Original/refreshed predicate-margin vectors and the
 strictly future Outcome appear in a separate Workbench research panel and never alter the canonical
 Candidate funnel.

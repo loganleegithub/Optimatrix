@@ -82,6 +82,8 @@ def test_active_authority_is_one_small_consistent_map() -> None:
     for path in (*AUTHORITY_FILES, *IMPLEMENTATION_CONTRACTS):
         opening = "\n".join(path.read_text(encoding="utf-8").splitlines()[:8])
         assert "**Status:** ACTIVE" in opening
+
+
 def test_agents_routes_work_and_enforces_anti_defensive_stops() -> None:
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     agents_flat = " ".join(agents.split())
@@ -194,7 +196,8 @@ def test_current_stage_selects_decision_outcome_after_natural_stop() -> None:
     assert "no live command or Shadow runtime is authorized" in normalized
     assert "before action or margin is known" in normalized
     assert "selected as Candidate and still Candidate reuses ordinary admission" in normalized
-    assert "every other evaluable selection may open" in normalized
+    assert "refreshed WATCH/ABSTAIN may open" in normalized
+    assert "REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION" in normalized
     assert "automatic restart" in current
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()

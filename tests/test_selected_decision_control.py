@@ -189,7 +189,7 @@ def test_decision_control_attempt_opens_only_from_one_strictly_later_valid_pair(
         response_budget_ms=30_000,
         maximum_source_skew_ms=6_000,
         maximum_receive_skew_ms=4_000,
-        classification=DecisionControlRefreshClassification.EVALUABLE,
+        classification=DecisionControlRefreshClassification.REFRESHED_WATCH_OR_ABSTAIN,
     )
     assert attempt.terminal_outcome is DecisionControlAttemptOutcome.CONTROL_OPENED
     assert attempt.terminal_boundary == pair.boundary
@@ -243,7 +243,7 @@ def test_decision_control_attempt_fails_closed_on_pair_skew() -> None:
         response_budget_ms=30_000,
         maximum_source_skew_ms=6_000,
         maximum_receive_skew_ms=4_000,
-        classification=DecisionControlRefreshClassification.EVALUABLE,
+        classification=DecisionControlRefreshClassification.REFRESHED_WATCH_OR_ABSTAIN,
     )
 
     assert attempt.terminal_outcome is DecisionControlAttemptOutcome.UNKNOWN_CONSUMED
@@ -302,7 +302,7 @@ def test_decision_control_attempt_reports_every_non_timing_pair_blocker() -> Non
         response_budget_ms=30_000,
         maximum_source_skew_ms=6_000,
         maximum_receive_skew_ms=4_000,
-        classification=DecisionControlRefreshClassification.EVALUABLE,
+        classification=DecisionControlRefreshClassification.REFRESHED_WATCH_OR_ABSTAIN,
     )
 
     assert attempt.terminal_outcome is DecisionControlAttemptOutcome.UNKNOWN_CONSUMED

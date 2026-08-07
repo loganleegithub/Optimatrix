@@ -115,9 +115,11 @@ snapshots are immutable bytes for readers but are not durable records.
 An enrolled `SHADOW_CASE_OPENED` freezes the exact code and three Policy identities, decision
 boundary, frozen two-leg structure, target quantity, one strictly later paired public option-book
 snapshot, conservative stressed leg prices, standard public fees, and the minimum consumed decision
-facts. `enrollment_kind` discriminates an admitted Candidate trade from one pre-outcome selected
-no-trade decision control; a control has no Candidate or `SHADOW_ENTRY` identity. Strictly future
-bounded transitions and one terminal Outcome may then be stored.
+facts, including the protective-leg selector-rule identity and Candidate protective-leg count that
+cannot be reconstructed after option scope is released. `enrollment_kind` discriminates an admitted
+Candidate trade from one pre-outcome selected no-trade decision control; a control has no Candidate
+or `SHADOW_ENTRY` identity. Strictly future bounded transitions and one terminal Outcome may then be
+stored.
 
 An opened Case without a terminal record after an unclean process loss is
 `INCOMPLETE_UNCLEAN_EXIT`. It is never silently completed, resumed by a new runtime, or removed from
@@ -181,8 +183,10 @@ rejected-counterfactual trades or durable controls. The authorized selected-deci
 one action-blind designation per Radar activation causal batch before Underwriting action or future
 facts are known, with no fallback if that Episode remains `UNKNOWN` or ends. Its first evaluable
 decision receives one strictly later paired refresh. A decision selected as Candidate and still
-Candidate reuses ordinary admission; every other evaluable selection may open one explicitly
-tagged no-trade Case. This research
+Candidate reuses ordinary admission. A refresh classified as WATCH or ABSTAIN may open one
+explicitly tagged no-trade Case. A selected WATCH/ABSTAIN that refreshes to Candidate opens no
+control and terminalizes as `REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`; only a later
+ordinary Candidate activation followed by its own strictly later pair may admit it. This research
 branch is projected separately and never increments canonical Candidate, `SHADOW_ENTRY`, or
 admitted-trade counts.
 

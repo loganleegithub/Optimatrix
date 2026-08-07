@@ -1330,6 +1330,11 @@ def _decision_control_rows(
             if isinstance(terminal_identity, str):
                 terminal = refresh_terminals_by_identity.get(terminal_identity)
         terminal_payload = _payload(terminal) if terminal is not None else {}
+        refreshed_observation = (
+            selected_observation
+            if isinstance(selected_observation.get("refreshed_economic_action"), str)
+            else terminal_payload
+        )
         direct_terminal_outcome = enrollment_payload.get("entry_refresh_terminal_outcome")
         refresh_terminal_outcome = (
             direct_terminal_outcome
@@ -1363,6 +1368,17 @@ def _decision_control_rows(
                     "selected_predicate_margin_vector"
                 )
                 or selection_payload.get("predicate_margin_vector", []),
+                "protective_leg_selection_rule_identity": selection_payload.get(
+                    "protective_leg_selection_rule_identity"
+                )
+                or enrollment_payload.get(
+                    "entry_underwriting_protective_leg_selection_rule_identity"
+                ),
+                "candidate_protective_leg_count": selection_payload.get(
+                    "candidate_protective_leg_count"
+                )
+                if selection_payload.get("candidate_protective_leg_count") is not None
+                else enrollment_payload.get("entry_underwriting_candidate_protective_leg_count"),
                 "selection_fact_boundary": selected_observation.get("selection_fact_boundary")
                 or selection_payload.get("selection_fact_boundary"),
                 "refresh_terminal_outcome": refresh_terminal_outcome,
@@ -1377,16 +1393,16 @@ def _decision_control_rows(
                 )
                 or terminal_payload.get("component_pair_limits")
                 or enrollment_payload.get("entry_component_pair_limits"),
-                "refreshed_economic_action": selected_observation.get("refreshed_economic_action"),
-                "refreshed_failed_predicates": selected_observation.get(
+                "refreshed_economic_action": refreshed_observation.get("refreshed_economic_action"),
+                "refreshed_failed_predicates": refreshed_observation.get(
                     "refreshed_failed_predicates",
                     [],
                 ),
-                "refreshed_predicate_margin_vector": selected_observation.get(
+                "refreshed_predicate_margin_vector": refreshed_observation.get(
                     "refreshed_predicate_margin_vector",
                     [],
                 ),
-                "refreshed_fact_boundary": selected_observation.get("refreshed_fact_boundary"),
+                "refreshed_fact_boundary": refreshed_observation.get("refreshed_fact_boundary"),
                 "enrollment_kind": enrollment_payload.get("enrollment_kind"),
                 "enrollment_identity": enrollment_identity,
                 "case_state": (
@@ -2618,6 +2634,8 @@ function renderDecisionControlResearch(documentValue) {
     ['active episode', 'active_episode_identity'],
     ['selected failed predicates', 'selected_failed_predicates'],
     ['selected predicate margin vector', 'selected_predicate_margin_vector'],
+    ['protective-leg selection rule identity', 'protective_leg_selection_rule_identity'],
+    ['Candidate protective-leg count', 'candidate_protective_leg_count'],
     ['selection fact boundary', 'selection_fact_boundary'],
     ['refresh unknown reasons', 'refresh_unknown_reasons'],
     ['refresh pair timing', 'refresh_component_pair_timing'],

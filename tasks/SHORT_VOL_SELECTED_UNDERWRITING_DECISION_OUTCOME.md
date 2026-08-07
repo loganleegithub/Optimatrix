@@ -8,7 +8,7 @@
 
 **Live commands:** FORBIDDEN
 
-**Base commit:** `2b23de06ef9e7b0e208967c234e00c6097735c3c`
+**Base commit:** `baa071dadb60bc5f613030d164dfb932288ceeda`
 
 **Target branch/PR:** `codex/selected-underwriting-decision-outcome`; stacked Draft PR against
 `codex/underwriting-selection-margin-truth`
@@ -42,15 +42,17 @@ trade, order, fill, or canonical funnel conversion.
 `SHADOW_CASE_OPENED` with `enrollment_kind=SELECTED_UNDERWRITING_DECISION_CONTROL`, followed by the
 existing bounded first-CLOSE and Outcome records. The direct consumers are trader/AI Case review
 and later offline rejection-quality research. This open-time selection and paired entry witness
-cannot be reconstructed after restart from current memory. Unselected Episode, WATCH, ABSTAIN,
-UNKNOWN, Workbench, and batch state remain non-durable.
+cannot be reconstructed after restart from current memory. The Case also freezes the selector-rule
+identity and Candidate protective-leg count; the full option chain and rejected alternatives remain
+transient. Unselected Episode, WATCH, ABSTAIN, UNKNOWN, Workbench, and batch state remain non-durable.
 
 **Complexity added:** one bounded in-memory causal activation-batch selector derived from the
 already-frozen Radar activation sequence; one paired control-enrollment attempt; one explicit Case
 enrollment variant; one separate Workbench/funnel research projection.
 
 **Complexity deleted:** the selective-label dead end in which only current-Policy Candidates can
-ever receive a future label.
+ever receive a future label, plus the duplicate top-level copy of the canonical selected-decision
+observation inside a control-open payload.
 
 ## Business closure
 
@@ -60,14 +62,16 @@ sequence, with no decision already selected for that batch.
 
 **When:** the action-blind designated Episode reaches its first fully evaluable decision before
 future facts, receives exactly two strictly later paired public component-book refreshes, and remains
-Underwriting-evaluable as `CANDIDATE`, `WATCH`, or `ABSTAIN` at that refreshed boundary.
+Underwriting-evaluable at that refreshed boundary.
 
 **Then:** at most one selected-decision Case opens for that batch, freezes the selection rule,
 original and refreshed complete predicate-margin vectors, pair timing/economics, and follows the
 same strictly future Position/paired-close/Outcome model. A decision selected as Candidate and still
-Candidate at refresh reuses its ordinary admitted `SHADOW_ENTRY` Case; every other evaluable
-selected decision uses the discriminated no-trade control enrollment and remains semantically and
-metrically separate from Candidate admission.
+Candidate at refresh reuses its ordinary admitted `SHADOW_ENTRY` Case. A refreshed WATCH/ABSTAIN
+uses the discriminated no-trade control enrollment and remains semantically and metrically separate
+from Candidate admission. If an originally WATCH/ABSTAIN selection refreshes to Candidate, it opens
+no Case and reports `REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`; a canonical admission
+requires a later ordinary Candidate activation and another strictly later pair.
 
 **Valid zero/UNKNOWN:** no fully evaluable decision, an ambiguous batch input, failed/missing/skewed
 pair, or refreshed Underwriting `UNKNOWN` opens no Case and remains an exact current blocker. A
@@ -97,8 +101,9 @@ per batch.
 
 **Outcome/evaluation contract change:** authorize a selected Underwriting decision to reuse the
 exact Position and paired component-book Outcome calculator after its Case-open boundary. Candidate
-selection reuses ordinary admission rather than scheduling a duplicate refresh; all evaluable
-selections that do not produce an admitted Candidate use the control-open variant. The descriptive
+selection reuses ordinary admission rather than scheduling a duplicate refresh; only a refresh
+classified WATCH/ABSTAIN uses the control-open variant. A WATCH/ABSTAIN-to-Candidate change opens no
+Case and cannot reuse the same pair as canonical admission. The descriptive
 result does not establish causal effect, profitability, or Policy qualification.
 
 **Stage/authorization change:** authorize Task B implementation and deterministic offline tests only;

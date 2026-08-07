@@ -138,10 +138,12 @@ admission pair; scheduling a duplicate control pair is forbidden.
 
 At the refresh boundary, `UNKNOWN`, invalid pair timing, missing full quantity, or a no-longer
 evaluable structure opens no Case. A decision selected as Candidate and still Candidate opens the
-ordinary admitted `SHADOW_ENTRY` Case. Every other evaluable selected decision opens one
+ordinary admitted `SHADOW_ENTRY` Case. Any refreshed WATCH or ABSTAIN may open one
 `SELECTED_UNDERWRITING_DECISION_CONTROL` Case without a Candidate, `SHADOW_ENTRY`, slot consumption,
-order, fill, or capital exposure; the initial decision, not a later action change, determines that
-it is a no-trade observation. Both Case variants freeze original and refreshed actions/margins, then
+order, fill, or capital exposure. A selected WATCH/ABSTAIN that refreshes to Candidate instead opens
+no Case and terminalizes as `REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`; the same refresh
+cannot retroactively become the strictly later admission pair for a newly activated Candidate.
+Both Case variants freeze original and refreshed actions/margins, then
 use the same strictly future Position, paired-close, and Outcome calculators. The no-trade variant
 is projected in a separate research funnel and never increments the canonical Candidate or
 admitted-Case funnel. Because a settled Candidate and its admission terminal leave bounded current
@@ -188,6 +190,7 @@ required to reconstruct the admitted counterfactual:
 - paired source identity and both raw/stressed consumed leg levels;
 - entry economics and fixed reserve components;
 - the consumed Radar/Underwriting state required to explain the admission;
+- the frozen protective-leg selector-rule identity and Candidate protective-leg count;
 - explicit public-quote/not-fill non-claims.
 
 If durable Case opening fails, admission fails visibly; the runtime must not silently manage an

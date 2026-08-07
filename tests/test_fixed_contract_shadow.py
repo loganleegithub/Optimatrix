@@ -1694,6 +1694,8 @@ def test_component_candidate_requires_both_strictly_later_option_book_responses(
     )
     assert research_row["refresh_terminal_outcome"] == "ENTRY_EMITTED"
     assert research_row["refresh_unknown_reasons"] == []
+    assert research_row["protective_leg_selection_rule_identity"] is not None
+    assert research_row["candidate_protective_leg_count"] == 1
     assert _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN") == []
     assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 1
 
@@ -1757,8 +1759,9 @@ def test_selected_abstain_uses_one_future_pair_without_candidate_or_shadow_entry
         owner,
         "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN",
     )
-    assert opened["selected_economic_action"] == "ABSTAIN"
-    assert opened["refreshed_economic_action"] == "ABSTAIN"
+    observation = opened["selected_underwriting_decision"]
+    assert observation["selected_economic_action"] == "ABSTAIN"
+    assert observation["refreshed_economic_action"] == "ABSTAIN"
     assert opened["enrollment_kind"] == "SELECTED_UNDERWRITING_DECISION_CONTROL"
     assert _object_payloads(owner, "SHADOW_ENTRY") == []
     assert owner.retained_state_counts["active_trades"] == 1
@@ -1792,8 +1795,9 @@ def test_selected_candidate_that_fails_refresh_uses_that_same_pair_for_no_trade_
     assert len(_object_payloads(owner, "CANDIDATE_ACTIVATION")) == 1
     assert _object_payloads(owner, "SHADOW_ENTRY") == []
     (opened,) = _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN")
-    assert opened["selected_economic_action"] == "CANDIDATE"
-    assert opened["refreshed_economic_action"] == "ABSTAIN"
+    observation = opened["selected_underwriting_decision"]
+    assert observation["selected_economic_action"] == "CANDIDATE"
+    assert observation["refreshed_economic_action"] == "ABSTAIN"
     assert opened["entry_refresh_attempt_kind"] == "CANDIDATE_ADMISSION"
     assert opened["entry_refresh_terminal_outcome"] == "KNOWN_COMPLETE_NO_ENTRY"
     (research_row,) = workbench_module._decision_control_rows(
@@ -1855,7 +1859,7 @@ def test_selected_control_full_quantity_failure_is_exact_workbench_unknown(
     assert research_row["refresh_unknown_reasons"] == terminal["terminal_unknown_reasons"]
 
 
-def test_selected_abstain_that_refreshes_to_candidate_remains_no_trade_control(
+def test_selected_abstain_that_refreshes_to_candidate_requires_canonical_admission(
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
@@ -1892,13 +1896,35 @@ def test_selected_abstain_that_refreshes_to_candidate_remains_no_trade_control(
         long_ask="101",
     )
 
-    (opened,) = _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN")
-    assert opened["selected_economic_action"] == "ABSTAIN"
-    assert opened["refreshed_economic_action"] == "CANDIDATE"
-    assert opened["entry_refresh_terminal_outcome"] == "CONTROL_OPENED"
+    (terminal,) = _object_payloads(
+        owner,
+        "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
+    )
+    assert terminal["terminal_outcome"] == ("REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION")
+    assert terminal["refreshed_economic_action"] == "CANDIDATE"
+    assert terminal["refreshed_failed_predicates"] == []
+    assert len(terminal["refreshed_predicate_margin_vector"]) == 6
+    assert all(item["passes"] for item in terminal["refreshed_predicate_margin_vector"])
+    assert _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN") == []
     assert _object_payloads(owner, "CANDIDATE_ACTIVATION") == []
     assert _object_payloads(owner, "SHADOW_ENTRY") == []
-    assert "NOT_AN_ADMITTED_TRADE" in opened["non_claims"]
+    (research_row,) = workbench_module._decision_control_rows(
+        workbench_module._objects_by_kind(owner.state_store.objects)
+    )
+    assert research_row["refresh_terminal_outcome"] == (
+        "REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION"
+    )
+    assert research_row["selected_economic_action"] == "ABSTAIN"
+    assert research_row["refreshed_economic_action"] == "CANDIDATE"
+    assert research_row["refreshed_failed_predicates"] == []
+    assert (
+        research_row["refreshed_predicate_margin_vector"]
+        == terminal["refreshed_predicate_margin_vector"]
+    )
+    assert research_row["case_state"] == "NOT_OPENED"
+    assert research_row["protective_leg_selection_rule_identity"] is not None
+    assert research_row["candidate_protective_leg_count"] == 0
+    assert owner.retained_state_counts["active_trades"] == 0
 
 
 def test_selected_abstain_opens_one_durable_control_case(tmp_path: Path) -> None:
@@ -1983,6 +2009,8 @@ def test_selected_abstain_opens_one_durable_control_case(tmp_path: Path) -> None
         selected["selected_underwriting_decision_identity"],
         refreshed_fingerprint,
         selected["refreshed_economic_action"],
+        opened["underwriting"]["protective_leg_selection_rule_identity"],
+        opened["underwriting"]["candidate_protective_leg_count"],
         DownstreamFactBoundary.from_object(selected["refreshed_fact_boundary"]).as_object(),
     )
     (case_directory / "opened.json").write_text(json.dumps(opened), encoding="utf-8")
@@ -2173,6 +2201,13 @@ def test_component_shadow_entry_opens_its_durable_case(tmp_path: Path) -> None:
     assert isinstance(selected, Mapping)
     assert underwriting["predicate_margin_vector"] == selected["refreshed_predicate_margin_vector"]
     assert underwriting["predicate_margin_vector"] != selected["selected_predicate_margin_vector"]
+    entry_payload = entry["payload"]
+    assert isinstance(entry_payload, Mapping)
+    assert (
+        underwriting["protective_leg_selection_rule_identity"]
+        == entry_payload["entry_underwriting_protective_leg_selection_rule_identity"]
+    )
+    assert underwriting["candidate_protective_leg_count"] == 1
 
 
 def test_no_active_combo_is_only_a_diagnostic_and_does_not_block_shadow_entry(

@@ -74,6 +74,8 @@ The opened record contains:
 - the minimal consumed Radar state: active episode identity, band, richness interval, component
   state, and official atomic diagnostic;
 - the Underwriting action, complete failed-predicate/margin vector, and thresholds actually consumed;
+- the protective-leg selector-rule identity and Candidate protective-leg count frozen with the
+  selected structure;
 - when pre-outcome selected, the selection rule/batch identities plus original and refreshed actions,
   complete predicate-margin vectors, and their strictly ordered boundaries;
 - exact non-claims: `NOT_AN_ORDER`, `NOT_A_FILL`, `NOT_AN_ATOMIC_QUOTE`,
@@ -175,6 +177,9 @@ decision, and exactly one strictly later paired refresh remained evaluable as WA
 `UNKNOWN` and invalid pairs write no Case, and the designation has no fallback. The system never
 persists every WATCH or ABSTAIN automatically. The no-trade Case reuses Position/Outcome arithmetic
 but is not a Candidate, `SHADOW_ENTRY`, admitted trade, order, fill, or causal-effect estimate.
+A selected WATCH/ABSTAIN that refreshes to Candidate writes no control Case and reports
+`REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`; any later admission requires the ordinary
+Candidate lifecycle and another strictly later paired witness.
 
 Qualification Cohorts are later offline views over completed or honestly censored Cases under a
 pre-registered evaluator. The Online Runtime never writes Cohort or aligned-pair objects.

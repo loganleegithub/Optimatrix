@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from short_vol_underwriting import (
+    UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
     RuntimeBindings,
     ShadowCaseReadStatus,
     ShadowCaseStore,
@@ -255,6 +256,8 @@ def _open_case(
         candidate_identity,
         entry_economic_fingerprint,
         "CANDIDATE",
+        UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
+        1,
         _boundary(causal_seq).as_object(),
     )
     leg_identities = (
@@ -291,6 +294,10 @@ def _open_case(
             "entry_underwriting_consumed_economic_fact_fingerprint": (entry_economic_fingerprint),
             "entry_underwriting_failed_predicates": [],
             "entry_underwriting_predicate_margin_vector": _predicate_margin_vector(),
+            "entry_underwriting_protective_leg_selection_rule_identity": (
+                UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY
+            ),
+            "entry_underwriting_candidate_protective_leg_count": 1,
             "entry_underwriting_decision_fact_boundary": _boundary(causal_seq).as_object(),
             "active_episode_identity": (
                 f"{RUNTIME}:{RADAR_POLICY}:BTC_USDC-8AUG26-100000-C:{causal_seq}"
@@ -445,6 +452,11 @@ def test_shadow_entry_opens_exactly_one_minimal_case(tmp_path: Path) -> None:
     underwriting = read.opened["underwriting"]
     assert isinstance(underwriting, Mapping)
     assert underwriting["action"] == "CANDIDATE"
+    assert (
+        underwriting["protective_leg_selection_rule_identity"]
+        == UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY
+    )
+    assert underwriting["candidate_protective_leg_count"] == 1
 
 
 def test_case_reader_rejects_unexpected_nested_opened_fields(tmp_path: Path) -> None:
@@ -475,6 +487,8 @@ def test_case_reader_rejects_unexpected_nested_opened_fields(tmp_path: Path) -> 
         ("predicate_passes", "contradicts signed_margin"),
         ("failed_predicates", "failed predicates"),
         ("signed_margin", "do not match entry economics"),
+        ("selector_rule", "selection rule identity mismatch"),
+        ("candidate_leg_count", "action identity mismatch"),
     ),
 )
 def test_case_reader_rejects_tampered_entry_pair_and_underwriting_truth(
@@ -511,6 +525,10 @@ def test_case_reader_rejects_tampered_entry_pair_and_underwriting_truth(
         opened["underwriting"]["failed_predicates"] = ["NON_POSITIVE_NET_ENTRY_CREDIT"]
     elif tamper == "signed_margin":
         opened["underwriting"]["predicate_margin_vector"][0]["signed_margin"] = "999"
+    elif tamper == "selector_rule":
+        opened["underwriting"]["protective_leg_selection_rule_identity"] = "sha256:" + "e" * 64
+    elif tamper == "candidate_leg_count":
+        opened["underwriting"]["candidate_protective_leg_count"] = 2
     else:  # pragma: no cover - parametrization is closed above
         raise AssertionError(tamper)
     opened_path.write_text(json.dumps(opened), encoding="utf-8")
