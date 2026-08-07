@@ -177,26 +177,30 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_natural_public_shadow_after_short_smoke() -> None:
+def test_current_stage_closes_natural_public_shadow_after_human_stop() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "`COMPONENT_BOOK_SHADOW_LIFECYCLE_ACCEPTED`" in current
     assert "**Production Short Vol Radar:** `CREDIBLE_CLUE_GENERATOR_FROZEN`" in current
-    assert "**Persistent service:** `NATURAL_PUBLIC_SHADOW_ACTIVE_NO_DEPLOYMENT`" in current
-    assert "**Live commands:** `SHORT_PUBLIC_SMOKE_THEN_NATURAL_SHADOW_UNTIL_HUMAN_STOP`" in current
-    assert "**Sole authorized closure:** `SHORT_VOL_NATURAL_SHADOW_OPERATION`" in current
-    assert "`84` distinct contract-level Radar Episodes" in current
-    assert "`NO_ACTIVE_COMBO 84`" in current
+    assert "**Persistent service:** `NATURAL_PUBLIC_SHADOW_STOPPED_NO_DEPLOYMENT`" in current
+    assert "**Live commands:** `NONE_AUTHORIZED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
+    assert "1,812,600 contract evaluations" in current
+    assert "1,811,662 contract evaluations" in current
+    assert "10 distinct Episodes" in current
+    assert "7 distinct Episodes" in current
+    assert "`NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE 3`" in current
+    assert "`CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE 7`" in current
+    assert "`NO_ACTIVE_COMBO 10`" in current
     assert "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE" in current
     assert "exactly two strictly later `public/get_order_book` responses" in normalized
-    assert "one short production-public read-only smoke" in normalized
-    assert "until a human requests stop" in normalized
+    assert "no runtime command is currently authorized" in normalized
     assert "automatic restart" in current
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_COMPONENT_BOOK_SHADOW_LIFECYCLE.md").exists()
-    assert (ROOT / "tasks/SHORT_VOL_NATURAL_SHADOW_OPERATION.md").exists()
+    assert not (ROOT / "tasks/SHORT_VOL_NATURAL_SHADOW_OPERATION.md").exists()
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"
     )
