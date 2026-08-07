@@ -147,6 +147,7 @@ class FixedContractShadowRuntimeAdapter:
         self._workbench_underwriting_metadata_by_scope: dict[str, Mapping[str, object]] = {}
         self._workbench_underwriting_metadata: tuple[Mapping[str, object], ...] = ()
         self._candidate_origins: dict[str, UnderwritingFacts] = {}
+        self._decision_control_origins: dict[str, UnderwritingFacts] = {}
         self._anchors: dict[str, _Anchor] = {}
         self._requests: dict[int, _RequestContext] = {}
         self._paired_responses: dict[
@@ -179,6 +180,7 @@ class FixedContractShadowRuntimeAdapter:
             "current_ticker_sources": len(self._ticker_sources),
             "underwriting_scopes": len(self._underwriting_by_scope),
             "candidate_origins": len(self._candidate_origins),
+            "decision_control_origins": len(self._decision_control_origins),
             "active_anchors": len(self._anchors),
             "request_contexts": len(self._requests),
         }
@@ -722,6 +724,24 @@ class FixedContractShadowRuntimeAdapter:
                 pair_witness=pair,
             )
             intents = self._consume_transition(transition, (refreshed,))
+        elif family == "COMPONENT_DECISION_CONTROL":
+            origin = self._decision_control_origins.get(context.owner_identity)
+            if origin is None:
+                self._retire_component_response_pair(key)
+                return ()
+            refreshed = self._refresh_component_admission_facts(
+                reducer=reducer,
+                origin=origin,
+                pair=pair,
+                short_book=short_response.book,
+                long_book=long_response.book,
+            )
+            transition = self.owner.settle_component_decision_control(
+                selection_identity=context.owner_identity,
+                refreshed_facts=refreshed,
+                pair_witness=pair,
+            )
+            intents = self._consume_transition(transition, (refreshed,))
         else:
             anchor = self._anchor_for_owner_identity(context.owner_identity)
             if anchor is None:
@@ -782,6 +802,8 @@ class FixedContractShadowRuntimeAdapter:
     def _component_request_family(purpose: str) -> str:
         if purpose.startswith("COMPONENT_ADMISSION_"):
             return "COMPONENT_ADMISSION"
+        if purpose.startswith("COMPONENT_DECISION_CONTROL_"):
+            return "COMPONENT_DECISION_CONTROL"
         if purpose.startswith("COMPONENT_POST_CLOSE_"):
             return "COMPONENT_POST_CLOSE"
         raise ValueError("component request purpose is outside the bounded route")
@@ -1307,6 +1329,7 @@ class FixedContractShadowRuntimeAdapter:
                 prior,
                 boundary=boundary,
                 active_episode_identity=None,
+                anomaly_activation_seq=None,
                 atomic_state=PublicAtomicQuoteState.NOT_EVALUATED.value,
                 entry_consumed_levels=(),
                 trusted_time_lower_ms=(trusted.lower_ms if trusted is not None else None),
@@ -1551,6 +1574,7 @@ class FixedContractShadowRuntimeAdapter:
             boundary=boundary,
             radar_scope_identity=scope_identity,
             active_episode_identity=snapshot.episode_identity,
+            anomaly_activation_seq=snapshot.anomaly_activation_seq,
             short_leg_identity=short_identity,
             long_leg_identity=long_identity,
             canonical_combo_identity=None,
@@ -1871,6 +1895,7 @@ class FixedContractShadowRuntimeAdapter:
             boundary=boundary,
             radar_scope_identity=scope_identity,
             active_episode_identity=snapshot.episode_identity,
+            anomaly_activation_seq=snapshot.anomaly_activation_seq,
             short_leg_identity=short_identity,
             long_leg_identity=long_identity,
             canonical_combo_identity=combo_identity,
@@ -1980,6 +2005,7 @@ class FixedContractShadowRuntimeAdapter:
                 "NO_COMBO",
             ),
             active_episode_identity=snapshot.episode_identity,
+            anomaly_activation_seq=snapshot.anomaly_activation_seq,
             short_leg_identity=short_identity,
             long_leg_identity=None,
             canonical_combo_identity=None,
@@ -2363,6 +2389,17 @@ class FixedContractShadowRuntimeAdapter:
                     self._candidate_origins[emitted.object_identity] = facts_by_slot[slot]
             elif emitted.object_kind == "SHADOW_ENTRY" and value is not None:
                 self._remember_anchor(value)
+            elif emitted.object_kind == "SELECTED_UNDERWRITING_DECISION" and isinstance(
+                payload, Mapping
+            ):
+                slot = payload.get("underwriting_position_slot_key_identity")
+                if isinstance(slot, str) and slot in facts_by_slot:
+                    self._decision_control_origins[emitted.object_identity] = facts_by_slot[slot]
+            elif (
+                emitted.object_kind == "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN"
+                and value is not None
+            ):
+                self._remember_anchor(value)
         result: list[ShadowRpcIntent] = []
         for intent in transition.request_intents:
             role = (
@@ -2440,6 +2477,8 @@ class FixedContractShadowRuntimeAdapter:
             "ADMISSION_REFRESH",
             "COMPONENT_ADMISSION_SHORT_REFRESH",
             "COMPONENT_ADMISSION_LONG_REFRESH",
+            "COMPONENT_DECISION_CONTROL_SHORT_REFRESH",
+            "COMPONENT_DECISION_CONTROL_LONG_REFRESH",
         }:
             purpose = RpcPurpose.ADMISSION_REFRESH
             send_budget = self.owner.policies.underwriting.component_book_snapshot_send_budget_ms
@@ -2529,6 +2568,10 @@ class FixedContractShadowRuntimeAdapter:
         for candidate_identity in tuple(self._candidate_origins):
             if candidate_identity not in active_candidates:
                 self._candidate_origins.pop(candidate_identity, None)
+        active_controls = self.owner.active_decision_control_identities
+        for selection_identity in tuple(self._decision_control_origins):
+            if selection_identity not in active_controls:
+                self._decision_control_origins.pop(selection_identity, None)
         active_trades = self.owner.active_trade_identities
         for anchor_identity in tuple(self._anchors):
             if anchor_identity not in active_trades:
@@ -2538,13 +2581,21 @@ class FixedContractShadowRuntimeAdapter:
                 active_candidates
                 if context.purpose == "ADMISSION_REFRESH"
                 or context.purpose.startswith("COMPONENT_ADMISSION_")
+                else active_controls
+                if context.purpose.startswith("COMPONENT_DECISION_CONTROL_")
                 else active_trades
             )
             if context.owner_identity not in owners:
                 self._requests.pop(request_id, None)
         for key in tuple(self._paired_responses):
             family, owner_identity = key
-            owners = active_candidates if family == "COMPONENT_ADMISSION" else active_trades
+            owners = (
+                active_candidates
+                if family == "COMPONENT_ADMISSION"
+                else active_controls
+                if family == "COMPONENT_DECISION_CONTROL"
+                else active_trades
+            )
             if owner_identity not in owners:
                 self._paired_responses.pop(key, None)
 
@@ -2746,6 +2797,17 @@ class FixedContractShadowRuntimeAdapter:
             raise ValueError("component request context lacks a leg role")
         if context.purpose.startswith("COMPONENT_ADMISSION_"):
             origin = self._candidate_origins.get(context.owner_identity)
+            target = (
+                origin.target_quantity_btc
+                if origin is not None
+                else self.owner.policies.underwriting.target_base_quantity_btc
+            )
+            return (
+                "bid" if role is ComponentLegRole.SHORT else "ask",
+                target,
+            )
+        if context.purpose.startswith("COMPONENT_DECISION_CONTROL_"):
+            origin = self._decision_control_origins.get(context.owner_identity)
             target = (
                 origin.target_quantity_btc
                 if origin is not None

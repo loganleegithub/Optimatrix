@@ -33,6 +33,13 @@ def _require_non_negative_integer(value: object, field: str) -> int:
     return value
 
 
+def _require_positive_integer(value: object, field: str) -> int:
+    integer = _require_non_negative_integer(value, field)
+    if integer == 0:
+        raise ValueError(f"{field} must be positive")
+    return integer
+
+
 @dataclass(frozen=True)
 class SubscriptionAdmissionRefreshWitness:
     """Exact official subscription snapshot/change provenance."""
@@ -284,6 +291,88 @@ class ComponentBookPairWitness:
             "receive_skew_ms": self.receive_skew_ms,
         }
 
+    def attempt_unknown_reasons(
+        self,
+        *,
+        origin_boundary: FactBoundary,
+        sent_boundaries: Mapping[int, FactBoundary],
+        short_request_id: int,
+        long_request_id: int,
+        short_option_identity: str,
+        long_option_identity: str,
+        short_instrument_name: str,
+        long_instrument_name: str,
+        response_budget_ms: int,
+        maximum_source_skew_ms: int,
+        maximum_receive_skew_ms: int,
+    ) -> tuple[str, ...]:
+        """Return the one canonical fail-closed reason vector for a paired attempt."""
+        _require_positive_integer(response_budget_ms, "response_budget_ms")
+        reasons = list(
+            self.timing_unknown_reasons(
+                maximum_source_skew_ms=maximum_source_skew_ms,
+                maximum_receive_skew_ms=maximum_receive_skew_ms,
+            )
+        )
+
+        def add_reason(reason: str) -> None:
+            if reason not in reasons:
+                reasons.append(reason)
+
+        expected = (
+            (
+                "SHORT",
+                self.short,
+                short_request_id,
+                short_option_identity,
+                short_instrument_name,
+            ),
+            (
+                "LONG",
+                self.long,
+                long_request_id,
+                long_option_identity,
+                long_instrument_name,
+            ),
+        )
+        for role, member, request_id, option_identity, instrument_name in expected:
+            prefix = f"COMPONENT_PAIR_{role}"
+            sent = sent_boundaries.get(request_id)
+            if sent is None:
+                add_reason(f"{prefix}_SENT_BOUNDARY_MISSING")
+            if member.request_id != request_id:
+                add_reason(f"{prefix}_REQUEST_ID_MISMATCH")
+            if member.canonical_option_identity != option_identity:
+                add_reason(f"{prefix}_OPTION_IDENTITY_MISMATCH")
+            if member.instrument_name != instrument_name:
+                add_reason(f"{prefix}_INSTRUMENT_NAME_MISMATCH")
+            if member.owner_origin_boundary != origin_boundary:
+                add_reason(f"{prefix}_OWNER_ORIGIN_BOUNDARY_MISMATCH")
+            if member.sent_boundary != sent:
+                add_reason(f"{prefix}_SENT_BOUNDARY_MISMATCH")
+            if not member.payload_matches_request:
+                add_reason(f"{prefix}_PAYLOAD_REQUEST_MISMATCH")
+            if not member.payload_well_formed:
+                add_reason(f"{prefix}_PAYLOAD_MALFORMED")
+            if not member.response_covers_full_quantity:
+                add_reason(f"{prefix}_FULL_QUANTITY_NOT_COVERED")
+            if sent is None:
+                continue
+            same_runtime = (
+                member.boundary.code_identity == sent.code_identity
+                and member.boundary.runtime_identity == sent.runtime_identity
+            )
+            if not same_runtime:
+                add_reason(f"{prefix}_RESPONSE_RUNTIME_MISMATCH")
+            elif not member.boundary.is_strictly_after(sent):
+                add_reason(f"{prefix}_RESPONSE_NOT_STRICTLY_AFTER_SENT")
+            elif (
+                member.boundary.received_monotonic_ms - sent.received_monotonic_ms
+                > response_budget_ms
+            ):
+                add_reason(f"{prefix}_RESPONSE_BUDGET_EXCEEDED")
+        return tuple(reasons)
+
 
 def component_pair_witness(
     *,
@@ -400,6 +489,7 @@ class AdmissionAttempt:
             boundary.received_monotonic_ms - self.origin_boundary.received_monotonic_ms
             > send_budget_ms
         ):
+            self.terminal_unknown_reasons = ("ADMISSION_SEND_BUDGET_EXCEEDED",)
             return self._terminalize(
                 source_identity=canonical_identity(
                     "AdmissionSendDeadlineLateIdentity",
@@ -681,6 +771,7 @@ class ComponentAdmissionAttempt:
             boundary.received_monotonic_ms - self.origin_boundary.received_monotonic_ms
             > send_budget_ms
         ):
+            self.terminal_unknown_reasons = ("COMPONENT_ADMISSION_SEND_BUDGET_EXCEEDED",)
             return self._terminalize(
                 source_identity=canonical_identity(
                     "ComponentAdmissionSendDeadlineLateIdentity",
@@ -702,61 +793,44 @@ class ComponentAdmissionAttempt:
         maximum_source_skew_ms: int,
         maximum_receive_skew_ms: int,
         classification: RefreshClassification,
+        classification_unknown_reasons: tuple[str, ...] = (),
     ) -> bool:
         if self.terminal_outcome is not None:
             return False
-        short = witness.short
-        long = witness.long
-        expected = (
-            (
-                short,
-                self.short_request_id,
-                self.short_option_identity,
-                self.short_instrument_name,
-            ),
-            (
-                long,
-                self.long_request_id,
-                self.long_option_identity,
-                self.long_instrument_name,
-            ),
-        )
-        timing_unknown_reasons = witness.timing_unknown_reasons(
-            maximum_source_skew_ms=maximum_source_skew_ms,
-            maximum_receive_skew_ms=maximum_receive_skew_ms,
+        for reason in classification_unknown_reasons:
+            if not isinstance(reason, str) or not reason:
+                raise ValueError("classification_unknown_reasons must contain non-empty strings")
+        if len(classification_unknown_reasons) != len(set(classification_unknown_reasons)):
+            raise ValueError("classification_unknown_reasons must not contain duplicates")
+        invalid_reasons = list(
+            witness.attempt_unknown_reasons(
+                origin_boundary=self.origin_boundary,
+                sent_boundaries=self.sent_boundaries,
+                short_request_id=self.short_request_id,
+                long_request_id=self.long_request_id,
+                short_option_identity=self.short_option_identity,
+                long_option_identity=self.long_option_identity,
+                short_instrument_name=self.short_instrument_name,
+                long_instrument_name=self.long_instrument_name,
+                response_budget_ms=response_budget_ms,
+                maximum_source_skew_ms=maximum_source_skew_ms,
+                maximum_receive_skew_ms=maximum_receive_skew_ms,
+            )
         )
         self.terminal_pair_timing = witness.timing_as_object()
         self.terminal_pair_limits = {
             "maximum_source_skew_ms": maximum_source_skew_ms,
             "maximum_receive_skew_ms": maximum_receive_skew_ms,
         }
-        invalid = witness.boundary != max(
-            (short.boundary, long.boundary), key=lambda value: value.causal_seq
-        )
-        invalid = invalid or bool(timing_unknown_reasons)
-        for member, request_id, option_identity, instrument_name in expected:
-            sent = self.sent_boundaries.get(request_id)
-            invalid = invalid or (
-                sent is None
-                or member.request_id != request_id
-                or member.canonical_option_identity != option_identity
-                or member.instrument_name != instrument_name
-                or member.owner_origin_boundary != self.origin_boundary
-                or member.sent_boundary != sent
-                or not member.payload_matches_request
-                or not member.payload_well_formed
-            )
-            if sent is not None:
-                if not member.boundary.is_strictly_after(sent):
-                    raise ValueError("component admission response must be strictly after SENT")
-                if (
-                    member.boundary.received_monotonic_ms - sent.received_monotonic_ms
-                    > response_budget_ms
-                ):
-                    invalid = True
-        if invalid:
+        if classification is RefreshClassification.UNKNOWN:
+            for reason in classification_unknown_reasons:
+                if reason not in invalid_reasons:
+                    invalid_reasons.append(reason)
+            if not classification_unknown_reasons:
+                invalid_reasons.append("COMPONENT_ADMISSION_REFRESHED_UNDERWRITING_UNKNOWN")
+        if invalid_reasons:
             classification = RefreshClassification.UNKNOWN
-            self.terminal_unknown_reasons = timing_unknown_reasons
+            self.terminal_unknown_reasons = tuple(invalid_reasons)
         return self._terminalize(
             source_identity=witness.pair_identity,
             boundary=witness.boundary,
@@ -769,12 +843,16 @@ class ComponentAdmissionAttempt:
         request_id: int,
         source_identity: str,
         boundary: FactBoundary,
+        unknown_reason: str,
     ) -> bool:
         if request_id not in self.request_ids or self.terminal_outcome is not None:
             return False
         lower = self.sent_boundaries.get(request_id, self.origin_boundary)
         if not boundary.is_strictly_after(lower):
             raise ValueError("component admission failure must be causally later")
+        if not isinstance(unknown_reason, str) or not unknown_reason:
+            raise ValueError("unknown_reason must be a non-empty string")
+        self.terminal_unknown_reasons = (unknown_reason,)
         return self._terminalize(
             source_identity=source_identity,
             boundary=boundary,
@@ -815,6 +893,11 @@ class ComponentAdmissionAttempt:
             ),
             RefreshClassification.UNKNOWN: AdmissionTerminalOutcome.UNKNOWN_CONSUMED,
         }[classification]
+        if (
+            outcome is AdmissionTerminalOutcome.UNKNOWN_CONSUMED
+            and not self.terminal_unknown_reasons
+        ):
+            self.terminal_unknown_reasons = ("COMPONENT_ADMISSION_UNCLASSIFIED_UNKNOWN",)
         self.terminal_outcome = outcome
         self.terminal_boundary = boundary
         self.terminal_source_identity = source_identity

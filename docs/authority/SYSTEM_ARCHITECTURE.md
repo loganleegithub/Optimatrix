@@ -66,7 +66,8 @@ The following remain bounded in memory:
 
 - platform, clock, catalog, ticker, book, index, RPC, and continuity state;
 - Radar calculations, detector episodes, component-book counterfactuals, atomic diagnostics,
-  Underwriting, Candidate, admission, and current Position state;
+  Underwriting, causal activation-batch designation, selected-decision refresh, Candidate,
+  admission, and current Position state;
 - internal typed transitions used by the owner and Workbench;
 - service status and funnel diagnostics.
 
@@ -84,8 +85,10 @@ not make a snapshot a durable business record.
 
 ## Shadow Case persistence boundary
 
-The first durable record is `SHADOW_CASE_OPENED`, emitted only after accepted Shadow admission. A
-Case directory may then contain at most:
+The first durable record is `SHADOW_CASE_OPENED`, emitted only after a pre-outcome enrollment and
+its strictly later accepted paired entry witness. Enrollment is either an admitted Candidate trade
+or the one action-blind selected no-trade decision for a causal Radar activation batch. A Case
+directory may then contain at most:
 
 ```text
 opened.json
@@ -164,13 +167,18 @@ tick and long sells down one tick, then applies both fees. The same value object
 scalar fingerprint projection used by Underwriting and Position; no second leg-price calculator or
 schema is permitted.
 
-Candidate admission and post-CLOSE each schedule exactly two bounded
+Candidate admission, non-Candidate selected-decision enrollment, and post-CLOSE each schedule
+exactly two bounded
 `public/get_order_book` requests for the frozen legs. The downstream owner accepts a quote only
 after both strictly later responses share one causal owner, session epoch, and global continuity
 epoch; each covers the full quantity; source timestamps differ by no more than `6000 ms`; and local
 receive boundaries differ by no more than `4000 ms`. A single response cannot open or close a Case.
 Failure of either response retires the sibling and settles the one paired attempt. Session,
 continuity, or skew mismatch is a bounded `UNKNOWN` with an exact reason, not an integrity exception.
+When the selected decision is already a Candidate, its ordinary admission pair is the selection's
+future-blind pair; a duplicate control refresh is forbidden. If that refresh remains Candidate it
+opens the ordinary admitted Case, while a refreshed WATCH/ABSTAIN opens the discriminated no-trade
+Case. A selected `UNKNOWN` opens nothing and has no fallback Episode.
 
 The canonical stages are:
 
@@ -186,12 +194,21 @@ SHADOW_CASE_OPENED
 SHADOW_CASE_OUTCOME
 ```
 
+The last two canonical stages count admitted-Candidate Cases only; selected no-trade Cases use the
+separate research projection below despite sharing the durable Case record family.
+
 `APPLICABLE_MARKET_SCOPE` and `RADAR_KNOWN` use post-warmup countable instrument evaluations. The
 separate `radar_knownness.startup_warmup` projection retains startup/recovery counts and reasons, so
 `INDEX_WARMUP` remains visible without becoming the steady-state primary blocker. Every Radar
 UNKNOWN contributes exactly one finite aggregate reason. The primary-blocker function identifies
 the earliest material post-warmup conversion loss and its largest reason. Official Combo outcomes
 are counted in a separate diagnostic projection and never enter the canonical Shadow funnel.
+
+Selected-decision research has a second, explicitly non-canonical projection: activation batches,
+pre-outcome selected decisions, Decision Cases, and strictly future Outcomes. It may include
+Candidate, WATCH, or ABSTAIN decisions, but a WATCH/ABSTAIN Case never increments the canonical
+Candidate, `SHADOW_CASE_OPENED`, or `SHADOW_CASE_OUTCOME` stages. The projection retains cumulative
+scalars and only current/latest bounded identities.
 
 Funnel diagnostics may be displayed and logged externally, but they are not business evidence or
 qualification data.
@@ -206,8 +223,10 @@ HTTP handlers read one immutable complete byte snapshot. They never traverse mut
 state, read Shadow Case files, compute strategy truth, modify Policy, contact Deribit, or expose a
 write route. The server binds only to loopback and supports the declared GET/HEAD surface. The
 snapshot contains a bounded Top-N attention view plus `ALL`, exact rank inputs, source-contract
-facts, hard-screen fields, and diagnostic non-claims. Browser code only renders server-owned typed
-truth; it does not recalculate rank, IV, RV, surface, or structure economics.
+facts, hard-screen fields, a separate selected-decision panel with original/refreshed actions and
+margin vectors, enrollment/Outcome state, and diagnostic non-claims. Browser code only renders
+server-owned typed truth; it does not recalculate rank, IV, RV, surface, structure economics, or
+decision-control membership.
 
 ## Failure domains
 
@@ -219,8 +238,8 @@ truth; it does not recalculate rank, IV, RV, surface, or structure economics.
 - reconnect: rebuild current session facts without replacing the same in-process Shadow owner;
 - Workbench publication error: explicit process failure in the current simple topology, not stale
   success;
-- Shadow Case write conflict or I/O failure after admission: explicit process failure because an
-  admitted research Case must not be silently lost;
+- Shadow Case write conflict or I/O failure after enrollment: explicit process failure because an
+  enrolled research Case must not be silently lost;
 - host CPU, memory, process restart, launchd/systemd, logs, and deployment health: external
   operations, not application business truth.
 
@@ -255,6 +274,6 @@ The current architecture forbids:
 
 If one non-product control subsystem causes a second real runtime failure, the default response is
 delete or externalize it. Continued repair requires proving that removing it would create an
-incorrect trader decision, lose an admitted Shadow Case, or expose actual account/capital risk.
+incorrect trader decision, lose an enrolled Shadow Case, or expose actual account/capital risk.
 
 No pre-Shadow component may open a file.

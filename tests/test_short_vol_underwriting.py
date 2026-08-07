@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 from short_vol_underwriting import (
     CANDIDATE_INVALIDATION_REASONS,
+    DECISION_CONTROL_OBJECT_KINDS,
     OUTCOME_OBJECT_KINDS,
     POSITION_CLOSE_REASONS,
     UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
@@ -200,6 +201,7 @@ def _underwriting_facts(
         boundary=boundary,
         radar_scope_identity="sha256:" + "4" * 64,
         active_episode_identity=_radar_episode_identity(runtime_identity=boundary.runtime_identity),
+        anomaly_activation_seq=1,
         short_leg_identity="sha256:" + "6" * 64,
         long_leg_identity="sha256:" + "7" * 64,
         canonical_combo_identity=combo_identity,
@@ -303,7 +305,12 @@ def test_underwriting_facts_reject_malformed_radar_episode_identity(
     with pytest.raises(ValueError):
         replace(facts, active_episode_identity=episode_identity)
 
-    assert replace(facts, active_episode_identity=None).active_episode_identity is None
+    assert (
+        replace(
+            facts, active_episode_identity=None, anomaly_activation_seq=None
+        ).active_episode_identity
+        is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -351,6 +358,7 @@ def test_owner_rejects_unbound_radar_episode_before_emission(
             snapshot_kind="snapshot",
         ),
         active_episode_identity=episode_identity,
+        anomaly_activation_seq=int(episode_identity.rsplit(":", 1)[1]),
     )
 
     with pytest.raises(ValueError, match="not bound"):
@@ -841,7 +849,17 @@ def test_kind_registries_are_exact_and_disjoint() -> None:
         "SHADOW_COUNTERFACTUAL_EXIT",
         "SHADOW_OUTCOME",
     )
+    assert DECISION_CONTROL_OBJECT_KINDS == (
+        "UNDERWRITING_DECISION_BATCH_DESIGNATION",
+        "SELECTED_UNDERWRITING_DECISION",
+        "UNDERWRITING_DECISION_CONTROL_ATTEMPT_SCHEDULED",
+        "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
+        "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN",
+        "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME",
+    )
     assert not set(UNDERWRITING_OBJECT_KINDS) & set(OUTCOME_OBJECT_KINDS)
+    assert not set(UNDERWRITING_OBJECT_KINDS) & set(DECISION_CONTROL_OBJECT_KINDS)
+    assert not set(OUTCOME_OBJECT_KINDS) & set(DECISION_CONTROL_OBJECT_KINDS)
 
 
 def test_candidate_invalidation_uses_complete_total_order_and_is_terminal() -> None:

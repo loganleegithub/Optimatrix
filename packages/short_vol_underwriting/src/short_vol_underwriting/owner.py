@@ -38,6 +38,14 @@ from short_vol_underwriting.constants import (
     ADMISSION_CUTOFF_LEAD_MS,
     POSITION_CLOSE_REASONS,
 )
+from short_vol_underwriting.control import (
+    DecisionControlAttempt,
+    DecisionControlAttemptOutcome,
+    DecisionControlRefreshClassification,
+    designate_selected_decision_episode,
+    selected_decision_batch_identity,
+    selected_decision_rule_identity,
+)
 from short_vol_underwriting.domain import (
     AdmissionTerminalOutcome,
     CandidateState,
@@ -121,6 +129,7 @@ class UnderwritingFacts:
     boundary: FactBoundary
     radar_scope_identity: str
     active_episode_identity: str | None
+    anomaly_activation_seq: int | None
     short_leg_identity: str | None
     long_leg_identity: str | None
     canonical_combo_identity: str | None
@@ -175,7 +184,11 @@ class UnderwritingFacts:
     def __post_init__(self) -> None:
         require_identity(self.radar_scope_identity, "radar_scope_identity")
         if self.active_episode_identity is not None:
-            _radar_episode_identity_components(self.active_episode_identity)
+            episode = _radar_episode_identity_components(self.active_episode_identity)
+            if self.anomaly_activation_seq != episode[3]:
+                raise ValueError("Underwriting activation sequence is not bound to its Episode")
+        elif self.anomaly_activation_seq is not None:
+            raise ValueError("inactive Underwriting facts cannot carry an activation sequence")
         for identity in (
             self.short_leg_identity,
             self.long_leg_identity,
@@ -303,6 +316,19 @@ class _UnderwritingEvaluation:
 
 
 @dataclass
+class _SelectedDecisionRecord:
+    batch_identity: str
+    rule_identity: str
+    selection_identity: str
+    selected_action_identity: str
+    selected_action: UnderwritingAction
+    selected_margins: UnderwritingThresholdMargins
+    selected_economic_fingerprint: str
+    selected_facts: UnderwritingFacts
+    selected_economics: EntryEconomics
+
+
+@dataclass
 class _CandidateRecord:
     facts: UnderwritingFacts
     state: CandidateState
@@ -310,11 +336,14 @@ class _CandidateRecord:
     attempt: AdmissionAttempt | ComponentAdmissionAttempt
     availability_fingerprint: str
     economic_fingerprint: str
+    action_identity: str
+    selected_decision: _SelectedDecisionRecord | None = None
 
 
 @dataclass
 class _TradeRecord:
     anchor_identity: str
+    enrollment_kind: str
     slot_identity: str
     entry_boundary: FactBoundary
     entry_facts: UnderwritingFacts
@@ -333,6 +362,20 @@ class _TradeRecord:
     first_close_decision: PositionDecision | None = None
     post_close_attempt: PostCloseAttempt | ComponentPostCloseAttempt | None = None
     terminal_written: bool = False
+
+
+@dataclass
+class _DecisionControlRecord:
+    selection: _SelectedDecisionRecord
+    attempt: DecisionControlAttempt
+
+    @property
+    def selection_identity(self) -> str:
+        return self.selection.selection_identity
+
+    @property
+    def batch_identity(self) -> str:
+        return self.selection.batch_identity
 
 
 class FixedContractShadowOwner:
@@ -365,11 +408,16 @@ class FixedContractShadowOwner:
             tuple[str, UnderwritingAction, str],
         ] = {}
         self._candidates: dict[str, _CandidateRecord] = {}
+        self._decision_controls: dict[str, _DecisionControlRecord] = {}
+        self._decision_control_batch_by_episode: dict[str, str] = {}
+        self._decision_control_designated_by_batch: dict[str, str] = {}
+        self._decision_control_selected_batches: set[str] = set()
         self._trades: dict[str, _TradeRecord] = {}
         self._emitted: list[EmittedObject] = []
         self._intents: list[RpcRequestIntent] = []
         self._retirements: list[RpcRetirementIntent] = []
         self._candidate_retirements: set[str] = set()
+        self._decision_control_retirements: set[str] = set()
         self._trade_retirements: set[str] = set()
         self._counts: Counter[str] = Counter()
         self._accepting_new_work = True
@@ -381,6 +429,8 @@ class FixedContractShadowOwner:
     def retained_state_counts(self) -> Mapping[str, int]:
         return {
             "active_candidates": len(self._candidates),
+            "active_decision_control_attempts": len(self._decision_controls),
+            "active_decision_control_batches": len(self._decision_control_designated_by_batch),
             "active_trades": len(self._trades),
             "active_consumed_slots": len(self._slot_consumed),
             "availability_scopes": len(self._last_availability),
@@ -395,6 +445,10 @@ class FixedContractShadowOwner:
     def active_trade_identities(self) -> frozenset[str]:
         return frozenset(self._trades)
 
+    @property
+    def active_decision_control_identities(self) -> frozenset[str]:
+        return frozenset(self._decision_controls)
+
     def retire_underwriting_scope(self, scope_identity: str) -> None:
         self._last_availability.pop(scope_identity, None)
         self._last_underwriting_action.pop(scope_identity, None)
@@ -407,6 +461,32 @@ class FixedContractShadowOwner:
         boundary: FactBoundary,
     ) -> OwnerTransition:
         self._begin_transition()
+        batch_identity = self._decision_control_batch_by_episode.get(episode_identity)
+        designated = (
+            self._decision_control_designated_by_batch.get(batch_identity)
+            if batch_identity is not None
+            else None
+        )
+        if designated == episode_identity:
+            control = next(
+                (
+                    value
+                    for value in self._decision_controls.values()
+                    if value.batch_identity == batch_identity
+                ),
+                None,
+            )
+            if control is not None:
+                control.attempt.invalidate_before_refresh(
+                    source_identity=canonical_identity(
+                        "DecisionControlEpisodeEndedIdentity",
+                        episode_identity,
+                        boundary.as_object(),
+                    ),
+                    boundary=boundary,
+                )
+                self._emit_decision_control_terminal(control)
+                self._decision_control_retirements.add(control.selection_identity)
         for record in tuple(self._candidates.values()):
             if record.facts.active_episode_identity != episode_identity:
                 continue
@@ -423,6 +503,7 @@ class FixedContractShadowOwner:
             raise RuntimeError("ended Radar episode still owns an active Candidate")
         slots = self._consumed_slots_by_episode.pop(episode_identity, set())
         self._slot_consumed.difference_update(slots)
+        self._retire_decision_control_episode(episode_identity)
         return transition
 
     @property
@@ -502,6 +583,7 @@ class FixedContractShadowOwner:
         boundaries = {member.boundary for member in facts}
         if len(boundaries) != 1:
             raise ValueError("one Underwriting transaction requires one settled boundary")
+        self._register_decision_control_batches(facts)
         facts_by_scope = {member.radar_scope_identity: member for member in facts}
         handled_scopes: set[str] = set()
         for record in tuple(self._candidates.values()):
@@ -595,6 +677,12 @@ class FixedContractShadowOwner:
                     action_identity=action_identity,
                     allocate_request_id=allocate_request_id,
                 )
+            if action_changed:
+                self._select_decision_control(
+                    evaluation,
+                    action_identity=action_identity,
+                    allocate_request_id=allocate_request_id,
+                )
         return self._finish_transition()
 
     def settle_admission(
@@ -661,7 +749,18 @@ class FixedContractShadowOwner:
         ):
             raise ValueError("component admission facts and paired witnesses must be identical")
         evaluation = self._evaluate_underwriting(refreshed_facts)
-        pair_timing_unknown_reasons = pair_witness.timing_unknown_reasons(
+        pair_attempt_unknown_reasons = pair_witness.attempt_unknown_reasons(
+            origin_boundary=record.attempt.origin_boundary,
+            sent_boundaries=record.attempt.sent_boundaries,
+            short_request_id=record.attempt.short_request_id,
+            long_request_id=record.attempt.long_request_id,
+            short_option_identity=record.attempt.short_option_identity,
+            long_option_identity=record.attempt.long_option_identity,
+            short_instrument_name=record.attempt.short_instrument_name,
+            long_instrument_name=record.attempt.long_instrument_name,
+            response_budget_ms=(
+                self.policies.underwriting.component_book_snapshot_response_budget_ms
+            ),
             maximum_source_skew_ms=(
                 self.policies.underwriting.maximum_component_pair_source_skew_ms
             ),
@@ -673,7 +772,7 @@ class FixedContractShadowOwner:
             record,
             refreshed_facts,
         )
-        if pre_refresh_reasons and not pair_timing_unknown_reasons:
+        if pre_refresh_reasons and not pair_attempt_unknown_reasons:
             self._terminalize_candidate_before_refresh(
                 record,
                 reasons=pre_refresh_reasons,
@@ -710,6 +809,11 @@ class FixedContractShadowOwner:
                 self.policies.underwriting.maximum_component_pair_receive_skew_ms
             ),
             classification=classification,
+            classification_unknown_reasons=(
+                self._decision_control_refresh_unknown_reasons(evaluation)
+                if classification is RefreshClassification.UNKNOWN
+                else ()
+            ),
         )
         if not accepted:
             return self._finish_transition()
@@ -718,7 +822,7 @@ class FixedContractShadowOwner:
             record.state.admit(refreshed_facts.boundary)
             if evaluation.economics is None:
                 raise RuntimeError("component Candidate admission lacks complete economics")
-            self._create_admitted_trade(record, refreshed_facts, evaluation.economics)
+            self._create_admitted_trade(record, evaluation)
         else:
             reasons = self._candidate_invalidation_reasons(
                 record,
@@ -729,7 +833,98 @@ class FixedContractShadowOwner:
                 include_failed_admission=True,
             )
             self._invalidate_candidate(record, reasons, refreshed_facts.boundary)
+            if (
+                record.selected_decision is not None
+                and evaluation.availability is UnderwritingAvailability.EVALUABLE
+                and evaluation.action is not None
+                and evaluation.economics is not None
+            ):
+                self._create_selected_decision_control(
+                    selection=record.selected_decision,
+                    refreshed=evaluation,
+                    attempt=record.attempt,
+                )
         self._candidate_retirements.add(record.state.candidate_identity)
+        return self._finish_transition()
+
+    def settle_component_decision_control(
+        self,
+        *,
+        selection_identity: str,
+        refreshed_facts: UnderwritingFacts,
+        pair_witness: ComponentBookPairWitness,
+    ) -> OwnerTransition:
+        """Open one selected control only from its strictly later valid pair."""
+        self._require_target_quantity_integrity(refreshed_facts)
+        self._require_radar_episode_binding(refreshed_facts)
+        self._begin_transition()
+        record = self._decision_controls.get(selection_identity)
+        if record is None:
+            return self._finish_transition()
+        short_source = refreshed_facts.component_short_quote_source
+        long_source = refreshed_facts.component_long_quote_source
+        if (
+            refreshed_facts.boundary != pair_witness.boundary
+            or refreshed_facts.component_pair_witness != pair_witness
+            or short_source is None
+            or long_source is None
+            or short_source.source_identity != pair_witness.short.source_identity
+            or short_source.boundary != pair_witness.short.boundary
+            or long_source.source_identity != pair_witness.long.source_identity
+            or long_source.boundary != pair_witness.long.boundary
+        ):
+            raise ValueError("decision-control facts and paired witnesses must be identical")
+        evaluation = self._evaluate_underwriting(refreshed_facts)
+        selection = record.selection
+        same_opportunity = (
+            evaluation.slot_identity == self._slot_identity(selection.selected_facts)
+            and refreshed_facts.active_episode_identity
+            == selection.selected_facts.active_episode_identity
+            and refreshed_facts.short_leg_identity == selection.selected_facts.short_leg_identity
+            and refreshed_facts.long_leg_identity == selection.selected_facts.long_leg_identity
+            and refreshed_facts.target_quantity_btc == selection.selected_facts.target_quantity_btc
+        )
+        if (
+            same_opportunity
+            and evaluation.availability is UnderwritingAvailability.EVALUABLE
+            and evaluation.action is not None
+        ):
+            classification = DecisionControlRefreshClassification.EVALUABLE
+        elif evaluation.availability is UnderwritingAvailability.NOT_EVALUATED:
+            classification = DecisionControlRefreshClassification.NOT_EVALUATED
+        else:
+            classification = DecisionControlRefreshClassification.UNKNOWN
+        classification_unknown_reasons = (
+            self._decision_control_refresh_unknown_reasons(evaluation)
+            if classification is DecisionControlRefreshClassification.UNKNOWN
+            else ()
+        )
+        accepted = record.attempt.accept_pair(
+            witness=pair_witness,
+            response_budget_ms=(
+                self.policies.underwriting.component_book_snapshot_response_budget_ms
+            ),
+            maximum_source_skew_ms=(
+                self.policies.underwriting.maximum_component_pair_source_skew_ms
+            ),
+            maximum_receive_skew_ms=(
+                self.policies.underwriting.maximum_component_pair_receive_skew_ms
+            ),
+            classification=classification,
+            classification_unknown_reasons=classification_unknown_reasons,
+        )
+        if not accepted:
+            return self._finish_transition()
+        self._emit_decision_control_terminal(record)
+        if record.attempt.terminal_outcome is DecisionControlAttemptOutcome.CONTROL_OPENED:
+            if evaluation.economics is None or evaluation.action is None:
+                raise RuntimeError("evaluable decision control lacks economics/action")
+            self._create_selected_decision_control(
+                selection=selection,
+                refreshed=evaluation,
+                attempt=record.attempt,
+            )
+        self._decision_control_retirements.add(record.selection_identity)
         return self._finish_transition()
 
     def _settle_admission_record(
@@ -807,7 +1002,7 @@ class FixedContractShadowOwner:
             record.state.admit(refreshed_facts.boundary)
             if evaluation.economics is None:
                 raise RuntimeError("Candidate admission lacks complete economics")
-            self._create_admitted_trade(record, refreshed_facts, evaluation.economics)
+            self._create_admitted_trade(record, evaluation)
         else:
             reasons = self._candidate_invalidation_reasons(
                 record,
@@ -818,6 +1013,17 @@ class FixedContractShadowOwner:
                 include_failed_admission=True,
             )
             self._invalidate_candidate(record, reasons, refreshed_facts.boundary)
+            if (
+                record.selected_decision is not None
+                and evaluation.availability is UnderwritingAvailability.EVALUABLE
+                and evaluation.action is not None
+                and evaluation.economics is not None
+            ):
+                self._create_selected_decision_control(
+                    selection=record.selected_decision,
+                    refreshed=evaluation,
+                    attempt=record.attempt,
+                )
         self._candidate_retirements.add(record.state.candidate_identity)
 
     def note_request_sent(
@@ -842,6 +1048,17 @@ class FixedContractShadowOwner:
                         boundary,
                     )
                 return self._finish_transition()
+        for control in self._decision_controls.values():
+            if control.attempt.mark_sent(
+                request_id=request_id,
+                boundary=boundary,
+                send_budget_ms=(self.policies.underwriting.component_book_snapshot_send_budget_ms),
+            ):
+                if control.attempt.terminal_outcome is not None:
+                    self._retire_sibling_requests(control.attempt, request_id, boundary)
+                    self._emit_decision_control_terminal(control)
+                    self._decision_control_retirements.add(control.selection_identity)
+                return self._finish_transition()
         for trade in self._trades.values():
             attempt = trade.post_close_attempt
             if attempt is not None and attempt.mark_sent(
@@ -860,11 +1077,15 @@ class FixedContractShadowOwner:
         attempt: (
             AdmissionAttempt
             | ComponentAdmissionAttempt
+            | DecisionControlAttempt
             | PostCloseAttempt
             | ComponentPostCloseAttempt
         ),
     ) -> tuple[int, ...]:
-        if isinstance(attempt, (ComponentAdmissionAttempt, ComponentPostCloseAttempt)):
+        if isinstance(
+            attempt,
+            (ComponentAdmissionAttempt, DecisionControlAttempt, ComponentPostCloseAttempt),
+        ):
             return attempt.request_ids
         return (attempt.request_id,) if attempt.request_id is not None else ()
 
@@ -873,6 +1094,7 @@ class FixedContractShadowOwner:
         attempt: (
             AdmissionAttempt
             | ComponentAdmissionAttempt
+            | DecisionControlAttempt
             | PostCloseAttempt
             | ComponentPostCloseAttempt
         ),
@@ -968,11 +1190,23 @@ class FixedContractShadowOwner:
                 )
                 invalidation_reasons = ("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN",)
             else:
-                transitioned = record.attempt.fail_request(
-                    request_id=request_id,
-                    source_identity=source_identity,
-                    boundary=boundary,
-                )
+                if isinstance(record.attempt, ComponentAdmissionAttempt):
+                    transitioned = record.attempt.fail_request(
+                        request_id=request_id,
+                        source_identity=source_identity,
+                        boundary=boundary,
+                        unknown_reason=(
+                            "COMPONENT_ADMISSION_RESPONSE_DEADLINE_LATE"
+                            if terminal_status is PostCloseAttemptStatus.DEADLINE_LATE
+                            else "COMPONENT_ADMISSION_REQUEST_ERROR"
+                        ),
+                    )
+                else:
+                    transitioned = record.attempt.fail_request(
+                        request_id=request_id,
+                        source_identity=source_identity,
+                        boundary=boundary,
+                    )
                 invalidation_reasons = ("FAILED_ADMISSION_EVALUATION_CONSUMED",)
             if transitioned:
                 self._retire_sibling_requests(record.attempt, request_id, boundary)
@@ -983,13 +1217,55 @@ class FixedContractShadowOwner:
                     boundary,
                 )
                 return self._finish_transition()
+        for control in self._decision_controls.values():
+            if request_id not in control.attempt.request_ids:
+                continue
+            transitioned = (
+                control.attempt.invalidate_before_refresh(
+                    source_identity=source_identity,
+                    boundary=boundary,
+                )
+                if terminal_status is PostCloseAttemptStatus.RETIRED
+                else control.attempt.fail_request(
+                    request_id=request_id,
+                    source_identity=source_identity,
+                    boundary=boundary,
+                    unknown_reason=(
+                        "COMPONENT_DECISION_CONTROL_RESPONSE_DEADLINE_LATE"
+                        if terminal_status is PostCloseAttemptStatus.DEADLINE_LATE
+                        else "COMPONENT_DECISION_CONTROL_REQUEST_ERROR"
+                    ),
+                )
+            )
+            if transitioned:
+                self._retire_sibling_requests(control.attempt, request_id, boundary)
+                self._emit_decision_control_terminal(control)
+                self._decision_control_retirements.add(control.selection_identity)
+                return self._finish_transition()
         for trade in self._trades.values():
             attempt = trade.post_close_attempt
-            if attempt is not None and attempt.fail(
-                request_id=request_id,
-                status=terminal_status,
-                boundary=boundary,
-            ):
+            if attempt is None:
+                continue
+            if isinstance(attempt, ComponentPostCloseAttempt):
+                transitioned = attempt.fail(
+                    request_id=request_id,
+                    status=terminal_status,
+                    boundary=boundary,
+                    unknown_reason=(
+                        "COMPONENT_POST_CLOSE_RESPONSE_DEADLINE_LATE"
+                        if terminal_status is PostCloseAttemptStatus.DEADLINE_LATE
+                        else "COMPONENT_POST_CLOSE_REQUEST_RETIRED"
+                        if terminal_status is PostCloseAttemptStatus.RETIRED
+                        else "COMPONENT_POST_CLOSE_REQUEST_ERROR"
+                    ),
+                )
+            else:
+                transitioned = attempt.fail(
+                    request_id=request_id,
+                    status=terminal_status,
+                    boundary=boundary,
+                )
+            if transitioned:
                 self._retire_sibling_requests(attempt, request_id, boundary)
                 self._emit_post_close_terminal(trade)
                 return self._finish_transition()
@@ -1298,6 +1574,13 @@ class FixedContractShadowOwner:
                 ("RUNTIME_OR_CODE_IDENTITY_CHANGED",),
                 boundary,
             )
+        for control in self._decision_controls.values():
+            if control.attempt.invalidate_before_refresh(
+                source_identity=terminal_source_identity,
+                boundary=boundary,
+            ):
+                self._emit_decision_control_terminal(control)
+                self._decision_control_retirements.add(control.selection_identity)
         owner = (
             PostCloseAttemptOwner.STOP
             if terminal_source is TerminalSource.STOP
@@ -1975,10 +2258,290 @@ class FixedContractShadowOwner:
         )
 
     @staticmethod
+    def _decision_control_refresh_unknown_reasons(
+        evaluation: _UnderwritingEvaluation,
+    ) -> tuple[str, ...]:
+        facts = evaluation.facts
+        reasons: list[str] = []
+        for reason in (*facts.unknown_reasons, *facts.component_blockers):
+            if reason and reason not in reasons:
+                reasons.append(reason)
+        if not reasons:
+            reasons.append("REFRESHED_UNDERWRITING_AVAILABILITY_UNKNOWN")
+        return tuple(reasons)
+
+    @staticmethod
     def _entry_consumed_level_count(facts: UnderwritingFacts) -> int:
         if facts.component_quote is not None:
             return facts.component_quote.consumed_level_count
         return len(facts.entry_consumed_levels)
+
+    def _register_decision_control_batches(
+        self,
+        facts: Sequence[UnderwritingFacts],
+    ) -> None:
+        newly_activated: dict[int, list[UnderwritingFacts]] = {}
+        for member in facts:
+            activation_seq = member.anomaly_activation_seq
+            if (
+                member.active_episode_identity is None
+                or activation_seq is None
+                or activation_seq != member.boundary.causal_seq
+                or member.canonical_combo_identity is not None
+            ):
+                continue
+            newly_activated.setdefault(activation_seq, []).append(member)
+        rule_identity = selected_decision_rule_identity(bindings=self.bindings)
+        for activation_seq, members in sorted(newly_activated.items()):
+            batch_identity = selected_decision_batch_identity(
+                bindings=self.bindings,
+                activation_causal_seq=activation_seq,
+            )
+            episode_identities = tuple(
+                sorted(
+                    {
+                        member.active_episode_identity
+                        for member in members
+                        if member.active_episode_identity is not None
+                    }
+                )
+            )
+            if not episode_identities:
+                continue
+            designated = designate_selected_decision_episode(
+                bindings=self.bindings,
+                batch_identity=batch_identity,
+                episode_identities=episode_identities,
+            )
+            previous = self._decision_control_designated_by_batch.get(batch_identity)
+            if previous is not None:
+                if previous != designated:
+                    raise RuntimeError(
+                        "decision-control batch membership changed after designation"
+                    )
+                continue
+            self._decision_control_designated_by_batch[batch_identity] = designated
+            for episode_identity in episode_identities:
+                self._decision_control_batch_by_episode[episode_identity] = batch_identity
+            designation_identity = canonical_identity(
+                "UnderwritingDecisionBatchDesignationIdentity",
+                rule_identity,
+                batch_identity,
+                designated,
+                episode_identities,
+                activation_seq,
+            )
+            self._emit(
+                "UNDERWRITING_DECISION_BATCH_DESIGNATION",
+                designation_identity,
+                members[0].boundary,
+                {
+                    "decision_control_rule_identity": rule_identity,
+                    "activation_batch_identity": batch_identity,
+                    "activation_causal_seq": activation_seq,
+                    "batch_member_episode_identities": list(episode_identities),
+                    "designated_episode_identity": designated,
+                    "designation_method": ("MINIMUM_PRE_OUTCOME_EPISODE_HASH_NO_UNKNOWN_FALLBACK"),
+                    "designation_fact_boundary": members[0].boundary.as_object(),
+                },
+            )
+            self._counts["decision_control_activation_batch_count"] += 1
+
+    def _select_decision_control(
+        self,
+        evaluation: _UnderwritingEvaluation,
+        *,
+        action_identity: str,
+        allocate_request_id: Callable[[], int],
+    ) -> None:
+        facts = evaluation.facts
+        episode_identity = facts.active_episode_identity
+        if episode_identity is None:
+            return
+        batch_identity = self._decision_control_batch_by_episode.get(episode_identity)
+        if (
+            batch_identity is None
+            or self._decision_control_designated_by_batch.get(batch_identity) != episode_identity
+            or batch_identity in self._decision_control_selected_batches
+            or evaluation.availability is not UnderwritingAvailability.EVALUABLE
+            or evaluation.action is None
+            or evaluation.economics is None
+            or evaluation.economic_fingerprint is None
+            or evaluation.slot_identity is None
+            or facts.component_quote is None
+            or facts.short_leg_identity is None
+            or facts.long_leg_identity is None
+            or facts.short_leg_instrument_name is None
+            or facts.long_leg_instrument_name is None
+        ):
+            return
+        rule_identity = selected_decision_rule_identity(bindings=self.bindings)
+        margins = self._underwriting_threshold_margins(evaluation)
+        selection_identity = canonical_identity(
+            "SelectedUnderwritingDecisionIdentity",
+            rule_identity,
+            batch_identity,
+            episode_identity,
+            action_identity,
+            evaluation.action.value,
+            margins.as_vector(),
+            evaluation.economic_fingerprint,
+            facts.boundary.as_object(),
+        )
+        selection = _SelectedDecisionRecord(
+            batch_identity=batch_identity,
+            rule_identity=rule_identity,
+            selection_identity=selection_identity,
+            selected_action_identity=action_identity,
+            selected_action=evaluation.action,
+            selected_margins=margins,
+            selected_economic_fingerprint=evaluation.economic_fingerprint,
+            selected_facts=facts,
+            selected_economics=evaluation.economics,
+        )
+        enrollment_route = (
+            "ADMITTED_SHADOW_TRADE"
+            if evaluation.action is UnderwritingAction.CANDIDATE
+            else "SELECTED_UNDERWRITING_DECISION_CONTROL"
+        )
+        candidate = (
+            next(
+                (
+                    member
+                    for member in self._candidates.values()
+                    if member.action_identity == action_identity
+                    and member.state.lifecycle.value == "VALID"
+                ),
+                None,
+            )
+            if evaluation.action is UnderwritingAction.CANDIDATE
+            else None
+        )
+        if evaluation.action is UnderwritingAction.CANDIDATE and candidate is None:
+            raise RuntimeError("selected Candidate lacks its admission record")
+        entry_refresh_attempt_kind = (
+            "CANDIDATE_ADMISSION" if candidate is not None else "DECISION_CONTROL"
+        )
+        entry_refresh_owner_identity = (
+            candidate.state.candidate_identity if candidate is not None else selection_identity
+        )
+        non_claims = ["NOT_AN_ORDER", "NOT_A_FILL"]
+        if evaluation.action is not UnderwritingAction.CANDIDATE:
+            non_claims.extend(
+                [
+                    "NOT_A_CANDIDATE_ACTIVATION",
+                    "NOT_A_SHADOW_ENTRY",
+                ]
+            )
+        self._emit(
+            "SELECTED_UNDERWRITING_DECISION",
+            selection_identity,
+            facts.boundary,
+            {
+                "selected_underwriting_decision_identity": selection_identity,
+                "decision_control_rule_identity": rule_identity,
+                "activation_batch_identity": batch_identity,
+                "active_episode_identity": episode_identity,
+                "underwriting_action_identity": action_identity,
+                "underwriting_position_slot_key_identity": evaluation.slot_identity,
+                "economic_action": evaluation.action.value,
+                "selected_consumed_economic_fact_fingerprint": (evaluation.economic_fingerprint),
+                "failed_predicates": list(margins.failed_predicates),
+                "predicate_margin_vector": list(margins.as_vector()),
+                "selected_short_leg_instrument_name": facts.short_leg_instrument_name,
+                "selected_long_leg_instrument_name": facts.long_leg_instrument_name,
+                "enrollment_route": enrollment_route,
+                "entry_refresh_attempt_kind": entry_refresh_attempt_kind,
+                "entry_refresh_owner_identity": entry_refresh_owner_identity,
+                "selection_fact_boundary": facts.boundary.as_object(),
+                "non_claims": non_claims,
+            },
+        )
+        self._decision_control_selected_batches.add(batch_identity)
+        self._counts["selected_underwriting_decision_count"] += 1
+        if evaluation.action is UnderwritingAction.CANDIDATE:
+            assert candidate is not None
+            candidate.selected_decision = selection
+            return
+        attempt = DecisionControlAttempt.schedule(
+            selection_identity=selection_identity,
+            short_option_identity=facts.short_leg_identity,
+            long_option_identity=facts.long_leg_identity,
+            short_request_id=allocate_request_id(),
+            long_request_id=allocate_request_id(),
+            boundary=facts.boundary,
+            short_instrument_name=facts.short_leg_instrument_name,
+            long_instrument_name=facts.long_leg_instrument_name,
+        )
+        intents = attempt.take_request_intents()
+        if len(intents) != 2:
+            raise RuntimeError("new decision-control attempt lacks its paired intents")
+        record = _DecisionControlRecord(
+            selection=selection,
+            attempt=attempt,
+        )
+        self._decision_controls[selection_identity] = record
+        self._emit(
+            "UNDERWRITING_DECISION_CONTROL_ATTEMPT_SCHEDULED",
+            attempt.scheduled_identity,
+            facts.boundary,
+            {
+                "scheduled_decision_control_attempt_identity": attempt.scheduled_identity,
+                "selected_underwriting_decision_identity": selection_identity,
+                "activation_batch_identity": batch_identity,
+                "request_method": "public/get_order_book",
+                "requests": [
+                    {"request_id": intent.request_id, "request_params": dict(intent.params)}
+                    for intent in intents
+                ],
+                "schedule_fact_boundary": facts.boundary.as_object(),
+            },
+        )
+        self._intents.extend(intents)
+
+    def _emit_decision_control_terminal(self, record: _DecisionControlRecord) -> None:
+        attempt = record.attempt
+        if (
+            attempt.terminal_identity is None
+            or attempt.terminal_boundary is None
+            or attempt.terminal_outcome is None
+            or attempt.terminal_source_identity is None
+        ):
+            raise RuntimeError("decision-control terminal is incomplete")
+        self._emit(
+            "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
+            attempt.terminal_identity,
+            attempt.terminal_boundary,
+            {
+                "decision_control_attempt_terminal_identity": attempt.terminal_identity,
+                "scheduled_decision_control_attempt_identity": attempt.scheduled_identity,
+                "selected_underwriting_decision_identity": record.selection_identity,
+                "activation_batch_identity": record.batch_identity,
+                "terminal_outcome": attempt.terminal_outcome.value,
+                "terminal_source_identity": attempt.terminal_source_identity,
+                "terminal_unknown_reasons": list(attempt.terminal_unknown_reasons),
+                "component_pair_timing": attempt.terminal_pair_timing,
+                "component_pair_limits": attempt.terminal_pair_limits,
+                "terminal_fact_boundary": attempt.terminal_boundary.as_object(),
+            },
+        )
+        self._counts[
+            f"decision_control_attempt_{attempt.terminal_outcome.value.lower()}_count"
+        ] += 1
+
+    def _retire_decision_control_episode(self, episode_identity: str) -> None:
+        batch_identity = self._decision_control_batch_by_episode.pop(episode_identity, None)
+        if batch_identity is None:
+            return
+        if batch_identity in self._decision_control_batch_by_episode.values():
+            return
+        if any(
+            record.batch_identity == batch_identity for record in self._decision_controls.values()
+        ):
+            return
+        self._decision_control_designated_by_batch.pop(batch_identity, None)
+        self._decision_control_selected_batches.discard(batch_identity)
+        self.state_store.retire_control_batch(batch_identity)
 
     def _activate_candidate(
         self,
@@ -2036,6 +2599,7 @@ class FixedContractShadowOwner:
             attempt=attempt,
             availability_fingerprint=evaluation.availability_fingerprint,
             economic_fingerprint=evaluation.economic_fingerprint,
+            action_identity=action_identity,
         )
         self._candidates[candidate_identity] = record
         if not intents:
@@ -2078,10 +2642,12 @@ class FixedContractShadowOwner:
     def _create_admitted_trade(
         self,
         candidate: _CandidateRecord,
-        facts: UnderwritingFacts,
-        economics: EntryEconomics,
+        refreshed: _UnderwritingEvaluation,
     ) -> None:
+        facts = refreshed.facts
+        economics = refreshed.economics
         attempt = candidate.attempt
+        terminal_outcome = attempt.terminal_outcome
         quote_source = facts.quote_source
         index_source = facts.index_source
         ticker_source = facts.ticker_source
@@ -2091,7 +2657,9 @@ class FixedContractShadowOwner:
             facts.component_long_quote_source,
         )
         if (
-            attempt.terminal_identity is None
+            economics is None
+            or attempt.terminal_identity is None
+            or terminal_outcome is None
             or index_source is None
             or ticker_source is None
             or (component_quote is None and quote_source is None)
@@ -2109,11 +2677,103 @@ class FixedContractShadowOwner:
             candidate.state.candidate_identity,
             facts.boundary.as_object(),
         )
+        selected_observation = (
+            self._selected_decision_observation_payload(
+                candidate.selected_decision,
+                refreshed,
+            )
+            if candidate.selected_decision is not None
+            else None
+        )
+        entry_underwriting = self._case_open_underwriting_payload(
+            refreshed,
+            owner_identity=(
+                candidate.selected_decision.selection_identity
+                if candidate.selected_decision is not None
+                else candidate.state.candidate_identity
+            ),
+        )
         payload = {
             "shadow_entry_identity": entry_identity,
             "candidate_identity": candidate.state.candidate_identity,
             "admission_attempt_terminal_identity": attempt.terminal_identity,
+            "entry_refresh_attempt_kind": "CANDIDATE_ADMISSION",
+            "scheduled_entry_refresh_attempt_identity": attempt.scheduled_identity,
+            "entry_refresh_attempt_terminal_identity": attempt.terminal_identity,
+            "entry_refresh_terminal_outcome": terminal_outcome.value,
+            "entry_refresh_terminal_unknown_reasons": list(
+                getattr(attempt, "terminal_unknown_reasons", ())
+            ),
+            "entry_refresh_component_pair_timing": getattr(
+                attempt,
+                "terminal_pair_timing",
+                None,
+            ),
+            "entry_refresh_component_pair_limits": getattr(
+                attempt,
+                "terminal_pair_limits",
+                None,
+            ),
             "underwriting_position_slot_key_identity": candidate.slot_identity,
+            **entry_underwriting,
+            "enrollment_kind": "ADMITTED_SHADOW_TRADE",
+            **self._counterfactual_entry_payload(facts, economics),
+        }
+        if selected_observation is not None:
+            payload["selected_underwriting_decision"] = selected_observation
+        self._emit(
+            "SHADOW_ENTRY",
+            entry_identity,
+            facts.boundary,
+            payload,
+        )
+        self._slot_consumed.add(candidate.slot_identity)
+        episode_identity = facts.active_episode_identity
+        if episode_identity is None:
+            raise RuntimeError("admitted Candidate lacks its active Radar episode")
+        self._consumed_slots_by_episode.setdefault(episode_identity, set()).add(
+            candidate.slot_identity
+        )
+        self._counts["shadow_entry_count"] += 1
+        self._create_trade_record(
+            anchor_identity=entry_identity,
+            slot_identity=candidate.slot_identity,
+            facts=facts,
+            economics=economics,
+        )
+        for other in self._candidates.values():
+            if (
+                other is not candidate
+                and other.slot_identity == candidate.slot_identity
+                and other.state.lifecycle.value == "VALID"
+            ):
+                other.attempt.invalidate_before_refresh(
+                    source_identity=entry_identity,
+                    boundary=facts.boundary,
+                )
+                self._emit_admission_terminal(other)
+                self._invalidate_candidate(
+                    other,
+                    ("POSITION_SLOT_CONSUMED_BY_SHADOW_ENTRY",),
+                    facts.boundary,
+                )
+
+    def _counterfactual_entry_payload(
+        self,
+        facts: UnderwritingFacts,
+        economics: EntryEconomics,
+    ) -> dict[str, object]:
+        quote_source = facts.quote_source
+        index_source = facts.index_source
+        ticker_source = facts.ticker_source
+        component_quote = facts.component_quote
+        component_sources = (
+            facts.component_short_quote_source,
+            facts.component_long_quote_source,
+        )
+        if index_source is None or ticker_source is None:
+            raise RuntimeError("counterfactual enrollment requires index and ticker sources")
+        return {
             "entry_fact_boundary": facts.boundary.as_object(),
             "active_episode_identity": facts.active_episode_identity,
             "radar_scope_identity": facts.radar_scope_identity,
@@ -2163,6 +2823,18 @@ class FixedContractShadowOwner:
                 if facts.component_pair_witness is not None
                 else None
             ),
+            "entry_component_pair_limits": (
+                {
+                    "maximum_source_skew_ms": (
+                        self.policies.underwriting.maximum_component_pair_source_skew_ms
+                    ),
+                    "maximum_receive_skew_ms": (
+                        self.policies.underwriting.maximum_component_pair_receive_skew_ms
+                    ),
+                }
+                if facts.component_pair_witness is not None
+                else None
+            ),
             "entry_component_legs": (
                 [
                     self._component_leg_payload("SHORT", component_quote.short_leg),
@@ -2173,15 +2845,28 @@ class FixedContractShadowOwner:
             ),
             "entry_component_quote_source_refs": (
                 [
-                    {"canonical_leg_role": role, **source.as_ref()}
-                    for role, source in zip(
+                    {
+                        "canonical_leg_role": role,
+                        **source.as_ref(),
+                        "source_timestamp_ms": witness.source_timestamp_ms,
+                        "global_continuity_epoch": witness.global_continuity_epoch,
+                        "request_id": witness.request_id,
+                        "owner_origin_boundary": witness.owner_origin_boundary.as_object(),
+                        "sent_boundary": witness.sent_boundary.as_object(),
+                        "change_id": witness.change_id,
+                    }
+                    for role, source, witness in zip(
                         ("SHORT", "LONG"),
                         component_sources,
+                        (
+                            facts.component_pair_witness.short,
+                            facts.component_pair_witness.long,
+                        ),
                         strict=True,
                     )
                     if source is not None
                 ]
-                if component_quote is not None
+                if component_quote is not None and facts.component_pair_witness is not None
                 else []
             ),
             "entry_commission_source_refs": self._commission_refs(facts),
@@ -2214,42 +2899,184 @@ class FixedContractShadowOwner:
                 else []
             ),
         }
+
+    @staticmethod
+    def _selected_decision_payload(
+        selection: _SelectedDecisionRecord,
+    ) -> dict[str, object]:
+        return {
+            "selected_underwriting_decision_identity": selection.selection_identity,
+            "decision_control_rule_identity": selection.rule_identity,
+            "activation_batch_identity": selection.batch_identity,
+            "selected_underwriting_action_identity": selection.selected_action_identity,
+            "selected_economic_action": selection.selected_action.value,
+            "selected_consumed_economic_fact_fingerprint": (
+                selection.selected_economic_fingerprint
+            ),
+            "selected_failed_predicates": list(selection.selected_margins.failed_predicates),
+            "selected_predicate_margin_vector": list(selection.selected_margins.as_vector()),
+            "selection_fact_boundary": selection.selected_facts.boundary.as_object(),
+        }
+
+    def _case_open_underwriting_payload(
+        self,
+        refreshed: _UnderwritingEvaluation,
+        *,
+        owner_identity: str,
+    ) -> dict[str, object]:
+        if (
+            refreshed.action is None
+            or refreshed.economics is None
+            or refreshed.economic_fingerprint is None
+        ):
+            raise RuntimeError("Case-open Underwriting requires evaluable refreshed facts")
+        require_identity(owner_identity, "Case-open Underwriting owner_identity")
+        margins = self._underwriting_threshold_margins(refreshed)
+        action_identity = canonical_identity(
+            "CaseOpenRefreshedUnderwritingActionIdentity",
+            owner_identity,
+            refreshed.economic_fingerprint,
+            refreshed.action.value,
+            refreshed.facts.boundary.as_object(),
+        )
+        return {
+            "entry_underwriting_action_identity": action_identity,
+            "entry_underwriting_economic_action": refreshed.action.value,
+            "entry_underwriting_consumed_economic_fact_fingerprint": (
+                refreshed.economic_fingerprint
+            ),
+            "entry_underwriting_failed_predicates": list(margins.failed_predicates),
+            "entry_underwriting_predicate_margin_vector": list(margins.as_vector()),
+            "entry_underwriting_decision_fact_boundary": (refreshed.facts.boundary.as_object()),
+        }
+
+    def _selected_decision_observation_payload(
+        self,
+        selection: _SelectedDecisionRecord,
+        refreshed: _UnderwritingEvaluation,
+    ) -> dict[str, object]:
+        if (
+            refreshed.action is None
+            or refreshed.economics is None
+            or refreshed.economic_fingerprint is None
+        ):
+            raise RuntimeError("selected decision observation requires evaluable refreshed facts")
+        entry_underwriting = self._case_open_underwriting_payload(
+            refreshed,
+            owner_identity=selection.selection_identity,
+        )
+        return {
+            **self._selected_decision_payload(selection),
+            "refreshed_underwriting_action_identity": entry_underwriting[
+                "entry_underwriting_action_identity"
+            ],
+            "refreshed_economic_action": entry_underwriting["entry_underwriting_economic_action"],
+            "refreshed_consumed_economic_fact_fingerprint": entry_underwriting[
+                "entry_underwriting_consumed_economic_fact_fingerprint"
+            ],
+            "refreshed_failed_predicates": entry_underwriting[
+                "entry_underwriting_failed_predicates"
+            ],
+            "refreshed_predicate_margin_vector": entry_underwriting[
+                "entry_underwriting_predicate_margin_vector"
+            ],
+            "refreshed_fact_boundary": entry_underwriting[
+                "entry_underwriting_decision_fact_boundary"
+            ],
+        }
+
+    def _create_selected_decision_control(
+        self,
+        *,
+        selection: _SelectedDecisionRecord,
+        refreshed: _UnderwritingEvaluation,
+        attempt: AdmissionAttempt | ComponentAdmissionAttempt | DecisionControlAttempt,
+    ) -> None:
+        facts = refreshed.facts
+        economics = refreshed.economics
+        action = refreshed.action
+        terminal_identity = attempt.terminal_identity
+        terminal_outcome = attempt.terminal_outcome
+        refresh_attempt_kind = (
+            "DECISION_CONTROL"
+            if isinstance(attempt, DecisionControlAttempt)
+            else "CANDIDATE_ADMISSION"
+        )
+        if (
+            economics is None
+            or action is None
+            or refreshed.slot_identity is None
+            or terminal_identity is None
+            or terminal_outcome is None
+        ):
+            raise RuntimeError("decision-control open requires evaluable refreshed facts")
+        observation_payload = self._selected_decision_observation_payload(
+            selection,
+            refreshed,
+        )
+        refreshed_action_identity = observation_payload["refreshed_underwriting_action_identity"]
+        assert isinstance(refreshed_action_identity, str)
+        open_identity = canonical_identity(
+            "SelectedUnderwritingDecisionControlOpenIdentity",
+            selection.selection_identity,
+            terminal_identity,
+            refreshed_action_identity,
+            facts.boundary.as_object(),
+        )
+        payload = {
+            "selected_decision_control_open_identity": open_identity,
+            "enrollment_kind": "SELECTED_UNDERWRITING_DECISION_CONTROL",
+            **observation_payload,
+            "selected_underwriting_decision": observation_payload,
+            "entry_refresh_attempt_kind": refresh_attempt_kind,
+            "scheduled_entry_refresh_attempt_identity": attempt.scheduled_identity,
+            "entry_refresh_attempt_terminal_identity": terminal_identity,
+            "entry_refresh_terminal_outcome": terminal_outcome.value,
+            "entry_refresh_terminal_unknown_reasons": list(
+                getattr(attempt, "terminal_unknown_reasons", ())
+            ),
+            "entry_refresh_component_pair_timing": getattr(
+                attempt,
+                "terminal_pair_timing",
+                None,
+            ),
+            "entry_refresh_component_pair_limits": getattr(
+                attempt,
+                "terminal_pair_limits",
+                None,
+            ),
+            "underwriting_position_slot_key_identity": refreshed.slot_identity,
+            **self._case_open_underwriting_payload(
+                refreshed,
+                owner_identity=selection.selection_identity,
+            ),
+            **self._counterfactual_entry_payload(facts, economics),
+        }
+        non_claims = payload.get("non_claims")
+        if not isinstance(non_claims, list):
+            raise RuntimeError("control enrollment non-claims must be a list")
+        non_claims.extend(
+            [
+                "NOT_A_CANDIDATE_ACTIVATION",
+                "NOT_A_SHADOW_ENTRY",
+                "NOT_AN_ADMITTED_TRADE",
+                "NO_CAPITAL_EXPOSURE",
+            ]
+        )
         self._emit(
-            "SHADOW_ENTRY",
-            entry_identity,
+            "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN",
+            open_identity,
             facts.boundary,
             payload,
         )
-        self._slot_consumed.add(candidate.slot_identity)
-        episode_identity = facts.active_episode_identity
-        if episode_identity is None:
-            raise RuntimeError("admitted Candidate lacks its active Radar episode")
-        self._consumed_slots_by_episode.setdefault(episode_identity, set()).add(
-            candidate.slot_identity
-        )
-        self._counts["shadow_entry_count"] += 1
+        self._counts["selected_underwriting_decision_control_open_count"] += 1
         self._create_trade_record(
-            anchor_identity=entry_identity,
-            slot_identity=candidate.slot_identity,
+            anchor_identity=open_identity,
+            slot_identity=refreshed.slot_identity,
             facts=facts,
             economics=economics,
+            enrollment_kind="SELECTED_UNDERWRITING_DECISION_CONTROL",
         )
-        for other in self._candidates.values():
-            if (
-                other is not candidate
-                and other.slot_identity == candidate.slot_identity
-                and other.state.lifecycle.value == "VALID"
-            ):
-                other.attempt.invalidate_before_refresh(
-                    source_identity=entry_identity,
-                    boundary=facts.boundary,
-                )
-                self._emit_admission_terminal(other)
-                self._invalidate_candidate(
-                    other,
-                    ("POSITION_SLOT_CONSUMED_BY_SHADOW_ENTRY",),
-                    facts.boundary,
-                )
 
     def _create_trade_record(
         self,
@@ -2258,6 +3085,7 @@ class FixedContractShadowOwner:
         slot_identity: str,
         facts: UnderwritingFacts,
         economics: EntryEconomics,
+        enrollment_kind: str = "ADMITTED_SHADOW_TRADE",
     ) -> None:
         if facts.index_usdc_per_btc is None or facts.index_source is None:
             raise RuntimeError("trade anchor requires a known entry index")
@@ -2268,6 +3096,7 @@ class FixedContractShadowOwner:
         )
         record = _TradeRecord(
             anchor_identity=anchor_identity,
+            enrollment_kind=enrollment_kind,
             slot_identity=slot_identity,
             entry_boundary=facts.boundary,
             entry_facts=facts,
@@ -2300,6 +3129,7 @@ class FixedContractShadowOwner:
             {
                 "shadow_observation_identity": observation.observation_identity,
                 "shadow_entry_identity": anchor_identity,
+                "enrollment_kind": enrollment_kind,
                 "start_fact_boundary": facts.boundary.as_object(),
                 "lifecycle_state": "PENDING",
             },
@@ -3065,6 +3895,7 @@ class FixedContractShadowOwner:
             "shadow_outcome_identity": trade.observation.terminal_outcome_identity,
             "shadow_observation_identity": trade.observation.observation_identity,
             "shadow_entry_identity": trade.anchor_identity,
+            "enrollment_kind": trade.enrollment_kind,
             "execution_model": (
                 trade.entry_facts.component_quote.execution_model
                 if trade.entry_facts.component_quote is not None
@@ -3225,12 +4056,18 @@ class FixedContractShadowOwner:
                 else []
             ),
         }
+        outcome_kind = (
+            "SHADOW_OUTCOME"
+            if trade.enrollment_kind == "ADMITTED_SHADOW_TRADE"
+            else "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME"
+        )
         self._emit(
-            "SHADOW_OUTCOME",
+            outcome_kind,
             trade.observation.terminal_outcome_identity,
             boundary,
             payload,
         )
+        self._counts[f"{outcome_kind.lower()}_count"] += 1
         trade.terminal_written = True
         self._trade_retirements.add(trade.anchor_identity)
 
@@ -3375,31 +4212,41 @@ class FixedContractShadowOwner:
             or attempt.terminal_source_identity is None
         ):
             raise RuntimeError("admission terminal is incomplete")
+        payload: dict[str, object] = {
+            "admission_attempt_terminal_identity": attempt.terminal_identity,
+            "scheduled_admission_attempt_identity": attempt.scheduled_identity,
+            "candidate_identity": record.state.candidate_identity,
+            "active_episode_identity": record.facts.active_episode_identity,
+            "terminal_outcome": attempt.terminal_outcome.value,
+            "terminal_fact_boundary": attempt.terminal_boundary.as_object(),
+            "terminal_source_identity": attempt.terminal_source_identity,
+            "matched_response_identity": (
+                attempt.terminal_source_identity
+                if attempt.terminal_outcome
+                in {
+                    AdmissionTerminalOutcome.ENTRY_EMITTED,
+                    AdmissionTerminalOutcome.KNOWN_COMPLETE_NO_ENTRY,
+                }
+                else None
+            ),
+            "terminal_unknown_reasons": list(getattr(attempt, "terminal_unknown_reasons", ())),
+            "component_pair_timing": getattr(attempt, "terminal_pair_timing", None),
+            "component_pair_limits": getattr(attempt, "terminal_pair_limits", None),
+        }
+        if record.selected_decision is not None:
+            payload.update(
+                {
+                    "selected_underwriting_decision_identity": (
+                        record.selected_decision.selection_identity
+                    ),
+                    "activation_batch_identity": record.selected_decision.batch_identity,
+                }
+            )
         self._emit(
             "ADMISSION_ATTEMPT_TERMINAL",
             attempt.terminal_identity,
             attempt.terminal_boundary,
-            {
-                "admission_attempt_terminal_identity": attempt.terminal_identity,
-                "scheduled_admission_attempt_identity": attempt.scheduled_identity,
-                "candidate_identity": record.state.candidate_identity,
-                "active_episode_identity": record.facts.active_episode_identity,
-                "terminal_outcome": attempt.terminal_outcome.value,
-                "terminal_fact_boundary": attempt.terminal_boundary.as_object(),
-                "terminal_source_identity": attempt.terminal_source_identity,
-                "matched_response_identity": (
-                    attempt.terminal_source_identity
-                    if attempt.terminal_outcome
-                    in {
-                        AdmissionTerminalOutcome.ENTRY_EMITTED,
-                        AdmissionTerminalOutcome.KNOWN_COMPLETE_NO_ENTRY,
-                    }
-                    else None
-                ),
-                "terminal_unknown_reasons": list(getattr(attempt, "terminal_unknown_reasons", ())),
-                "component_pair_timing": getattr(attempt, "terminal_pair_timing", None),
-                "component_pair_limits": getattr(attempt, "terminal_pair_limits", None),
-            },
+            payload,
         )
         self._counts[f"admission_{attempt.terminal_outcome.value.lower()}_count"] += 1
 
@@ -4181,6 +5028,7 @@ class FixedContractShadowOwner:
         self._intents = []
         self._retirements = []
         self._candidate_retirements = set()
+        self._decision_control_retirements = set()
         self._trade_retirements = set()
 
     def _finish_transition(self) -> OwnerTransition:
@@ -4192,6 +5040,10 @@ class FixedContractShadowOwner:
         for candidate_identity in sorted(self._candidate_retirements):
             self._candidates.pop(candidate_identity, None)
             self.state_store.retire_candidate(candidate_identity)
+        for selection_identity in sorted(self._decision_control_retirements):
+            record = self._decision_controls.pop(selection_identity, None)
+            if record is not None:
+                self.state_store.retain_latest_terminal_control_batch(record.batch_identity)
         for anchor_identity in sorted(self._trade_retirements):
             self._trades.pop(anchor_identity, None)
             self.state_store.retain_latest_terminal_case(anchor_identity)

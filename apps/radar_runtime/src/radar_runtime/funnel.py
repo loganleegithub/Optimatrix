@@ -175,11 +175,52 @@ class RadarKnownnessSnapshot:
 
 
 @dataclass(frozen=True)
+class DecisionControlResearchSnapshot:
+    activation_batch_count: int
+    selected_decision_count: int
+    decision_case_opened_count: int
+    decision_outcome_count: int
+    selected_action_counts: Mapping[str, int]
+    attempt_terminal_counts: Mapping[str, int]
+
+    def as_object(self) -> dict[str, object]:
+        return {
+            "unit": "PRE_OUTCOME_SELECTED_UNDERWRITING_DECISION",
+            "activation_batch_count": self.activation_batch_count,
+            "selected_decision_count": self.selected_decision_count,
+            "decision_case_opened_count": self.decision_case_opened_count,
+            "decision_outcome_count": self.decision_outcome_count,
+            "selected_action_counts": dict(sorted(self.selected_action_counts.items())),
+            "attempt_terminal_counts": dict(sorted(self.attempt_terminal_counts.items())),
+            "pending_counts": {
+                "batch_without_selected_evaluable_decision": max(
+                    0,
+                    self.activation_batch_count - self.selected_decision_count,
+                ),
+                "selected_without_case": max(
+                    0,
+                    self.selected_decision_count - self.decision_case_opened_count,
+                ),
+                "case_without_outcome": max(
+                    0,
+                    self.decision_case_opened_count - self.decision_outcome_count,
+                ),
+            },
+            "non_claims": [
+                "NOT_THE_CANONICAL_CANDIDATE_FUNNEL",
+                "NON_CANDIDATE_CASE_IS_NOT_A_TRADE",
+                "DESCRIPTIVE_OUTCOME_NOT_CAUSAL_EFFECT",
+            ],
+        }
+
+
+@dataclass(frozen=True)
 class FunnelSnapshot:
     stages: tuple[FunnelStageSnapshot, ...]
     primary_blocker: PrimaryFunnelBlocker
     radar_knownness: RadarKnownnessSnapshot
     atomic_combo_diagnostic_counts: Mapping[str, int]
+    decision_control_research: DecisionControlResearchSnapshot
 
     def as_object(self) -> dict[str, object]:
         return {
@@ -195,6 +236,7 @@ class FunnelSnapshot:
                     "NO_ON_DEMAND_COMBO_CLAIM",
                 ],
             },
+            "decision_control_research": self.decision_control_research.as_object(),
             "non_claims": [
                 "NON_DURABLE_RUNTIME_DIAGNOSTIC",
                 "NO_POLICY_QUALITY_OR_PROFITABILITY_CLAIM",
@@ -241,6 +283,15 @@ class FunnelTracker:
         self._case_opened_count = 0
         self._outcome_count = 0
 
+        self._decision_control_activation_batch_count = 0
+        self._selected_decision_count = 0
+        self._decision_case_opened_count = 0
+        self._decision_outcome_count = 0
+        self._selected_decision_action_counts: Counter[str] = Counter()
+        self._decision_control_attempt_terminal_counts: Counter[str] = Counter()
+        self._decision_selection_by_enrollment: dict[str, str] = {}
+        self._decision_selection_by_candidate: dict[str, str] = {}
+
         self._episodes: dict[str, _EpisodeState] = {}
         self._candidate_episode_by_identity: dict[str, str] = {}
         self._entry_episode_by_identity: dict[str, str] = {}
@@ -254,6 +305,8 @@ class FunnelTracker:
             "episodes": len(self._episodes),
             "candidate_identities": len(self._candidate_episode_by_identity),
             "entry_identities": len(self._entry_episode_by_identity),
+            "decision_case_identities": len(self._decision_selection_by_enrollment),
+            "selected_candidate_identities": len(self._decision_selection_by_candidate),
         }
 
     def observe(
@@ -347,7 +400,7 @@ class FunnelTracker:
             FunnelStageSnapshot(
                 "SHADOW_CASE_OPENED",
                 self._case_opened_count,
-                "DISTINCT_SHADOW_CASE",
+                "DISTINCT_ADMITTED_SHADOW_CASE",
                 self._candidate_episode_count,
                 "DISTINCT_ANOMALY_EPISODE",
                 blockers["SHADOW_CASE_OPENED"],
@@ -355,9 +408,9 @@ class FunnelTracker:
             FunnelStageSnapshot(
                 "SHADOW_CASE_OUTCOME",
                 self._outcome_count,
-                "DISTINCT_SHADOW_CASE",
+                "DISTINCT_ADMITTED_SHADOW_CASE",
                 self._case_opened_count,
-                "DISTINCT_SHADOW_CASE",
+                "DISTINCT_ADMITTED_SHADOW_CASE",
                 blockers["SHADOW_CASE_OUTCOME"],
             ),
         )
@@ -381,6 +434,14 @@ class FunnelTracker:
             self._primary_blocker(stages),
             knownness,
             self._atomic_diagnostic_episode_counts,
+            DecisionControlResearchSnapshot(
+                self._decision_control_activation_batch_count,
+                self._selected_decision_count,
+                self._decision_case_opened_count,
+                self._decision_outcome_count,
+                self._selected_decision_action_counts,
+                self._decision_control_attempt_terminal_counts,
+            ),
         )
 
     def _observe_radar(self, reducer: RadarReducer, commit: CausalCommit) -> set[str]:
@@ -460,6 +521,7 @@ class FunnelTracker:
             payload = value.get("payload")
             if not isinstance(kind, str) or not isinstance(payload, Mapping):
                 continue
+            self._observe_decision_control_record(value, kind=kind, payload=payload)
             episode = _optional_string(payload.get("active_episode_identity"))
             if episode is not None:
                 state = self._episodes.get(episode)
@@ -540,6 +602,71 @@ class FunnelTracker:
                     outcome_state.outcome = True
                     self._outcome_count += 1
                     self._episodes.pop(outcome_episode, None)
+
+    def _observe_decision_control_record(
+        self,
+        value: Mapping[str, object],
+        *,
+        kind: str,
+        payload: Mapping[str, object],
+    ) -> None:
+        if kind == "UNDERWRITING_DECISION_BATCH_DESIGNATION":
+            self._decision_control_activation_batch_count += 1
+            return
+        if kind == "SELECTED_UNDERWRITING_DECISION":
+            self._selected_decision_count += 1
+            action = _optional_string(payload.get("economic_action"))
+            if action is not None:
+                self._selected_decision_action_counts[action] += 1
+            if payload.get("entry_refresh_attempt_kind") == "CANDIDATE_ADMISSION":
+                candidate = _optional_string(payload.get("entry_refresh_owner_identity"))
+                selection = _optional_string(value.get("object_identity"))
+                if candidate is not None and selection is not None:
+                    self._decision_selection_by_candidate[candidate] = selection
+            return
+        if kind == "ADMISSION_ATTEMPT_TERMINAL":
+            candidate = _optional_string(payload.get("candidate_identity"))
+            if (
+                candidate is not None
+                and self._decision_selection_by_candidate.pop(candidate, None) is not None
+            ):
+                terminal = _optional_string(payload.get("terminal_outcome"))
+                if terminal is not None:
+                    self._decision_control_attempt_terminal_counts[terminal] += 1
+            return
+        if kind == "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL":
+            terminal = _optional_string(payload.get("terminal_outcome"))
+            if terminal is not None:
+                self._decision_control_attempt_terminal_counts[terminal] += 1
+            return
+        if kind == "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN":
+            enrollment = _optional_string(value.get("object_identity"))
+            selection = _optional_string(payload.get("selected_underwriting_decision_identity"))
+        elif kind == "SHADOW_ENTRY" and isinstance(
+            payload.get("selected_underwriting_decision"),
+            Mapping,
+        ):
+            enrollment = _optional_string(value.get("object_identity"))
+            selected = payload["selected_underwriting_decision"]
+            assert isinstance(selected, Mapping)
+            selection = _optional_string(selected.get("selected_underwriting_decision_identity"))
+        else:
+            enrollment = None
+            selection = None
+        if enrollment is not None and selection is not None:
+            self._decision_case_opened_count += 1
+            self._decision_selection_by_enrollment[enrollment] = selection
+            return
+        if kind in {
+            "SHADOW_OUTCOME",
+            "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME",
+        }:
+            enrollment = _optional_string(payload.get("shadow_entry_identity"))
+            if (
+                enrollment is not None
+                and self._decision_selection_by_enrollment.pop(enrollment, None) is not None
+            ):
+                self._decision_outcome_count += 1
 
     def _retire_inactive_episodes(self, active_episodes: set[str]) -> None:
         for episode, state in tuple(self._episodes.items()):

@@ -7,12 +7,14 @@
 ## Purpose
 
 Define the only durable business boundary in the current public-only product. A Shadow Case begins
-when one admitted counterfactual trade is explicitly enrolled before its future path is known. It
-preserves the minimum admission context, a bounded first-CLOSE transition, and one terminal result
-for trader review, AI research, and later offline qualification.
+when one counterfactual is explicitly enrolled before its future path is known: either an admitted
+Candidate trade or the one action-blind selected no-trade decision for its causal activation batch.
+It preserves the minimum enrollment context, a bounded first-CLOSE transition, and one terminal
+result for trader review, AI research, and later offline qualification.
 
 The Online Runtime does not persist qualification Cohorts, aligned pairs, comparison tables,
-Challenger features, Radar events, Underwriting events, or automatic no-trade counterfactuals.
+Challenger features, Radar events, Underwriting events, or unselected/automatic no-trade
+counterfactuals.
 
 ## Record set
 
@@ -45,7 +47,7 @@ runtime_identity
 Radar Policy identity
 Underwriting Policy identity
 Position Policy identity
-SHADOW_ENTRY identity
+enrollment identity (`SHADOW_ENTRY` or selected-decision-control open)
 opened FactBoundary
 ```
 
@@ -62,20 +64,29 @@ The opened record contains:
 
 - `record_kind`, `schema_version`, and `case_id`;
 - exact code/runtime/three-Policy identities;
-- opened/entry and Underwriting decision boundaries;
+- `enrollment_kind`, generic enrollment identity, opened/entry and Underwriting decision boundaries;
+- Candidate/`SHADOW_ENTRY` identities for admitted trades, or explicit nulls for no-trade controls;
 - execution model and two frozen canonical option-leg identities;
 - display instrument names, expiry, option type, strikes, entry direction, and full BTC quantity;
-- paired component-book source identity and exact raw/stressed full-quantity levels for both legs;
+- paired component-book source identity, session/continuity epochs, measured source/receive skew,
+  consumed Policy skew limits, and exact raw/stressed full-quantity levels for both legs;
 - gross credit, entry fee reserve, net credit, payoff cap, future-cost reserve, and reserved loss;
 - the minimal consumed Radar state: active episode identity, band, richness interval, component
   state, and official atomic diagnostic;
-- the Underwriting action and thresholds actually consumed;
+- the Underwriting action, complete failed-predicate/margin vector, and thresholds actually consumed;
+- when pre-outcome selected, the selection rule/batch identities plus original and refreshed actions,
+  complete predicate-margin vectors, and their strictly ordered boundaries;
 - exact non-claims: `NOT_AN_ORDER`, `NOT_A_FILL`, `NOT_AN_ATOMIC_QUOTE`,
-  `NO_LIQUIDITY_RESERVATION`, and `ATOMIC_EXECUTABILITY_UNPROVEN`.
+  `NO_LIQUIDITY_RESERVATION`, and `ATOMIC_EXECUTABILITY_UNPROVEN`. A no-trade control additionally
+  states `NOT_A_CANDIDATE_ACTIVATION`, `NOT_A_SHADOW_ENTRY`, `NOT_AN_ADMITTED_TRADE`, and
+  `NO_CAPITAL_EXPOSURE`.
 
-Each entry leg's consumed amounts must sum exactly to the full quantity. Stored gross credit, both
-fee reserves, net credit, width, payoff cap, and loss values must conserve against the stored
-stressed legs. The record may not contain the full option chain or unrelated market state.
+Each entry leg's consumed amounts must sum exactly to the full quantity. Pair session and continuity
+epochs must match, measured receive skew must agree with the two receipt boundaries, and both skews
+must remain within the stored limits bound to the Underwriting Policy. Stored gross credit, both fee
+reserves, net credit, width, payoff cap, loss values, canonical six-predicate margin vector, failed
+predicates, and resulting action must conserve against the stored stressed legs and Policy
+thresholds. The record may not contain the full option chain or unrelated market state.
 
 ## `SHADOW_CASE_FIRST_CLOSE`
 
@@ -145,7 +156,9 @@ The product reader validates only the one requested Case:
 
 - exact record key/type shape;
 - identity format and same Case/code/runtime/Policy binding;
-- opened pair identity, per-leg quantity, stress direction, fee, and economic conservation;
+- opened pair identity/timing/Policy limits, per-leg quantity, stress direction, fee, and economic
+  conservation;
+- canonical predicate order/unit/sign truth, failed predicates, action, and Policy-bound margins;
 - strictly later first-close/outcome boundaries;
 - state-specific null/economic requirements;
 - recomputable paired component-book PnL arithmetic;
@@ -156,16 +169,20 @@ validate Git trees, inspect host state, read legacy schemas, or form a qualifica
 
 ## No-trade controls and Cohorts
 
-The current implementation enrolls admitted Shadow trades only. A future no-trade control must be
-selected by an explicit pre-outcome sampling rule and use a separately authorized Case-open path.
-The system must never persist every WATCH or ABSTAIN automatically.
+The current implementation may enroll one no-trade control only when the causal activation batch
+designated its Episode before action/future facts, that Episode later produced its first evaluable
+decision, and exactly one strictly later paired refresh remained evaluable as WATCH or ABSTAIN.
+`UNKNOWN` and invalid pairs write no Case, and the designation has no fallback. The system never
+persists every WATCH or ABSTAIN automatically. The no-trade Case reuses Position/Outcome arithmetic
+but is not a Candidate, `SHADOW_ENTRY`, admitted trade, order, fill, or causal-effect estimate.
 
 Qualification Cohorts are later offline views over completed or honestly censored Cases under a
 pre-registered evaluator. The Online Runtime never writes Cohort or aligned-pair objects.
 
 ## Required verification
 
-Direct tests prove zero pre-Shadow files, exact one-open/one-first-close/one-outcome cardinality,
-atomic file publication, duplicate handling, pair/source identity and boundary binding, both-leg
-arithmetic, censoring, and unclean incomplete readback. No manifest, receipt, full graph, legacy
-reader, or replay is required.
+Direct tests prove zero pre-enrollment files, exact one-open/one-first-close/one-outcome cardinality,
+schema-v3 enrollment discrimination, original/refreshed selection boundary ordering, zero
+Candidate/`SHADOW_ENTRY` for controls, atomic file publication, duplicate handling, pair/source
+identity and boundary binding, both-leg arithmetic, censoring, and unclean incomplete readback. No
+manifest, receipt, full graph, legacy reader, or replay is required.

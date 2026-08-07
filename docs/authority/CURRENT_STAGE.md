@@ -4,7 +4,7 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current implementation status:** `UNDERWRITING_SELECTION_AND_MARGIN_TRUTH_ACTIVE`
+**Current implementation status:** `SELECTED_UNDERWRITING_DECISION_OUTCOME_ACTIVE`
 
 **Accepted implementation boundary:** `COMPONENT_BOOK_SHADOW_LIFECYCLE_ACCEPTED`
 
@@ -14,7 +14,7 @@
 
 **Live commands:** `NONE_AUTHORIZED_PAIR_TIMING_PROBE_EXHAUSTED`
 
-**Sole authorized closure:** `SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH`
+**Sole authorized closure:** `SHORT_VOL_SELECTED_UNDERWRITING_DECISION_OUTCOME`
 
 ## Current truth
 
@@ -59,8 +59,8 @@ qualification, deployment readiness, or private execution permission.
 - inspect the repository, accepted contracts, and final aggregate Shadow facts read-only;
 - run deterministic offline tests and repository checks that do not contact a live venue;
 - implement the one active task
-  [`SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH`](../../tasks/SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH.md)
-  without changing any economic threshold, fee, target quantity, or persistence boundary.
+  [`SHORT_VOL_SELECTED_UNDERWRITING_DECISION_OUTCOME`](../../tasks/SHORT_VOL_SELECTED_UNDERWRITING_DECISION_OUTCOME.md)
+  without changing any economic threshold, fee, target quantity, or Radar screen.
 
 ## Forbidden work
 
@@ -70,6 +70,8 @@ qualification, deployment readiness, or private execution permission.
   active task and explicit authorization;
 - changing Radar thresholds, benchmark, TTE/Delta universe, target quantity, reserve thresholds,
   or fees to manufacture a Candidate;
+- automatically persisting every WATCH/ABSTAIN, selecting a control after seeing future facts, or
+  counting a selected decision control as a Candidate/admitted-trade funnel conversion;
 - treating component-book snapshots as an atomic execution, guaranteed simultaneous fill,
   liquidity reservation, or proof of strategy edge;
 - database, replay platform, full-feed persistence, ML, SVI/Heston, GEX, microservice split,
@@ -77,10 +79,14 @@ qualification, deployment readiness, or private execution permission.
 
 ## Acceptance boundary
 
-The component-book lifecycle and its fail-closed data boundary are accepted implementation. The
-completed observation is a measured zero-Candidate market result, not a strategy qualification.
-The sole active closure starts from the `7 → 0` Underwriting-to-Candidate loss. Its one timing probe
-completed with `30` pairs and is exhausted. It froze maximum pair source-timestamp skew at `6000 ms`
-and receive skew at `4000 ms`; this is input-contract calibration, not Candidate evidence or
-strategy evaluation. Completion requires offline direct tests and repository checks; no live
-command or Shadow runtime is authorized.
+The component-book lifecycle, formal all-leg Underwriting selector, complete predicate-margin
+truth, and fail-closed pair timing boundary are the accepted implementation baseline. The completed
+observation remains a measured zero-Candidate market result, not a strategy qualification; its
+seven decisions predate the formal selector and cannot calibrate the new path. The sole active
+closure removes the selective-label dead end by designating at most one Episode from each causal
+Radar activation batch before action or margin is known. Its first evaluable decision is observed
+only after a strictly later valid paired refresh: a decision selected as Candidate and still
+Candidate reuses ordinary admission, while every other evaluable selection may open an explicitly
+tagged no-trade control Case. The canonical
+Candidate funnel remains unchanged. Completion requires offline direct tests and repository checks;
+no live command or Shadow runtime is authorized.

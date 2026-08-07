@@ -86,12 +86,14 @@ class ShadowStateStore:
 
         self._scope_keys: dict[str, dict[str, _ObjectKey]] = {}
         self._candidate_keys: dict[str, dict[str, _ObjectKey]] = {}
+        self._control_keys: dict[str, dict[str, _ObjectKey]] = {}
         self._entry_keys: dict[str, dict[str, _ObjectKey]] = {}
         self._scope_by_availability: dict[str, str] = {}
         self._candidate_by_admission_attempt: dict[str, str] = {}
         self._entry_by_observation: dict[str, str] = {}
         self._entry_by_post_close_attempt: dict[str, str] = {}
         self._latest_terminal_entry: str | None = None
+        self._latest_terminal_control_batch: str | None = None
 
     @property
     def objects(self) -> tuple[Mapping[str, object], ...]:
@@ -129,12 +131,14 @@ class ShadowStateStore:
             "pending_records": len(self._pending_records),
             "active_scopes": len(self._scope_keys),
             "active_candidates": len(self._candidate_keys),
+            "active_or_latest_terminal_control_batches": len(self._control_keys),
             "active_or_latest_terminal_cases": len(self._entry_keys),
             "availability_bindings": len(self._scope_by_availability),
             "admission_attempt_bindings": len(self._candidate_by_admission_attempt),
             "observation_bindings": len(self._entry_by_observation),
             "post_close_attempt_bindings": len(self._entry_by_post_close_attempt),
             "latest_terminal_cases": int(self._latest_terminal_entry is not None),
+            "latest_terminal_control_batches": int(self._latest_terminal_control_batch is not None),
         }
 
     def take_pending_records(self) -> tuple[Mapping[str, object], ...]:
@@ -189,6 +193,15 @@ class ShadowStateStore:
             if candidate == candidate_identity:
                 self._candidate_by_admission_attempt.pop(attempt, None)
 
+    def retire_control_batch(self, batch_identity: str) -> None:
+        self._retire_owner("control", batch_identity)
+
+    def retain_latest_terminal_control_batch(self, batch_identity: str) -> None:
+        previous = self._latest_terminal_control_batch
+        if previous is not None and previous != batch_identity:
+            self._retire_owner("control", previous)
+        self._latest_terminal_control_batch = batch_identity
+
     def retain_latest_terminal_case(self, entry_identity: str) -> None:
         previous = self._latest_terminal_entry
         if previous is not None and previous != entry_identity:
@@ -228,10 +241,25 @@ class ShadowStateStore:
             candidate = _required_text(payload, "candidate_identity")
             self._candidate_by_admission_attempt[identity] = candidate
             return "candidate", candidate
-        if kind in {"ADMISSION_ATTEMPT_TERMINAL", "CANDIDATE_INVALIDATION"}:
+        if kind == "ADMISSION_ATTEMPT_TERMINAL":
+            selection = payload.get("selected_underwriting_decision_identity")
+            batch = payload.get("activation_batch_identity")
+            if isinstance(selection, str) and selection and isinstance(batch, str) and batch:
+                return "control", batch
+            return "candidate", _required_text(payload, "candidate_identity")
+        if kind == "CANDIDATE_INVALIDATION":
             return "candidate", _required_text(payload, "candidate_identity")
 
-        if kind == "SHADOW_ENTRY":
+        if kind == "UNDERWRITING_DECISION_BATCH_DESIGNATION":
+            return "control", _required_text(payload, "activation_batch_identity")
+        if kind in {
+            "SELECTED_UNDERWRITING_DECISION",
+            "UNDERWRITING_DECISION_CONTROL_ATTEMPT_SCHEDULED",
+            "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
+        }:
+            return "control", _required_text(payload, "activation_batch_identity")
+
+        if kind in {"SHADOW_ENTRY", "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN"}:
             return "entry", identity
         if kind == "SHADOW_OUTCOME_OBSERVATION":
             entry = _required_text(payload, "shadow_entry_identity")
@@ -253,6 +281,7 @@ class ShadowStateStore:
             "CLOSE_OPPORTUNITY_EVALUATION",
             "SHADOW_CLOSE_OPPORTUNITY",
             "SHADOW_OUTCOME",
+            "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME",
         }:
             return "entry", _required_text(payload, "shadow_entry_identity")
         if kind == "SHADOW_COUNTERFACTUAL_EXIT":
@@ -268,6 +297,8 @@ class ShadowStateStore:
             return self._scope_keys
         if owner_kind == "candidate":
             return self._candidate_keys
+        if owner_kind == "control":
+            return self._control_keys
         if owner_kind == "entry":
             return self._entry_keys
         raise RuntimeError("unknown current-state owner kind")
@@ -292,6 +323,9 @@ class ShadowStateStore:
                     self._entry_by_post_close_attempt.pop(attempt, None)
             if self._latest_terminal_entry == owner_identity:
                 self._latest_terminal_entry = None
+        elif owner_kind == "control":
+            if self._latest_terminal_control_batch == owner_identity:
+                self._latest_terminal_control_batch = None
         self._revision += 1
         self._object_snapshot = None
 

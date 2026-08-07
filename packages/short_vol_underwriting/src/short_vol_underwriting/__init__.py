@@ -37,9 +37,19 @@ from short_vol_underwriting.close import (
 )
 from short_vol_underwriting.constants import (
     CANDIDATE_INVALIDATION_REASONS,
+    DECISION_CONTROL_OBJECT_KINDS,
     OUTCOME_OBJECT_KINDS,
     POSITION_CLOSE_REASONS,
     UNDERWRITING_OBJECT_KINDS,
+)
+from short_vol_underwriting.control import (
+    DecisionControlAttempt,
+    DecisionControlAttemptOutcome,
+    DecisionControlRefreshClassification,
+    designate_selected_decision_episode,
+    selected_decision_batch_identity,
+    selected_decision_designation_key,
+    selected_decision_rule_identity,
 )
 from short_vol_underwriting.domain import (
     UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
@@ -103,6 +113,7 @@ from short_vol_underwriting.policy import (
 
 __all__ = [
     "CANDIDATE_INVALIDATION_REASONS",
+    "DECISION_CONTROL_OBJECT_KINDS",
     "OUTCOME_OBJECT_KINDS",
     "POSITION_CLOSE_REASONS",
     "UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY",
@@ -124,6 +135,9 @@ __all__ = [
     "ComponentBookPairWitness",
     "ComponentLegRole",
     "ComponentPostCloseAttempt",
+    "DecisionControlAttempt",
+    "DecisionControlAttemptOutcome",
+    "DecisionControlRefreshClassification",
     "EntryEconomics",
     "FactBoundary",
     "FixedContractShadowOwner",
@@ -177,9 +191,13 @@ __all__ = [
     "compute_component_entry_economics",
     "compute_entry_economics",
     "compute_shadow_outcome_economics",
+    "designate_selected_decision_episode",
     "evaluate_close_opportunity",
     "load_policy_chain",
     "ordered_candidate_invalidation",
     "select_underwriting_component",
+    "selected_decision_batch_identity",
+    "selected_decision_designation_key",
+    "selected_decision_rule_identity",
     "underwriting_threshold_margins",
 ]

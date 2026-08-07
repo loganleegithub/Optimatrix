@@ -76,15 +76,61 @@ def _scope_identity(suffix: str) -> str:
     return canonical_identity("RadarScope", suffix)
 
 
-def _component_source_refs(*, suffix: str, causal_seq: int) -> list[dict[str, object]]:
-    return [
-        {
-            "canonical_leg_role": role,
-            "source_identity": canonical_identity("ComponentSource", suffix, role, causal_seq),
-            "receipt_fact_boundary": _boundary(causal_seq).as_object(),
-        }
-        for role in ("SHORT", "LONG")
-    ]
+def _component_source_refs(
+    *,
+    suffix: str,
+    causal_seq: int,
+    include_pair_timing_inputs: bool = False,
+    leg_identities: tuple[str, str] | None = None,
+    instrument_names: tuple[str, str] | None = None,
+) -> list[dict[str, object]]:
+    if not include_pair_timing_inputs:
+        return [
+            {
+                "canonical_leg_role": role,
+                "source_identity": canonical_identity("ComponentSource", suffix, role, causal_seq),
+                "receipt_fact_boundary": _boundary(causal_seq).as_object(),
+            }
+            for role in ("SHORT", "LONG")
+        ]
+    if leg_identities is None or instrument_names is None:
+        raise ValueError("entry component source refs require leg identities and names")
+    origin = _boundary(causal_seq - 2)
+    sent = _boundary(causal_seq - 1)
+    response = _boundary(causal_seq)
+    refs: list[dict[str, object]] = []
+    for index, role in enumerate(("SHORT", "LONG")):
+        request_id = 101 + index
+        params = {"instrument_name": instrument_names[index], "depth": 10000}
+        source_identity = canonical_identity(
+            "RpcComponentLegRefreshSourceIdentity",
+            response.runtime_identity,
+            request_id,
+            role,
+            "public/get_order_book",
+            leg_identities[index],
+            params,
+            origin.as_object(),
+            sent.as_object(),
+            1,
+            11,
+            1_000,
+            response.as_object(),
+        )
+        refs.append(
+            {
+                "canonical_leg_role": role,
+                "source_identity": source_identity,
+                "receipt_fact_boundary": response.as_object(),
+                "source_timestamp_ms": 1_000,
+                "global_continuity_epoch": 1,
+                "request_id": request_id,
+                "owner_origin_boundary": origin.as_object(),
+                "sent_boundary": sent.as_object(),
+                "change_id": 11,
+            }
+        )
+    return refs
 
 
 def _component_legs(*, close: bool = False) -> list[dict[str, object]]:
@@ -93,13 +139,13 @@ def _component_legs(*, close: bool = False) -> list[dict[str, object]]:
             "SHORT",
             "BTC_USDC-8AUG26-100000-C",
             "BUY" if close else "SELL",
-            "50" if close else "300",
-            "51" if close else "299",
+            "50" if close else "400",
+            "51" if close else "399",
             "0.6375" if close else "3",
         ),
         (
             "LONG",
-            "BTC_USDC-8AUG26-105000-C",
+            "BTC_USDC-8AUG26-102000-C",
             "SELL" if close else "BUY",
             "20" if close else "100",
             "19" if close else "101",
@@ -120,6 +166,25 @@ def _component_legs(*, close: bool = False) -> list[dict[str, object]]:
             "fee_reserve_usdc": fee,
         }
         for role, instrument_name, action, raw_price, stressed_price, fee in specifications
+    ]
+
+
+def _predicate_margin_vector() -> list[dict[str, object]]:
+    return [
+        {
+            "predicate": predicate,
+            "signed_margin": margin,
+            "unit": unit,
+            "passes": True,
+        }
+        for predicate, margin, unit in (
+            ("POSITIVE_NET_ENTRY_CREDIT", "25.5375", "USDC"),
+            ("CREDIT_ABOVE_FUTURE_COST_RESERVE", "13.5375", "USDC"),
+            ("UNDERWRITING_RESERVED_LOSS_WITHIN_LIMIT", "63.5375", "USDC"),
+            ("MINIMUM_NET_ENTRY_CREDIT", "10.5375", "USDC"),
+            ("MINIMUM_NET_CREDIT_TO_PAYOFF_CAP", "0.0276875", "FRACTION"),
+            ("ENTRY_CONSUMED_LEVEL_LIMIT", 9998, "LEVEL_COUNT"),
+        )
     ]
 
 
@@ -157,6 +222,8 @@ def _seed_pre_shadow(
             "underwriting_opportunity_key_identity": canonical_identity("Opportunity", suffix),
             "consumed_economic_fact_fingerprint": canonical_identity("Economics", suffix),
             "economic_action": "CANDIDATE",
+            "failed_predicates": [],
+            "predicate_margin_vector": _predicate_margin_vector(),
             "evaluation_fact_boundary": _boundary(start_seq + 1).as_object(),
         },
     )
@@ -182,13 +249,49 @@ def _open_case(
     causal_seq: int = 4,
 ) -> str:
     entry_identity = canonical_identity("ShadowEntryIdentity", suffix)
+    entry_economic_fingerprint = canonical_identity("EntryEconomicFingerprint", suffix)
+    entry_action_identity = canonical_identity(
+        "CaseOpenRefreshedUnderwritingActionIdentity",
+        candidate_identity,
+        entry_economic_fingerprint,
+        "CANDIDATE",
+        _boundary(causal_seq).as_object(),
+    )
+    leg_identities = (
+        canonical_identity("Leg", f"{suffix}-short"),
+        canonical_identity("Leg", f"{suffix}-long"),
+    )
+    instrument_names = (
+        "BTC_USDC-8AUG26-100000-C",
+        "BTC_USDC-8AUG26-102000-C",
+    )
+    entry_source_refs = _component_source_refs(
+        suffix=f"{suffix}-entry",
+        causal_seq=causal_seq,
+        include_pair_timing_inputs=True,
+        leg_identities=leg_identities,
+        instrument_names=instrument_names,
+    )
+    entry_pair_identity = canonical_identity(
+        "ComponentBookPairWitnessIdentity",
+        entry_source_refs[0]["source_identity"],
+        entry_source_refs[1]["source_identity"],
+        _boundary(causal_seq).as_object(),
+    )
     state.record(
         object_kind="SHADOW_ENTRY",
         object_identity=entry_identity,
         fact_boundary=_boundary(causal_seq),
         payload={
             "shadow_entry_identity": entry_identity,
+            "enrollment_kind": "ADMITTED_SHADOW_TRADE",
             "candidate_identity": candidate_identity,
+            "entry_underwriting_action_identity": entry_action_identity,
+            "entry_underwriting_economic_action": "CANDIDATE",
+            "entry_underwriting_consumed_economic_fact_fingerprint": (entry_economic_fingerprint),
+            "entry_underwriting_failed_predicates": [],
+            "entry_underwriting_predicate_margin_vector": _predicate_margin_vector(),
+            "entry_underwriting_decision_fact_boundary": _boundary(causal_seq).as_object(),
             "active_episode_identity": (
                 f"{RUNTIME}:{RADAR_POLICY}:BTC_USDC-8AUG26-100000-C:{causal_seq}"
             ),
@@ -199,32 +302,38 @@ def _open_case(
             "radar_band_id": "six-to-twenty-four-hours",
             "radar_richness_interval": {"lower": "1.3", "upper": "1.31"},
             "canonical_leg_identities": [
-                canonical_identity("Leg", f"{suffix}-short"),
-                canonical_identity("Leg", f"{suffix}-long"),
+                *leg_identities,
             ],
-            "short_leg_instrument_name": "BTC_USDC-8AUG26-100000-C",
-            "long_leg_instrument_name": "BTC_USDC-8AUG26-105000-C",
+            "short_leg_instrument_name": instrument_names[0],
+            "long_leg_instrument_name": instrument_names[1],
             "expiry_ms": 1_786_150_800_000,
             "option_type": "call",
             "short_strike_usdc_per_btc": "100000",
-            "long_strike_usdc_per_btc": "105000",
+            "long_strike_usdc_per_btc": "102000",
             "entry_direction": "SELL",
             "full_quantity_btc": "0.1",
-            "entry_component_pair_identity": canonical_identity("ComponentPair", suffix, "entry"),
-            "entry_component_quote_source_refs": _component_source_refs(
-                suffix=f"{suffix}-entry",
-                causal_seq=causal_seq,
-            ),
+            "entry_component_pair_identity": entry_pair_identity,
+            "entry_component_pair_timing": {
+                "session_epochs": [1, 1],
+                "global_continuity_epochs": [1, 1],
+                "source_timestamp_skew_ms": 0,
+                "receive_skew_ms": 0,
+            },
+            "entry_component_pair_limits": {
+                "maximum_source_skew_ms": 6000,
+                "maximum_receive_skew_ms": 4000,
+            },
+            "entry_component_quote_source_refs": entry_source_refs,
             "entry_component_legs": _component_legs(),
-            "gross_entry_credit_usdc": "19.8",
+            "gross_entry_credit_usdc": "29.8",
             "entry_fee_reserve_usdc": "4.2625",
-            "net_entry_credit_usdc": "15.5375",
-            "width_usdc_per_btc": "5000",
-            "payoff_cap_usdc": "500",
-            "contractual_payoff_max_loss_ex_fees_usdc": "480.2",
-            "entry_fee_reserved_payoff_loss_usdc": "484.4625",
+            "net_entry_credit_usdc": "25.5375",
+            "width_usdc_per_btc": "2000",
+            "payoff_cap_usdc": "200",
+            "contractual_payoff_max_loss_ex_fees_usdc": "170.2",
+            "entry_fee_reserved_payoff_loss_usdc": "174.4625",
             "future_cost_reserve_usdc": "12",
-            "underwriting_reserved_loss_usdc": "496.4625",
+            "underwriting_reserved_loss_usdc": "186.4625",
             "non_claims": COMPONENT_NON_CLAIMS,
         },
     )
@@ -353,6 +462,63 @@ def test_case_reader_rejects_unexpected_nested_opened_fields(tmp_path: Path) -> 
         case_store.read_case(case_id)
 
 
+@pytest.mark.parametrize(
+    ("tamper", "expected_error"),
+    (
+        ("pair_receive_skew", "receive skew"),
+        ("pair_source_skew", "source skew"),
+        ("pair_continuity", "continuity evidence"),
+        ("pair_limit", "Policy"),
+        ("pair_identity", "pair identity mismatch"),
+        ("source_identity", "source identity mismatch"),
+        ("predicate_name", "predicate order/unit"),
+        ("predicate_passes", "contradicts signed_margin"),
+        ("failed_predicates", "failed predicates"),
+        ("signed_margin", "do not match entry economics"),
+    ),
+)
+def test_case_reader_rejects_tampered_entry_pair_and_underwriting_truth(
+    tmp_path: Path,
+    tamper: str,
+    expected_error: str,
+) -> None:
+    state, case_store, _bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    entry_identity = _open_case(state, candidate_identity)
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+    opened_path = tmp_path / "cases" / case_id.removeprefix("sha256:") / "opened.json"
+    opened = json.loads(opened_path.read_text(encoding="utf-8"))
+    if tamper == "pair_receive_skew":
+        opened["structure"]["entry_component_pair_timing"]["receive_skew_ms"] = 1
+    elif tamper == "pair_source_skew":
+        opened["structure"]["entry_component_pair_timing"]["source_timestamp_skew_ms"] = 1
+    elif tamper == "pair_continuity":
+        opened["structure"]["entry_component_pair_timing"]["global_continuity_epochs"] = [2, 2]
+    elif tamper == "pair_limit":
+        opened["structure"]["entry_component_pair_limits"]["maximum_receive_skew_ms"] = 4_001
+    elif tamper == "pair_identity":
+        opened["structure"]["entry_component_pair_identity"] = "sha256:" + "c" * 64
+    elif tamper == "source_identity":
+        opened["structure"]["entry_component_quote_source_refs"][0]["source_identity"] = (
+            "sha256:" + "d" * 64
+        )
+    elif tamper == "predicate_name":
+        opened["underwriting"]["predicate_margin_vector"][0]["predicate"] = "NOT_CANONICAL"
+    elif tamper == "predicate_passes":
+        opened["underwriting"]["predicate_margin_vector"][0]["passes"] = False
+    elif tamper == "failed_predicates":
+        opened["underwriting"]["failed_predicates"] = ["NON_POSITIVE_NET_ENTRY_CREDIT"]
+    elif tamper == "signed_margin":
+        opened["underwriting"]["predicate_margin_vector"][0]["signed_margin"] = "999"
+    else:  # pragma: no cover - parametrization is closed above
+        raise AssertionError(tamper)
+    opened_path.write_text(json.dumps(opened), encoding="utf-8")
+
+    with pytest.raises(ShadowCaseStoreError, match=expected_error):
+        case_store.read_case(case_id)
+
+
 def test_first_close_and_known_outcome_complete_case_with_recomputable_economics(
     tmp_path: Path,
 ) -> None:
@@ -393,9 +559,9 @@ def test_first_close_and_known_outcome_complete_case_with_recomputable_economics
             "gross_close_cashflow_usdc": "-3.2",
             "close_fee_reserve_usdc": "0.875",
             "net_close_cashflow_usdc": "-4.075",
-            "gross_pnl_usdc": "16.6",
+            "gross_pnl_usdc": "26.6",
             "total_public_fee_reserve_usdc": "5.1375",
-            "net_pnl_after_public_standard_fee_reserve_usdc": "11.4625",
+            "net_pnl_after_public_standard_fee_reserve_usdc": "21.4625",
             "net_loss_usdc": "0",
             "economic_availability": "KNOWN",
             "close_component_pair_identity": canonical_identity("ComponentPair", "one", "close"),
@@ -419,7 +585,7 @@ def test_first_close_and_known_outcome_complete_case_with_recomputable_economics
     assert read.status is ShadowCaseReadStatus.COMPLETE
     assert read.first_close is not None
     assert read.outcome is not None
-    assert read.outcome["net_pnl_after_public_standard_fee_reserve_usdc"] == "11.4625"
+    assert read.outcome["net_pnl_after_public_standard_fee_reserve_usdc"] == "21.4625"
 
     for filename in ("first-close.json", "outcome.json"):
         path = case_directory / filename
@@ -459,7 +625,7 @@ def test_case_reader_rejects_tampered_known_outcome_arithmetic(tmp_path: Path) -
     opened_boundary = _boundary(4)
     tampered = {
         "record_kind": "SHADOW_CASE_OUTCOME",
-        "schema_version": 2,
+        "schema_version": 3,
         "case_id": case_id,
         "code_identity": CODE,
         "runtime_identity": RUNTIME,
@@ -476,7 +642,7 @@ def test_case_reader_rejects_tampered_known_outcome_arithmetic(tmp_path: Path) -
         "net_close_cashflow_usdc": "-4.075",
         "gross_pnl_usdc": "999",
         "total_public_fee_reserve_usdc": "5.1375",
-        "net_pnl_after_public_standard_fee_reserve_usdc": "11.4625",
+        "net_pnl_after_public_standard_fee_reserve_usdc": "21.4625",
         "net_loss_usdc": "0",
         "economic_availability": "KNOWN",
         "close_component_pair_identity": canonical_identity("ComponentPair", "tampered", "close"),
@@ -602,12 +768,14 @@ def test_completed_cases_evict_active_memory_but_remain_durably_readable(tmp_pat
         "pending_records": 0,
         "active_scopes": 0,
         "active_candidates": 0,
+        "active_or_latest_terminal_control_batches": 0,
         "active_or_latest_terminal_cases": 1,
         "availability_bindings": 0,
         "admission_attempt_bindings": 0,
         "observation_bindings": 0,
         "post_close_attempt_bindings": 0,
         "latest_terminal_cases": 1,
+        "latest_terminal_control_batches": 0,
     }
     assert case_store.read_case(case_ids[0]).status is ShadowCaseReadStatus.COMPLETE
     assert case_store.read_case(case_ids[-1]).status is ShadowCaseReadStatus.COMPLETE
@@ -661,12 +829,14 @@ def test_current_scope_replacements_do_not_accumulate_hidden_availability_bindin
         "pending_records": 0,
         "active_scopes": 1,
         "active_candidates": 0,
+        "active_or_latest_terminal_control_batches": 0,
         "active_or_latest_terminal_cases": 0,
         "availability_bindings": 1,
         "admission_attempt_bindings": 0,
         "observation_bindings": 0,
         "post_close_attempt_bindings": 0,
         "latest_terminal_cases": 0,
+        "latest_terminal_control_batches": 0,
     }
     state.retire_scope(scope)
     assert state.retained_object_count == 0
