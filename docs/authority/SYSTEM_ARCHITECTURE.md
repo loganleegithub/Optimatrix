@@ -148,9 +148,14 @@ The hard-screen calculator in `short_vol_radar` is the sole owner of target-size
 official tick stress, Black inversion, TTE/Delta clue eligibility, and stressed IV/RV detector
 truth. The separate review calculator may derive semivariance/jump context, surface-lite context,
 protective vertical references, and transparent attention rank from already settled current state.
-For each active Episode, the composition layer freezes one protective long from that review and
-does not switch it. Review output cannot feed detector truth. The frozen two-leg identity may feed
-the sole component-book calculator; official Combo availability remains a separate diagnostic.
+Its bounded Top 3 is display-only and cannot select an Underwriting structure or feed detector
+truth. For each active Episode, composition waits for a complete positive option scope, excludes
+known inactive or quantity-ineligible legs, and keeps potentially legal metadata/book/source gaps
+`UNKNOWN`. It then uses the sole component-book calculator on every legal target-size protective
+quote and passes those economics to the Underwriting-owned selector. The selector orders action
+class `CANDIDATE > WATCH > ABSTAIN`, then the complete signed predicate-margin vector, narrower
+width, and instrument name. Composition freezes that result and does not switch it during the
+Episode. Official Combo availability remains a separate diagnostic.
 
 `options_domain` owns the one component-book calculator. Entry walks short bids and long asks at
 the full target quantity, stresses short sells down one legal tick and long buys up one legal tick,
@@ -161,9 +166,11 @@ schema is permitted.
 
 Candidate admission and post-CLOSE each schedule exactly two bounded
 `public/get_order_book` requests for the frozen legs. The downstream owner accepts a quote only
-after both strictly later responses share one causal owner and each covers the full quantity. A
-single response cannot open or close a Case. Failure of either response retires the sibling and
-settles the one paired attempt.
+after both strictly later responses share one causal owner, session epoch, and global continuity
+epoch; each covers the full quantity; source timestamps differ by no more than `6000 ms`; and local
+receive boundaries differ by no more than `4000 ms`. A single response cannot open or close a Case.
+Failure of either response retires the sibling and settles the one paired attempt. Session,
+continuity, or skew mismatch is a bounded `UNKNOWN` with an exact reason, not an integrity exception.
 
 The canonical stages are:
 

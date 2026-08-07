@@ -142,10 +142,10 @@ applies the public standard option fee formula including the premium cap, and sh
 width, payoff cap, max loss after fee reserve, and credit/payoff-cap ratio. Ordering is descending
 credit/payoff-cap ratio, descending stressed net credit, narrower width, then instrument name.
 
-When an Episode first reaches this boundary, composition freezes the first ranked protective leg.
-It does not switch to a later apparently better leg during that Episode. Its economics are
-recomputed by the sole component-book calculator; the review object itself cannot create a
-Candidate or Case.
+These three rows are a trader display and attention aid only. They do not select or freeze the
+formal protective leg. The downstream Underwriting composition separately enumerates every legal
+target-size component quote, invokes the sole component-book calculator, and hands its economics to
+the Underwriting-owned selector. The review object itself cannot create a Candidate or Case.
 
 This state is exactly `LEGGED_REFERENCE_NOT_ATOMIC`. It carries explicit non-claims:
 
@@ -223,7 +223,8 @@ Radar, frozen structure, component-book, and atomic-diagnostic facts.
 
 Direct tests own source shape/cadence/revision state, tick regimes, two-sided target depth, one-tick
 stress, Black inversion, TTE/Delta review buckets, five-minute multi-horizon baseline, regime
-statistics, surface-lite limitations, fee-cap arithmetic, frozen protective-leg selection, ranking
+statistics, surface-lite limitations, fee-cap arithmetic, protective-leg display ranking,
+Underwriting-selector separation, ranking
 determinism, episode persistence/end reasons, official combo semantics, reducer ordering, and
 bounded UNKNOWN reasons.
 

@@ -14,6 +14,7 @@ from options_domain import (
     OptionInstrument,
     check_target_amount,
     evaluate_component_book_vertical,
+    is_protective_vertical,
 )
 from options_domain.quotes import walk_target_depth
 from short_vol_radar.atomic import (
@@ -38,9 +39,12 @@ from short_vol_underwriting import (
     SourceFact,
     SubscriptionAdmissionRefreshWitness,
     TerminalSource,
+    UnderwritingComponentCandidate,
     UnderwritingFacts,
     canonical_identity,
     component_pair_witness,
+    compute_component_entry_economics,
+    select_underwriting_component,
 )
 from short_vol_underwriting import (
     FactBoundary as DownstreamFactBoundary,
@@ -664,6 +668,7 @@ class FixedContractShadowRuntimeAdapter:
             {"instrument_name": context.instrument_name, "depth": 10000},
             context.origin_boundary.as_object(),
             sent_boundary.as_object(),
+            reducer.current_global_continuity_epoch,
             parsed.change_id,
             parsed.source_timestamp_ms,
             accepted_boundary.as_object(),
@@ -680,6 +685,7 @@ class FixedContractShadowRuntimeAdapter:
             request_id=request_id,
             owner_origin_boundary=context.origin_boundary,
             sent_boundary=sent_boundary,
+            global_continuity_epoch=reducer.current_global_continuity_epoch,
             response_covers_full_quantity=walk is not None,
             payload_matches_request=parsed.instrument_name == context.instrument_name,
             payload_well_formed=parsed.well_formed and parsed.state == "open",
@@ -839,7 +845,15 @@ class FixedContractShadowRuntimeAdapter:
                 target_quantity_btc=origin.target_quantity_btc,
                 fee_rate_index_fraction=self.owner.policies.underwriting.fee_rate_index_fraction,
             )
-        unknown: list[str] = []
+        pair_unknown_reasons = pair.timing_unknown_reasons(
+            maximum_source_skew_ms=(
+                self.owner.policies.underwriting.maximum_component_pair_source_skew_ms
+            ),
+            maximum_receive_skew_ms=(
+                self.owner.policies.underwriting.maximum_component_pair_receive_skew_ms
+            ),
+        )
+        unknown: list[str] = list(pair_unknown_reasons)
         for condition, reason in (
             (active_episode is None, "RADAR_EPISODE_NOT_ACTIVE"),
             (not catalog_complete, "OPTION_CATALOG_INCOMPLETE"),
@@ -920,7 +934,7 @@ class FixedContractShadowRuntimeAdapter:
             quote_refresh_witness=None,
             unknown_reasons=tuple(sorted(set(unknown))),
             component_state=component_state,
-            component_blockers=tuple(sorted(quote_reasons)),
+            component_blockers=tuple(sorted((*quote_reasons, *pair_unknown_reasons))),
             component_quote=quote,
             component_short_quote_source=SourceFact(
                 pair.short.source_identity,
@@ -1367,10 +1381,34 @@ class FixedContractShadowRuntimeAdapter:
     ) -> UnderwritingFacts:
         short_name = snapshot.short_leg.instrument_name
         short = self._option_sources.get(short_name)
+        trusted = self._trusted_interval(
+            reducer,
+            boundary,
+            budget_ms=self.owner.policies.underwriting.clock_currentness_budget_ms,
+        )
+        index, index_source = self._current_index(
+            reducer,
+            trusted,
+            budget_ms=self.owner.policies.underwriting.index_currentness_budget_ms,
+        )
+        catalog_complete = reducer.option_catalog.complete and bool(
+            getattr(reducer, "_option_positive_scope_safe", False)
+        )
         frozen_long_name = self._frozen_component_by_episode.get(snapshot.episode_identity)
-        if frozen_long_name is None and context is not None and context.legged_structure.references:
-            frozen_long_name = context.legged_structure.references[0].long_instrument_name
-            self._frozen_component_by_episode[snapshot.episode_identity] = frozen_long_name
+        selection_unknown_reasons: tuple[str, ...] = ()
+        if (
+            frozen_long_name is None
+            and catalog_complete
+            and short is not None
+            and index is not None
+        ):
+            frozen_long_name, selection_unknown_reasons = self._select_underwriting_component_long(
+                reducer=reducer,
+                short=short,
+                index_usdc_per_btc=index,
+            )
+            if frozen_long_name is not None:
+                self._frozen_component_by_episode[snapshot.episode_identity] = frozen_long_name
         long = self._option_sources.get(frozen_long_name) if frozen_long_name is not None else None
         short_identity = short.semantic_identity if short is not None else None
         long_identity = long.semantic_identity if long is not None else None
@@ -1382,16 +1420,6 @@ class FixedContractShadowRuntimeAdapter:
             short_identity,
             long_identity or "NO_FROZEN_PROTECTIVE_COMPONENT",
         )
-        trusted = self._trusted_interval(
-            reducer,
-            boundary,
-            budget_ms=self.owner.policies.underwriting.clock_currentness_budget_ms,
-        )
-        index, index_source = self._current_index(
-            reducer,
-            trusted,
-            budget_ms=self.owner.policies.underwriting.index_currentness_budget_ms,
-        )
         ticker, ticker_source = self._current_ticker(
             short_name,
             trusted,
@@ -1401,9 +1429,6 @@ class FixedContractShadowRuntimeAdapter:
             reducer,
             boundary,
             budget_ms=self.owner.policies.underwriting.platform_currentness_budget_ms,
-        )
-        catalog_complete = reducer.option_catalog.complete and bool(
-            getattr(reducer, "_option_positive_scope_safe", False)
         )
         short_book = reducer.option_books.get(short_name)
         long_book = (
@@ -1424,7 +1449,9 @@ class FixedContractShadowRuntimeAdapter:
         quote: ComponentBookVerticalQuote | None = None
         if frozen_long_name is None:
             legged_state = context.legged_structure.state if context is not None else None
-            if legged_state is LeggedReferenceState.NO_PROTECTIVE_LEG:
+            if selection_unknown_reasons:
+                component_blockers.extend(selection_unknown_reasons)
+            elif legged_state is LeggedReferenceState.NO_PROTECTIVE_LEG:
                 component_state = NO_PROTECTIVE_COMPONENT
                 component_blockers.append(NO_PROTECTIVE_COMPONENT)
             elif legged_state is LeggedReferenceState.NO_TARGET_SIZE_REFERENCE:
@@ -1597,6 +1624,132 @@ class FixedContractShadowRuntimeAdapter:
             component_long_quote_source=long_book_source,
             component_pair_witness=None,
         )
+
+    def _select_underwriting_component_long(
+        self,
+        *,
+        reducer: RadarReducer,
+        short: _OptionSource,
+        index_usdc_per_btc: Decimal,
+    ) -> tuple[str | None, tuple[str, ...]]:
+        """Compose every evaluable legal leg into the sole Underwriting selector."""
+        short_name = short.instrument.instrument_name
+        target_quantity = self.owner.policies.underwriting.target_base_quantity_btc
+        if (
+            short.instrument.lifecycle_state.value != "open"
+            or not short.instrument.is_active
+            or (
+                short.instrument.amount is not None
+                and check_target_amount(target_quantity, short.instrument.amount).state
+                is AmountState.INELIGIBLE
+            )
+        ):
+            return None, ()
+        short_metadata_unknown = self._selection_metadata_unknown_reasons(short)
+        if short_metadata_unknown:
+            return None, short_metadata_unknown
+        short_book = reducer.option_books.get(short_name)
+        short_source = self._option_book_source(
+            reducer,
+            short_name,
+            short.semantic_identity,
+        )
+        if short_book is None or short_book.state is not BookState.USABLE:
+            return None, (f"{short_name}:BOOK_UNKNOWN",)
+        if short_source is None:
+            return None, (f"{short_name}:BOOK_SOURCE_UNKNOWN",)
+        candidates: list[UnderwritingComponentCandidate] = []
+        unknown_reasons: list[str] = []
+        for long in sorted(
+            self._option_sources.values(),
+            key=lambda value: value.instrument.instrument_name,
+        ):
+            if not is_protective_vertical(short.instrument, long.instrument):
+                continue
+            long_name = long.instrument.instrument_name
+            if (
+                long.instrument.lifecycle_state.value != "open"
+                or not long.instrument.is_active
+                or (
+                    long.instrument.amount is not None
+                    and check_target_amount(target_quantity, long.instrument.amount).state
+                    is AmountState.INELIGIBLE
+                )
+            ):
+                continue
+            metadata_unknown = self._selection_metadata_unknown_reasons(long)
+            if metadata_unknown:
+                unknown_reasons.extend(metadata_unknown)
+                continue
+            long_book = reducer.option_books.get(long_name)
+            long_source = self._option_book_source(
+                reducer,
+                long_name,
+                long.semantic_identity,
+            )
+            if long_book is None or long_book.state is not BookState.USABLE:
+                unknown_reasons.append(f"{long_name}:BOOK_UNKNOWN")
+                continue
+            if long_source is None:
+                unknown_reasons.append(f"{long_name}:BOOK_SOURCE_UNKNOWN")
+                continue
+            quote, quote_reasons = evaluate_component_book_vertical(
+                kind=ComponentBookQuoteKind.ENTRY,
+                short_instrument=short.instrument,
+                long_instrument=long.instrument,
+                short_side_levels=short_book.levels("bid"),
+                long_side_levels=long_book.levels("ask"),
+                index_usdc_per_btc=index_usdc_per_btc,
+                target_quantity_btc=target_quantity,
+                fee_rate_index_fraction=(self.owner.policies.underwriting.fee_rate_index_fraction),
+            )
+            if quote is None:
+                for reason in quote_reasons:
+                    if reason.endswith("METADATA_UNKNOWN") or reason.endswith(
+                        "STRESSED_PRICE_NON_POSITIVE"
+                    ):
+                        instrument_name = short_name if reason.startswith("SHORT_") else long_name
+                        unknown_reasons.append(f"{instrument_name}:{reason}")
+                continue
+            candidates.append(
+                UnderwritingComponentCandidate(
+                    long_instrument_name=long_name,
+                    economics=compute_component_entry_economics(
+                        quote=quote,
+                        future_cost_reserve_usdc=(
+                            self.owner.policies.underwriting.future_cost_reserve_usdc
+                        ),
+                    ),
+                    consumed_level_count=quote.consumed_level_count,
+                )
+            )
+        if unknown_reasons:
+            return None, tuple(sorted(set(unknown_reasons)))
+        policy = self.owner.policies.underwriting
+        selection = select_underwriting_component(
+            candidates,
+            maximum_underwriting_reserved_loss_usdc=(
+                policy.maximum_underwriting_reserved_loss_usdc
+            ),
+            minimum_net_entry_credit_usdc=policy.minimum_net_entry_credit_usdc,
+            minimum_net_credit_to_payoff_cap_fraction=(
+                policy.minimum_net_credit_to_payoff_cap_fraction
+            ),
+            maximum_entry_consumed_level_count=policy.maximum_entry_consumed_level_count,
+        )
+        return (
+            selection.candidate.long_instrument_name if selection is not None else None,
+            (),
+        )
+
+    @staticmethod
+    def _selection_metadata_unknown_reasons(source: _OptionSource) -> tuple[str, ...]:
+        reasons: list[str] = []
+        if source.instrument.amount is None:
+            reasons.append(f"{source.instrument.instrument_name}:AMOUNT_METADATA_UNKNOWN")
+        if source.instrument.price_tick is None:
+            reasons.append(f"{source.instrument.instrument_name}:PRICE_TICK_METADATA_UNKNOWN")
+        return tuple(reasons)
 
     @staticmethod
     def _component_quote_prerequisite_reasons(
@@ -2036,8 +2189,26 @@ class FixedContractShadowRuntimeAdapter:
                     target_quantity_btc=anchor.target_quantity_btc,
                     fee_rate_index_fraction=self.owner.policies.position.fee_rate_index_fraction,
                 )
+        component_pair_unknown_reasons = (
+            component_pair.timing_unknown_reasons(
+                maximum_source_skew_ms=(
+                    self.owner.policies.position.maximum_component_pair_source_skew_ms
+                ),
+                maximum_receive_skew_ms=(
+                    self.owner.policies.position.maximum_component_pair_receive_skew_ms
+                ),
+            )
+            if component_pair is not None
+            else ()
+        )
+        if component_pair_unknown_reasons:
+            component_quote = None
         component_books_known = (
-            (component_pair.short.payload_well_formed and component_pair.long.payload_well_formed)
+            (
+                component_pair.short.payload_well_formed
+                and component_pair.long.payload_well_formed
+                and not component_pair_unknown_reasons
+            )
             if component_pair is not None
             else (
                 short_book is not None
@@ -2129,6 +2300,7 @@ class FixedContractShadowRuntimeAdapter:
             component_short_quote_source=component_short_quote_source,
             component_long_quote_source=component_long_quote_source,
             component_pair_witness=component_pair,
+            component_pair_unknown_reasons=component_pair_unknown_reasons,
         )
 
     def _consume_transition(

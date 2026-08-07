@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+import radar_runtime.workbench as workbench_module
 from conftest import PolicyFactory
 from market_monitor import (
     ContinuityGap,
@@ -698,6 +699,251 @@ def test_frozen_component_structure_does_not_switch_to_a_later_protective_leg(
     assert adapter.retained_state_counts["request_contexts"] == 2
 
 
+def test_underwriting_selector_waits_for_complete_catalog_before_freezing(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    reducer.option_catalog.complete = False
+
+    assert (
+        adapter.on_settled_transaction(
+            reducer=reducer,
+            commit=_commit(
+                causal_seq=1,
+                monotonic_ms=110,
+                cause=CausalCause.OPTION_BOOK_FACT,
+            ),
+        )
+        == ()
+    )
+    (incomplete,) = adapter._underwriting_by_scope.values()
+    assert incomplete.long_leg_instrument_name is None
+    assert "OPTION_CATALOG_INCOMPLETE" in incomplete.unknown_reasons
+
+    original = reducer.options["BTC-LONG"]
+    better = replace(
+        original,
+        instrument_name="BTC-LONG-BETTER",
+        strike=Decimal("103000"),
+    )
+    reducer.options[better.instrument_name] = better
+    reducer.catalog_options[better.instrument_name] = better
+    better_book = ContinuousOrderBook(better.instrument_name)
+    better_book.apply(
+        {
+            "type": "snapshot",
+            "instrument_name": better.instrument_name,
+            "change_id": 20,
+            "timestamp": 1_000_020,
+            "bids": [["new", "49", "0.1"]],
+            "asks": [["new", "50", "0.1"]],
+        },
+        120,
+    )
+    reducer.option_books[better.instrument_name] = better_book
+    reducer.accepted_book_receipts[better.instrument_name] = AcceptedBookReceipt(
+        instrument_name=better.instrument_name,
+        snapshot_kind="snapshot",
+        prev_change_id=None,
+        change_id=20,
+        source_timestamp_ms=1_000_020,
+        session_epoch=1,
+        subscription_generation=1,
+        boundary=FactBoundary(1, 2, 120, 2),
+    )
+    reducer.option_catalog.complete = True
+
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=2,
+            monotonic_ms=120,
+            cause=CausalCause.OPTION_CATALOG,
+        ),
+    )
+
+    (complete,) = adapter._underwriting_by_scope.values()
+    assert complete.long_leg_instrument_name == "BTC-LONG-BETTER"
+    assert len(intents) == 2
+    assert owner.retained_state_counts["active_candidates"] == 1
+
+
+def test_underwriting_selector_can_choose_candidate_outside_radar_display_top_three(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    original = reducer.options["BTC-LONG"]
+    first_boundary = FactBoundary(1, 1, 110, 1)
+    for suffix, strike, bid, ask in (
+        ("A", "101250", "126", "127"),
+        ("B", "101500", "122", "123"),
+        ("C", "101750", "113", "114"),
+    ):
+        alternative = replace(
+            original,
+            instrument_name=f"BTC-LONG-{suffix}",
+            strike=Decimal(strike),
+        )
+        reducer.options[alternative.instrument_name] = alternative
+        reducer.catalog_options[alternative.instrument_name] = alternative
+        book = ContinuousOrderBook(alternative.instrument_name)
+        book.apply(
+            {
+                "type": "snapshot",
+                "instrument_name": alternative.instrument_name,
+                "change_id": 10,
+                "timestamp": 1_000_010,
+                "bids": [["new", bid, "0.1"]],
+                "asks": [["new", ask, "0.1"]],
+            },
+            110,
+        )
+        reducer.option_books[alternative.instrument_name] = book
+        reducer.accepted_book_receipts[alternative.instrument_name] = AcceptedBookReceipt(
+            instrument_name=alternative.instrument_name,
+            snapshot_kind="snapshot",
+            prev_change_id=None,
+            change_id=10,
+            source_timestamp_ms=1_000_010,
+            session_epoch=1,
+            subscription_generation=1,
+            boundary=first_boundary,
+        )
+
+    top_three = {
+        reference.long_instrument_name
+        for reference in adapter._review_contexts(reducer)["BTC-SHORT"].legged_structure.references
+    }
+    assert len(top_three) == 3
+    assert "BTC-LONG" not in top_three
+
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+
+    (current_facts,) = adapter._underwriting_by_scope.values()
+    assert current_facts.long_leg_instrument_name == "BTC-LONG"
+    assert len(intents) == 2
+    assert owner.retained_state_counts["active_candidates"] == 1
+
+
+@pytest.mark.parametrize("variant", ("inactive", "amount_ineligible"))
+def test_known_illegal_protective_leg_without_book_does_not_poison_selection(
+    tmp_path: Path,
+    variant: str,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    original = reducer.options["BTC-LONG"]
+    if variant == "inactive":
+        illegal = replace(
+            original,
+            instrument_name="BTC-LONG-INACTIVE",
+            strike=Decimal("103000"),
+            lifecycle_state=InstrumentLifecycleState.INACTIVE,
+            is_active=False,
+        )
+    else:
+        illegal = replace(
+            original,
+            instrument_name="BTC-LONG-AMOUNT_INELIGIBLE",
+            strike=Decimal("103000"),
+            amount=AmountMetadata(
+                contract_size=Decimal("1"),
+                min_trade_amount=Decimal("0.2"),
+                qty_tick_size=Decimal("0.1"),
+            ),
+        )
+    reducer.options[illegal.instrument_name] = illegal
+    reducer.catalog_options[illegal.instrument_name] = illegal
+
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_CATALOG,
+        ),
+    )
+
+    (facts,) = adapter._underwriting_by_scope.values()
+    assert facts.long_leg_instrument_name == "BTC-LONG"
+    assert len(intents) == 2
+    assert owner.retained_state_counts["active_candidates"] == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "reason"),
+    (
+        ("amount", "AMOUNT_METADATA_UNKNOWN"),
+        ("price_tick", "PRICE_TICK_METADATA_UNKNOWN"),
+    ),
+)
+def test_potentially_legal_leg_metadata_unknown_blocks_selection_exactly(
+    tmp_path: Path,
+    field: str,
+    reason: str,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    original = reducer.options["BTC-LONG"]
+    unknown = (
+        replace(original, amount=None) if field == "amount" else replace(original, price_tick=None)
+    )
+    reducer.options[unknown.instrument_name] = unknown
+    reducer.catalog_options[unknown.instrument_name] = unknown
+
+    assert (
+        adapter.on_settled_transaction(
+            reducer=reducer,
+            commit=_commit(
+                causal_seq=1,
+                monotonic_ms=110,
+                cause=CausalCause.OPTION_CATALOG,
+            ),
+        )
+        == ()
+    )
+
+    (facts,) = adapter._underwriting_by_scope.values()
+    assert facts.long_leg_instrument_name is None
+    assert facts.component_state == "COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN"
+    assert facts.component_blockers == (f"BTC-LONG:{reason}",)
+    assert owner.retained_state_counts["active_candidates"] == 0
+
+
+def test_underwriting_selector_keeps_missing_legal_leg_input_unknown(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    missing = replace(
+        reducer.options["BTC-LONG"],
+        instrument_name="BTC-LONG-MISSING",
+        strike=Decimal("103000"),
+    )
+    reducer.options[missing.instrument_name] = missing
+    reducer.catalog_options[missing.instrument_name] = missing
+
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+
+    (facts,) = adapter._underwriting_by_scope.values()
+    assert intents == ()
+    assert facts.long_leg_instrument_name is None
+    assert facts.component_state == "COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN"
+    assert facts.component_blockers == ("BTC-LONG-MISSING:BOOK_UNKNOWN",)
+    assert owner.retained_state_counts["active_candidates"] == 0
+
+
 def test_workbench_underwriting_metadata_reuses_unchanged_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -1181,12 +1427,13 @@ def _rest_option_book(
     ask_price: str,
     change_id: int,
     amount: str = "0.1",
+    timestamp_ms: int | None = None,
 ) -> dict[str, object]:
     return {
         "instrument_name": instrument_name,
         "state": "open",
         "change_id": change_id,
-        "timestamp": 1_000_000 + change_id,
+        "timestamp": 1_000_000 + change_id if timestamp_ms is None else timestamp_ms,
         "bids": [[bid_price, amount]],
         "asks": [[ask_price, amount]],
     }
@@ -1341,6 +1588,130 @@ def test_component_candidate_requires_both_strictly_later_option_book_responses(
         "ATOMIC_EXECUTABILITY_UNPROVEN",
     ]
     assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 1
+
+
+def test_component_admission_pair_over_skew_budget_is_exact_unknown_without_case(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    short_intent = next(
+        value for value in intents if value.params["instrument_name"] == "BTC-SHORT"
+    )
+    long_intent = next(value for value in intents if value.params["instrument_name"] == "BTC-LONG")
+    short_sent = FactBoundary(1, 2, 120, 2)
+    long_sent = FactBoundary(1, 3, 121, 3)
+    adapter.on_request_sent(request_id=short_intent.request_id, boundary=short_sent)
+    adapter.on_request_sent(request_id=long_intent.request_id, boundary=long_sent)
+    adapter.on_rpc_response(
+        request_id=short_intent.request_id,
+        result=_rest_option_book(
+            "BTC-SHORT",
+            bid_price="300",
+            ask_price="301",
+            change_id=11,
+            timestamp_ms=1_000_000,
+        ),
+        sent_boundary=short_sent,
+        boundary=FactBoundary(1, 4, 130, 4),
+    )
+    adapter.on_rpc_response(
+        request_id=long_intent.request_id,
+        result=_rest_option_book(
+            "BTC-LONG",
+            bid_price="100",
+            ask_price="101",
+            change_id=11,
+            timestamp_ms=1_007_000,
+        ),
+        sent_boundary=long_sent,
+        boundary=FactBoundary(1, 5, 5_500, 5),
+    )
+
+    assert not _object_payloads(owner, "SHADOW_ENTRY")
+    assert _terminal_outcomes(owner) == ["UNKNOWN_CONSUMED"]
+    terminal = _object_payloads(owner, "ADMISSION_ATTEMPT_TERMINAL")[-1]
+    assert terminal["terminal_unknown_reasons"] == [
+        "COMPONENT_PAIR_SOURCE_TIMESTAMP_SKEW_EXCEEDED",
+        "COMPONENT_PAIR_RECEIVE_SKEW_EXCEEDED",
+    ]
+    assert terminal["component_pair_timing"] == {
+        "session_epochs": [1, 1],
+        "global_continuity_epochs": [1, 1],
+        "source_timestamp_skew_ms": 7_000,
+        "receive_skew_ms": 5_370,
+    }
+    assert terminal["component_pair_limits"] == {
+        "maximum_source_skew_ms": 6_000,
+        "maximum_receive_skew_ms": 4_000,
+    }
+
+
+@pytest.mark.parametrize(
+    ("variant", "expected_reason"),
+    (
+        ("session", "COMPONENT_PAIR_SESSION_EPOCH_MISMATCH"),
+        ("continuity", "COMPONENT_PAIR_CONTINUITY_EPOCH_MISMATCH"),
+    ),
+)
+def test_component_admission_pair_epoch_mismatch_is_exact_unknown_without_case(
+    tmp_path: Path,
+    variant: str,
+    expected_reason: str,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    short_intent = next(
+        value for value in intents if value.params["instrument_name"] == "BTC-SHORT"
+    )
+    long_intent = next(value for value in intents if value.params["instrument_name"] == "BTC-LONG")
+    short_sent = FactBoundary(1, 2, 120, 2)
+    long_sent = FactBoundary(1, 3, 121, 3)
+    adapter.on_request_sent(request_id=short_intent.request_id, boundary=short_sent)
+    adapter.on_request_sent(request_id=long_intent.request_id, boundary=long_sent)
+    adapter.on_rpc_response(
+        request_id=short_intent.request_id,
+        result=_rest_option_book(
+            "BTC-SHORT",
+            bid_price="300",
+            ask_price="301",
+            change_id=11,
+        ),
+        sent_boundary=short_sent,
+        boundary=FactBoundary(1, 4, 130, 4),
+    )
+    if variant == "continuity":
+        reducer._global_continuity_epoch += 1
+    adapter.on_rpc_response(
+        request_id=long_intent.request_id,
+        result=_rest_option_book(
+            "BTC-LONG",
+            bid_price="100",
+            ask_price="101",
+            change_id=11,
+        ),
+        sent_boundary=long_sent,
+        boundary=FactBoundary(2 if variant == "session" else 1, 5, 150, 5),
+    )
+
+    assert not _object_payloads(owner, "SHADOW_ENTRY")
+    assert _terminal_outcomes(owner) == ["UNKNOWN_CONSUMED"]
+    terminal = _object_payloads(owner, "ADMISSION_ATTEMPT_TERMINAL")[-1]
+    assert terminal["terminal_unknown_reasons"] == [expected_reason]
 
 
 def test_component_shadow_entry_opens_its_durable_case(tmp_path: Path) -> None:
@@ -1521,6 +1892,79 @@ def test_component_shadow_entry_closes_from_a_new_paired_snapshot_and_writes_kno
     assert owner.retained_state_counts["active_trades"] == 0
     assert adapter.retained_state_counts["active_anchors"] == 0
     assert owner.state_store.retained_state_counts["latest_terminal_cases"] == 1
+
+
+def test_component_close_pair_over_skew_is_workbench_visible_business_unknown(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    _admit_component_shadow(reducer, adapter)
+    _set_platform_usable(reducer, False)
+    close_intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=6,
+            monotonic_ms=160,
+            cause=CausalCause.TIME_BOUNDARY,
+        ),
+    )
+    short_intent = next(
+        value for value in close_intents if value.params["instrument_name"] == "BTC-SHORT"
+    )
+    long_intent = next(
+        value for value in close_intents if value.params["instrument_name"] == "BTC-LONG"
+    )
+    short_sent = FactBoundary(1, 7, 170, 7)
+    long_sent = FactBoundary(1, 8, 171, 8)
+    adapter.on_request_sent(request_id=short_intent.request_id, boundary=short_sent)
+    adapter.on_request_sent(request_id=long_intent.request_id, boundary=long_sent)
+    adapter.on_rpc_response(
+        request_id=short_intent.request_id,
+        result=_rest_option_book(
+            "BTC-SHORT",
+            bid_price="249",
+            ask_price="250",
+            change_id=12,
+            timestamp_ms=1_000_000,
+        ),
+        sent_boundary=short_sent,
+        boundary=FactBoundary(1, 9, 180, 9),
+    )
+    adapter.on_rpc_response(
+        request_id=long_intent.request_id,
+        result=_rest_option_book(
+            "BTC-LONG",
+            bid_price="149",
+            ask_price="150",
+            change_id=12,
+            timestamp_ms=1_007_000,
+        ),
+        sent_boundary=long_sent,
+        boundary=FactBoundary(1, 10, 5_500, 10),
+    )
+
+    terminal = _object_payloads(owner, "POST_CLOSE_ATTEMPT_TERMINAL")[-1]
+    assert terminal["terminal_status"] == "ERROR"
+    assert terminal["terminal_unknown_reasons"] == [
+        "COMPONENT_PAIR_SOURCE_TIMESTAMP_SKEW_EXCEEDED",
+        "COMPONENT_PAIR_RECEIVE_SKEW_EXCEEDED",
+    ]
+    assert terminal["component_pair_limits"] == {
+        "maximum_source_skew_ms": 6_000,
+        "maximum_receive_skew_ms": 4_000,
+    }
+    kinds = workbench_module._objects_by_kind(owner.state_store.objects)
+    (row,) = workbench_module._position_rows(
+        kinds,
+        owner.policies,
+        trusted_time=None,
+        option_metadata=(),
+    )
+    assert row["component_pair_business_state"] == "UNKNOWN"
+    assert row["component_pair_timing"] == terminal["component_pair_timing"]
+    assert row["component_pair_limits"] == terminal["component_pair_limits"]
+    assert row["component_pair_unknown_reasons"] == terminal["terminal_unknown_reasons"]
+    assert not _object_payloads(owner, "SHADOW_OUTCOME")
 
 
 def test_partial_component_close_then_rpc_failure_matures_unknown_without_fake_close(

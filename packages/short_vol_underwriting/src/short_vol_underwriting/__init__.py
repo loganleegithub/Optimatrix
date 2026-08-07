@@ -52,6 +52,9 @@ from short_vol_underwriting.domain import (
     ShadowOutcomeEconomics,
     UnderwritingAction,
     UnderwritingAvailability,
+    UnderwritingComponentCandidate,
+    UnderwritingComponentSelection,
+    UnderwritingThresholdMargins,
     classify_underwriting_action,
     compute_close_economics,
     compute_component_close_economics,
@@ -59,6 +62,8 @@ from short_vol_underwriting.domain import (
     compute_entry_economics,
     compute_shadow_outcome_economics,
     ordered_candidate_invalidation,
+    select_underwriting_component,
+    underwriting_threshold_margins,
 )
 from short_vol_underwriting.evidence import (
     RuntimeBindings,
@@ -154,8 +159,11 @@ __all__ = [
     "TrustedTimeBoundary",
     "UnderwritingAction",
     "UnderwritingAvailability",
+    "UnderwritingComponentCandidate",
+    "UnderwritingComponentSelection",
     "UnderwritingFacts",
     "UnderwritingPolicy",
+    "UnderwritingThresholdMargins",
     "build_current_shadow_object",
     "canonical_decimal",
     "canonical_identity",
@@ -170,4 +178,6 @@ __all__ = [
     "evaluate_close_opportunity",
     "load_policy_chain",
     "ordered_candidate_invalidation",
+    "select_underwriting_component",
+    "underwriting_threshold_margins",
 ]

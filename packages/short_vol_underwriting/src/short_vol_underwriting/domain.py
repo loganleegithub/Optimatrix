@@ -63,6 +63,99 @@ class EntryEconomics:
 
 
 @dataclass(frozen=True)
+class UnderwritingThresholdMargins:
+    """Signed distance to every ordered Underwriting action predicate."""
+
+    positive_net_credit_usdc: Decimal
+    credit_above_future_cost_reserve_usdc: Decimal
+    reserved_loss_limit_headroom_usdc: Decimal
+    minimum_net_credit_headroom_usdc: Decimal
+    minimum_credit_ratio_headroom: Decimal
+    entry_consumed_level_headroom: int
+
+    @property
+    def failed_predicates(self) -> tuple[str, ...]:
+        failures: list[str] = []
+        if self.positive_net_credit_usdc <= 0:
+            failures.append("NON_POSITIVE_NET_ENTRY_CREDIT")
+        if self.credit_above_future_cost_reserve_usdc <= 0:
+            failures.append("CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE")
+        if self.reserved_loss_limit_headroom_usdc < 0:
+            failures.append("UNDERWRITING_RESERVED_LOSS_LIMIT")
+        if self.minimum_net_credit_headroom_usdc < 0:
+            failures.append("MINIMUM_NET_ENTRY_CREDIT")
+        if self.minimum_credit_ratio_headroom < 0:
+            failures.append("MINIMUM_NET_CREDIT_TO_PAYOFF_CAP")
+        if self.entry_consumed_level_headroom < 0:
+            failures.append("ENTRY_CONSUMED_LEVEL_LIMIT")
+        return tuple(failures)
+
+    def as_vector(self) -> tuple[dict[str, object], ...]:
+        return (
+            {
+                "predicate": "POSITIVE_NET_ENTRY_CREDIT",
+                "signed_margin": str(self.positive_net_credit_usdc),
+                "unit": "USDC",
+                "passes": self.positive_net_credit_usdc > 0,
+            },
+            {
+                "predicate": "CREDIT_ABOVE_FUTURE_COST_RESERVE",
+                "signed_margin": str(self.credit_above_future_cost_reserve_usdc),
+                "unit": "USDC",
+                "passes": self.credit_above_future_cost_reserve_usdc > 0,
+            },
+            {
+                "predicate": "UNDERWRITING_RESERVED_LOSS_WITHIN_LIMIT",
+                "signed_margin": str(self.reserved_loss_limit_headroom_usdc),
+                "unit": "USDC",
+                "passes": self.reserved_loss_limit_headroom_usdc >= 0,
+            },
+            {
+                "predicate": "MINIMUM_NET_ENTRY_CREDIT",
+                "signed_margin": str(self.minimum_net_credit_headroom_usdc),
+                "unit": "USDC",
+                "passes": self.minimum_net_credit_headroom_usdc >= 0,
+            },
+            {
+                "predicate": "MINIMUM_NET_CREDIT_TO_PAYOFF_CAP",
+                "signed_margin": str(self.minimum_credit_ratio_headroom),
+                "unit": "FRACTION",
+                "passes": self.minimum_credit_ratio_headroom >= 0,
+            },
+            {
+                "predicate": "ENTRY_CONSUMED_LEVEL_LIMIT",
+                "signed_margin": self.entry_consumed_level_headroom,
+                "unit": "LEVEL_COUNT",
+                "passes": self.entry_consumed_level_headroom >= 0,
+            },
+        )
+
+
+@dataclass(frozen=True)
+class UnderwritingComponentCandidate:
+    long_instrument_name: str
+    economics: EntryEconomics
+    consumed_level_count: int
+
+    def __post_init__(self) -> None:
+        if not self.long_instrument_name:
+            raise ValueError("component Candidate instrument name must be non-empty")
+        if (
+            isinstance(self.consumed_level_count, bool)
+            or not isinstance(self.consumed_level_count, int)
+            or self.consumed_level_count < 0
+        ):
+            raise ValueError("component Candidate consumed level count must be non-negative")
+
+
+@dataclass(frozen=True)
+class UnderwritingComponentSelection:
+    candidate: UnderwritingComponentCandidate
+    action: UnderwritingAction
+    margins: UnderwritingThresholdMargins
+
+
+@dataclass(frozen=True)
 class CloseEconomics:
     full_quantity_btc: Decimal
     required_close_side_total_quote_usdc: Decimal
@@ -265,6 +358,103 @@ def ordered_candidate_invalidation(reasons: Iterable[str]) -> tuple[str, tuple[s
         raise ValueError("Candidate invalidation reasons must not contain duplicates")
     ordered = tuple(reason for reason in CANDIDATE_INVALIDATION_REASONS if reason in set(values))
     return ordered[0], ordered
+
+
+def underwriting_threshold_margins(
+    *,
+    economics: EntryEconomics,
+    consumed_level_count: int,
+    maximum_underwriting_reserved_loss_usdc: Decimal,
+    minimum_net_entry_credit_usdc: Decimal,
+    minimum_net_credit_to_payoff_cap_fraction: Decimal,
+    maximum_entry_consumed_level_count: int,
+) -> UnderwritingThresholdMargins:
+    """Return the complete signed predicate-distance vector without changing action order."""
+    if economics.payoff_cap_usdc <= 0:
+        raise ValueError("Underwriting margin vector requires a positive payoff cap")
+    for value, field_name in (
+        (consumed_level_count, "consumed_level_count"),
+        (maximum_entry_consumed_level_count, "maximum_entry_consumed_level_count"),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{field_name} must be a non-negative integer")
+    return UnderwritingThresholdMargins(
+        positive_net_credit_usdc=economics.net_entry_credit_usdc,
+        credit_above_future_cost_reserve_usdc=(
+            economics.net_entry_credit_usdc - economics.future_cost_reserve_usdc
+        ),
+        reserved_loss_limit_headroom_usdc=(
+            maximum_underwriting_reserved_loss_usdc - economics.underwriting_reserved_loss_usdc
+        ),
+        minimum_net_credit_headroom_usdc=(
+            economics.net_entry_credit_usdc - minimum_net_entry_credit_usdc
+        ),
+        minimum_credit_ratio_headroom=(
+            economics.net_entry_credit_usdc / economics.payoff_cap_usdc
+            - minimum_net_credit_to_payoff_cap_fraction
+        ),
+        entry_consumed_level_headroom=(maximum_entry_consumed_level_count - consumed_level_count),
+    )
+
+
+def select_underwriting_component(
+    candidates: Iterable[UnderwritingComponentCandidate],
+    *,
+    maximum_underwriting_reserved_loss_usdc: Decimal,
+    minimum_net_entry_credit_usdc: Decimal,
+    minimum_net_credit_to_payoff_cap_fraction: Decimal,
+    maximum_entry_consumed_level_count: int,
+) -> UnderwritingComponentSelection | None:
+    """Select one legal leg by action class, ordered margins, then stable identity."""
+    selections: list[UnderwritingComponentSelection] = []
+    for candidate in candidates:
+        economics = candidate.economics
+        margins = underwriting_threshold_margins(
+            economics=economics,
+            consumed_level_count=candidate.consumed_level_count,
+            maximum_underwriting_reserved_loss_usdc=(maximum_underwriting_reserved_loss_usdc),
+            minimum_net_entry_credit_usdc=minimum_net_entry_credit_usdc,
+            minimum_net_credit_to_payoff_cap_fraction=(minimum_net_credit_to_payoff_cap_fraction),
+            maximum_entry_consumed_level_count=maximum_entry_consumed_level_count,
+        )
+        action = classify_underwriting_action(
+            availability=UnderwritingAvailability.EVALUABLE,
+            net_entry_credit_usdc=economics.net_entry_credit_usdc,
+            future_cost_reserve_usdc=economics.future_cost_reserve_usdc,
+            underwriting_reserved_loss_usdc=economics.underwriting_reserved_loss_usdc,
+            maximum_underwriting_reserved_loss_usdc=(maximum_underwriting_reserved_loss_usdc),
+            minimum_net_entry_credit_usdc=minimum_net_entry_credit_usdc,
+            payoff_cap_usdc=economics.payoff_cap_usdc,
+            minimum_net_credit_to_payoff_cap_fraction=(minimum_net_credit_to_payoff_cap_fraction),
+            consumed_level_count=candidate.consumed_level_count,
+            maximum_entry_consumed_level_count=maximum_entry_consumed_level_count,
+        )
+        if action is None:
+            raise RuntimeError("evaluable component selection produced no action")
+        selections.append(UnderwritingComponentSelection(candidate, action, margins))
+    if not selections:
+        return None
+    action_rank = {
+        UnderwritingAction.CANDIDATE: 2,
+        UnderwritingAction.WATCH: 1,
+        UnderwritingAction.ABSTAIN: 0,
+    }
+
+    def selection_key(value: UnderwritingComponentSelection) -> tuple[object, ...]:
+        margins = value.margins
+        return (
+            -action_rank[value.action],
+            -margins.positive_net_credit_usdc,
+            -margins.credit_above_future_cost_reserve_usdc,
+            -margins.reserved_loss_limit_headroom_usdc,
+            -margins.minimum_net_credit_headroom_usdc,
+            -margins.minimum_credit_ratio_headroom,
+            -margins.entry_consumed_level_headroom,
+            value.candidate.economics.width_usdc_per_btc,
+            value.candidate.long_instrument_name,
+        )
+
+    return min(selections, key=selection_key)
 
 
 def classify_underwriting_action(

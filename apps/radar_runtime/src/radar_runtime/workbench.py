@@ -6,7 +6,7 @@ import socket
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -41,7 +41,6 @@ WORKBENCH_NON_CLAIMS = (
     "NO_PRIVATE_ACCOUNT_OR_ORDER_ACCESS",
     "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY",
 )
-
 _STALE_REASONS = frozenset(
     {
         CoverageBlockingReason.INDEX_SOURCE_STALE.value,
@@ -345,7 +344,9 @@ class WorkbenchPublisher:
         self._business_dirty = False
         self._cached_downstream_revision: int | None = None
         self._cached_underwriting_metadata: tuple[Mapping[str, object], ...] | None = None
+        self._cached_admission_terminal_diagnostics: tuple[Mapping[str, object], ...] | None = None
         self._cached_downstream_projection: _DownstreamProjection | None = None
+        self._admission_terminal_diagnostics_by_episode: dict[str, Mapping[str, object]] = {}
         initial_document = self._document(self._last_business, status=self._status)
         self._preencoded_members = {
             key: _json_value_bytes(initial_document[key])
@@ -388,10 +389,12 @@ class WorkbenchPublisher:
                 self._status.recorded_monotonic_ms,
             ),
         )
+        new_shadow_records = self.shadow_state.take_pending_records()
+        self._update_admission_terminal_diagnostics(new_shadow_records)
         self.funnel_tracker.observe(
             reducer=reducer,
             commit=commit,
-            new_shadow_records=self.shadow_state.take_pending_records(),
+            new_shadow_records=new_shadow_records,
         )
         self._latest_reducer = reducer
         self._latest_commit = commit
@@ -415,6 +418,7 @@ class WorkbenchPublisher:
         preencoded_members = dict(self._preencoded_members)
         downstream_revision = self._cached_downstream_revision
         underwriting_metadata = self._cached_underwriting_metadata
+        admission_terminal_diagnostics = self._cached_admission_terminal_diagnostics
         downstream_projection = self._cached_downstream_projection
 
         if self._business_dirty:
@@ -425,19 +429,26 @@ class WorkbenchPublisher:
             option_metadata = self.shadow_metadata.workbench_option_metadata()
             latest_underwriting_metadata = self.shadow_metadata.workbench_underwriting_metadata()
             latest_downstream_revision = self.shadow_state.revision
+            latest_admission_terminal_diagnostics = tuple(
+                self._admission_terminal_diagnostics_by_episode[key]
+                for key in sorted(self._admission_terminal_diagnostics_by_episode)
+            )
             downstream_changed = (
                 downstream_projection is None
                 or latest_downstream_revision != downstream_revision
                 or latest_underwriting_metadata != underwriting_metadata
+                or latest_admission_terminal_diagnostics != admission_terminal_diagnostics
             )
             if downstream_changed:
                 downstream_projection = _build_downstream_projection(
                     objects=self.shadow_state.objects,
+                    diagnostic_records=latest_admission_terminal_diagnostics,
                     policies=self.policies,
                     underwriting_metadata=latest_underwriting_metadata,
                 )
                 downstream_revision = latest_downstream_revision
                 underwriting_metadata = latest_underwriting_metadata
+                admission_terminal_diagnostics = latest_admission_terminal_diagnostics
             if downstream_projection is None:
                 raise RuntimeError("workbench downstream projection cache was not initialized")
             projected_business = _build_business_projection(
@@ -461,11 +472,40 @@ class WorkbenchPublisher:
         self._preencoded_members = preencoded_members
         self._cached_downstream_revision = downstream_revision
         self._cached_underwriting_metadata = underwriting_metadata
+        self._cached_admission_terminal_diagnostics = admission_terminal_diagnostics
         self._cached_downstream_projection = downstream_projection
         self._published_status_key = _status_key(status)
         self._last_publication_monotonic_ms = status.recorded_monotonic_ms
         self._dirty = False
         self._business_dirty = False
+
+    def _update_admission_terminal_diagnostics(
+        self,
+        records: Sequence[Mapping[str, object]],
+    ) -> None:
+        """Keep at most one current terminal per still-active Radar Episode."""
+        for value in records:
+            kind = value.get("object_kind")
+            payload = value.get("payload")
+            if not isinstance(payload, Mapping):
+                continue
+            episode = payload.get("active_episode_identity")
+            if not isinstance(episode, str):
+                continue
+            if kind == "CANDIDATE_ACTIVATION":
+                self._admission_terminal_diagnostics_by_episode.pop(episode, None)
+            elif kind == "ADMISSION_ATTEMPT_TERMINAL":
+                self._admission_terminal_diagnostics_by_episode[episode] = value
+        active_episodes = {
+            str(payload.get("active_episode_identity"))
+            for value in self.shadow_state.objects
+            if value.get("object_kind") == "UNDERWRITING_AVAILABILITY_EVALUATION"
+            and isinstance((payload := value.get("payload")), Mapping)
+            and isinstance(payload.get("active_episode_identity"), str)
+        }
+        for episode in tuple(self._admission_terminal_diagnostics_by_episode):
+            if episode not in active_episodes:
+                self._admission_terminal_diagnostics_by_episode.pop(episode, None)
 
     def _document(
         self,
@@ -699,6 +739,7 @@ def _build_business_projection(
         "underwriting": {
             "panel_state": panel_state(downstream.underwriting_rows).value,
             "empty_label": EMPTY_PANEL_LABEL if not downstream.underwriting_rows else None,
+            "predicate_margin_summary": _underwriting_margin_summary(downstream.underwriting_rows),
             "rows": downstream.underwriting_rows,
         },
         "shadow_entries": {
@@ -723,10 +764,20 @@ def _build_business_projection(
 def _build_downstream_projection(
     *,
     objects: Sequence[Mapping[str, object]],
+    diagnostic_records: Sequence[Mapping[str, object]] = (),
     policies: PolicyChain,
     underwriting_metadata: Sequence[Mapping[str, object]],
 ) -> _DownstreamProjection:
-    kinds = _objects_by_kind(objects)
+    current_keys = {(value.get("object_kind"), value.get("object_identity")) for value in objects}
+    projection_objects = (
+        *objects,
+        *(
+            value
+            for value in diagnostic_records
+            if (value.get("object_kind"), value.get("object_identity")) not in current_keys
+        ),
+    )
+    kinds = _objects_by_kind(projection_objects)
     return _DownstreamProjection(
         kinds=kinds,
         underwriting_rows=_underwriting_rows(
@@ -1051,7 +1102,10 @@ def _underwriting_rows(
             {
                 "radar_scope_or_short_leg_identity": scope_identity,
                 "short_leg_instrument_name": display.get("short_leg_instrument_name"),
-                "long_leg_instrument_name": display.get("long_leg_instrument_name"),
+                "long_leg_instrument_name": payload.get(
+                    "selected_long_leg_instrument_name",
+                    display.get("long_leg_instrument_name"),
+                ),
                 "combo_instrument_name": display.get("combo_instrument_name"),
                 "expiry_timestamp_ms": display.get("expiry_timestamp_ms"),
                 "option_type": display.get("option_type"),
@@ -1076,6 +1130,8 @@ def _underwriting_rows(
                 ),
                 "future_cost_reserve_usdc": payload.get("future_cost_reserve_usdc"),
                 "underwriting_reserved_loss_usdc": payload.get("underwriting_reserved_loss_usdc"),
+                "failed_predicates": payload.get("failed_predicates", []),
+                "predicate_margin_vector": payload.get("predicate_margin_vector", []),
                 "reserve_breakdown_usdc": {
                     "path": str(policies.underwriting.path_risk_reserve_usdc),
                     "jump": str(policies.underwriting.jump_risk_reserve_usdc),
@@ -1094,6 +1150,7 @@ def _underwriting_rows(
                     availability=availability,
                     action=payload.get("economic_action"),
                     unknown_reasons=unknown_reasons,
+                    failed_predicates=payload.get("failed_predicates", []),
                 ),
                 "candidate_identity": candidate_identity,
                 "candidate_lifecycle": lifecycle,
@@ -1118,15 +1175,82 @@ def _underwriting_decision_reason(
     availability: object,
     action: object,
     unknown_reasons: object,
+    failed_predicates: object,
 ) -> str:
     if isinstance(action, str):
-        return f"CONTROLLED_RUNTIME_ACTION:{action};FAILED_ECONOMIC_PREDICATE_VECTOR_NOT_PERSISTED"
+        failures = (
+            ",".join(str(value) for value in failed_predicates)
+            if isinstance(failed_predicates, list) and failed_predicates
+            else "NONE"
+        )
+        return f"UNDERWRITING_ACTION:{action};FAILED:{failures}"
     reasons = (
         ",".join(str(value) for value in unknown_reasons)
         if isinstance(unknown_reasons, list) and unknown_reasons
         else "NO_ADDITIONAL_REASON_PERSISTED"
     )
     return f"UNDERWRITING_{availability}:{reasons}"
+
+
+def _underwriting_margin_summary(
+    rows: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Aggregate owner-emitted current margins without recalculating a predicate."""
+    values: dict[str, list[Decimal]] = {}
+    units: dict[str, str] = {}
+    predicate_order: list[str] = []
+    for row in rows:
+        vector = row.get("predicate_margin_vector")
+        if not isinstance(vector, list):
+            continue
+        seen_in_row: set[str] = set()
+        for member in vector:
+            if not isinstance(member, Mapping):
+                continue
+            predicate = member.get("predicate")
+            unit = member.get("unit")
+            margin = member.get("signed_margin")
+            if (
+                not isinstance(predicate, str)
+                or not isinstance(unit, str)
+                or predicate in seen_in_row
+            ):
+                continue
+            seen_in_row.add(predicate)
+            if predicate not in values:
+                values[predicate] = []
+                units[predicate] = unit
+                predicate_order.append(predicate)
+            elif units[predicate] != unit:
+                continue
+            try:
+                parsed = Decimal(str(margin))
+            except (InvalidOperation, ValueError):
+                continue
+            if parsed.is_finite():
+                values[predicate].append(parsed)
+    result: list[dict[str, object]] = []
+    for predicate in predicate_order:
+        ordered = sorted(values[predicate])
+        if not ordered:
+            continue
+        middle = len(ordered) // 2
+        median = (
+            ordered[middle]
+            if len(ordered) % 2
+            else (ordered[middle - 1] + ordered[middle]) / Decimal(2)
+        )
+        result.append(
+            {
+                "predicate": predicate,
+                "unit": units[predicate],
+                "count": len(ordered),
+                "min": str(ordered[0]),
+                "p50": str(median),
+                "max": str(ordered[-1]),
+            }
+        )
+    return result
 
 
 def _shadow_rows(
@@ -1137,19 +1261,36 @@ def _shadow_rows(
         str(_payload(value).get("candidate_identity")): value
         for value in kinds.get("SHADOW_ENTRY", ())
     }
+    terminals_by_candidate = {
+        str(_payload(value).get("candidate_identity")): value
+        for value in _latest_by_payload_key(
+            kinds.get("ADMISSION_ATTEMPT_TERMINAL", ()),
+            "candidate_identity",
+        )
+    }
     rows: list[dict[str, object]] = []
     for candidate in kinds.get("CANDIDATE_ACTIVATION", ()):
         candidate_identity = str(candidate["object_identity"])
         if candidate_identity in entries_by_candidate:
             continue
+        terminal = terminals_by_candidate.get(candidate_identity)
+        terminal_payload = _payload(terminal) if terminal is not None else {}
+        terminal_outcome = terminal_payload.get("terminal_outcome")
+        terminal_unknown_reasons = terminal_payload.get("terminal_unknown_reasons", [])
         rows.append(
             {
                 "candidate_identity": candidate_identity,
+                "active_episode_identity": _payload(candidate).get("active_episode_identity"),
                 "candidate_formed_fact_boundary": _payload(candidate).get(
                     "candidate_activation_fact_boundary"
                 ),
-                "admission_refresh_terminal_outcome": None,
-                "matched_refresh_source_identity": None,
+                "admission_refresh_terminal_outcome": terminal_outcome,
+                "admission_refresh_unknown_reasons": terminal_unknown_reasons,
+                "admission_component_pair_timing": terminal_payload.get("component_pair_timing"),
+                "admission_component_pair_limits": terminal_payload.get("component_pair_limits"),
+                "matched_refresh_source_identity": terminal_payload.get(
+                    "matched_response_identity"
+                ),
                 "shadow_entry_identity": None,
                 "execution_model": None,
                 "entry_component_pair_identity": None,
@@ -1160,7 +1301,55 @@ def _shadow_rows(
                 "simulated_entry_credit_usdc": None,
                 "target_quantity_btc": str(policies.underwriting.target_base_quantity_btc),
                 "entry_consumed_levels": None,
-                "no_entry_reason": "PENDING_REFRESH",
+                "no_entry_reason": (
+                    ",".join(str(value) for value in terminal_unknown_reasons)
+                    if isinstance(terminal_unknown_reasons, list) and terminal_unknown_reasons
+                    else terminal_outcome or "PENDING_REFRESH"
+                ),
+                "simulation_label": SIMULATION_LABEL,
+            }
+        )
+    candidate_ids = {
+        str(value["object_identity"]) for value in kinds.get("CANDIDATE_ACTIVATION", ())
+    }
+    for terminal in terminals_by_candidate.values():
+        terminal_payload = _payload(terminal)
+        terminal_candidate_identity = terminal_payload.get("candidate_identity")
+        if (
+            not isinstance(terminal_candidate_identity, str)
+            or terminal_candidate_identity in candidate_ids
+            or terminal_candidate_identity in entries_by_candidate
+        ):
+            continue
+        terminal_unknown_reasons = terminal_payload.get("terminal_unknown_reasons", [])
+        terminal_outcome = terminal_payload.get("terminal_outcome")
+        rows.append(
+            {
+                "candidate_identity": terminal_candidate_identity,
+                "active_episode_identity": terminal_payload.get("active_episode_identity"),
+                "candidate_formed_fact_boundary": None,
+                "admission_refresh_terminal_outcome": terminal_outcome,
+                "admission_refresh_unknown_reasons": terminal_unknown_reasons,
+                "admission_component_pair_timing": terminal_payload.get("component_pair_timing"),
+                "admission_component_pair_limits": terminal_payload.get("component_pair_limits"),
+                "matched_refresh_source_identity": terminal_payload.get(
+                    "matched_response_identity"
+                ),
+                "shadow_entry_identity": None,
+                "execution_model": None,
+                "entry_component_pair_identity": None,
+                "entry_component_legs": None,
+                "simulated_entry_price_usdc_per_btc": None,
+                "simulated_entry_price_availability": "UNKNOWN",
+                "simulated_entry_price_basis": None,
+                "simulated_entry_credit_usdc": None,
+                "target_quantity_btc": str(policies.underwriting.target_base_quantity_btc),
+                "entry_consumed_levels": None,
+                "no_entry_reason": (
+                    ",".join(str(value) for value in terminal_unknown_reasons)
+                    if isinstance(terminal_unknown_reasons, list) and terminal_unknown_reasons
+                    else terminal_outcome or "PENDING_REFRESH"
+                ),
                 "simulation_label": SIMULATION_LABEL,
             }
         )
@@ -1177,14 +1366,19 @@ def _shadow_rows(
         rows.append(
             {
                 "candidate_identity": candidate_identity,
+                "active_episode_identity": entry_payload.get("active_episode_identity"),
                 "candidate_formed_fact_boundary": None,
                 "admission_refresh_terminal_outcome": "ENTRY_EMITTED",
+                "admission_refresh_unknown_reasons": [],
+                "admission_component_pair_timing": entry_payload.get("entry_component_pair_timing"),
+                "admission_component_pair_limits": None,
                 "matched_refresh_source_identity": entry_payload.get(
                     "entry_component_pair_identity"
                 ),
                 "shadow_entry_identity": str(entry["object_identity"]),
                 "execution_model": entry_payload.get("execution_model"),
                 "entry_component_pair_identity": entry_payload.get("entry_component_pair_identity"),
+                "entry_component_pair_timing": entry_payload.get("entry_component_pair_timing"),
                 "entry_component_legs": entry_payload.get("entry_component_legs"),
                 "simulated_entry_price_usdc_per_btc": entry_price,
                 "simulated_entry_price_availability": (
@@ -1256,6 +1450,15 @@ def _position_rows(
         quote_payload = _payload(quote) if quote is not None else {}
         opportunity = _latest(opportunities_by_entry.get(entry_identity, ()))
         opportunity_payload = _payload(opportunity) if opportunity is not None else {}
+        component_pair_timing = quote_payload.get("component_pair_timing") or (
+            opportunity_payload.get("component_pair_timing")
+        )
+        component_pair_limits = quote_payload.get("component_pair_limits") or (
+            opportunity_payload.get("component_pair_limits")
+        )
+        component_pair_unknown_reasons = quote_payload.get(
+            "component_pair_unknown_reasons", []
+        ) or opportunity_payload.get("component_pair_unknown_reasons", [])
         selected = selected_by_entry.get(entry_identity)
         outcome = outcomes_by_entry.get(entry_identity)
         leg_ids = entry_payload.get("canonical_leg_identities")
@@ -1306,6 +1509,12 @@ def _position_rows(
                     else None
                 ),
                 "close_quote_state": quote_payload.get("close_quote_state", "UNKNOWN"),
+                "component_pair_timing": component_pair_timing,
+                "component_pair_limits": component_pair_limits,
+                "component_pair_unknown_reasons": component_pair_unknown_reasons,
+                "component_pair_business_state": (
+                    "UNKNOWN" if component_pair_unknown_reasons else None
+                ),
                 "current_close_debit_usdc": opportunity_payload.get("net_close_debit_usdc"),
                 "projected_shadow_pnl_usdc": opportunity_payload.get(
                     "projected_shadow_net_pnl_usdc"
@@ -1491,7 +1700,7 @@ def _empty_business_projection() -> dict[str, object]:
             ).as_object(),
         },
         "radar": dict(empty),
-        "underwriting": dict(empty),
+        "underwriting": {**empty, "predicate_margin_summary": []},
         "shadow_entries": {**empty, "simulation_label": SIMULATION_LABEL},
         "positions": dict(empty),
         "outcomes": dict(empty),
@@ -1917,7 +2126,10 @@ const underwritingReasonText = (row, value) => {
       : '承保所需事实不可确认';
   }
   if (row.availability === 'EVALUABLE' && !isMissing(row.action)) {
-    return `已结算承保动作: ${row.action}`;
+    const failures = Array.isArray(row.failed_predicates) ? row.failed_predicates : [];
+    return failures.length
+      ? `已结算承保动作: ${row.action}; 未通过: ${failures.map(reasonText).join('; ')}`
+      : `已结算承保动作: ${row.action}; 全部经济谓词通过`;
   }
   return isMissing(value) ? 'N/A' : reasonText(value);
 };
@@ -2105,9 +2317,18 @@ function renderRadarPanel(documentValue) {
 function renderUnderwritingPanel(documentValue) {
   const ordered = orderedUnderwritingRows(documentValue.underwriting.rows);
   const rows = filterRows(ordered, 'availability', underwritingFilterValue);
+  const marginSummary = Array.isArray(documentValue.underwriting.predicate_margin_summary)
+    ? documentValue.underwriting.predicate_margin_summary : [];
+  const marginDetails = marginSummary.length
+    ? `<details class="system-details"><summary>当前承保谓词 margin 分布</summary><div class="grid">${
+        marginSummary.map(value => card(value.predicate,
+          `n=${value.count}; min=${value.min}; p50=${value.p50}; max=${value.max}; ${value.unit}`
+        )).join('')
+      }</div></details>`
+    : '';
   document.getElementById('underwriting').innerHTML =
     toolbar('可用性筛选', 'underwriting-filter', underwritingFilterValue,
-      ['ALL', 'EVALUABLE', 'UNKNOWN', 'NOT_EVALUATED'], rows.length, ordered.length) +
+      ['ALL', 'EVALUABLE', 'UNKNOWN', 'NOT_EVALUATED'], rows.length, ordered.length) + marginDetails +
     table(documentValue.underwriting, [
       ['Short leg', 'short_leg_instrument_name', underwritingCellValue],
       ['Long leg', 'long_leg_instrument_name', underwritingCellValue],
@@ -2127,6 +2348,8 @@ function renderUnderwritingPanel(documentValue) {
       ['availability identity', 'underwriting_availability_evaluation_identity'],
       ['action identity', 'underwriting_action_identity'], ['availability enum', 'availability'],
       ['decision reason enum', 'decision_reason'], ['unknown reasons', 'unknown_reasons'],
+      ['failed predicates', 'failed_predicates'],
+      ['predicate margin vector', 'predicate_margin_vector'],
       ['component blockers', 'component_blockers'],
       ['gross entry credit exact', 'gross_entry_credit_usdc'],
       ['entry fee reserve exact', 'entry_fee_reserve_usdc'],
@@ -2276,13 +2499,18 @@ function render(documentValue) {
     ['模拟权利金 (USDC)', 'simulated_entry_credit_usdc', shadowCellValue],
     ['未入场原因', 'no_entry_reason', shadowCellValue], ['声明', 'simulation_label']
   ], documentValue.shadow_entries.rows, [
-    ['candidate identity', 'candidate_identity'], ['formed boundary', 'candidate_formed_fact_boundary'],
+    ['candidate identity', 'candidate_identity'], ['active episode', 'active_episode_identity'],
+    ['formed boundary', 'candidate_formed_fact_boundary'],
     ['refresh source identity', 'matched_refresh_source_identity'],
     ['shadow entry identity', 'shadow_entry_identity'], ['target quantity exact', 'target_quantity_btc'],
     ['simulated entry price exact', 'simulated_entry_price_usdc_per_btc'],
     ['simulated entry credit exact', 'simulated_entry_credit_usdc'],
     ['execution model', 'execution_model'],
     ['component pair identity', 'entry_component_pair_identity'],
+    ['component pair timing', 'entry_component_pair_timing'],
+    ['admission refresh unknown reasons', 'admission_refresh_unknown_reasons'],
+    ['admission pair timing', 'admission_component_pair_timing'],
+    ['admission pair limits', 'admission_component_pair_limits'],
     ['component legs', 'entry_component_legs']
   ]);
   document.getElementById('positions').innerHTML = table(documentValue.positions, [
@@ -2302,6 +2530,10 @@ function render(documentValue) {
     ['shadow entry identity', 'shadow_entry_identity'],
     ['remaining premium exact', 'remaining_premium_usdc'],
     ['close debit exact', 'current_close_debit_usdc'],
+    ['component pair timing', 'component_pair_timing'],
+    ['component pair limits', 'component_pair_limits'],
+    ['component pair business state', 'component_pair_business_state'],
+    ['component pair unknown reasons', 'component_pair_unknown_reasons'],
     ['projected Shadow PnL exact', 'projected_shadow_pnl_usdc'],
     ['hard-close interval ms', 'hard_close_countdown_interval_ms'],
     ['remaining premium basis', 'remaining_premium_basis'],

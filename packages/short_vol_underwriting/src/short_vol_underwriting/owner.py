@@ -46,10 +46,12 @@ from short_vol_underwriting.domain import (
     PositionDecisionState,
     UnderwritingAction,
     UnderwritingAvailability,
+    UnderwritingThresholdMargins,
     classify_underwriting_action,
     compute_component_entry_economics,
     compute_entry_economics,
     compute_shadow_outcome_economics,
+    underwriting_threshold_margins,
 )
 from short_vol_underwriting.evidence import (
     RuntimeBindings,
@@ -225,6 +227,7 @@ class PositionFacts:
     component_short_quote_source: SourceFact | None = None
     component_long_quote_source: SourceFact | None = None
     component_pair_witness: ComponentBookPairWitness | None = None
+    component_pair_unknown_reasons: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.close_direction not in {"BUY", "SELL"}:
@@ -637,11 +640,19 @@ class FixedContractShadowOwner:
         ):
             raise ValueError("component admission facts and paired witnesses must be identical")
         evaluation = self._evaluate_underwriting(refreshed_facts)
+        pair_timing_unknown_reasons = pair_witness.timing_unknown_reasons(
+            maximum_source_skew_ms=(
+                self.policies.underwriting.maximum_component_pair_source_skew_ms
+            ),
+            maximum_receive_skew_ms=(
+                self.policies.underwriting.maximum_component_pair_receive_skew_ms
+            ),
+        )
         pre_refresh_reasons = self._component_candidate_pre_refresh_reasons(
             record,
             refreshed_facts,
         )
-        if pre_refresh_reasons:
+        if pre_refresh_reasons and not pair_timing_unknown_reasons:
             self._terminalize_candidate_before_refresh(
                 record,
                 reasons=pre_refresh_reasons,
@@ -670,6 +681,12 @@ class FixedContractShadowOwner:
             witness=pair_witness,
             response_budget_ms=(
                 self.policies.underwriting.component_book_snapshot_response_budget_ms
+            ),
+            maximum_source_skew_ms=(
+                self.policies.underwriting.maximum_component_pair_source_skew_ms
+            ),
+            maximum_receive_skew_ms=(
+                self.policies.underwriting.maximum_component_pair_receive_skew_ms
             ),
             classification=classification,
         )
@@ -990,6 +1007,12 @@ class FixedContractShadowOwner:
                 witness=pair_witness,
                 response_budget_ms=(
                     self.policies.position.component_book_snapshot_response_budget_ms
+                ),
+                maximum_source_skew_ms=(
+                    self.policies.position.maximum_component_pair_source_skew_ms
+                ),
+                maximum_receive_skew_ms=(
+                    self.policies.position.maximum_component_pair_receive_skew_ms
                 ),
             )
         ):
@@ -1835,6 +1858,7 @@ class FixedContractShadowOwner:
             evaluation.action.value,
         )
         economics = evaluation.economics
+        margins = self._underwriting_threshold_margins(evaluation)
         payload = {
             "underwriting_action_identity": identity,
             "underwriting_availability_evaluation_identity": availability_identity,
@@ -1842,7 +1866,12 @@ class FixedContractShadowOwner:
             "active_episode_identity": facts.active_episode_identity,
             "consumed_economic_fact_fingerprint": evaluation.economic_fingerprint,
             "economic_action": evaluation.action.value,
-            "decision_blockers": list(self._underwriting_decision_blockers(evaluation)),
+            "decision_blockers": list(
+                self._underwriting_decision_blockers(evaluation, margins.failed_predicates)
+            ),
+            "failed_predicates": list(margins.failed_predicates),
+            "predicate_margin_vector": list(margins.as_vector()),
+            "selected_long_leg_instrument_name": facts.long_leg_instrument_name,
             "entry_consumed_level_count": self._entry_consumed_level_count(facts),
             "evaluation_fact_boundary": facts.boundary.as_object(),
             "gross_entry_credit_usdc": economics.gross_entry_credit_usdc,
@@ -1876,40 +1905,47 @@ class FixedContractShadowOwner:
     def _underwriting_decision_blockers(
         self,
         evaluation: _UnderwritingEvaluation,
+        failed_predicates: tuple[str, ...],
     ) -> tuple[str, ...]:
         action = evaluation.action
-        economics = evaluation.economics
-        if action is None or economics is None:
+        if action is None:
             return ()
-        blockers: list[str] = []
+        abstain_predicates = {
+            "NON_POSITIVE_NET_ENTRY_CREDIT",
+            "CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE",
+            "UNDERWRITING_RESERVED_LOSS_LIMIT",
+        }
+        watch_predicates = {
+            "MINIMUM_NET_ENTRY_CREDIT",
+            "MINIMUM_NET_CREDIT_TO_PAYOFF_CAP",
+            "ENTRY_CONSUMED_LEVEL_LIMIT",
+        }
         if action is UnderwritingAction.ABSTAIN:
-            if economics.net_entry_credit_usdc <= 0:
-                blockers.append("NON_POSITIVE_NET_ENTRY_CREDIT")
-            if economics.net_entry_credit_usdc <= economics.future_cost_reserve_usdc:
-                blockers.append("CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE")
-            if (
-                economics.underwriting_reserved_loss_usdc
-                > self.policies.underwriting.maximum_underwriting_reserved_loss_usdc
-            ):
-                blockers.append("UNDERWRITING_RESERVED_LOSS_LIMIT")
-        elif action is UnderwritingAction.WATCH:
-            if (
-                economics.net_entry_credit_usdc
-                < self.policies.underwriting.minimum_net_entry_credit_usdc
-            ):
-                blockers.append("MINIMUM_NET_ENTRY_CREDIT")
-            if (
-                economics.net_entry_credit_usdc
-                < self.policies.underwriting.minimum_net_credit_to_payoff_cap_fraction
-                * economics.payoff_cap_usdc
-            ):
-                blockers.append("MINIMUM_NET_CREDIT_TO_PAYOFF_CAP")
-            if (
-                self._entry_consumed_level_count(evaluation.facts)
-                > self.policies.underwriting.maximum_entry_consumed_level_count
-            ):
-                blockers.append("ENTRY_CONSUMED_LEVEL_LIMIT")
-        return tuple(blockers)
+            return tuple(value for value in failed_predicates if value in abstain_predicates)
+        if action is UnderwritingAction.WATCH:
+            return tuple(value for value in failed_predicates if value in watch_predicates)
+        return ()
+
+    def _underwriting_threshold_margins(
+        self,
+        evaluation: _UnderwritingEvaluation,
+    ) -> UnderwritingThresholdMargins:
+        economics = evaluation.economics
+        if economics is None:
+            raise RuntimeError("Underwriting margins require complete economics")
+        policy = self.policies.underwriting
+        return underwriting_threshold_margins(
+            economics=economics,
+            consumed_level_count=self._entry_consumed_level_count(evaluation.facts),
+            maximum_underwriting_reserved_loss_usdc=(
+                policy.maximum_underwriting_reserved_loss_usdc
+            ),
+            minimum_net_entry_credit_usdc=policy.minimum_net_entry_credit_usdc,
+            minimum_net_credit_to_payoff_cap_fraction=(
+                policy.minimum_net_credit_to_payoff_cap_fraction
+            ),
+            maximum_entry_consumed_level_count=policy.maximum_entry_consumed_level_count,
+        )
 
     @staticmethod
     def _entry_consumed_level_count(facts: UnderwritingFacts) -> int:
@@ -2092,6 +2128,11 @@ class FixedContractShadowOwner:
             ),
             "entry_component_pair_identity": (
                 facts.component_pair_witness.pair_identity
+                if facts.component_pair_witness is not None
+                else None
+            ),
+            "entry_component_pair_timing": (
+                facts.component_pair_witness.timing_as_object()
                 if facts.component_pair_witness is not None
                 else None
             ),
@@ -2731,6 +2772,12 @@ class FixedContractShadowOwner:
                 if facts.component_pair_witness is not None
                 else None
             ),
+            "component_pair_timing": (
+                facts.component_pair_witness.timing_as_object()
+                if facts.component_pair_witness is not None
+                else None
+            ),
+            "component_pair_unknown_reasons": list(facts.component_pair_unknown_reasons),
             "component_legs": (
                 [
                     self._component_leg_payload("SHORT", facts.component_quote.short_leg),
@@ -3322,6 +3369,9 @@ class FixedContractShadowOwner:
                     }
                     else None
                 ),
+                "terminal_unknown_reasons": list(getattr(attempt, "terminal_unknown_reasons", ())),
+                "component_pair_timing": getattr(attempt, "terminal_pair_timing", None),
+                "component_pair_limits": getattr(attempt, "terminal_pair_limits", None),
             },
         )
         self._counts[f"admission_{attempt.terminal_outcome.value.lower()}_count"] += 1
@@ -3540,6 +3590,10 @@ class FixedContractShadowOwner:
                 "terminal_owner": attempt.terminal_owner.value,
                 "terminal_fact_boundary": attempt.terminal_boundary.as_object(),
                 "matched_response_identity": attempt.matched_response_identity,
+                "terminal_unknown_reasons": list(getattr(attempt, "terminal_unknown_reasons", ())),
+                "shadow_entry_identity": trade.anchor_identity,
+                "component_pair_timing": getattr(attempt, "terminal_pair_timing", None),
+                "component_pair_limits": getattr(attempt, "terminal_pair_limits", None),
             },
         )
         if (
@@ -3606,6 +3660,11 @@ class FixedContractShadowOwner:
             "opportunity_economics_business_fingerprint": fingerprint,
             "eligibility": eligibility.value,
             "eligibility_reason": reason,
+            "component_pair_timing": getattr(attempt, "terminal_pair_timing", None),
+            "component_pair_limits": getattr(attempt, "terminal_pair_limits", None),
+            "component_pair_unknown_reasons": list(
+                getattr(attempt, "terminal_unknown_reasons", ())
+            ),
             "evaluation_fact_boundary": attempt.terminal_boundary.as_object(),
             "gross_close_cashflow_usdc": None,
             "gross_cashflow_availability": ("NOT_APPLICABLE" if known_unavailable else "UNKNOWN"),
