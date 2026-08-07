@@ -137,7 +137,7 @@ def test_product_data_boundary_is_unambiguous() -> None:
     assert "The Online Runtime does not own Cohort" in " ".join(product.split())
     assert "No pre-Shadow component may open a file" in architecture
     assert "Pre-Shadow persistence is forbidden by default" in " ".join(delivery.split())
-    assert "does not persist anomaly" in radar
+    assert "No market fact, clue, diagnostic, rank, atomic quote" in radar
     assert "Exactly three record kinds are authorized" in shadow_case
     assert "SHADOW_CASE_OPENED" in shadow_case
     assert "SHADOW_CASE_FIRST_CLOSE" in shadow_case
@@ -164,7 +164,10 @@ def test_online_runtime_has_no_rejected_counterfactual_or_cohort_surface() -> No
 
 def test_public_only_validation_does_not_recreate_commissioning() -> None:
     delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
-    assert "at most one explicitly authorized bounded read-only smoke" in " ".join(delivery.split())
+    assert "at most one explicitly authorized bounded read-only integration smoke" in (
+        " ".join(delivery.split())
+    )
+    assert "source-contract probe" in delivery
     assert "does not require a manifest, receipt chain" in delivery
     assert "Two-strike deletion rule" in delivery
     persistent = (ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md").read_text(
@@ -174,20 +177,33 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_closes_a1_at_the_measured_downstream_blocker() -> None:
+def test_current_stage_authorizes_one_repaired_fixed_long_observation() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`RADAR_STEADY_STATE_KNOWNNESS_IMPLEMENTED`" in current
-    assert "**Production Short Vol Radar:** `POST_WARMUP_KNOWNNESS_OBSERVED`" in current
-    assert "**Live commands:** `NONE_AUTHORIZED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "`RADAR_LONG_OBSERVATION_AUTHORIZED`" in current
+    assert (
+        "**Production Short Vol Radar:** `CANDIDATE_GENERATOR_FROZEN_WITH_BOUNDARY_REPAIR`"
+        in current
+    )
+    assert "**Persistent service:** `BOUNDED_OBSERVATION_ONLY_NO_DEPLOYMENT`" in current
+    assert (
+        "**Live commands:** `ONE_FIXED_43200_SECOND_PRODUCTION_PUBLIC_READ_ONLY_OBSERVATION`"
+        in current
+    )
+    assert "**Sole authorized closure:** `SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE`" in current
     assert "`1,556,097` `RADAR_KNOWN` evaluations: `100%`" in current
-    assert "`PUBLIC_ATOMIC_QUOTE_AVAILABLE / NO_ACTIVE_COMBO`" in current
-    assert not (ROOT / "tasks/SHORT_VOL_RADAR_STEADY_STATE_KNOWNNESS.md").exists()
+    assert "`58,773,561` applicable evaluations" in current
+    assert "one legal tick" in current
+    assert "`0.05 <= |Delta| <= 0.40`" in current
+    assert "any new smoke, second 43,200-second observation" in current
+    assert "`608` tests" in current
+    assert not (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
+    assert (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"
     )
     assert "observe-radar-knownness" not in entrypoint
+    assert "observe-radar-candidate-validity" not in entrypoint
 
 
 def test_architecture_restores_applicable_scope_and_freezes_warmup_partition() -> None:
@@ -199,8 +215,12 @@ def test_architecture_restores_applicable_scope_and_freezes_warmup_partition() -
     assert "the boundary at which that band first has an `AVAILABLE` tail is post-warmup" in (
         " ".join(architecture.split())
     )
-    assert "`INDEX_WARMUP` therefore remains visible" in " ".join(contract.split())
+    assert "`INDEX_WARMUP` remains visible" in " ".join(contract.split())
     assert "Every Radar UNKNOWN contributes exactly one bounded aggregate reason" in contract
+    assert "configured completed-interval cutoff" in architecture
+    assert "one-tick-stressed executable bid IV" in contract
+    assert "LEGGED_REFERENCE_NOT_ATOMIC" in contract
+    assert "deterministic lexicographic rank" in contract
 
 
 def test_task_template_measures_product_progress_not_proof_volume() -> None:
@@ -242,16 +262,16 @@ def test_internal_package_dependency_direction() -> None:
             assert not forbidden, f"{path} imports higher layers: {sorted(forbidden)}"
 
 
-def test_fixed_policy_files_remain_content_identified_and_unchanged() -> None:
+def test_fixed_policy_files_remain_content_identified_after_credible_clue_rebind() -> None:
     expected = {
         "policies/short-vol-fixed-public-shadow-radar.json": (
-            "2bcb780e6a9bab0982e59a70929e0150f1113d39452fcdb35894e293431f93d4"
+            "74f286e07f8013e6178b44421db1d4d04808e5e0b0c604a80a0fdbc50f276c21"
         ),
         "policies/short-vol-fixed-public-shadow-underwriting.json": (
-            "be056d7fad71668954103e1e383372c3b03db9b27b8d03ce0a030d39285629af"
+            "9fa7ff745052c2ce20ea854a9c5283c43a69349358c847052464dc2ead6f800f"
         ),
         "policies/short-vol-fixed-public-shadow-position.json": (
-            "498a298be50cb356f43886ae7ba02d1f6da065233ae9b2b52e9a230cf7f9c439"
+            "0585108701584fc223ad6711e37b32ffc8704e1e64c86250c166a66a08f056cd"
         ),
     }
     for relative, digest in expected.items():
@@ -260,6 +280,15 @@ def test_fixed_policy_files_remain_content_identified_and_unchanged() -> None:
         assert hashlib.sha256(raw).hexdigest() == digest
         parsed = json.loads(raw)
         assert raw == json.dumps(parsed, ensure_ascii=False, indent=2).encode() + b"\n"
+
+    radar = json.loads((ROOT / "policies/short-vol-fixed-public-shadow-radar.json").read_bytes())
+    limits = radar["runtime_limits"]
+    assert (
+        limits["clock_refresh_interval_ms"]
+        + 4 * limits["rpc_deadline_ms"]
+        + limits["time_boundary_poll_interval_ms"]
+        < limits["clock_stale_deadline_ms"]
+    )
 
 
 def test_markdown_contract_bytes_are_not_runtime_identity_authority() -> None:

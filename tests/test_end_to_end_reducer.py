@@ -102,6 +102,8 @@ def option_payload(name: str, expiry_ms: int, strike: str) -> dict[str, object]:
         "contract_size": 1,
         "min_trade_amount": 0.1,
         "qty_tick_size": 0.1,
+        "tick_size": 0.00000001,
+        "tick_size_steps": [],
     }
 
 
@@ -178,6 +180,7 @@ def run_nonempty_scenario(
         processed_monotonic_ms=1_003,
     )
     clock = only(bootstrap_commands, RpcPurpose.CLOCK_BOOTSTRAP)
+    index_history = only(bootstrap_commands, RpcPurpose.INDEX_HISTORY)
     option_catalog = only(bootstrap_commands, RpcPurpose.OPTION_CATALOG)
     combo_catalog = only(bootstrap_commands, RpcPurpose.COMBO_CATALOG)
     index_subscribe = only(
@@ -186,6 +189,16 @@ def run_nonempty_scenario(
             processed_monotonic_ms=1_004,
         ),
         RpcPurpose.SUBSCRIBE_CHANNELS,
+    )
+    reducer.reduce(
+        response(
+            reducer,
+            index_history,
+            [[0, 100], [300_000, 100]],
+            seq=5,
+            received_ms=1_004,
+        ),
+        processed_monotonic_ms=1_004,
     )
     reducer.reduce(
         response(
@@ -319,7 +332,7 @@ def run_nonempty_scenario(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": f"book.{long_name}.100ms",
+                    "channel": f"book.{long_name}.agg2",
                     "data": {
                         "type": "snapshot",
                         "timestamp": 1_020_100,
@@ -341,7 +354,7 @@ def run_nonempty_scenario(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": f"ticker.{short_name}.100ms",
+                    "channel": f"ticker.{short_name}.agg2",
                     "data": {
                         "instrument_name": short_name,
                         "timestamp": 1_020_101,
@@ -363,14 +376,14 @@ def run_nonempty_scenario(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": f"book.{short_name}.100ms",
+                    "channel": f"book.{short_name}.agg2",
                     "data": {
                         "type": "snapshot",
                         "timestamp": 1_020_102,
                         "instrument_name": short_name,
                         "change_id": 1,
                         "bids": [["new", first_price, "0.1"]],
-                        "asks": [],
+                        "asks": [["new", first_price + Decimal("0.00000002"), "0.1"]],
                     },
                 },
             },

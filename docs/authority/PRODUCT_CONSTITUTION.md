@@ -72,8 +72,10 @@ The product does not apply execution-stage risk preferences to every earlier sta
 
 ### Radar and trader review
 
-False-positive cost is low because no order or Shadow Case follows automatically from display.
-Radar should expose bounded opportunities with confidence, missing facts, and upgrade/invalidation
+False-positive cost is lower than at admission because no order or Shadow Case follows automatically
+from display, but it is not zero: an over-broad Radar makes every downstream conversion rate and
+blocker economically misleading. Radar should therefore expose selective, time-persistent bounded
+clues with the causal benchmark, confidence, missing facts, and upgrade/invalidation
 conditions. An unrelated `UNKNOWN` must not erase a known positive witness.
 
 ### Underwriting and Shadow admission
@@ -97,9 +99,10 @@ memory. Normal ticks and full books are not persisted.
 
 ### Current opportunity state
 
-Radar, atomic availability, Underwriting, Candidate, admission, current Position assessment, health,
-readiness, and funnel diagnostics are current in-memory state. Workbench snapshots are immutable
-bytes for readers but are not durable records.
+Radar hard-screen calculations, diagnostic regime/surface/legged/rank context, atomic availability,
+Underwriting, Candidate, admission, current Position assessment, health, readiness, and funnel
+diagnostics are current in-memory state. Workbench snapshots are immutable bytes for readers but
+are not durable records.
 
 ### Shadow Case data
 
@@ -123,7 +126,8 @@ particular qualification denominator.
 The first Radar asks:
 
 > Is target-size executable sell-side implied volatility unusually rich relative to the exact
-> deployed causal baseline for the same remaining-life interval?
+> deployed conservative multi-horizon BTC realized-volatility baseline, and has that richness
+> persisted long enough to merit structure review?
 
 It separately reports whether an existing official Deribit combo exposes the required target-size
 1:1 protective credit vertical. Detector truth and atomic availability remain distinct:
@@ -134,8 +138,13 @@ atomic = NOT_EVALUATED | UNKNOWN | NO_ACTIVE_COMBO |
          NO_TARGET_SIZE_CREDIT_QUOTE | PUBLIC_ATOMIC_QUOTE_AVAILABLE
 ```
 
-The Radar must show the trader what was found, why it matters, what is missing, and what would
-upgrade or invalidate it. It does not persist anomaly or atomic-quote events.
+The Radar must show the trader what was found, which causal sampling interval and conservative
+horizon produced the benchmark, why it matters, what is missing, and what would upgrade or
+invalidate it. A hard-screen clue must be target-size, two-sided, uncrossed, official-tick-aware,
+one-tick robust, time-persistent, and inside an explicit TTE/Delta risk bucket. Regime, surface,
+legged-reference, and rank context are diagnostic only. It does not persist clue or atomic-quote
+events and does not claim calendar forecasting, surface-relative edge, Policy edge, or
+profitability.
 
 ## Underwriting and admission
 
@@ -177,8 +186,9 @@ requirements.
    the smallest consumer.
 4. A known positive witness is not erased by unrelated missingness; negative absence claims require
    complete relevant scope.
-5. Detector truth, official atomic availability, Underwriting action, admission, Position action,
-   Shadow Outcome, future order state, and actual fill state remain distinct.
+5. Detector truth, diagnostic review/rank, official atomic availability, Underwriting action,
+   admission, Position action, Shadow Outcome, future order state, and actual fill state remain
+   distinct; diagnostic context cannot create downstream truth.
 6. Executable Shadow entry and close economics require visible full-quantity official atomic combo
    depth. Component-leg prices may be trader diagnostics only.
 7. Pre-Shadow durable business record count is exactly zero.

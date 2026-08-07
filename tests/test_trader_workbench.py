@@ -5,6 +5,7 @@ import inspect
 import json
 import socket
 import subprocess
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -157,6 +158,12 @@ def test_radar_projection_binds_atomic_state_to_active_episode_identity() -> Non
                 )
             },
             trackers={"BTC-TEST": tracker},
+            option_books={
+                "BTC-TEST": SimpleNamespace(
+                    state=SimpleNamespace(value="UNKNOWN"),
+                    reason="CHANGE_ID_GAP",
+                )
+            },
             atomic_states={episode_identity: PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE},
             episode_started_monotonic_ms=lambda _episode: 100,
             episode_active_duration_ms=lambda _episode, *, observed_monotonic_ms: (
@@ -174,6 +181,78 @@ def test_radar_projection_binds_atomic_state_to_active_episode_identity() -> Non
     (row,) = workbench_module._radar_rows(reducer, commit, None)
 
     assert row["public_atomic_quote_state"] == "PUBLIC_ATOMIC_QUOTE_AVAILABLE"
+    assert row["option_book_state"] == "UNKNOWN"
+    assert row["option_book_reason"] == "CHANGE_ID_GAP"
+
+
+def test_radar_projection_explains_candidate_baseline_sampling_and_selection() -> None:
+    baseline = SimpleNamespace(
+        annualized_volatility="0.72",
+        return_interval_minutes=5,
+        selected_lookback_minutes=120,
+    )
+    calculation = SimpleNamespace(
+        clue_eligible=False,
+        band=SimpleNamespace(clue_eligible=True),
+        delta_clue_eligible=False,
+        delta_bucket=SimpleNamespace(value="EXTREME_TAIL_LT_05"),
+        delta=SimpleNamespace(lower=Decimal("0.20"), upper=Decimal("0.21")),
+        executable_sell_price_usdc=Decimal("123.45"),
+        executable_buy_price_usdc=Decimal("124.45"),
+        stressed_executable_sell_price_usdc=Decimal("123.44"),
+        price_tick_usdc=Decimal("0.01"),
+        target_spread_usdc=Decimal("1"),
+        target_spread_ticks=Decimal("100"),
+        bid_premium_ticks=Decimal("12345"),
+        target_bid=SimpleNamespace(consumed=(1,)),
+        target_ask=SimpleNamespace(consumed=(1, 2)),
+        executable_bid_iv=SimpleNamespace(lower="0.80", upper="0.81"),
+        executable_ask_iv=SimpleNamespace(lower="0.82", upper="0.83"),
+        stressed_executable_bid_iv=SimpleNamespace(lower="0.79", upper="0.80"),
+        baseline=baseline,
+        raw_richness=SimpleNamespace(lower="1.22", upper="1.23"),
+        richness=SimpleNamespace(lower="1.20", upper="1.21"),
+    )
+    reducer = cast(
+        RadarReducer,
+        SimpleNamespace(
+            options={
+                "BTC-TEST": SimpleNamespace(
+                    expiration_timestamp_ms=10_000,
+                    option_type=SimpleNamespace(value="call"),
+                    strike=100,
+                )
+            },
+            results={
+                "BTC-TEST": SimpleNamespace(
+                    detector_state=DetectorState.NO_ANOMALY,
+                    reason="BELOW_ACTIVATION",
+                    known_evaluation=True,
+                    band_id="band",
+                    calculation=calculation,
+                )
+            },
+            trackers={},
+            option_books={},
+            atomic_states={},
+            episode_started_monotonic_ms=lambda _episode: None,
+            episode_active_duration_ms=lambda _episode, *, observed_monotonic_ms: None,
+        ),
+    )
+    commit = CausalCommit(
+        boundary=FactBoundary(1, 1, 200, 1),
+        cause=CausalCause.TIME_BOUNDARY,
+        failure_domain=FailureScope.CLOCK_INDEX,
+        affected_scopes=("GLOBAL",),
+    )
+
+    (row,) = workbench_module._radar_rows(reducer, commit, None)
+
+    assert row["baseline_return_interval_minutes"] == 5
+    assert row["baseline_selected_lookback_minutes"] == 120
+    assert row["baseline_source"] == "OFFICIAL_INDEX_CHART_AVERAGE_PRICE_RV"
+    assert row["clue_eligible_tte"] is True
+    assert row["clue_eligible_delta"] is False
 
 
 def test_radar_projection_uses_not_evaluated_without_active_detector_truth() -> None:
@@ -203,6 +282,7 @@ def test_radar_projection_uses_not_evaluated_without_active_detector_truth() -> 
                     detector_state=DetectorState.UNKNOWN,
                 )
             },
+            option_books={},
             atomic_states={episode_identity: PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE},
             episode_started_monotonic_ms=lambda _episode: 100,
             episode_active_duration_ms=lambda _episode, *, observed_monotonic_ms: (
@@ -241,7 +321,7 @@ def test_initial_snapshot_keeps_empty_panels_separate_from_unknown_zero_claims()
         "observed_count": 0,
     }
     assert value["service"]["data_state"] == "UNKNOWN"
-    assert value["schema_version"] == 2
+    assert value["schema_version"] == 3
     assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in value["non_claims"]
     assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in value["non_claims"]
 
@@ -607,7 +687,7 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "documentValue.publication_sequence" in JS
     assert "if (!response.ok) throw" in JS
     assert "renderUnavailable();" in JS
-    assert "SUPPORTED_SCHEMA_VERSION = 2" in JS
+    assert "SUPPORTED_SCHEMA_VERSION = 3" in JS
     assert ".table-scroll" in CSS
     assert "overflow-x:auto" in CSS
     assert 'class="system-details"' in JS
@@ -648,6 +728,17 @@ assert.equal(api.radarCellValue({{
   detector_state: 'UNKNOWN', known_evaluation: false
 }}, 'detector_reason', 'QUEUE_LAG_CURRENTNESS'),
   '处理队列延迟, 行情时效性不可确认');
+assert.equal(api.radarCellValue({{
+  detector_state: 'ANOMALY_ACTIVE', known_evaluation: true
+}}, 'baseline_return_interval_minutes', 5), '5 分钟');
+assert.equal(api.radarCellValue({{
+  detector_state: 'ANOMALY_ACTIVE', known_evaluation: true,
+  baseline_source: 'OFFICIAL_INDEX_CHART_REALIZED_VARIANCE'
+}}, 'baseline_selected_lookback_minutes', 120), '120 分钟');
+assert.equal(api.radarCellValue({{
+  detector_state: 'ANOMALY_ACTIVE', known_evaluation: true,
+  baseline_source: 'ANNUALIZED_VARIANCE_FLOOR'
+}}, 'baseline_selected_lookback_minutes', null), '固定年化方差下限');
 
 assert.equal(api.underwritingCellValue({{
   availability: 'NOT_EVALUATED', action: null
@@ -667,7 +758,7 @@ assert.equal(api.underwritingCellValue({{
   availability: 'NOT_EVALUATED', action: null,
   unknown_reasons: ['RADAR_EPISODE_NOT_ACTIVE']
 }}, 'decision_reason', 'UNDERWRITING_NOT_EVALUATED:RADAR_EPISODE_NOT_ACTIVE'),
-  '当前无活跃 Radar 异常, 承保尚未评估');
+  '当前无活跃 Radar 候选, 承保尚未评估');
 assert.equal(api.underwritingCellValue({{
   availability: 'NOT_EVALUATED', action: null,
   unknown_reasons: ['NO_ACTIVE_COMBO']
@@ -730,6 +821,9 @@ assert.deepEqual(
 def test_browser_keeps_formatted_exact_facts_in_collapsed_details() -> None:
     for exact_field in (
         "executable IV exact",
+        "baseline return interval minutes",
+        "baseline selected lookback minutes",
+        "baseline source",
         "baseline volatility exact",
         "richness exact",
         "short strike exact",

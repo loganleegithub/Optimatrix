@@ -23,6 +23,7 @@ from short_vol_radar.detector import (
     EpisodeEndReason,
     EpisodeTracker,
     NumericalBoundaryUnresolved,
+    ObservationSignal,
     TrackerState,
     aggregate_detector,
     classify_observation,
@@ -35,16 +36,15 @@ def observation(
     causal_seq: int,
     lower_time: int,
     upper_time: int,
-    richness: str,
+    signal: ObservationSignal,
     *,
     band_id: str = "band",
 ) -> DetectorObservation:
-    value = Decimal(richness)
     return DetectorObservation(
         causal_seq,
         TimeInterval(lower_time, upper_time),
         band_id,
-        DecimalInterval(value, value),
+        signal,
     )
 
 
@@ -54,7 +54,7 @@ def activated_tracker(policy_factory: PolicyFactory) -> tuple[EpisodeTracker, Op
     tracker = EpisodeTracker(
         runtime_identity="run", policy_identity=digest, instrument_name="SHORT"
     )
-    transition = tracker.observe(observation(1, 1_000, 1_001, "1.3"), rule)
+    transition = tracker.observe(observation(1, 1_000, 1_001, ObservationSignal.ACTIVATE), rule)
     assert transition.activated_episode_id is not None
     return tracker, rule
 
@@ -67,18 +67,33 @@ def test_activation_separation_equality_overlap_and_interruption(
     tracker = EpisodeTracker(
         runtime_identity="run", policy_identity=digest, instrument_name="SHORT"
     )
-    assert tracker.observe(observation(1, 1_000, 1_010, "1.3"), rule).activated_episode_id is None
-    assert tracker.observe(observation(2, 2_009, 2_009, "1.3"), rule).activated_episode_id is None
-    activated = tracker.observe(observation(3, 2_010, 2_011, "1.3"), rule)
+    assert (
+        tracker.observe(
+            observation(1, 1_000, 1_010, ObservationSignal.ACTIVATE), rule
+        ).activated_episode_id
+        is None
+    )
+    assert (
+        tracker.observe(
+            observation(2, 2_009, 2_009, ObservationSignal.ACTIVATE), rule
+        ).activated_episode_id
+        is None
+    )
+    activated = tracker.observe(observation(3, 2_010, 2_011, ObservationSignal.ACTIVATE), rule)
     assert activated.activated_episode_id is not None
     assert tracker.detector_state.value == DetectorState.ANOMALY_ACTIVE.value
 
     tracker = EpisodeTracker(
         runtime_identity="run", policy_identity=digest, instrument_name="RESET"
     )
-    tracker.observe(observation(1, 1_000, 1_000, "1.3"), rule)
-    tracker.observe(observation(2, 1_100, 1_100, "1.0"), rule)
-    assert tracker.observe(observation(3, 3_000, 3_000, "1.3"), rule).activated_episode_id is None
+    tracker.observe(observation(1, 1_000, 1_000, ObservationSignal.ACTIVATE), rule)
+    tracker.observe(observation(2, 1_100, 1_100, ObservationSignal.NEUTRAL), rule)
+    assert (
+        tracker.observe(
+            observation(3, 3_000, 3_000, ObservationSignal.ACTIVATE), rule
+        ).activated_episode_id
+        is None
+    )
 
 
 def test_clear_rearm_gap_and_fresh_episode_identity(
@@ -89,22 +104,30 @@ def test_clear_rearm_gap_and_fresh_episode_identity(
     tracker = EpisodeTracker(
         runtime_identity="run", policy_identity=digest, instrument_name="SHORT"
     )
-    first = tracker.observe(observation(1, 0, 0, "1.3"), rule).activated_episode_id
-    tracker.observe(observation(2, 1_000, 1_000, "0.8"), rule)
+    first = tracker.observe(
+        observation(1, 0, 0, ObservationSignal.ACTIVATE), rule
+    ).activated_episode_id
+    tracker.observe(observation(2, 1_000, 1_000, ObservationSignal.CLEAR), rule)
     assert tracker.state.value == TrackerState.CLEARING.value
-    tracker.observe(observation(3, 1_500, 1_500, "1.0"), rule)
+    tracker.observe(observation(3, 1_500, 1_500, ObservationSignal.NEUTRAL), rule)
     assert tracker.state.value == TrackerState.ACTIVE.value
-    tracker.observe(observation(4, 3_000, 3_000, "0.8"), rule)
-    ended = tracker.observe(observation(5, 4_000, 4_000, "0.8"), rule).ended_episode
+    tracker.observe(observation(4, 3_000, 3_000, ObservationSignal.CLEAR), rule)
+    ended = tracker.observe(
+        observation(5, 4_000, 4_000, ObservationSignal.CLEAR), rule
+    ).ended_episode
     assert ended is not None and ended.reason is EpisodeEndReason.CLEAR
     assert tracker.detector_state.value == DetectorState.NO_ANOMALY.value
 
-    second = tracker.observe(observation(6, 5_000, 5_000, "1.3"), rule).activated_episode_id
+    second = tracker.observe(
+        observation(6, 5_000, 5_000, ObservationSignal.ACTIVATE), rule
+    ).activated_episode_id
     assert second is not None and second != first
     gap_end = tracker.unknown(reason="BOOK_GAP", causal_seq=7, continuity_gap=True).ended_episode
     assert gap_end is not None and gap_end.reason is EpisodeEndReason.UNKNOWN_AT_GAP
     assert tracker.detector_state.value == DetectorState.UNKNOWN.value
-    third = tracker.observe(observation(8, 6_000, 6_000, "1.3"), rule).activated_episode_id
+    third = tracker.observe(
+        observation(8, 6_000, 6_000, ObservationSignal.ACTIVATE), rule
+    ).activated_episode_id
     assert third is not None and third not in {first, second}
 
 

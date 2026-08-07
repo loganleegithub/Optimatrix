@@ -20,11 +20,11 @@ MAX_BUFFERED_LIFECYCLE_EVENTS = 10_000
 
 
 def ticker_channel(instrument_name: str) -> str:
-    return f"ticker.{instrument_name}.100ms"
+    return f"ticker.{instrument_name}.agg2"
 
 
 def book_channel(instrument_name: str) -> str:
-    return f"book.{instrument_name}.100ms"
+    return f"book.{instrument_name}.agg2"
 
 
 def subscription_batches(

@@ -17,6 +17,12 @@ from market_monitor import ContinuityGap, TimeInterval
 from short_vol_radar.black import DecimalInterval
 from short_vol_radar.detector import DetectorState
 from short_vol_radar.evidence import CoverageBlockingReason, CoverageState
+from short_vol_radar.radar import DetectorCalculation
+from short_vol_radar.review import (
+    DEFAULT_ATTENTION_TOP_N,
+    ReviewContext,
+    build_review_contexts,
+)
 from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
 from short_vol_underwriting.identity import canonical_decimal, canonical_value
 from short_vol_underwriting.policy import PolicyChain
@@ -24,7 +30,7 @@ from short_vol_underwriting.policy import PolicyChain
 from radar_runtime.funnel import FunnelSnapshot, FunnelTracker
 from radar_runtime.runtime import CausalCommit, RadarReducer
 
-WORKBENCH_SCHEMA_VERSION = 2
+WORKBENCH_SCHEMA_VERSION = 3
 WORKBENCH_PUBLICATION_INTERVAL_MS = 500
 SIMULATION_LABEL = "模拟入场, 不是订单或成交"
 EMPTY_PANEL_LABEL = "无已结算对象; 这不是业务零值"
@@ -521,7 +527,26 @@ def _build_business_projection(
     funnel: FunnelSnapshot,
 ) -> dict[str, object]:
     trusted = _trusted_interval(reducer, commit.boundary.received_monotonic_ms)
-    radar_rows = _radar_rows(reducer, commit, trusted)
+    calculations: dict[str, DetectorCalculation] = {}
+    for name, result in reducer.results.items():
+        if result.calculation is not None:
+            calculations[name] = result.calculation
+    detector_states = {name: result.detector_state for name, result in reducer.results.items()}
+    detector_reasons = {name: result.reason for name, result in reducer.results.items()}
+    review_contexts = build_review_contexts(
+        options=reducer.options,
+        calculations=calculations,
+        detector_states=detector_states,
+        detector_reasons=detector_reasons,
+        tickers=reducer.current_diagnostic_tickers,
+        option_books=reducer.option_books,
+        option_catalog_complete=reducer.option_catalog.complete,
+        index_usdc_per_btc=reducer.current_index_price_usdc_per_btc,
+        target_quantity_btc=policies.radar.target_base_quantity_btc,
+        fee_rate_index_fraction=policies.underwriting.fee_rate_index_fraction,
+        attention_top_n=DEFAULT_ATTENTION_TOP_N,
+    )
+    radar_rows = _radar_rows(reducer, commit, trusted, review_contexts)
     position_rows = _position_rows(
         downstream.kinds,
         policies,
@@ -565,6 +590,18 @@ def _build_business_projection(
             commit.boundary.received_monotonic_ms - reducer.last_wire_received_monotonic_ms,
         )
     )
+    history_state = (
+        reducer.index_history.current_tail(
+            reducer.policy.largest_lookback_minutes,
+            trusted_time=trusted,
+            source_stale_deadline_ms=(
+                reducer.policy.runtime_limits.index_history_source_stale_deadline_ms
+            ),
+        )
+        if trusted is not None
+        else None
+    )
+    history_contract = history_state.contract if history_state is not None else None
     return {
         "published_fact_boundary": _runtime_boundary_object(commit),
         "funnel": funnel.as_object(),
@@ -585,6 +622,68 @@ def _build_business_projection(
             "session_gap_count": reducer.diagnostics.session_gap_count,
             "global_continuity_epoch": reducer.current_global_continuity_epoch,
             "disconnect_records": _disconnect_records(reducer),
+            "index_history": {
+                "source": "DERIBIT_PUBLIC_GET_INDEX_CHART_DATA_BTC_USDC_1D",
+                "value_semantics": "AVERAGE_INDEX_PRICE",
+                "availability": (
+                    history_state.availability.value if history_state is not None else "UNKNOWN"
+                ),
+                "reason": history_state.reason if history_state is not None else "CLOCK_UNKNOWN",
+                "source_point_count": (
+                    history_contract.source_point_count if history_contract is not None else None
+                ),
+                "interval_counts": (
+                    [
+                        {"interval_ms": interval, "count": count}
+                        for interval, count in history_contract.interval_counts
+                    ]
+                    if history_contract is not None
+                    else []
+                ),
+                "modal_interval_ms": (
+                    history_contract.modal_interval_ms if history_contract is not None else None
+                ),
+                "newest_response_timestamp_ms": (
+                    history_contract.newest_response_timestamp_ms
+                    if history_contract is not None
+                    else None
+                ),
+                "newest_response_age_ms": (
+                    history_contract.newest_response_age_ms
+                    if history_contract is not None
+                    else None
+                ),
+                "newest_response_point_excluded_by_completion_cutoff": (
+                    history_contract.newest_response_point_excluded_by_completion_cutoff
+                    if history_contract is not None
+                    else False
+                ),
+                "latest_source_timestamp_ms": (
+                    history_contract.latest_source_timestamp_ms
+                    if history_contract is not None
+                    else None
+                ),
+                "latest_source_age_ms": (
+                    history_contract.latest_source_age_ms if history_contract is not None else None
+                ),
+                "exact_suffix_point_count": (
+                    history_contract.exact_suffix_point_count if history_contract is not None else 0
+                ),
+                "exact_suffix_minutes": (
+                    history_contract.exact_suffix_minutes if history_contract is not None else 0
+                ),
+                "revision_count": (
+                    history_contract.revision_count if history_contract is not None else 0
+                ),
+                "revision_pending": (
+                    history_contract.revision_pending if history_contract is not None else False
+                ),
+                "revised_timestamps_ms": (
+                    list(history_contract.revised_timestamps_ms)
+                    if history_contract is not None
+                    else []
+                ),
+            },
         },
         "zero_claims": {
             "anomaly": anomaly_zero.as_object(),
@@ -593,6 +692,8 @@ def _build_business_projection(
         "radar": {
             "panel_state": panel_state(radar_rows).value,
             "empty_label": EMPTY_PANEL_LABEL if not radar_rows else None,
+            "attention_top_n": DEFAULT_ATTENTION_TOP_N,
+            "ranked_row_count": len(review_contexts),
             "rows": radar_rows,
         },
         "underwriting": {
@@ -668,13 +769,17 @@ def _radar_rows(
     reducer: RadarReducer,
     commit: CausalCommit,
     trusted: TimeInterval | None,
+    review_contexts: Mapping[str, ReviewContext] | None = None,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
+    contexts = review_contexts or {}
     trusted_interval = trusted
     for name, instrument in sorted(reducer.options.items()):
         result = reducer.results.get(name)
         tracker = reducer.trackers.get(name)
         calculation = result.calculation if result is not None else None
+        option_book = reducer.option_books.get(name)
+        review = contexts.get(name)
         episode = tracker.episode_id if tracker is not None else None
         tte = (
             None
@@ -695,13 +800,67 @@ def _radar_rows(
                     result.detector_state.value if result is not None else "UNKNOWN"
                 ),
                 "detector_reason": result.reason if result is not None else "NOT_SETTLED",
+                "option_book_state": (
+                    option_book.state.value if option_book is not None else "UNKNOWN"
+                ),
+                "option_book_reason": (
+                    option_book.reason if option_book is not None else "BOOK_NOT_CREATED"
+                ),
                 "known_evaluation": (result.known_evaluation if result is not None else False),
                 "tte_band_id": result.band_id if result is not None else None,
+                "clue_eligible_tte": (
+                    calculation.band.clue_eligible if calculation is not None else None
+                ),
+                "clue_eligible_delta": (
+                    calculation.delta_clue_eligible if calculation is not None else None
+                ),
+                "delta_bucket": (
+                    calculation.delta_bucket.value if calculation is not None else None
+                ),
+                "delta_interval": (
+                    _decimal_interval(calculation.delta) if calculation is not None else None
+                ),
                 "executable_sell_price_usdc_per_btc": (
                     str(calculation.executable_sell_price_usdc) if calculation is not None else None
                 ),
+                "executable_buy_price_usdc_per_btc": (
+                    str(calculation.executable_buy_price_usdc) if calculation is not None else None
+                ),
+                "one_tick_stressed_sell_price_usdc_per_btc": (
+                    str(calculation.stressed_executable_sell_price_usdc)
+                    if calculation is not None
+                    else None
+                ),
+                "price_tick_usdc": (
+                    str(calculation.price_tick_usdc) if calculation is not None else None
+                ),
+                "target_spread_usdc": (
+                    str(calculation.target_spread_usdc) if calculation is not None else None
+                ),
+                "target_spread_ticks": (
+                    str(calculation.target_spread_ticks) if calculation is not None else None
+                ),
+                "bid_premium_ticks": (
+                    str(calculation.bid_premium_ticks) if calculation is not None else None
+                ),
+                "bid_consumed_level_count": (
+                    len(calculation.target_bid.consumed) if calculation is not None else None
+                ),
+                "ask_consumed_level_count": (
+                    len(calculation.target_ask.consumed) if calculation is not None else None
+                ),
                 "executable_iv_interval": (
                     _decimal_interval(calculation.executable_bid_iv)
+                    if calculation is not None
+                    else None
+                ),
+                "executable_ask_iv_interval": (
+                    _decimal_interval(calculation.executable_ask_iv)
+                    if calculation is not None
+                    else None
+                ),
+                "one_tick_stressed_iv_interval": (
+                    _decimal_interval(calculation.stressed_executable_bid_iv)
                     if calculation is not None
                     else None
                 ),
@@ -710,8 +869,73 @@ def _radar_rows(
                     if calculation is not None
                     else None
                 ),
+                "baseline_return_interval_minutes": (
+                    calculation.baseline.return_interval_minutes
+                    if calculation is not None
+                    else None
+                ),
+                "baseline_selected_lookback_minutes": (
+                    calculation.baseline.selected_lookback_minutes
+                    if calculation is not None
+                    else None
+                ),
+                "baseline_source": (
+                    (
+                        "ANNUALIZED_VARIANCE_FLOOR"
+                        if calculation.baseline.selected_lookback_minutes is None
+                        else "OFFICIAL_INDEX_CHART_AVERAGE_PRICE_RV"
+                    )
+                    if calculation is not None
+                    else None
+                ),
+                "raw_richness_ratio_interval": (
+                    _decimal_interval(calculation.raw_richness) if calculation is not None else None
+                ),
                 "richness_ratio_interval": (
                     _decimal_interval(calculation.richness) if calculation is not None else None
+                ),
+                "hard_screen_label": review.hard_screen_label if review is not None else None,
+                "positive_witness": review.positive_witness if review is not None else None,
+                "primary_blocker": review.primary_blocker if review is not None else None,
+                "upgrade_condition": review.upgrade_condition if review is not None else None,
+                "invalidation_condition": (
+                    review.invalidation_condition if review is not None else None
+                ),
+                "rank_inputs": (review.rank_inputs.as_object() if review is not None else None),
+                "attention_rank": review.attention_rank if review is not None else None,
+                "within_attention_top_n": (
+                    review.within_attention_top_n if review is not None else False
+                ),
+                "rank_explanation": (list(review.rank_explanation) if review is not None else []),
+                "regime_context": review.regime.as_object() if review is not None else None,
+                "regime_jump_share": (
+                    str(review.regime.jump_share)
+                    if review is not None and review.regime.jump_share is not None
+                    else None
+                ),
+                "regime_adverse_semivariance_share": (
+                    str(review.regime.adverse_semivariance_share)
+                    if review is not None and review.regime.adverse_semivariance_share is not None
+                    else None
+                ),
+                "surface_context": review.surface.as_object() if review is not None else None,
+                "surface_residual": (
+                    str(review.surface.executable_bid_iv_minus_local_mark_iv)
+                    if review is not None
+                    and review.surface.executable_bid_iv_minus_local_mark_iv is not None
+                    else None
+                ),
+                "legged_structure_context": (
+                    review.legged_structure.as_object() if review is not None else None
+                ),
+                "legged_reference_state": (
+                    review.legged_structure.state.value if review is not None else None
+                ),
+                "best_legged_credit_to_payoff_cap_fraction": (
+                    str(review.legged_structure.best_credit_to_payoff_cap_fraction)
+                    if review is not None
+                    and review.legged_structure.best_credit_to_payoff_cap_fraction is not None
+                    else None
                 ),
                 "public_atomic_quote_state": _public_atomic_quote_state(
                     reducer,
@@ -1223,6 +1447,25 @@ def _empty_business_projection() -> dict[str, object]:
             "session_gap_count": 0,
             "global_continuity_epoch": 1,
             "disconnect_records": [],
+            "index_history": {
+                "source": "DERIBIT_PUBLIC_GET_INDEX_CHART_DATA_BTC_USDC_1D",
+                "value_semantics": "AVERAGE_INDEX_PRICE",
+                "availability": "UNKNOWN",
+                "reason": "NOT_STARTED",
+                "source_point_count": None,
+                "interval_counts": [],
+                "modal_interval_ms": None,
+                "newest_response_timestamp_ms": None,
+                "newest_response_age_ms": None,
+                "newest_response_point_excluded_by_completion_cutoff": False,
+                "latest_source_timestamp_ms": None,
+                "latest_source_age_ms": None,
+                "exact_suffix_point_count": 0,
+                "exact_suffix_minutes": 0,
+                "revision_count": 0,
+                "revision_pending": False,
+                "revised_timestamps_ms": [],
+            },
         },
         "zero_claims": {
             "anomaly": zero_anomaly_claim(
@@ -1450,7 +1693,7 @@ HTML = """<!doctype html>
     <section><h2>交易摘要</h2><div id="system" class="grid"></div></section>
     <section><h2>业务漏斗</h2><div id="funnel"></div></section>
     <section><h2>业务零值证明</h2><div id="zero" class="grid"></div></section>
-    <section><h2>Radar</h2><div id="radar"></div></section>
+    <section><h2>Radar 可信候选</h2><div id="radar"></div></section>
     <section><h2>承保详情</h2><div id="underwriting"></div></section>
     <section><h2>Shadow 入场</h2><p class="warning">模拟入场, 不是订单或成交</p><div id="shadow"></div></section>
     <section><h2>持仓管理</h2><div id="positions"></div></section>
@@ -1464,7 +1707,7 @@ HTML = """<!doctype html>
 
 CSS = """*{box-sizing:border-box}[hidden]{display:none!important}html,body{max-width:100%;overflow-x:hidden}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3}header,footer{padding:20px 5vw;background:#161b22}main{max-width:1600px;margin:0 auto;padding:20px 5vw}section{min-width:0;margin:0 0 24px;padding:18px;background:#161b22;border:1px solid #30363d;border-radius:10px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.card{min-width:0;padding:12px;background:#0d1117;border:1px solid #30363d;border-radius:8px;overflow-wrap:anywhere}.label{color:#8b949e;font-size:.85rem}.value{font-weight:650;margin-top:4px}.warning{padding:10px;border:1px solid #d29922;background:#2d2308;border-radius:8px}.system-details{margin-top:12px}.system-details>summary{cursor:pointer;color:#58a6ff}.system-details>.grid{margin-top:10px}.panel-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px}.panel-toolbar label{color:#8b949e}.panel-toolbar select{margin-left:8px;padding:6px 8px;color:#e6edf3;background:#0d1117;border:1px solid #30363d;border-radius:6px}.table-scroll{max-width:100%;overflow-x:auto}.table-scroll table{min-width:900px;width:100%;border-collapse:collapse;font-size:.88rem}th,td{padding:8px;border-bottom:1px solid #30363d;text-align:left;vertical-align:top}th{position:sticky;top:0;color:#8b949e;background:#161b22;z-index:1}.empty{color:#d29922}.UNKNOWN,.STALE,.INTERRUPTED,.state-unknown{color:#f0883e}.CURRENT,.PROVEN_ZERO,.ANOMALY_ACTIVE,.EVALUABLE{color:#3fb950}.DEGRADED,.NOT_EVALUATED{color:#d29922}.na{color:#8b949e}.raw-details{max-width:360px}.raw-details summary{cursor:pointer;color:#58a6ff}.raw-details dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 8px}.raw-details dt{color:#8b949e}.raw-details dd{margin:0;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem}@media(max-width:800px){header,footer,main{padding-left:16px;padding-right:16px}.grid{grid-template-columns:1fr}}"""
 
-JS = r"""const SUPPORTED_SCHEMA_VERSION = 2;
+JS = r"""const SUPPORTED_SCHEMA_VERSION = 3;
 const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;',
   '<': '&lt;',
@@ -1491,8 +1734,17 @@ const reasonLabels = {
   INDEX_WINDOW_GAP: '指数基线窗口存在缺口',
   INDEX_SOURCE_STALE: '指数来源已陈旧',
   INDEX_CONTINUITY_GAP: '指数行情连续性中断',
+  INDEX_HISTORY_REVISION: '官方指数历史已完成点发生修订, 等待下一响应确认',
   OPTION_BOOK_UNKNOWN: '期权簿不可确认',
   OPTION_AMOUNT_METADATA_UNKNOWN: '期权数量元数据不可确认',
+  OPTION_PRICE_TICK_METADATA_UNKNOWN: '官方价格 tick 规则不可确认',
+  INSUFFICIENT_TARGET_ASK_DEPTH: '目标数量买回深度不足',
+  NON_POSITIVE_TARGET_SPREAD: '目标规模双边盘口锁定或交叉',
+  ONE_TICK_STRESSED_BID_NON_POSITIVE: '卖价下压一个合法 tick 后不再为正',
+  DELTA_INELIGIBLE: 'Delta 不在冻结的可行动风险桶',
+  REVIEW_ONLY_TTE_BAND: '临近 admission cutoff, 仅供审查不可激活 clue',
+  REVIEW_ONLY_DELTA_BUCKET: 'Delta 位于冻结的 clue 风险桶之外, 仅供审查',
+  REVIEW_ONLY_TTE_AND_DELTA: 'TTE 与 Delta 均位于 review-only 范围',
   FORWARD_TICKER_UNKNOWN: '远期价格 ticker 不可确认',
   INVALID_FORWARD: '远期价格无效',
   NUMERICAL_BOUNDARY_UNRESOLVED: '数值区间跨越决策边界',
@@ -1520,7 +1772,7 @@ const reasonLabels = {
   OUTCOME_PENDING: 'Shadow Case 已打开, Outcome 尚未终结',
   NO_MATERIAL_BLOCKER_OBSERVED: '当前已观察漏斗没有实质转换阻塞',
   POSITION_SLOT_CONSUMED_BY_SHADOW_ENTRY: '该承保槽位已被 Shadow Entry 使用',
-  RADAR_EPISODE_NOT_ACTIVE: '当前无活跃 Radar 异常, 承保尚未评估',
+  RADAR_EPISODE_NOT_ACTIVE: '当前无活跃 Radar 候选, 承保尚未评估',
   NOT_STARTED: '服务尚未启动'
 };
 const reasonText = value => reasonLabels[value] || String(value);
@@ -1573,24 +1825,43 @@ const unavailableRadarCalculation = row =>
 const radarCellValue = (row, field, value) => {
   if (field === 'expiration_timestamp_ms') return formatEpochMs(value);
   if (field === 'tte_interval_ms') return formatDurationInterval(value);
+  if (field === 'attention_rank') return isMissing(value) ? 'N/A' : `#${formatDecimal(value)}`;
   if (field === 'strike_usdc_per_btc') {
     return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
   }
-  if (field === 'executable_sell_price_usdc_per_btc') {
+  if (['executable_sell_price_usdc_per_btc', 'executable_buy_price_usdc_per_btc',
+      'one_tick_stressed_sell_price_usdc_per_btc'].includes(field)) {
     return isMissing(value) ? unavailableRadarCalculation(row) : formatDecimal(value);
   }
-  if (field === 'executable_iv_interval') {
+  if (['executable_iv_interval', 'executable_ask_iv_interval',
+      'one_tick_stressed_iv_interval'].includes(field)) {
     return isMissing(value) ? unavailableRadarCalculation(row)
       : formatInterval(value, formatPercent);
   }
   if (field === 'baseline_annualized_volatility') {
     return isMissing(value) ? unavailableRadarCalculation(row) : formatPercent(value);
   }
-  if (field === 'richness_ratio_interval') {
+  if (field === 'baseline_return_interval_minutes') {
+    return isMissing(value) ? unavailableRadarCalculation(row) : `${formatDecimal(value)} 分钟`;
+  }
+  if (field === 'baseline_selected_lookback_minutes') {
+    if (!isMissing(value)) return `${formatDecimal(value)} 分钟`;
+    return row.baseline_source === 'ANNUALIZED_VARIANCE_FLOOR'
+      ? '固定年化方差下限'
+      : unavailableRadarCalculation(row);
+  }
+  if (['richness_ratio_interval', 'raw_richness_ratio_interval'].includes(field)) {
     return isMissing(value) ? unavailableRadarCalculation(row)
       : formatInterval(value, formatDecimal);
   }
-  if (field === 'detector_reason') {
+  if (['target_spread_ticks', 'bid_premium_ticks', 'surface_residual',
+      'best_legged_credit_to_payoff_cap_fraction'].includes(field)) {
+    return isMissing(value) ? unavailableRadarCalculation(row) : formatDecimal(value);
+  }
+  if (['regime_jump_share', 'regime_adverse_semivariance_share'].includes(field)) {
+    return isMissing(value) ? 'UNKNOWN' : formatPercent(value);
+  }
+  if (field === 'detector_reason' || field === 'option_book_reason') {
     return isMissing(value) ? unavailableRadarCalculation(row) : reasonText(value);
   }
   if (field === 'active_episode_identity' || field === 'anomaly_started_monotonic_ms') {
@@ -1680,6 +1951,8 @@ const radarPriority = {ANOMALY_ACTIVE: 0, UNKNOWN: 1, NO_ANOMALY: 2};
 const underwritingPriority = {EVALUABLE: 0, UNKNOWN: 1, NOT_EVALUATED: 2};
 const underwritingActionPriority = {CANDIDATE: 0, WATCH: 1, ABSTAIN: 2};
 const orderedRadarRows = rows => [...rows].sort((left, right) =>
+  (Number.isFinite(Number(left.attention_rank)) ? Number(left.attention_rank) : 999999) -
+    (Number.isFinite(Number(right.attention_rank)) ? Number(right.attention_rank) : 999999) ||
   (radarPriority[left.detector_state] ?? 9) - (radarPriority[right.detector_state] ?? 9) ||
   Number(left.expiration_timestamp_ms || 0) - Number(right.expiration_timestamp_ms || 0) ||
   String(left.option_type || '').localeCompare(String(right.option_type || '')) ||
@@ -1698,7 +1971,9 @@ const orderedUnderwritingRows = rows => [...rows].sort((left, right) =>
 );
 const filterRows = (rows, field, selected) => selected === 'ALL'
   ? [...rows]
-  : rows.filter(row => row[field] === selected);
+  : (selected === 'TOP_N'
+    ? rows.filter(row => row.within_attention_top_n)
+    : rows.filter(row => row[field] === selected));
 const details = (row, fields) => {
   const body = fields.map(([label, key]) =>
     `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(rawText(row[key]))}</dd>`
@@ -1737,7 +2012,7 @@ let lastSuccessfulFetchAtMs = null;
 let lastPublicationRuntimeIdentity = null;
 let lastPublicationSequence = null;
 let lastPublicationChangeAtMs = null;
-let radarFilterValue = 'ALL';
+let radarFilterValue = 'TOP_N';
 let underwritingFilterValue = 'ALL';
 let lastRenderedDocument = null;
 const ageMs = timestamp => timestamp === null ? 'UNKNOWN' : Math.max(0, Date.now() - timestamp);
@@ -1767,24 +2042,40 @@ function renderRadarPanel(documentValue) {
   const ordered = orderedRadarRows(documentValue.radar.rows);
   const rows = filterRows(ordered, 'detector_state', radarFilterValue);
   document.getElementById('radar').innerHTML =
-    toolbar('状态筛选', 'radar-filter', radarFilterValue,
-      ['ALL', 'ANOMALY_ACTIVE', 'UNKNOWN', 'NO_ANOMALY'], rows.length, ordered.length) +
+    toolbar('注意力筛选', 'radar-filter', radarFilterValue,
+      ['TOP_N', 'ALL', 'ANOMALY_ACTIVE', 'UNKNOWN', 'NO_ANOMALY'], rows.length, ordered.length) +
     table(documentValue.radar, [
-      ['合约', 'instrument_name'], ['到期(北京时间)', 'expiration_timestamp_ms', radarCellValue],
+      ['Rank', 'attention_rank', radarCellValue], ['合约', 'instrument_name'],
+      ['到期(北京时间)', 'expiration_timestamp_ms', radarCellValue],
       ['TTE', 'tte_interval_ms', radarCellValue], ['类型', 'option_type', radarCellValue],
-      ['Strike', 'strike_usdc_per_btc', radarCellValue],
-      ['Executable IV', 'executable_iv_interval', radarCellValue],
-      ['基准波动率', 'baseline_annualized_volatility', radarCellValue],
-      ['Richness', 'richness_ratio_interval', radarCellValue],
-      ['Radar', 'detector_state', radarCellValue], ['原因', 'detector_reason', radarCellValue],
+      ['Delta 桶', 'delta_bucket', radarCellValue],
+      ['One-tick Richness', 'richness_ratio_interval', radarCellValue],
+      ['Spread ticks', 'target_spread_ticks', radarCellValue],
+      ['Surface residual', 'surface_residual', radarCellValue],
+      ['Jump share', 'regime_jump_share', radarCellValue],
+      ['Legged ref', 'legged_reference_state', radarCellValue],
+      ['Clue 状态', 'detector_state', radarCellValue], ['原因', 'detector_reason', radarCellValue],
       ['Atomic combo', 'public_atomic_quote_state', radarCellValue]
-    ], rows, [['episode identity', 'active_episode_identity'],
+    ], rows, [['rank explanation', 'rank_explanation'],
+      ['hard screen label', 'hard_screen_label'],
+      ['episode identity', 'active_episode_identity'],
       ['expiration timestamp ms', 'expiration_timestamp_ms'],
       ['TTE interval ms', 'tte_interval_ms'], ['strike exact', 'strike_usdc_per_btc'],
       ['executable sell price exact', 'executable_sell_price_usdc_per_btc'],
       ['executable IV exact', 'executable_iv_interval'],
+      ['baseline return interval minutes', 'baseline_return_interval_minutes'],
+      ['baseline selected lookback minutes', 'baseline_selected_lookback_minutes'],
+      ['baseline source', 'baseline_source'],
       ['baseline volatility exact', 'baseline_annualized_volatility'],
-      ['richness exact', 'richness_ratio_interval'], ['detector reason enum', 'detector_reason'],
+      ['raw richness exact', 'raw_richness_ratio_interval'],
+      ['one-tick richness exact', 'richness_ratio_interval'],
+      ['delta exact', 'delta_interval'], ['quote ask exact', 'executable_buy_price_usdc_per_btc'],
+      ['one-tick stressed bid exact', 'one_tick_stressed_sell_price_usdc_per_btc'],
+      ['price tick exact', 'price_tick_usdc'], ['spread exact', 'target_spread_usdc'],
+      ['premium ticks', 'bid_premium_ticks'], ['regime context', 'regime_context'],
+      ['surface context', 'surface_context'], ['legged structure', 'legged_structure_context'],
+      ['detector reason enum', 'detector_reason'],
+      ['option book state', 'option_book_state'], ['option book reason', 'option_book_reason'],
       ['episode start monotonic ms', 'anomaly_started_monotonic_ms'],
       ['episode duration ms', 'anomaly_active_duration_ms']]);
 }
@@ -1905,7 +2196,7 @@ function render(documentValue) {
     card('当前行情判定', service.ready ? '可用于当前判定' : '不可用于当前判定') +
     card('主阻塞原因', reasonText(service.reason)) +
     card('Coverage 已知/监控', `${system.known_current_instrument_evaluation_count}/${system.monitored_instrument_count}`) +
-    card('Radar 结论', zeroClaimText(documentValue.zero_claims.anomaly, '异常')) +
+    card('Radar clue 结论', zeroClaimText(documentValue.zero_claims.anomaly, 'Radar clue')) +
     card('Candidate 结论', zeroClaimText(documentValue.zero_claims.candidate, 'Candidate')) +
     card('数据延迟', isMissing(system.data_delay_ms) ? 'UNKNOWN' : formatDurationMs(system.data_delay_ms)) +
     '<details class="system-details"><summary>运行与 Policy 详情</summary><div class="grid">' +
@@ -1923,6 +2214,15 @@ function render(documentValue) {
     card('断线/重连', system.reconnect_count) +
     card('Session gaps', system.session_gap_count) +
     card('最近断线记录', system.disconnect_records.slice(-1)[0]) +
+    card('RV source', system.index_history.source) +
+    card('RV value semantics', system.index_history.value_semantics) +
+    card('History cadence', isMissing(system.index_history.modal_interval_ms)
+      ? 'UNKNOWN' : formatDurationMs(system.index_history.modal_interval_ms)) +
+    card('History confirmed suffix', `${system.index_history.exact_suffix_point_count} points / ${formatDecimal(system.index_history.exact_suffix_minutes)} minutes`) +
+    card('History confirmed age', isMissing(system.index_history.latest_source_age_ms)
+      ? 'UNKNOWN' : formatDurationMs(system.index_history.latest_source_age_ms)) +
+    card('History newest point outside completion cutoff', system.index_history.newest_response_point_excluded_by_completion_cutoff) +
+    card('History revisions', `${system.index_history.revision_count}; pending=${system.index_history.revision_pending}`) +
     card('Runtime identity', documentValue.runtime_identity) +
     card('Code identity', documentValue.code_identity) +
     card('Published fact boundary', documentValue.published_fact_boundary) +

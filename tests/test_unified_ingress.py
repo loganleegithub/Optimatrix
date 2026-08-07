@@ -45,10 +45,10 @@ def test_reader_enqueues_every_inbound_frame_once_in_one_continuous_sequence() -
                     {
                         "jsonrpc": "2.0",
                         "method": "subscription",
-                        "params": {"channel": "book.X.100ms", "data": {"change_id": 1}},
+                        "params": {"channel": "book.X.agg2", "data": {"change_id": 1}},
                     }
                 ),
-                json.dumps({"jsonrpc": "2.0", "id": 10, "result": ["book.X.100ms"]}),
+                json.dumps({"jsonrpc": "2.0", "id": 10, "result": ["book.X.agg2"]}),
                 json.dumps(
                     {
                         "jsonrpc": "2.0",
@@ -246,6 +246,35 @@ def test_transport_ignores_ambient_system_proxy(monkeypatch: pytest.MonkeyPatch)
     assert observed["open_timeout"] == 1.234
     assert observed["close_timeout"] == 1.234
     assert observed["proxy"] is None
+
+
+def test_transport_close_has_an_independent_bounded_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cancelled = False
+
+    class HangingCloseConnection(IncomingConnection):
+        async def close(self) -> None:
+            nonlocal cancelled
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+
+    monkeypatch.setattr(
+        deribit_public,
+        "PUBLIC_TRANSPORT_CLOSE_TIMEOUT_SECONDS",
+        0.001,
+    )
+
+    async def scenario() -> None:
+        client = DeribitPublicClient(session_epoch=1, rpc_deadline_ms=30_000)
+        client._connection = HangingCloseConnection([])  # type: ignore[assignment]
+        await client.__aexit__(None, None, None)
+
+    asyncio.run(scenario())
+    assert cancelled
 
 
 def test_transport_records_real_queue_high_water_and_overflow() -> None:

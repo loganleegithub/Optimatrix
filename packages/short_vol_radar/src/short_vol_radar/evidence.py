@@ -18,6 +18,8 @@ from short_vol_radar.policy import OptionRule
 ANOMALY_NON_CLAIMS = (
     "NOT_A_DELIVERY_TWAP_DISTRIBUTION_FORECAST",
     "NOT_VALIDATED_FORECAST",
+    "NOT_SURFACE_RELATIVE_MISPRICING_CLAIM",
+    "NOT_CALENDAR_OR_EVENT_FORECAST",
 )
 ATOMIC_NON_CLAIMS = (
     "PUBLIC_QUOTE_NOT_FILL",
@@ -69,6 +71,7 @@ class CoverageBlockingReason(StrEnum):
     INDEX_WINDOW_GAP = "INDEX_WINDOW_GAP"
     INDEX_SOURCE_STALE = "INDEX_SOURCE_STALE"
     INDEX_CONTINUITY_GAP = "INDEX_CONTINUITY_GAP"
+    INDEX_HISTORY_REVISION = "INDEX_HISTORY_REVISION"
     TICKER_SOURCE_STALE = "TICKER_SOURCE_STALE"
     TICKER_TIMESTAMP_AHEAD = "TICKER_TIMESTAMP_AHEAD"
     OPTION_LIFECYCLE_UNAVAILABLE = "OPTION_LIFECYCLE_UNAVAILABLE"
@@ -90,7 +93,9 @@ class CausalCause(StrEnum):
     TIME_BOUNDARY = "TIME_BOUNDARY"
     CLEAN_STOP = "CLEAN_STOP"
     INDEX_TICK = "INDEX_TICK"
+    INDEX_HISTORY = "INDEX_HISTORY"
     INDEX_CONTINUITY_GAP = "INDEX_CONTINUITY_GAP"
+    INDEX_HISTORY_REVISION = "INDEX_HISTORY_REVISION"
     INDEX_SOURCE_STALE = "INDEX_SOURCE_STALE"
     INDEX_WINDOW_GAP = "INDEX_WINDOW_GAP"
     OPTION_CATALOG = "OPTION_CATALOG"
@@ -218,10 +223,12 @@ def project_anomaly_event(value: AnomalyEvidence) -> dict[str, object]:
         "target_base_quantity_btc": decimal_text(value.target_base_quantity_btc),
         "detector_boundaries": _rule_object(value.rule),
         "baseline": {
+            "return_interval_minutes": value.baseline.return_interval_minutes,
             "window_variances": [
                 {"lookback_minutes": lookback, "variance": decimal_text(variance)}
                 for lookback, variance in value.baseline.window_variances
             ],
+            "selected_lookback_minutes": value.baseline.selected_lookback_minutes,
             "variance_rate_per_minute": decimal_text(value.baseline.variance_rate_per_minute),
             "annualized_volatility": decimal_text(value.baseline.annualized_volatility),
             "total_variance_interval": _decimal_interval(

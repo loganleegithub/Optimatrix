@@ -5,7 +5,13 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 
 from market_monitor import BookState, ContinuousOrderBook, TimeInterval
-from options_domain import AmountState, OptionInstrument, OptionType, check_target_amount
+from options_domain import (
+    AmountState,
+    OptionInstrument,
+    OptionType,
+    check_target_amount,
+    stress_depth_walk_down_one_tick,
+)
 from options_domain.quotes import DepthWalk, walk_target_depth
 
 from short_vol_radar.baseline import BaselineResult, BaselineUnavailable, compute_baseline
@@ -25,6 +31,7 @@ from short_vol_radar.detector import (
     NumericalBoundaryUnresolved,
     TrackerState,
     TrackerTransition,
+    classify_observation,
     delta_is_eligible,
 )
 from short_vol_radar.policy import (
@@ -48,24 +55,52 @@ class TickerState:
     mark_iv_fraction: Decimal | None = None
 
 
+class DeltaBucket(StrEnum):
+    EXTREME_TAIL_LT_05 = "EXTREME_TAIL_LT_05"
+    TAIL_05_15 = "TAIL_05_15"
+    WING_15_30 = "WING_15_30"
+    NEAR_ATM_30_40 = "NEAR_ATM_30_40"
+    ATM_GT_40 = "ATM_GT_40"
+
+
 @dataclass(frozen=True)
 class DetectorCalculation:
     band: TteBand
     rule: OptionRule
     target_bid: DepthWalk
+    target_ask: DepthWalk
+    stressed_target_bid: DepthWalk
+    price_tick_usdc: Decimal
+    target_spread_usdc: Decimal
+    target_spread_ticks: Decimal
+    bid_premium_ticks: Decimal
     forward_usdc: Decimal
     executable_sell_price_usdc: Decimal
+    executable_buy_price_usdc: Decimal
+    stressed_executable_sell_price_usdc: Decimal
     baseline: BaselineResult
     remaining_life_years: DecimalInterval
     total_volatility: TotalVolatilityInterval
+    stressed_total_volatility: TotalVolatilityInterval
+    ask_total_volatility: TotalVolatilityInterval
     executable_bid_iv: DecimalInterval
+    stressed_executable_bid_iv: DecimalInterval
+    executable_ask_iv: DecimalInterval
     delta: DecimalInterval
+    delta_bucket: DeltaBucket
+    delta_clue_eligible: bool
     implied_total_variance: DecimalInterval
+    raw_richness: DecimalInterval
     richness: DecimalInterval
+
+    @property
+    def clue_eligible(self) -> bool:
+        return self.band.clue_eligible and self.delta_clue_eligible
 
 
 class CurrentDisposition(StrEnum):
     RICHNESS = "RICHNESS"
+    REVIEW_ONLY = "REVIEW_ONLY"
     KNOWN_INELIGIBLE = "KNOWN_INELIGIBLE"
     UNKNOWN = "UNKNOWN"
     BAND_SUSPENDED = "BAND_SUSPENDED"
@@ -113,15 +148,22 @@ def detector_observation_identity(
         trusted_time=trusted_time,
         option_type=instrument.option_type,
     )
-    target_bid = (
-        walk_target_depth(option_book.levels("bid"), policy.target_base_quantity_btc)
-        if option_book is not None and option_book.state is BookState.USABLE
-        else None
-    )
+    target_bid = None
+    target_ask = None
+    stressed_bid = None
+    if option_book is not None and option_book.state is BookState.USABLE:
+        target_bid = walk_target_depth(option_book.levels("bid"), policy.target_base_quantity_btc)
+        target_ask = walk_target_depth(option_book.levels("ask"), policy.target_base_quantity_btc)
+        if target_bid is not None and instrument.price_tick is not None:
+            stressed_bid = stress_depth_walk_down_one_tick(target_bid, instrument.price_tick)
     return (
         applicability.classification.value,
         applicability.band.band_id if applicability.band is not None else None,
+        applicability.band.clue_eligible if applicability.band is not None else None,
         tuple(target_bid.consumed) if target_bid is not None else None,
+        tuple(target_ask.consumed) if target_ask is not None else None,
+        tuple(stressed_bid.consumed) if stressed_bid is not None else None,
+        instrument.price_tick,
         ticker.forward_usdc if ticker is not None else None,
         baseline_identity,
     )
@@ -191,6 +233,7 @@ def calculate_current_evaluation(
         known: bool,
         full_formula: bool,
         band_id: str | None,
+        calculation: DetectorCalculation | None = None,
         continuity_gap: bool = False,
     ) -> CurrentEvaluation:
         return CurrentEvaluation(
@@ -199,6 +242,7 @@ def calculate_current_evaluation(
             known_evaluation=known,
             full_formula_evaluation=full_formula,
             band_id=band_id,
+            calculation=calculation,
             continuity_gap=continuity_gap,
         )
 
@@ -257,14 +301,32 @@ def calculate_current_evaluation(
             known=False,
             full_formula=False,
             band_id=band.band_id,
-            continuity_gap=option_book is not None
-            and option_book.reason not in {"SNAPSHOT_REQUIRED"},
+            continuity_gap=(
+                option_book is not None and option_book.reason not in {"SNAPSHOT_REQUIRED"}
+            ),
         )
     target_bid = walk_target_depth(option_book.levels("bid"), policy.target_base_quantity_btc)
     if target_bid is None:
         return current(
             CurrentDisposition.KNOWN_INELIGIBLE,
             "INSUFFICIENT_TARGET_BID_DEPTH",
+            known=True,
+            full_formula=False,
+            band_id=band.band_id,
+        )
+    target_ask = walk_target_depth(option_book.levels("ask"), policy.target_base_quantity_btc)
+    if target_ask is None:
+        return current(
+            CurrentDisposition.KNOWN_INELIGIBLE,
+            "INSUFFICIENT_TARGET_ASK_DEPTH",
+            known=True,
+            full_formula=False,
+            band_id=band.band_id,
+        )
+    if target_ask.vwap <= target_bid.vwap:
+        return current(
+            CurrentDisposition.KNOWN_INELIGIBLE,
+            "NON_POSITIVE_TARGET_SPREAD",
             known=True,
             full_formula=False,
             band_id=band.band_id,
@@ -277,6 +339,24 @@ def calculate_current_evaluation(
             full_formula=False,
             band_id=band.band_id,
         )
+    if instrument.price_tick is None:
+        return current(
+            CurrentDisposition.UNKNOWN,
+            "OPTION_PRICE_TICK_METADATA_UNKNOWN",
+            known=False,
+            full_formula=False,
+            band_id=band.band_id,
+        )
+    stressed_target_bid = stress_depth_walk_down_one_tick(target_bid, instrument.price_tick)
+    if stressed_target_bid is None:
+        return current(
+            CurrentDisposition.KNOWN_INELIGIBLE,
+            "ONE_TICK_STRESSED_BID_NON_POSITIVE",
+            known=True,
+            full_formula=False,
+            band_id=band.band_id,
+        )
+    price_tick = instrument.price_tick.tick_size_for_price(target_bid.consumed[0].price)
     if ticker is None:
         return current(
             CurrentDisposition.UNKNOWN,
@@ -302,6 +382,7 @@ def calculate_current_evaluation(
             full_formula=False,
             band_id=band.band_id,
         )
+
     remaining_years = DecimalInterval(
         Decimal(lower_tte_ms) / MILLISECONDS_PER_365_DAY_YEAR,
         Decimal(upper_tte_ms) / MILLISECONDS_PER_365_DAY_YEAR,
@@ -313,26 +394,32 @@ def calculate_current_evaluation(
             strike=instrument.strike,
             option_type=instrument.option_type,
         )
+        stressed_total_volatility = invert_total_volatility(
+            target_price=stressed_target_bid.vwap,
+            forward=ticker.forward_usdc,
+            strike=instrument.strike,
+            option_type=instrument.option_type,
+        )
+        ask_total_volatility = invert_total_volatility(
+            target_price=target_ask.vwap,
+            forward=ticker.forward_usdc,
+            strike=instrument.strike,
+            option_type=instrument.option_type,
+        )
         delta = delta_interval(
             forward=ticker.forward_usdc,
             strike=instrument.strike,
             total_volatility=total_volatility,
             option_type=instrument.option_type,
         )
-        if not delta_is_eligible(delta, rule):
-            return current(
-                CurrentDisposition.KNOWN_INELIGIBLE,
-                "DELTA_INELIGIBLE",
-                known=True,
-                full_formula=False,
-                band_id=band.band_id,
-            )
+        delta_clue_eligible = delta_is_eligible(delta, rule)
+        delta_bucket = classify_delta_bucket(delta, rule)
         if causal_closes is None:
             raise BaselineUnavailable(baseline_unavailable_reason)
         baseline = compute_baseline(
-            closes=causal_closes,
+            sampled_prices=causal_closes,
             lookbacks=band.lookbacks_minutes,
-            weights=band.lookback_weights,
+            return_interval_minutes=band.return_interval_minutes,
             annualized_variance_floor=band.annualized_variance_floor,
             remaining_life_minutes_low=Decimal(lower_tte_ms) / MILLISECONDS_PER_MINUTE,
             remaining_life_minutes_high=Decimal(upper_tte_ms) / MILLISECONDS_PER_MINUTE,
@@ -341,7 +428,16 @@ def calculate_current_evaluation(
             total_volatility=total_volatility,
             time_years=remaining_years,
         )
-        richness = ratio_interval(iv, baseline.annualized_volatility)
+        stressed_iv = executable_iv_interval(
+            total_volatility=stressed_total_volatility,
+            time_years=remaining_years,
+        )
+        ask_iv = executable_iv_interval(
+            total_volatility=ask_total_volatility,
+            time_years=remaining_years,
+        )
+        raw_richness = ratio_interval(iv, baseline.annualized_volatility)
+        stressed_richness = ratio_interval(stressed_iv, baseline.annualized_volatility)
     except NumericalBoundaryUnresolved:
         return current(
             CurrentDisposition.UNKNOWN,
@@ -358,6 +454,9 @@ def calculate_current_evaluation(
             "INDEX_WINDOW_GAP",
             "INDEX_SOURCE_STALE",
             "INDEX_CONTINUITY_GAP",
+            "INDEX_HISTORY_SOURCE_STALE",
+            "INDEX_HISTORY_WINDOW_GAP",
+            "INDEX_HISTORY_REVISION",
         }
         return current(
             CurrentDisposition.UNKNOWN,
@@ -367,29 +466,71 @@ def calculate_current_evaluation(
             band_id=band.band_id,
             continuity_gap=currentness_gap,
         )
+
     implied_total_variance = DecimalInterval(
         total_volatility.lower * total_volatility.lower,
         total_volatility.upper * total_volatility.upper,
     )
+    spread = target_ask.vwap - target_bid.vwap
     calculation = DetectorCalculation(
         band=band,
         rule=rule,
         target_bid=target_bid,
+        target_ask=target_ask,
+        stressed_target_bid=stressed_target_bid,
+        price_tick_usdc=price_tick,
+        target_spread_usdc=spread,
+        target_spread_ticks=spread / price_tick,
+        bid_premium_ticks=target_bid.vwap / price_tick,
         forward_usdc=ticker.forward_usdc,
         executable_sell_price_usdc=target_bid.vwap,
+        executable_buy_price_usdc=target_ask.vwap,
+        stressed_executable_sell_price_usdc=stressed_target_bid.vwap,
         baseline=baseline,
         remaining_life_years=remaining_years,
         total_volatility=total_volatility,
+        stressed_total_volatility=stressed_total_volatility,
+        ask_total_volatility=ask_total_volatility,
         executable_bid_iv=iv,
+        stressed_executable_bid_iv=stressed_iv,
+        executable_ask_iv=ask_iv,
         delta=delta,
+        delta_bucket=delta_bucket,
+        delta_clue_eligible=delta_clue_eligible,
         implied_total_variance=implied_total_variance,
-        richness=richness,
+        raw_richness=raw_richness,
+        richness=stressed_richness,
     )
+    if not calculation.clue_eligible:
+        if not band.clue_eligible and not delta_clue_eligible:
+            reason = "REVIEW_ONLY_TTE_AND_DELTA"
+        elif not band.clue_eligible:
+            reason = "REVIEW_ONLY_TTE_BAND"
+        else:
+            reason = "REVIEW_ONLY_DELTA_BUCKET"
+        return current(
+            CurrentDisposition.REVIEW_ONLY,
+            reason,
+            known=True,
+            full_formula=True,
+            band_id=band.band_id,
+            calculation=calculation,
+        )
+    try:
+        signal = classify_observation(stressed_richness, rule)
+    except NumericalBoundaryUnresolved:
+        return current(
+            CurrentDisposition.UNKNOWN,
+            "NUMERICAL_BOUNDARY_UNRESOLVED",
+            known=False,
+            full_formula=False,
+            band_id=band.band_id,
+        )
     observation = DetectorObservation(
         causal_seq=causal_seq,
         trusted_time=trusted_time,
         band_id=band.band_id,
-        richness=richness,
+        signal=signal,
     )
     return CurrentEvaluation(
         disposition=CurrentDisposition.RICHNESS,
@@ -400,6 +541,22 @@ def calculate_current_evaluation(
         calculation=calculation,
         observation=observation,
     )
+
+
+def classify_delta_bucket(interval: DecimalInterval, rule: OptionRule) -> DeltaBucket:
+    absolute_candidates = tuple(abs(value) for value in (interval.lower, interval.upper))
+    lower = min(absolute_candidates)
+    upper = max(absolute_candidates)
+    if upper < rule.abs_delta_min:
+        return DeltaBucket.EXTREME_TAIL_LT_05
+    if lower > rule.abs_delta_max:
+        return DeltaBucket.ATM_GT_40
+    midpoint = (lower + upper) / Decimal(2)
+    if midpoint <= Decimal("0.15"):
+        return DeltaBucket.TAIL_05_15
+    if midpoint <= Decimal("0.30"):
+        return DeltaBucket.WING_15_30
+    return DeltaBucket.NEAR_ATM_30_40
 
 
 def apply_current_evaluation(
@@ -417,7 +574,10 @@ def apply_current_evaluation(
     resumed = tracker.state is TrackerState.BAND_SUSPENDED
     if resumed:
         tracker.resume_after_band_boundary()
-    if current.disposition is CurrentDisposition.KNOWN_INELIGIBLE:
+    if current.disposition in {
+        CurrentDisposition.KNOWN_INELIGIBLE,
+        CurrentDisposition.REVIEW_ONLY,
+    }:
         return tracker.known_ineligible(
             reason=current.reason or "KNOWN_INELIGIBLE",
             causal_seq=causal_seq,
@@ -433,10 +593,7 @@ def apply_current_evaluation(
     if not observation_eligible:
         known_current = tracker.establish_known_current()
         return TrackerTransition(state_changed=resumed or known_current.state_changed)
-    transition = tracker.observe(
-        current.observation,
-        current.calculation.rule,
-    )
+    transition = tracker.observe(current.observation, current.calculation.rule)
     if resumed and not transition.state_changed:
         return TrackerTransition(
             activated_episode_id=transition.activated_episode_id,

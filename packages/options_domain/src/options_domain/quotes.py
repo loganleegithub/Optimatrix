@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from market_monitor.types import PriceLevel
 
-from options_domain.instruments import AmountMetadata
+from options_domain.instruments import AmountMetadata, PriceTickMetadata
 
 
 class AmountState(StrEnum):
@@ -60,3 +60,41 @@ def walk_target_depth(levels: tuple[PriceLevel, ...], target: Decimal) -> DepthW
                 vwap=total_value / target,
             )
     return None
+
+
+def stress_depth_walk_down_one_tick(
+    walk: DepthWalk,
+    price_ticks: PriceTickMetadata,
+) -> DepthWalk | None:
+    consumed: list[PriceLevel] = []
+    total_value = Decimal(0)
+    for level in walk.consumed:
+        stressed_price = price_ticks.previous_legal_price(level.price)
+        if stressed_price is None:
+            return None
+        consumed.append(PriceLevel(stressed_price, level.amount))
+        total_value += stressed_price * level.amount
+    return DepthWalk(
+        consumed=tuple(consumed),
+        target_amount=walk.target_amount,
+        total_value=total_value,
+        vwap=total_value / walk.target_amount,
+    )
+
+
+def stress_depth_walk_up_one_tick(
+    walk: DepthWalk,
+    price_ticks: PriceTickMetadata,
+) -> DepthWalk:
+    consumed: list[PriceLevel] = []
+    total_value = Decimal(0)
+    for level in walk.consumed:
+        stressed_price = price_ticks.next_legal_price(level.price)
+        consumed.append(PriceLevel(stressed_price, level.amount))
+        total_value += stressed_price * level.amount
+    return DepthWalk(
+        consumed=tuple(consumed),
+        target_amount=walk.target_amount,
+        total_value=total_value,
+        vwap=total_value / walk.target_amount,
+    )

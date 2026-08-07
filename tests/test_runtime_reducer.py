@@ -403,8 +403,8 @@ def test_partial_channel_ack_commits_missing_truth_before_releasing_success_fram
     reducer = make_reducer(tmp_path, policy_factory)
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.pending_rpcs.clear()
-    first = "ticker.FIRST.100ms"
-    second = "ticker.SECOND.100ms"
+    first = "ticker.FIRST.agg2"
+    second = "ticker.SECOND.agg2"
     reducer.options = {
         name: _option_for_combo_test(name, strike)
         for name, strike in (("FIRST", 100), ("SECOND", 110))
@@ -472,8 +472,8 @@ def test_partial_channel_ack_commits_successes_and_scopes_missing_failure(
     reducer = make_reducer(tmp_path, policy_factory)
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.pending_rpcs.clear()
-    first = "ticker.FIRST.100ms"
-    second = "ticker.SECOND.100ms"
+    first = "ticker.FIRST.agg2"
+    second = "ticker.SECOND.agg2"
     reducer._plan_channel_change(
         (first, second),
         subscribe=True,
@@ -520,9 +520,9 @@ def test_partial_ack_does_not_fail_a_channel_owned_by_a_newer_generation(
     reducer = make_reducer(tmp_path, policy_factory)
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.pending_rpcs.clear()
-    first = "ticker.FIRST.100ms"
-    second = "ticker.SECOND.100ms"
-    third = "ticker.THIRD.100ms"
+    first = "ticker.FIRST.agg2"
+    second = "ticker.SECOND.agg2"
+    third = "ticker.THIRD.agg2"
     reducer._plan_channel_change(
         (first, second, third),
         subscribe=True,
@@ -556,7 +556,7 @@ def test_tainted_pending_generation_is_dropped_at_ack_before_resubscribe(
     reducer = make_reducer(tmp_path, policy_factory)
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.pending_rpcs.clear()
-    channel = "ticker.SHORT.100ms"
+    channel = "ticker.SHORT.agg2"
     reducer._plan_channel_change(
         (channel,),
         subscribe=True,
@@ -601,7 +601,7 @@ def test_failed_intentional_unsubscribe_does_not_reopen_frame_admission(
     reducer = make_reducer(tmp_path, policy_factory)
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.pending_rpcs.clear()
-    channel = "ticker.REMOVED.100ms"
+    channel = "ticker.REMOVED.agg2"
     reducer._channels[channel] = runtime_module._ChannelSlot(
         state=ChannelState.ACKNOWLEDGED,
         generation=1,
@@ -669,7 +669,7 @@ def test_removed_option_unsubscribe_failure_does_not_restore_current_result(
         policy_identity=reducer.policy.identity,
         instrument_name="REMOVED",
     )
-    channel = "book.REMOVED.100ms"
+    channel = "book.REMOVED.agg2"
     reducer._channels[channel] = runtime_module._ChannelSlot(
         state=ChannelState.ACKNOWLEDGED,
         generation=1,
@@ -1804,6 +1804,94 @@ def test_invalid_core_status_shape_is_fatal_protocol_incompatibility(
         )
 
 
+def test_post_status_schedules_the_official_btc_usdc_index_history_boundary(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    subscribe, seq = begin_through_bootstrap_subscribe(reducer)
+    commands = reducer.reduce(
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
+        processed_monotonic_ms=1_000 + seq,
+    )
+    commands, _seq = accept_platform_status(reducer, commands, seq=seq + 1)
+
+    history = only(commands, RpcPurpose.INDEX_HISTORY)
+
+    assert history.method == "public/get_index_chart_data"
+    assert history.params == {"index_name": "btc_usdc", "range": "1d"}
+    assert history.scope == "INDEX_HISTORY"
+    assert history.failure_scope is FailureScope.CLOCK_INDEX
+    assert RpcPurpose.INDEX_HISTORY not in runtime_module.POST_STATUS_BOOTSTRAP_PURPOSES
+
+
+def test_invalid_index_history_shape_is_a_protocol_incompatibility(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    subscribe, seq = begin_through_bootstrap_subscribe(reducer)
+    commands = reducer.reduce(
+        response(reducer, subscribe, exact_channels(subscribe), seq=seq),
+        processed_monotonic_ms=1_000 + seq,
+    )
+    commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
+    history = only(commands, RpcPurpose.INDEX_HISTORY)
+
+    with pytest.raises(PublicProtocolError, match="get_index_chart_data"):
+        reducer.reduce(
+            response(reducer, history, {"unexpected": "shape"}, seq=seq + 1),
+            processed_monotonic_ms=1_001 + seq,
+        )
+
+
+def test_index_history_rpc_failure_preserves_clock_and_last_valid_history(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    reducer = make_reducer(tmp_path, policy_factory)
+    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
+    reducer.pending_rpcs.clear()
+    clock = TrustedClock.from_response(
+        600_000,
+        1_000,
+        1_000,
+        stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
+    )
+    reducer.clock = clock
+    reducer.index_history.apply_chart_result([[0, 100], [300_000, 101]])
+    history = reducer._schedule_index_history_refresh(reducer._current_fact_boundary())
+    reducer.reduce(
+        send_control(
+            history,
+            kind="SEND_COMPLETED",
+            boundary_ms=history.origin_boundary.received_monotonic_ms,
+        ),
+        processed_monotonic_ms=history.origin_boundary.received_monotonic_ms,
+    )
+
+    reducer.reduce(
+        envelope(
+            {
+                "id": history.request_id,
+                "error": {"code": 10_028, "message": "too_many_requests"},
+            },
+            seq=1,
+            received_ms=1_001,
+        ),
+        processed_monotonic_ms=1_001,
+    )
+
+    assert reducer.clock is clock
+    assert [point.average_price for point in reducer.index_history.points] == [
+        Decimal(100),
+        Decimal(101),
+    ]
+    retry_commands = reducer.advance_time(1_001 + reducer.policy.runtime_limits.rpc_deadline_ms)
+    retry = only(retry_commands, RpcPurpose.INDEX_HISTORY)
+    assert retry.params == {"index_name": "btc_usdc", "range": "1d"}
+
+
 @pytest.mark.parametrize(
     "status",
     [
@@ -2781,7 +2869,7 @@ def test_metadata_response_commits_after_sustained_market_ingress(
                 {
                     "method": "subscription",
                     "params": {
-                        "channel": f"ticker.{existing}.100ms",
+                        "channel": f"ticker.{existing}.agg2",
                         "data": {
                             "instrument_name": existing,
                             "timestamp": source_timestamp,

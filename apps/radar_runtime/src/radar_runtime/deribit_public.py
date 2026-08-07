@@ -13,11 +13,13 @@ from websockets.asyncio.client import ClientConnection, connect
 
 PRODUCTION_PUBLIC_ENDPOINT = "wss://www.deribit.com/ws/api/v2"
 MAX_PENDING_INBOUND_FRAMES = 10_000
+PUBLIC_TRANSPORT_CLOSE_TIMEOUT_SECONDS = 5.0
 PUBLIC_METHODS = frozenset(
     {
         "public/subscribe",
         "public/unsubscribe",
         "public/get_instruments",
+        "public/get_index_chart_data",
         "public/get_instrument",
         "public/get_combos",
         "public/get_order_book",
@@ -169,6 +171,10 @@ class DeribitPublicClient:
         self.endpoint = endpoint
         self.session_epoch = session_epoch
         self.connection_timeout_seconds = rpc_deadline_ms / 1_000
+        self.close_timeout_seconds = min(
+            self.connection_timeout_seconds,
+            PUBLIC_TRANSPORT_CLOSE_TIMEOUT_SECONDS,
+        )
         self._connection: ClientConnection | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._inbound: asyncio.Queue[InboundEnvelope] = asyncio.Queue(
@@ -188,7 +194,7 @@ class DeribitPublicClient:
         self._connection = await connect(
             self.endpoint,
             open_timeout=self.connection_timeout_seconds,
-            close_timeout=self.connection_timeout_seconds,
+            close_timeout=self.close_timeout_seconds,
             ping_interval=None,
             max_size=2**24,
             proxy=None,
@@ -198,7 +204,9 @@ class DeribitPublicClient:
 
     async def __aexit__(self, *_: object) -> None:
         if self._connection is not None:
-            await self._connection.close()
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(self.close_timeout_seconds):
+                    await self._connection.close()
         if self._reader_task is not None:
             self._reader_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

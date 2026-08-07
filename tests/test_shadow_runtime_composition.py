@@ -235,7 +235,7 @@ def test_shadow_subscription_requirement_is_unioned_with_radar_requirement(
     (request,) = reducer._take_commands()
 
     assert request.purpose is RpcPurpose.SUBSCRIBE_CHANNELS
-    assert request.params == {"channels": ["book.BTC-COMBO.100ms"]}
+    assert request.params == {"channels": ["book.BTC-COMBO.agg2"]}
 
 
 def test_shadow_send_failure_uses_typed_failure_route(

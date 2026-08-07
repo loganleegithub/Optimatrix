@@ -73,7 +73,11 @@ class ContinuousOrderBook:
         else:
             raise SourceDataError("book.type must be snapshot or change")
 
-        _validate_uncrossed(bids, asks)
+        try:
+            _validate_uncrossed(bids, asks)
+        except SourceDataError:
+            self.invalidate("CROSSED_OR_LOCKED_BOOK")
+            raise
         changed = message_type == "snapshot" or bids != self.bids or asks != self.asks
         self.bids = bids
         self.asks = asks

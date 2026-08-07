@@ -13,11 +13,12 @@ from enum import StrEnum
 from typing import Protocol, cast
 
 from market_monitor import (
-    BaselinePublicationPhase,
     BookState,
     ContinuityGap,
     ContinuousOrderBook,
     IndexAvailabilityState,
+    IndexHistoryReducer,
+    IndexHistoryState,
     IndexMinuteReducer,
     IndexPublicationBoundary,
     IndexPublicationUpdate,
@@ -126,6 +127,7 @@ from radar_runtime.deribit_public import (
 PUBLIC_RPC_METHODS = frozenset(
     {
         "public/get_combos",
+        "public/get_index_chart_data",
         "public/get_instrument",
         "public/get_instruments",
         "public/get_time",
@@ -191,9 +193,24 @@ class ScopeCounts:
     complete_aggregate_with_full_formula_evaluation_count: int = 0
     distinct_anomaly_episode_count: int = 0
     anomaly_activation_transition_count: int = 0
+    candidate_activation_batch_count: int = 0
     anomaly_end_count_by_reason: Counter[str] = field(default_factory=Counter)
     known_active_duration_ms_sum_by_end_reason: Counter[str] = field(default_factory=Counter)
     public_atomic_quote_state_transition_count: Counter[str] = field(default_factory=Counter)
+    _last_candidate_activation_causal_seq: int | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
+    def record_candidate_activation(self, causal_seq: int) -> None:
+        if isinstance(causal_seq, bool) or not isinstance(causal_seq, int) or causal_seq <= 0:
+            raise ValueError("candidate activation causal sequence must be a positive integer")
+        self.distinct_anomaly_episode_count += 1
+        self.anomaly_activation_transition_count += 1
+        if self._last_candidate_activation_causal_seq != causal_seq:
+            self.candidate_activation_batch_count += 1
+            self._last_candidate_activation_causal_seq = causal_seq
 
     def as_object(self) -> dict[str, object]:
         known_formula_rate = ratio_or_none(
@@ -229,6 +246,7 @@ class ScopeCounts:
             ),
             "distinct_anomaly_episode_count": self.distinct_anomaly_episode_count,
             "anomaly_activation_transition_count": self.anomaly_activation_transition_count,
+            "candidate_activation_batch_count": self.candidate_activation_batch_count,
             "anomaly_end_count_by_reason": dict(self.anomaly_end_count_by_reason),
             "known_active_duration_ms_sum_by_end_reason": dict(
                 self.known_active_duration_ms_sum_by_end_reason
@@ -257,6 +275,7 @@ class ScopeSnapshot:
     trusted_time: TimeInterval
     clock_revision: int
     current: tuple[ScopeCurrent, ...]
+    scope_results: tuple[tuple[OptionInstrument, EvaluationResult | None], ...]
     boundary_countable: bool
     acceptance_eligible: bool
     catalog_complete: bool
@@ -341,6 +360,7 @@ class RpcPurpose(StrEnum):
     PLATFORM_STATUS = "PLATFORM_STATUS"
     CLOCK_BOOTSTRAP = "CLOCK_BOOTSTRAP"
     CLOCK_REFRESH = "CLOCK_REFRESH"
+    INDEX_HISTORY = "INDEX_HISTORY"
     OPTION_CATALOG = "OPTION_CATALOG"
     OPTION_METADATA = "OPTION_METADATA"
     COMBO_CATALOG = "COMBO_CATALOG"
@@ -663,6 +683,10 @@ class RadarReducer:
             AggregateDetectorResult,
         ] = {}
         self.index = IndexMinuteReducer(policy.largest_lookback_minutes)
+        self.index_history = IndexHistoryReducer(
+            maximum_lookback_minutes=policy.largest_lookback_minutes,
+            return_interval_minutes=policy.return_interval_minutes,
+        )
         self.clock: TrustedClock | None = None
         self.diagnostics = RuntimeDiagnostics()
         self.pending_rpcs: dict[int, PendingRpc] = {}
@@ -737,6 +761,7 @@ class RadarReducer:
         self._index_coverage_generation: int | None = None
         self._index_gap_active = False
         self._next_clock_refresh_ms: int | None = None
+        self._next_index_history_refresh_ms: int | None = None
         self._next_option_catalog_recovery_ms: int | None = None
         self._next_combo_catalog_recovery_ms: int | None = None
         self._fact_transaction_active = False
@@ -826,6 +851,10 @@ class RadarReducer:
         self.atomic_states.clear()
         self.aggregate_results.clear()
         self.index = IndexMinuteReducer(self.policy.largest_lookback_minutes)
+        self.index_history = IndexHistoryReducer(
+            maximum_lookback_minutes=self.policy.largest_lookback_minutes,
+            return_interval_minutes=self.policy.return_interval_minutes,
+        )
         self.clock = None
         self._last_time_currentness_token = None
         self._last_time_currentness_by_instrument.clear()
@@ -851,6 +880,7 @@ class RadarReducer:
         self._next_clock_refresh_ms = (
             monotonic_ms + self.policy.runtime_limits.clock_refresh_interval_ms
         )
+        self._next_index_history_refresh_ms = None
         self._next_option_catalog_recovery_ms = None
         self._next_combo_catalog_recovery_ms = None
         self._queue_lag_currentness_active = False
@@ -1833,6 +1863,36 @@ class RadarReducer:
                     release_index_generation,
                 )
                 self._drain_held_frames(boundary)
+        elif request.purpose is RpcPurpose.INDEX_HISTORY:
+            history_trusted_time: TimeInterval | None = None
+            if self.clock is not None:
+                try:
+                    history_trusted_time = self.clock.interval_at(boundary.received_monotonic_ms)
+                except (ContinuityGap, ValueError):
+                    pass
+            try:
+                history_changed = self.index_history.apply_chart_result(
+                    result,
+                    trusted_time=history_trusted_time,
+                )
+            except SourceDataError as exc:
+                raise PublicProtocolIncompatibility(
+                    "public/get_index_chart_data response shape is incompatible"
+                ) from exc
+            self._next_index_history_refresh_ms = (
+                boundary.received_monotonic_ms
+                + self.policy.runtime_limits.index_history_refresh_interval_ms
+            )
+            self._settle_fact(
+                commit=CausalCommit(
+                    boundary=boundary,
+                    cause=CausalCause.INDEX_HISTORY,
+                    failure_domain=FailureScope.CLOCK_INDEX,
+                    affected_scopes=("GLOBAL",),
+                ),
+                affected_instruments=tuple(self.options),
+                countable=history_changed,
+            )
         elif request.purpose is RpcPurpose.OPTION_CATALOG:
             source_valid = self._apply_option_snapshot(result, boundary)
         elif request.purpose is RpcPurpose.OPTION_METADATA:
@@ -1874,6 +1934,22 @@ class RadarReducer:
                 )
             )
             return
+        if request.purpose is RpcPurpose.INDEX_HISTORY:
+            boundary = self._current_fact_boundary()
+            self._next_index_history_refresh_ms = (
+                boundary.received_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
+            )
+            self._settle_fact(
+                commit=CausalCommit(
+                    boundary=boundary,
+                    cause=CausalCause.INDEX_HISTORY,
+                    failure_domain=FailureScope.CLOCK_INDEX,
+                    affected_scopes=("GLOBAL",),
+                ),
+                affected_instruments=tuple(self.options),
+                countable=False,
+            )
+            return
         if request.purpose in {
             RpcPurpose.CLOCK_BOOTSTRAP,
             RpcPurpose.CLOCK_REFRESH,
@@ -1886,7 +1962,8 @@ class RadarReducer:
                     self._invalidate_clock_index(boundary, reason="CLOCK_GAP")
                     return
                 self._next_clock_refresh_ms = (
-                    boundary.received_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
+                    boundary.received_monotonic_ms
+                    + self.policy.runtime_limits.time_boundary_poll_interval_ms
                 )
                 return
             self.platform.invalidate_fresh_index_coverage("CLOCK_GAP")
@@ -1899,7 +1976,8 @@ class RadarReducer:
                 )
             )
             self._next_clock_refresh_ms = (
-                boundary.received_monotonic_ms + self.policy.runtime_limits.rpc_deadline_ms
+                boundary.received_monotonic_ms
+                + self.policy.runtime_limits.time_boundary_poll_interval_ms
             )
             return
         if request.purpose is RpcPurpose.OPTION_METADATA and (
@@ -2260,8 +2338,24 @@ class RadarReducer:
             origin_boundary=boundary,
             failure_scope=FailureScope.CLOCK_INDEX,
         )
+        self._schedule_index_history_refresh(boundary)
         self._schedule_option_catalog_refresh(boundary)
         self._schedule_combo_refresh(boundary)
+
+    def _schedule_index_history_refresh(self, boundary: FactBoundary) -> PendingRpc:
+        self._next_index_history_refresh_ms = (
+            boundary.received_monotonic_ms
+            + self.policy.runtime_limits.index_history_refresh_interval_ms
+        )
+        return self._schedule(
+            purpose=RpcPurpose.INDEX_HISTORY,
+            method="public/get_index_chart_data",
+            params={"index_name": "btc_usdc", "range": "1d"},
+            scope="INDEX_HISTORY",
+            generation=None,
+            origin_boundary=boundary,
+            failure_scope=FailureScope.CLOCK_INDEX,
+        )
 
     def _note_post_status_bootstrap_success(
         self,
@@ -2424,15 +2518,15 @@ class RadarReducer:
                     )
             elif channel == INDEX_CHANNEL:
                 self._apply_index(data, boundary)
-            elif channel.startswith("ticker.") and channel.endswith(".100ms"):
-                instrument_name = channel[len("ticker.") : -len(".100ms")]
+            elif channel.startswith("ticker.") and channel.endswith(".agg2"):
+                instrument_name = channel[len("ticker.") : -len(".agg2")]
                 self._apply_ticker(
                     instrument_name,
                     data,
                     boundary,
                 )
-            elif channel.startswith("book.") and channel.endswith(".100ms"):
-                instrument_name = channel[len("book.") : -len(".100ms")]
+            elif channel.startswith("book.") and channel.endswith(".agg2"):
+                instrument_name = channel[len("book.") : -len(".agg2")]
                 self._apply_book(
                     instrument_name,
                     data,
@@ -2440,7 +2534,7 @@ class RadarReducer:
                 )
         except EvidenceError:
             raise
-        except (ContinuityGap, SourceDataError, ValueError) as exc:
+        except (ContinuityGap, SourceDataError) as exc:
             raise PublicProtocolIncompatibility(
                 f"{source} subscription payload is incompatible"
             ) from exc
@@ -3333,9 +3427,13 @@ class RadarReducer:
             )
             try:
                 changed = book.apply(payload, boundary.received_monotonic_ms)
-            except (ContinuityGap, SourceDataError):
-                book.invalidate("OPTION_BOOK_GAP")
-                self.option_books[instrument_name] = ContinuousOrderBook(instrument_name)
+            except (ContinuityGap, SourceDataError) as exc:
+                reason = (
+                    book.reason
+                    if isinstance(exc, ContinuityGap) or book.reason == "CROSSED_OR_LOCKED_BOOK"
+                    else "BOOK_SOURCE_INVALID"
+                )
+                book.invalidate(reason or "OPTION_BOOK_GAP")
                 self._settle_fact(
                     commit=CausalCommit(
                         boundary=boundary,
@@ -3990,6 +4088,7 @@ class RadarReducer:
         self,
         instrument: OptionInstrument,
         trusted: TimeInterval,
+        tail_by_lookback: dict[int, IndexHistoryState],
     ) -> tuple[object, ...]:
         applicability = classify_time_applicability(
             self.policy,
@@ -4000,22 +4099,16 @@ class RadarReducer:
         if applicability.band is None:
             tail_identity: tuple[object, ...] = ()
         else:
-            tail = self.index.current_tail(
+            tail = self._cached_index_tail(
                 max(applicability.band.lookbacks_minutes),
-                trusted_time=trusted,
-                source_stale_deadline_ms=(
-                    self.policy.runtime_limits.index_source_stale_deadline_ms
-                ),
+                trusted=trusted,
+                tail_by_lookback=tail_by_lookback,
             )
-            tail_state = tail.availability.value
-            if (
-                tail.availability is IndexAvailabilityState.AVAILABLE
-                and tail.publication_phase is not BaselinePublicationPhase.CURRENT
-            ):
-                tail_state = tail.publication_phase.value
             tail_identity = (
-                tail_state,
-                tuple((close.minute_start_ms, close.causal_seq) for close in tail.closes),
+                tail.availability.value,
+                tail.reason,
+                tail.latest_source_timestamp_ms,
+                tuple((point.timestamp_ms, point.average_price) for point in tail.points),
             )
         return (
             applicability.classification.value,
@@ -4026,11 +4119,32 @@ class RadarReducer:
     def _time_currentness_by_instrument(
         self,
         trusted: TimeInterval,
+        tail_by_lookback: dict[int, IndexHistoryState] | None = None,
     ) -> dict[str, tuple[object, ...]]:
+        tails = {} if tail_by_lookback is None else tail_by_lookback
         return {
-            name: self._instrument_time_currentness_token(instrument, trusted)
+            name: self._instrument_time_currentness_token(instrument, trusted, tails)
             for name, instrument in sorted(self.options.items())
         }
+
+    def _cached_index_tail(
+        self,
+        lookback_minutes: int,
+        *,
+        trusted: TimeInterval,
+        tail_by_lookback: dict[int, IndexHistoryState],
+    ) -> IndexHistoryState:
+        tail = tail_by_lookback.get(lookback_minutes)
+        if tail is None:
+            tail = self.index_history.current_tail(
+                lookback_minutes,
+                trusted_time=trusted,
+                source_stale_deadline_ms=(
+                    self.policy.runtime_limits.index_history_source_stale_deadline_ms
+                ),
+            )
+            tail_by_lookback[lookback_minutes] = tail
+        return tail
 
     def _time_currentness_token(
         self,
@@ -4198,39 +4312,35 @@ class RadarReducer:
             )
         )
         countable_names = set(directly_affected_names) if countable else set()
-        current_time_tokens = self._time_currentness_by_instrument(trusted)
+        tail_by_lookback: dict[int, IndexHistoryState] = {}
+        current_time_tokens = self._time_currentness_by_instrument(
+            trusted,
+            tail_by_lookback,
+        )
         time_changed_names = {
             name
             for name, token in current_time_tokens.items()
             if self._last_time_currentness_by_instrument.get(name) != token
         }
+        recalculation_names = set((*directly_affected_names, *time_changed_names))
+        if force_full_currentness:
+            recalculation_names.update(self.options)
+        elif affected_scope_keys:
+            recalculation_names.update(
+                name
+                for name, instrument in self.options.items()
+                if (instrument.expiration_timestamp_ms, instrument.option_type)
+                in affected_scope_keys
+            )
         frozen_scope_keys = set(affected_scope_keys)
         frozen_scope_keys.update(
             (
                 self.options[name].expiration_timestamp_ms,
                 self.options[name].option_type,
             )
-            for name in (*directly_affected_names, *time_changed_names)
+            for name in recalculation_names
         )
-        if force_full_currentness:
-            frozen_scope_keys.update(
-                (
-                    instrument.expiration_timestamp_ms,
-                    instrument.option_type,
-                )
-                for instrument in self.options.values()
-            )
-        names = tuple(
-            sorted(
-                name
-                for name, instrument in self.options.items()
-                if (
-                    instrument.expiration_timestamp_ms,
-                    instrument.option_type,
-                )
-                in frozen_scope_keys
-            )
-        )
+        names = tuple(sorted(recalculation_names))
         for scope_key in frozen_scope_keys:
             if not any(
                 (
@@ -4245,7 +4355,6 @@ class RadarReducer:
                         self.aggregate_results.pop(aggregate_key, None)
         prepared: list[ScopeCurrent] = []
         global_gap_reasons: set[str] = set()
-        global_gap_scope_labels: set[str] = set()
         global_gap_reason: str | None = None
         global_gap_effect: CausalEffect | None = None
         global_resubscribe = False
@@ -4262,44 +4371,6 @@ class RadarReducer:
             }:
                 global_resubscribe = True
                 global_resubscribe_reason = publication_update.currentness_lost_reason
-        for name in names:
-            instrument = self.options[name]
-            applicability = classify_time_applicability(
-                self.policy,
-                expiration_timestamp_ms=instrument.expiration_timestamp_ms,
-                trusted_time=trusted,
-                option_type=instrument.option_type,
-            )
-            tail = None
-            if applicability.band is not None:
-                tail = self.index.current_tail(
-                    max(applicability.band.lookbacks_minutes),
-                    trusted_time=trusted,
-                    source_stale_deadline_ms=(
-                        self.policy.runtime_limits.index_source_stale_deadline_ms
-                    ),
-                )
-                if tail.availability in {
-                    IndexAvailabilityState.WINDOW_GAP,
-                    IndexAvailabilityState.SOURCE_STALE,
-                    IndexAvailabilityState.CONTINUITY_GAP,
-                }:
-                    global_gap_reasons.add(tail.reason or "INDEX_CONTINUITY_GAP")
-                    global_gap_scope_labels.add(
-                        "SCOPE:"
-                        f"{instrument.expiration_timestamp_ms}:"
-                        f"{instrument.option_type.value}:"
-                        f"{applicability.band.band_id}"
-                    )
-                if tail.availability in {
-                    IndexAvailabilityState.SOURCE_STALE,
-                    IndexAvailabilityState.CONTINUITY_GAP,
-                }:
-                    global_resubscribe = True
-                    if tail.availability is IndexAvailabilityState.CONTINUITY_GAP:
-                        global_resubscribe_reason = "INDEX_CONTINUITY_GAP"
-                    elif global_resubscribe_reason is None:
-                        global_resubscribe_reason = "INDEX_SOURCE_STALE"
         if global_gap_reasons:
             global_gap_reason = next(
                 reason
@@ -4310,21 +4381,10 @@ class RadarReducer:
                 )
                 if reason in global_gap_reasons
             )
-            gap_affected_scopes = (
-                ("GLOBAL",)
-                if global_gap_reason
-                in {
-                    "INDEX_CONTINUITY_GAP",
-                    "INDEX_SOURCE_STALE",
-                }
-                or not global_gap_scope_labels
-                or len(global_gap_scope_labels) > 256
-                else tuple(sorted(global_gap_scope_labels))
-            )
             global_gap_effect = CausalEffect(
                 cause=CausalCause(global_gap_reason),
                 failure_domain=FailureScope.CLOCK_INDEX,
-                affected_scopes=gap_affected_scopes,
+                affected_scopes=("GLOBAL",),
             )
             transaction_commit = self._freeze_fact_commit(
                 commit,
@@ -4395,12 +4455,10 @@ class RadarReducer:
                 option_type=instrument.option_type,
             )
             tail = (
-                self.index.current_tail(
+                self._cached_index_tail(
                     max(applicability.band.lookbacks_minutes),
-                    trusted_time=trusted,
-                    source_stale_deadline_ms=(
-                        self.policy.runtime_limits.index_source_stale_deadline_ms
-                    ),
+                    trusted=trusted,
+                    tail_by_lookback=tail_by_lookback,
                 )
                 if applicability.band is not None
                 else None
@@ -4517,6 +4575,7 @@ class RadarReducer:
                 trusted_time=trusted,
                 clock_revision=self._clock_revision,
                 current=tuple(current),
+                scope_results=(),
                 boundary_countable=countable,
                 acceptance_eligible=acceptance_eligible,
                 catalog_complete=self.option_catalog.complete,
@@ -4629,6 +4688,13 @@ class RadarReducer:
                     )
                     for item in snapshot.current
                 ),
+                scope_results=tuple(
+                    (candidate, self.results.get(candidate.instrument_name))
+                    for candidate in self.options.values()
+                    if candidate.expiration_timestamp_ms
+                    == snapshot.current[0].instrument.expiration_timestamp_ms
+                    and candidate.option_type is snapshot.current[0].instrument.option_type
+                ),
             )
             for snapshot in snapshots
         )
@@ -4656,6 +4722,7 @@ class RadarReducer:
                         aggregate.coverage or DetectorCoverage.DEGRADED,
                         snapshot.trusted_time,
                         boundary.received_monotonic_ms,
+                        boundary.causal_seq,
                     )
             if snapshot.acceptance_eligible and aggregate.coverage is DetectorCoverage.COMPLETE:
                 counter = self._scope_counter(
@@ -4677,9 +4744,17 @@ class RadarReducer:
                     counter.applicable_instrument_count,
                     1,
                 )
-                if acceptance_eligible and result.known_evaluation:
+                if (
+                    acceptance_eligible
+                    and instrument.instrument_name in countable_names
+                    and result.known_evaluation
+                ):
                     counter.known_per_instrument_detector_evaluation_count += 1
-                if acceptance_eligible and result.full_formula_evaluation:
+                if (
+                    acceptance_eligible
+                    and instrument.instrument_name in countable_names
+                    and result.full_formula_evaluation
+                ):
                     counter.known_full_detector_formula_evaluation_count += 1
 
         self._latest_funnel_causal_seq = transaction_commit.boundary.causal_seq
@@ -4690,7 +4765,11 @@ class RadarReducer:
                 reason=result.reason,
             )
             for instrument, result, _state, _episode in evaluated
-            if countable and acceptance_eligible and result.band_id is not None
+            if (
+                instrument.instrument_name in countable_names
+                and acceptance_eligible
+                and result.band_id is not None
+            )
         )
 
         for instrument, _result, _state, _episode in evaluated:
@@ -4745,7 +4824,10 @@ class RadarReducer:
             ):
                 raise RuntimeError("scope snapshot contains cross-scope or unsettled current truth")
         states = tuple(
-            item.result.detector_state for item in snapshot.current if item.result is not None
+            result.detector_state
+            if result is not None and result.band_id == band_id
+            else DetectorState.UNKNOWN
+            for _candidate, result in snapshot.scope_results
         )
         counter = self._scope_counter(
             instrument.option_type,
@@ -4753,7 +4835,7 @@ class RadarReducer:
         )
         counter.applicable_instrument_count = max(
             counter.applicable_instrument_count,
-            len(snapshot.current),
+            len(snapshot.scope_results),
         )
         aggregate = aggregate_detector(
             states,
@@ -4769,9 +4851,11 @@ class RadarReducer:
         ] = aggregate
         formula_instrument = next(
             (
-                item.instrument
-                for item in snapshot.current
-                if item.result is not None and item.result.full_formula_evaluation
+                candidate
+                for candidate, result in snapshot.scope_results
+                if result is not None
+                and result.band_id == band_id
+                and result.full_formula_evaluation
             ),
             None,
         )
@@ -4788,14 +4872,14 @@ class RadarReducer:
         coverage: DetectorCoverage,
         trusted: TimeInterval,
         monotonic_ms: int,
+        activation_causal_seq: int,
     ) -> None:
         episode_id = result.transition.activated_episode_id
         calculation = result.calculation
         if episode_id is None or calculation is None:
-            raise RuntimeError("activation lacks full calculation")
+            raise RuntimeError("activation lacks its full calculation")
         counter = self._scope_counter(instrument.option_type, calculation.band.band_id)
-        counter.distinct_anomaly_episode_count += 1
-        counter.anomaly_activation_transition_count += 1
+        counter.record_candidate_activation(activation_causal_seq)
         self._episode_started_ms[episode_id] = monotonic_ms
         self._episode_last_trusted_ms[episode_id] = monotonic_ms
         self._episode_paused_duration_ms[episode_id] = 0
@@ -5681,6 +5765,31 @@ class RadarReducer:
     def latest_funnel_evaluations(self) -> tuple[RadarFunnelEvaluation, ...]:
         return self._latest_funnel_evaluations
 
+    @property
+    def current_diagnostic_tickers(self) -> dict[str, TickerState]:
+        """Return only tickers whose source currentness was settled as CURRENT."""
+        return {
+            name: settled.ticker
+            for name, settled in self._settled_ticker_currentness.items()
+            if settled.state is TickerAcceptedCurrentness.CURRENT and settled.ticker is not None
+        }
+
+    @property
+    def current_index_price_usdc_per_btc(self) -> Decimal | None:
+        receipt = self.accepted_index_receipt
+        if receipt is None or not self.platform.usable or self.clock is None:
+            return None
+        try:
+            trusted = self.clock.interval_at(self._last_boundary_monotonic_ms)
+        except (ContinuityGap, ValueError):
+            return None
+        if (
+            trusted.lower_ms - receipt.source_timestamp_ms
+            > self.policy.runtime_limits.index_source_stale_deadline_ms
+        ):
+            return None
+        return receipt.price_usdc_per_btc
+
     def episode_started_monotonic_ms(self, episode_identity: str) -> int | None:
         return self._episode_started_ms.get(episode_identity)
 
@@ -5808,6 +5917,15 @@ class RadarReducer:
             self._next_clock_refresh_ms = (
                 monotonic_ms + self.policy.runtime_limits.clock_refresh_interval_ms
             )
+        if (
+            self._next_index_history_refresh_ms is not None
+            and monotonic_ms >= self._next_index_history_refresh_ms
+            and not any(
+                request.purpose is RpcPurpose.INDEX_HISTORY
+                for request in self.pending_rpcs.values()
+            )
+        ):
+            self._schedule_index_history_refresh(boundary)
         if (
             self._next_option_catalog_recovery_ms is not None
             and monotonic_ms >= self._next_option_catalog_recovery_ms
@@ -6206,7 +6324,6 @@ class LiveRadarRuntime:
         try:
             while True:
                 self._raise_sender_failure(sender_task)
-                buffered.extend(self._drain_client_envelopes(client))
                 now_ms = _monotonic_ms()
                 if stop_event.is_set():
                     break
@@ -6233,6 +6350,7 @@ class LiveRadarRuntime:
                             processed_monotonic_ms=now_ms,
                         ),
                     )
+                    await asyncio.sleep(0)
                     continue
                 next_time_boundary_ms = self._next_runtime_time_boundary_ms(
                     next_poll_ms,
@@ -6244,6 +6362,7 @@ class LiveRadarRuntime:
                     )
                     if next_time_boundary_ms == next_poll_ms:
                         next_poll_ms += poll_ms
+                    await asyncio.sleep(0)
                     continue
                 timeout_seconds = (next_time_boundary_ms - now_ms) / 1_000
                 try:
@@ -6269,6 +6388,11 @@ class LiveRadarRuntime:
             barrier_monotonic_ms,
             terminal=clean_stop_requested,
         )
+        try:
+            await self._stop_client_intake(client)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
         buffered.extend(self._drain_client_envelopes(client))
         barrier_frontier = self._barrier_frontier(
             client,
@@ -6284,11 +6408,6 @@ class LiveRadarRuntime:
             )
 
         sender_cancelled_by_barrier = False
-        try:
-            await self._stop_client_intake(client)
-        except BaseException as exc:
-            if failure is None:
-                failure = exc
         if not sender_task.done():
             sender_cancelled_by_barrier = True
             sender_task.cancel()
@@ -6325,6 +6444,7 @@ class LiveRadarRuntime:
                         envelope.received_monotonic_ms,
                     ),
                 )
+                await asyncio.sleep(0)
             except BaseException as exc:
                 if failure is None:
                     failure = exc
@@ -6638,10 +6758,10 @@ def _source_name_for_channel(channel: str, *, combo_names: set[str]) -> str:
 
 
 def _instrument_from_channel(channel: str) -> str | None:
-    if channel.startswith("ticker.") and channel.endswith(".100ms"):
-        return channel[len("ticker.") : -len(".100ms")]
-    if channel.startswith("book.") and channel.endswith(".100ms"):
-        return channel[len("book.") : -len(".100ms")]
+    if channel.startswith("ticker.") and channel.endswith(".agg2"):
+        return channel[len("ticker.") : -len(".agg2")]
+    if channel.startswith("book.") and channel.endswith(".agg2"):
+        return channel[len("book.") : -len(".agg2")]
     return None
 
 

@@ -45,6 +45,11 @@ _RADAR_UNKNOWN_REASON_ALIASES = {
     "INDEX_BASELINE_WARMUP": "INDEX_WARMUP",
     "INDEX_BASELINE_STALE": "INDEX_SOURCE_STALE",
     "INDEX_BASELINE_GAP": "INDEX_WINDOW_GAP",
+    "INDEX_HISTORY_BOOTSTRAP_REQUIRED": "INDEX_WARMUP",
+    "INDEX_HISTORY_WARMUP": "INDEX_WARMUP",
+    "INDEX_HISTORY_SOURCE_STALE": "INDEX_SOURCE_STALE",
+    "INDEX_HISTORY_WINDOW_GAP": "INDEX_WINDOW_GAP",
+    "INDEX_HISTORY_REVISION": "INDEX_HISTORY_REVISION",
 }
 
 _RADAR_UNKNOWN_REASON_CATEGORIES = frozenset(
@@ -52,6 +57,7 @@ _RADAR_UNKNOWN_REASON_CATEGORIES = frozenset(
         *(item.value for item in CoverageBlockingReason if item is not CoverageBlockingReason.NONE),
         "OPTION_BOOK_UNKNOWN",
         "OPTION_AMOUNT_METADATA_UNKNOWN",
+        "OPTION_PRICE_TICK_METADATA_UNKNOWN",
         "FORWARD_TICKER_UNKNOWN",
         "INVALID_FORWARD",
         "NUMERICAL_BOUNDARY_UNRESOLVED",
@@ -653,10 +659,12 @@ def _radar_baseline_availability(
         trusted_time = clock.interval_at(commit.boundary.received_monotonic_ms)
     except (ContinuityGap, ValueError) as exc:
         raise RuntimeError("countable Radar funnel evaluation cannot recover trusted time") from exc
-    baseline = reducer.index.current_tail(
+    baseline = reducer.index_history.current_tail(
         max(band.lookbacks_minutes),
         trusted_time=trusted_time,
-        source_stale_deadline_ms=reducer.policy.runtime_limits.index_source_stale_deadline_ms,
+        source_stale_deadline_ms=(
+            reducer.policy.runtime_limits.index_history_source_stale_deadline_ms
+        ),
     )
     availability_by_band[band_id] = baseline.availability
     return band_id, baseline.availability

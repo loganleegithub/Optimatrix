@@ -6,9 +6,9 @@ from decimal import Decimal
 
 import pytest
 import short_vol_radar.radar as radar_module
-from conftest import PolicyFactory
+from conftest import PolicyFactory, encode_policy, policy_document
 from market_monitor import ContinuousOrderBook, TimeInterval
-from options_domain import AmountMetadata, OptionInstrument, OptionType
+from options_domain import AmountMetadata, OptionInstrument, OptionType, PriceTickMetadata
 from short_vol_radar.black import black_price
 from short_vol_radar.detector import (
     DetectorState,
@@ -25,9 +25,22 @@ from short_vol_radar.radar import (
     parse_ticker,
 )
 
+TEST_PRICE_TICK = PriceTickMetadata(Decimal("0.00000001"))
 
-def make_book(name: str, bid_price: Decimal | None, amount: str = "0.1") -> ContinuousOrderBook:
+
+def make_book(
+    name: str,
+    bid_price: Decimal | None,
+    amount: str = "0.1",
+    *,
+    include_ask: bool = True,
+) -> ContinuousOrderBook:
     bids = [] if bid_price is None else [["new", bid_price, amount]]
+    asks = (
+        []
+        if bid_price is None or not include_ask
+        else [["new", bid_price + Decimal("0.00000002"), amount]]
+    )
     book = ContinuousOrderBook(name)
     book.apply(
         {
@@ -36,7 +49,7 @@ def make_book(name: str, bid_price: Decimal | None, amount: str = "0.1") -> Cont
             "instrument_name": name,
             "change_id": 1,
             "bids": bids,
-            "asks": [],
+            "asks": asks,
         },
         1,
     )
@@ -60,6 +73,7 @@ def make_engine_inputs(
         strike,
         OptionType.CALL,
         AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+        TEST_PRICE_TICK,
     )
     tracker = EpisodeTracker(
         runtime_identity="run",
@@ -193,6 +207,214 @@ def test_full_baseline_iv_delta_richness_path_can_activate(
     assert result.calculation.baseline.annualized_volatility == Decimal("0.1")
 
 
+def test_activation_boundary_span_is_one_unknown_and_next_fact_can_activate(
+    policy_factory: PolicyFactory,
+) -> None:
+    policy, instrument, tracker, _price = make_engine_inputs(policy_factory)
+    trusted_midpoint_ms = 1_000_000
+    instrument = replace(
+        instrument,
+        expiration_timestamp_ms=trusted_midpoint_ms + 60 * 60 * 1_000,
+    )
+    total_volatility = 0.1199999 * math.sqrt(60 / (365 * 24 * 60))
+    boundary_price = Decimal(
+        str(black_price(100, float(instrument.strike), total_volatility, OptionType.CALL))
+    )
+
+    boundary = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(trusted_midpoint_ms - 10, trusted_midpoint_ms + 10),
+        causal_seq=1,
+        option_book=make_book("SHORT", boundary_price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100),) * 6,
+    )
+
+    assert boundary.reason == "NUMERICAL_BOUNDARY_UNRESOLVED"
+    assert boundary.detector_state is DetectorState.UNKNOWN
+    assert not boundary.known_evaluation
+    assert not boundary.full_formula_evaluation
+    assert boundary.transition.activated_episode_id is None
+    assert boundary.transition.ended_episode is None
+    assert tracker.episode_id is None
+
+    activation_total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
+    activation_price = Decimal(
+        str(
+            black_price(
+                100,
+                float(instrument.strike),
+                activation_total_volatility,
+                OptionType.CALL,
+            )
+        )
+    )
+    recovered = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(trusted_midpoint_ms, trusted_midpoint_ms),
+        causal_seq=2,
+        option_book=make_book("SHORT", activation_price),
+        ticker=TickerState(Decimal(100), "index_price", 2),
+        causal_closes=(Decimal(100),) * 6,
+    )
+
+    assert recovered.detector_state is DetectorState.ANOMALY_ACTIVE
+    assert recovered.transition.activated_episode_id is not None
+
+
+def test_clear_boundary_span_ends_active_episode_as_unknown_not_clear() -> None:
+    document = policy_document(activation_count=1, clear_count=1, separation_ms=0)
+    bands = document["tte_bands"]
+    assert isinstance(bands, list)
+    for band in bands:
+        assert isinstance(band, dict)
+        rules = band["option_rules"]
+        assert isinstance(rules, dict)
+        for rule in rules.values():
+            assert isinstance(rule, dict)
+            rule["clear_ratio"] = 1.05
+    exact, digest = encode_policy(document)
+    policy = load_policy_bytes(exact, digest)
+    trusted_midpoint_ms = 1_000_000
+    strike = Decimal("100.01")
+    instrument = OptionInstrument(
+        "SHORT",
+        trusted_midpoint_ms + 60 * 60 * 1_000,
+        strike,
+        OptionType.CALL,
+        AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+        TEST_PRICE_TICK,
+    )
+    tracker = EpisodeTracker(
+        runtime_identity="run",
+        policy_identity=policy.identity,
+        instrument_name=instrument.instrument_name,
+    )
+    activation_total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
+    activation_price = Decimal(
+        str(black_price(100, float(strike), activation_total_volatility, OptionType.CALL))
+    )
+    activated = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(trusted_midpoint_ms, trusted_midpoint_ms),
+        causal_seq=1,
+        option_book=make_book("SHORT", activation_price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100),) * 6,
+    )
+    assert activated.detector_state is DetectorState.ANOMALY_ACTIVE
+
+    clear_boundary_total_volatility = 0.1049999 * math.sqrt(60 / (365 * 24 * 60))
+    clear_boundary_price = Decimal(
+        str(black_price(100, float(strike), clear_boundary_total_volatility, OptionType.CALL))
+    )
+    unresolved = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(trusted_midpoint_ms - 10, trusted_midpoint_ms + 10),
+        causal_seq=2,
+        option_book=make_book("SHORT", clear_boundary_price),
+        ticker=TickerState(Decimal(100), "index_price", 2),
+        causal_closes=(Decimal(100),) * 6,
+    )
+
+    assert unresolved.reason == "NUMERICAL_BOUNDARY_UNRESOLVED"
+    assert unresolved.detector_state is DetectorState.UNKNOWN
+    assert unresolved.transition.ended_episode is not None
+    assert unresolved.transition.ended_episode.reason is EpisodeEndReason.UNKNOWN_DETECTOR
+    assert unresolved.transition.ended_episode.detail == "NUMERICAL_BOUNDARY_UNRESOLVED"
+    assert tracker.episode_id is None
+
+
+def test_hard_screen_requires_target_ask_and_official_tick_metadata(
+    policy_factory: PolicyFactory,
+) -> None:
+    policy, instrument, tracker, price = make_engine_inputs(policy_factory)
+    no_ask = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=1,
+        option_book=make_book("SHORT", price, include_ask=False),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100),) * 6,
+    )
+    assert no_ask.reason == "INSUFFICIENT_TARGET_ASK_DEPTH"
+    assert no_ask.detector_state is DetectorState.NO_ANOMALY
+
+    missing_tick = replace(instrument, price_tick=None)
+    missing_tick_tracker = EpisodeTracker(
+        runtime_identity="run",
+        policy_identity=policy.identity,
+        instrument_name=missing_tick.instrument_name,
+    )
+    unknown = evaluate_instrument(
+        policy=policy,
+        tracker=missing_tick_tracker,
+        instrument=missing_tick,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=2,
+        option_book=make_book("SHORT", price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100),) * 6,
+    )
+    assert unknown.reason == "OPTION_PRICE_TICK_METADATA_UNKNOWN"
+    assert unknown.detector_state is DetectorState.UNKNOWN
+
+
+def test_activation_uses_one_tick_stressed_richness_not_raw_richness(
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory(
+        activation=1.2,
+        activation_count=1,
+        clear_count=1,
+        separation_ms=0,
+    )
+    policy = load_policy_bytes(exact, digest)
+    expiry = 60 * 60 * 1_000
+    strike = Decimal("100.01")
+    raw_iv = 0.13
+    total_volatility = raw_iv * math.sqrt(60 / (365 * 24 * 60))
+    price = Decimal(str(black_price(100, float(strike), total_volatility, OptionType.CALL)))
+    instrument = OptionInstrument(
+        "SHORT",
+        expiry,
+        strike,
+        OptionType.CALL,
+        AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+        PriceTickMetadata(price * Decimal("0.20")),
+    )
+    tracker = EpisodeTracker(
+        runtime_identity="run",
+        policy_identity=policy.identity,
+        instrument_name=instrument.instrument_name,
+    )
+    result = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=1,
+        option_book=make_book("SHORT", price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100),) * 6,
+    )
+    assert result.calculation is not None
+    assert result.calculation.raw_richness.lower >= Decimal("1.2")
+    assert result.calculation.richness.upper < Decimal("1.2")
+    assert result.detector_state is DetectorState.NO_ANOMALY
+    assert result.transition.activated_episode_id is None
+
+
 def test_clock_only_recalculation_is_not_a_countable_persistence_observation(
     policy_factory: PolicyFactory,
 ) -> None:
@@ -208,6 +430,7 @@ def test_clock_only_recalculation_is_not_a_countable_persistence_observation(
         strike,
         OptionType.CALL,
         AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+        TEST_PRICE_TICK,
     )
     tracker = EpisodeTracker(
         runtime_identity="run",
@@ -482,6 +705,7 @@ def test_known_liquidity_and_otm_failures_short_circuit_missing_inputs(
         Decimal(99),
         OptionType.CALL,
         instrument.amount,
+        instrument.price_tick,
     )
     not_otm_tracker = EpisodeTracker(
         runtime_identity="run",
@@ -507,6 +731,7 @@ def test_known_liquidity_and_otm_failures_short_circuit_missing_inputs(
         instrument.strike,
         instrument.option_type,
         None,
+        instrument.price_tick,
     )
     amount_unknown_tracker = EpisodeTracker(
         runtime_identity="run",
@@ -613,6 +838,9 @@ def test_missing_book_ticker_and_warmup_remain_unknown(
         ("INDEX_WINDOW_GAP", CurrentDisposition.UNKNOWN, True),
         ("INDEX_SOURCE_STALE", CurrentDisposition.UNKNOWN, True),
         ("INDEX_CONTINUITY_GAP", CurrentDisposition.UNKNOWN, True),
+        ("INDEX_HISTORY_SOURCE_STALE", CurrentDisposition.UNKNOWN, True),
+        ("INDEX_HISTORY_WINDOW_GAP", CurrentDisposition.UNKNOWN, True),
+        ("INDEX_HISTORY_REVISION", CurrentDisposition.UNKNOWN, True),
     ],
 )
 def test_index_tail_unavailability_has_typed_current_semantics(
@@ -643,7 +871,6 @@ def test_index_tail_unavailability_has_typed_current_semantics(
 
 def test_index_unavailability_is_lazy_behind_pricing_eligibility_gates(
     policy_factory: PolicyFactory,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     policy, instrument, _tracker, price = make_engine_inputs(policy_factory)
     unavailable = "INDEX_CONTINUITY_GAP"
@@ -682,15 +909,140 @@ def test_index_unavailability_is_lazy_behind_pricing_eligibility_gates(
         valid_book,
         valid_ticker,
     )
-    monkeypatch.setattr(radar_module, "delta_is_eligible", lambda *_args: False)
-    delta_ineligible = current(instrument, valid_book, valid_ticker)
-
     assert amount_ineligible.reason == "OFF_PUBLISHED_QUANTITY_GRID"
     assert book_unknown.reason == "OPTION_BOOK_UNKNOWN"
     assert depth_ineligible.reason == "INSUFFICIENT_TARGET_BID_DEPTH"
     assert ticker_unknown.reason == "FORWARD_TICKER_UNKNOWN"
     assert not_otm.reason == "NOT_OTM"
-    assert delta_ineligible.reason == "DELTA_INELIGIBLE"
+
+
+def test_near_atm_delta_is_review_only_and_cannot_activate_a_radar_clue() -> None:
+    document = policy_document(activation_count=1, clear_count=1, separation_ms=0)
+    bands = document["tte_bands"]
+    assert isinstance(bands, list)
+    for band in bands:
+        assert isinstance(band, dict)
+        rules = band["option_rules"]
+        assert isinstance(rules, dict)
+        for rule in rules.values():
+            assert isinstance(rule, dict)
+            rule["abs_delta_max"] = 0.4
+    exact, digest = encode_policy(document)
+    policy = load_policy_bytes(exact, digest)
+    strike = Decimal("100.01")
+    total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
+    price = Decimal(str(black_price(100, float(strike), total_volatility, OptionType.CALL)))
+    instrument = OptionInstrument(
+        "SHORT",
+        60 * 60 * 1_000,
+        strike,
+        OptionType.CALL,
+        AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+        TEST_PRICE_TICK,
+    )
+    tracker = EpisodeTracker(
+        runtime_identity="run",
+        policy_identity=policy.identity,
+        instrument_name=instrument.instrument_name,
+    )
+
+    result = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=1,
+        option_book=make_book("SHORT", price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100), Decimal(100)),
+    )
+
+    assert result.current_evaluation is not None
+    assert result.current_evaluation.disposition is CurrentDisposition.REVIEW_ONLY
+    assert result.reason == "REVIEW_ONLY_DELTA_BUCKET"
+    assert result.calculation is not None
+    assert result.calculation.delta_bucket.value == "ATM_GT_40"
+    assert not result.calculation.delta_clue_eligible
+    assert not result.calculation.clue_eligible
+    assert result.detector_state is DetectorState.NO_ANOMALY
+    assert result.transition.activated_episode_id is None
+
+
+def test_30_to_45_minute_tte_is_review_only_and_cannot_activate(
+    policy_factory: PolicyFactory,
+) -> None:
+    document = policy_document(activation_count=1, clear_count=1, separation_ms=0)
+    bands = document["tte_bands"]
+    assert isinstance(bands, list)
+    first_band = bands[0]
+    second_band = bands[1]
+    assert isinstance(first_band, dict)
+    assert isinstance(second_band, dict)
+    first_band["lower_bound_minutes"] = 30
+    first_band["upper_bound_minutes"] = 45
+    first_band["clue_eligible"] = False
+    second_band["lower_bound_minutes"] = 45
+    exact, digest = encode_policy(document)
+    policy = load_policy_bytes(exact, digest)
+    _unused, instrument, _tracker, price = make_engine_inputs(policy_factory)
+    instrument = replace(instrument, expiration_timestamp_ms=40 * 60 * 1_000)
+    tracker = EpisodeTracker(
+        runtime_identity="run",
+        policy_identity=policy.identity,
+        instrument_name=instrument.instrument_name,
+    )
+
+    result = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=1,
+        option_book=make_book("SHORT", price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100), Decimal(100)),
+    )
+
+    assert result.reason == "REVIEW_ONLY_TTE_BAND"
+    assert result.current_evaluation is not None
+    assert result.current_evaluation.disposition is CurrentDisposition.REVIEW_ONLY
+    assert result.calculation is not None
+    assert not result.calculation.clue_eligible
+    assert result.detector_state is DetectorState.NO_ANOMALY
+    assert result.transition.activated_episode_id is None
+
+
+def test_history_revision_ends_an_active_episode_as_a_gap(
+    policy_factory: PolicyFactory,
+) -> None:
+    policy, instrument, tracker, price = make_engine_inputs(policy_factory)
+    active = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=1,
+        option_book=make_book("SHORT", price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=(Decimal(100), Decimal(100)),
+    )
+    assert active.detector_state is DetectorState.ANOMALY_ACTIVE
+
+    revised = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=2,
+        option_book=make_book("SHORT", price),
+        ticker=TickerState(Decimal(100), "index_price", 1),
+        causal_closes=None,
+        baseline_unavailable_reason="INDEX_HISTORY_REVISION",
+    )
+
+    assert revised.transition.ended_episode is not None
+    assert revised.transition.ended_episode.reason is EpisodeEndReason.UNKNOWN_AT_GAP
+    assert revised.transition.ended_episode.detail == "INDEX_HISTORY_REVISION"
 
 
 def test_band_boundary_suspends_but_scope_gap_ends_episode(
@@ -717,6 +1069,7 @@ def test_band_boundary_suspends_but_scope_gap_ends_episode(
         instrument.strike,
         instrument.option_type,
         instrument.amount,
+        instrument.price_tick,
     )
     boundary = evaluate_instrument(
         policy=policy,
@@ -738,6 +1091,7 @@ def test_band_boundary_suspends_but_scope_gap_ends_episode(
         instrument.strike,
         instrument.option_type,
         instrument.amount,
+        instrument.price_tick,
     )
     ended = evaluate_instrument(
         policy=policy,
@@ -764,6 +1118,7 @@ def test_monitor_boundary_uncertainty_is_unknown_not_out_of_baseline_scope(
         instrument.strike,
         instrument.option_type,
         instrument.amount,
+        instrument.price_tick,
     )
     result = evaluate_instrument(
         policy=policy,

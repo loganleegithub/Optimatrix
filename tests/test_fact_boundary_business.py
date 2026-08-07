@@ -14,7 +14,7 @@ from market_monitor import (
     ContinuityGap,
     ContinuousOrderBook,
     IndexAvailabilityState,
-    IndexBaselineState,
+    IndexHistoryState,
     IndexPublicationBoundary,
     MinuteClose,
     PublishedIndexTail,
@@ -28,6 +28,7 @@ from options_domain import (
     ComboLeg,
     OptionInstrument,
     OptionType,
+    PriceTickMetadata,
 )
 from radar_runtime.deribit_public import (
     InboundEnvelope,
@@ -47,13 +48,14 @@ from radar_runtime.runtime import (
     ScopeSnapshot,
 )
 from short_vol_radar.atomic import PublicAtomicQuoteState
-from short_vol_radar.black import DecimalInterval, black_price
+from short_vol_radar.black import black_price
 from short_vol_radar.detector import (
     DetectorCoverage,
     DetectorObservation,
     DetectorState,
     EpisodeEndReason,
     EpisodeTracker,
+    ObservationSignal,
     TrackerState,
 )
 from short_vol_radar.evidence import (
@@ -112,6 +114,9 @@ def fact_commit(
     )
 
 
+TEST_PRICE_TICK = PriceTickMetadata(Decimal("0.00000001"))
+
+
 def make_option(name: str, expiry_ms: int, *, amount_known: bool = True) -> OptionInstrument:
     return OptionInstrument(
         name,
@@ -119,11 +124,14 @@ def make_option(name: str, expiry_ms: int, *, amount_known: bool = True) -> Opti
         Decimal("100.01"),
         OptionType.CALL,
         (AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")) if amount_known else None),
+        TEST_PRICE_TICK,
     )
 
 
 def make_book(name: str, price: str | None) -> ContinuousOrderBook:
     book = ContinuousOrderBook(name)
+    bid = None if price is None else Decimal(price)
+    asks = [] if bid is None else [["new", bid + Decimal("0.00000002"), "0.1"]]
     book.apply(
         {
             "type": "snapshot",
@@ -131,7 +139,7 @@ def make_book(name: str, price: str | None) -> ContinuousOrderBook:
             "instrument_name": name,
             "change_id": 1,
             "bids": [] if price is None else [["new", price, "0.1"]],
-            "asks": [],
+            "asks": asks,
         },
         1_000,
     )
@@ -200,6 +208,7 @@ def complete_rpc_send(
 
 
 def seed_available_index(reducer: RadarReducer) -> None:
+    reducer.index_history.apply_chart_result([[300_000, 100], [600_000, 100]])
     reducer.index.start_continuous_coverage(600_000)
     for causal_seq, timestamp in enumerate(
         (600_001, 660_000, 720_000, 780_000, 840_000, 900_000, 960_000),
@@ -214,6 +223,7 @@ def seed_available_index(reducer: RadarReducer) -> None:
 
 
 def seed_flat_available_index(reducer: RadarReducer) -> None:
+    reducer.index_history.apply_chart_result([[300_000, 100], [600_000, 100]])
     reducer.index.start_continuous_coverage(600_000)
     for causal_seq, timestamp in enumerate(
         (600_001, 660_000, 720_000, 780_000, 840_000, 900_000, 960_000),
@@ -303,7 +313,7 @@ def activate_directly(
             causal_seq=1,
             trusted_time=TimeInterval(1_000_000, 1_000_000),
             band_id=reducer.policy.tte_bands[band_index].band_id,
-            richness=DecimalInterval(Decimal(2), Decimal(2)),
+            signal=ObservationSignal.ACTIVATE,
         ),
         rule,
     )
@@ -327,7 +337,7 @@ def test_band_boundary_suspension_resets_partial_detector_persistence(
             causal_seq=1,
             trusted_time=TimeInterval(1_000, 1_000),
             band_id="band",
-            richness=DecimalInterval(Decimal("1.3"), Decimal("1.3")),
+            signal=ObservationSignal.ACTIVATE,
         ),
         rule,
     )
@@ -340,7 +350,7 @@ def test_band_boundary_suspension_resets_partial_detector_persistence(
             causal_seq=2,
             trusted_time=TimeInterval(2_000, 2_000),
             band_id="band",
-            richness=DecimalInterval(Decimal("1.3"), Decimal("1.3")),
+            signal=ObservationSignal.ACTIVATE,
         ),
         rule,
     )
@@ -370,15 +380,10 @@ def test_one_global_index_gap_makes_every_instrument_unknown_in_same_fact_bounda
         first.instrument_name: TickerState(Decimal(100), "index_price", 1),
         second.instrument_name: TickerState(Decimal(100), "index_price", 1),
     }
-    reducer.index.gap()
-
-    reducer.settle_fact(
-        commit=fact_commit(
-            FactBoundary(1, 1, 1_001, 2),
-            CausalCause.INDEX_CONTINUITY_GAP,
-        ),
-        affected_instruments=(first.instrument_name,),
-        countable=False,
+    seed_flat_available_index(reducer)
+    assert not reducer._apply_index(
+        {"timestamp": 500_000, "price": 100, "index_name": "btc_usdc"},
+        FactBoundary(1, 1, 1_001, 2),
     )
 
     assert reducer.trackers[first.instrument_name].detector_state is DetectorState.UNKNOWN
@@ -468,6 +473,7 @@ def test_non_index_boundary_seals_ready_index_minute_before_tail_classification(
         price=100,
         causal_seq=8,
     )
+    reducer.index_history.apply_chart_result([[300_000, 100], [600_000, 100]])
     instrument = make_option(
         "BTC_USDC-08AUG26-100000-C",
         1_020_000 + 60 * 60_000,
@@ -527,7 +533,7 @@ def test_bootstrap_warmup_does_not_report_or_recover_a_real_index_gap(
         countable=False,
     )
 
-    assert reducer.results[instrument.instrument_name].reason == "INDEX_WARMUP"
+    assert reducer.results[instrument.instrument_name].reason == "INDEX_HISTORY_BOOTSTRAP_REQUIRED"
     assert not reducer._index_gap_active
     assert not reducer._index_resubscribe_pending
 
@@ -554,7 +560,7 @@ def test_funnel_partitions_the_real_reducer_index_tail_at_first_availability(
         affected_instruments=(instrument.instrument_name,),
         countable=True,
     )
-    assert reducer.results[instrument.instrument_name].reason == "INDEX_WARMUP"
+    assert reducer.results[instrument.instrument_name].reason == "INDEX_HISTORY_BOOTSTRAP_REQUIRED"
     tracker.observe(reducer=reducer, commit=warmup_commit, new_shadow_records=())
     warmup = tracker.snapshot().radar_knownness
     assert warmup.startup_warmup.applicable_market_scope_count == 1
@@ -623,7 +629,7 @@ def setup_same_millisecond_watermark_phase(
     return reducer, instrument
 
 
-def test_persistent_index_window_gap_restarts_global_continuity_once(
+def test_persistent_history_window_gap_stays_radar_local_without_live_resubscribe(
     tmp_path: Path,
     policy_factory: PolicyFactory,
     monkeypatch: pytest.MonkeyPatch,
@@ -637,12 +643,11 @@ def test_persistent_index_window_gap_restarts_global_continuity_once(
     configure_full_formula_scope(reducer, instrument)
     reducer.index.start_continuous_coverage(0)
     monkeypatch.setattr(
-        reducer.index,
+        reducer.index_history,
         "current_tail",
-        lambda *_args, **_kwargs: IndexBaselineState(
+        lambda *_args, **_kwargs: IndexHistoryState(
             availability=IndexAvailabilityState.WINDOW_GAP,
-            publication_phase=BaselinePublicationPhase.CURRENT,
-            reason="INDEX_WINDOW_GAP",
+            reason="INDEX_HISTORY_WINDOW_GAP",
         ),
     )
 
@@ -655,12 +660,10 @@ def test_persistent_index_window_gap_restarts_global_continuity_once(
         },
         FactBoundary(1, 1, 1_001, 1),
     )
-    assert reducer._global_continuity_epoch == 2
+    assert reducer._global_continuity_epoch == 1
     assert not reducer._index_resubscribe_pending
-    assert reducer._coverage._current_blocking_reason == "INDEX_WINDOW_GAP"
-    assert reducer._coverage._current_affected_scopes == (
-        f"SCOPE:{instrument.expiration_timestamp_ms}:call:{reducer.policy.tte_bands[0].band_id}",
-    )
+    assert reducer.results[instrument.instrument_name].reason == "INDEX_HISTORY_WINDOW_GAP"
+    assert reducer._coverage._current_state is CoverageState.UNKNOWN
 
     reducer._causal_seq = 2
     assert reducer._apply_index(
@@ -671,10 +674,11 @@ def test_persistent_index_window_gap_restarts_global_continuity_once(
         },
         FactBoundary(1, 2, 1_002, 2),
     )
-    assert reducer._global_continuity_epoch == 2
+    assert reducer._global_continuity_epoch == 1
+    assert not reducer._index_resubscribe_pending
 
 
-def test_countable_index_tuple_is_observed_once_without_noncountable_backfill_or_catchup_replay(
+def test_countable_history_tuple_is_observed_once_without_live_index_backfill(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
@@ -744,9 +748,10 @@ def test_countable_index_tuple_is_observed_once_without_noncountable_backfill_or
         3_000,
         stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
     )
+    reducer.index_history.apply_chart_result([[300_000, 100], [600_000, 100], [900_000, 100]])
     reducer._causal_seq = 7
     reducer.settle_fact(
-        commit=fact_commit(FactBoundary(1, 4, 3_000, 7), CausalCause.INDEX_TICK),
+        commit=fact_commit(FactBoundary(1, 4, 3_000, 7), CausalCause.INDEX_HISTORY),
         affected_instruments=(name,),
         countable=True,
     )
@@ -831,6 +836,9 @@ def test_clock_refresh_failure_keeps_fresh_clock_until_real_stale_boundary(
     assert reducer.clock is not None
     assert reducer.index.sealed == sealed_before_failure
     assert reducer.trackers[instrument.instrument_name].episode_id == episode_id
+    assert reducer._next_clock_refresh_ms == (
+        1_001 + reducer.policy.runtime_limits.time_boundary_poll_interval_ms
+    )
 
     stale_commands = reducer.advance_time(61_000)
 
@@ -929,7 +937,7 @@ def test_subscription_evidence_failure_is_not_reclassified_as_public_payload(
         raise EvidenceError("injected local evidence failure")
 
     monkeypatch.setattr(reducer, "_apply_book", fail_evidence_write)
-    channel = "book.BTC_USDC-2AUG26-63000-C.100ms"
+    channel = "book.BTC_USDC-2AUG26-63000-C.agg2"
     acknowledge_channel(reducer, channel)
 
     with pytest.raises(EvidenceError, match="local evidence failure"):
@@ -941,6 +949,40 @@ def test_subscription_evidence_failure_is_not_reclassified_as_public_payload(
                 received_monotonic_ms=1_001,
             ),
             processed_monotonic_ms=1_001,
+        )
+
+
+def test_subscription_does_not_relabel_business_value_error_as_public_payload(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    instrument = make_option("BTC_USDC-2AUG26-63000-C", 10_000_000)
+    reducer.options = {instrument.instrument_name: instrument}
+    channel = f"ticker.{instrument.instrument_name}.agg2"
+    acknowledge_channel(reducer, channel)
+
+    def fail_business_settlement(*_args: object) -> bool:
+        raise ValueError("injected business calculation failure")
+
+    monkeypatch.setattr(reducer, "_apply_ticker", fail_business_settlement)
+    with pytest.raises(ValueError, match="injected business calculation failure"):
+        reducer._apply_acknowledged_subscription(
+            InboundEnvelope(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "subscription",
+                    "params": {
+                        "channel": channel,
+                        "data": {},
+                    },
+                },
+                session_epoch=1,
+                ingress_seq=1,
+                received_monotonic_ms=1_000,
+            )
         )
 
 
@@ -1487,7 +1529,10 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
                 "change_id": 2,
                 "prev_change_id": 1,
                 "bids": [["delete", "1", "0"], ["new", "2", "0.1"]],
-                "asks": [],
+                "asks": [
+                    ["delete", "1.00000002", "0"],
+                    ["new", "2.00000002", "0.1"],
+                ],
             },
             ingress_seq=reducer._last_ingress_seq + 1,
             received_monotonic_ms=2_001,
@@ -1926,6 +1971,7 @@ def test_option_book_gap_quarantines_old_generation_snapshot(
         },
         FactBoundary(1, 1, 1_001, 2),
     )
+    assert reducer.option_books["SHORT"].reason == "CHANGE_ID_GAP"
     assert reducer.channel_state(channel) is ChannelState.UNSUBSCRIBE_PENDING
     unsubscribe = next(
         request
@@ -2287,7 +2333,7 @@ def test_one_option_subscribe_failure_is_local_to_that_instrument(
     reducer._last_time_currentness_by_instrument = reducer._time_currentness_by_instrument(trusted)
     reducer._last_time_currentness_token = reducer._time_currentness_token(trusted)
     reducer._plan_channel_change(
-        ("book.FIRST.100ms",),
+        ("book.FIRST.agg2",),
         subscribe=True,
         origin_boundary=FactBoundary(1, 0, 1_000, 1),
         failure_scope=FailureScope.OPTION,
@@ -2391,14 +2437,9 @@ def test_noncountable_known_current_advances_active_duration_without_persistence
     assert not reducer.results[instrument.instrument_name].observation_eligible
     assert reducer.trackers[instrument.instrument_name].episode_id == episode_id
 
-    reducer.index.gap()
-    reducer.settle_fact(
-        commit=fact_commit(
-            FactBoundary(1, 2, 2_000, 3),
-            CausalCause.INDEX_CONTINUITY_GAP,
-        ),
-        affected_instruments=(instrument.instrument_name,),
-        countable=False,
+    assert not reducer._apply_index(
+        {"timestamp": 500_000, "price": 100, "index_name": "btc_usdc"},
+        FactBoundary(1, 2, 2_000, 3),
     )
 
     assert reducer._known_active_duration_ms[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 500
@@ -2723,6 +2764,8 @@ def test_market_boundary_settles_ttl_crossing_in_an_unrelated_full_scope(
         2_000,
         stale_deadline_ms=reducer.policy.runtime_limits.clock_stale_deadline_ms,
     )
+    old_bid = reducer.option_books[first.instrument_name].levels("bid")[0].price
+    old_ask = reducer.option_books[first.instrument_name].levels("ask")[0].price
     assert reducer._apply_book(
         first.instrument_name,
         {
@@ -2731,8 +2774,8 @@ def test_market_boundary_settles_ttl_crossing_in_an_unrelated_full_scope(
             "instrument_name": first.instrument_name,
             "change_id": 2,
             "prev_change_id": 1,
-            "bids": [["new", "999", "0.1"]],
-            "asks": [],
+            "bids": [["delete", str(old_bid), "0"], ["new", "999", "0.1"]],
+            "asks": [["delete", str(old_ask), "0"], ["new", "1000", "0.1"]],
         },
         FactBoundary(1, 2, 2_001, 2),
     )
@@ -2747,7 +2790,7 @@ def test_market_boundary_settles_ttl_crossing_in_an_unrelated_full_scope(
     )
 
 
-def test_scope_snapshot_contains_only_every_current_member_of_one_scope(
+def test_local_book_fact_recalculates_only_changed_member_and_refreshes_scope_truth(
     tmp_path: Path,
     policy_factory: PolicyFactory,
     monkeypatch: pytest.MonkeyPatch,
@@ -2788,13 +2831,24 @@ def test_scope_snapshot_contains_only_every_current_member_of_one_scope(
         countable=False,
     )
     captured: list[ScopeSnapshot] = []
+    scope_truths: list[object] = []
     current_scope_truth = reducer._current_scope_truth
+    evaluated_names: list[str] = []
+    calculate = runtime_module.calculate_current_evaluation
 
     def capture_snapshot(snapshot: ScopeSnapshot) -> object:
         captured.append(snapshot)
-        return current_scope_truth(snapshot)
+        value = current_scope_truth(snapshot)
+        scope_truths.append(value)
+        return value
+
+    def capture_calculation(**kwargs: object) -> CurrentEvaluation:
+        instrument = cast(OptionInstrument, kwargs["instrument"])
+        evaluated_names.append(instrument.instrument_name)
+        return calculate(**kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(reducer, "_current_scope_truth", capture_snapshot)
+    monkeypatch.setattr(runtime_module, "calculate_current_evaluation", capture_calculation)
     reducer.settle_fact(
         commit=CausalCommit(
             boundary=FactBoundary(1, 2, 1_002, 2),
@@ -2811,18 +2865,103 @@ def test_scope_snapshot_contains_only_every_current_member_of_one_scope(
     assert isinstance(snapshot, runtime_module.ScopeSnapshot)
     assert snapshot.commit.cause is CausalCause.OPTION_BOOK_CHANGED
     assert snapshot.commit.affected_scopes == ("OPTION:FIRST",)
-    assert tuple(item.instrument.instrument_name for item in snapshot.current) == (
+    assert tuple(item.instrument.instrument_name for item in snapshot.current) == ("FIRST",)
+    assert evaluated_names == ["FIRST"]
+    assert all(item.result is not None for item in snapshot.current)
+    assert tuple(item.instrument_name for item, _result in snapshot.scope_results) == (
         "FIRST",
         "SECOND",
     )
-    assert all(item.result is not None for item in snapshot.current)
+    assert len(scope_truths) == 1
+    assert scope_truths[0].aggregate.instrument_count == 2  # type: ignore[attr-defined]
 
     before = current_scope_truth(snapshot)
     reducer.options.clear()
     reducer.trackers.clear()
     reducer.results.clear()
-    after = current_scope_truth(snapshot)
-    assert after == before
+    assert current_scope_truth(snapshot) == before
+
+
+def test_high_fanout_local_fact_shares_one_history_tail_and_one_formula_call(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    expiry = 1_000_000 + 60 * 60_000
+    instruments = tuple(
+        make_option(f"BTC_USDC-08AUG26-{100_000 + index}-C", expiry) for index in range(320)
+    )
+    reducer.options = {item.instrument_name: item for item in instruments}
+    reducer.catalog_options = dict(reducer.options)
+    for instrument in instruments:
+        reducer.trackers[instrument.instrument_name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=reducer.policy.identity,
+            instrument_name=instrument.instrument_name,
+        )
+        reducer.option_books[instrument.instrument_name] = make_book(
+            instrument.instrument_name,
+            None,
+        )
+        reducer.tickers[instrument.instrument_name] = TickerState(
+            Decimal(100),
+            "index_price",
+            1_000_000,
+        )
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 1, 1_001, 1),
+            CausalCause.TIME_BOUNDARY,
+        ),
+        affected_instruments=tuple(reducer.options),
+        countable=False,
+    )
+
+    tail_calls = 0
+    calculation_calls = 0
+    current_tail = reducer.index_history.current_tail
+    calculate = runtime_module.calculate_current_evaluation
+
+    def count_tail(*args: object, **kwargs: object) -> IndexHistoryState:
+        nonlocal tail_calls
+        tail_calls += 1
+        return current_tail(*args, **kwargs)  # type: ignore[arg-type]
+
+    def count_calculation(**kwargs: object) -> CurrentEvaluation:
+        nonlocal calculation_calls
+        calculation_calls += 1
+        return calculate(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(reducer.index_history, "current_tail", count_tail)
+    monkeypatch.setattr(runtime_module, "calculate_current_evaluation", count_calculation)
+    known_before = sum(
+        scope.known_per_instrument_detector_evaluation_count
+        for scope in reducer._scope_counts.values()
+    )
+    changed = instruments[0]
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 2, 1_002, 2),
+            CausalCause.OPTION_BOOK_CHANGED,
+            failure_domain=FailureScope.OPTION,
+            affected_scopes=(f"OPTION:{changed.instrument_name}",),
+        ),
+        affected_instruments=(changed.instrument_name,),
+        countable=True,
+    )
+
+    assert calculation_calls == 1
+    assert tail_calls == 1
+    assert (
+        sum(
+            scope.known_per_instrument_detector_evaluation_count
+            for scope in reducer._scope_counts.values()
+        )
+        == known_before + 1
+    )
 
 
 def test_option_lifecycle_unknown_recomputes_aggregate_from_one_full_scope_snapshot(
@@ -3258,6 +3397,8 @@ def test_fact_transaction_preserves_trigger_and_concurrent_source_stale_attribut
         return current_scope_truth(snapshot)
 
     monkeypatch.setattr(reducer, "_current_scope_truth", capture_snapshot)
+    old_bid = reducer.option_books[first.instrument_name].levels("bid")[0].price
+    old_ask = reducer.option_books[first.instrument_name].levels("ask")[0].price
     assert reducer._apply_book(
         first.instrument_name,
         {
@@ -3266,8 +3407,8 @@ def test_fact_transaction_preserves_trigger_and_concurrent_source_stale_attribut
             "instrument_name": first.instrument_name,
             "change_id": 2,
             "prev_change_id": 1,
-            "bids": [["new", "999", "0.1"]],
-            "asks": [],
+            "bids": [["delete", str(old_bid), "0"], ["new", "999", "0.1"]],
+            "asks": [["delete", str(old_ask), "0"], ["new", "1000", "0.1"]],
         },
         FactBoundary(1, 2, 2_001, 2),
     )

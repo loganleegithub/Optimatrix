@@ -42,8 +42,8 @@ def policy_document(
         "minimum_separation_ms": separation_ms,
     }
     return {
-        "policy_schema_version": 3,
-        "policy_family": "POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE",
+        "policy_schema_version": 6,
+        "policy_family": "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS",
         "target_base_quantity_btc": target,
         "runtime_limits": {
             "heartbeat_interval_seconds": 30,
@@ -52,6 +52,8 @@ def policy_document(
             "clock_refresh_interval_ms": 30_000,
             "clock_stale_deadline_ms": 60_000,
             "index_source_stale_deadline_ms": 90_000,
+            "index_history_refresh_interval_ms": 300_000,
+            "index_history_source_stale_deadline_ms": 900_000,
             "ticker_source_stale_deadline_ms": ticker_source_stale_deadline_ms,
             "notification_queue_lag_deadline_ms": 1_000,
             "time_boundary_poll_interval_ms": 1_000,
@@ -61,8 +63,9 @@ def policy_document(
                 "band_id": "settlement-clear-to-six-hours",
                 "lower_bound_minutes": 30,
                 "upper_bound_minutes": 360,
-                "lookbacks_minutes": [2, 5],
-                "lookback_weights": [0.25, 0.75],
+                "clue_eligible": True,
+                "return_interval_minutes": 5,
+                "lookbacks_minutes": [5],
                 "annualized_variance_floor": 0.01,
                 "option_rules": {"call": rule, "put": dict(rule)},
             },
@@ -70,8 +73,9 @@ def policy_document(
                 "band_id": "six-to-seventy-two-hours",
                 "lower_bound_minutes": 360,
                 "upper_bound_minutes": 4_320,
+                "clue_eligible": True,
+                "return_interval_minutes": 5,
                 "lookbacks_minutes": [5],
-                "lookback_weights": [1],
                 "annualized_variance_floor": 0.02,
                 "option_rules": {"call": dict(rule), "put": dict(rule)},
             },
@@ -134,6 +138,8 @@ def option_payload_factory() -> OptionPayloadFactory:
             "strike": strike,
             "contract_size": 1,
             "min_trade_amount": 0.1,
+            "tick_size": 0.01,
+            "tick_size_steps": [],
             "unrelated_future_field": "tolerated",
         }
         if step is not None:

@@ -89,11 +89,13 @@ def anomaly_evidence() -> AnomalyEvidence:
         target_base_quantity_btc=Decimal("0.1"),
         rule=rule,
         baseline=BaselineResult(
-            ((5, Decimal("0.0001")),),
-            Decimal("0.0001"),
-            Decimal("0.2"),
-            Decimal("0.001"),
-            Decimal("0.002"),
+            return_interval_minutes=5,
+            window_variances=((5, Decimal("0.0001")),),
+            selected_lookback_minutes=5,
+            variance_rate_per_minute=Decimal("0.0001"),
+            annualized_volatility=Decimal("0.2"),
+            total_variance_low=Decimal("0.001"),
+            total_variance_high=Decimal("0.002"),
         ),
         trusted_time=TimeInterval(1_000, 1_001),
         remaining_life_years=DecimalInterval(Decimal("0.01"), Decimal("0.011")),
@@ -130,6 +132,19 @@ def atomic_evidence() -> AtomicEvidence:
         target_base_quantity_btc=Decimal("0.1"),
         source_timestamp_ms=2_000,
     )
+
+
+def test_scope_counts_collapse_correlated_instrument_activations_at_one_boundary() -> None:
+    scope = ScopeCounts("sha256:" + "b" * 64, "call", "band")
+
+    scope.record_candidate_activation(10)
+    scope.record_candidate_activation(10)
+    scope.record_candidate_activation(11)
+
+    assert scope.distinct_anomaly_episode_count == 3
+    assert scope.anomaly_activation_transition_count == 3
+    assert scope.candidate_activation_batch_count == 2
+    assert scope.as_object()["candidate_activation_batch_count"] == 2
 
 
 def summary_object(
@@ -215,6 +230,12 @@ def test_minimal_events_are_strict_unit_bearing_and_carry_non_claims() -> None:
     anomaly_non_claims = anomaly["non_claims"]
     assert isinstance(anomaly_non_claims, list)
     assert "NOT_VALIDATED_FORECAST" in anomaly_non_claims
+    assert "NOT_SURFACE_RELATIVE_MISPRICING_CLAIM" in anomaly_non_claims
+    assert "NOT_CALENDAR_OR_EVENT_FORECAST" in anomaly_non_claims
+    baseline = anomaly["baseline"]
+    assert isinstance(baseline, dict)
+    assert baseline["return_interval_minutes"] == 5
+    assert baseline["selected_lookback_minutes"] == 5
     assert atomic["object_kind"] == "PUBLIC_ATOMIC_QUOTE_EVENT"
     assert atomic["gross_entry_credit_usdc"] == "0.5"
     atomic_non_claims = atomic["non_claims"]
@@ -685,6 +706,99 @@ def test_continuous_inbound_flow_cannot_starve_absolute_time_boundaries(
     assert asyncio.run(runtime.run(ContinuousClient(), stop_event)) == summary
     assert reduced == [1, 2, 3]
     assert timer_boundaries == [1_000]
+
+
+def test_prefilled_ingress_stays_single_owner_and_yields_between_facts(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    runtime = LiveRadarRuntime(
+        policy=load_policy_bytes(exact, digest),
+        code_identity="a" * 40,
+        event_sink=RadarEventSink(
+            code_identity="a" * 40,
+            runtime_identity="runtime",
+            policy_identity=digest,
+        ),
+        runtime_identity="runtime",
+    )
+    stop_event = asyncio.Event()
+    summary = {"object_kind": "RADAR_RUN_SUMMARY"}
+    reduced: list[int] = []
+    fairness_observations: list[int] = []
+    drain_before_stop = 0
+
+    class PrefilledClient:
+        session_epoch = 1
+        queue_high_water_frames = 3
+        overflow_count = 0
+        received_frame_count = 3
+        enqueued_envelope_count = 3
+
+        def __init__(self) -> None:
+            self.stopped = False
+            self.frames = [
+                InboundEnvelope(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "heartbeat",
+                        "params": {"type": "heartbeat"},
+                    },
+                    session_epoch=1,
+                    ingress_seq=seq,
+                    received_monotonic_ms=seq,
+                )
+                for seq in range(1, 4)
+            ]
+
+        async def next_envelope(
+            self,
+            timeout_seconds: float | None = None,
+        ) -> InboundEnvelope:
+            del timeout_seconds
+            return self.frames.pop(0)
+
+        def drain_envelopes(self) -> tuple[InboundEnvelope, ...]:
+            nonlocal drain_before_stop
+            if not self.stopped:
+                drain_before_stop += 1
+            values = tuple(self.frames)
+            self.frames.clear()
+            return values
+
+        async def stop_intake(self) -> None:
+            self.stopped = True
+
+        async def send_request(self, **_kwargs: object) -> None:
+            raise AssertionError("patched reducer must not emit commands")
+
+        def enqueue_send_control(self, event: SendControlEvent) -> None:
+            raise AssertionError(f"patched reducer unexpectedly emitted {event}")
+
+    def reduce_frame(
+        frame: InboundEnvelope,
+        *,
+        processed_monotonic_ms: int,
+    ) -> tuple[object, ...]:
+        del processed_monotonic_ms
+        reduced.append(frame.ingress_seq)
+        if frame.ingress_seq == 1:
+            asyncio.get_running_loop().call_soon(lambda: fairness_observations.append(len(reduced)))
+        if frame.ingress_seq == 3:
+            stop_event.set()
+        return ()
+
+    monkeypatch.setattr(runtime.reducer, "begin_session", lambda **_kwargs: ())
+    monkeypatch.setattr(runtime.reducer, "reduce", reduce_frame)
+    monkeypatch.setattr(runtime.reducer, "advance_time", lambda _boundary_ms: ())
+    monkeypatch.setattr(runtime.reducer, "clean_stop", lambda _stop_ms: summary)
+
+    assert asyncio.run(runtime.run(PrefilledClient(), stop_event)) == summary
+    assert reduced == [1, 2, 3]
+    assert drain_before_stop == 0
+    assert fairness_observations == [1]
 
 
 @pytest.mark.parametrize("outcome", ("SUCCESS", "CANCELLED", "ERROR"))

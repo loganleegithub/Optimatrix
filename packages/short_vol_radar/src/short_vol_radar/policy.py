@@ -16,7 +16,7 @@ from market_monitor.types import SourceDataError, TimeInterval
 from options_domain import OptionType
 from options_domain.instruments import MAX_TTE_MS, SETTLEMENT_WINDOW_MS
 
-POLICY_FAMILY = "POINTWISE_EXECUTABLE_IV_RICHNESS_BASELINE"
+POLICY_FAMILY = "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS"
 MINIMUM_TTE_MINUTES = 30
 MAXIMUM_TTE_MINUTES = 72 * 60
 EXPECTED_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
@@ -42,8 +42,9 @@ class TteBand:
     band_id: str
     lower_bound_minutes: int
     upper_bound_minutes: int
+    clue_eligible: bool
+    return_interval_minutes: int
     lookbacks_minutes: tuple[int, ...]
-    lookback_weights: tuple[Decimal, ...]
     annualized_variance_floor: Decimal
     option_rules: Mapping[OptionType, OptionRule]
 
@@ -64,6 +65,8 @@ class RuntimeLimits:
     clock_refresh_interval_ms: int
     clock_stale_deadline_ms: int
     index_source_stale_deadline_ms: int
+    index_history_refresh_interval_ms: int
+    index_history_source_stale_deadline_ms: int
     ticker_source_stale_deadline_ms: int
     notification_queue_lag_deadline_ms: int
     time_boundary_poll_interval_ms: int
@@ -76,6 +79,8 @@ class RuntimeLimits:
             "clock_refresh_interval_ms": self.clock_refresh_interval_ms,
             "clock_stale_deadline_ms": self.clock_stale_deadline_ms,
             "index_source_stale_deadline_ms": self.index_source_stale_deadline_ms,
+            "index_history_refresh_interval_ms": self.index_history_refresh_interval_ms,
+            "index_history_source_stale_deadline_ms": self.index_history_source_stale_deadline_ms,
             "ticker_source_stale_deadline_ms": self.ticker_source_stale_deadline_ms,
             "notification_queue_lag_deadline_ms": self.notification_queue_lag_deadline_ms,
             "time_boundary_poll_interval_ms": self.time_boundary_poll_interval_ms,
@@ -94,6 +99,13 @@ class RadarPolicy:
     @property
     def largest_lookback_minutes(self) -> int:
         return max(max(band.lookbacks_minutes) for band in self.tte_bands)
+
+    @property
+    def return_interval_minutes(self) -> int:
+        intervals = {band.return_interval_minutes for band in self.tte_bands}
+        if len(intervals) != 1:
+            raise RuntimeError("Radar Policy has inconsistent return intervals")
+        return next(iter(intervals))
 
 
 class TimeApplicability(StrEnum):
@@ -237,8 +249,8 @@ def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:
         "Policy",
     )
     schema_version = _positive_int(raw["policy_schema_version"], "policy_schema_version")
-    if schema_version != 3:
-        raise PolicyError("policy_schema_version must be exactly 3")
+    if schema_version != 6:
+        raise PolicyError("policy_schema_version must be exactly 6")
     family = raw["policy_family"]
     if family != POLICY_FAMILY:
         raise PolicyError(f"policy_family must be {POLICY_FAMILY}")
@@ -252,6 +264,8 @@ def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:
     if len(set(band_ids)) != len(band_ids):
         raise PolicyError("tte_bands band_id values must be unique")
     ordered = tuple(sorted(bands, key=lambda item: (item.lower_bound_minutes, item.band_id)))
+    if len({band.return_interval_minutes for band in ordered}) != 1:
+        raise PolicyError("tte_bands must share one return_interval_minutes owner")
     for previous, current in pairwise(ordered):
         if current.lower_bound_minutes < previous.upper_bound_minutes:
             raise PolicyError("tte_bands must not overlap")
@@ -275,6 +289,8 @@ def _parse_runtime_limits(value: object) -> RuntimeLimits:
         "clock_refresh_interval_ms",
         "clock_stale_deadline_ms",
         "index_source_stale_deadline_ms",
+        "index_history_refresh_interval_ms",
+        "index_history_source_stale_deadline_ms",
         "ticker_source_stale_deadline_ms",
         "notification_queue_lag_deadline_ms",
         "time_boundary_poll_interval_ms",
@@ -300,6 +316,14 @@ def _parse_runtime_limits(value: object) -> RuntimeLimits:
         raise PolicyError(
             "runtime_limits.clock_stale_deadline_ms must exceed clock refresh interval"
         )
+    if (
+        parsed["index_history_source_stale_deadline_ms"]
+        <= parsed["index_history_refresh_interval_ms"]
+    ):
+        raise PolicyError(
+            "runtime_limits.index_history_source_stale_deadline_ms must exceed "
+            "the index history refresh interval"
+        )
     return RuntimeLimits(**parsed)
 
 
@@ -312,8 +336,9 @@ def _parse_band(value: object, index: int) -> TteBand:
             "band_id",
             "lower_bound_minutes",
             "upper_bound_minutes",
+            "clue_eligible",
+            "return_interval_minutes",
             "lookbacks_minutes",
-            "lookback_weights",
             "annualized_variance_floor",
             "option_rules",
         },
@@ -326,20 +351,23 @@ def _parse_band(value: object, index: int) -> TteBand:
     upper = _positive_int(value["upper_bound_minutes"], f"{band_id}.upper_bound_minutes")
     if lower < MINIMUM_TTE_MINUTES or upper > MAXIMUM_TTE_MINUTES or lower >= upper:
         raise PolicyError(f"{band_id} bounds must satisfy 30 <= lower < upper <= 4320")
+    clue_eligible = value["clue_eligible"]
+    if not isinstance(clue_eligible, bool):
+        raise PolicyError(f"{band_id}.clue_eligible must be boolean")
+    return_interval = _positive_int(
+        value["return_interval_minutes"],
+        f"{band_id}.return_interval_minutes",
+    )
     lookbacks_raw = value["lookbacks_minutes"]
-    weights_raw = value["lookback_weights"]
     if not isinstance(lookbacks_raw, list) or not lookbacks_raw:
         raise PolicyError(f"{band_id}.lookbacks_minutes must be non-empty")
-    if not isinstance(weights_raw, list) or len(weights_raw) != len(lookbacks_raw):
-        raise PolicyError(f"{band_id}.lookback_weights must align with lookbacks")
     lookbacks = tuple(_positive_int(item, f"{band_id}.lookbacks_minutes") for item in lookbacks_raw)
     if len(set(lookbacks)) != len(lookbacks):
         raise PolicyError(f"{band_id}.lookbacks_minutes must be unique")
-    weights = tuple(
-        _non_negative_decimal(item, f"{band_id}.lookback_weights") for item in weights_raw
-    )
-    if sum(weights, Decimal(0)) != Decimal(1):
-        raise PolicyError(f"{band_id}.lookback_weights must sum exactly to one")
+    if any(lookback % return_interval != 0 for lookback in lookbacks):
+        raise PolicyError(
+            f"{band_id}.lookbacks_minutes must be divisible by return_interval_minutes"
+        )
     rules_raw = value["option_rules"]
     if not isinstance(rules_raw, dict) or not rules_raw:
         raise PolicyError(f"{band_id}.option_rules must be a non-empty object")
@@ -353,8 +381,9 @@ def _parse_band(value: object, index: int) -> TteBand:
         band_id=band_id,
         lower_bound_minutes=lower,
         upper_bound_minutes=upper,
+        clue_eligible=clue_eligible,
+        return_interval_minutes=return_interval,
         lookbacks_minutes=lookbacks,
-        lookback_weights=weights,
         annualized_variance_floor=_positive_decimal(
             value["annualized_variance_floor"],
             f"{band_id}.annualized_variance_floor",
