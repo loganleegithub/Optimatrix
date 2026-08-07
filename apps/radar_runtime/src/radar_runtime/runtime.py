@@ -4108,7 +4108,7 @@ class RadarReducer:
                 tail.availability.value,
                 tail.reason,
                 tail.latest_source_timestamp_ms,
-                tuple((point.timestamp_ms, point.average_price) for point in tail.points),
+                tail.points,
             )
         return (
             applicability.classification.value,

@@ -172,17 +172,18 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_one_selected_decision_natural_validation() -> None:
+def test_current_stage_authorizes_one_queue_lag_repair_and_post_merge_run() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
+    assert "`QUEUE_LAG_CURRENTNESS_THROUGHPUT_REPAIR_AUTHORIZED`" in current
     assert "`SELECTED_UNDERWRITING_DECISION_OUTCOME_ACCEPTED`" in current
     assert "**Production Short Vol Radar:** `CREDIBLE_CLUE_GENERATOR_FROZEN`" in current
-    assert "**Persistent service:** `ONE_NATURAL_PUBLIC_SHADOW_AUTHORIZED_NO_DEPLOYMENT`" in current
-    assert "**Live commands:** `ONE_PRODUCTION_PUBLIC_SERVE_SHADOW_AUTHORIZED`" in current
+    assert "**Persistent service:** `STOPPED_CLEANLY_CURRENTNESS_REPAIR_REQUIRED`" in current
     assert (
-        "**Sole authorized closure:** `SHORT_VOL_SELECTED_DECISION_NATURAL_VALIDATION`" in current
+        "**Live commands:** `ONE_POST_MERGE_PRODUCTION_PUBLIC_SERVE_SHADOW_AUTHORIZED`" in current
     )
+    assert "**Sole authorized closure:** `SHORT_VOL_QUEUE_LAG_CURRENTNESS_THROUGHPUT`" in current
     assert "1,812,600 contract evaluations" in current
     assert "1,811,662 contract evaluations" in current
     assert "10 distinct Episodes" in current
@@ -193,7 +194,7 @@ def test_current_stage_authorizes_one_selected_decision_natural_validation() -> 
     assert "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE" in current
     assert "exactly two strictly later `public/get_order_book` responses" in normalized
     assert "execute exactly one" in normalized
-    assert "there is no separate smoke/restart boundary" in normalized.lower()
+    assert "one uninterrupted 600-second current window" in normalized.lower()
     assert "before action or margin is known" in normalized
     assert "selected as Candidate and still Candidate reuses ordinary admission" in normalized
     assert "refreshed WATCH/ABSTAIN may open" in normalized
@@ -205,13 +206,14 @@ def test_current_stage_authorizes_one_selected_decision_natural_validation() -> 
     assert not (ROOT / "tasks/SHORT_VOL_NATURAL_SHADOW_OPERATION.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_SELECTED_UNDERWRITING_DECISION_OUTCOME.md").exists()
-    validation_task = ROOT / "tasks/SHORT_VOL_SELECTED_DECISION_NATURAL_VALIDATION.md"
-    assert validation_task.exists()
-    task = validation_task.read_text(encoding="utf-8")
-    assert "**Task kind:** VALIDATION_ONLY" in task
-    assert "**Runtime implementation:** FORBIDDEN" in task
+    repair_task = ROOT / "tasks/SHORT_VOL_QUEUE_LAG_CURRENTNESS_THROUGHPUT.md"
+    assert repair_task.exists()
+    task = repair_task.read_text(encoding="utf-8")
+    normalized_task = " ".join(task.split())
+    assert "**Task kind:** IMPLEMENTATION" in task
+    assert "**Runtime implementation:** REQUIRED" in task
     assert "**Decision Policy change:** NONE" in task
-    assert "There is no separate smoke process" in task
+    assert "with no timing threshold embedded in the test suite" in normalized_task
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"
     )
