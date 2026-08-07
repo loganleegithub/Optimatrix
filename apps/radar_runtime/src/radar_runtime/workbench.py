@@ -1132,6 +1132,10 @@ def _underwriting_rows(
                 "underwriting_reserved_loss_usdc": payload.get("underwriting_reserved_loss_usdc"),
                 "failed_predicates": payload.get("failed_predicates", []),
                 "predicate_margin_vector": payload.get("predicate_margin_vector", []),
+                "protective_leg_selection_rule_identity": payload.get(
+                    "protective_leg_selection_rule_identity"
+                ),
+                "candidate_protective_leg_count": payload.get("candidate_protective_leg_count"),
                 "reserve_breakdown_usdc": {
                     "path": str(policies.underwriting.path_risk_reserve_usdc),
                     "jump": str(policies.underwriting.jump_risk_reserve_usdc),
@@ -2350,6 +2354,8 @@ function renderUnderwritingPanel(documentValue) {
       ['decision reason enum', 'decision_reason'], ['unknown reasons', 'unknown_reasons'],
       ['failed predicates', 'failed_predicates'],
       ['predicate margin vector', 'predicate_margin_vector'],
+      ['protective-leg selection rule identity', 'protective_leg_selection_rule_identity'],
+      ['Candidate protective-leg count', 'candidate_protective_leg_count'],
       ['component blockers', 'component_blockers'],
       ['gross entry credit exact', 'gross_entry_credit_usdc'],
       ['entry fee reserve exact', 'entry_fee_reserve_usdc'],

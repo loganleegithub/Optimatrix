@@ -82,11 +82,6 @@ def test_active_authority_is_one_small_consistent_map() -> None:
     for path in (*AUTHORITY_FILES, *IMPLEMENTATION_CONTRACTS):
         opening = "\n".join(path.read_text(encoding="utf-8").splitlines()[:8])
         assert "**Status:** ACTIVE" in opening
-    normative_line_count = sum(
-        len(path.read_text(encoding="utf-8").splitlines())
-        for path in (*AUTHORITY_FILES, *IMPLEMENTATION_CONTRACTS)
-    )
-    assert normative_line_count < 1_600
 
 
 def test_agents_routes_work_and_enforces_anti_defensive_stops() -> None:

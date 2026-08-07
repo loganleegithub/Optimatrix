@@ -695,6 +695,8 @@ def test_frozen_component_structure_does_not_switch_to_a_later_protective_leg(
     )
     (current_facts,) = adapter._underwriting_by_scope.values()
     assert current_facts.long_leg_instrument_name == "BTC-LONG"
+    assert current_facts.protective_leg_selection_rule_identity is not None
+    assert current_facts.candidate_protective_leg_count == 1
     assert owner.retained_state_counts["active_candidates"] == 1
     assert adapter.retained_state_counts["request_contexts"] == 2
 
@@ -764,6 +766,8 @@ def test_underwriting_selector_waits_for_complete_catalog_before_freezing(
 
     (complete,) = adapter._underwriting_by_scope.values()
     assert complete.long_leg_instrument_name == "BTC-LONG-BETTER"
+    assert complete.protective_leg_selection_rule_identity is not None
+    assert complete.candidate_protective_leg_count == 2
     assert len(intents) == 2
     assert owner.retained_state_counts["active_candidates"] == 1
 

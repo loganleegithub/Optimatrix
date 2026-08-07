@@ -32,9 +32,9 @@ Candidate predicate was not exposed.
 
 **Expected user-visible delta:** after complete positive option scope, Underwriting freezes the best
 formally classified legal protective leg rather than the first Radar review row. For every
-evaluable selection, Workbench shows the full
-ordered predicate-margin vector, all failed predicates, the exact selected leg, and the upgrade
-condition, plus exact `count/min/p50/max` over the bounded current rows. Paired admission/close
+evaluable selection, Workbench shows the selector-rule identity, Candidate protective-leg count,
+full ordered predicate-margin vector, all failed predicates, the exact selected leg, and the
+upgrade condition, plus exact `count/min/p50/max` over the bounded current rows. Paired admission/close
 refreshes also expose and enforce same-session,
 same-continuity-epoch, source-timestamp-skew, and receive-skew truth.
 

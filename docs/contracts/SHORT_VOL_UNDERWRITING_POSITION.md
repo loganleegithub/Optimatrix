@@ -95,10 +95,11 @@ lexicographically by:
 4. protective instrument name.
 
 The chosen long is frozen for the Episode and is not switched by later market movement. Workbench
-projects the same owner-generated six-member signed margin vector and every failed predicate. It
-also reports exact `count/min/p50/max` over the bounded current Underwriting rows; it does not retain
-Episode history. Workbench does not recalculate thresholds or replace them with one generic reason.
-Radar Top-3 order, mark IV, or official Combo state cannot affect this selection.
+projects the selector-rule identity, the number of legal quotes classified as Candidate, the same
+owner-generated six-member signed margin vector, and every failed predicate. It also reports exact
+`count/min/p50/max` over the bounded current Underwriting rows; it does not retain Episode history.
+Workbench does not recalculate thresholds or replace them with one generic reason. Radar Top-3
+order, mark IV, or official Combo state cannot affect this selection.
 
 ## Underwriting action
 

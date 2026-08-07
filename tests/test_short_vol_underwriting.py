@@ -12,6 +12,7 @@ from short_vol_underwriting import (
     CANDIDATE_INVALIDATION_REASONS,
     OUTCOME_OBJECT_KINDS,
     POSITION_CLOSE_REASONS,
+    UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
     UNDERWRITING_OBJECT_KINDS,
     AdmissionAttempt,
     AdmissionTerminalOutcome,
@@ -712,6 +713,13 @@ def test_underwriting_selector_prefers_action_class_then_full_margin_vector() ->
         minimum_net_credit_to_payoff_cap_fraction=Decimal("0.1"),
         maximum_entry_consumed_level_count=10_000,
     )
+    reordered = select_underwriting_component(
+        (watch_a, candidate, watch_b, abstain_with_more_credit),
+        maximum_underwriting_reserved_loss_usdc=Decimal("250"),
+        minimum_net_entry_credit_usdc=Decimal("15"),
+        minimum_net_credit_to_payoff_cap_fraction=Decimal("0.1"),
+        maximum_entry_consumed_level_count=10_000,
+    )
     watches = select_underwriting_component(
         (watch_b, watch_a),
         maximum_underwriting_reserved_loss_usdc=Decimal("250"),
@@ -723,8 +731,12 @@ def test_underwriting_selector_prefers_action_class_then_full_margin_vector() ->
     assert selection is not None
     assert selection.candidate.long_instrument_name == "BTC-LONG-CANDIDATE"
     assert selection.action.value == "CANDIDATE"
+    assert selection.selection_rule_identity == UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY
+    assert selection.candidate_protective_leg_count == 1
+    assert reordered == selection
     assert watches is not None
     assert watches.candidate.long_instrument_name == "BTC-LONG-WATCH-A"
+    assert watches.candidate_protective_leg_count == 0
 
 
 def _component_leg_witness(

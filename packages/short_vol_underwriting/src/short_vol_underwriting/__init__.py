@@ -42,6 +42,7 @@ from short_vol_underwriting.constants import (
     UNDERWRITING_OBJECT_KINDS,
 )
 from short_vol_underwriting.domain import (
+    UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
     AdmissionTerminalOutcome,
     CandidateState,
     CloseEconomics,
@@ -104,6 +105,7 @@ __all__ = [
     "CANDIDATE_INVALIDATION_REASONS",
     "OUTCOME_OBJECT_KINDS",
     "POSITION_CLOSE_REASONS",
+    "UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY",
     "UNDERWRITING_OBJECT_KINDS",
     "AdmissionAttempt",
     "AdmissionRefreshKind",

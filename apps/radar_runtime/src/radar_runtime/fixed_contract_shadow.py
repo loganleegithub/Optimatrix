@@ -40,6 +40,7 @@ from short_vol_underwriting import (
     SubscriptionAdmissionRefreshWitness,
     TerminalSource,
     UnderwritingComponentCandidate,
+    UnderwritingComponentSelection,
     UnderwritingFacts,
     canonical_identity,
     component_pair_witness,
@@ -151,7 +152,7 @@ class FixedContractShadowRuntimeAdapter:
         self._paired_responses: dict[
             tuple[str, str], dict[ComponentLegRole, _ComponentRestResponse]
         ] = {}
-        self._frozen_component_by_episode: dict[str, str] = {}
+        self._frozen_component_by_episode: dict[str, UnderwritingComponentSelection] = {}
         self._last_reducer: RadarReducer | None = None
 
     def bind_reducer(self, reducer: RadarReducer) -> None:
@@ -1394,21 +1395,26 @@ class FixedContractShadowRuntimeAdapter:
         catalog_complete = reducer.option_catalog.complete and bool(
             getattr(reducer, "_option_positive_scope_safe", False)
         )
-        frozen_long_name = self._frozen_component_by_episode.get(snapshot.episode_identity)
+        frozen_selection = self._frozen_component_by_episode.get(snapshot.episode_identity)
         selection_unknown_reasons: tuple[str, ...] = ()
         if (
-            frozen_long_name is None
+            frozen_selection is None
             and catalog_complete
             and short is not None
             and index is not None
         ):
-            frozen_long_name, selection_unknown_reasons = self._select_underwriting_component_long(
+            frozen_selection, selection_unknown_reasons = self._select_underwriting_component_long(
                 reducer=reducer,
                 short=short,
                 index_usdc_per_btc=index,
             )
-            if frozen_long_name is not None:
-                self._frozen_component_by_episode[snapshot.episode_identity] = frozen_long_name
+            if frozen_selection is not None:
+                self._frozen_component_by_episode[snapshot.episode_identity] = frozen_selection
+        frozen_long_name = (
+            frozen_selection.candidate.long_instrument_name
+            if frozen_selection is not None
+            else None
+        )
         long = self._option_sources.get(frozen_long_name) if frozen_long_name is not None else None
         short_identity = short.semantic_identity if short is not None else None
         long_identity = long.semantic_identity if long is not None else None
@@ -1623,6 +1629,14 @@ class FixedContractShadowRuntimeAdapter:
             component_short_quote_source=short_book_source,
             component_long_quote_source=long_book_source,
             component_pair_witness=None,
+            protective_leg_selection_rule_identity=(
+                frozen_selection.selection_rule_identity if frozen_selection is not None else None
+            ),
+            candidate_protective_leg_count=(
+                frozen_selection.candidate_protective_leg_count
+                if frozen_selection is not None
+                else None
+            ),
         )
 
     def _select_underwriting_component_long(
@@ -1631,7 +1645,7 @@ class FixedContractShadowRuntimeAdapter:
         reducer: RadarReducer,
         short: _OptionSource,
         index_usdc_per_btc: Decimal,
-    ) -> tuple[str | None, tuple[str, ...]]:
+    ) -> tuple[UnderwritingComponentSelection | None, tuple[str, ...]]:
         """Compose every evaluable legal leg into the sole Underwriting selector."""
         short_name = short.instrument.instrument_name
         target_quantity = self.owner.policies.underwriting.target_base_quantity_btc
@@ -1737,10 +1751,7 @@ class FixedContractShadowRuntimeAdapter:
             ),
             maximum_entry_consumed_level_count=policy.maximum_entry_consumed_level_count,
         )
-        return (
-            selection.candidate.long_instrument_name if selection is not None else None,
-            (),
-        )
+        return selection, ()
 
     @staticmethod
     def _selection_metadata_unknown_reasons(source: _OptionSource) -> tuple[str, ...]:

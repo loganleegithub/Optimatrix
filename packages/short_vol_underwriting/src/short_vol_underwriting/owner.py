@@ -169,6 +169,8 @@ class UnderwritingFacts:
     component_short_quote_source: SourceFact | None = None
     component_long_quote_source: SourceFact | None = None
     component_pair_witness: ComponentBookPairWitness | None = None
+    protective_leg_selection_rule_identity: str | None = None
+    candidate_protective_leg_count: int | None = None
 
     def __post_init__(self) -> None:
         require_identity(self.radar_scope_identity, "radar_scope_identity")
@@ -193,6 +195,25 @@ class UnderwritingFacts:
         ):
             if instrument_name is not None and not instrument_name:
                 raise ValueError("option instrument names must be non-empty when present")
+        provenance = (
+            self.protective_leg_selection_rule_identity,
+            self.candidate_protective_leg_count,
+        )
+        if any(value is None for value in provenance) and not all(
+            value is None for value in provenance
+        ):
+            raise ValueError("protective-leg selection provenance must be complete or absent")
+        if self.protective_leg_selection_rule_identity is not None:
+            require_identity(
+                self.protective_leg_selection_rule_identity,
+                "protective_leg_selection_rule_identity",
+            )
+            if (
+                isinstance(self.candidate_protective_leg_count, bool)
+                or not isinstance(self.candidate_protective_leg_count, int)
+                or self.candidate_protective_leg_count < 0
+            ):
+                raise ValueError("candidate protective-leg count must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -1849,6 +1870,8 @@ class FixedContractShadowOwner:
             evaluation.opportunity_identity,
             self.bindings.underwriting_policy_identity,
             self.bindings.position_policy_identity,
+            facts.protective_leg_selection_rule_identity,
+            facts.candidate_protective_leg_count,
             evaluation.economic_fingerprint,
             facts.boundary.as_object(),
         )
@@ -1872,6 +1895,10 @@ class FixedContractShadowOwner:
             "failed_predicates": list(margins.failed_predicates),
             "predicate_margin_vector": list(margins.as_vector()),
             "selected_long_leg_instrument_name": facts.long_leg_instrument_name,
+            "protective_leg_selection_rule_identity": (
+                facts.protective_leg_selection_rule_identity
+            ),
+            "candidate_protective_leg_count": facts.candidate_protective_leg_count,
             "entry_consumed_level_count": self._entry_consumed_level_count(facts),
             "evaluation_fact_boundary": facts.boundary.as_object(),
             "gross_entry_credit_usdc": economics.gross_entry_credit_usdc,

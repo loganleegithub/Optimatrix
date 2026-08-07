@@ -611,6 +611,8 @@ def test_underwriting_projection_exposes_owner_margin_vector_and_exact_failures(
                     ],
                     "predicate_margin_vector": margin_vector,
                     "selected_long_leg_instrument_name": "BTC-SELECTED-LONG",
+                    "protective_leg_selection_rule_identity": "sha256:" + "a" * 64,
+                    "candidate_protective_leg_count": 0,
                 },
             }
         ],
@@ -624,6 +626,8 @@ def test_underwriting_projection_exposes_owner_margin_vector_and_exact_failures(
     ]
     assert row["predicate_margin_vector"] == margin_vector
     assert row["long_leg_instrument_name"] == "BTC-SELECTED-LONG"
+    assert row["protective_leg_selection_rule_identity"] == "sha256:" + "a" * 64
+    assert row["candidate_protective_leg_count"] == 0
     assert row["decision_reason"] == (
         "UNDERWRITING_ACTION:ABSTAIN;FAILED:"
         "CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE,MINIMUM_NET_ENTRY_CREDIT"

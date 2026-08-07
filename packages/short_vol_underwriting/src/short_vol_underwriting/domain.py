@@ -153,6 +153,35 @@ class UnderwritingComponentSelection:
     candidate: UnderwritingComponentCandidate
     action: UnderwritingAction
     margins: UnderwritingThresholdMargins
+    selection_rule_identity: str
+    candidate_protective_leg_count: int
+
+    def __post_init__(self) -> None:
+        require_identity(self.selection_rule_identity, "selection_rule_identity")
+        if (
+            isinstance(self.candidate_protective_leg_count, bool)
+            or not isinstance(self.candidate_protective_leg_count, int)
+            or self.candidate_protective_leg_count < 0
+        ):
+            raise ValueError("candidate protective-leg count must be non-negative")
+        if self.action is UnderwritingAction.CANDIDATE and self.candidate_protective_leg_count == 0:
+            raise ValueError("Candidate selection must count its selected protective leg")
+
+
+UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY = canonical_identity(
+    "UnderwritingComponentSelectionRuleIdentity",
+    ("CANDIDATE", "WATCH", "ABSTAIN"),
+    (
+        "POSITIVE_NET_ENTRY_CREDIT",
+        "CREDIT_ABOVE_FUTURE_COST_RESERVE",
+        "UNDERWRITING_RESERVED_LOSS_WITHIN_LIMIT",
+        "MINIMUM_NET_ENTRY_CREDIT",
+        "MINIMUM_NET_CREDIT_TO_PAYOFF_CAP",
+        "ENTRY_CONSUMED_LEVEL_LIMIT",
+    ),
+    "NARROWER_WIDTH",
+    "PROTECTIVE_INSTRUMENT_NAME",
+)
 
 
 @dataclass(frozen=True)
@@ -406,7 +435,13 @@ def select_underwriting_component(
     maximum_entry_consumed_level_count: int,
 ) -> UnderwritingComponentSelection | None:
     """Select one legal leg by action class, ordered margins, then stable identity."""
-    selections: list[UnderwritingComponentSelection] = []
+    selections: list[
+        tuple[
+            UnderwritingComponentCandidate,
+            UnderwritingAction,
+            UnderwritingThresholdMargins,
+        ]
+    ] = []
     for candidate in candidates:
         economics = candidate.economics
         margins = underwriting_threshold_margins(
@@ -431,7 +466,7 @@ def select_underwriting_component(
         )
         if action is None:
             raise RuntimeError("evaluable component selection produced no action")
-        selections.append(UnderwritingComponentSelection(candidate, action, margins))
+        selections.append((candidate, action, margins))
     if not selections:
         return None
     action_rank = {
@@ -440,21 +475,37 @@ def select_underwriting_component(
         UnderwritingAction.ABSTAIN: 0,
     }
 
-    def selection_key(value: UnderwritingComponentSelection) -> tuple[object, ...]:
-        margins = value.margins
+    def selection_key(
+        value: tuple[
+            UnderwritingComponentCandidate,
+            UnderwritingAction,
+            UnderwritingThresholdMargins,
+        ],
+    ) -> tuple[object, ...]:
+        candidate, action, margins = value
         return (
-            -action_rank[value.action],
+            -action_rank[action],
             -margins.positive_net_credit_usdc,
             -margins.credit_above_future_cost_reserve_usdc,
             -margins.reserved_loss_limit_headroom_usdc,
             -margins.minimum_net_credit_headroom_usdc,
             -margins.minimum_credit_ratio_headroom,
             -margins.entry_consumed_level_headroom,
-            value.candidate.economics.width_usdc_per_btc,
-            value.candidate.long_instrument_name,
+            candidate.economics.width_usdc_per_btc,
+            candidate.long_instrument_name,
         )
 
-    return min(selections, key=selection_key)
+    candidate_protective_leg_count = sum(
+        action is UnderwritingAction.CANDIDATE for _candidate, action, _margins in selections
+    )
+    selected_candidate, selected_action, selected_margins = min(selections, key=selection_key)
+    return UnderwritingComponentSelection(
+        candidate=selected_candidate,
+        action=selected_action,
+        margins=selected_margins,
+        selection_rule_identity=UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
+        candidate_protective_leg_count=candidate_protective_leg_count,
+    )
 
 
 def classify_underwriting_action(
