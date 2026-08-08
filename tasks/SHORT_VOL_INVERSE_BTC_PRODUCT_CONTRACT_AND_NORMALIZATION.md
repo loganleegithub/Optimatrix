@@ -10,7 +10,8 @@
 
 **Base commit:** `e9ee9217be6189d4079548715b1c273813d6ef44`
 
-**Target branch/PR:** `codex/inverse-btc-product-construction` / Draft PR pending creation
+**Target branch/PR:** `codex/inverse-btc-product-construction` / Draft PR
+[#27](https://github.com/loganleegithub/Optimatrix/pull/27)
 
 **Owning authority/contract:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md),
