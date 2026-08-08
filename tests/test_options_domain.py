@@ -157,8 +157,8 @@ def test_combo_parser_requires_open_active_metadata() -> None:
         "id": "COMBO",
         "state": "active",
         "legs": [
-            {"instrument_name": "SHORT", "amount": -1},
-            {"instrument_name": "LONG", "amount": 1},
+            {"instrument_name": "BTC_USDC-SHORT", "amount": -1},
+            {"instrument_name": "BTC_USDC-LONG", "amount": 1},
         ],
     }
     metadata = {
@@ -274,12 +274,12 @@ def test_component_vertical_uses_two_full_books_two_tick_stresses_and_two_fee_ca
     option_payload_factory: OptionPayloadFactory,
 ) -> None:
     short_payload = option_payload_factory(
-        name="BTC-SHORT",
+        name="BTC_USDC-SHORT",
         strike=100_000,
         option_type="call",
     )
     long_payload = option_payload_factory(
-        name="BTC-LONG",
+        name="BTC_USDC-LONG",
         strike=101_000,
         option_type="call",
     )

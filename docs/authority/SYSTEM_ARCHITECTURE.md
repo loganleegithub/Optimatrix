@@ -6,11 +6,15 @@
 
 Optimatrix is one event-driven modular monolith. Market transport, current-state reduction, Radar,
 Underwriting, Shadow admission, Position management, bounded Shadow Case persistence, funnel
-projection, and the loopback Workbench run in one process. No network service split, database,
-message bus, replay job, generic scheduler, or browser strategy engine is part of the current slice.
+projection, and the loopback Workbench run in one process. Each process selects exactly one product
+profile at startup: `LINEAR_BTC_USDC_V1` or `INVERSE_BTC_V1`. That profile binds the public source
+universe, native/model/valuation units, one exact three-Policy chain, Case schema, funnel, and
+Workbench projection for the full run. One process never observes, aggregates, or switches between
+both products. No network service split, database, message bus, replay job, generic scheduler, or
+browser strategy engine is part of the current slice.
 
 ```text
-Deribit public WebSocket
+Deribit public WebSocket for one selected product
 → one bounded application queue
 → one synchronous causal reducer
 → Radar current state
@@ -28,10 +32,11 @@ comparisons, Challenger datasets, and promotion decisions are offline concerns.
 
 ```text
 market_monitor
-    public source parsing, clock, catalogs, books, index continuity
+    selected-product public source parsing, clock, catalogs, books, index continuity
         ↓
 options_domain
-    instruments, amount rules, target-depth arithmetic, component-book stress and fees
+    one product specification, instruments, amount rules, native target-depth/tick stress,
+    component-book fees, model normalization, and valuation conversion
         ↓
 short_vol_radar
     detector, episode, protective-leg review, official atomic diagnostic, Policy parsing
@@ -47,6 +52,11 @@ Lower packages do not import higher packages. `radar_runtime` may compose every 
 own strategy formulas.
 
 ## One causal application path
+
+Before constructing the graph, startup resolves one canonical product specification and its exact
+matching Radar, Underwriting, and Position Policies. Product/Policy mismatch fails before any
+business owner is constructed. The selected product is immutable for the runtime; there is no
+second product reducer, owner, queue, Case store, Workbench, or in-process cross-product funnel.
 
 One application-sequence allocator stamps every accepted decoded frame and transport-control fact
 with a session epoch, consecutive ingress sequence, and monotonic receive boundary. One bounded
@@ -100,6 +110,18 @@ The store owns atomic file publication, exact record validation, duplicate confl
 a minimal read path. It does not own market reconstruction, runtime recovery, qualification,
 Cohort membership, or host acceptance.
 
+The one store/reader owns exactly two compatible versions of the same Case family:
+
+- schema v3 remains the byte-exact Linear BTC-USDC record contract. It has no added keys and binds
+  its product implicitly through the fixed Linear Policy chain;
+- schema v4 is reserved for a future authorized Inverse BTC Case. It binds the product explicitly
+  and conserves BTC-native entry/close/fee/PnL facts plus separately named USD valuation facts at
+  their declared causal index boundaries.
+
+These are version branches inside one validator, not parallel business schemas or a migration of
+existing records. The current implementation closure writes neither version because live commands
+are forbidden.
+
 A new runtime never resumes another runtime's Case. If a hard crash leaves only `opened.json`, the
 offline reader reports `INCOMPLETE_UNCLEAN_EXIT`. Clean stop and handled process failure ask the
 business owner to emit a censored Outcome before process exit.
@@ -127,11 +149,12 @@ Workbench rows; it cannot create an unbounded aggregate reason-key set.
 
 For Radar knownness, the funnel uses the canonical `IndexHistoryReducer` tail state already owned
 by the settled reducer; it does not recalculate the Radar formula. The history reducer is the sole
-validator and in-memory owner of the official `public/get_index_chart_data` response. It accepts
-only bounded, strictly chronological, positive finite BTC-USDC average-price points, applies the
-configured completed-interval cutoff, exposes cadence/age/exact-suffix facts including whether the
-newest response point falls outside that cutoff, and detects completed-overlap revision. It never interpolates or fills a gap. The warmup gate is per
-Policy TTE band:
+validator and in-memory owner of the official `public/get_index_chart_data` response for the
+startup-selected product index: `btc_usdc` for Linear or `btc_usd` for Inverse. It accepts only
+bounded, strictly chronological, positive finite average-price points for that one index, applies
+the configured completed-interval cutoff, exposes cadence/age/exact-suffix facts including whether
+the newest response point falls outside that cutoff, and detects completed-overlap revision. It
+never interpolates or fills a gap. The warmup gate is per Policy TTE band:
 
 - `IndexHistoryReducer` owns causal sampling and availability; the Radar baseline calculator owns
   only multi-horizon variance selection over those samples. The streaming `IndexMinuteReducer`
@@ -148,8 +171,12 @@ Policy TTE band:
 
 
 The hard-screen calculator in `short_vol_radar` is the sole owner of target-size bid/ask use,
-official tick stress, Black inversion, TTE/Delta clue eligibility, and stressed IV/RV detector
-truth. The separate review calculator may derive semivariance/jump context, surface-lite context,
+official native tick stress, product-owned Black-model normalization, Black inversion, TTE/Delta
+clue eligibility, and stressed IV/RV detector truth. Depth walking and adverse tick stress happen
+in the exchange-native premium unit before conversion. Linear native premium is already in the
+Black strike-currency domain; Inverse BTC native premium is converted with the declared forward for
+model use. The forward used for model normalization is not the causal index used to value BTC
+cashflows. The separate review calculator may derive semivariance/jump context, surface-lite context,
 protective vertical references, and transparent attention rank from already settled current state.
 Its bounded Top 3 is display-only and cannot select an Underwriting structure or feed detector
 truth. For each active Episode, composition waits for a complete positive option scope, excludes
@@ -160,12 +187,17 @@ class `CANDIDATE > WATCH > ABSTAIN`, then the complete signed predicate-margin v
 width, and instrument name. Composition freezes that result and does not switch it during the
 Episode. Official Combo availability remains a separate diagnostic.
 
-`options_domain` owns the one component-book calculator. Entry walks short bids and long asks at
-the full target quantity, stresses short sells down one legal tick and long buys up one legal tick,
-then applies both standard fees. Close walks short asks and long bids, stresses short buys up one
-tick and long sells down one tick, then applies both fees. The same value object owns the canonical
-scalar fingerprint projection used by Underwriting and Position; no second leg-price calculator or
-schema is permitted.
+`options_domain` owns the one product specification and one component-book calculator. Entry walks
+short bids and long asks at the full target quantity, stresses short sells down one native legal
+tick and long buys up one native legal tick, then applies both standard fees in the product's native
+settlement currency. Close walks short asks and long bids, stresses short buys up one native tick
+and long sells down one native tick, then applies both native fees. The calculator also produces one
+explicit valuation projection at the causal selected-product index. Linear values remain USDC;
+Inverse native values remain BTC and their valuation fields are explicitly USD-equivalent. Strike
+width and contractual payoff cap are USD-defined; Inverse BTC liability depends on settlement
+price, while actual account margin remains `UNKNOWN`. The same product-aware value object owns the
+canonical scalar fingerprint projection used by Underwriting and Position; no second leg-price
+calculator or parallel quote schema is permitted.
 
 Candidate admission, non-Candidate selected-decision enrollment, and post-CLOSE each schedule
 exactly two bounded
@@ -224,11 +256,12 @@ immediately; pending state flushes before reconnect or stop.
 HTTP handlers read one immutable complete byte snapshot. They never traverse mutable reducer
 state, read Shadow Case files, compute strategy truth, modify Policy, contact Deribit, or expose a
 write route. The server binds only to loopback and supports the declared GET/HEAD surface. The
-snapshot contains a bounded Top-N attention view plus `ALL`, exact rank inputs, source-contract
-facts, hard-screen fields, a separate selected-decision panel with original/refreshed actions and
-margin vectors, enrollment/Outcome state, and diagnostic non-claims. Browser code only renders
-server-owned typed truth; it does not recalculate rank, IV, RV, surface, structure economics, or
-decision-control membership.
+snapshot contains the one selected product identity, public/index/native/settlement/valuation units,
+a bounded Top-N attention view plus `ALL`, exact rank inputs, source-contract facts, hard-screen
+fields, a separate selected-decision panel with original/refreshed actions and margin vectors,
+enrollment/Outcome state, and diagnostic non-claims. Browser code only renders server-owned typed
+truth; it does not infer a unit from a legacy field suffix or recalculate rank, IV, RV, surface,
+structure economics, or decision-control membership.
 
 ## Failure domains
 
@@ -255,8 +288,9 @@ Every external trust boundary has one validator:
 - durable Case records: Shadow Case store/reader.
 
 No emitted result is re-run through a second business schema, relationship graph, provenance graph,
-or validator-of-validator. Unit tests may independently exercise pure formulas; they do not create
-a second runtime truth path.
+or validator-of-validator. The one Case store/reader may select its exact v3 Linear or v4 Inverse
+version branch from the product-bound Policy chain; it never passes one record through both. Unit
+tests may independently exercise pure formulas; they do not create a second runtime truth path.
 
 ## Structural non-goals
 

@@ -15,13 +15,9 @@ from typing import Protocol, cast
 
 from market_monitor import ContinuityGap
 from market_monitor.types import SourceDataError
+from options_domain import LINEAR_BTC_USDC, OptionProductName, OptionProductSpec
 from short_vol_radar.evidence import RadarEventSink
 from short_vol_underwriting.case_store import ShadowCaseStore
-from short_vol_underwriting.constants import (
-    POSITION_POLICY_IDENTITY,
-    RADAR_POLICY_IDENTITY,
-    UNDERWRITING_POLICY_IDENTITY,
-)
 from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
 from short_vol_underwriting.identity import canonical_identity, require_code_identity
 from short_vol_underwriting.owner import FixedContractShadowOwner
@@ -36,6 +32,7 @@ from radar_runtime.deribit_public import (
 )
 from radar_runtime.fixed_contract_shadow import FixedContractShadowRuntimeAdapter
 from radar_runtime.identity import clean_code_identity, git_repository_root
+from radar_runtime.product_config import persistent_product_profile
 from radar_runtime.runtime import (
     LiveRadarRuntime,
     PublicClient,
@@ -186,6 +183,7 @@ class PersistentServiceStartup:
     code_identity: str
     runtime_identity: str
     startup_monotonic_ms: int
+    product: OptionProductSpec
     policies: PolicyChain
     runtime_bindings: RuntimeBindings
     workbench_host: str
@@ -234,6 +232,7 @@ def prepare_persistent_service_startup(
     process_cwd: Path,
     workbench_host: str,
     workbench_port: int,
+    product: OptionProductName | str | OptionProductSpec = LINEAR_BTC_USDC,
     code_identity: str | None = None,
     startup_monotonic_ms: int | None = None,
     process_id: int | None = None,
@@ -255,14 +254,20 @@ def prepare_persistent_service_startup(
         process_id=pid,
         nonce=nonce,
     )
+    profile = persistent_product_profile(product)
+    selected_product = profile.product
     policies = load_policy_chain(
-        radar_path=repository / "policies/short-vol-fixed-public-shadow-radar.json",
-        underwriting_path=(repository / "policies/short-vol-fixed-public-shadow-underwriting.json"),
-        position_path=(repository / "policies/short-vol-fixed-public-shadow-position.json"),
-        radar_identity=RADAR_POLICY_IDENTITY,
-        underwriting_identity=UNDERWRITING_POLICY_IDENTITY,
-        position_identity=POSITION_POLICY_IDENTITY,
+        radar_path=repository / "policies" / profile.radar_policy_filename,
+        underwriting_path=repository / "policies" / profile.underwriting_policy_filename,
+        position_path=repository / "policies" / profile.position_policy_filename,
+        radar_identity=profile.radar_policy_identity,
+        underwriting_identity=profile.underwriting_policy_identity,
+        position_identity=profile.position_policy_identity,
     )
+    if policies.radar.product_spec_identity != selected_product.identity:
+        raise PersistentServiceStartupError(
+            "selected option product does not match the frozen Radar Policy"
+        )
     run_directory = resolved_state_root / "runs" / runtime_identity.removeprefix("sha256:")
     try:
         run_directory.mkdir(parents=True, exist_ok=False)
@@ -287,6 +292,7 @@ def prepare_persistent_service_startup(
         code_identity=resolved_code_identity,
         runtime_identity=runtime_identity,
         startup_monotonic_ms=start_ms,
+        product=selected_product,
         policies=policies,
         runtime_bindings=runtime_bindings,
         workbench_host=validated_host,
@@ -315,6 +321,7 @@ def build_persistent_service_composition(
     snapshot_store = SnapshotStore(
         initial_workbench_document(
             startup.runtime_bindings,
+            product=startup.product,
             recorded_monotonic_ms=startup.startup_monotonic_ms,
         )
     )
@@ -333,6 +340,7 @@ def build_persistent_service_composition(
     )
     runtime = LiveRadarRuntime(
         policy=startup.policies.radar,
+        product=startup.product,
         code_identity=startup.code_identity,
         event_sink=radar_sink,
         runtime_identity=startup.runtime_identity,
@@ -546,6 +554,7 @@ async def run_persistent_service(
     process_cwd: Path,
     workbench_host: str,
     workbench_port: int,
+    product: OptionProductName | str | OptionProductSpec = LINEAR_BTC_USDC,
 ) -> tuple[PersistentServiceStartup, Mapping[str, object]]:
     repository = git_repository_root(process_cwd)
     resolved_state_root = _prepare_state_root(state_root, repository)
@@ -556,6 +565,7 @@ async def run_persistent_service(
             process_cwd=repository,
             workbench_host=workbench_host,
             workbench_port=workbench_port,
+            product=product,
         )
         composition = build_persistent_service_composition(startup)
         summary = await run_persistent_service_composition(composition)

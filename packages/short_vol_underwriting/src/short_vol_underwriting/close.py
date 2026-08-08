@@ -5,7 +5,12 @@ from decimal import Decimal
 from enum import StrEnum
 from types import MappingProxyType
 
-from options_domain import ComponentBookQuoteKind, ComponentBookVerticalQuote
+from options_domain import (
+    ComponentBookQuoteKind,
+    ComponentBookVerticalQuote,
+    OptionProductSpec,
+    component_quote_matches_product_contract,
+)
 
 from short_vol_underwriting.admission import (
     AdmissionRefreshWitness,
@@ -209,6 +214,11 @@ def evaluate_close_opportunity(
     fee_rate_index_fraction: Decimal,
     close_index_usdc_per_btc: Decimal | None,
     net_entry_credit_usdc: Decimal,
+    expected_product: OptionProductSpec,
+    entry_product_spec_identity: str | None,
+    expected_short_leg_instrument_name: str | None,
+    expected_long_leg_instrument_name: str | None,
+    expected_width_usdc_per_btc: Decimal | None,
     component_quote: ComponentBookVerticalQuote | None = None,
 ) -> CloseOpportunity:
     """Apply the frozen eligibility rules without consulting ignored later facts."""
@@ -225,6 +235,12 @@ def evaluate_close_opportunity(
         return CloseOpportunity(
             CloseOpportunityEligibility.UNKNOWN,
             "CLOSE_QUOTE_UNKNOWN",
+            None,
+        )
+    if expected_product.is_inverse and quote_state is CloseQuoteState.ATOMIC_COMBO_CLOSE_QUOTE:
+        return CloseOpportunity(
+            CloseOpportunityEligibility.UNKNOWN,
+            "INVERSE_ATOMIC_ECONOMICS_UNSUPPORTED",
             None,
         )
     commissions = (
@@ -258,6 +274,34 @@ def evaluate_close_opportunity(
             return CloseOpportunity(
                 CloseOpportunityEligibility.UNKNOWN,
                 "COMPONENT_CLOSE_QUOTE_UNKNOWN",
+                None,
+            )
+        if (
+            entry_product_spec_identity != expected_product.identity
+            or component_quote.valuation_index_price != close_index_usdc_per_btc
+            or not component_quote_matches_product_contract(
+                component_quote,
+                product=expected_product,
+                fee_rate=fee_rate_index_fraction,
+            )
+        ):
+            return CloseOpportunity(
+                CloseOpportunityEligibility.UNKNOWN,
+                "COMPONENT_PRODUCT_MISMATCH",
+                None,
+            )
+        if (
+            expected_short_leg_instrument_name is None
+            or expected_long_leg_instrument_name is None
+            or expected_width_usdc_per_btc is None
+            or component_quote.full_quantity_btc != full_quantity_btc
+            or component_quote.short_leg.instrument_name != expected_short_leg_instrument_name
+            or component_quote.long_leg.instrument_name != expected_long_leg_instrument_name
+            or component_quote.width_usdc_per_btc != expected_width_usdc_per_btc
+        ):
+            return CloseOpportunity(
+                CloseOpportunityEligibility.UNKNOWN,
+                "COMPONENT_POSITION_MISMATCH",
                 None,
             )
         economics = compute_component_close_economics(

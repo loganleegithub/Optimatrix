@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import Protocol, cast
 
 from market_monitor import ContinuityGap, TimeInterval
+from options_domain import LINEAR_BTC_USDC, OptionProductSpec, product_for_identity
 from short_vol_radar.black import DecimalInterval
 from short_vol_radar.detector import DetectorState
 from short_vol_radar.evidence import CoverageBlockingReason, CoverageState
@@ -30,7 +31,7 @@ from short_vol_underwriting.policy import PolicyChain
 from radar_runtime.funnel import FunnelSnapshot, FunnelTracker
 from radar_runtime.runtime import CausalCommit, RadarReducer
 
-WORKBENCH_SCHEMA_VERSION = 4
+WORKBENCH_SCHEMA_VERSION = 5
 WORKBENCH_PUBLICATION_INTERVAL_MS = 500
 SIMULATION_LABEL = "模拟入场, 不是订单或成交"
 EMPTY_PANEL_LABEL = "无已结算对象; 这不是业务零值"
@@ -324,6 +325,7 @@ class WorkbenchPublisher:
         self.store = store
         self.bindings = bindings
         self.policies = policies
+        self.product = product_for_identity(policies.radar.product_spec_identity)
         self.shadow_state = shadow_state
         self.shadow_metadata = shadow_metadata
         self.funnel_tracker = FunnelTracker()
@@ -338,7 +340,9 @@ class WorkbenchPublisher:
         )
         self._published_status_key = _status_key(self._status)
         self._last_publication_monotonic_ms = initial_recorded_monotonic_ms
-        self._last_business: Mapping[str, object] = MappingProxyType(_empty_business_projection())
+        self._last_business: Mapping[str, object] = MappingProxyType(
+            _empty_business_projection(self.product)
+        )
         self._latest_reducer: RadarReducer | None = None
         self._latest_commit: CausalCommit | None = None
         self._dirty = False
@@ -356,6 +360,7 @@ class WorkbenchPublisher:
                 "runtime_identity",
                 "code_identity",
                 "policy_identities",
+                "product",
                 "non_claims",
                 "underwriting",
                 "shadow_entries",
@@ -523,6 +528,7 @@ class WorkbenchPublisher:
                 "underwriting": self.bindings.underwriting_policy_identity,
                 "position": self.bindings.position_policy_identity,
             },
+            "product": _product_object(self.product),
             "service": _status_object(status),
             **dict(business),
             "non_claims": list(WORKBENCH_NON_CLAIMS),
@@ -532,6 +538,7 @@ class WorkbenchPublisher:
 def initial_workbench_document(
     bindings: RuntimeBindings,
     *,
+    product: OptionProductSpec = LINEAR_BTC_USDC,
     recorded_monotonic_ms: int = 0,
 ) -> dict[str, object]:
     status = ServiceStatus(
@@ -552,8 +559,9 @@ def initial_workbench_document(
             "underwriting": bindings.underwriting_policy_identity,
             "position": bindings.position_policy_identity,
         },
+        "product": _product_object(product),
         "service": _status_object(status),
-        **_empty_business_projection(),
+        **_empty_business_projection(product),
         "non_claims": list(WORKBENCH_NON_CLAIMS),
     }
 
@@ -664,7 +672,9 @@ def _build_business_projection(
             "global_continuity_epoch": reducer.current_global_continuity_epoch,
             "disconnect_records": _disconnect_records(reducer),
             "index_history": {
-                "source": "DERIBIT_PUBLIC_GET_INDEX_CHART_DATA_BTC_USDC_1D",
+                "source": (
+                    f"DERIBIT_PUBLIC_GET_INDEX_CHART_DATA_{reducer.product.price_index.upper()}_1D"
+                ),
                 "value_semantics": "AVERAGE_INDEX_PRICE",
                 "availability": (
                     history_state.availability.value if history_state is not None else "UNKNOWN"
@@ -833,6 +843,7 @@ def _radar_rows(
     contexts = review_contexts or {}
     trusted_interval = trusted
     for name, instrument in sorted(reducer.options.items()):
+        product = getattr(instrument, "product", LINEAR_BTC_USDC)
         result = reducer.results.get(name)
         tracker = reducer.trackers.get(name)
         calculation = result.calculation if result is not None else None
@@ -850,10 +861,15 @@ def _radar_rows(
         rows.append(
             {
                 "instrument_name": name,
+                "product_spec_identity": product.identity,
+                "product_name": product.name.value,
+                "native_premium_currency": product.native_premium_currency,
+                "valuation_currency": product.valuation_currency,
+                "strike_currency": product.strike_currency,
                 "expiration_timestamp_ms": instrument.expiration_timestamp_ms,
                 "tte_interval_ms": tte,
                 "option_type": instrument.option_type.value,
-                "strike_usdc_per_btc": str(instrument.strike),
+                "strike_price": str(instrument.strike),
                 "detector_state": (
                     result.detector_state.value if result is not None else "UNKNOWN"
                 ),
@@ -878,21 +894,81 @@ def _radar_rows(
                 "delta_interval": (
                     _decimal_interval(calculation.delta) if calculation is not None else None
                 ),
-                "executable_sell_price_usdc_per_btc": (
+                "native_executable_sell_price": (
+                    str(
+                        getattr(
+                            calculation,
+                            "native_executable_sell_price",
+                            calculation.executable_sell_price_usdc,
+                        )
+                    )
+                    if calculation is not None
+                    else None
+                ),
+                "native_executable_buy_price": (
+                    str(
+                        getattr(
+                            calculation,
+                            "native_executable_buy_price",
+                            calculation.executable_buy_price_usdc,
+                        )
+                    )
+                    if calculation is not None
+                    else None
+                ),
+                "native_one_tick_stressed_sell_price": (
+                    str(
+                        getattr(
+                            calculation,
+                            "native_stressed_executable_sell_price",
+                            calculation.stressed_executable_sell_price_usdc,
+                        )
+                    )
+                    if calculation is not None
+                    else None
+                ),
+                "native_price_tick": (
+                    str(getattr(calculation, "native_price_tick", calculation.price_tick_usdc))
+                    if calculation is not None
+                    else None
+                ),
+                "native_target_spread": (
+                    str(
+                        getattr(
+                            calculation,
+                            "native_target_spread",
+                            calculation.target_spread_usdc,
+                        )
+                    )
+                    if calculation is not None
+                    else None
+                ),
+                "model_conversion_forward": (
+                    str(
+                        getattr(
+                            calculation,
+                            "model_conversion_forward",
+                            getattr(calculation, "forward_usdc", None),
+                        )
+                    )
+                    if calculation is not None
+                    else None
+                ),
+                "model_executable_sell_price": (
                     str(calculation.executable_sell_price_usdc) if calculation is not None else None
                 ),
-                "executable_buy_price_usdc_per_btc": (
+                "model_executable_buy_price": (
                     str(calculation.executable_buy_price_usdc) if calculation is not None else None
                 ),
-                "one_tick_stressed_sell_price_usdc_per_btc": (
+                "model_one_tick_stressed_sell_price": (
                     str(calculation.stressed_executable_sell_price_usdc)
                     if calculation is not None
                     else None
                 ),
-                "price_tick_usdc": (
+                "model_price_tick": (
                     str(calculation.price_tick_usdc) if calculation is not None else None
                 ),
-                "target_spread_usdc": (
+                "model_target_spread": (
                     str(calculation.target_spread_usdc) if calculation is not None else None
                 ),
                 "target_spread_ticks": (
@@ -1116,8 +1192,8 @@ def _underwriting_rows(
                 "combo_instrument_name": display.get("combo_instrument_name"),
                 "expiry_timestamp_ms": display.get("expiry_timestamp_ms"),
                 "option_type": display.get("option_type"),
-                "short_strike_usdc_per_btc": display.get("short_strike_usdc_per_btc"),
-                "long_strike_usdc_per_btc": display.get("long_strike_usdc_per_btc"),
+                "short_strike_price": display.get("short_strike_usdc_per_btc"),
+                "long_strike_price": display.get("long_strike_usdc_per_btc"),
                 "target_quantity_btc": display.get("target_quantity_btc"),
                 "underwriting_availability_evaluation_identity": availability_identity,
                 "underwriting_action_identity": action_identity,
@@ -1129,21 +1205,31 @@ def _underwriting_rows(
                     "atomic_state_diagnostic", "NOT_EVALUATED"
                 ),
                 "action": payload.get("economic_action"),
-                "gross_entry_credit_usdc": payload.get("gross_entry_credit_usdc"),
-                "entry_fee_reserve_usdc": payload.get("entry_fee_reserve_usdc"),
-                "net_entry_credit_usdc": payload.get("net_entry_credit_usdc"),
-                "contractual_payoff_max_loss_ex_fees_usdc": payload.get(
+                "product_spec_identity": payload.get("product_spec_identity"),
+                "product_name": payload.get("product_name"),
+                "native_premium_currency": payload.get("native_premium_currency"),
+                "valuation_currency": payload.get("valuation_currency"),
+                "native_gross_entry_credit": payload.get("native_gross_entry_credit"),
+                "native_entry_fee_reserve": payload.get("native_entry_fee_reserve"),
+                "native_net_entry_credit": payload.get("native_net_entry_credit"),
+                "entry_valuation_index_price": payload.get("entry_valuation_index_price"),
+                "gross_entry_credit_valuation": payload.get("gross_entry_credit_usdc"),
+                "entry_fee_reserve_valuation": payload.get("entry_fee_reserve_usdc"),
+                "net_entry_credit_valuation": payload.get("net_entry_credit_usdc"),
+                "entry_boundary_valued_payoff_loss_ex_fees_valuation": payload.get(
                     "contractual_payoff_max_loss_ex_fees_usdc"
                 ),
-                "future_cost_reserve_usdc": payload.get("future_cost_reserve_usdc"),
-                "underwriting_reserved_loss_usdc": payload.get("underwriting_reserved_loss_usdc"),
+                "future_cost_reserve_valuation": payload.get("future_cost_reserve_usdc"),
+                "underwriting_reserved_loss_valuation": payload.get(
+                    "underwriting_reserved_loss_usdc"
+                ),
                 "failed_predicates": payload.get("failed_predicates", []),
                 "predicate_margin_vector": payload.get("predicate_margin_vector", []),
                 "protective_leg_selection_rule_identity": payload.get(
                     "protective_leg_selection_rule_identity"
                 ),
                 "candidate_protective_leg_count": payload.get("candidate_protective_leg_count"),
-                "reserve_breakdown_usdc": {
+                "reserve_breakdown_valuation": {
                     "path": str(policies.underwriting.path_risk_reserve_usdc),
                     "jump": str(policies.underwriting.jump_risk_reserve_usdc),
                     "tail": str(policies.underwriting.tail_risk_reserve_usdc),
@@ -1412,8 +1498,14 @@ def _decision_control_rows(
                     if enrollment is not None
                     else "NOT_OPENED"
                 ),
-                "net_pnl_after_public_standard_fee_reserve_usdc": outcome_payload.get(
+                "public_quote_net_pnl_valuation": outcome_payload.get(
                     "net_pnl_after_public_standard_fee_reserve_usdc"
+                ),
+                "native_premium_currency": outcome_payload.get("native_premium_currency"),
+                "native_net_pnl": outcome_payload.get("native_net_pnl"),
+                "boundary_valued_net_pnl_usd": outcome_payload.get("boundary_valued_net_pnl_usd"),
+                "exit_valued_native_net_pnl_usd": outcome_payload.get(
+                    "exit_valued_native_net_pnl_usd"
                 ),
                 "non_claims": enrollment_payload.get("non_claims")
                 or selection_payload.get("non_claims", []),
@@ -1464,10 +1556,15 @@ def _shadow_rows(
                 "execution_model": None,
                 "entry_component_pair_identity": None,
                 "entry_component_legs": None,
-                "simulated_entry_price_usdc_per_btc": None,
+                "simulated_entry_price_valuation_per_btc": None,
                 "simulated_entry_price_availability": "UNKNOWN",
                 "simulated_entry_price_basis": None,
-                "simulated_entry_credit_usdc": None,
+                "simulated_entry_credit_valuation": None,
+                "native_premium_currency": None,
+                "native_gross_entry_credit": None,
+                "native_entry_fee_reserve": None,
+                "native_net_entry_credit": None,
+                "entry_valuation_index_price": None,
                 "target_quantity_btc": str(policies.underwriting.target_base_quantity_btc),
                 "entry_consumed_levels": None,
                 "no_entry_reason": (
@@ -1508,10 +1605,15 @@ def _shadow_rows(
                 "execution_model": None,
                 "entry_component_pair_identity": None,
                 "entry_component_legs": None,
-                "simulated_entry_price_usdc_per_btc": None,
+                "simulated_entry_price_valuation_per_btc": None,
                 "simulated_entry_price_availability": "UNKNOWN",
                 "simulated_entry_price_basis": None,
-                "simulated_entry_credit_usdc": None,
+                "simulated_entry_credit_valuation": None,
+                "native_premium_currency": None,
+                "native_gross_entry_credit": None,
+                "native_entry_fee_reserve": None,
+                "native_net_entry_credit": None,
+                "entry_valuation_index_price": None,
                 "target_quantity_btc": str(policies.underwriting.target_base_quantity_btc),
                 "entry_consumed_levels": None,
                 "no_entry_reason": (
@@ -1548,8 +1650,10 @@ def _shadow_rows(
                 "execution_model": entry_payload.get("execution_model"),
                 "entry_component_pair_identity": entry_payload.get("entry_component_pair_identity"),
                 "entry_component_pair_timing": entry_payload.get("entry_component_pair_timing"),
-                "entry_component_legs": entry_payload.get("entry_component_legs"),
-                "simulated_entry_price_usdc_per_btc": entry_price,
+                "entry_component_legs": _workbench_component_legs(
+                    entry_payload.get("entry_component_legs")
+                ),
+                "simulated_entry_price_valuation_per_btc": entry_price,
                 "simulated_entry_price_availability": (
                     "AVAILABLE_FROM_SHADOW_ENTRY_STRESSED_COMPONENT_LEGS"
                     if entry_price is not None
@@ -1560,7 +1664,12 @@ def _shadow_rows(
                     if entry_price is not None
                     else None
                 ),
-                "simulated_entry_credit_usdc": entry_payload.get("gross_entry_credit_usdc"),
+                "simulated_entry_credit_valuation": entry_payload.get("gross_entry_credit_usdc"),
+                "native_premium_currency": entry_payload.get("native_premium_currency"),
+                "native_gross_entry_credit": entry_payload.get("native_gross_entry_credit"),
+                "native_entry_fee_reserve": entry_payload.get("native_entry_fee_reserve"),
+                "native_net_entry_credit": entry_payload.get("native_net_entry_credit"),
+                "entry_valuation_index_price": entry_payload.get("entry_valuation_index_price"),
                 "target_quantity_btc": target_quantity,
                 "no_entry_reason": None,
                 "simulation_label": SIMULATION_LABEL,
@@ -1666,14 +1775,14 @@ def _position_rows(
             {
                 "shadow_entry_identity": entry_identity,
                 "position_action": action_payload.get("serialized_action", "UNKNOWN"),
-                "remaining_premium_usdc": remaining_premium,
+                "remaining_premium_valuation": remaining_premium,
                 "remaining_premium_availability": (
                     "AVAILABLE_FROM_PERSISTED_COMPONENT_CLOSE_ECONOMICS"
                     if remaining_premium is not None
                     else "UNKNOWN"
                 ),
                 "remaining_premium_basis": (
-                    "MAX_ZERO_NEGATIVE_GROSS_CLOSE_CASHFLOW_USDC"
+                    "MAX_ZERO_NEGATIVE_GROSS_CLOSE_CASHFLOW_VALUATION"
                     if remaining_premium is not None
                     else None
                 ),
@@ -1684,9 +1793,21 @@ def _position_rows(
                 "component_pair_business_state": (
                     "UNKNOWN" if component_pair_unknown_reasons else None
                 ),
-                "current_close_debit_usdc": opportunity_payload.get("net_close_debit_usdc"),
-                "projected_shadow_pnl_usdc": opportunity_payload.get(
+                "current_close_debit_valuation": opportunity_payload.get("net_close_debit_usdc"),
+                "projected_shadow_pnl_valuation": opportunity_payload.get(
                     "projected_shadow_net_pnl_usdc"
+                ),
+                "native_premium_currency": opportunity_payload.get("native_premium_currency")
+                or entry_payload.get("native_premium_currency"),
+                "native_net_close_cashflow": opportunity_payload.get("native_net_close_cashflow"),
+                "native_projected_shadow_net_pnl": opportunity_payload.get(
+                    "native_projected_shadow_net_pnl"
+                ),
+                "boundary_valued_projected_shadow_net_pnl_usd": opportunity_payload.get(
+                    "boundary_valued_projected_shadow_net_pnl_usd"
+                ),
+                "exit_valued_native_projected_pnl_usd": opportunity_payload.get(
+                    "exit_valued_native_projected_pnl_usd"
                 ),
                 "hard_close_boundary_ms": hard_close_boundary_ms,
                 "hard_close_countdown_interval_ms": countdown,
@@ -1731,10 +1852,16 @@ def _outcome_rows(
                 ),
                 "selected_exit_identity": outcome_payload.get("selected_exit_identity"),
                 "censor_mask": outcome_payload.get("censor_mask"),
-                "net_pnl_after_public_standard_fee_reserve_usdc": (
+                "public_quote_net_pnl_valuation": (
                     outcome_payload.get("net_pnl_after_public_standard_fee_reserve_usdc")
                 ),
-                "actual_pnl_usdc": outcome_payload.get("actual_pnl_usdc"),
+                "native_premium_currency": outcome_payload.get("native_premium_currency"),
+                "native_net_pnl": outcome_payload.get("native_net_pnl"),
+                "boundary_valued_net_pnl_usd": outcome_payload.get("boundary_valued_net_pnl_usd"),
+                "exit_valued_native_net_pnl_usd": outcome_payload.get(
+                    "exit_valued_native_net_pnl_usd"
+                ),
+                "actual_pnl": outcome_payload.get("actual_pnl_usdc"),
                 "actual_availability": outcome_payload.get("actual_availability", "UNKNOWN"),
             }
         )
@@ -1811,7 +1938,35 @@ def _status_key(status: ServiceStatus) -> tuple[object, ...]:
     )
 
 
-def _empty_business_projection() -> dict[str, object]:
+def _product_object(product: OptionProductSpec) -> dict[str, object]:
+    return {
+        "product_spec_identity": product.identity,
+        "name": product.name.value,
+        "market_family": product.market_family,
+        "economic_semantics_version": product.economic_semantics_version,
+        "case_schema_version": product.case_schema_version,
+        "public_currency": product.public_currency,
+        "base_currency": product.base_currency,
+        "quote_currency": product.quote_currency,
+        "settlement_currency": product.settlement_currency,
+        "counter_currency": product.counter_currency,
+        "price_index": product.price_index,
+        "instrument_type": product.instrument_type,
+        "native_premium_currency": product.native_premium_currency,
+        "valuation_currency": product.valuation_currency,
+        "strike_currency": product.strike_currency,
+        "model_premium_rule": product.model_premium_rule,
+        "valuation_rule": product.valuation_rule,
+        "fee_rule": product.fee_rule,
+        "native_settlement_payoff_rule": product.native_settlement_payoff_rule,
+        "native_settlement_liability_profile": product.native_settlement_liability_profile,
+        "actual_account_margin_requirement": None,
+        "actual_account_margin_availability": product.actual_account_margin_availability,
+        "actual_account_margin_reason": product.actual_account_margin_reason,
+    }
+
+
+def _empty_business_projection(product: OptionProductSpec) -> dict[str, object]:
     empty = {
         "panel_state": PanelState.EMPTY_NO_SETTLED_OBJECT.value,
         "empty_label": EMPTY_PANEL_LABEL,
@@ -1838,7 +1993,7 @@ def _empty_business_projection() -> dict[str, object]:
             "global_continuity_epoch": 1,
             "disconnect_records": [],
             "index_history": {
-                "source": "DERIBIT_PUBLIC_GET_INDEX_CHART_DATA_BTC_USDC_1D",
+                "source": (f"DERIBIT_PUBLIC_GET_INDEX_CHART_DATA_{product.price_index.upper()}_1D"),
                 "value_semantics": "AVERAGE_INDEX_PRICE",
                 "availability": "UNKNOWN",
                 "reason": "NOT_STARTED",
@@ -2010,6 +2165,60 @@ def _component_vertical_credit_per_btc(legs: object, full_quantity: object) -> s
     return canonical_decimal(short_price - long_price)
 
 
+def _workbench_component_legs(legs: object) -> list[dict[str, object]] | None:
+    """Project legacy runtime component fields into Workbench-owned product-neutral names."""
+    if legs is None:
+        return None
+    if not isinstance(legs, list):
+        return None
+    projected: list[dict[str, object]] = []
+    for leg in legs:
+        if not isinstance(leg, Mapping):
+            return None
+        projected.append(
+            {
+                "canonical_leg_role": leg.get("canonical_leg_role"),
+                "instrument_name": leg.get("instrument_name"),
+                "action": leg.get("action"),
+                "native_premium_currency": leg.get("native_premium_currency"),
+                "valuation_index_price": leg.get("valuation_index_price"),
+                "raw_consumed_levels_native": leg.get("raw_consumed_levels_native"),
+                "raw_vwap_native": leg.get("raw_vwap_native"),
+                "stressed_consumed_levels_native": leg.get("stressed_consumed_levels_native"),
+                "stressed_vwap_native": leg.get("stressed_vwap_native"),
+                "native_fee_reserve": leg.get("native_fee_reserve"),
+                "raw_consumed_levels_valuation": _workbench_valuation_levels(
+                    leg.get("raw_consumed_levels")
+                ),
+                "raw_vwap_valuation_per_btc": leg.get("raw_vwap_usdc_per_btc"),
+                "stressed_consumed_levels_valuation": _workbench_valuation_levels(
+                    leg.get("stressed_consumed_levels")
+                ),
+                "stressed_vwap_valuation_per_btc": leg.get("stressed_vwap_usdc_per_btc"),
+                "fee_reserve_valuation": leg.get("fee_reserve_usdc"),
+            }
+        )
+    return projected
+
+
+def _workbench_valuation_levels(levels: object) -> list[dict[str, object]] | None:
+    if levels is None:
+        return None
+    if not isinstance(levels, list):
+        return None
+    projected: list[dict[str, object]] = []
+    for level in levels:
+        if not isinstance(level, Mapping):
+            return None
+        projected.append(
+            {
+                "price_valuation_per_btc": level.get("price_usdc_per_btc"),
+                "amount_btc": level.get("amount_btc"),
+            }
+        )
+    return projected
+
+
 def _runtime_boundary_object(commit: CausalCommit) -> dict[str, object]:
     boundary = commit.boundary
     return {
@@ -2107,7 +2316,7 @@ HTML = """<!doctype html>
 
 CSS = """*{box-sizing:border-box}[hidden]{display:none!important}html,body{max-width:100%;overflow-x:hidden}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3}header,footer{padding:20px 5vw;background:#161b22}main{max-width:1600px;margin:0 auto;padding:20px 5vw}section{min-width:0;margin:0 0 24px;padding:18px;background:#161b22;border:1px solid #30363d;border-radius:10px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.card{min-width:0;padding:12px;background:#0d1117;border:1px solid #30363d;border-radius:8px;overflow-wrap:anywhere}.label{color:#8b949e;font-size:.85rem}.value{font-weight:650;margin-top:4px}.warning{padding:10px;border:1px solid #d29922;background:#2d2308;border-radius:8px}.system-details{margin-top:12px}.system-details>summary{cursor:pointer;color:#58a6ff}.system-details>.grid{margin-top:10px}.panel-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px}.panel-toolbar label{color:#8b949e}.panel-toolbar select{margin-left:8px;padding:6px 8px;color:#e6edf3;background:#0d1117;border:1px solid #30363d;border-radius:6px}.table-scroll{max-width:100%;overflow-x:auto}.table-scroll table{min-width:900px;width:100%;border-collapse:collapse;font-size:.88rem}th,td{padding:8px;border-bottom:1px solid #30363d;text-align:left;vertical-align:top}th{position:sticky;top:0;color:#8b949e;background:#161b22;z-index:1}.empty{color:#d29922}.UNKNOWN,.STALE,.INTERRUPTED,.state-unknown{color:#f0883e}.CURRENT,.PROVEN_ZERO,.ANOMALY_ACTIVE,.EVALUABLE{color:#3fb950}.DEGRADED,.NOT_EVALUATED{color:#d29922}.na{color:#8b949e}.raw-details{max-width:360px}.raw-details summary{cursor:pointer;color:#58a6ff}.raw-details dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 8px}.raw-details dt{color:#8b949e}.raw-details dd{margin:0;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem}@media(max-width:800px){header,footer,main{padding-left:16px;padding-right:16px}.grid{grid-template-columns:1fr}}"""
 
-JS = r"""const SUPPORTED_SCHEMA_VERSION = 4;
+JS = r"""const SUPPORTED_SCHEMA_VERSION = 5;
 const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;',
   '<': '&lt;',
@@ -2229,11 +2438,11 @@ const radarCellValue = (row, field, value) => {
   if (field === 'expiration_timestamp_ms') return formatEpochMs(value);
   if (field === 'tte_interval_ms') return formatDurationInterval(value);
   if (field === 'attention_rank') return isMissing(value) ? 'N/A' : `#${formatDecimal(value)}`;
-  if (field === 'strike_usdc_per_btc') {
+  if (field === 'strike_price') {
     return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
   }
-  if (['executable_sell_price_usdc_per_btc', 'executable_buy_price_usdc_per_btc',
-      'one_tick_stressed_sell_price_usdc_per_btc'].includes(field)) {
+  if (['model_executable_sell_price', 'model_executable_buy_price',
+      'model_one_tick_stressed_sell_price'].includes(field)) {
     return isMissing(value) ? unavailableRadarCalculation(row) : formatDecimal(value);
   }
   if (['executable_iv_interval', 'executable_ask_iv_interval',
@@ -2306,7 +2515,7 @@ const underwritingReasonText = (row, value) => {
 };
 const underwritingCellValue = (row, field, value) => {
   if (field === 'expiry_timestamp_ms') return isMissing(value) ? 'UNKNOWN' : formatEpochMs(value);
-  if (field.endsWith('_strike_usdc_per_btc') || field === 'target_quantity_btc') {
+  if (field.endsWith('_strike_price') || field === 'target_quantity_btc') {
     return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
   }
   if (field === 'radar_scope_or_short_leg_identity' || field.endsWith('_identity')) {
@@ -2314,9 +2523,10 @@ const underwritingCellValue = (row, field, value) => {
   }
   if (field === 'decision_reason') return underwritingReasonText(row, value);
   const unavailableFields = new Set([
-    'action', 'gross_entry_credit_usdc', 'entry_fee_reserve_usdc',
-    'net_entry_credit_usdc', 'contractual_payoff_max_loss_ex_fees_usdc',
-    'future_cost_reserve_usdc', 'underwriting_reserved_loss_usdc',
+    'action', 'gross_entry_credit_valuation', 'entry_fee_reserve_valuation',
+    'net_entry_credit_valuation',
+    'entry_boundary_valued_payoff_loss_ex_fees_valuation',
+    'future_cost_reserve_valuation', 'underwriting_reserved_loss_valuation',
     'candidate_lifecycle', 'candidate_still_valid', 'candidate_invalidation_reason'
   ]);
   if (unavailableFields.has(field) && isMissing(value)) {
@@ -2327,8 +2537,8 @@ const underwritingCellValue = (row, field, value) => {
 const shadowCellValue = (row, field, value) => {
   if (field.endsWith('_identity')) return isMissing(value) ? 'N/A' : shortIdentity(value);
   if (field === 'target_quantity_btc') return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
-  if (field === 'simulated_entry_price_usdc_per_btc' ||
-      field === 'simulated_entry_credit_usdc') {
+  if (field === 'simulated_entry_price_valuation_per_btc' ||
+      field === 'simulated_entry_credit_valuation') {
     return isMissing(value)
       ? (isMissing(row.shadow_entry_identity) ? 'N/A' : 'UNKNOWN')
       : formatDecimal(value);
@@ -2342,15 +2552,15 @@ const shadowCellValue = (row, field, value) => {
 const positionCellValue = (row, field, value) => {
   if (field.endsWith('_identity')) return isMissing(value) ? 'N/A' : shortIdentity(value);
   if (field === 'hard_close_countdown_interval_ms') return formatDurationInterval(value);
-  if (field.endsWith('_usdc')) return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
+  if (field.endsWith('_valuation')) return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
   return displayText(value);
 };
 const outcomeCellValue = (row, field, value) => {
   if (field.endsWith('_identity')) return isMissing(value) ? 'N/A' : shortIdentity(value);
-  if (field === 'actual_pnl_usdc' && isMissing(value)) {
+  if (field === 'actual_pnl' && isMissing(value)) {
     return 'N/A — public Shadow 无订单、成交或实际持仓';
   }
-  if (field.endsWith('_usdc')) return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
+  if (field.endsWith('_valuation')) return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
   return displayText(value);
 };
 const radarPriority = {ANOMALY_ACTIVE: 0, UNKNOWN: 1, NO_ANOMALY: 2};
@@ -2362,7 +2572,7 @@ const orderedRadarRows = rows => [...rows].sort((left, right) =>
   (radarPriority[left.detector_state] ?? 9) - (radarPriority[right.detector_state] ?? 9) ||
   Number(left.expiration_timestamp_ms || 0) - Number(right.expiration_timestamp_ms || 0) ||
   String(left.option_type || '').localeCompare(String(right.option_type || '')) ||
-  String(left.strike_usdc_per_btc || '').localeCompare(String(right.strike_usdc_per_btc || ''), undefined, {numeric: true}) ||
+  String(left.strike_price || '').localeCompare(String(right.strike_price || ''), undefined, {numeric: true}) ||
   String(left.instrument_name || '').localeCompare(String(right.instrument_name || ''))
 );
 const orderedUnderwritingRows = rows => [...rows].sort((left, right) =>
@@ -2446,6 +2656,9 @@ const toolbar = (label, id, selected, choices, shown, total) =>
   choices.map(choice => `<option value="${escapeHtml(choice)}"${choice === selected ? ' selected' : ''}>${escapeHtml(choice)}</option>`).join('') +
   `</select></label><span>显示 ${shown} / ${total}</span></div>`;
 function renderRadarPanel(documentValue) {
+  const product = documentValue.product;
+  const valuationUnit = product.valuation_currency;
+  const nativeUnit = product.native_premium_currency;
   const ordered = orderedRadarRows(documentValue.radar.rows);
   const rows = filterRows(ordered, 'detector_state', radarFilterValue);
   document.getElementById('radar').innerHTML =
@@ -2467,8 +2680,15 @@ function renderRadarPanel(documentValue) {
       ['hard screen label', 'hard_screen_label'],
       ['episode identity', 'active_episode_identity'],
       ['expiration timestamp ms', 'expiration_timestamp_ms'],
-      ['TTE interval ms', 'tte_interval_ms'], ['strike exact', 'strike_usdc_per_btc'],
-      ['executable sell price exact', 'executable_sell_price_usdc_per_btc'],
+      ['TTE interval ms', 'tte_interval_ms'], [`strike exact (${product.strike_currency})`, 'strike_price'],
+      [`model executable sell price (${product.strike_currency})`, 'model_executable_sell_price'],
+      [`native executable sell price (${nativeUnit})`, 'native_executable_sell_price'],
+      [`native executable buy price (${nativeUnit})`, 'native_executable_buy_price'],
+      [`native stressed sell price (${nativeUnit})`, 'native_one_tick_stressed_sell_price'],
+      [`native price tick (${nativeUnit})`, 'native_price_tick'],
+      [`native target spread (${nativeUnit})`, 'native_target_spread'],
+      ['model conversion forward', 'model_conversion_forward'],
+      ['product spec identity', 'product_spec_identity'],
       ['executable IV exact', 'executable_iv_interval'],
       ['baseline return interval minutes', 'baseline_return_interval_minutes'],
       ['baseline selected lookback minutes', 'baseline_selected_lookback_minutes'],
@@ -2476,9 +2696,9 @@ function renderRadarPanel(documentValue) {
       ['baseline volatility exact', 'baseline_annualized_volatility'],
       ['raw richness exact', 'raw_richness_ratio_interval'],
       ['one-tick richness exact', 'richness_ratio_interval'],
-      ['delta exact', 'delta_interval'], ['quote ask exact', 'executable_buy_price_usdc_per_btc'],
-      ['one-tick stressed bid exact', 'one_tick_stressed_sell_price_usdc_per_btc'],
-      ['price tick exact', 'price_tick_usdc'], ['spread exact', 'target_spread_usdc'],
+      ['delta exact', 'delta_interval'], ['quote ask exact', 'model_executable_buy_price'],
+      ['one-tick stressed bid exact', 'model_one_tick_stressed_sell_price'],
+      ['model price tick exact', 'model_price_tick'], ['model spread exact', 'model_target_spread'],
       ['premium ticks', 'bid_premium_ticks'], ['regime context', 'regime_context'],
       ['surface context', 'surface_context'], ['legged structure', 'legged_structure_context'],
       ['detector reason enum', 'detector_reason'],
@@ -2487,6 +2707,9 @@ function renderRadarPanel(documentValue) {
       ['episode duration ms', 'anomaly_active_duration_ms']]);
 }
 function renderUnderwritingPanel(documentValue) {
+  const product = documentValue.product;
+  const valuationUnit = product.valuation_currency;
+  const nativeUnit = product.native_premium_currency;
   const ordered = orderedUnderwritingRows(documentValue.underwriting.rows);
   const rows = filterRows(ordered, 'availability', underwritingFilterValue);
   const marginSummary = Array.isArray(documentValue.underwriting.predicate_margin_summary)
@@ -2509,13 +2732,14 @@ function renderUnderwritingPanel(documentValue) {
       ['到期(北京时间)', 'expiry_timestamp_ms', underwritingCellValue],
       ['Availability', 'availability', underwritingCellValue],
       ['Action', 'action', underwritingCellValue],
-      ['净权利金', 'net_entry_credit_usdc', underwritingCellValue],
-      ['承保准备损失', 'underwriting_reserved_loss_usdc', underwritingCellValue],
+      [`净权利金 (${valuationUnit})`, 'net_entry_credit_valuation', underwritingCellValue],
+      [`原生净权利金 (${nativeUnit})`, 'native_net_entry_credit', underwritingCellValue],
+      [`承保准备损失 (${valuationUnit})`, 'underwriting_reserved_loss_valuation', underwritingCellValue],
       ['Candidate 状态', 'candidate_lifecycle', underwritingCellValue],
       ['原因', 'decision_reason', underwritingCellValue]
     ], rows, [['radar scope', 'radar_scope_or_short_leg_identity'],
-      ['option type', 'option_type'], ['short strike exact', 'short_strike_usdc_per_btc'],
-      ['long strike exact', 'long_strike_usdc_per_btc'],
+      ['option type', 'option_type'], ['short strike exact', 'short_strike_price'],
+      ['long strike exact', 'long_strike_price'],
       ['target quantity exact', 'target_quantity_btc'],
       ['availability identity', 'underwriting_availability_evaluation_identity'],
       ['action identity', 'underwriting_action_identity'], ['availability enum', 'availability'],
@@ -2525,13 +2749,22 @@ function renderUnderwritingPanel(documentValue) {
       ['protective-leg selection rule identity', 'protective_leg_selection_rule_identity'],
       ['Candidate protective-leg count', 'candidate_protective_leg_count'],
       ['component blockers', 'component_blockers'],
-      ['gross entry credit exact', 'gross_entry_credit_usdc'],
-      ['entry fee reserve exact', 'entry_fee_reserve_usdc'],
-      ['net entry credit exact', 'net_entry_credit_usdc'],
-      ['max loss ex fees exact', 'contractual_payoff_max_loss_ex_fees_usdc'],
-      ['future cost reserve exact', 'future_cost_reserve_usdc'],
-      ['reserved loss exact', 'underwriting_reserved_loss_usdc'],
-      ['reserve breakdown', 'reserve_breakdown_usdc'],
+      ['product spec identity', 'product_spec_identity'],
+      ['product name', 'product_name'],
+      ['native premium currency', 'native_premium_currency'],
+      ['valuation currency', 'valuation_currency'],
+      [`native gross entry credit (${nativeUnit})`, 'native_gross_entry_credit'],
+      [`native entry fee reserve (${nativeUnit})`, 'native_entry_fee_reserve'],
+      [`native net entry credit (${nativeUnit})`, 'native_net_entry_credit'],
+      ['entry valuation index price', 'entry_valuation_index_price'],
+      [`gross entry credit (${valuationUnit})`, 'gross_entry_credit_valuation'],
+      ['entry fee reserve exact', 'entry_fee_reserve_valuation'],
+      ['net entry credit exact', 'net_entry_credit_valuation'],
+      [`entry-boundary payoff loss proxy (${valuationUnit}; not native liability, expiry loss, or account margin)`,
+        'entry_boundary_valued_payoff_loss_ex_fees_valuation'],
+      ['future cost reserve exact', 'future_cost_reserve_valuation'],
+      ['reserved loss exact', 'underwriting_reserved_loss_valuation'],
+      ['reserve breakdown', 'reserve_breakdown_valuation'],
       ['evaluation fact boundary', 'evaluation_fact_boundary']]);
 }
 const funnelStageLabels = {
@@ -2604,11 +2837,14 @@ function renderFunnel(documentValue) {
 function renderDecisionControlResearch(documentValue) {
   const research = documentValue.funnel && documentValue.funnel.decision_control_research;
   const panel = documentValue.decision_controls;
+  const product = documentValue.product;
   if (!research || !research.pending_counts || !research.selected_action_counts ||
       !research.attempt_terminal_counts || !Array.isArray(research.non_claims) ||
-      !panel || !Array.isArray(panel.rows)) {
+      !panel || !Array.isArray(panel.rows) || !product) {
     throw new Error('invalid selected-decision research projection');
   }
+  const valuationUnit = product.valuation_currency;
+  const nativeUnit = product.native_premium_currency;
   const summary = '<div class="grid">' +
     card('因果 activation batch', research.activation_batch_count) +
     card('预先选定决策', research.selected_decision_count) +
@@ -2627,7 +2863,8 @@ function renderDecisionControlResearch(documentValue) {
     ['刷新终局', 'refresh_terminal_outcome'],
     ['Enrollment', 'enrollment_kind'],
     ['Case / Outcome', 'case_state'],
-    ['Public-quote PnL (USDC)', 'net_pnl_after_public_standard_fee_reserve_usdc']
+    [`Public-quote PnL (${valuationUnit})`, 'public_quote_net_pnl_valuation'],
+    [`Native PnL (${nativeUnit})`, 'native_net_pnl']
   ], panel.rows, [
     ['selection identity', 'selected_underwriting_decision_identity'],
     ['activation batch identity', 'activation_batch_identity'],
@@ -2644,6 +2881,9 @@ function renderDecisionControlResearch(documentValue) {
     ['refreshed predicate margin vector', 'refreshed_predicate_margin_vector'],
     ['refreshed fact boundary', 'refreshed_fact_boundary'],
     ['enrollment identity', 'enrollment_identity'],
+    ['boundary-valued PnL', 'boundary_valued_net_pnl_usd'],
+    ['exit-valued native PnL', 'exit_valued_native_net_pnl_usd'],
+    ['native premium currency', 'native_premium_currency'],
     ['non claims', 'non_claims']
   ]);
   document.getElementById('decision-control').innerHTML = summary + rows;
@@ -2652,6 +2892,16 @@ function render(documentValue) {
   if (!documentValue || documentValue.schema_version !== SUPPORTED_SCHEMA_VERSION) {
     throw new Error('unsupported workbench projection schema');
   }
+  const product = documentValue.product;
+  if (!product || !product.product_spec_identity || !product.name ||
+      !product.native_premium_currency || !product.valuation_currency || !product.price_index ||
+      !product.native_settlement_payoff_rule || !product.native_settlement_liability_profile ||
+      product.actual_account_margin_availability !== 'UNKNOWN' ||
+      product.actual_account_margin_reason !== 'ACCOUNT_MARGIN_UNKNOWN') {
+    throw new Error('invalid product projection');
+  }
+  const valuationUnit = product.valuation_currency;
+  const nativeUnit = product.native_premium_currency;
   const connection = document.getElementById('connection');
   connection.hidden = true;
   connection.textContent = '';
@@ -2660,6 +2910,11 @@ function render(documentValue) {
   const service = documentValue.service;
   const system = documentValue.system;
   document.getElementById('system').innerHTML =
+    card('产品', product.name) +
+    card('原生权利金 / 结算币种', `${nativeUnit} / ${product.settlement_currency}`) +
+    card('估值币种 / 指数', `${valuationUnit} / ${product.price_index}`) +
+    card('合约 payoff / 原生负债', `${product.strike_currency}; ${product.native_settlement_liability_profile}`) +
+    card('实际账户保证金', `${product.actual_account_margin_availability}: ${product.actual_account_margin_reason}`) +
     card('服务阶段', service.phase) +
     card('数据状态', service.data_state) +
     card('当前行情判定', service.ready ? '可用于当前判定' : '不可用于当前判定') +
@@ -2698,6 +2953,10 @@ function render(documentValue) {
     card('Policy / Radar', documentValue.policy_identities.radar) +
     card('Policy / Underwriting', documentValue.policy_identities.underwriting) +
     card('Policy / Position', documentValue.policy_identities.position) +
+    card('Product spec identity', product.product_spec_identity) +
+    card('Product instrument type', product.instrument_type) +
+    card('Product quote/counter', `${product.quote_currency}/${product.counter_currency}`) +
+    card('Native settlement payoff rule', product.native_settlement_payoff_rule) +
     '</div></details>';
   const zero = documentValue.zero_claims;
   document.getElementById('zero').innerHTML =
@@ -2716,17 +2975,23 @@ function render(documentValue) {
   document.getElementById('shadow').innerHTML = table(documentValue.shadow_entries, [
     ['刷新结果', 'admission_refresh_terminal_outcome', shadowCellValue],
     ['目标数量 (BTC)', 'target_quantity_btc', shadowCellValue],
-    ['模拟垂直毛信用 (USDC/BTC)', 'simulated_entry_price_usdc_per_btc', shadowCellValue],
+    [`模拟垂直毛信用 (${valuationUnit}/BTC)`, 'simulated_entry_price_valuation_per_btc', shadowCellValue],
     ['模拟入场价状态', 'simulated_entry_price_availability'],
-    ['模拟权利金 (USDC)', 'simulated_entry_credit_usdc', shadowCellValue],
+    [`模拟毛权利金 (${valuationUnit})`, 'simulated_entry_credit_valuation', shadowCellValue],
+    [`原生净权利金 (${nativeUnit})`, 'native_net_entry_credit', shadowCellValue],
     ['未入场原因', 'no_entry_reason', shadowCellValue], ['声明', 'simulation_label']
   ], documentValue.shadow_entries.rows, [
     ['candidate identity', 'candidate_identity'], ['active episode', 'active_episode_identity'],
     ['formed boundary', 'candidate_formed_fact_boundary'],
     ['refresh source identity', 'matched_refresh_source_identity'],
     ['shadow entry identity', 'shadow_entry_identity'], ['target quantity exact', 'target_quantity_btc'],
-    ['simulated entry price exact', 'simulated_entry_price_usdc_per_btc'],
-    ['simulated entry credit exact', 'simulated_entry_credit_usdc'],
+    ['simulated entry price exact', 'simulated_entry_price_valuation_per_btc'],
+    ['simulated entry credit exact', 'simulated_entry_credit_valuation'],
+    ['native gross entry credit', 'native_gross_entry_credit'],
+    ['native entry fee reserve', 'native_entry_fee_reserve'],
+    ['native net entry credit', 'native_net_entry_credit'],
+    ['entry valuation index price', 'entry_valuation_index_price'],
+    ['native premium currency', 'native_premium_currency'],
     ['execution model', 'execution_model'],
     ['component pair identity', 'entry_component_pair_identity'],
     ['component pair timing', 'entry_component_pair_timing'],
@@ -2737,11 +3002,12 @@ function render(documentValue) {
   ]);
   document.getElementById('positions').innerHTML = table(documentValue.positions, [
     ['Action', 'position_action'],
-    ['剩余权利金 (USDC)', 'remaining_premium_usdc', positionCellValue],
+    [`剩余权利金 (${valuationUnit})`, 'remaining_premium_valuation', positionCellValue],
     ['剩余权利金状态', 'remaining_premium_availability'],
     ['Component close', 'close_quote_state'],
-    ['Close debit (USDC)', 'current_close_debit_usdc', positionCellValue],
-    ['Shadow PnL (USDC)', 'projected_shadow_pnl_usdc', positionCellValue],
+    [`Close debit (${valuationUnit})`, 'current_close_debit_valuation', positionCellValue],
+    [`Boundary-valued Shadow PnL (${valuationUnit})`, 'projected_shadow_pnl_valuation', positionCellValue],
+    [`Native projected PnL (${nativeUnit})`, 'native_projected_shadow_net_pnl', positionCellValue],
     ['Hard-close 倒计时', 'hard_close_countdown_interval_ms', positionCellValue],
     ['首要退出规则', 'primary_exit_rule'],
     ['Close eligibility', 'close_opportunity_eligibility'],
@@ -2750,26 +3016,36 @@ function render(documentValue) {
     ['Outcome', 'outcome_state']
   ], documentValue.positions.rows, [
     ['shadow entry identity', 'shadow_entry_identity'],
-    ['remaining premium exact', 'remaining_premium_usdc'],
-    ['close debit exact', 'current_close_debit_usdc'],
+    ['remaining premium exact', 'remaining_premium_valuation'],
+    ['close debit exact', 'current_close_debit_valuation'],
     ['component pair timing', 'component_pair_timing'],
     ['component pair limits', 'component_pair_limits'],
     ['component pair business state', 'component_pair_business_state'],
     ['component pair unknown reasons', 'component_pair_unknown_reasons'],
-    ['projected Shadow PnL exact', 'projected_shadow_pnl_usdc'],
+    ['projected Shadow PnL exact', 'projected_shadow_pnl_valuation'],
+    ['native close cashflow', 'native_net_close_cashflow'],
+    ['native projected Shadow PnL', 'native_projected_shadow_net_pnl'],
+    ['boundary-valued projected Shadow PnL', 'boundary_valued_projected_shadow_net_pnl_usd'],
+    ['exit-valued native projected PnL', 'exit_valued_native_projected_pnl_usd'],
+    ['native premium currency', 'native_premium_currency'],
     ['hard-close interval ms', 'hard_close_countdown_interval_ms'],
     ['remaining premium basis', 'remaining_premium_basis'],
     ['ordered exit rules', 'ordered_latched_exit_rules']
   ]);
   document.getElementById('outcomes').innerHTML = table(documentValue.outcomes, [
     ['状态', 'state'], ['成熟度', 'maturity'],
-    ['Public-quote PnL (USDC)', 'net_pnl_after_public_standard_fee_reserve_usdc', outcomeCellValue],
-    ['Actual PnL', 'actual_pnl_usdc', outcomeCellValue]
+    [`Boundary-valued public-quote PnL (${valuationUnit})`, 'public_quote_net_pnl_valuation', outcomeCellValue],
+    [`Native net PnL (${nativeUnit})`, 'native_net_pnl', outcomeCellValue],
+    ['Actual PnL', 'actual_pnl', outcomeCellValue]
   ], documentValue.outcomes.rows, [
     ['observation identity', 'shadow_observation_identity'],
     ['selected exit identity', 'selected_exit_identity'],
-    ['public-quote PnL exact', 'net_pnl_after_public_standard_fee_reserve_usdc'],
-    ['actual PnL exact', 'actual_pnl_usdc']
+    ['public-quote PnL exact', 'public_quote_net_pnl_valuation'],
+    ['native net PnL', 'native_net_pnl'],
+    ['boundary-valued net PnL', 'boundary_valued_net_pnl_usd'],
+    ['exit-valued native net PnL', 'exit_valued_native_net_pnl_usd'],
+    ['native premium currency', 'native_premium_currency'],
+    ['actual PnL exact', 'actual_pnl']
   ]);
   lastRenderedDocument = documentValue;
 }

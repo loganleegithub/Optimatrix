@@ -1,15 +1,17 @@
 # Optimatrix
 
 Optimatrix is a trader-facing BTC 0–3DTE options opportunity-discovery and Shadow-learning system.
-The current product slice consumes Deribit BTC-USDC public data, evaluates one fixed defined-risk
-Short Vol strategy chain, displays current opportunity state, and may enroll a simulated Shadow
-Case for strictly future observation. It has no private account, order, fill, capital, or actual
-position capability.
+The accepted product is Deribit Linear BTC-USDC defined-risk Short Vol. The active offline
+construction adds Inverse BTC as a second strict product profile without adding a second runtime
+architecture. One process selects exactly one product and its matching three-Policy chain at
+startup; it never mixes products, legs, funnels, state roots, or Outcomes. The system has no private
+account, order, fill, capital, actual-margin, or actual-position capability.
 
 ## Product flow
 
 ```text
 Deribit public facts
+→ one startup-selected product profile and Policy chain
 → bounded current market state
 → Short Vol Radar
 → Underwriting-selected frozen protective vertical
@@ -28,28 +30,27 @@ offline from Shadow Cases.
 
 ## Current stage
 
-The active permission remains `PUBLIC_SHADOW`. The completed natural run observed `10` Radar
-Episodes, `7` reviewable/component-book/Underwriting-evaluable Episodes, and zero Candidates,
-Cases, or Outcomes. All seven selected structures first failed
-`CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE`; `NO_ACTIVE_COMBO 10` remained a parallel diagnostic and did
-not veto the component-book path. The formal whole-funnel primary loss still starts earlier at the
-`938 / 1,812,600` Radar-knownness gap; the active task intentionally owns the Authority-selected
-downstream `7 → 0` closure.
+The permission boundary remains `PUBLIC_SHADOW`, but the persistent runtime is `STOPPED_CLEANLY`
+and every live command is currently `FORBIDDEN`. The final accepted Linear process reached
+`5,043,177` applicable and `5,040,616` Radar-known evaluations, `11` Episodes, `6`
+Underwriting-evaluable structures, and zero Candidates or admitted-Candidate Cases. All six
+evaluable structures stopped at `CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE`. The separate
+selected-decision projection made six future-blind selections: five opened complete no-trade
+control Cases and one terminalized `UNKNOWN_CONSUMED` on receive skew. All five Outcomes are
+`CENSORED_AT_STOP`; `COMPLETE` means lifecycle-terminal, not known economics or profitability.
 
-The accepted implementation closes the selective-label gap without changing economic thresholds. For each
-causal Radar activation batch it designates at most one Episode before action or future facts are
-known, with no `UNKNOWN` fallback. The designated Episode's first evaluable decision receives one
-strictly later paired refresh: a decision selected as Candidate and still Candidate reuses ordinary
-admission, while a refreshed WATCH/ABSTAIN may open an explicitly tagged no-trade Case. A selected
-WATCH/ABSTAIN that refreshes to Candidate opens no control and must enter the ordinary Candidate
-lifecycle before a later paired admission.
-Original/refreshed predicate-margin vectors and the
-strictly future Outcome appear in a separate Workbench research panel and never alter the canonical
-Candidate funnel.
-The active validation task authorizes one production-public natural Shadow service from the clean
-merged main tree. It uses the frozen three-Policy chain and a fresh external state root until the
-first selected-decision Outcome, explicit human stop, or fatal process failure. It authorizes no
-private API, order, fill, capital exposure, automatic restart, or Policy change.
+The sole active task is offline `INVERSE_BTC_V1` product construction. Inverse currently has zero
+applicable evaluations because its product economics were unsupported; the task removes that
+`INVERSE_PRODUCT_SEMANTICS_UNSUPPORTED` blocker through deterministic fixtures only. Linear native
+premium, fees, settlement, and PnL remain USDC under exact Case schema v3. Inverse schema v4 keeps
+BTC-native premium, fees, settlement cashflow, liability, and PnL distinct from Black-model price
+and explicitly named USD valuation views. Public facts do not establish account margin, which
+remains `UNKNOWN`.
+
+No Deribit probe, smoke, `serve-shadow`, service start, restart, or natural observation is
+authorized. Tests and `make check` can accept construction behavior only; a later
+`VALIDATION_ONLY` task must separately name the exact product, code, Policies, state root, and
+observation topology before any live use.
 
 See:
 
@@ -66,7 +67,8 @@ See:
 
 - `market_monitor`: Deribit public-source parsing, continuity, trusted time, and bounded market
   state;
-- `options_domain`: instrument, target-size depth, component-leg stress, and fee arithmetic;
+- `options_domain`: one immutable product specification, instruments, native target-size depth and
+  tick stress, product fee arithmetic, model normalization, and valuation conversion;
 - `short_vol_radar`: detector, episode, protective-structure review, and atomic diagnostics;
 - `short_vol_underwriting`: Underwriting, admission, Position, Outcome, in-memory owner state, and
   the minimal Shadow Case store;

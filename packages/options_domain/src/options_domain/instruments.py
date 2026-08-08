@@ -15,6 +15,8 @@ from market_monitor.types import (
     require_str,
 )
 
+from options_domain.product import LINEAR_BTC_USDC, OptionProductSpec
+
 MAX_TTE_MS = 72 * 60 * 60 * 1_000
 SETTLEMENT_WINDOW_MS = 30 * 60 * 1_000
 
@@ -143,6 +145,7 @@ class OptionInstrument:
     lifecycle_state: InstrumentLifecycleState = InstrumentLifecycleState.OPEN
     is_active: bool = True
     taker_commission: Decimal | None = None
+    product: OptionProductSpec = LINEAR_BTC_USDC
 
     def legal_tick_size(self, price: Decimal) -> Decimal | None:
         return self.price_tick.tick_size_for_price(price) if self.price_tick is not None else None
@@ -160,9 +163,14 @@ class ComboInstrument:
     state: str
     legs: tuple[ComboLeg, ComboLeg]
     amount: AmountMetadata | None
+    product: OptionProductSpec = LINEAR_BTC_USDC
 
 
-def parse_option_instrument(payload: object) -> OptionInstrument | None:
+def parse_option_instrument(
+    payload: object,
+    *,
+    product: OptionProductSpec = LINEAR_BTC_USDC,
+) -> OptionInstrument | None:
     data = require_mapping(payload, "instrument")
     product_fields = {
         "kind": require_str(data.get("kind"), "instrument.kind"),
@@ -177,15 +185,10 @@ def parse_option_instrument(payload: object) -> OptionInstrument | None:
         "price_index": require_str(data.get("price_index"), "instrument.price_index"),
         "instrument_type": require_str(data.get("instrument_type"), "instrument.instrument_type"),
     }
-    if product_fields != {
-        "kind": "option",
-        "base_currency": "BTC",
-        "quote_currency": "USDC",
-        "settlement_currency": "USDC",
-        "counter_currency": "USDC",
-        "price_index": "btc_usdc",
-        "instrument_type": "linear",
-    }:
+    if product_fields != product.product_fields(kind="option"):
+        return None
+    instrument_name = require_str(data.get("instrument_name"), "instrument.instrument_name")
+    if not product.matches_instrument_name(instrument_name):
         return None
     is_active = require_bool(data.get("is_active"), "instrument.is_active")
     state_raw = require_str(data.get("state"), "instrument.state")
@@ -223,7 +226,7 @@ def parse_option_instrument(payload: object) -> OptionInstrument | None:
         if taker_commission < 0:
             raise SourceDataError("instrument.taker_commission must be non-negative")
     return OptionInstrument(
-        instrument_name=require_str(data.get("instrument_name"), "instrument.instrument_name"),
+        instrument_name=instrument_name,
         expiration_timestamp_ms=expiry,
         strike=strike,
         option_type=option_type,
@@ -232,11 +235,15 @@ def parse_option_instrument(payload: object) -> OptionInstrument | None:
         lifecycle_state=state,
         is_active=is_active,
         taker_commission=taker_commission,
+        product=product,
     )
 
 
 def parse_combo_instrument(
-    summary_payload: object, metadata_payload: object
+    summary_payload: object,
+    metadata_payload: object,
+    *,
+    product: OptionProductSpec = LINEAR_BTC_USDC,
 ) -> ComboInstrument | None:
     summary = require_mapping(summary_payload, "combo")
     metadata = require_mapping(metadata_payload, "combo metadata")
@@ -263,14 +270,7 @@ def parse_combo_instrument(
             metadata.get("instrument_type"), "combo metadata.instrument_type"
         ),
     }
-    if product_fields != {
-        "kind": "option_combo",
-        "base_currency": "BTC",
-        "quote_currency": "USDC",
-        "settlement_currency": "USDC",
-        "counter_currency": "USDC",
-        "instrument_type": "linear",
-    }:
+    if product_fields != product.combo_product_fields():
         return None
     is_active = require_bool(metadata.get("is_active"), "combo metadata.is_active")
     state_raw = require_str(metadata.get("state"), "combo metadata.state")
@@ -289,12 +289,13 @@ def parse_combo_instrument(
         leg_amount = decimal_from_source(leg.get("amount"), f"combo.legs[{index}].amount")
         if leg_amount == 0:
             raise SourceDataError("combo leg amount cannot be zero")
-        legs.append(
-            ComboLeg(
-                require_str(leg.get("instrument_name"), f"combo.legs[{index}].instrument_name"),
-                leg_amount,
-            )
+        leg_instrument_name = require_str(
+            leg.get("instrument_name"),
+            f"combo.legs[{index}].instrument_name",
         )
+        if not product.matches_instrument_name(leg_instrument_name):
+            return None
+        legs.append(ComboLeg(leg_instrument_name, leg_amount))
     try:
         combo_amount = parse_amount_metadata(metadata, "combo metadata")
     except SourceDataError:
@@ -304,6 +305,7 @@ def parse_combo_instrument(
         state=state,
         legs=(legs[0], legs[1]),
         amount=combo_amount,
+        product=product,
     )
 
 

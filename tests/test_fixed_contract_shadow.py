@@ -116,12 +116,12 @@ def _reducer(tmp_path: Path, policy_factory: PolicyFactory) -> RadarReducer:
         runtime_identity="sha256:" + "b" * 64,
     )
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-    reducer.combos["BTC-COMBO"] = ComboInstrument(
-        instrument_name="BTC-COMBO",
+    reducer.combos["BTC_USDC-COMBO"] = ComboInstrument(
+        instrument_name="BTC_USDC-COMBO",
         state="active",
         legs=(
-            ComboLeg("BTC-SHORT", Decimal("-0.1")),
-            ComboLeg("BTC-LONG", Decimal("0.1")),
+            ComboLeg("BTC_USDC-SHORT", Decimal("-0.1")),
+            ComboLeg("BTC_USDC-LONG", Decimal("0.1")),
         ),
         amount=AmountMetadata(
             contract_size=Decimal("1"),
@@ -141,7 +141,7 @@ def _book_payload(
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "type": kind,
-        "instrument_name": "BTC-COMBO",
+        "instrument_name": "BTC_USDC-COMBO",
         "change_id": change_id,
         "timestamp": timestamp,
         "bids": [["new", "300", "0.1"]],
@@ -161,11 +161,11 @@ def test_successful_book_receipt_retains_exact_subscription_chain_and_failure_do
     reducer = _reducer(tmp_path, policy_factory)
     snapshot_boundary = FactBoundary(1, 1, 1_010, 2)
     assert reducer._apply_book(
-        "BTC-COMBO",
+        "BTC_USDC-COMBO",
         _book_payload(kind="snapshot", change_id=10, timestamp=2_000),
         snapshot_boundary,
     )
-    snapshot = reducer.accepted_book_receipts["BTC-COMBO"]
+    snapshot = reducer.accepted_book_receipts["BTC_USDC-COMBO"]
     assert snapshot.snapshot_kind == "snapshot"
     assert snapshot.prev_change_id is None
     assert snapshot.change_id == 10
@@ -174,7 +174,7 @@ def test_successful_book_receipt_retains_exact_subscription_chain_and_failure_do
 
     change_boundary = FactBoundary(1, 2, 1_020, 3)
     assert reducer._apply_book(
-        "BTC-COMBO",
+        "BTC_USDC-COMBO",
         _book_payload(
             kind="change",
             prev_change_id=10,
@@ -183,7 +183,7 @@ def test_successful_book_receipt_retains_exact_subscription_chain_and_failure_do
         ),
         change_boundary,
     )
-    accepted = reducer.accepted_book_receipts["BTC-COMBO"]
+    accepted = reducer.accepted_book_receipts["BTC_USDC-COMBO"]
     assert accepted.snapshot_kind == "change"
     assert accepted.prev_change_id == 10
     assert accepted.change_id == 11
@@ -191,7 +191,7 @@ def test_successful_book_receipt_retains_exact_subscription_chain_and_failure_do
     assert accepted.boundary == change_boundary
 
     with pytest.raises(ContinuityGap):
-        reducer.combo_books["BTC-COMBO"].apply(
+        reducer.combo_books["BTC_USDC-COMBO"].apply(
             _book_payload(
                 kind="change",
                 prev_change_id=9,
@@ -200,7 +200,7 @@ def test_successful_book_receipt_retains_exact_subscription_chain_and_failure_do
             ),
             1_030,
         )
-    assert reducer.accepted_book_receipts["BTC-COMBO"] == accepted
+    assert reducer.accepted_book_receipts["BTC_USDC-COMBO"] == accepted
 
 
 def test_successful_index_receipt_retains_exact_value_timestamp_and_boundary(
@@ -267,10 +267,10 @@ def _apply_combo_change(
     change_id: int,
     asks: list[list[str]] | None = None,
 ) -> None:
-    book = reducer.combo_books["BTC-COMBO"]
+    book = reducer.combo_books["BTC_USDC-COMBO"]
     payload: dict[str, object] = {
         "type": "change",
-        "instrument_name": "BTC-COMBO",
+        "instrument_name": "BTC_USDC-COMBO",
         "prev_change_id": previous_change_id,
         "change_id": change_id,
         "timestamp": 1_000_000 + change_id,
@@ -278,8 +278,8 @@ def _apply_combo_change(
         "asks": asks or [],
     }
     book.apply(payload, boundary.received_monotonic_ms)
-    reducer.accepted_book_receipts["BTC-COMBO"] = AcceptedBookReceipt(
-        instrument_name="BTC-COMBO",
+    reducer.accepted_book_receipts["BTC_USDC-COMBO"] = AcceptedBookReceipt(
+        instrument_name="BTC_USDC-COMBO",
         snapshot_kind="change",
         prev_change_id=previous_change_id,
         change_id=change_id,
@@ -346,7 +346,7 @@ def _shadow_system(
         qty_tick_size=Decimal("0.1"),
     )
     short = OptionInstrument(
-        instrument_name="BTC-SHORT",
+        instrument_name="BTC_USDC-SHORT",
         expiration_timestamp_ms=10_000_000,
         strike=Decimal("101000"),
         option_type=OptionType.CALL,
@@ -357,7 +357,7 @@ def _shadow_system(
         price_tick=PriceTickMetadata(Decimal("1")),
     )
     long = OptionInstrument(
-        instrument_name="BTC-LONG",
+        instrument_name="BTC_USDC-LONG",
         expiration_timestamp_ms=10_000_000,
         strike=Decimal("102000"),
         option_type=OptionType.CALL,
@@ -371,22 +371,22 @@ def _shadow_system(
     reducer.options = dict(reducer.catalog_options)
     reducer.option_catalog.source_complete = True
     reducer.option_catalog.complete = True
-    reducer.combos["BTC-COMBO"] = ComboInstrument(
-        instrument_name="BTC-COMBO",
+    reducer.combos["BTC_USDC-COMBO"] = ComboInstrument(
+        instrument_name="BTC_USDC-COMBO",
         state="active",
         legs=(
-            ComboLeg("BTC-SHORT", Decimal("1")),
-            ComboLeg("BTC-LONG", Decimal("-1")),
+            ComboLeg("BTC_USDC-SHORT", Decimal("1")),
+            ComboLeg("BTC_USDC-LONG", Decimal("-1")),
         ),
         amount=amount,
     )
     reducer.combo_catalog.source_complete = True
     reducer.combo_catalog.complete = True
-    book = ContinuousOrderBook("BTC-COMBO")
+    book = ContinuousOrderBook("BTC_USDC-COMBO")
     book.apply(
         {
             "type": "snapshot",
-            "instrument_name": "BTC-COMBO",
+            "instrument_name": "BTC_USDC-COMBO",
             "change_id": 10,
             "timestamp": 1_000_010,
             "bids": [["new", "300", "0.1"]],
@@ -394,11 +394,11 @@ def _shadow_system(
         },
         110,
     )
-    reducer.combo_books["BTC-COMBO"] = book
+    reducer.combo_books["BTC_USDC-COMBO"] = book
     first_boundary = FactBoundary(1, 1, 110, 1)
     reducer.accepted_platform_continuity_boundary = first_boundary
-    reducer.accepted_book_receipts["BTC-COMBO"] = AcceptedBookReceipt(
-        instrument_name="BTC-COMBO",
+    reducer.accepted_book_receipts["BTC_USDC-COMBO"] = AcceptedBookReceipt(
+        instrument_name="BTC_USDC-COMBO",
         snapshot_kind="snapshot",
         prev_change_id=None,
         change_id=10,
@@ -412,7 +412,7 @@ def _shadow_system(
         source_timestamp_ms=1_000_000,
         boundary=first_boundary,
     )
-    reducer.tickers["BTC-SHORT"] = TickerState(
+    reducer.tickers["BTC_USDC-SHORT"] = TickerState(
         forward_usdc=Decimal("100000"),
         underlying_index="index_price",
         source_timestamp_ms=1_000_000,
@@ -422,13 +422,13 @@ def _shadow_system(
     tracker = EpisodeTracker(
         runtime_identity=runtime_identity,
         policy_identity=RADAR_POLICY_IDENTITY,
-        instrument_name="BTC-SHORT",
+        instrument_name="BTC_USDC-SHORT",
     )
     tracker.state = TrackerState.ACTIVE
-    tracker.episode_id = f"{runtime_identity}:{RADAR_POLICY_IDENTITY}:BTC-SHORT:1"
+    tracker.episode_id = f"{runtime_identity}:{RADAR_POLICY_IDENTITY}:BTC_USDC-SHORT:1"
     tracker.activation_band_id = policies.radar.tte_bands[0].band_id
     tracker.activation_causal_seq = 1
-    reducer.trackers["BTC-SHORT"] = tracker
+    reducer.trackers["BTC_USDC-SHORT"] = tracker
     calculation = SimpleNamespace(
         baseline=SimpleNamespace(window_diagnostics=()),
         delta=SimpleNamespace(lower=Decimal("0.19"), upper=Decimal("0.21")),
@@ -440,7 +440,7 @@ def _shadow_system(
         target_bid=SimpleNamespace(consumed=()),
         target_ask=SimpleNamespace(consumed=()),
     )
-    reducer.results["BTC-SHORT"] = cast(
+    reducer.results["BTC_USDC-SHORT"] = cast(
         Any,
         SimpleNamespace(
             calculation=calculation,
@@ -452,8 +452,8 @@ def _shadow_system(
     )
     reducer.option_books = {}
     for instrument_name, bid, ask in (
-        ("BTC-SHORT", "300", "301"),
-        ("BTC-LONG", "100", "101"),
+        ("BTC_USDC-SHORT", "300", "301"),
+        ("BTC_USDC-LONG", "100", "101"),
     ):
         option_book = ContinuousOrderBook(instrument_name)
         option_book.apply(
@@ -482,7 +482,7 @@ def _shadow_system(
 
 
 def _activate_real_episode(reducer: RadarReducer) -> str:
-    instrument_name = "BTC-SHORT"
+    instrument_name = "BTC_USDC-SHORT"
     rule = reducer.policy.tte_bands[0].option_rules[OptionType.CALL]
     tracker = EpisodeTracker(
         runtime_identity=reducer.runtime_identity,
@@ -550,7 +550,7 @@ def test_real_episode_identity_round_trips_without_economic_action(
     assert intents == ()
     (facts,) = adapter._underwriting_by_scope.values()
     assert facts.active_episode_identity == episode_identity
-    assert facts.short_leg_instrument_name == "BTC-SHORT"
+    assert facts.short_leg_instrument_name == "BTC_USDC-SHORT"
     assert facts.atomic_state == expected_atomic_state
     assert [value["object_kind"] for value in owner.state_store.objects] == [
         "UNDERWRITING_AVAILABILITY_EVALUATION",
@@ -563,15 +563,15 @@ def test_same_activation_batch_designates_before_action_and_unknown_has_no_fallb
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    second_name = "BTC-SHORT-2"
+    second_name = "BTC_USDC-SHORT-2"
     second = replace(
-        reducer.options["BTC-SHORT"],
+        reducer.options["BTC_USDC-SHORT"],
         instrument_name=second_name,
         strike=Decimal("100500"),
     )
     reducer.options[second_name] = second
     reducer.catalog_options[second_name] = second
-    reducer.tickers[second_name] = replace(reducer.tickers["BTC-SHORT"])
+    reducer.tickers[second_name] = replace(reducer.tickers["BTC_USDC-SHORT"])
     second_book = ContinuousOrderBook(second_name)
     second_book.apply(
         {
@@ -607,7 +607,7 @@ def test_same_activation_batch_designates_before_action_and_unknown_has_no_fallb
     second_tracker.activation_band_id = reducer.policy.tte_bands[0].band_id
     second_tracker.activation_causal_seq = 1
     reducer.trackers[second_name] = second_tracker
-    reducer.results[second_name] = reducer.results["BTC-SHORT"]
+    reducer.results[second_name] = reducer.results["BTC_USDC-SHORT"]
     episodes = tuple(
         sorted(
             tracker.episode_id
@@ -659,8 +659,8 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
     )
     assert len(admission_intents) == 2
     assert {str(intent.params["instrument_name"]) for intent in admission_intents} == {
-        "BTC-SHORT",
-        "BTC-LONG",
+        "BTC_USDC-SHORT",
+        "BTC_USDC-LONG",
     }
     (active,) = adapter._underwriting_by_scope.values()
     assert active.active_episode_identity is not None
@@ -703,13 +703,15 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
     next_tracker = EpisodeTracker(
         runtime_identity=reducer.runtime_identity,
         policy_identity=reducer.policy.identity,
-        instrument_name="BTC-SHORT",
+        instrument_name="BTC_USDC-SHORT",
     )
     next_tracker.state = TrackerState.ACTIVE
-    next_tracker.episode_id = f"{reducer.runtime_identity}:{reducer.policy.identity}:BTC-SHORT:4"
+    next_tracker.episode_id = (
+        f"{reducer.runtime_identity}:{reducer.policy.identity}:BTC_USDC-SHORT:4"
+    )
     next_tracker.activation_band_id = reducer.policy.tte_bands[0].band_id
     next_tracker.activation_causal_seq = 4
-    reducer.trackers["BTC-SHORT"] = next_tracker
+    reducer.trackers["BTC_USDC-SHORT"] = next_tracker
     adapter.on_settled_transaction(
         reducer=reducer,
         commit=_commit(
@@ -739,12 +741,12 @@ def test_frozen_component_structure_does_not_switch_to_a_later_protective_leg(
     )
     assert len(first_intents) == 2
     (current_facts,) = adapter._underwriting_by_scope.values()
-    assert current_facts.long_leg_instrument_name == "BTC-LONG"
+    assert current_facts.long_leg_instrument_name == "BTC_USDC-LONG"
 
-    original = reducer.options["BTC-LONG"]
+    original = reducer.options["BTC_USDC-LONG"]
     alternative = replace(
         original,
-        instrument_name="BTC-LONG-ALT",
+        instrument_name="BTC_USDC-LONG-ALT",
         strike=Decimal("101500"),
     )
     reducer.options[alternative.instrument_name] = alternative
@@ -785,7 +787,7 @@ def test_frozen_component_structure_does_not_switch_to_a_later_protective_leg(
         == ()
     )
     (current_facts,) = adapter._underwriting_by_scope.values()
-    assert current_facts.long_leg_instrument_name == "BTC-LONG"
+    assert current_facts.long_leg_instrument_name == "BTC_USDC-LONG"
     assert current_facts.protective_leg_selection_rule_identity is not None
     assert current_facts.candidate_protective_leg_count == 1
     assert owner.retained_state_counts["active_candidates"] == 1
@@ -813,10 +815,10 @@ def test_underwriting_selector_waits_for_complete_catalog_before_freezing(
     assert incomplete.long_leg_instrument_name is None
     assert "OPTION_CATALOG_INCOMPLETE" in incomplete.unknown_reasons
 
-    original = reducer.options["BTC-LONG"]
+    original = reducer.options["BTC_USDC-LONG"]
     better = replace(
         original,
-        instrument_name="BTC-LONG-BETTER",
+        instrument_name="BTC_USDC-LONG-BETTER",
         strike=Decimal("103000"),
     )
     reducer.options[better.instrument_name] = better
@@ -856,7 +858,7 @@ def test_underwriting_selector_waits_for_complete_catalog_before_freezing(
     )
 
     (complete,) = adapter._underwriting_by_scope.values()
-    assert complete.long_leg_instrument_name == "BTC-LONG-BETTER"
+    assert complete.long_leg_instrument_name == "BTC_USDC-LONG-BETTER"
     assert complete.protective_leg_selection_rule_identity is not None
     assert complete.candidate_protective_leg_count == 2
     assert len(intents) == 2
@@ -867,7 +869,7 @@ def test_underwriting_selector_can_choose_candidate_outside_radar_display_top_th
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    original = reducer.options["BTC-LONG"]
+    original = reducer.options["BTC_USDC-LONG"]
     first_boundary = FactBoundary(1, 1, 110, 1)
     for suffix, strike, bid, ask in (
         ("A", "101250", "126", "127"),
@@ -876,7 +878,7 @@ def test_underwriting_selector_can_choose_candidate_outside_radar_display_top_th
     ):
         alternative = replace(
             original,
-            instrument_name=f"BTC-LONG-{suffix}",
+            instrument_name=f"BTC_USDC-LONG-{suffix}",
             strike=Decimal(strike),
         )
         reducer.options[alternative.instrument_name] = alternative
@@ -907,10 +909,12 @@ def test_underwriting_selector_can_choose_candidate_outside_radar_display_top_th
 
     top_three = {
         reference.long_instrument_name
-        for reference in adapter._review_contexts(reducer)["BTC-SHORT"].legged_structure.references
+        for reference in adapter._review_contexts(reducer)[
+            "BTC_USDC-SHORT"
+        ].legged_structure.references
     }
     assert len(top_three) == 3
-    assert "BTC-LONG" not in top_three
+    assert "BTC_USDC-LONG" not in top_three
 
     intents = adapter.on_settled_transaction(
         reducer=reducer,
@@ -922,7 +926,7 @@ def test_underwriting_selector_can_choose_candidate_outside_radar_display_top_th
     )
 
     (current_facts,) = adapter._underwriting_by_scope.values()
-    assert current_facts.long_leg_instrument_name == "BTC-LONG"
+    assert current_facts.long_leg_instrument_name == "BTC_USDC-LONG"
     assert len(intents) == 2
     assert owner.retained_state_counts["active_candidates"] == 1
 
@@ -933,11 +937,11 @@ def test_known_illegal_protective_leg_without_book_does_not_poison_selection(
     variant: str,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    original = reducer.options["BTC-LONG"]
+    original = reducer.options["BTC_USDC-LONG"]
     if variant == "inactive":
         illegal = replace(
             original,
-            instrument_name="BTC-LONG-INACTIVE",
+            instrument_name="BTC_USDC-LONG-INACTIVE",
             strike=Decimal("103000"),
             lifecycle_state=InstrumentLifecycleState.INACTIVE,
             is_active=False,
@@ -945,7 +949,7 @@ def test_known_illegal_protective_leg_without_book_does_not_poison_selection(
     else:
         illegal = replace(
             original,
-            instrument_name="BTC-LONG-AMOUNT_INELIGIBLE",
+            instrument_name="BTC_USDC-LONG-AMOUNT_INELIGIBLE",
             strike=Decimal("103000"),
             amount=AmountMetadata(
                 contract_size=Decimal("1"),
@@ -966,7 +970,7 @@ def test_known_illegal_protective_leg_without_book_does_not_poison_selection(
     )
 
     (facts,) = adapter._underwriting_by_scope.values()
-    assert facts.long_leg_instrument_name == "BTC-LONG"
+    assert facts.long_leg_instrument_name == "BTC_USDC-LONG"
     assert len(intents) == 2
     assert owner.retained_state_counts["active_candidates"] == 1
 
@@ -984,7 +988,7 @@ def test_potentially_legal_leg_metadata_unknown_blocks_selection_exactly(
     reason: str,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    original = reducer.options["BTC-LONG"]
+    original = reducer.options["BTC_USDC-LONG"]
     unknown = (
         replace(original, amount=None) if field == "amount" else replace(original, price_tick=None)
     )
@@ -1006,7 +1010,7 @@ def test_potentially_legal_leg_metadata_unknown_blocks_selection_exactly(
     (facts,) = adapter._underwriting_by_scope.values()
     assert facts.long_leg_instrument_name is None
     assert facts.component_state == "COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN"
-    assert facts.component_blockers == (f"BTC-LONG:{reason}",)
+    assert facts.component_blockers == (f"BTC_USDC-LONG:{reason}",)
     assert owner.retained_state_counts["active_candidates"] == 0
 
 
@@ -1015,8 +1019,8 @@ def test_underwriting_selector_keeps_missing_legal_leg_input_unknown(
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
     missing = replace(
-        reducer.options["BTC-LONG"],
-        instrument_name="BTC-LONG-MISSING",
+        reducer.options["BTC_USDC-LONG"],
+        instrument_name="BTC_USDC-LONG-MISSING",
         strike=Decimal("103000"),
     )
     reducer.options[missing.instrument_name] = missing
@@ -1035,7 +1039,7 @@ def test_underwriting_selector_keeps_missing_legal_leg_input_unknown(
     assert intents == ()
     assert facts.long_leg_instrument_name is None
     assert facts.component_state == "COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN"
-    assert facts.component_blockers == ("BTC-LONG-MISSING:BOOK_UNKNOWN",)
+    assert facts.component_blockers == ("BTC_USDC-LONG-MISSING:BOOK_UNKNOWN",)
     assert owner.retained_state_counts["active_candidates"] == 0
 
 
@@ -1073,11 +1077,11 @@ def test_atomic_scope_rejects_unbound_radar_episode_before_economic_action(
     reducer, adapter, owner = _shadow_system(tmp_path)
     reducer.trackers.clear()
     exact = _activate_real_episode(reducer)
-    tracker = reducer.trackers["BTC-SHORT"]
+    tracker = reducer.trackers["BTC_USDC-SHORT"]
     replacements = {
         "runtime": exact.replace(reducer.runtime_identity, "sha256:" + "c" * 64, 1),
         "policy": exact.replace(reducer.policy.identity, "sha256:" + "d" * 64, 1),
-        "instrument": exact.replace("BTC-SHORT", "BTC-OTHER", 1),
+        "instrument": exact.replace("BTC_USDC-SHORT", "BTC_USDC-OTHER", 1),
         "activation_seq": exact.rsplit(":", 1)[0] + ":1",
         "truncated": exact[:-1],
     }
@@ -1118,7 +1122,7 @@ def test_close_amount_missing_is_unknown_unless_an_earlier_gate_is_known_unexecu
     )
     short = _OptionSource(
         OptionInstrument(
-            instrument_name="BTC-SHORT",
+            instrument_name="BTC_USDC-SHORT",
             expiration_timestamp_ms=10_000_000,
             strike=Decimal("101000"),
             option_type=OptionType.CALL,
@@ -1129,7 +1133,7 @@ def test_close_amount_missing_is_unknown_unless_an_earlier_gate_is_known_unexecu
     )
     long = _OptionSource(
         OptionInstrument(
-            instrument_name="BTC-LONG",
+            instrument_name="BTC_USDC-LONG",
             expiration_timestamp_ms=10_000_000,
             strike=Decimal("102000"),
             option_type=OptionType.CALL,
@@ -1143,7 +1147,7 @@ def test_close_amount_missing_is_unknown_unless_an_earlier_gate_is_known_unexecu
 
     inactive_short = _OptionSource(
         OptionInstrument(
-            instrument_name="BTC-SHORT",
+            instrument_name="BTC_USDC-SHORT",
             expiration_timestamp_ms=10_000_000,
             strike=Decimal("101000"),
             option_type=OptionType.CALL,
@@ -1162,11 +1166,11 @@ def test_close_amount_missing_is_unknown_unless_an_earlier_gate_is_known_unexecu
     reducer = _reducer(tmp_path, policy_factory)
     combo = _ComboSource(
         ComboInstrument(
-            instrument_name="BTC-COMBO",
+            instrument_name="BTC_USDC-COMBO",
             state="active",
             legs=(
-                ComboLeg("BTC-SHORT", Decimal("1")),
-                ComboLeg("BTC-LONG", Decimal("-1")),
+                ComboLeg("BTC_USDC-SHORT", Decimal("1")),
+                ComboLeg("BTC_USDC-LONG", Decimal("-1")),
             ),
             amount=None,
         ),
@@ -1190,7 +1194,7 @@ def test_close_amount_missing_is_unknown_unless_an_earlier_gate_is_known_unexecu
         source_identity=witness_identity,
         boundary=source.boundary,
         canonical_combo_identity=combo.semantic_identity,
-        instrument_name="BTC-COMBO",
+        instrument_name="BTC_USDC-COMBO",
         change_id=10,
         source_timestamp_ms=1_000_010,
         snapshot_kind="snapshot",
@@ -1208,20 +1212,20 @@ def test_previously_active_combo_book_gap_is_known_discontinuity(
     tmp_path: Path,
 ) -> None:
     reducer, _adapter, _owner = _shadow_system(tmp_path)
-    amount = reducer.options["BTC-SHORT"].amount
+    amount = reducer.options["BTC_USDC-SHORT"].amount
     assert amount is not None
     short = _OptionSource(
-        reducer.options["BTC-SHORT"],
+        reducer.options["BTC_USDC-SHORT"],
         canonical_identity("ShortIdentity"),
         _downstream_source("ShortSource"),
     )
     long = _OptionSource(
-        reducer.options["BTC-LONG"],
+        reducer.options["BTC_USDC-LONG"],
         canonical_identity("LongIdentity"),
         _downstream_source("LongSource"),
     )
     combo = _ComboSource(
-        reducer.combos["BTC-COMBO"],
+        reducer.combos["BTC_USDC-COMBO"],
         canonical_identity("ComboIdentity"),
         _downstream_source("ComboSource"),
     )
@@ -1385,10 +1389,10 @@ def test_known_nonactive_combo_lifecycle_is_atomic_unavailability(
     reducer = _reducer(tmp_path, policy_factory)
     combo = _ComboSource(
         ComboInstrument(
-            instrument_name="BTC-COMBO",
+            instrument_name="BTC_USDC-COMBO",
             state=state,
-            legs=reducer.combos["BTC-COMBO"].legs,
-            amount=reducer.combos["BTC-COMBO"].amount,
+            legs=reducer.combos["BTC_USDC-COMBO"].legs,
+            amount=reducer.combos["BTC_USDC-COMBO"].amount,
         ),
         canonical_identity("ComboIdentity"),
         _downstream_source("ComboSource"),
@@ -1407,7 +1411,7 @@ def _rest_combo_book(
     ask_price: str = "301",
 ) -> dict[str, object]:
     return {
-        "instrument_name": "BTC-COMBO",
+        "instrument_name": "BTC_USDC-COMBO",
         "state": "open",
         "change_id": change_id,
         "timestamp": 1_000_010,
@@ -1475,8 +1479,8 @@ def _set_trusted_source_time(
         source_timestamp_ms=server_ms,
         boundary=receipt_boundary,
     )
-    reducer.tickers["BTC-SHORT"] = replace(
-        reducer.tickers["BTC-SHORT"],
+    reducer.tickers["BTC_USDC-SHORT"] = replace(
+        reducer.tickers["BTC_USDC-SHORT"],
         source_timestamp_ms=server_ms,
     )
     reducer.accepted_platform_continuity_boundary = receipt_boundary
@@ -1502,16 +1506,16 @@ def _object_payloads(
 
 def _set_natural_lifecycle_ready(reducer: RadarReducer) -> None:
     short = replace(
-        reducer.options["BTC-SHORT"],
+        reducer.options["BTC_USDC-SHORT"],
         lifecycle_state=InstrumentLifecycleState.DELIVERED,
         is_active=False,
     )
     long = replace(
-        reducer.options["BTC-LONG"],
+        reducer.options["BTC_USDC-LONG"],
         lifecycle_state=InstrumentLifecycleState.ARCHIVIZED,
         is_active=False,
     )
-    reducer.options = {"BTC-SHORT": short, "BTC-LONG": long}
+    reducer.options = {"BTC_USDC-SHORT": short, "BTC_USDC-LONG": long}
     reducer.catalog_options = dict(reducer.options)
 
 
@@ -1560,7 +1564,7 @@ def _settle_component_pair(
 
     for offset, intent in enumerate(intents):
         instrument_name = str(intent.params["instrument_name"])
-        is_short = instrument_name == "BTC-SHORT"
+        is_short = instrument_name == "BTC_USDC-SHORT"
         amount = "0.1" if is_short else long_amount
         accepted_seq = first_causal_seq + 2 + offset
         adapter.on_rpc_response(
@@ -1621,8 +1625,8 @@ def test_component_candidate_requires_both_strictly_later_option_book_responses(
     )
     assert len(intents) == 2
     assert {str(intent.params["instrument_name"]) for intent in intents} == {
-        "BTC-SHORT",
-        "BTC-LONG",
+        "BTC_USDC-SHORT",
+        "BTC_USDC-LONG",
     }
     assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 0
     (selected,) = _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION")
@@ -1630,13 +1634,15 @@ def test_component_candidate_requires_both_strictly_later_option_book_responses(
     assert selected["enrollment_route"] == "ADMITTED_SHADOW_TRADE"
 
     sent = FactBoundary(1, 2, 120, 2)
-    first = next(intent for intent in intents if intent.params["instrument_name"] == "BTC-SHORT")
+    first = next(
+        intent for intent in intents if intent.params["instrument_name"] == "BTC_USDC-SHORT"
+    )
     adapter.on_request_sent(request_id=first.request_id, boundary=sent)
     assert (
         adapter.on_rpc_response(
             request_id=first.request_id,
             result=_rest_option_book(
-                "BTC-SHORT",
+                "BTC_USDC-SHORT",
                 bid_price="300",
                 ask_price="301",
                 change_id=11,
@@ -1649,13 +1655,15 @@ def test_component_candidate_requires_both_strictly_later_option_book_responses(
     assert not _object_payloads(owner, "SHADOW_ENTRY")
     assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 0
 
-    second = next(intent for intent in intents if intent.params["instrument_name"] == "BTC-LONG")
+    second = next(
+        intent for intent in intents if intent.params["instrument_name"] == "BTC_USDC-LONG"
+    )
     second_sent = FactBoundary(1, 4, 140, 4)
     adapter.on_request_sent(request_id=second.request_id, boundary=second_sent)
     adapter.on_rpc_response(
         request_id=second.request_id,
         result=_rest_option_book(
-            "BTC-LONG",
+            "BTC_USDC-LONG",
             bid_price="100",
             ask_price="101",
             change_id=11,
@@ -1705,11 +1713,11 @@ def test_selected_abstain_uses_one_future_pair_without_candidate_or_shadow_entry
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
     boundary = FactBoundary(1, 1, 110, 1)
-    short_book = ContinuousOrderBook("BTC-SHORT")
+    short_book = ContinuousOrderBook("BTC_USDC-SHORT")
     short_book.apply(
         {
             "type": "snapshot",
-            "instrument_name": "BTC-SHORT",
+            "instrument_name": "BTC_USDC-SHORT",
             "change_id": 10,
             "timestamp": 1_000_010,
             "bids": [["new", "150", "0.1"]],
@@ -1717,9 +1725,9 @@ def test_selected_abstain_uses_one_future_pair_without_candidate_or_shadow_entry
         },
         110,
     )
-    reducer.option_books["BTC-SHORT"] = short_book
-    reducer.accepted_book_receipts["BTC-SHORT"] = AcceptedBookReceipt(
-        instrument_name="BTC-SHORT",
+    reducer.option_books["BTC_USDC-SHORT"] = short_book
+    reducer.accepted_book_receipts["BTC_USDC-SHORT"] = AcceptedBookReceipt(
+        instrument_name="BTC_USDC-SHORT",
         snapshot_kind="snapshot",
         prev_change_id=None,
         change_id=10,
@@ -1811,11 +1819,11 @@ def test_selected_control_full_quantity_failure_is_exact_workbench_unknown(
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    short_book = ContinuousOrderBook("BTC-SHORT")
+    short_book = ContinuousOrderBook("BTC_USDC-SHORT")
     short_book.apply(
         {
             "type": "snapshot",
-            "instrument_name": "BTC-SHORT",
+            "instrument_name": "BTC_USDC-SHORT",
             "change_id": 10,
             "timestamp": 1_000_010,
             "bids": [["new", "150", "0.1"]],
@@ -1823,7 +1831,7 @@ def test_selected_control_full_quantity_failure_is_exact_workbench_unknown(
         },
         110,
     )
-    reducer.option_books["BTC-SHORT"] = short_book
+    reducer.option_books["BTC_USDC-SHORT"] = short_book
     intents = adapter.on_settled_transaction(
         reducer=reducer,
         commit=_commit(
@@ -1863,11 +1871,11 @@ def test_selected_abstain_that_refreshes_to_candidate_requires_canonical_admissi
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    short_book = ContinuousOrderBook("BTC-SHORT")
+    short_book = ContinuousOrderBook("BTC_USDC-SHORT")
     short_book.apply(
         {
             "type": "snapshot",
-            "instrument_name": "BTC-SHORT",
+            "instrument_name": "BTC_USDC-SHORT",
             "change_id": 10,
             "timestamp": 1_000_010,
             "bids": [["new", "150", "0.1"]],
@@ -1875,7 +1883,7 @@ def test_selected_abstain_that_refreshes_to_candidate_requires_canonical_admissi
         },
         110,
     )
-    reducer.option_books["BTC-SHORT"] = short_book
+    reducer.option_books["BTC_USDC-SHORT"] = short_book
     intents = adapter.on_settled_transaction(
         reducer=reducer,
         commit=_commit(
@@ -1929,11 +1937,11 @@ def test_selected_abstain_that_refreshes_to_candidate_requires_canonical_admissi
 
 def test_selected_abstain_opens_one_durable_control_case(tmp_path: Path) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    short_book = ContinuousOrderBook("BTC-SHORT")
+    short_book = ContinuousOrderBook("BTC_USDC-SHORT")
     short_book.apply(
         {
             "type": "snapshot",
-            "instrument_name": "BTC-SHORT",
+            "instrument_name": "BTC_USDC-SHORT",
             "change_id": 10,
             "timestamp": 1_000_010,
             "bids": [["new", "150", "0.1"]],
@@ -1941,7 +1949,7 @@ def test_selected_abstain_opens_one_durable_control_case(tmp_path: Path) -> None
         },
         110,
     )
-    reducer.option_books["BTC-SHORT"] = short_book
+    reducer.option_books["BTC_USDC-SHORT"] = short_book
     intents = adapter.on_settled_transaction(
         reducer=reducer,
         commit=_commit(
@@ -2034,9 +2042,11 @@ def test_component_admission_pair_over_skew_budget_is_exact_unknown_without_case
         ),
     )
     short_intent = next(
-        value for value in intents if value.params["instrument_name"] == "BTC-SHORT"
+        value for value in intents if value.params["instrument_name"] == "BTC_USDC-SHORT"
     )
-    long_intent = next(value for value in intents if value.params["instrument_name"] == "BTC-LONG")
+    long_intent = next(
+        value for value in intents if value.params["instrument_name"] == "BTC_USDC-LONG"
+    )
     short_sent = FactBoundary(1, 2, 120, 2)
     long_sent = FactBoundary(1, 3, 121, 3)
     adapter.on_request_sent(request_id=short_intent.request_id, boundary=short_sent)
@@ -2044,7 +2054,7 @@ def test_component_admission_pair_over_skew_budget_is_exact_unknown_without_case
     adapter.on_rpc_response(
         request_id=short_intent.request_id,
         result=_rest_option_book(
-            "BTC-SHORT",
+            "BTC_USDC-SHORT",
             bid_price="300",
             ask_price="301",
             change_id=11,
@@ -2056,7 +2066,7 @@ def test_component_admission_pair_over_skew_budget_is_exact_unknown_without_case
     adapter.on_rpc_response(
         request_id=long_intent.request_id,
         result=_rest_option_book(
-            "BTC-LONG",
+            "BTC_USDC-LONG",
             bid_price="100",
             ask_price="101",
             change_id=11,
@@ -2113,9 +2123,11 @@ def test_component_admission_pair_epoch_mismatch_is_exact_unknown_without_case(
         ),
     )
     short_intent = next(
-        value for value in intents if value.params["instrument_name"] == "BTC-SHORT"
+        value for value in intents if value.params["instrument_name"] == "BTC_USDC-SHORT"
     )
-    long_intent = next(value for value in intents if value.params["instrument_name"] == "BTC-LONG")
+    long_intent = next(
+        value for value in intents if value.params["instrument_name"] == "BTC_USDC-LONG"
+    )
     short_sent = FactBoundary(1, 2, 120, 2)
     long_sent = FactBoundary(1, 3, 121, 3)
     adapter.on_request_sent(request_id=short_intent.request_id, boundary=short_sent)
@@ -2123,7 +2135,7 @@ def test_component_admission_pair_epoch_mismatch_is_exact_unknown_without_case(
     adapter.on_rpc_response(
         request_id=short_intent.request_id,
         result=_rest_option_book(
-            "BTC-SHORT",
+            "BTC_USDC-SHORT",
             bid_price="300",
             ask_price="301",
             change_id=11,
@@ -2136,7 +2148,7 @@ def test_component_admission_pair_epoch_mismatch_is_exact_unknown_without_case(
     adapter.on_rpc_response(
         request_id=long_intent.request_id,
         result=_rest_option_book(
-            "BTC-LONG",
+            "BTC_USDC-LONG",
             bid_price="100",
             ask_price="101",
             change_id=11,
@@ -2216,7 +2228,7 @@ def test_no_active_combo_is_only_a_diagnostic_and_does_not_block_shadow_entry(
     reducer, adapter, owner = _shadow_system(tmp_path)
     reducer.combos.clear()
     reducer.combo_books.clear()
-    reducer.accepted_book_receipts.pop("BTC-COMBO")
+    reducer.accepted_book_receipts.pop("BTC_USDC-COMBO")
     reducer.combo_catalog.complete = True
     reducer.combo_catalog.source_complete = True
 
@@ -2339,8 +2351,8 @@ def test_component_shadow_entry_closes_from_a_new_paired_snapshot_and_writes_kno
     )
     assert len(close_intents) == 2
     assert {str(intent.params["instrument_name"]) for intent in close_intents} == {
-        "BTC-SHORT",
-        "BTC-LONG",
+        "BTC_USDC-SHORT",
+        "BTC_USDC-LONG",
     }
 
     _settle_component_pair(
@@ -2377,11 +2389,11 @@ def test_selected_abstain_case_reuses_strictly_future_position_outcome_without_c
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    short_book = ContinuousOrderBook("BTC-SHORT")
+    short_book = ContinuousOrderBook("BTC_USDC-SHORT")
     short_book.apply(
         {
             "type": "snapshot",
-            "instrument_name": "BTC-SHORT",
+            "instrument_name": "BTC_USDC-SHORT",
             "change_id": 10,
             "timestamp": 1_000_010,
             "bids": [["new", "150", "0.1"]],
@@ -2389,7 +2401,7 @@ def test_selected_abstain_case_reuses_strictly_future_position_outcome_without_c
         },
         110,
     )
-    reducer.option_books["BTC-SHORT"] = short_book
+    reducer.option_books["BTC_USDC-SHORT"] = short_book
     cases = tmp_path / "cases"
     cases.mkdir()
     case_store = ShadowCaseStore(
@@ -2476,10 +2488,10 @@ def test_component_close_pair_over_skew_is_workbench_visible_business_unknown(
         ),
     )
     short_intent = next(
-        value for value in close_intents if value.params["instrument_name"] == "BTC-SHORT"
+        value for value in close_intents if value.params["instrument_name"] == "BTC_USDC-SHORT"
     )
     long_intent = next(
-        value for value in close_intents if value.params["instrument_name"] == "BTC-LONG"
+        value for value in close_intents if value.params["instrument_name"] == "BTC_USDC-LONG"
     )
     short_sent = FactBoundary(1, 7, 170, 7)
     long_sent = FactBoundary(1, 8, 171, 8)
@@ -2488,7 +2500,7 @@ def test_component_close_pair_over_skew_is_workbench_visible_business_unknown(
     adapter.on_rpc_response(
         request_id=short_intent.request_id,
         result=_rest_option_book(
-            "BTC-SHORT",
+            "BTC_USDC-SHORT",
             bid_price="249",
             ask_price="250",
             change_id=12,
@@ -2500,7 +2512,7 @@ def test_component_close_pair_over_skew_is_workbench_visible_business_unknown(
     adapter.on_rpc_response(
         request_id=long_intent.request_id,
         result=_rest_option_book(
-            "BTC-LONG",
+            "BTC_USDC-LONG",
             bid_price="149",
             ask_price="150",
             change_id=12,

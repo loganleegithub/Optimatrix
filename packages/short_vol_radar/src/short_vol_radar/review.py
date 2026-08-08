@@ -154,6 +154,12 @@ class SurfaceContext:
 @dataclass(frozen=True)
 class LeggedVerticalReference:
     long_instrument_name: str
+    product_spec_identity: str
+    product_name: str
+    native_premium_currency: str
+    valuation_currency: str
+    strike_currency: str
+    valuation_index_price: Decimal
     short_strike_usdc_per_btc: Decimal
     long_strike_usdc_per_btc: Decimal
     raw_short_bid_vwap_usdc_per_btc: Decimal
@@ -165,6 +171,11 @@ class LeggedVerticalReference:
     long_fee_reserve_usdc: Decimal
     total_fee_reserve_usdc: Decimal
     stressed_net_credit_usdc: Decimal
+    stressed_gross_credit_native: Decimal
+    short_fee_reserve_native: Decimal
+    long_fee_reserve_native: Decimal
+    total_fee_reserve_native: Decimal
+    stressed_net_credit_native: Decimal
     width_usdc_per_btc: Decimal
     payoff_cap_usdc: Decimal
     maximum_loss_after_fee_reserve_usdc: Decimal
@@ -173,20 +184,33 @@ class LeggedVerticalReference:
     def as_object(self) -> dict[str, object]:
         return {
             "long_instrument_name": self.long_instrument_name,
-            "short_strike_usdc_per_btc": str(self.short_strike_usdc_per_btc),
-            "long_strike_usdc_per_btc": str(self.long_strike_usdc_per_btc),
-            "raw_short_bid_vwap_usdc_per_btc": str(self.raw_short_bid_vwap_usdc_per_btc),
-            "stressed_short_bid_vwap_usdc_per_btc": str(self.stressed_short_bid_vwap_usdc_per_btc),
-            "raw_long_ask_vwap_usdc_per_btc": str(self.raw_long_ask_vwap_usdc_per_btc),
-            "stressed_long_ask_vwap_usdc_per_btc": str(self.stressed_long_ask_vwap_usdc_per_btc),
-            "stressed_gross_credit_usdc": str(self.stressed_gross_credit_usdc),
-            "short_fee_reserve_usdc": str(self.short_fee_reserve_usdc),
-            "long_fee_reserve_usdc": str(self.long_fee_reserve_usdc),
-            "total_fee_reserve_usdc": str(self.total_fee_reserve_usdc),
-            "stressed_net_credit_usdc": str(self.stressed_net_credit_usdc),
-            "width_usdc_per_btc": str(self.width_usdc_per_btc),
-            "payoff_cap_usdc": str(self.payoff_cap_usdc),
-            "maximum_loss_after_fee_reserve_usdc": str(self.maximum_loss_after_fee_reserve_usdc),
+            "product_spec_identity": self.product_spec_identity,
+            "product_name": self.product_name,
+            "native_premium_currency": self.native_premium_currency,
+            "valuation_currency": self.valuation_currency,
+            "strike_currency": self.strike_currency,
+            "valuation_index_price": str(self.valuation_index_price),
+            "short_strike_price": str(self.short_strike_usdc_per_btc),
+            "long_strike_price": str(self.long_strike_usdc_per_btc),
+            "raw_short_bid_vwap_native": str(self.raw_short_bid_vwap_usdc_per_btc),
+            "stressed_short_bid_vwap_native": str(self.stressed_short_bid_vwap_usdc_per_btc),
+            "raw_long_ask_vwap_native": str(self.raw_long_ask_vwap_usdc_per_btc),
+            "stressed_long_ask_vwap_native": str(self.stressed_long_ask_vwap_usdc_per_btc),
+            "stressed_gross_credit_native": str(self.stressed_gross_credit_native),
+            "short_fee_reserve_native": str(self.short_fee_reserve_native),
+            "long_fee_reserve_native": str(self.long_fee_reserve_native),
+            "total_fee_reserve_native": str(self.total_fee_reserve_native),
+            "stressed_net_credit_native": str(self.stressed_net_credit_native),
+            "stressed_gross_credit_valuation": str(self.stressed_gross_credit_usdc),
+            "short_fee_reserve_valuation": str(self.short_fee_reserve_usdc),
+            "long_fee_reserve_valuation": str(self.long_fee_reserve_usdc),
+            "total_fee_reserve_valuation": str(self.total_fee_reserve_usdc),
+            "stressed_net_credit_valuation": str(self.stressed_net_credit_usdc),
+            "width_strike_currency_per_btc": str(self.width_usdc_per_btc),
+            "contractual_payoff_cap_strike_currency": str(self.payoff_cap_usdc),
+            "entry_boundary_valued_payoff_loss_including_fee_valuation": str(
+                self.maximum_loss_after_fee_reserve_usdc
+            ),
             "credit_to_payoff_cap_fraction": str(self.credit_to_payoff_cap_fraction),
         }
 
@@ -254,7 +278,7 @@ class RankInputs:
             "expiration_timestamp_ms": self.expiration_timestamp_ms,
             "option_type": self.option_type.value,
             "abs_delta_midpoint": _decimal_text(self.abs_delta_midpoint),
-            "strike_usdc_per_btc": str(self.strike_usdc_per_btc),
+            "strike_price": str(self.strike_usdc_per_btc),
             "instrument_name": self.instrument_name,
         }
 
@@ -697,6 +721,12 @@ def _legged_reference(
     return (
         LeggedVerticalReference(
             long_instrument_name=long_instrument.instrument_name,
+            product_spec_identity=quote.product_spec_identity,
+            product_name=quote.product_name,
+            native_premium_currency=quote.native_premium_currency,
+            valuation_currency=quote.valuation_currency,
+            strike_currency=short_instrument.product.strike_currency,
+            valuation_index_price=quote.valuation_index_price,
             short_strike_usdc_per_btc=short_instrument.strike,
             long_strike_usdc_per_btc=long_instrument.strike,
             raw_short_bid_vwap_usdc_per_btc=quote.short_leg.raw.vwap,
@@ -708,6 +738,11 @@ def _legged_reference(
             long_fee_reserve_usdc=quote.long_leg.fee_reserve_usdc,
             total_fee_reserve_usdc=quote.total_fee_reserve_usdc,
             stressed_net_credit_usdc=quote.net_cashflow_usdc,
+            stressed_gross_credit_native=quote.native_gross_cashflow,
+            short_fee_reserve_native=quote.short_leg.native_fee_reserve,
+            long_fee_reserve_native=quote.long_leg.native_fee_reserve,
+            total_fee_reserve_native=quote.native_total_fee_reserve,
+            stressed_net_credit_native=quote.native_net_cashflow,
             width_usdc_per_btc=quote.width_usdc_per_btc,
             payoff_cap_usdc=quote.payoff_cap_usdc,
             maximum_loss_after_fee_reserve_usdc=max(
@@ -722,6 +757,7 @@ def _legged_reference(
 def _is_protective_leg(short: OptionInstrument, candidate: OptionInstrument) -> bool:
     if (
         candidate.instrument_name == short.instrument_name
+        or candidate.product != short.product
         or candidate.expiration_timestamp_ms != short.expiration_timestamp_ms
         or candidate.option_type is not short.option_type
         or not candidate.is_active

@@ -6,11 +6,12 @@
 
 ## Purpose
 
-Maintain the current Deribit BTC-USDC 0–72 hour option market in memory and tell the trader whether
-a target-size executable sell-side implied-volatility witness is unusually rich relative to one
-exact causal, conservative multi-horizon BTC realized-volatility baseline. A positive detector
-state is a selective `RICHNESS_CLUE`, not a downstream Underwriting `CANDIDATE`, forecast, trade, or
-profitability claim.
+Maintain the current 0–72 hour Deribit BTC option market for exactly one startup-selected product
+profile in memory and tell the trader whether a target-size executable sell-side implied-volatility
+witness is unusually rich relative to one exact causal, conservative multi-horizon BTC
+realized-volatility baseline. The profile is `LINEAR_BTC_USDC_V1` or `INVERSE_BTC_V1`; one runtime
+never mixes or aggregates them. A positive detector state is a selective `RICHNESS_CLUE`, not a
+downstream Underwriting `CANDIDATE`, forecast, trade, or profitability claim.
 
 The Radar separately supplies a ranked protective-vertical review and reports official
 atomic-combo availability as a diagnostic. Review context cannot create detector truth. One frozen
@@ -20,13 +21,15 @@ not create admission or execution permission by itself.
 ## Authorized sources and universe
 
 - production endpoint `wss://www.deribit.com/ws/api/v2` and public methods only;
-- active BTC-USDC linear options selected by actual expiry timestamp;
+- exactly one startup-selected product scope: active BTC-USDC Linear options or active BTC Inverse
+  options, selected by actual expiry timestamp and exact product metadata;
 - trusted-time scope `0 < TTE <= 72 hours`, with the final 30 minutes excluded;
 - Calls and Puts evaluated separately;
 - official option/combo metadata, aggregated `agg2` option ticker and option order books, combo order
-  books, streaming BTC-USDC index, official BTC-USDC index-chart history, platform status,
-  heartbeat, and public time;
-- one exact target quantity and content-identified Policy chain for the full run.
+  books, the selected product's streaming `btc_usdc | btc_usd` index and matching index-chart
+  history, platform status, heartbeat, and public time;
+- one exact target quantity, product identity, and matching content-identified Policy chain for the
+  full run.
 
 No private/account, RFQ, combo-creation, order, trade, fill, balance, margin, settlement act, or test
 environment method is authorized. Component-leg prices cannot create official atomic availability,
@@ -35,8 +38,9 @@ but may create the explicitly non-atomic Shadow counterfactual defined by the Un
 ## Source contract
 
 `IndexHistoryReducer` is the sole validator and bounded in-memory owner of
-`public/get_index_chart_data(index_name=btc_usdc, range=1d)`. It accepts only a bounded chronological
-array of positive finite `[timestamp, average_index_price]` pairs. It exposes:
+`public/get_index_chart_data(index_name=<selected-product-index>, range=1d)`, where the index is
+`btc_usdc` for Linear and `btc_usd` for Inverse. It accepts only a bounded chronological array of
+positive finite `[timestamp, average_index_price]` pairs for that one index. It exposes:
 
 - response point count and interval histogram;
 - modal timestamp interval;
@@ -51,6 +55,21 @@ revision makes the history `REVISION/UNKNOWN` until one subsequent response conf
 values. `WARMUP`, `SOURCE_STALE`, `WINDOW_GAP`, and `REVISION` are local history facts; none triggers
 a streaming-index reconnect. The streaming index remains the separate owner of current price and
 currentness.
+
+## Product and unit boundary
+
+The startup-selected product specification is immutable and binds market family, exact source
+metadata, native option-price and settlement currency, strike currency, price index,
+economic-semantics version, model-normalization rule, valuation-conversion rule, fee rule, payoff
+convention, and Case schema. The Radar Policy must bind the same product identity; any mismatch or
+mixed-product leg is rejected before it can create Radar or downstream truth.
+
+Depth walking and adverse tick stress always occur first in the exchange-native premium unit. For
+Linear BTC-USDC, native and Black-model premium are USDC. For Inverse BTC, native premium is BTC and
+the product-owned model conversion multiplies it by the declared expiry forward before Black
+inversion. The forward is a model input, not the current cash-valuation index. Current Inverse BTC
+cashflows are separately valued at the causal `btc_usd` index and labeled `USD_EQUIVALENT`; they are
+not USDC cashflows or account-margin facts.
 
 ## Detector truth
 
@@ -72,13 +91,15 @@ requires complete relevant scope.
 
 For one short-leg option at one causal boundary:
 
-1. prove trusted TTE applicability, lifecycle, target amount rules, current forward, and OTM status;
+1. prove selected-product identity, trusted TTE applicability, lifecycle, target amount rules,
+   current forward, and OTM status;
 2. consume full target quantity from both bid and ask; reject an absent side, locked/crossed target
    VWAP, or invalid amount grid;
-3. consume official `tick_size` and `tick_size_steps` metadata;
-4. move every consumed bid level down by one legal tick, respecting tick-regime boundaries; a
-   non-positive stressed price is known ineligible;
-5. invert Black total volatility from raw bid, stressed bid, and ask target-size VWAPs;
+3. consume official native `tick_size` and `tick_size_steps` metadata;
+4. move every consumed bid level down by one native legal tick, respecting tick-regime boundaries;
+   a non-positive stressed price is known ineligible;
+5. convert raw bid, stressed bid, and ask native VWAPs through the selected product's model rule,
+   then invert Black total volatility from those model-domain prices;
 6. derive the short-leg Delta interval and classify its explicit review bucket;
 7. consume the exact confirmed five-minute average-index suffix and compute 30/120/360-minute
    realized-variance rates;
@@ -136,10 +157,13 @@ mispricing claim is part of this slice.
 
 ## Protective-vertical structure review
 
-The review layer may enumerate at most three same-expiry, same-type 1:1 protective legs. It uses
-target-size short bid and long ask, stresses the short bid down and long ask up by one legal tick,
-applies the public standard option fee formula including the premium cap, and shows net credit,
-width, payoff cap, max loss after fee reserve, and credit/payoff-cap ratio. Ordering is descending
+The review layer may enumerate at most three same-expiry, same-type 1:1 protective legs from the
+same product. It uses target-size short bid and long ask, stresses the short bid down and long ask up
+by one native legal tick, and applies each public standard option fee in the product's native
+settlement currency including the premium cap. It shows native credit and fees plus an explicitly
+labeled causal valuation projection, USD-defined width/payoff cap, max loss after fee reserve, and
+credit/payoff-cap ratio. Inverse BTC liability at settlement depends on settlement price; actual
+account margin remains `UNKNOWN`. Ordering uses the declared valuation unit: descending
 credit/payoff-cap ratio, descending stressed net credit, narrower width, then instrument name.
 
 These three rows are a trader display and attention aid only. They do not select or freeze the
@@ -175,8 +199,8 @@ Rank changes attention only and cannot change any business truth.
 
 ## Episode semantics
 
-One Episode identity is namespaced by runtime, Radar Policy, instrument, and activation causal
-sequence. Repeated bytes, heartbeat, polling, display publication, unchanged recomputation, and
+One Episode identity is namespaced by runtime, selected product, Radar Policy, instrument, and
+activation causal sequence. Repeated bytes, heartbeat, polling, display publication, unchanged recomputation, and
 multiple changes inside one separation interval do not advance persistence.
 
 An Episode ends on clear, known ineligibility, transition into a review-only bucket, membership or
@@ -228,10 +252,12 @@ Underwriting-selector separation, ranking
 determinism, episode persistence/end reasons, official combo semantics, reducer ordering, and
 bounded UNKNOWN reasons.
 
-After direct tests and `make check`, one explicitly authorized production-public read-only
-integration smoke of at most 600 seconds may establish only current API behavior and end-to-end
-component-funnel reachability. It may not tune Policy or require a natural clue. It proves no future
-frequency, fillability, Edge, profitability, qualification, deployment, or execution permission.
+Only a later explicit `CURRENT_STAGE` may authorize a production-public read-only integration
+smoke. The current Inverse construction closure declares public observation `NOT_APPLICABLE` and
+forbids every probe, smoke, service start, restart, or natural Shadow process. A future authorized
+smoke could establish only current API behavior and end-to-end component-funnel reachability; it
+could not tune Policy, require a natural clue, or prove frequency, fillability, Edge, profitability,
+qualification, deployment, or execution permission.
 
 ## Design references
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from options_domain import LINEAR_BTC_USDC
 from short_vol_underwriting import (
     CANDIDATE_INVALIDATION_REASONS,
     DECISION_CONTROL_OBJECT_KINDS,
@@ -3509,6 +3510,11 @@ def test_close_opportunity_preserves_unknown_and_only_full_quote_is_eligible() -
         fee_rate_index_fraction=Decimal("0.0003"),
         close_index_usdc_per_btc=None,
         net_entry_credit_usdc=Decimal("16.4"),
+        expected_product=LINEAR_BTC_USDC,
+        entry_product_spec_identity=None,
+        expected_short_leg_instrument_name=None,
+        expected_long_leg_instrument_name=None,
+        expected_width_usdc_per_btc=None,
     )
     assert unknown.eligibility is CloseOpportunityEligibility.UNKNOWN
     assert unknown.economics is None
@@ -3523,6 +3529,11 @@ def test_close_opportunity_preserves_unknown_and_only_full_quote_is_eligible() -
         fee_rate_index_fraction=Decimal("0.0003"),
         close_index_usdc_per_btc=Decimal("100000"),
         net_entry_credit_usdc=Decimal("16.4"),
+        expected_product=LINEAR_BTC_USDC,
+        entry_product_spec_identity=None,
+        expected_short_leg_instrument_name=None,
+        expected_long_leg_instrument_name=None,
+        expected_width_usdc_per_btc=None,
     )
     assert incompatible_fee.eligibility is CloseOpportunityEligibility.INELIGIBLE
     assert incompatible_fee.economics is None
@@ -3537,6 +3548,11 @@ def test_close_opportunity_preserves_unknown_and_only_full_quote_is_eligible() -
         fee_rate_index_fraction=Decimal("0.0003"),
         close_index_usdc_per_btc=Decimal("100000"),
         net_entry_credit_usdc=Decimal("16.4"),
+        expected_product=LINEAR_BTC_USDC,
+        entry_product_spec_identity=None,
+        expected_short_leg_instrument_name=None,
+        expected_long_leg_instrument_name=None,
+        expected_width_usdc_per_btc=None,
     )
     assert eligible.eligibility is CloseOpportunityEligibility.ELIGIBLE
     assert eligible.economics is not None

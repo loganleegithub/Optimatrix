@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from options_domain import ComponentBookQuoteKind, ComponentBookVerticalQuote
+from options_domain import ComponentBookQuoteKind, ComponentBookVerticalQuote, product_for_identity
 
 from short_vol_underwriting.constants import (
     CANDIDATE_INVALIDATION_REASONS,
@@ -90,30 +90,35 @@ class UnderwritingThresholdMargins:
             failures.append("ENTRY_CONSUMED_LEVEL_LIMIT")
         return tuple(failures)
 
-    def as_vector(self) -> tuple[dict[str, object], ...]:
+    def as_vector(
+        self,
+        valuation_unit: str = "USDC",
+    ) -> tuple[dict[str, object], ...]:
+        if not valuation_unit:
+            raise ValueError("valuation_unit must be non-empty")
         return (
             {
                 "predicate": "POSITIVE_NET_ENTRY_CREDIT",
                 "signed_margin": str(self.positive_net_credit_usdc),
-                "unit": "USDC",
+                "unit": valuation_unit,
                 "passes": self.positive_net_credit_usdc > 0,
             },
             {
                 "predicate": "CREDIT_ABOVE_FUTURE_COST_RESERVE",
                 "signed_margin": str(self.credit_above_future_cost_reserve_usdc),
-                "unit": "USDC",
+                "unit": valuation_unit,
                 "passes": self.credit_above_future_cost_reserve_usdc > 0,
             },
             {
                 "predicate": "UNDERWRITING_RESERVED_LOSS_WITHIN_LIMIT",
                 "signed_margin": str(self.reserved_loss_limit_headroom_usdc),
-                "unit": "USDC",
+                "unit": valuation_unit,
                 "passes": self.reserved_loss_limit_headroom_usdc >= 0,
             },
             {
                 "predicate": "MINIMUM_NET_ENTRY_CREDIT",
                 "signed_margin": str(self.minimum_net_credit_headroom_usdc),
-                "unit": "USDC",
+                "unit": valuation_unit,
                 "passes": self.minimum_net_credit_headroom_usdc >= 0,
             },
             {
@@ -604,6 +609,7 @@ def compute_component_entry_economics(
     if quote.kind is not ComponentBookQuoteKind.ENTRY:
         raise ValueError("component entry economics requires an ENTRY quote")
     _require_non_negative(future_cost_reserve_usdc, "future_cost_reserve_usdc")
+    product = product_for_identity(quote.product_spec_identity)
     contractual = max(Decimal(0), quote.payoff_cap_usdc - quote.gross_cashflow_usdc)
     fee_reserved = max(Decimal(0), quote.payoff_cap_usdc - quote.net_cashflow_usdc)
     underwriting_reserved = max(
@@ -612,8 +618,9 @@ def compute_component_entry_economics(
     )
     return EntryEconomics(
         full_quantity_btc=quote.full_quantity_btc,
-        required_side_total_quote_usdc=(
-            quote.short_leg.stressed.total_value + quote.long_leg.stressed.total_value
+        required_side_total_quote_usdc=product.valuation(
+            quote.short_leg.stressed.total_value + quote.long_leg.stressed.total_value,
+            index_price=quote.valuation_index_price,
         ),
         gross_entry_credit_usdc=quote.gross_cashflow_usdc,
         entry_fee_reserve_usdc=quote.total_fee_reserve_usdc,
@@ -666,11 +673,13 @@ def compute_component_close_economics(
     """Project a CLOSE component-book quote without recalculating price or fees."""
     if quote.kind is not ComponentBookQuoteKind.CLOSE:
         raise ValueError("component close economics requires a CLOSE quote")
+    product = product_for_identity(quote.product_spec_identity)
     projected_pnl = net_entry_credit_usdc + quote.net_cashflow_usdc
     return CloseEconomics(
         full_quantity_btc=quote.full_quantity_btc,
-        required_close_side_total_quote_usdc=(
-            quote.short_leg.stressed.total_value + quote.long_leg.stressed.total_value
+        required_close_side_total_quote_usdc=product.valuation(
+            quote.short_leg.stressed.total_value + quote.long_leg.stressed.total_value,
+            index_price=quote.valuation_index_price,
         ),
         gross_close_cashflow_usdc=quote.gross_cashflow_usdc,
         close_fee_reserve_usdc=quote.total_fee_reserve_usdc,

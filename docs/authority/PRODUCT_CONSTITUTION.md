@@ -4,7 +4,8 @@
 
 **Long-term product:** autonomous 0–3DTE options decision and trading system
 
-**Current product slice:** Deribit BTC-USDC defined-risk Short Vol, production-public Shadow only
+**Current product slice:** Deribit BTC options defined-risk Short Vol — accepted Linear BTC-USDC
+plus Inverse BTC product construction, production-public Shadow permission only
 
 ## North star
 
@@ -41,6 +42,26 @@ The current permission is `PUBLIC_SHADOW`:
 
 Permission comes only from [`CURRENT_STAGE`](CURRENT_STAGE.md). Code, tests, files, commits, green
 CI, or historical runs grant no additional authority.
+
+## Product identity and unit boundary
+
+Linear BTC-USDC and Inverse BTC share one opportunity, Underwriting, admission, Position, and
+Outcome state machine, but they are separate economic products. Each runtime selects exactly one
+product profile at startup and binds exactly one matching three-Policy chain for the full run. Every
+active Policy chain and every durable Shadow Case binds one product identity. Existing Linear schema
+v3 Cases bind `LINEAR_BTC_USDC_V1` implicitly and exclusively through their frozen Policy chain so
+their bytes remain unchanged; Inverse schema v4 Cases bind `INVERSE_BTC_V1` explicitly. The product
+identity declares the market family, quote and settlement currencies, price index, native
+option-price unit, economic-semantics version, model-normalization rule, valuation-conversion rule,
+payoff convention, standard fee rule, and Case schema version. A runtime must reject a mixed
+product, mixed Policy chain, or mixed-leg structure before it can become Candidate or Case.
+
+Linear BTC-USDC uses USDC-native premium, fees, settlement, payoff, and PnL. Inverse BTC uses BTC-
+native premium, fees, settlement cashflow, and PnL; a declared BTC index converts those native
+amounts to a current USD valuation boundary. The model-normalized premium and current USD valuation
+are different quantities and may not be substituted. Defined strike width limits USD payoff, while
+the corresponding BTC liability depends on settlement price. Public facts do not establish actual
+account margin, which remains `UNKNOWN`.
 
 ## Product funnel
 

@@ -323,7 +323,7 @@ def test_initial_snapshot_keeps_empty_panels_separate_from_unknown_zero_claims()
         "observed_count": 0,
     }
     assert value["service"]["data_state"] == "UNKNOWN"
-    assert value["schema_version"] == 4
+    assert value["schema_version"] == 5
     assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in value["non_claims"]
     assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in value["non_claims"]
 
@@ -384,7 +384,7 @@ def test_shadow_projection_derives_vertical_credit_only_from_persisted_component
 
     (row,) = workbench_module._shadow_rows(kinds, _policies())
 
-    assert row["simulated_entry_price_usdc_per_btc"] == "197"
+    assert row["simulated_entry_price_valuation_per_btc"] == "197"
     assert (
         row["simulated_entry_price_availability"]
         == "AVAILABLE_FROM_SHADOW_ENTRY_STRESSED_COMPONENT_LEGS"
@@ -452,7 +452,7 @@ def test_selected_decision_projection_keeps_original_refresh_and_outcome_togethe
     assert row["refreshed_economic_action"] == "WATCH"
     assert row["enrollment_kind"] == "SELECTED_UNDERWRITING_DECISION_CONTROL"
     assert row["case_state"] == "MATURE_KNOWN"
-    assert row["net_pnl_after_public_standard_fee_reserve_usdc"] == "-3.5"
+    assert row["public_quote_net_pnl_valuation"] == "-3.5"
     assert (
         row["selected_predicate_margin_vector"] == observation["selected_predicate_margin_vector"]
     )
@@ -786,7 +786,7 @@ def test_underwriting_projection_joins_only_settled_display_metadata() -> None:
     assert row["long_leg_instrument_name"] == "BTC-8AUG26-105000-C"
     assert row["combo_instrument_name"] == "BTC-CS-8AUG26-100000_105000"
     assert row["expiry_timestamp_ms"] == 1_786_150_800_000
-    assert row["short_strike_usdc_per_btc"] == "100000"
+    assert row["short_strike_price"] == "100000"
     assert row["target_quantity_btc"] == "0.1"
 
 
@@ -842,13 +842,13 @@ def test_position_projection_separates_gross_remaining_premium_from_net_close_de
         option_metadata=(),
     )
 
-    assert row["remaining_premium_usdc"] == "25"
+    assert row["remaining_premium_valuation"] == "25"
     assert row["remaining_premium_availability"] == (
         "AVAILABLE_FROM_PERSISTED_COMPONENT_CLOSE_ECONOMICS"
     )
-    assert row["remaining_premium_basis"] == ("MAX_ZERO_NEGATIVE_GROSS_CLOSE_CASHFLOW_USDC")
-    assert row["current_close_debit_usdc"] == "26"
-    assert row["projected_shadow_pnl_usdc"] == "8"
+    assert row["remaining_premium_basis"] == ("MAX_ZERO_NEGATIVE_GROSS_CLOSE_CASHFLOW_VALUATION")
+    assert row["current_close_debit_valuation"] == "26"
+    assert row["projected_shadow_pnl_valuation"] == "8"
     assert row["component_pair_timing"] == {
         "source_timestamp_skew_ms": 7_000,
         "receive_skew_ms": 5_000,
@@ -1044,7 +1044,7 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "documentValue.publication_sequence" in JS
     assert "if (!response.ok) throw" in JS
     assert "renderUnavailable();" in JS
-    assert "SUPPORTED_SCHEMA_VERSION = 4" in JS
+    assert "SUPPORTED_SCHEMA_VERSION = 5" in JS
     assert ".table-scroll" in CSS
     assert "overflow-x:auto" in CSS
     assert 'class="system-details"' in JS
@@ -1101,8 +1101,8 @@ assert.equal(api.underwritingCellValue({{
   availability: 'NOT_EVALUATED', action: null
 }}, 'action', null), 'N/A');
 assert.equal(api.underwritingCellValue({{
-  availability: 'NOT_EVALUATED', gross_entry_credit_usdc: null
-}}, 'gross_entry_credit_usdc', null), 'N/A');
+  availability: 'NOT_EVALUATED', gross_entry_credit_valuation: null
+}}, 'gross_entry_credit_valuation', null), 'N/A');
 assert.equal(api.underwritingCellValue({{
   availability: 'UNKNOWN', action: null
 }}, 'availability', 'UNKNOWN'), 'UNKNOWN');
@@ -1127,10 +1127,10 @@ assert.equal(api.underwritingCellValue({{
   '已知前置条件未满足, 承保未评估');
 assert.equal(api.outcomeCellValue({{
   state: 'MATURED'
-}}, 'actual_pnl_usdc', null), 'N/A — public Shadow 无订单、成交或实际持仓');
+}}, 'actual_pnl', null), 'N/A — public Shadow 无订单、成交或实际持仓');
 assert.equal(api.shadowCellValue({{
   shadow_entry_identity: null
-}}, 'simulated_entry_price_usdc_per_btc', null), 'N/A');
+}}, 'simulated_entry_price_valuation_per_btc', null), 'N/A');
 assert.equal(api.positionCellValue({{}}, 'hard_close_countdown_interval_ms', {{
   lower_ms: 60000, upper_ms: 120000
 }}), '1.0 分钟 - 2.0 分钟');
@@ -1149,9 +1149,9 @@ assert.equal(api.knownnessRatioText({{
 }}), '0/0 (UNKNOWN)');
 
 const radar = api.orderedRadarRows([
-  {{instrument_name:'N', detector_state:'NO_ANOMALY', expiration_timestamp_ms:2, strike_usdc_per_btc:'2'}},
-  {{instrument_name:'U', detector_state:'UNKNOWN', expiration_timestamp_ms:1, strike_usdc_per_btc:'1'}},
-  {{instrument_name:'A', detector_state:'ANOMALY_ACTIVE', expiration_timestamp_ms:3, strike_usdc_per_btc:'3'}}
+  {{instrument_name:'N', detector_state:'NO_ANOMALY', expiration_timestamp_ms:2, strike_price:'2'}},
+  {{instrument_name:'U', detector_state:'UNKNOWN', expiration_timestamp_ms:1, strike_price:'1'}},
+  {{instrument_name:'A', detector_state:'ANOMALY_ACTIVE', expiration_timestamp_ms:3, strike_price:'3'}}
 ]);
 assert.deepEqual(radar.map(row => row.instrument_name), ['A', 'U', 'N']);
 assert.deepEqual(api.filterRows(radar, 'detector_state', 'UNKNOWN').map(row => row.instrument_name), ['U']);

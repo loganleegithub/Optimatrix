@@ -7,6 +7,7 @@ from dataclasses import dataclass, fields
 from decimal import Decimal
 from pathlib import Path
 
+from options_domain import OptionProductSpec, product_for_identity
 from short_vol_radar.policy import PolicyError as RadarPolicyError
 from short_vol_radar.policy import RadarPolicy, load_policy_bytes
 
@@ -129,13 +130,16 @@ def load_policy_chain(
         radar = load_policy_bytes(radar_bytes, radar_identity)
     except RadarPolicyError as exc:
         raise PolicyChainError(f"invalid Radar Policy: {exc}") from exc
+    product = product_for_identity(radar.product_spec_identity)
     underwriting = _parse_underwriting(
         _load_exact_json(underwriting_bytes, underwriting_identity, "Underwriting Policy"),
         underwriting_identity,
+        product=product,
     )
     position = _parse_position(
         _load_exact_json(position_bytes, position_identity, "Position Policy"),
         position_identity,
+        product=product,
     )
     if underwriting.radar_policy_identity != radar.identity:
         raise PolicyChainError("Underwriting Policy Radar identity mismatch")
@@ -191,7 +195,28 @@ def _reject_constant(value: str) -> object:
     raise PolicyChainError(f"non-finite Policy number: {value}")
 
 
-def _parse_underwriting(raw: dict[str, object], identity: str) -> UnderwritingPolicy:
+def _parse_underwriting(
+    raw: dict[str, object],
+    identity: str,
+    *,
+    product: OptionProductSpec,
+) -> UnderwritingPolicy:
+    raw = _product_policy_keys(
+        raw,
+        product=product,
+        inverse_to_internal={
+            "fee_rate_base_fraction": "fee_rate_index_fraction",
+            "path_risk_reserve_usd": "path_risk_reserve_usdc",
+            "jump_risk_reserve_usd": "jump_risk_reserve_usdc",
+            "tail_risk_reserve_usd": "tail_risk_reserve_usdc",
+            "liquidity_cost_reserve_usd": "liquidity_cost_reserve_usdc",
+            "uncertainty_reserve_usd": "uncertainty_reserve_usdc",
+            "settlement_cost_reserve_usd": "settlement_cost_reserve_usdc",
+            "maximum_underwriting_reserved_loss_usd": ("maximum_underwriting_reserved_loss_usdc"),
+            "minimum_net_entry_credit_usd": "minimum_net_entry_credit_usdc",
+        },
+        label="Underwriting Policy",
+    )
     expected = {field.name for field in fields(UnderwritingPolicy)} - {"identity"}
     _require_exact_keys(raw, expected, "Underwriting Policy")
     policy = UnderwritingPolicy(
@@ -289,7 +314,22 @@ def _parse_underwriting(raw: dict[str, object], identity: str) -> UnderwritingPo
     return policy
 
 
-def _parse_position(raw: dict[str, object], identity: str) -> PositionPolicy:
+def _parse_position(
+    raw: dict[str, object],
+    identity: str,
+    *,
+    product: OptionProductSpec,
+) -> PositionPolicy:
+    raw = _product_policy_keys(
+        raw,
+        product=product,
+        inverse_to_internal={
+            "fee_rate_base_fraction": "fee_rate_index_fraction",
+            "maximum_projected_net_loss_usd": "maximum_projected_net_loss_usdc",
+            "minimum_take_profit_usd": "minimum_take_profit_usdc",
+        },
+        label="Position Policy",
+    )
     expected = {field.name for field in fields(PositionPolicy)} - {"identity"}
     _require_exact_keys(raw, expected, "Position Policy")
     return PositionPolicy(
@@ -407,6 +447,24 @@ def _validate_shared_policy_members(
     for field in shared:
         if getattr(underwriting, field) != getattr(position, field):
             raise PolicyChainError(f"Policy compatibility mismatch: {field}")
+
+
+def _product_policy_keys(
+    raw: dict[str, object],
+    *,
+    product: OptionProductSpec,
+    inverse_to_internal: dict[str, str],
+    label: str,
+) -> dict[str, object]:
+    if not product.is_inverse:
+        return raw
+    forbidden_internal = set(inverse_to_internal.values()) & set(raw)
+    if forbidden_internal:
+        raise PolicyChainError(f"{label} uses Linear-only unit keys: {sorted(forbidden_internal)}")
+    normalized = {inverse_to_internal.get(key, key): value for key, value in raw.items()}
+    if len(normalized) != len(raw):
+        raise PolicyChainError(f"{label} product-unit keys collide")
+    return normalized
 
 
 def _require_exact_keys(raw: dict[str, object], expected: set[str], label: str) -> None:

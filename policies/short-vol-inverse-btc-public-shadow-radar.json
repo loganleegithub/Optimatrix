@@ -1,0 +1,153 @@
+{
+  "policy_schema_version": 7,
+  "policy_family": "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS",
+  "target_base_quantity_btc": 0.1,
+  "runtime_limits": {
+    "heartbeat_interval_seconds": 30,
+    "session_liveness_deadline_ms": 90000,
+    "rpc_deadline_ms": 10000,
+    "clock_refresh_interval_ms": 15000,
+    "clock_stale_deadline_ms": 60000,
+    "index_source_stale_deadline_ms": 90000,
+    "index_history_refresh_interval_ms": 300000,
+    "index_history_source_stale_deadline_ms": 900000,
+    "ticker_source_stale_deadline_ms": 300000,
+    "notification_queue_lag_deadline_ms": 5000,
+    "time_boundary_poll_interval_ms": 1000
+  },
+  "tte_bands": [
+    {
+      "band_id": "review-only-30-to-45m",
+      "lower_bound_minutes": 30,
+      "upper_bound_minutes": 45,
+      "clue_eligible": false,
+      "return_interval_minutes": 5,
+      "lookbacks_minutes": [
+        30,
+        120,
+        360
+      ],
+      "annualized_variance_floor": 0.01,
+      "option_rules": {
+        "call": {
+          "abs_delta_min": 0.05,
+          "abs_delta_max": 0.4,
+          "activation_ratio": 1.2,
+          "clear_ratio": 1.05,
+          "activation_observation_count": 3,
+          "clear_observation_count": 2,
+          "minimum_separation_ms": 300000
+        },
+        "put": {
+          "abs_delta_min": 0.05,
+          "abs_delta_max": 0.4,
+          "activation_ratio": 1.2,
+          "clear_ratio": 1.05,
+          "activation_observation_count": 3,
+          "clear_observation_count": 2,
+          "minimum_separation_ms": 300000
+        }
+      }
+    },
+    {
+      "band_id": "ultra-short-45m-to-6h",
+      "lower_bound_minutes": 45,
+      "upper_bound_minutes": 360,
+      "clue_eligible": true,
+      "return_interval_minutes": 5,
+      "lookbacks_minutes": [
+        30,
+        120,
+        360
+      ],
+      "annualized_variance_floor": 0.01,
+      "option_rules": {
+        "call": {
+          "abs_delta_min": 0.05,
+          "abs_delta_max": 0.4,
+          "activation_ratio": 1.2,
+          "clear_ratio": 1.05,
+          "activation_observation_count": 3,
+          "clear_observation_count": 2,
+          "minimum_separation_ms": 300000
+        },
+        "put": {
+          "abs_delta_min": 0.05,
+          "abs_delta_max": 0.4,
+          "activation_ratio": 1.2,
+          "clear_ratio": 1.05,
+          "activation_observation_count": 3,
+          "clear_observation_count": 2,
+          "minimum_separation_ms": 300000
+        }
+      }
+    },
+    {
+      "band_id": "intraday-6h-to-24h",
+      "lower_bound_minutes": 360,
+      "upper_bound_minutes": 1440,
+      "clue_eligible": true,
+      "return_interval_minutes": 5,
+      "lookbacks_minutes": [
+        30,
+        120,
+        360
+      ],
+      "annualized_variance_floor": 0.01,
+      "option_rules": {
+        "call": {
+          "abs_delta_min": 0.05,
+          "abs_delta_max": 0.4,
+          "activation_ratio": 1.2,
+          "clear_ratio": 1.05,
+          "activation_observation_count": 3,
+          "clear_observation_count": 2,
+          "minimum_separation_ms": 300000
+        },
+        "put": {
+          "abs_delta_min": 0.05,
+          "abs_delta_max": 0.4,
+          "activation_ratio": 1.2,
+          "clear_ratio": 1.05,
+          "activation_observation_count": 3,
+          "clear_observation_count": 2,
+          "minimum_separation_ms": 300000
+        }
+      }
+    },
+    {
+      "band_id": "multiday-24h-to-72h",
+      "lower_bound_minutes": 1440,
+      "upper_bound_minutes": 4320,
+      "clue_eligible": true,
+      "return_interval_minutes": 5,
+      "lookbacks_minutes": [
+        30,
+        120,
+        360
+      ],
+      "annualized_variance_floor": 0.01,
+      "option_rules": {
+        "call": {
+          "abs_delta_min": 0.05,
+          "abs_delta_max": 0.4,
+          "activation_ratio": 1.2,
+          "clear_ratio": 1.05,
+          "activation_observation_count": 3,
+          "clear_observation_count": 2,
+          "minimum_separation_ms": 300000
+        },
+        "put": {
+          "abs_delta_min": 0.05,
+          "abs_delta_max": 0.4,
+          "activation_ratio": 1.2,
+          "clear_ratio": 1.05,
+          "activation_observation_count": 3,
+          "clear_observation_count": 2,
+          "minimum_separation_ms": 300000
+        }
+      }
+    }
+  ],
+  "product_spec_identity": "sha256:ff90da92cefe8e530339df38505fe7726b92b45b1855b751f2633ffd4fdb2172"
+}
