@@ -118,8 +118,9 @@ at most one explicitly authorized bounded read-only integration smoke when curre
 ```
 
 This is a maximum validation shape, not standing live authority. `CURRENT_STAGE` and the one active
-task may forbid every probe, smoke, service start, or restart; the current Inverse construction
-closure does so.
+task may forbid every probe, smoke, service start, or restart, or may authorize one exact bounded
+public-only topology. The current Inverse validation is governed only by its registered one-start,
+same-process gate and Outcome-wait boundary.
 
 Public-only validation does not require a manifest, receipt chain, fresh empty evidence directory,
 commissioning controller, host probe, 24-hour Soak, replay, full-market archive, independent commit

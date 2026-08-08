@@ -1,11 +1,11 @@
 # Optimatrix
 
 Optimatrix is a trader-facing BTC 0–3DTE options opportunity-discovery and Shadow-learning system.
-The accepted product is Deribit Linear BTC-USDC defined-risk Short Vol. The active offline
-construction adds Inverse BTC as a second strict product profile without adding a second runtime
-architecture. One process selects exactly one product and its matching three-Policy chain at
-startup; it never mixes products, legs, funnels, state roots, or Outcomes. The system has no private
-account, order, fill, capital, actual-margin, or actual-position capability.
+The accepted implementation contains Deribit Linear BTC-USDC and Inverse BTC defined-risk Short Vol
+as two strict product profiles without a second runtime architecture. One process selects exactly
+one product and its matching three-Policy chain at startup; it never mixes products, legs, funnels,
+state roots, or Outcomes. The system has no private account, order, fill, capital, actual-margin, or
+actual-position capability.
 
 ## Product flow
 
@@ -30,8 +30,8 @@ offline from Shadow Cases.
 
 ## Current stage
 
-The permission boundary remains `PUBLIC_SHADOW`, but the persistent runtime is `STOPPED_CLEANLY`
-and every live command is currently `FORBIDDEN`. The final accepted Linear process reached
+The permission boundary remains `PUBLIC_SHADOW`. The final accepted Linear process is
+`STOPPED_CLEANLY`, is not authorized to restart, and reached
 `5,043,177` applicable and `5,040,616` Radar-known evaluations, `11` Episodes, `6`
 Underwriting-evaluable structures, and zero Candidates or admitted-Candidate Cases. All six
 evaluable structures stopped at `CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE`. The separate
@@ -39,18 +39,14 @@ selected-decision projection made six future-blind selections: five opened compl
 control Cases and one terminalized `UNKNOWN_CONSUMED` on receive skew. All five Outcomes are
 `CENSORED_AT_STOP`; `COMPLETE` means lifecycle-terminal, not known economics or profitability.
 
-The sole active task is offline `INVERSE_BTC_V1` product construction. Inverse currently has zero
-applicable evaluations because its product economics were unsupported; the task removes that
-`INVERSE_PRODUCT_SEMANTICS_UNSUPPORTED` blocker through deterministic fixtures only. Linear native
-premium, fees, settlement, and PnL remain USDC under exact Case schema v3. Inverse schema v4 keeps
-BTC-native premium, fees, settlement cashflow, liability, and PnL distinct from Black-model price
-and explicitly named USD valuation views. Public facts do not establish account margin, which
-remains `UNKNOWN`.
-
-No Deribit probe, smoke, `serve-shadow`, service start, restart, or natural observation is
-authorized. Tests and `make check` can accept construction behavior only; a later
-`VALIDATION_ONLY` task must separately name the exact product, code, Policies, state root, and
-observation topology before any live use.
+PR #27 accepted `INVERSE_BTC_V1` construction at merged-main code identity `89a6eb02...` while
+preserving exact Linear schema-v3 behavior. The sole active task is now `VALIDATION_ONLY`: after its
+Authority PR and merged-main CI pass, exactly one registered Inverse-only process may start. Its
+first 600 seconds are the same process's `CURRENT` and negative cross-product/Combo-contamination
+gate. Only a passing gate permits that uninterrupted process to keep waiting for the first natural
+Inverse schema-v4 Outcome. Zero business events during the gate is valid; `NO_ACTIVE_COMBO` is a
+separate diagnostic; process restart, concurrent Linear observation, and code/Policy tuning remain
+forbidden. Public facts do not establish account margin, which remains `UNKNOWN`.
 
 See:
 
