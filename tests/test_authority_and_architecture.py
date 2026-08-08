@@ -183,8 +183,7 @@ def test_current_stage_authorizes_local_inverse_stability_loop() -> None:
     assert "**Persistent service:** `LOCAL_INVERSE_STABILITY_LOOP_AUTHORIZED`" in current
     assert "**Live commands:** `ITERATIVE_INVERSE_REPAIR_RESTART_MONITOR_AUTHORIZED`" in current
     assert (
-        "**Sole authorized closure:** "
-        "`SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION`" in current
+        "**Sole authorized closure:** `SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION`" in current
     )
     assert "5,043,177 contract evaluations" in current
     assert "5,040,616 contract evaluations" in current
