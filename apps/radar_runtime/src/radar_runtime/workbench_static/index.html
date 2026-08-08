@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Optimatrix 交易员工作台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳至主要内容</a>
+  <header class="app-header">
+    <div class="header-copy">
+      <p class="eyebrow">BTC 0–3DTE · PUBLIC SHADOW · READ ONLY</p>
+      <h1>Optimatrix 交易员工作台</h1>
+      <p id="runtime" class="runtime-line"></p>
+    </div>
+    <p id="connection" class="warning connection-warning" role="alert" hidden></p>
+  </header>
+
+  <nav class="tab-nav" aria-label="工作台视图">
+    <a href="#decision-view" class="tab-link" data-tab-target="decision-view" aria-controls="decision-view" aria-current="page">当前决策</a>
+    <a href="#opportunity-view" class="tab-link" data-tab-target="opportunity-view" aria-controls="opportunity-view">机会与承保</a>
+    <a href="#outcome-view" class="tab-link" data-tab-target="outcome-view" aria-controls="outcome-view">Outcome 研究</a>
+    <a href="#audit-view" class="tab-link" data-tab-target="audit-view" aria-controls="audit-view">漏斗与审计</a>
+  </nav>
+
+  <main id="main-content">
+    <section id="decision-view" class="tab-view" data-tab-view aria-labelledby="decision-view-title">
+      <div class="section-heading">
+        <div>
+          <p class="scope-label">当前快照</p>
+          <h2 id="decision-view-title">现在是否值得继续看</h2>
+        </div>
+        <p class="section-note">先判断数据是否可信，再区分 Attention、Radar clue、Candidate 与 Case。</p>
+      </div>
+      <div id="system" class="grid system-grid"></div>
+      <div class="boundary-strip" role="note">
+        <strong>边界：</strong>公共行情反事实，不是订单、成交、实际持仓或账户保证金结论。
+      </div>
+      <div class="subsection">
+        <div class="subsection-heading">
+          <div>
+            <p class="scope-label">当前快照</p>
+            <h3>业务零值与 UNKNOWN</h3>
+          </div>
+        </div>
+        <div id="zero" class="grid compact-grid"></div>
+      </div>
+    </section>
+
+    <section id="opportunity-view" class="tab-view" data-tab-view aria-labelledby="opportunity-view-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="scope-label">当前内存对象</p>
+          <h2 id="opportunity-view-title">Radar 关注列表与 Underwriting</h2>
+        </div>
+        <p class="section-note">Attention 只表示值得查看；只有 Underwriting 明确输出 CANDIDATE 才是 Candidate。</p>
+      </div>
+      <div class="subsection">
+        <div class="subsection-heading">
+          <h3>Radar 关注列表（非 Candidate）</h3>
+          <span class="semantic-badge attention">ATTENTION</span>
+        </div>
+        <div id="radar"></div>
+      </div>
+      <div class="subsection">
+        <div class="subsection-heading">
+          <h3>承保结构与最早失败谓词</h3>
+          <span class="semantic-badge neutral">UNDERWRITING</span>
+        </div>
+        <div id="underwriting"></div>
+      </div>
+    </section>
+
+    <section id="outcome-view" class="tab-view" data-tab-view aria-labelledby="outcome-view-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="scope-label">当前 Case 状态 + 本次运行研究投影</p>
+          <h2 id="outcome-view-title">Outcome 验证</h2>
+        </div>
+        <p class="section-note">生命周期终结不等于经济结果已知，更不等于盈利。</p>
+      </div>
+      <div class="subsection research-branch">
+        <div class="subsection-heading">
+          <div>
+            <h3>Selected Decision 独立研究分支</h3>
+            <p>非 Candidate 的 Case 不是交易，也不进入规范 Candidate 漏斗。</p>
+          </div>
+          <span class="semantic-badge research">RESEARCH CONTROL</span>
+        </div>
+        <div id="decision-control"></div>
+      </div>
+      <div class="subsection">
+        <div class="subsection-heading">
+          <h3>Shadow 入场</h3>
+          <span class="semantic-badge simulation">模拟入场, 不是订单或成交</span>
+        </div>
+        <div id="shadow"></div>
+      </div>
+      <div class="subsection">
+        <div class="subsection-heading">
+          <h3>持仓监督</h3>
+          <span class="semantic-badge neutral">PUBLIC QUOTE</span>
+        </div>
+        <div id="positions"></div>
+      </div>
+      <div class="subsection">
+        <div class="subsection-heading">
+          <h3>Outcome 状态</h3>
+          <span class="semantic-badge neutral">STRICTLY FUTURE</span>
+        </div>
+        <div id="outcomes"></div>
+      </div>
+    </section>
+
+    <section id="audit-view" class="tab-view" data-tab-view aria-labelledby="audit-view-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="scope-label">本次运行累计</p>
+          <h2 id="audit-view-title">漏斗与审计</h2>
+        </div>
+        <p class="section-note">阶段单位不同，按阶段阶梯呈现，不把 contract evaluations、Episodes 与 Cases 伪装成同一流量。</p>
+      </div>
+      <div class="subsection">
+        <div class="subsection-heading">
+          <h3>规范 Candidate 漏斗</h3>
+          <span class="semantic-badge canonical">CANONICAL</span>
+        </div>
+        <div id="funnel"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    只读 public-only 投影；无 Policy 修改、私有账户或下单能力。浏览器仅格式化服务器已结算真值。
+  </footer>
+  <script src="/app.js" defer></script>
+</body>
+</html>
