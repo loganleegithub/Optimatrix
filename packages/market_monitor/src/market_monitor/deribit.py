@@ -11,10 +11,29 @@ from market_monitor.types import (
     require_str,
 )
 
-OPTION_LIFECYCLE_CHANNEL = "instrument.state.option.USDC"
-COMBO_LIFECYCLE_CHANNEL = "instrument.state.option_combo.USDC"
+
+def option_lifecycle_channel(currency: str) -> str:
+    if not currency:
+        raise ValueError("lifecycle currency must be non-empty")
+    return f"instrument.state.option.{currency}"
+
+
+def combo_lifecycle_channel(currency: str) -> str:
+    if not currency:
+        raise ValueError("lifecycle currency must be non-empty")
+    return f"instrument.state.option_combo.{currency}"
+
+
+def index_channel(index_name: str) -> str:
+    if not index_name:
+        raise ValueError("index name must be non-empty")
+    return f"deribit_price_index.{index_name}"
+
+
+OPTION_LIFECYCLE_CHANNEL = option_lifecycle_channel("USDC")
+COMBO_LIFECYCLE_CHANNEL = combo_lifecycle_channel("USDC")
 PLATFORM_CHANNELS = ("platform_state", "platform_state.public_methods_state")
-INDEX_CHANNEL = "deribit_price_index.btc_usdc"
+INDEX_CHANNEL = index_channel("btc_usdc")
 DEFAULT_SUBSCRIPTION_BATCH_SIZE = 100
 MAX_BUFFERED_LIFECYCLE_EVENTS = 10_000
 
@@ -105,6 +124,7 @@ class CatalogBootstrap:
 
 @dataclass
 class PlatformReadiness:
+    price_index: str = "btc_usdc"
     bootstrap_epoch: int = 0
     platform_subscription_acknowledged: bool = False
     public_methods_subscription_acknowledged: bool = False
@@ -135,7 +155,7 @@ class PlatformReadiness:
     def start_epoch(self, epoch: int) -> None:
         if epoch <= 0:
             raise ValueError("platform bootstrap epoch must be positive")
-        replacement = PlatformReadiness(bootstrap_epoch=epoch)
+        replacement = PlatformReadiness(price_index=self.price_index, bootstrap_epoch=epoch)
         self.__dict__.update(replacement.__dict__)
 
     def acknowledge(self, channels: Sequence[str]) -> None:
@@ -164,7 +184,7 @@ class PlatformReadiness:
             )
             if not all(isinstance(item, str) for item in locked_indices):
                 raise SourceDataError("public/status.locked_indices must contain strings")
-        relevant_locked = all_locked or "btc_usdc" in locked_indices
+        relevant_locked = all_locked or self.price_index in locked_indices
         if self.lock_snapshot is not True:
             self.lock_snapshot = relevant_locked
         self.status_usable = self.lock_snapshot is False
@@ -191,7 +211,7 @@ class PlatformReadiness:
         if "price_index" in data or "locked" in data:
             price_index = require_str(data.get("price_index"), "platform_state.price_index")
             locked = require_bool(data.get("locked"), "platform_state.locked")
-            if price_index == "btc_usdc" and locked:
+            if price_index == self.price_index and locked:
                 self.lock_snapshot = True
                 self._invalidate("RELEVANT_PLATFORM_LOCK")
             return

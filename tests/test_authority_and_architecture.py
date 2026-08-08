@@ -172,50 +172,53 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_accepts_queue_lag_repair_and_keeps_only_current_run() -> None:
+def test_current_stage_closes_linear_run_and_authorizes_only_inverse_construction() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`QUEUE_LAG_CURRENTNESS_THROUGHPUT_ACCEPTED`" in current
-    assert "**Production Short Vol Radar:** `CREDIBLE_CLUE_GENERATOR_FROZEN`" in current
-    assert "**Persistent service:** `REPAIRED_NATURAL_PUBLIC_SHADOW_RUNNING`" in current
-    assert "**Live commands:** `CURRENT_PRODUCTION_PUBLIC_SERVE_SHADOW_ONLY_NO_RESTART`" in current
+    assert "`INVERSE_BTC_PRODUCT_CONSTRUCTION_AUTHORIZED`" in current
+    assert "**Production Short Vol Radar:** `LINEAR_BTC_USDC_V1_ACCEPTED`" in current
+    assert "**Persistent service:** `STOPPED_CLEANLY`" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
     assert (
-        "**Sole authorized closure:** `SHORT_VOL_SELECTED_DECISION_NATURAL_VALIDATION`" in current
+        "**Sole authorized closure:** "
+        "`SHORT_VOL_INVERSE_BTC_PRODUCT_CONTRACT_AND_NORMALIZATION`" in current
     )
-    assert "1,812,600 contract evaluations" in current
-    assert "1,811,662 contract evaluations" in current
-    assert "10 distinct Episodes" in current
-    assert "7 distinct Episodes" in current
-    assert "`NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE 3`" in current
-    assert "`CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE 7`" in current
-    assert "`NO_ACTIVE_COMBO 10`" in current
+    assert "5,043,177 contract evaluations" in current
+    assert "5,040,616 contract evaluations" in current
+    assert "11 distinct Episodes" in current
+    assert "6 distinct Episodes" in current
+    assert "`CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE 6`" in current
+    assert "`OPTION_BOOK_UNKNOWN 1,792`" in current
+    assert "`POST_STATUS_BOOTSTRAP_REQUIRED 768`" in current
+    assert "`NUMERICAL_BOUNDARY_UNRESOLVED 1`" in current
     assert "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE" in current
-    assert "exactly two strictly later `public/get_order_book` responses" in normalized
-    assert "uninterrupted 600-second window" in normalized.lower()
-    assert "`600/600` CURRENT samples" in current
-    assert "4,783 ms" in current
+    assert "five Case directories" in normalized
+    assert "`CENSORED_AT_STOP`" in current
+    assert "`UNKNOWN_CONSUMED`" in current
+    assert "`7,100 ms`" in current
     assert "6dee819961d76b622dbc6b77997e1f987451a096" in current
     assert "sha256:fdb4f0b3eadfc0f892cfad210142d14c521394cfeb6fbd5c761554228c45998f" in current
-    assert "before action or margin is known" in normalized
-    assert "selected as Candidate and still Candidate reuses ordinary admission" in normalized
-    assert "refreshed WATCH/ABSTAIN may open" in normalized
-    assert "REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION" in normalized
-    assert "automatic restart" in current
+    assert "one process still binds exactly one product" in normalized.lower()
+    assert "actual account margin" in normalized.lower()
+    assert "remains `UNKNOWN`" in current
+    assert "any Deribit probe, smoke, natural Shadow process" in normalized
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_COMPONENT_BOOK_SHADOW_LIFECYCLE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_NATURAL_SHADOW_OPERATION.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_SELECTED_UNDERWRITING_DECISION_OUTCOME.md").exists()
-    validation_task = ROOT / "tasks/SHORT_VOL_SELECTED_DECISION_NATURAL_VALIDATION.md"
-    assert validation_task.exists()
-    task = validation_task.read_text(encoding="utf-8")
-    assert "**Task kind:** VALIDATION_ONLY" in task
-    assert "**Runtime implementation:** FORBIDDEN" in task
-    assert "**Decision Policy change:** NONE" in task
-    assert "**Live commands:** CURRENT_PROCESS_ONLY_NO_RESTART" in task
-    assert "600/600 one-second CURRENT samples" in " ".join(task.split())
+    assert not (ROOT / "tasks/SHORT_VOL_SELECTED_DECISION_NATURAL_VALIDATION.md").exists()
+    implementation_task = ROOT / "tasks/SHORT_VOL_INVERSE_BTC_PRODUCT_CONTRACT_AND_NORMALIZATION.md"
+    assert implementation_task.exists()
+    task = implementation_task.read_text(encoding="utf-8")
+    assert "**Task kind:** IMPLEMENTATION" in task
+    assert "**Runtime implementation:** REQUIRED" in task
+    assert "**Live commands:** FORBIDDEN" in task
+    assert "`INVERSE_PRODUCT_SEMANTICS_UNSUPPORTED`" in task
+    assert "Linear Case schema v3" in task
+    assert "product-aware schema v4" in task
     assert not (ROOT / "tasks/SHORT_VOL_QUEUE_LAG_CURRENTNESS_THROUGHPUT.md").exists()
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"

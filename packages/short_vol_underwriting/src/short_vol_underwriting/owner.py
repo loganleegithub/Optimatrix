@@ -5,7 +5,13 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
 
-from options_domain import ComponentBookLegQuote, ComponentBookQuoteKind, ComponentBookVerticalQuote
+from options_domain import (
+    ComponentBookLegQuote,
+    ComponentBookQuoteKind,
+    ComponentBookVerticalQuote,
+    component_quote_matches_product_contract,
+    product_for_identity,
+)
 
 from short_vol_underwriting.admission import (
     AdmissionAttempt,
@@ -395,6 +401,7 @@ class FixedContractShadowOwner:
         ):
             raise ValueError("owner Policy chain and runtime bindings differ")
         self.policies = policies
+        self.product = product_for_identity(policies.radar.product_spec_identity)
         self.bindings = bindings
         self.state_store = state_store
         self._slot_consumed: set[str] = set()
@@ -1639,6 +1646,7 @@ class FixedContractShadowOwner:
         self._require_target_quantity_integrity(facts)
         if self._uses_component_books(facts):
             return self._evaluate_component_underwriting(facts)
+        inverse_atomic_unsupported = self._inverse_atomic_unsupported_reason(facts)
         slot_identity = self._slot_identity(facts)
         slot_consumed = slot_identity is not None and slot_identity in self._slot_consumed
         known_negative = (
@@ -1659,8 +1667,10 @@ class FixedContractShadowOwner:
         )
         if known_negative:
             availability = UnderwritingAvailability.NOT_EVALUATED
-        elif facts.atomic_state != "PUBLIC_ATOMIC_QUOTE_AVAILABLE" or not self._facts_complete(
-            facts
+        elif (
+            inverse_atomic_unsupported is not None
+            or facts.atomic_state != "PUBLIC_ATOMIC_QUOTE_AVAILABLE"
+            or not self._facts_complete(facts)
         ):
             availability = UnderwritingAvailability.UNKNOWN
         else:
@@ -1686,6 +1696,7 @@ class FixedContractShadowOwner:
             facts.short_leg_taker_commission_fraction,
             facts.long_leg_taker_commission_fraction,
             facts.unknown_reasons,
+            inverse_atomic_unsupported,
         )
         if availability is not UnderwritingAvailability.EVALUABLE:
             return _UnderwritingEvaluation(
@@ -1796,6 +1807,8 @@ class FixedContractShadowOwner:
     ) -> _UnderwritingEvaluation:
         slot_identity = self._slot_identity(facts)
         slot_consumed = slot_identity is not None and slot_identity in self._slot_consumed
+        product_mismatch = self._component_product_mismatch_reason(facts.component_quote)
+        projection_mismatch = self._component_fact_projection_mismatch_reason(facts)
         known_negative = (
             facts.active_episode_identity is None
             or slot_consumed
@@ -1835,6 +1848,8 @@ class FixedContractShadowOwner:
             facts.short_leg_taker_commission_fraction,
             facts.long_leg_taker_commission_fraction,
             facts.unknown_reasons,
+            product_mismatch,
+            projection_mismatch,
         )
         if availability is not UnderwritingAvailability.EVALUABLE:
             return _UnderwritingEvaluation(
@@ -1968,9 +1983,15 @@ class FixedContractShadowOwner:
                 and facts.expiry_ms is not None
                 and facts.entry_direction == "SELL"
                 and quote is not None
+                and self._component_product_mismatch_reason(quote) is None
+                and self._component_fact_projection_mismatch_reason(facts) is None
                 and quote.kind is ComponentBookQuoteKind.ENTRY
                 and quote.execution_model == self.policies.underwriting.execution_model
                 and quote.full_quantity_btc == facts.target_quantity_btc
+                and quote.valuation_index_price == index
+                and short_strike is not None
+                and long_strike is not None
+                and quote.width_usdc_per_btc == abs(long_strike - short_strike)
                 and quote.short_leg.instrument_name == facts.short_leg_instrument_name
                 and quote.long_leg.instrument_name == facts.long_leg_instrument_name
                 and facts.option_catalog_complete
@@ -2047,6 +2068,61 @@ class FixedContractShadowOwner:
             and short_iv >= 0
         )
 
+    def _component_product_mismatch_reason(
+        self,
+        quote: ComponentBookVerticalQuote | None,
+    ) -> str | None:
+        if quote is None:
+            return None
+        if component_quote_matches_product_contract(
+            quote,
+            product=self.product,
+            fee_rate=self.policies.underwriting.fee_rate_index_fraction,
+        ):
+            return None
+        return "COMPONENT_PRODUCT_MISMATCH"
+
+    @staticmethod
+    def _component_fact_projection_mismatch_reason(
+        facts: UnderwritingFacts,
+    ) -> str | None:
+        quote = facts.component_quote
+        if quote is None:
+            return None
+        short_strike = facts.short_strike_usdc_per_btc
+        long_strike = facts.long_strike_usdc_per_btc
+        if (
+            quote.full_quantity_btc != facts.target_quantity_btc
+            or (
+                facts.index_usdc_per_btc is not None
+                and quote.valuation_index_price != facts.index_usdc_per_btc
+            )
+            or (
+                facts.short_leg_instrument_name is not None
+                and quote.short_leg.instrument_name != facts.short_leg_instrument_name
+            )
+            or (
+                facts.long_leg_instrument_name is not None
+                and quote.long_leg.instrument_name != facts.long_leg_instrument_name
+            )
+            or (
+                short_strike is not None
+                and long_strike is not None
+                and quote.width_usdc_per_btc != abs(long_strike - short_strike)
+            )
+        ):
+            return "COMPONENT_FACT_PROJECTION_MISMATCH"
+        return None
+
+    def _inverse_atomic_unsupported_reason(self, facts: UnderwritingFacts) -> str | None:
+        if (
+            self.product.is_inverse
+            and not self._uses_component_books(facts)
+            and facts.atomic_state == "PUBLIC_ATOMIC_QUOTE_AVAILABLE"
+        ):
+            return "INVERSE_ATOMIC_ECONOMICS_UNSUPPORTED"
+        return None
+
     @staticmethod
     def _known_structural_unavailability(facts: UnderwritingFacts) -> bool:
         known_states = {
@@ -2111,6 +2187,19 @@ class FixedContractShadowOwner:
             evaluation.availability,
             identity,
         )
+        unknown_reasons = list(facts.unknown_reasons)
+        product_mismatch = self._component_product_mismatch_reason(facts.component_quote)
+        if product_mismatch is not None and product_mismatch not in unknown_reasons:
+            unknown_reasons.append(product_mismatch)
+        projection_mismatch = self._component_fact_projection_mismatch_reason(facts)
+        if projection_mismatch is not None and projection_mismatch not in unknown_reasons:
+            unknown_reasons.append(projection_mismatch)
+        inverse_atomic_unsupported = self._inverse_atomic_unsupported_reason(facts)
+        if (
+            inverse_atomic_unsupported is not None
+            and inverse_atomic_unsupported not in unknown_reasons
+        ):
+            unknown_reasons.append(inverse_atomic_unsupported)
         payload: dict[str, object] = {
             "underwriting_availability_evaluation_identity": identity,
             "radar_scope_or_short_leg_identity": facts.radar_scope_identity,
@@ -2127,7 +2216,7 @@ class FixedContractShadowOwner:
                 facts.component_state == COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE
             ),
             "atomic_state_diagnostic": facts.atomic_state,
-            "unknown_reasons": list(facts.unknown_reasons),
+            "unknown_reasons": unknown_reasons,
         }
         self._emit(
             "UNDERWRITING_AVAILABILITY_EVALUATION",
@@ -2177,7 +2266,9 @@ class FixedContractShadowOwner:
             evaluation.action.value,
         )
         economics = evaluation.economics
+        component_quote = facts.component_quote
         margins = self._underwriting_threshold_margins(evaluation)
+        valuation_unit = self._underwriting_valuation_unit(facts)
         payload = {
             "underwriting_action_identity": identity,
             "underwriting_availability_evaluation_identity": availability_identity,
@@ -2189,7 +2280,7 @@ class FixedContractShadowOwner:
                 self._underwriting_decision_blockers(evaluation, margins.failed_predicates)
             ),
             "failed_predicates": list(margins.failed_predicates),
-            "predicate_margin_vector": list(margins.as_vector()),
+            "predicate_margin_vector": list(margins.as_vector(valuation_unit)),
             "selected_long_leg_instrument_name": facts.long_leg_instrument_name,
             "protective_leg_selection_rule_identity": (
                 facts.protective_leg_selection_rule_identity
@@ -2197,6 +2288,28 @@ class FixedContractShadowOwner:
             "candidate_protective_leg_count": facts.candidate_protective_leg_count,
             "entry_consumed_level_count": self._entry_consumed_level_count(facts),
             "evaluation_fact_boundary": facts.boundary.as_object(),
+            "product_spec_identity": (
+                component_quote.product_spec_identity if component_quote is not None else None
+            ),
+            "product_name": component_quote.product_name if component_quote is not None else None,
+            "native_premium_currency": (
+                component_quote.native_premium_currency if component_quote is not None else None
+            ),
+            "valuation_currency": (
+                component_quote.valuation_currency if component_quote is not None else None
+            ),
+            "native_gross_entry_credit": (
+                component_quote.native_gross_cashflow if component_quote is not None else None
+            ),
+            "native_entry_fee_reserve": (
+                component_quote.native_total_fee_reserve if component_quote is not None else None
+            ),
+            "native_net_entry_credit": (
+                component_quote.native_net_cashflow if component_quote is not None else None
+            ),
+            "entry_valuation_index_price": (
+                component_quote.valuation_index_price if component_quote is not None else None
+            ),
             "gross_entry_credit_usdc": economics.gross_entry_credit_usdc,
             "entry_fee_reserve_usdc": economics.entry_fee_reserve_usdc,
             "net_entry_credit_usdc": economics.net_entry_credit_usdc,
@@ -2271,12 +2384,26 @@ class FixedContractShadowOwner:
         )
 
     @staticmethod
+    def _underwriting_valuation_unit(facts: UnderwritingFacts) -> str:
+        quote = facts.component_quote
+        return quote.valuation_currency if quote is not None else "USDC"
+
     def _decision_control_refresh_unknown_reasons(
+        self,
         evaluation: _UnderwritingEvaluation,
     ) -> tuple[str, ...]:
         facts = evaluation.facts
         reasons: list[str] = []
-        for reason in (*facts.unknown_reasons, *facts.component_blockers):
+        product_mismatch = self._component_product_mismatch_reason(facts.component_quote)
+        projection_mismatch = self._component_fact_projection_mismatch_reason(facts)
+        inverse_atomic_unsupported = self._inverse_atomic_unsupported_reason(facts)
+        for reason in (
+            *facts.unknown_reasons,
+            *facts.component_blockers,
+            product_mismatch,
+            projection_mismatch,
+            inverse_atomic_unsupported,
+        ):
             if reason and reason not in reasons:
                 reasons.append(reason)
         if not reasons:
@@ -2390,6 +2517,7 @@ class FixedContractShadowOwner:
             return
         rule_identity = selected_decision_rule_identity(bindings=self.bindings)
         margins = self._underwriting_threshold_margins(evaluation)
+        valuation_unit = self._underwriting_valuation_unit(facts)
         selection_identity = canonical_identity(
             "SelectedUnderwritingDecisionIdentity",
             rule_identity,
@@ -2397,7 +2525,7 @@ class FixedContractShadowOwner:
             episode_identity,
             action_identity,
             evaluation.action.value,
-            margins.as_vector(),
+            margins.as_vector(valuation_unit),
             evaluation.economic_fingerprint,
             facts.boundary.as_object(),
         )
@@ -2460,7 +2588,7 @@ class FixedContractShadowOwner:
                 "economic_action": evaluation.action.value,
                 "selected_consumed_economic_fact_fingerprint": (evaluation.economic_fingerprint),
                 "failed_predicates": list(margins.failed_predicates),
-                "predicate_margin_vector": list(margins.as_vector()),
+                "predicate_margin_vector": list(margins.as_vector(valuation_unit)),
                 "selected_short_leg_instrument_name": facts.short_leg_instrument_name,
                 "selected_long_leg_instrument_name": facts.long_leg_instrument_name,
                 "protective_leg_selection_rule_identity": (
@@ -2809,6 +2937,20 @@ class FixedContractShadowOwner:
         if index_source is None or ticker_source is None:
             raise RuntimeError("counterfactual enrollment requires index and ticker sources")
         return {
+            "product_spec_identity": (
+                component_quote.product_spec_identity if component_quote is not None else None
+            ),
+            "product_name": component_quote.product_name if component_quote is not None else None,
+            "native_premium_currency": (
+                component_quote.native_premium_currency if component_quote is not None else None
+            ),
+            "settlement_currency": (
+                component_quote.settlement_currency if component_quote is not None else None
+            ),
+            "valuation_currency": (
+                component_quote.valuation_currency if component_quote is not None else None
+            ),
+            "price_index": component_quote.price_index if component_quote is not None else None,
             "entry_fact_boundary": facts.boundary.as_object(),
             "active_episode_identity": facts.active_episode_identity,
             "radar_scope_identity": facts.radar_scope_identity,
@@ -2909,6 +3051,18 @@ class FixedContractShadowOwner:
             "entry_index_source_ref": index_source.as_ref(),
             "entry_short_leg_mark_iv_fraction": facts.short_mark_iv_fraction,
             "entry_short_leg_mark_iv_source_ref": ticker_source.as_ref(),
+            "native_gross_entry_credit": (
+                component_quote.native_gross_cashflow if component_quote is not None else None
+            ),
+            "native_entry_fee_reserve": (
+                component_quote.native_total_fee_reserve if component_quote is not None else None
+            ),
+            "native_net_entry_credit": (
+                component_quote.native_net_cashflow if component_quote is not None else None
+            ),
+            "entry_valuation_index_price": (
+                component_quote.valuation_index_price if component_quote is not None else None
+            ),
             "gross_entry_credit_usdc": economics.gross_entry_credit_usdc,
             "entry_fee_reserve_usdc": economics.entry_fee_reserve_usdc,
             "net_entry_credit_usdc": economics.net_entry_credit_usdc,
@@ -2939,6 +3093,9 @@ class FixedContractShadowOwner:
     def _selected_decision_payload(
         selection: _SelectedDecisionRecord,
     ) -> dict[str, object]:
+        valuation_unit = FixedContractShadowOwner._underwriting_valuation_unit(
+            selection.selected_facts
+        )
         return {
             "selected_underwriting_decision_identity": selection.selection_identity,
             "decision_control_rule_identity": selection.rule_identity,
@@ -2949,7 +3106,9 @@ class FixedContractShadowOwner:
                 selection.selected_economic_fingerprint
             ),
             "selected_failed_predicates": list(selection.selected_margins.failed_predicates),
-            "selected_predicate_margin_vector": list(selection.selected_margins.as_vector()),
+            "selected_predicate_margin_vector": list(
+                selection.selected_margins.as_vector(valuation_unit)
+            ),
             "selection_fact_boundary": selection.selected_facts.boundary.as_object(),
         }
 
@@ -2977,6 +3136,7 @@ class FixedContractShadowOwner:
             )
         require_identity(owner_identity, "Case-open Underwriting owner_identity")
         margins = self._underwriting_threshold_margins(refreshed)
+        valuation_unit = self._underwriting_valuation_unit(refreshed.facts)
         selection_rule_identity = refreshed.facts.protective_leg_selection_rule_identity
         candidate_protective_leg_count = refreshed.facts.candidate_protective_leg_count
         action_identity = canonical_identity(
@@ -2995,7 +3155,7 @@ class FixedContractShadowOwner:
                 refreshed.economic_fingerprint
             ),
             "entry_underwriting_failed_predicates": list(margins.failed_predicates),
-            "entry_underwriting_predicate_margin_vector": list(margins.as_vector()),
+            "entry_underwriting_predicate_margin_vector": list(margins.as_vector(valuation_unit)),
             "entry_underwriting_protective_leg_selection_rule_identity": selection_rule_identity,
             "entry_underwriting_candidate_protective_leg_count": candidate_protective_leg_count,
             "entry_underwriting_decision_fact_boundary": (refreshed.facts.boundary.as_object()),
@@ -3411,6 +3571,19 @@ class FixedContractShadowOwner:
                 facts.current_index_usdc_per_btc if facts.index_source is not None else None
             ),
             net_entry_credit_usdc=trade.entry_economics.net_entry_credit_usdc,
+            expected_product=self.product,
+            entry_product_spec_identity=(
+                entry.component_quote.product_spec_identity
+                if entry.component_quote is not None
+                else None
+            ),
+            expected_short_leg_instrument_name=entry.short_leg_instrument_name,
+            expected_long_leg_instrument_name=entry.long_leg_instrument_name,
+            expected_width_usdc_per_btc=(
+                entry.component_quote.width_usdc_per_btc
+                if entry.component_quote is not None
+                else None
+            ),
             component_quote=facts.component_quote,
         )
 
@@ -3715,6 +3888,36 @@ class FixedContractShadowOwner:
                 )
                 if source is not None
             ],
+            "native_gross_close_cashflow": (
+                facts.component_quote.native_gross_cashflow
+                if facts.component_quote is not None
+                else None
+            ),
+            "native_close_fee_reserve": (
+                facts.component_quote.native_total_fee_reserve
+                if facts.component_quote is not None
+                else None
+            ),
+            "native_net_close_cashflow": (
+                facts.component_quote.native_net_cashflow
+                if facts.component_quote is not None
+                else None
+            ),
+            "native_premium_currency": (
+                facts.component_quote.native_premium_currency
+                if facts.component_quote is not None
+                else None
+            ),
+            "product_spec_identity": (
+                facts.component_quote.product_spec_identity
+                if facts.component_quote is not None
+                else None
+            ),
+            "close_valuation_index_price": (
+                facts.component_quote.valuation_index_price
+                if facts.component_quote is not None
+                else None
+            ),
             "gross_close_cashflow_usdc": gross,
             "evaluation_fact_boundary": facts.boundary.as_object(),
             "non_claims": (
@@ -3938,6 +4141,44 @@ class FixedContractShadowOwner:
             else None
         )
         close_economics = opportunity.economics if opportunity is not None else None
+        entry_component_quote = trade.entry_facts.component_quote
+        close_component_quote = (
+            facts.component_quote if facts is not None and known_economics is not None else None
+        )
+        if (
+            entry_component_quote is not None
+            and close_component_quote is not None
+            and entry_component_quote.product_spec_identity
+            == close_component_quote.product_spec_identity
+            and entry_component_quote.native_premium_currency
+            == close_component_quote.native_premium_currency
+        ):
+            native_close_quote = close_component_quote
+            native_gross_close_cashflow = native_close_quote.native_gross_cashflow
+            native_close_fee_reserve = native_close_quote.native_total_fee_reserve
+            native_net_close_cashflow = native_close_quote.native_net_cashflow
+            native_gross_pnl = (
+                entry_component_quote.native_gross_cashflow + native_gross_close_cashflow
+            )
+            native_total_fee = (
+                entry_component_quote.native_total_fee_reserve + native_close_fee_reserve
+            )
+            native_net_pnl = entry_component_quote.native_net_cashflow + native_net_close_cashflow
+            close_valuation_index_price = native_close_quote.valuation_index_price
+            exit_valued_native_net_pnl = (
+                native_net_pnl * close_valuation_index_price
+                if native_close_quote.native_premium_currency == "BTC"
+                else native_net_pnl
+            )
+        else:
+            native_gross_close_cashflow = None
+            native_close_fee_reserve = None
+            native_net_close_cashflow = None
+            native_gross_pnl = None
+            native_total_fee = None
+            native_net_pnl = None
+            close_valuation_index_price = None
+            exit_valued_native_net_pnl = None
         component_close_facts = (
             facts
             if (
@@ -3964,6 +4205,32 @@ class FixedContractShadowOwner:
                 trade.entry_facts.component_quote.execution_model
                 if trade.entry_facts.component_quote is not None
                 else "PUBLIC_ATOMIC_COMBO"
+            ),
+            "product_spec_identity": (
+                entry_component_quote.product_spec_identity
+                if entry_component_quote is not None
+                else None
+            ),
+            "product_name": (
+                entry_component_quote.product_name if entry_component_quote is not None else None
+            ),
+            "native_premium_currency": (
+                entry_component_quote.native_premium_currency
+                if entry_component_quote is not None
+                else None
+            ),
+            "settlement_currency": (
+                entry_component_quote.settlement_currency
+                if entry_component_quote is not None
+                else None
+            ),
+            "valuation_currency": (
+                entry_component_quote.valuation_currency
+                if entry_component_quote is not None
+                else None
+            ),
+            "price_index": (
+                entry_component_quote.price_index if entry_component_quote is not None else None
             ),
             "terminal_state": state.value,
             "terminal_fact_boundary": boundary.as_object(),
@@ -4011,6 +4278,39 @@ class FixedContractShadowOwner:
                 else []
             ),
             "terminal_supervisor_source_identity": terminal_source_identity,
+            "native_gross_entry_credit": (
+                entry_component_quote.native_gross_cashflow
+                if entry_component_quote is not None
+                else None
+            ),
+            "native_entry_fee_reserve": (
+                entry_component_quote.native_total_fee_reserve
+                if entry_component_quote is not None
+                else None
+            ),
+            "native_net_entry_credit": (
+                entry_component_quote.native_net_cashflow
+                if entry_component_quote is not None
+                else None
+            ),
+            "native_gross_close_cashflow": native_gross_close_cashflow,
+            "native_close_fee_reserve": native_close_fee_reserve,
+            "native_net_close_cashflow": native_net_close_cashflow,
+            "native_gross_pnl": native_gross_pnl,
+            "native_total_fee_reserve": native_total_fee,
+            "native_net_pnl": native_net_pnl,
+            "exit_valued_native_net_pnl_usd": exit_valued_native_net_pnl,
+            "boundary_valued_net_pnl_usd": (
+                known_economics.net_pnl_after_public_standard_fee_reserve_usdc
+                if known_economics is not None
+                else None
+            ),
+            "entry_valuation_index_price": (
+                entry_component_quote.valuation_index_price
+                if entry_component_quote is not None
+                else None
+            ),
+            "close_valuation_index_price": close_valuation_index_price,
             "gross_entry_credit_usdc": trade.entry_economics.gross_entry_credit_usdc,
             "entry_fee_reserve_usdc": trade.entry_economics.entry_fee_reserve_usdc,
             "net_entry_credit_usdc": trade.entry_economics.net_entry_credit_usdc,
@@ -4233,6 +4533,26 @@ class FixedContractShadowOwner:
         index_source = facts.index_source
         if economics is None or index_source is None:
             raise RuntimeError("exit requires economics")
+        entry_component_quote = trade.entry_facts.component_quote
+        close_component_quote = facts.component_quote
+        if (
+            entry_component_quote is not None
+            and close_component_quote is not None
+            and entry_component_quote.product_spec_identity
+            == close_component_quote.product_spec_identity
+        ):
+            native_projected_pnl = (
+                entry_component_quote.native_net_cashflow
+                + close_component_quote.native_net_cashflow
+            )
+            exit_valued_native_projected_pnl = (
+                native_projected_pnl * close_component_quote.valuation_index_price
+                if close_component_quote.native_premium_currency == "BTC"
+                else native_projected_pnl
+            )
+        else:
+            native_projected_pnl = None
+            exit_valued_native_projected_pnl = None
         return {
             "commission_source_refs": self._position_commission_refs(facts),
             "index_source_ref": index_source.as_ref(),
@@ -4257,6 +4577,36 @@ class FixedContractShadowOwner:
             ),
             "long_leg_taker_commission_fraction": (
                 trade.entry_facts.long_leg_taker_commission_fraction
+            ),
+            "product_spec_identity": (
+                facts.component_quote.product_spec_identity
+                if facts.component_quote is not None
+                else None
+            ),
+            "native_premium_currency": (
+                facts.component_quote.native_premium_currency
+                if facts.component_quote is not None
+                else None
+            ),
+            "native_gross_close_cashflow": (
+                facts.component_quote.native_gross_cashflow
+                if facts.component_quote is not None
+                else None
+            ),
+            "native_close_fee_reserve": (
+                facts.component_quote.native_total_fee_reserve
+                if facts.component_quote is not None
+                else None
+            ),
+            "native_net_close_cashflow": (
+                facts.component_quote.native_net_cashflow
+                if facts.component_quote is not None
+                else None
+            ),
+            "native_projected_shadow_net_pnl": native_projected_pnl,
+            "exit_valued_native_projected_pnl_usd": (exit_valued_native_projected_pnl),
+            "boundary_valued_projected_shadow_net_pnl_usd": (
+                economics.projected_shadow_net_pnl_usdc
             ),
             "close_index_usdc_per_btc": facts.current_index_usdc_per_btc,
             "gross_close_cashflow_usdc": economics.gross_close_cashflow_usdc,
@@ -4958,18 +5308,34 @@ class FixedContractShadowOwner:
         role: str,
         leg: ComponentBookLegQuote,
     ) -> dict[str, object]:
+        valuation_factor = (
+            leg.valuation_index_price if leg.native_premium_currency == "BTC" else Decimal(1)
+        )
+        raw_native = tuple((level.price, level.amount) for level in leg.raw.consumed)
+        stressed_native = tuple((level.price, level.amount) for level in leg.stressed.consumed)
         return {
             "canonical_leg_role": role,
             "instrument_name": leg.instrument_name,
             "action": leg.action.value,
+            "native_premium_currency": leg.native_premium_currency,
+            "valuation_index_price": leg.valuation_index_price,
+            "raw_consumed_levels_native": [
+                {"price_native": price, "amount_btc": amount} for price, amount in raw_native
+            ],
+            "raw_vwap_native": leg.raw.vwap,
+            "stressed_consumed_levels_native": [
+                {"price_native": price, "amount_btc": amount} for price, amount in stressed_native
+            ],
+            "stressed_vwap_native": leg.stressed.vwap,
+            "native_fee_reserve": leg.native_fee_reserve,
             "raw_consumed_levels": self._levels(
-                tuple((level.price, level.amount) for level in leg.raw.consumed)
+                tuple((price * valuation_factor, amount) for price, amount in raw_native)
             ),
-            "raw_vwap_usdc_per_btc": leg.raw.vwap,
+            "raw_vwap_usdc_per_btc": leg.raw.vwap * valuation_factor,
             "stressed_consumed_levels": self._levels(
-                tuple((level.price, level.amount) for level in leg.stressed.consumed)
+                tuple((price * valuation_factor, amount) for price, amount in stressed_native)
             ),
-            "stressed_vwap_usdc_per_btc": leg.stressed.vwap,
+            "stressed_vwap_usdc_per_btc": leg.stressed.vwap * valuation_factor,
             "fee_reserve_usdc": leg.fee_reserve_usdc,
         }
 

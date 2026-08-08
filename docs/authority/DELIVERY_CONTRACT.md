@@ -117,6 +117,10 @@ at most one explicitly authorized source-contract probe when an undocumented pro
 at most one explicitly authorized bounded read-only integration smoke when current reachability is the claim
 ```
 
+This is a maximum validation shape, not standing live authority. `CURRENT_STAGE` and the one active
+task may forbid every probe, smoke, service start, or restart; the current Inverse construction
+closure does so.
+
 Public-only validation does not require a manifest, receipt chain, fresh empty evidence directory,
 commissioning controller, host probe, 24-hour Soak, replay, full-market archive, independent commit
 ceremony, or post-push acceptance ledger.

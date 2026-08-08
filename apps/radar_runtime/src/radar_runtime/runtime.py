@@ -27,9 +27,6 @@ from market_monitor import (
     TrustedClock,
 )
 from market_monitor.deribit import (
-    COMBO_LIFECYCLE_CHANNEL,
-    INDEX_CHANNEL,
-    OPTION_LIFECYCLE_CHANNEL,
     PLATFORM_CHANNELS,
     CatalogBootstrap,
     PlatformReadiness,
@@ -50,9 +47,11 @@ from market_monitor.types import (
 from options_domain import (
     FINAL_INSTRUMENT_LIFECYCLE_STATES,
     INSTRUMENT_LIFECYCLE_STATES,
+    LINEAR_BTC_USDC,
     TEMPORARILY_UNAVAILABLE_INSTRUMENT_STATES,
     ComboInstrument,
     OptionInstrument,
+    OptionProductSpec,
     OptionType,
     parse_combo_instrument,
     parse_option_instrument,
@@ -649,16 +648,23 @@ class RadarReducer:
         code_identity: str,
         event_sink: RadarEventSink,
         runtime_identity: str,
+        product: OptionProductSpec = LINEAR_BTC_USDC,
         shadow_adapter: ShadowRuntimeAdapter | None = None,
         snapshot_publisher: SettledSnapshotPublisher | None = None,
     ) -> None:
+        if policy.product_spec_identity != product.identity:
+            raise ValueError("Radar Policy product identity does not match the selected product")
         self.policy = policy
+        self.product = product
+        self.option_lifecycle_channel = product.option_lifecycle_channel
+        self.combo_lifecycle_channel = product.combo_lifecycle_channel
+        self.index_channel = product.index_channel
         self.code_identity = code_identity
         self.event_sink = event_sink
         self.runtime_identity = runtime_identity
         self.shadow_adapter = shadow_adapter
         self.snapshot_publisher = snapshot_publisher
-        self.platform = PlatformReadiness()
+        self.platform = PlatformReadiness(price_index=product.price_index)
         self.option_catalog = CatalogBootstrap()
         self.combo_catalog = CatalogBootstrap()
         self.catalog_options: dict[str, OptionInstrument] = {}
@@ -829,7 +835,7 @@ class RadarReducer:
         self._held_subscription_frame_count = 0
         self.pending_rpcs.clear()
         self._early_rpc_responses.clear()
-        self.platform = PlatformReadiness()
+        self.platform = PlatformReadiness(price_index=self.product.price_index)
         self.platform.start_epoch(session_epoch)
         self.option_catalog = CatalogBootstrap()
         self.combo_catalog = CatalogBootstrap()
@@ -1732,8 +1738,8 @@ class RadarReducer:
             self._plan_channel_change(
                 (
                     *PLATFORM_CHANNELS,
-                    OPTION_LIFECYCLE_CHANNEL,
-                    COMBO_LIFECYCLE_CHANNEL,
+                    self.option_lifecycle_channel,
+                    self.combo_lifecycle_channel,
                 ),
                 subscribe=True,
                 origin_boundary=boundary,
@@ -1828,7 +1834,7 @@ class RadarReducer:
                 boundary.received_monotonic_ms
                 + self.policy.runtime_limits.clock_refresh_interval_ms
             )
-            index_slot = self._channels.get(INDEX_CHANNEL)
+            index_slot = self._channels.get(self.index_channel)
             release_index_generation = (
                 index_slot.generation
                 if (
@@ -1859,7 +1865,7 @@ class RadarReducer:
             )
             if release_index_generation is not None:
                 self._mark_held_frames_eligible(
-                    (INDEX_CHANNEL,),
+                    (self.index_channel,),
                     release_index_generation,
                 )
                 self._drain_held_frames(boundary)
@@ -2281,9 +2287,9 @@ class RadarReducer:
             and not self._channels[channel].resync_requested
         )
         self.platform.acknowledge(admitted_channels)
-        if OPTION_LIFECYCLE_CHANNEL in admitted_channels:
+        if self.option_lifecycle_channel in admitted_channels:
             self.option_catalog.acknowledge_lifecycle()
-        if COMBO_LIFECYCLE_CHANNEL in admitted_channels:
+        if self.combo_lifecycle_channel in admitted_channels:
             self.combo_catalog.acknowledge_lifecycle()
         for channel in acknowledged_channels:
             slot = self._channels[channel]
@@ -2294,7 +2300,7 @@ class RadarReducer:
                     generation=request.generation,
                 )
                 continue
-            if channel == INDEX_CHANNEL and self.clock is not None:
+            if channel == self.index_channel and self.clock is not None:
                 trusted = self.clock.interval_at(boundary.received_monotonic_ms)
                 self.index.start_continuous_coverage(
                     trusted.upper_ms,
@@ -2302,7 +2308,7 @@ class RadarReducer:
                 )
                 self._index_coverage_generation = slot.generation
                 self._index_resubscribe_pending = False
-            if channel != INDEX_CHANNEL or self.clock is not None:
+            if channel != self.index_channel or self.clock is not None:
                 self._mark_held_frames_eligible((channel,), request.generation)
         self._drain_held_frames(boundary)
         self._reconcile_channel_intents(acknowledged_channels, boundary)
@@ -2310,8 +2316,8 @@ class RadarReducer:
             self.channel_state(channel) is ChannelState.ACKNOWLEDGED
             for channel in (
                 *PLATFORM_CHANNELS,
-                OPTION_LIFECYCLE_CHANNEL,
-                COMBO_LIFECYCLE_CHANNEL,
+                self.option_lifecycle_channel,
+                self.combo_lifecycle_channel,
             )
         ):
             self._bootstrap_queries_issued = True
@@ -2350,7 +2356,7 @@ class RadarReducer:
         return self._schedule(
             purpose=RpcPurpose.INDEX_HISTORY,
             method="public/get_index_chart_data",
-            params={"index_name": "btc_usdc", "range": "1d"},
+            params={"index_name": self.product.price_index, "range": "1d"},
             scope="INDEX_HISTORY",
             generation=None,
             origin_boundary=boundary,
@@ -2398,7 +2404,7 @@ class RadarReducer:
         return self._schedule(
             purpose=RpcPurpose.OPTION_CATALOG,
             method="public/get_instruments",
-            params={"currency": "USDC", "kind": "option", "expired": False},
+            params={"currency": self.product.public_currency, "kind": "option", "expired": False},
             scope="OPTION_CATALOG",
             generation=None,
             origin_boundary=boundary,
@@ -2427,7 +2433,7 @@ class RadarReducer:
             or slot.resync_requested
         ):
             return
-        if channel == INDEX_CHANNEL and (
+        if channel == self.index_channel and (
             self.clock is None or self._index_coverage_generation != slot.generation
         ):
             self._hold_subscription_frame(
@@ -2450,6 +2456,7 @@ class RadarReducer:
         source = _source_name_for_channel(
             channel,
             combo_names=set(self.combos) | self._subscribed_combo_names,
+            product=self.product,
         )
         self._causal_seq += 1
         boundary = (
@@ -2464,8 +2471,8 @@ class RadarReducer:
         )
         epoch_failure_reason: str | None = None
         try:
-            if channel == OPTION_LIFECYCLE_CHANNEL:
-                if _is_target_option_lifecycle(data):
+            if channel == self.option_lifecycle_channel:
+                if _is_target_option_lifecycle(data, self.product):
                     try:
                         if self.option_catalog.buffering:
                             self.option_catalog.accept_lifecycle(data)
@@ -2473,7 +2480,7 @@ class RadarReducer:
                             self._apply_option_lifecycle(data, boundary)
                     except (SourceDataError, ValueError):
                         self._mark_option_catalog_incomplete(boundary)
-            elif channel == COMBO_LIFECYCLE_CHANNEL:
+            elif channel == self.combo_lifecycle_channel:
                 try:
                     if self.combo_catalog.buffering:
                         self.combo_catalog.accept_lifecycle(data)
@@ -2516,7 +2523,7 @@ class RadarReducer:
                         affected_instruments=tuple(self.options),
                         countable=False,
                     )
-            elif channel == INDEX_CHANNEL:
+            elif channel == self.index_channel:
                 self._apply_index(data, boundary)
             elif channel.startswith("ticker.") and channel.endswith(".agg2"):
                 instrument_name = channel[len("ticker.") : -len(".agg2")]
@@ -2610,7 +2617,7 @@ class RadarReducer:
                 else None
             )
             try:
-                instrument = parse_option_instrument(value)
+                instrument = parse_option_instrument(value, product=self.product)
             except SourceDataError:
                 complete = False
                 if instrument_name is None:
@@ -2630,7 +2637,7 @@ class RadarReducer:
                     )
                 continue
             try:
-                target_product = _is_target_option_product(value)
+                target_product = _is_target_option_product(value, self.product)
             except SourceDataError:
                 complete = False
                 positive_scope_safe = False
@@ -2708,7 +2715,7 @@ class RadarReducer:
             "option lifecycle.instrument_name",
         )
         state = require_str(data.get("state"), "option lifecycle.state")
-        if not _is_target_option_instrument_name(instrument_name):
+        if not _is_target_option_instrument_name(instrument_name, self.product):
             return
         existing = self.catalog_options.get(instrument_name) or self.options.get(instrument_name)
         affected_scope_keys = (
@@ -2821,13 +2828,13 @@ class RadarReducer:
             )
             return True
         try:
-            instrument = parse_option_instrument(payload)
+            instrument = parse_option_instrument(payload, product=self.product)
         except SourceDataError:
             instrument = None
         if instrument is None or instrument.instrument_name != request.scope:
             if _is_explicit_final_target_option_metadata(
-                payload, request.scope
-            ) or _is_valid_irrelevant_option_metadata(payload, request.scope):
+                payload, request.scope, self.product
+            ) or _is_valid_irrelevant_option_metadata(payload, request.scope, self.product):
                 if self._option_metadata_pending.get(request.scope) == request.generation:
                     self._option_metadata_pending.pop(request.scope, None)
                 self._option_lifecycle_unavailable.pop(request.scope, None)
@@ -3007,13 +3014,13 @@ class RadarReducer:
                 origin_boundary=boundary,
                 failure_scope=FailureScope.OPTION,
             )
-        if self.channel_state(INDEX_CHANNEL) in {
+        if self.channel_state(self.index_channel) in {
             ChannelState.UNSUBSCRIBED,
             ChannelState.RETIRED,
         }:
             self._index_resubscribe_pending = True
             self._plan_channel_change(
-                (INDEX_CHANNEL,),
+                (self.index_channel,),
                 subscribe=True,
                 origin_boundary=boundary,
                 failure_scope=FailureScope.CLOCK_INDEX,
@@ -3024,7 +3031,7 @@ class RadarReducer:
             return False
         try:
             data = require_mapping(payload, "index notification")
-            if require_str(data.get("index_name"), "index.index_name") != "btc_usdc":
+            if require_str(data.get("index_name"), "index.index_name") != self.product.price_index:
                 raise SourceDataError("unexpected index_name")
             source_timestamp_ms = require_int(data.get("timestamp"), "index.timestamp")
             price = decimal_from_source(data.get("price"), "index.price")
@@ -3065,7 +3072,7 @@ class RadarReducer:
             if not self._index_resubscribe_pending:
                 self._index_resubscribe_pending = True
                 self._plan_resubscribe(
-                    INDEX_CHANNEL,
+                    self.index_channel,
                     boundary,
                     failure_scope=FailureScope.CLOCK_INDEX,
                 )
@@ -3605,7 +3612,7 @@ class RadarReducer:
         request = self._schedule(
             purpose=RpcPurpose.COMBO_CATALOG,
             method="public/get_combos",
-            params={"currency": "USDC"},
+            params={"currency": self.product.public_currency},
             scope="COMBO_CATALOG",
             generation=self._combo_refresh_generation,
             origin_boundary=boundary,
@@ -3831,7 +3838,7 @@ class RadarReducer:
             )
             return False
         try:
-            combo = parse_combo_instrument(summary, payload)
+            combo = parse_combo_instrument(summary, payload, product=self.product)
         except SourceDataError:
             self._combo_metadata_pending.pop(request.scope, None)
             self.combo_catalog.mark_incomplete()
@@ -3842,7 +3849,7 @@ class RadarReducer:
             return False
         self._combo_metadata_pending.pop(request.scope, None)
         if combo is None:
-            if _is_valid_irrelevant_combo_metadata(payload, request.scope):
+            if _is_valid_irrelevant_combo_metadata(payload, request.scope, self.product):
                 self._combo_summaries.pop(request.scope, None)
                 self._combo_summary_fingerprints.pop(request.scope, None)
                 self.combos.pop(request.scope, None)
@@ -4077,7 +4084,7 @@ class RadarReducer:
         if not self._index_resubscribe_pending:
             self._index_resubscribe_pending = True
             self._plan_resubscribe(
-                INDEX_CHANNEL,
+                self.index_channel,
                 boundary,
                 failure_scope=FailureScope.CLOCK_INDEX,
             )
@@ -4433,7 +4440,7 @@ class RadarReducer:
             if not self._index_resubscribe_pending:
                 self._index_resubscribe_pending = True
                 self._plan_resubscribe(
-                    INDEX_CHANNEL,
+                    self.index_channel,
                     boundary,
                     failure_scope=FailureScope.CLOCK_INDEX,
                 )
@@ -6259,6 +6266,7 @@ class LiveRadarRuntime:
         code_identity: str,
         event_sink: RadarEventSink,
         runtime_identity: str | None = None,
+        product: OptionProductSpec = LINEAR_BTC_USDC,
         shadow_adapter: ShadowRuntimeAdapter | None = None,
         snapshot_publisher: SettledSnapshotPublisher | None = None,
     ) -> None:
@@ -6268,6 +6276,7 @@ class LiveRadarRuntime:
             code_identity=code_identity,
             event_sink=event_sink,
             runtime_identity=identity,
+            product=product,
             shadow_adapter=shadow_adapter,
             snapshot_publisher=snapshot_publisher,
         )
@@ -6738,14 +6747,19 @@ def _fact_boundary_key(boundary: FactBoundary) -> tuple[int, int, int, int]:
     )
 
 
-def _source_name_for_channel(channel: str, *, combo_names: set[str]) -> str:
+def _source_name_for_channel(
+    channel: str,
+    *,
+    combo_names: set[str],
+    product: OptionProductSpec,
+) -> str:
     if channel in PLATFORM_CHANNELS:
         return channel
-    if channel == OPTION_LIFECYCLE_CHANNEL:
+    if channel == product.option_lifecycle_channel:
         return "option_lifecycle"
-    if channel == COMBO_LIFECYCLE_CHANNEL:
+    if channel == product.combo_lifecycle_channel:
         return "combo_lifecycle"
-    if channel == INDEX_CHANNEL:
+    if channel == product.index_channel:
         return "index"
     if channel.startswith("ticker."):
         return "option_ticker"
@@ -6765,9 +6779,9 @@ def _instrument_from_channel(channel: str) -> str | None:
     return None
 
 
-def _is_target_option_product(payload: object) -> bool:
+def _is_target_option_product(payload: object, product: OptionProductSpec) -> bool:
     data = require_mapping(payload, "instrument")
-    return {
+    actual = {
         "kind": require_str(data.get("kind"), "instrument.kind"),
         "base_currency": require_str(data.get("base_currency"), "instrument.base_currency"),
         "quote_currency": require_str(data.get("quote_currency"), "instrument.quote_currency"),
@@ -6784,34 +6798,31 @@ def _is_target_option_product(payload: object) -> bool:
             data.get("instrument_type"),
             "instrument.instrument_type",
         ),
-    } == {
-        "kind": "option",
-        "base_currency": "BTC",
-        "quote_currency": "USDC",
-        "settlement_currency": "USDC",
-        "counter_currency": "USDC",
-        "price_index": "btc_usdc",
-        "instrument_type": "linear",
     }
+    return actual == product.product_fields(kind="option")
 
 
-def _is_target_option_instrument_name(instrument_name: str) -> bool:
-    return instrument_name.startswith("BTC_USDC-")
+def _is_target_option_instrument_name(
+    instrument_name: str,
+    product: OptionProductSpec,
+) -> bool:
+    return product.matches_instrument_name(instrument_name)
 
 
-def _is_target_option_lifecycle(payload: object) -> bool:
+def _is_target_option_lifecycle(payload: object, product: OptionProductSpec) -> bool:
     data = require_mapping(payload, "option lifecycle")
     instrument_name = require_str(
         data.get("instrument_name"),
         "option lifecycle.instrument_name",
     )
     require_str(data.get("state"), "option lifecycle.state")
-    return _is_target_option_instrument_name(instrument_name)
+    return _is_target_option_instrument_name(instrument_name, product)
 
 
 def _is_valid_irrelevant_option_metadata(
     payload: object,
     expected_name: str,
+    target: OptionProductSpec,
 ) -> bool:
     try:
         data = require_mapping(payload, "instrument")
@@ -6819,26 +6830,17 @@ def _is_valid_irrelevant_option_metadata(
             return False
         product = {
             "kind": require_str(data.get("kind"), "instrument.kind"),
-            "base_currency": require_str(
-                data.get("base_currency"),
-                "instrument.base_currency",
-            ),
-            "quote_currency": require_str(
-                data.get("quote_currency"),
-                "instrument.quote_currency",
-            ),
+            "base_currency": require_str(data.get("base_currency"), "instrument.base_currency"),
+            "quote_currency": require_str(data.get("quote_currency"), "instrument.quote_currency"),
             "settlement_currency": require_str(
-                data.get("settlement_currency"),
-                "instrument.settlement_currency",
+                data.get("settlement_currency"), "instrument.settlement_currency"
             ),
             "counter_currency": require_str(
-                data.get("counter_currency"),
-                "instrument.counter_currency",
+                data.get("counter_currency"), "instrument.counter_currency"
             ),
             "price_index": require_str(data.get("price_index"), "instrument.price_index"),
             "instrument_type": require_str(
-                data.get("instrument_type"),
-                "instrument.instrument_type",
+                data.get("instrument_type"), "instrument.instrument_type"
             ),
         }
         require_bool(data.get("is_active"), "instrument.is_active")
@@ -6847,23 +6849,23 @@ def _is_valid_irrelevant_option_metadata(
         return False
     return (
         product["kind"] == "option"
-        and product["base_currency"] != "BTC"
-        and product["quote_currency"] == "USDC"
-        and product["settlement_currency"] == "USDC"
-        and product["counter_currency"] == "USDC"
-        and product["instrument_type"] == "linear"
+        and product != target.product_fields(kind="option")
+        and product["quote_currency"] == target.quote_currency
+        and product["settlement_currency"] == target.settlement_currency
+        and product["instrument_type"] == target.instrument_type
     )
 
 
 def _is_explicit_final_target_option_metadata(
     payload: object,
     expected_name: str,
+    product: OptionProductSpec,
 ) -> bool:
     try:
         data = require_mapping(payload, "instrument")
         if require_str(data.get("instrument_name"), "instrument.instrument_name") != expected_name:
             return False
-        if not _is_target_option_product(data):
+        if not _is_target_option_product(data, product):
             return False
         require_bool(data.get("is_active"), "instrument.is_active")
         state = require_str(data.get("state"), "instrument.state")
@@ -6875,49 +6877,39 @@ def _is_explicit_final_target_option_metadata(
 def _is_valid_irrelevant_combo_metadata(
     payload: object,
     expected_name: str,
+    target: OptionProductSpec,
 ) -> bool:
     try:
         data = require_mapping(payload, "combo metadata")
         if (
-            require_str(
-                data.get("instrument_name"),
-                "combo metadata.instrument_name",
-            )
+            require_str(data.get("instrument_name"), "combo metadata.instrument_name")
             != expected_name
         ):
             return False
         product = {
             "kind": require_str(data.get("kind"), "combo metadata.kind"),
-            "base_currency": require_str(
-                data.get("base_currency"),
-                "combo metadata.base_currency",
-            ),
+            "base_currency": require_str(data.get("base_currency"), "combo metadata.base_currency"),
             "quote_currency": require_str(
-                data.get("quote_currency"),
-                "combo metadata.quote_currency",
+                data.get("quote_currency"), "combo metadata.quote_currency"
             ),
             "settlement_currency": require_str(
-                data.get("settlement_currency"),
-                "combo metadata.settlement_currency",
+                data.get("settlement_currency"), "combo metadata.settlement_currency"
             ),
             "counter_currency": require_str(
-                data.get("counter_currency"),
-                "combo metadata.counter_currency",
+                data.get("counter_currency"), "combo metadata.counter_currency"
             ),
             "instrument_type": require_str(
-                data.get("instrument_type"),
-                "combo metadata.instrument_type",
+                data.get("instrument_type"), "combo metadata.instrument_type"
             ),
         }
     except SourceDataError:
         return False
     return (
         product["kind"] == "option_combo"
-        and product["base_currency"] != "BTC"
-        and product["quote_currency"] == "USDC"
-        and product["settlement_currency"] == "USDC"
-        and product["counter_currency"] == "USDC"
-        and product["instrument_type"] == "linear"
+        and product != target.combo_product_fields()
+        and product["quote_currency"] == target.quote_currency
+        and product["settlement_currency"] == target.settlement_currency
+        and product["instrument_type"] == target.instrument_type
     )
 
 

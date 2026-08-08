@@ -194,6 +194,9 @@ class FixedContractShadowRuntimeAdapter:
                 "expiration_timestamp_ms": source.instrument.expiration_timestamp_ms,
                 "option_type": source.instrument.option_type.value,
                 "strike_usdc_per_btc": str(source.instrument.strike),
+                "product_spec_identity": source.instrument.product.identity,
+                "product_name": source.instrument.product.name.value,
+                "native_premium_currency": source.instrument.product.native_premium_currency,
             }
             for identity, source in sorted(self._options_by_identity.items())
         )
@@ -2746,7 +2749,7 @@ class FixedContractShadowRuntimeAdapter:
             SourceFact(
                 canonical_identity(
                     "IndexSourceIdentity",
-                    "btc_usdc",
+                    reducer.product.price_index,
                     receipt.source_timestamp_ms,
                     receipt.price_usdc_per_btc,
                     boundary.as_object(),
@@ -2833,6 +2836,7 @@ class FixedContractShadowRuntimeAdapter:
             reducer.code_identity != self.owner.bindings.code_identity
             or reducer.runtime_identity != self.owner.bindings.runtime_identity
             or reducer.policy.identity != self.owner.bindings.radar_policy_identity
+            or reducer.product.identity != reducer.policy.product_spec_identity
         ):
             raise ValueError("Radar reducer and fixed-contract owner identities differ")
 
@@ -2860,6 +2864,7 @@ def _option_identity(instrument: OptionInstrument) -> str:
     amount = instrument.amount
     return canonical_identity(
         "CanonicalOptionInstrumentIdentity",
+        instrument.product.identity,
         instrument.instrument_name,
         instrument.expiration_timestamp_ms,
         instrument.strike,
@@ -2879,6 +2884,7 @@ def _option_identity(instrument: OptionInstrument) -> str:
 def _combo_identity(instrument: ComboInstrument) -> str:
     return canonical_identity(
         "CanonicalComboInstrumentIdentity",
+        instrument.product.identity,
         instrument.instrument_name,
         [
             {

@@ -1,4 +1,4 @@
-"""BTC-USDC option facts and target-size public quote arithmetic."""
+"""BTC option product facts and target-size public quote arithmetic."""
 
 from options_domain.component import (
     COMPONENT_BOOK_EXECUTION_MODEL,
@@ -6,8 +6,10 @@ from options_domain.component import (
     ComponentBookLegQuote,
     ComponentBookQuoteKind,
     ComponentBookVerticalQuote,
+    component_quote_matches_product_contract,
     evaluate_component_book_vertical,
     is_protective_vertical,
+    standard_option_fee_native,
     standard_option_fee_usdc,
 )
 from options_domain.instruments import (
@@ -27,6 +29,15 @@ from options_domain.instruments import (
     parse_combo_instrument,
     parse_option_instrument,
 )
+from options_domain.product import (
+    INVERSE_BTC,
+    LINEAR_BTC_USDC,
+    PRODUCT_SPECS,
+    OptionProductName,
+    OptionProductSpec,
+    product_for_identity,
+    product_for_name,
+)
 from options_domain.quotes import (
     AmountCheck,
     AmountState,
@@ -40,6 +51,9 @@ __all__ = [
     "COMPONENT_BOOK_EXECUTION_MODEL",
     "FINAL_INSTRUMENT_LIFECYCLE_STATES",
     "INSTRUMENT_LIFECYCLE_STATES",
+    "INVERSE_BTC",
+    "LINEAR_BTC_USDC",
+    "PRODUCT_SPECS",
     "TEMPORARILY_UNAVAILABLE_INSTRUMENT_STATES",
     "AmountCheck",
     "AmountMetadata",
@@ -54,15 +68,21 @@ __all__ = [
     "DepthWalk",
     "InstrumentLifecycleState",
     "OptionInstrument",
+    "OptionProductName",
+    "OptionProductSpec",
     "OptionType",
     "PriceTickMetadata",
     "PriceTickStep",
     "check_target_amount",
+    "component_quote_matches_product_contract",
     "evaluate_component_book_vertical",
     "is_protective_vertical",
     "monitor_applicability",
     "parse_combo_instrument",
     "parse_option_instrument",
+    "product_for_identity",
+    "product_for_name",
+    "standard_option_fee_native",
     "standard_option_fee_usdc",
     "stress_depth_walk_down_one_tick",
     "stress_depth_walk_up_one_tick",

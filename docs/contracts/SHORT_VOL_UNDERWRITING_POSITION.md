@@ -18,16 +18,19 @@ unit. Either creates the first durable record only after its paired entry witnes
 
 ## Fixed Policy chain
 
-One runtime loads exactly:
+One runtime selects exactly one immutable product profile and loads exactly one matching chain:
 
 ```text
-Radar Policy
+Product specification
+→ Radar Policy bound to that product
 → Underwriting Policy bound to that Radar Policy
 → Position Policy bound to that Underwriting Policy
 ```
 
 Target quantity, shared source-currentness budgets, fee role, fee reserve, and source metadata must
-be compatible. The runtime cannot hot-reload, tune, approve, or replace any Policy.
+be compatible in the product's declared units. Product, Policy, or leg mismatch fails before
+Candidate or Case. The runtime cannot observe both products, hot-reload, tune, approve, or replace
+its product or any Policy.
 
 Policy files are content-identified. Markdown contract bytes are not runtime business identities.
 
@@ -36,11 +39,13 @@ Policy files are content-identified. Markdown contract bytes are not runtime bus
 Underwriting consumes one settled scope containing, when applicable:
 
 - active Radar episode and short leg;
+- exact product specification and product-bound three-Policy identities;
 - frozen short and protective long identities;
 - full target-size public option-book depth for both legs;
 - current option lifecycle, amount, and official price-tick rules;
 - trusted time, current platform, index, short-leg Delta and mark IV;
-- public taker-commission facts and fixed reserves;
+- native premium/settlement unit, model rule, causal valuation index and valuation unit;
+- public native taker-commission facts, USD-defined payoff convention, and fixed valuation reserves;
 - exact code, runtime, and three Policy identities.
 
 Missing or invalid required input is `UNKNOWN`. Known structural/lifecycle unavailability is
@@ -61,25 +66,43 @@ component-book Underwriting action.
 
 ## Entry economics
 
-For exact target quantity `q`:
+For exact target quantity `q`, the one component-book calculator first walks and stresses native
+book prices:
 
 ```text
-short_entry = walk short bids for q, then stress each level down one official tick
-long_entry  = walk long asks for q, then stress each level up one official tick
-gross_entry_credit_usdc = short_entry_total - long_entry_total
-leg_fee = min(fee_rate × index × q, 0.125 × stressed_leg_price × q)
-entry_fee_reserve_usdc = short_fee + long_fee
-net_entry_credit_usdc = gross_entry_credit_usdc - entry_fee_reserve_usdc
-payoff_cap_usdc = abs(long_strike - short_strike) × q
-underwriting_reserved_loss_usdc =
-    max(0, payoff_cap_usdc - gross_entry_credit_usdc)
-    + entry_fee_reserve_usdc
-    + future_cost_reserve_usdc
+short_entry_native = walk short bids for q, then stress every level down one native legal tick
+long_entry_native  = walk long asks for q, then stress every level up one native legal tick
+native_gross_entry_credit = short_entry_native_total - long_entry_native_total
+native_entry_fee_reserve = native_short_fee + native_long_fee
+native_net_entry_credit = native_gross_entry_credit - native_entry_fee_reserve
 ```
 
+Each native fee uses the selected product's standard public taker-fee rule and premium cap. Only
+after native arithmetic conserves does the calculator value each cashflow at the causal entry index:
+
+```text
+boundary_valued_gross_entry_credit = value(native_gross_entry_credit, entry_index)
+boundary_valued_entry_fee_reserve = value(native_entry_fee_reserve, entry_index)
+boundary_valued_net_entry_credit =
+    boundary_valued_gross_entry_credit - boundary_valued_entry_fee_reserve
+payoff_cap_usd = abs(long_strike_usd - short_strike_usd) × q
+underwriting_reserved_loss_valuation =
+    max(0, payoff_cap_usd - boundary_valued_gross_entry_credit)
+    + boundary_valued_entry_fee_reserve
+    + future_cost_reserve_valuation
+```
+
+For `LINEAR_BTC_USDC_V1`, native and valuation amounts are USDC and this is the exact accepted v3
+arithmetic. For `INVERSE_BTC_V1`, native premium, fees, settlement cashflow, and PnL are BTC while
+the Underwriting comparison unit is explicitly `USD_EQUIVALENT`. Strike width caps contractual USD
+payoff; the corresponding BTC settlement liability depends on settlement price. This public
+counterfactual does not establish actual account margin, which remains `UNKNOWN`. New Inverse
+Policy, product-value, Workbench, and schema v4 fields use explicit native or valuation names; they
+must not reinterpret a legacy `*_usdc` suffix as USD equivalent.
+
 Each leg's consumed amounts must sum exactly to `q`. No rounding, mark, mid, theoretical price,
-imagined maker price, or official-Combo assumption may enter admission economics. These prices are
-conservative public-book counterfactuals, not simultaneous fills.
+imagined maker price, cross-product conversion, or official-Combo assumption may enter admission
+economics. These prices are conservative public-book counterfactuals, not simultaneous fills.
 
 ## Protective-leg selection and margin truth
 
@@ -92,7 +115,8 @@ lexicographically by:
 
 1. action class `CANDIDATE > WATCH > ABSTAIN`;
 2. signed margin for positive credit, credit above future-cost reserve, reserved-loss headroom,
-   minimum credit, minimum credit/payoff ratio, and consumed-level headroom, in that order;
+   minimum credit, minimum credit/payoff ratio, and consumed-level headroom, in that order, with all
+   monetary members labeled in the selected product's valuation unit;
 3. narrower width;
 4. protective instrument name.
 
@@ -124,7 +148,7 @@ pre-outcome selected-decision rule may enroll one.
 ## Selected-decision research enrollment
 
 Every Episode newly activated in the same settled reducer transaction belongs to one batch
-identified by runtime, Radar Policy, and its shared activation causal sequence. Before any member's
+identified by runtime, product, Radar Policy, and its shared activation causal sequence. Before any member's
 Underwriting action or future facts are consulted, the batch designates the unique Episode with the
 minimum canonical hash over batch identity, Episode identity, and the frozen Underwriting/Position
 Policy identities. Input order cannot affect the result. If the designated Episode is `UNKNOWN` or
@@ -153,8 +177,8 @@ on retired Candidate history.
 
 ## Candidate lifecycle and admission
 
-A Candidate is current in-memory state identified by the exact opportunity, Policies, target
-quantity, and activation boundary. It is invalidated by identity/scope change, episode loss,
+A Candidate is current in-memory state identified by the exact product, opportunity, Policies,
+target quantity, and activation boundary. It is invalidated by identity/scope change, episode loss,
 structure or quantity change, source degradation, admission cutoff, slot consumption, changed
 business facts that no longer qualify, or a consumed failed admission.
 
@@ -185,10 +209,13 @@ store to publish exactly one `SHADOW_CASE_OPENED`. The opened record freezes onl
 required to reconstruct the admitted counterfactual:
 
 - code, runtime, and three Policy identities;
+- exact product identity and Case schema rule;
 - entry and decision boundaries;
 - frozen canonical legs, directions, expiry, strikes, and full quantity;
 - paired source identity and both raw/stressed consumed leg levels;
-- entry economics and fixed reserve components;
+- native entry levels/fees/economics and explicitly named causal valuation facts for schema v4, or
+  the byte-exact accepted Linear v3 projection;
+- USD-defined payoff facts and fixed valuation reserve components;
 - the consumed Radar/Underwriting state required to explain the admission;
 - the frozen protective-leg selector-rule identity and Candidate protective-leg count;
 - explicit public-quote/not-fill non-claims.
@@ -244,15 +271,23 @@ eligible Shadow close opportunity. The short is bought from asks stressed up one
 is sold from bids stressed down one tick. Each leg must cover the full remaining quantity. One
 response cannot close the Case.
 
-For an eligible atomic close:
+For an eligible paired component-book close, the same product-aware order applies:
 
 ```text
-gross_close_cashflow_usdc = long_stressed_sale_total - short_stressed_buy_total
-close_fee_reserve_usdc = short_fee + long_fee
-net_close_cashflow_usdc = gross_close_cashflow_usdc - close_fee_reserve_usdc
-projected_shadow_net_pnl_usdc = net_entry_credit_usdc + net_close_cashflow_usdc
-projected_net_loss_usdc = max(0, -projected_shadow_net_pnl_usdc)
+native_gross_close_cashflow = long_stressed_sale_total - short_stressed_buy_total
+native_close_fee_reserve = native_short_fee + native_long_fee
+native_net_close_cashflow = native_gross_close_cashflow - native_close_fee_reserve
+native_net_pnl = native_net_entry_credit + native_net_close_cashflow
+boundary_valued_net_pnl =
+    value(native_net_entry_credit, entry_index)
+    + value(native_net_close_cashflow, close_index)
+exit_valued_native_net_pnl = value(native_net_pnl, close_index)
 ```
+
+The boundary-valued and exit-valued views answer different declared questions and remain distinct;
+neither may be selected after observing the Outcome. Linear preserves its exact USDC values. An
+Inverse known Outcome conserves BTC-native PnL plus both explicitly USD-labeled valuation views.
+Actual account margin, settlement action, and fill PnL remain outside the public contract.
 
 ## Currentness and failure behavior
 
@@ -281,9 +316,11 @@ Workbench projection; all historical terminal truth comes from the bounded Shado
 
 ## Required verification
 
-Direct tests cover Policy compatibility, both-leg target depth, adverse tick direction, both fees,
-signed economics, action boundaries, all-legal-leg selection outside Radar Top 3, complete predicate
-margins, frozen-leg identity, pair session/continuity/skew boundaries, paired admission races, strictly
-post-entry Position order, first CLOSE latching, paired close classification, and no pre-Shadow
-durable writes. Full graph manifests, second schemas, and automatic rejected-counterfactual
-persistence are not required.
+Direct tests cover one-product/one-chain compatibility, mixed-product rejection, both-leg target
+depth, native adverse tick direction, product fee rules, native/model/valuation conservation, signed
+economics, action boundaries, all-legal-leg selection outside Radar Top 3, product-labeled complete
+predicate margins, frozen-leg identity, pair session/continuity/skew boundaries, paired admission
+races, strictly post-entry Position order, first CLOSE latching, paired close classification, exact
+Linear behavior, and no pre-Shadow durable writes. Full graph manifests, parallel schemas, and
+automatic rejected-counterfactual persistence are not required. Public observation is forbidden in
+the current implementation closure.

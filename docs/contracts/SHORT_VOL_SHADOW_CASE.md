@@ -38,7 +38,7 @@ No other durable file belongs to the product runtime.
 
 ## Case identity
 
-`case_id` is a canonical SHA-256 identity derived from:
+Schema v3 Linear `case_id` remains the byte-exact canonical SHA-256 identity derived from:
 
 ```text
 "ShadowCaseIdentity"
@@ -51,12 +51,29 @@ enrollment identity (`SHADOW_ENTRY` or selected-decision-control open)
 opened FactBoundary
 ```
 
+Schema v4 Inverse inserts the fixed schema marker and exact product identity before the enrollment
+identity and opened boundary:
+
+```text
+"ShadowCaseIdentity"
+code_identity
+runtime_identity
+Radar Policy identity
+Underwriting Policy identity
+Position Policy identity
+"schema-v4"
+INVERSE_BTC_V1 product identity
+enrollment identity
+opened FactBoundary
+```
+
 Policy identities are exact content digests. The code identity is the exact Git commit. Markdown
 contract bytes, file paths, host identity, PID, manifest, receipt, directory inventory, and
 Workbench publication sequence do not enter the Case identity.
 
-Every record binds the same case, code, runtime, and Policy identities. Boundaries use the same
-runtime and strictly increasing causal sequence.
+Every record binds the same case, code, runtime, Policy, schema, and product semantics. Existing v3
+records bind Linear implicitly through the fixed Linear Policy chain without adding a key; v4 binds
+Inverse explicitly. Boundaries use the same runtime and strictly increasing causal sequence.
 
 ## `SHADOW_CASE_OPENED`
 
@@ -83,12 +100,26 @@ The opened record contains:
   states `NOT_A_CANDIDATE_ACTIVATION`, `NOT_A_SHADOW_ENTRY`, `NOT_AN_ADMITTED_TRADE`, and
   `NO_CAPITAL_EXPOSURE`.
 
+The exact economic shape is versioned inside this one record family:
+
+- schema v3 is accepted Linear BTC-USDC only. Its key set, field names, values, canonical JSON, and
+  identity algorithm remain byte-compatible and are never widened or rewritten;
+- schema v4 is Inverse BTC only. It adds one exact product object with native premium/settlement
+  currency, price index, strike and valuation currencies, economic-semantics identity, and the
+  declared valuation basis. Entry legs retain BTC-native consumed levels, VWAPs, and fees. Entry
+  economics retain BTC-native gross/fee/net values and separately named USD boundary valuations at
+  the causal entry index. USD-defined strike width/payoff/reserve values remain distinct from native
+  BTC cashflow and from actual account margin, which is `UNKNOWN`. A schema v4 field with a legacy
+  `*_usdc` suffix may not contain an Inverse USD-equivalent value.
+
 Each entry leg's consumed amounts must sum exactly to the full quantity. Pair session and continuity
 epochs must match, measured receive skew must agree with the two receipt boundaries, and both skews
 must remain within the stored limits bound to the Underwriting Policy. Stored gross credit, both fee
 reserves, net credit, width, payoff cap, loss values, canonical six-predicate margin vector, failed
 predicates, and resulting action must conserve against the stored stressed legs and Policy
-thresholds. The record may not contain the full option chain or unrelated market state.
+thresholds in their declared units. For v4, native arithmetic and each native-to-USD valuation must
+also conserve independently. The record may not contain the full option chain or unrelated market
+state.
 
 ## `SHADOW_CASE_FIRST_CLOSE`
 
@@ -117,6 +148,12 @@ CENSORED_AT_FAILURE
 same frozen legs. It stores the pair/source identities, raw/stressed full-quantity levels for both
 legs, gross close cashflow, both close fee reserves, net close cashflow, gross PnL, total public fee
 reserve, net PnL after reserve, and net loss.
+
+For schema v3 those values retain their exact accepted USDC fields. For schema v4 the Outcome also
+stores BTC-native close cashflow, fees, gross/net PnL, the causal close valuation index, the net PnL
+formed from entry- and close-boundary USD valuations, and the distinct view that values total native
+BTC PnL at the close index. Both views are predeclared and conserved; neither is chosen after the
+Outcome. They are counterfactual valuations, not fills, settlement actions, or account-margin facts.
 
 `MATURE_UNKNOWN` means the Case reached its natural terminal condition without an eligible paired
 component-book exit under the frozen contract. Component close facts and economic exit/PnL fields
@@ -154,7 +191,7 @@ This is durable-record integrity, not a general evidence or commissioning framew
 
 ## Minimal reader
 
-The product reader validates only the one requested Case:
+The product reader validates only the one requested Case and selects exactly one schema branch:
 
 - exact record key/type shape;
 - identity format and same Case/code/runtime/Policy binding;
@@ -163,11 +200,14 @@ The product reader validates only the one requested Case:
 - canonical predicate order/unit/sign truth, failed predicates, action, and Policy-bound margins;
 - strictly later first-close/outcome boundaries;
 - state-specific null/economic requirements;
-- recomputable paired component-book PnL arithmetic;
+- recomputable paired component-book PnL arithmetic in the schema's declared native and valuation
+  units;
 - no conflicting duplicate files.
 
 It returns `OPEN`, `COMPLETE`, or `INCOMPLETE_UNCLEAN_EXIT`. It does not rebuild a repository graph,
-validate Git trees, inspect host state, read legacy schemas, or form a qualification Cohort.
+validate Git trees, inspect host state, migrate records, or form a qualification Cohort. It reads
+exact Linear schema v3 and Inverse schema v4 only. Supporting v3 is current compatibility, not a
+generic legacy-schema framework.
 
 ## No-trade controls and Cohorts
 
@@ -187,7 +227,10 @@ pre-registered evaluator. The Online Runtime never writes Cohort or aligned-pair
 ## Required verification
 
 Direct tests prove zero pre-enrollment files, exact one-open/one-first-close/one-outcome cardinality,
-schema-v3 enrollment discrimination, original/refreshed selection boundary ordering, zero
-Candidate/`SHADOW_ENTRY` for controls, atomic file publication, duplicate handling, pair/source
-identity and boundary binding, both-leg arithmetic, censoring, and unclean incomplete readback. No
-manifest, receipt, full graph, legacy reader, or replay is required.
+byte-compatible Linear schema v3 reads and enrollment discrimination, explicit Inverse schema v4
+product binding and native/boundary/exit valuation conservation, rejection of schema/product/Policy
+mixing, original/refreshed selection boundary ordering, zero Candidate/`SHADOW_ENTRY` for controls,
+atomic file publication, duplicate handling, pair/source identity and boundary binding, both-leg
+arithmetic, censoring, and unclean incomplete readback. No manifest, receipt, full graph, generic
+legacy reader, or replay is required. The current implementation closure writes no Case because all
+live commands are forbidden.

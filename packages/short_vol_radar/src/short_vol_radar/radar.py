@@ -6,6 +6,7 @@ from enum import StrEnum
 
 from market_monitor import BookState, ContinuousOrderBook, TimeInterval
 from options_domain import (
+    LINEAR_BTC_USDC,
     AmountState,
     OptionInstrument,
     OptionType,
@@ -92,6 +93,15 @@ class DetectorCalculation:
     implied_total_variance: DecimalInterval
     raw_richness: DecimalInterval
     richness: DecimalInterval
+    product_spec_identity: str = LINEAR_BTC_USDC.identity
+    product_name: str = LINEAR_BTC_USDC.name.value
+    native_premium_currency: str = LINEAR_BTC_USDC.native_premium_currency
+    native_price_tick: Decimal | None = None
+    native_target_spread: Decimal | None = None
+    native_executable_sell_price: Decimal | None = None
+    native_executable_buy_price: Decimal | None = None
+    native_stressed_executable_sell_price: Decimal | None = None
+    model_conversion_forward: Decimal | None = None
 
     @property
     def clue_eligible(self) -> bool:
@@ -163,6 +173,7 @@ def detector_observation_identity(
         tuple(target_bid.consumed) if target_bid is not None else None,
         tuple(target_ask.consumed) if target_ask is not None else None,
         tuple(stressed_bid.consumed) if stressed_bid is not None else None,
+        instrument.product.identity,
         instrument.price_tick,
         ticker.forward_usdc if ticker is not None else None,
         baseline_identity,
@@ -244,6 +255,15 @@ def calculate_current_evaluation(
             band_id=band_id,
             calculation=calculation,
             continuity_gap=continuity_gap,
+        )
+
+    if policy.product_spec_identity != instrument.product.identity:
+        return current(
+            CurrentDisposition.UNKNOWN,
+            "PRODUCT_POLICY_MISMATCH",
+            known=False,
+            full_formula=False,
+            band_id=None,
         )
 
     lower_tte_ms = instrument.expiration_timestamp_ms - trusted_time.upper_ms
@@ -383,25 +403,39 @@ def calculate_current_evaluation(
             band_id=band.band_id,
         )
 
+    product = instrument.product
+    model_target_bid = product.model_premium(
+        target_bid.vwap,
+        forward_price=ticker.forward_usdc,
+    )
+    model_stressed_target_bid = product.model_premium(
+        stressed_target_bid.vwap,
+        forward_price=ticker.forward_usdc,
+    )
+    model_target_ask = product.model_premium(
+        target_ask.vwap,
+        forward_price=ticker.forward_usdc,
+    )
+
     remaining_years = DecimalInterval(
         Decimal(lower_tte_ms) / MILLISECONDS_PER_365_DAY_YEAR,
         Decimal(upper_tte_ms) / MILLISECONDS_PER_365_DAY_YEAR,
     )
     try:
         total_volatility = invert_total_volatility(
-            target_price=target_bid.vwap,
+            target_price=model_target_bid,
             forward=ticker.forward_usdc,
             strike=instrument.strike,
             option_type=instrument.option_type,
         )
         stressed_total_volatility = invert_total_volatility(
-            target_price=stressed_target_bid.vwap,
+            target_price=model_stressed_target_bid,
             forward=ticker.forward_usdc,
             strike=instrument.strike,
             option_type=instrument.option_type,
         )
         ask_total_volatility = invert_total_volatility(
-            target_price=target_ask.vwap,
+            target_price=model_target_ask,
             forward=ticker.forward_usdc,
             strike=instrument.strike,
             option_type=instrument.option_type,
@@ -471,21 +505,26 @@ def calculate_current_evaluation(
         total_volatility.lower * total_volatility.lower,
         total_volatility.upper * total_volatility.upper,
     )
-    spread = target_ask.vwap - target_bid.vwap
+    native_spread = target_ask.vwap - target_bid.vwap
+    model_price_tick = product.model_premium(
+        price_tick,
+        forward_price=ticker.forward_usdc,
+    )
+    model_spread = model_target_ask - model_target_bid
     calculation = DetectorCalculation(
         band=band,
         rule=rule,
         target_bid=target_bid,
         target_ask=target_ask,
         stressed_target_bid=stressed_target_bid,
-        price_tick_usdc=price_tick,
-        target_spread_usdc=spread,
-        target_spread_ticks=spread / price_tick,
+        price_tick_usdc=model_price_tick,
+        target_spread_usdc=model_spread,
+        target_spread_ticks=native_spread / price_tick,
         bid_premium_ticks=target_bid.vwap / price_tick,
         forward_usdc=ticker.forward_usdc,
-        executable_sell_price_usdc=target_bid.vwap,
-        executable_buy_price_usdc=target_ask.vwap,
-        stressed_executable_sell_price_usdc=stressed_target_bid.vwap,
+        executable_sell_price_usdc=model_target_bid,
+        executable_buy_price_usdc=model_target_ask,
+        stressed_executable_sell_price_usdc=model_stressed_target_bid,
         baseline=baseline,
         remaining_life_years=remaining_years,
         total_volatility=total_volatility,
@@ -500,6 +539,15 @@ def calculate_current_evaluation(
         implied_total_variance=implied_total_variance,
         raw_richness=raw_richness,
         richness=stressed_richness,
+        product_spec_identity=product.identity,
+        product_name=product.name.value,
+        native_premium_currency=product.native_premium_currency,
+        native_price_tick=price_tick,
+        native_target_spread=native_spread,
+        native_executable_sell_price=target_bid.vwap,
+        native_executable_buy_price=target_ask.vwap,
+        native_stressed_executable_sell_price=stressed_target_bid.vwap,
+        model_conversion_forward=ticker.forward_usdc,
     )
     if not calculation.clue_eligible:
         if not band.clue_eligible and not delta_clue_eligible:

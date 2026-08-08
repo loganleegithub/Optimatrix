@@ -3117,16 +3117,16 @@ def test_nonempty_combo_catalog_fetches_metadata_once_and_reuses_unchanged(
     reducer.option_catalog.complete = True
     reducer.option_catalog.source_complete = True
     reducer.options = {
-        "SHORT": _option_for_combo_test("SHORT", 100),
-        "LONG": _option_for_combo_test("LONG", 110),
+        "BTC_USDC-SHORT": _option_for_combo_test("BTC_USDC-SHORT", 100),
+        "BTC_USDC-LONG": _option_for_combo_test("BTC_USDC-LONG", 110),
     }
     catalog = only(commands, RpcPurpose.COMBO_CATALOG)
     summary = {
         "id": "COMBO",
         "state": "active",
         "legs": [
-            {"instrument_name": "SHORT", "amount": -1},
-            {"instrument_name": "LONG", "amount": 1},
+            {"instrument_name": "BTC_USDC-SHORT", "amount": -1},
+            {"instrument_name": "BTC_USDC-LONG", "amount": 1},
         ],
     }
 
@@ -3196,8 +3196,8 @@ def test_unavailable_combo_metadata_never_enters_atomic_catalog(
     reducer.option_catalog.complete = True
     reducer.option_catalog.source_complete = True
     reducer.options = {
-        "SHORT": _option_for_combo_test("SHORT", 100),
-        "LONG": _option_for_combo_test("LONG", 110),
+        "BTC_USDC-SHORT": _option_for_combo_test("BTC_USDC-SHORT", 100),
+        "BTC_USDC-LONG": _option_for_combo_test("BTC_USDC-LONG", 110),
     }
     catalog = only(commands, RpcPurpose.COMBO_CATALOG)
     metadata = only(
@@ -3210,8 +3210,8 @@ def test_unavailable_combo_metadata_never_enters_atomic_catalog(
                         "id": "COMBO",
                         "state": "active",
                         "legs": [
-                            {"instrument_name": "SHORT", "amount": -1},
-                            {"instrument_name": "LONG", "amount": 1},
+                            {"instrument_name": "BTC_USDC-SHORT", "amount": -1},
+                            {"instrument_name": "BTC_USDC-LONG", "amount": 1},
                         ],
                     }
                 ],
