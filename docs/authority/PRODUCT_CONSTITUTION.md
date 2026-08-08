@@ -5,8 +5,8 @@
 **Long-term product:** autonomous 0–3DTE options decision and trading system
 
 **Current product slice:** Deribit BTC options defined-risk Short Vol — accepted Linear BTC-USDC
-plus accepted Inverse BTC construction, with one exact Inverse-only natural Shadow validation and
-production-public Shadow permission only
+plus accepted Inverse BTC construction; the consumed Inverse validation gate is rejected and no
+live command is authorized under production-public Shadow permission
 
 ## North star
 

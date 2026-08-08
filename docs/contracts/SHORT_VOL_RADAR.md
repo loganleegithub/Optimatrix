@@ -252,12 +252,11 @@ Underwriting-selector separation, ranking
 determinism, episode persistence/end reasons, official combo semantics, reducer ordering, and
 bounded UNKNOWN reasons.
 
-Only an explicit `CURRENT_STAGE` may authorize production-public read-only observation. The current
-Inverse validation registers one exact no-restart process whose first 600 seconds establish only
-same-process current-state reachability and negative cross-product/Combo contamination before that
-process may continue waiting for a natural Outcome. Neither the gate nor continued observation may
-tune Policy, require a clue by a deadline, or prove frequency, fillability, Edge, profitability,
-qualification, deployment, or execution permission.
+Only an explicit `CURRENT_STAGE` may authorize production-public read-only observation. A bounded
+currentness/product-isolation gate may establish only the facts it actually observes before the
+same process continues waiting for a natural Outcome. A rejected or consumed gate grants no retry.
+Neither a gate nor continued observation may tune Policy, require a clue by a deadline, or prove
+frequency, fillability, Edge, profitability, qualification, deployment, or execution permission.
 
 ## Design references
 
