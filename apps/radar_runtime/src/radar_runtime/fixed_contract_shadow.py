@@ -1307,7 +1307,11 @@ class FixedContractShadowRuntimeAdapter:
                 self._require_episode_snapshot_binding(reducer, snapshot)
                 snapshots.append(snapshot)
         by_episode = {snapshot.episode_identity: snapshot for snapshot in snapshots}
-        review_contexts = self._review_contexts(reducer)
+        unresolved_component_selection = any(
+            snapshot.episode_identity not in self._frozen_component_by_episode
+            for snapshot in snapshots
+        )
+        review_contexts = self._review_contexts(reducer) if unresolved_component_selection else {}
         for snapshot in snapshots:
             context = review_contexts.get(snapshot.short_leg.instrument_name)
             facts = self._underwriting_component(

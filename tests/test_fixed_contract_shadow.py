@@ -727,6 +727,65 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
     )
 
 
+def test_no_active_radar_episode_skips_review_context_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reducer, adapter, _owner = _shadow_system(tmp_path)
+    reducer.trackers.clear()
+
+    def unexpected_review_projection(_reducer: RadarReducer) -> dict[str, object]:
+        raise AssertionError("review contexts have no consumer without an active Radar Episode")
+
+    monkeypatch.setattr(adapter, "_review_contexts", unexpected_review_projection)
+
+    assert (
+        adapter.on_settled_transaction(
+            reducer=reducer,
+            commit=_commit(
+                causal_seq=1,
+                monotonic_ms=110,
+                cause=CausalCause.OPTION_BOOK_FACT,
+            ),
+        )
+        == ()
+    )
+
+
+def test_frozen_component_selection_skips_unused_review_context_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reducer, adapter, _owner = _shadow_system(tmp_path)
+    first = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    assert len(first) == 2
+    assert len(adapter._frozen_component_by_episode) == 1
+
+    def unexpected_review_projection(_reducer: RadarReducer) -> dict[str, object]:
+        raise AssertionError("frozen component selection does not consume review contexts")
+
+    monkeypatch.setattr(adapter, "_review_contexts", unexpected_review_projection)
+
+    assert (
+        adapter.on_settled_transaction(
+            reducer=reducer,
+            commit=_commit(
+                causal_seq=2,
+                monotonic_ms=120,
+                cause=CausalCause.OPTION_BOOK_FACT,
+            ),
+        )
+        == ()
+    )
+
+
 def test_frozen_component_structure_does_not_switch_to_a_later_protective_leg(
     tmp_path: Path,
 ) -> None:
