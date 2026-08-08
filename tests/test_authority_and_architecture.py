@@ -172,17 +172,18 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_closes_linear_run_and_authorizes_only_inverse_construction() -> None:
+def test_current_stage_authorizes_one_inverse_natural_shadow_validation() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "`INVERSE_BTC_PRODUCT_CONSTRUCTION_AUTHORIZED`" in current
+    assert "**Current task kind:** `VALIDATION_ONLY`" in current
+    assert "`DUAL_PRODUCT_CONSTRUCTION_ACCEPTED`" in current
+    assert "`INVERSE_BTC_V1_CONSTRUCTION_ACCEPTED_AT_89A6EB02`" in current
     assert "**Production Short Vol Radar:** `LINEAR_BTC_USDC_V1_ACCEPTED`" in current
-    assert "**Persistent service:** `STOPPED_CLEANLY`" in current
-    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "**Persistent service:** `ONE_INVERSE_BTC_RUNTIME_AUTHORIZED`" in current
+    assert "**Live commands:** `ONE_EXACT_INVERSE_START_REQUIRED`" in current
     assert (
-        "**Sole authorized closure:** "
-        "`SHORT_VOL_INVERSE_BTC_PRODUCT_CONTRACT_AND_NORMALIZATION`" in current
+        "**Sole authorized closure:** `SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION`" in current
     )
     assert "5,043,177 contract evaluations" in current
     assert "5,040,616 contract evaluations" in current
@@ -199,10 +200,23 @@ def test_current_stage_closes_linear_run_and_authorizes_only_inverse_constructio
     assert "`7,100 ms`" in current
     assert "6dee819961d76b622dbc6b77997e1f987451a096" in current
     assert "sha256:fdb4f0b3eadfc0f892cfad210142d14c521394cfeb6fbd5c761554228c45998f" in current
-    assert "one process still binds exactly one product" in normalized.lower()
+    assert "exactly one clean process" in normalized.lower()
     assert "actual account margin" in normalized.lower()
     assert "remains `UNKNOWN`" in current
-    assert "any Deribit probe, smoke, natural Shadow process" in normalized
+    assert "once the process exits for any reason" in normalized.lower()
+    assert "does not permit another start" in normalized
+    assert "first `600 seconds`" in normalized
+    assert "CURRENT_AND_COMBO_ISOLATION" in current
+    assert "service.data_state=CURRENT" in current
+    assert "system.coverage_state=KNOWN_COMPLETE" in current
+    assert "NO_ACTIVE_COMBO" in current
+    assert "same uninterrupted process" in normalized
+    assert "MATURE_KNOWN" in current
+    assert "MATURE_UNKNOWN" in current
+    assert "CENSORED_AT_STOP" in current
+    assert "89a6eb02ab3771c5e6d2874a98463c6100b04165" in current
+    assert "/private/tmp/optimatrix-inverse-btc-natural-shadow-validation-v1" in current
+    assert "--product inverse-btc" in current
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_COMPONENT_BOOK_SHADOW_LIFECYCLE.md").exists()
@@ -210,15 +224,17 @@ def test_current_stage_closes_linear_run_and_authorizes_only_inverse_constructio
     assert not (ROOT / "tasks/SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_SELECTED_UNDERWRITING_DECISION_OUTCOME.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_SELECTED_DECISION_NATURAL_VALIDATION.md").exists()
-    implementation_task = ROOT / "tasks/SHORT_VOL_INVERSE_BTC_PRODUCT_CONTRACT_AND_NORMALIZATION.md"
-    assert implementation_task.exists()
-    task = implementation_task.read_text(encoding="utf-8")
-    assert "**Task kind:** IMPLEMENTATION" in task
-    assert "**Runtime implementation:** REQUIRED" in task
-    assert "**Live commands:** FORBIDDEN" in task
-    assert "`INVERSE_PRODUCT_SEMANTICS_UNSUPPORTED`" in task
-    assert "Linear Case schema v3" in task
-    assert "product-aware schema v4" in task
+    assert not (ROOT / "tasks/SHORT_VOL_INVERSE_BTC_PRODUCT_CONTRACT_AND_NORMALIZATION.md").exists()
+    validation_task = ROOT / "tasks/SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION.md"
+    assert validation_task.exists()
+    task = validation_task.read_text(encoding="utf-8")
+    assert "**Task kind:** VALIDATION_ONLY" in task
+    assert "**Runtime implementation:** FORBIDDEN" in task
+    assert "**Live commands:** REQUIRED" in task
+    assert "`INVERSE_NATURAL_SHADOW_NOT_OBSERVED`" in task
+    assert "CURRENT_AND_COMBO_ISOLATION" in task
+    assert "same process keeps waiting" in task
+    assert "no-restart" in task.lower()
     assert not (ROOT / "tasks/SHORT_VOL_QUEUE_LAG_CURRENTNESS_THROUGHPUT.md").exists()
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"

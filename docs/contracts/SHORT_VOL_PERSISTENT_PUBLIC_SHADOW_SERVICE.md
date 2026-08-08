@@ -71,10 +71,10 @@ Case. The lock is not a commissioning or host-identity proof.
 Process supervision, restart policy, CPU, memory, host logs, and uptime monitoring are external.
 The application does not inspect or control them.
 
-The current Inverse construction task authorizes no invocation of `serve-shadow`, source probe,
-smoke, service start, restart, or natural Shadow process. Runtime code is constructed and exercised
-only through deterministic offline fixtures until a later `VALIDATION_ONLY` authority names the
-exact code, product, Policies, state root, and observation topology.
+Live invocation is governed only by `CURRENT_STAGE`. The current `VALIDATION_ONLY` task names one
+exact Inverse code/product/Policy/state-root topology and one process start. Its first 600 seconds
+are the same process's read-only currentness/isolation gate; a pass permits that process to continue
+but never permits a restart or second product process.
 
 ## Current state and Workbench
 
@@ -164,6 +164,6 @@ paired component admission/close, exact Linear v3 and product-aware Inverse v4 r
 Workbench product/unit projection, coalescing/status bypass/flush, loopback HTTP, truthful
 zero/UNKNOWN, and selected-product public-method allowlisting. Repeated Episode, Candidate,
 scope-replacement, and completed-Case tests must prove that retained collections return to the
-active-set bound. Public observation is `NOT_APPLICABLE` and forbidden in the current closure. Only
-a later explicit `CURRENT_STAGE` may authorize a bounded public smoke, which could prove
-current-state reachability only.
+active-set bound. Public observation requires explicit `CURRENT_STAGE` authority. The current
+Inverse gate may establish current-state reachability and negative product contamination only; a
+later natural schema-v4 Outcome remains a separate product result.

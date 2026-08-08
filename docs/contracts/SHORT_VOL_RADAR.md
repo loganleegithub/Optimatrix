@@ -252,11 +252,11 @@ Underwriting-selector separation, ranking
 determinism, episode persistence/end reasons, official combo semantics, reducer ordering, and
 bounded UNKNOWN reasons.
 
-Only a later explicit `CURRENT_STAGE` may authorize a production-public read-only integration
-smoke. The current Inverse construction closure declares public observation `NOT_APPLICABLE` and
-forbids every probe, smoke, service start, restart, or natural Shadow process. A future authorized
-smoke could establish only current API behavior and end-to-end component-funnel reachability; it
-could not tune Policy, require a natural clue, or prove frequency, fillability, Edge, profitability,
+Only an explicit `CURRENT_STAGE` may authorize production-public read-only observation. The current
+Inverse validation registers one exact no-restart process whose first 600 seconds establish only
+same-process current-state reachability and negative cross-product/Combo contamination before that
+process may continue waiting for a natural Outcome. Neither the gate nor continued observation may
+tune Policy, require a clue by a deadline, or prove frequency, fillability, Edge, profitability,
 qualification, deployment, or execution permission.
 
 ## Design references
