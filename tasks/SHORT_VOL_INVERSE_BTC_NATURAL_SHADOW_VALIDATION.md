@@ -10,7 +10,8 @@
 
 **Base commit:** `89a6eb02ab3771c5e6d2874a98463c6100b04165`
 
-**Target branch/PR:** `codex/inverse-btc-natural-shadow-validation` / Draft PR pending
+**Target branch/PR:** `codex/inverse-btc-natural-shadow-validation` / Draft PR
+[#28](https://github.com/loganleegithub/Optimatrix/pull/28)
 
 **Owning authority/contract:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md),
