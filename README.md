@@ -44,9 +44,12 @@ preserving exact Linear schema-v3 behavior. PR #28 authorized one Inverse-only p
 reached exact-identity `RUNNING/CURRENT/ready` snapshots with `128 / 128` current-known instruments
 and no product contamination. The snapshots were `100,000 ms` apart against the frozen `30,000 ms`
 maximum, so the first-600-second gate is `REJECTED / GATE_OBSERVATION_INTERVAL_UNPROVEN`. The process
-stopped cleanly without restart; the official verifier reports zero Cases and zero Outcomes. Every
-live command is now forbidden pending fresh human Authority. This validation failure does not
-establish a runtime defect, account margin, frequency, edge, profitability, or qualification.
+stopped cleanly without restart; the official verifier reports zero Cases and zero Outcomes. The
+human now authorizes one local repair/restart/monitor loop without repeated per-fix PR/CI or human
+approval: use focused checks and fresh state roots until one process is stable for 600 sampled
+CURRENT seconds, then keep that process waiting for the first Inverse v4 Outcome. This validation
+failure does not establish a runtime defect, account margin, frequency, edge, profitability, or
+qualification.
 
 See:
 

@@ -172,19 +172,19 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_closes_rejected_inverse_validation_without_restart() -> None:
+def test_current_stage_authorizes_local_inverse_stability_loop() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `VALIDATION_ONLY`" in current
+    assert "**Current task kind:** `IMPLEMENTATION`" in current
     assert "`DUAL_PRODUCT_CONSTRUCTION_ACCEPTED`" in current
     assert "`INVERSE_BTC_V1_CONSTRUCTION_ACCEPTED_AT_89A6EB02`" in current
     assert "**Production Short Vol Radar:** `LINEAR_BTC_USDC_V1_ACCEPTED`" in current
-    assert "**Persistent service:** `STOPPED_CLEANLY__AUTHORIZED_ATTEMPT_CONSUMED`" in current
-    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "**Persistent service:** `LOCAL_INVERSE_STABILITY_LOOP_AUTHORIZED`" in current
+    assert "**Live commands:** `ITERATIVE_INVERSE_REPAIR_RESTART_MONITOR_AUTHORIZED`" in current
     assert (
         "**Sole authorized closure:** "
-        "`SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION__GATE_FAILED`" in current
+        "`SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION`" in current
     )
     assert "5,043,177 contract evaluations" in current
     assert "5,040,616 contract evaluations" in current
@@ -205,7 +205,11 @@ def test_current_stage_closes_rejected_inverse_validation_without_restart() -> N
     assert "actual account margin" in normalized.lower()
     assert "remains `UNKNOWN`" in current
     assert "cannot be restarted" in normalized
-    assert "no public command is authorized" in normalized.lower()
+    assert "without repeated human approval" in normalized
+    assert "non-major repairs remain local" in normalized.lower()
+    assert "do not require a Draft PR" in normalized
+    assert "`600` consecutive seconds" in normalized
+    assert "at least every `10` seconds" in normalized
     assert "CURRENT_AND_COMBO_ISOLATION" in current
     assert "GATE_OBSERVATION_INTERVAL_UNPROVEN" in current
     assert "`100,000 ms` apart" in normalized
@@ -229,13 +233,13 @@ def test_current_stage_closes_rejected_inverse_validation_without_restart() -> N
     validation_task = ROOT / "tasks/SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION.md"
     assert validation_task.exists()
     task = validation_task.read_text(encoding="utf-8")
-    assert "**Task kind:** VALIDATION_ONLY" in task
-    assert "**Runtime implementation:** FORBIDDEN" in task
-    assert "**Live commands:** FORBIDDEN" in task
+    assert "**Task kind:** IMPLEMENTATION" in task
+    assert "**Runtime implementation:** REQUIRED only when" in task
+    assert "**Live commands:** REQUIRED" in task
     assert "`GATE_OBSERVATION_INTERVAL_UNPROVEN`" in task
     assert "CURRENT_AND_COMBO_ISOLATION" in task
     assert "`case_count=0`" in task
-    assert "requested validation is not done" in task.lower()
+    assert "intermediate non-major repairs do not require" in task.lower()
     assert not (ROOT / "tasks/SHORT_VOL_QUEUE_LAG_CURRENTNESS_THROUGHPUT.md").exists()
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"

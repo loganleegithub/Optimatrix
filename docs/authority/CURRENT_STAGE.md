@@ -4,7 +4,7 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `VALIDATION_ONLY`
+**Current task kind:** `IMPLEMENTATION`
 
 **Current implementation status:** `DUAL_PRODUCT_CONSTRUCTION_ACCEPTED`
 
@@ -12,11 +12,11 @@
 
 **Production Short Vol Radar:** `LINEAR_BTC_USDC_V1_ACCEPTED`
 
-**Persistent service:** `STOPPED_CLEANLY__AUTHORIZED_ATTEMPT_CONSUMED`
+**Persistent service:** `LOCAL_INVERSE_STABILITY_LOOP_AUTHORIZED`
 
-**Live commands:** `FORBIDDEN`
+**Live commands:** `ITERATIVE_INVERSE_REPAIR_RESTART_MONITOR_AUTHORIZED`
 
-**Sole authorized closure:** `SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION__GATE_FAILED`
+**Sole authorized closure:** `SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION`
 
 ## Current truth
 
@@ -102,27 +102,39 @@ Workbench closed. The official Case-directory verifier reported `case_count=0`; 
 v4 Case or Outcome exists, complete, censored, or otherwise. The one-start Authority is consumed
 and cannot be restarted.
 
-## Current boundary
+## Standing local stability loop
 
-No public command is authorized. A later retry would require an explicit new human instruction,
-fresh Authority, a fresh state root, and a pre-tested external sampling procedure before—not
-during—the one-start window. The accepted runtime, product semantics, and three Policies remain
-unchanged; this failure authorizes no code change, Policy change, threshold tuning, or monitoring
-subsystem.
+The human explicitly authorizes Codex to continue without repeated human approval: diagnose a
+failed attempt, stop it cleanly, make the smallest owning-boundary repair, run the focused check for
+that repair, use a fresh state root, and restart the next single Inverse process. Non-major repairs
+remain local on one loop branch; they do not require a Draft PR, merged-main CI, repeated full
+repository gates, or a new Authority change before each restart.
+
+Exactly one runtime may exist at a time. No code is hot-swapped into a running process, no failed
+state root is reused, and the three Inverse Policies remain byte-frozen. The first repair is only to
+prepare the external sampler before process start; it is not a runtime-code defect.
+
+Stable means one process produces `600` consecutive seconds of sampled
+`RUNNING/CURRENT/ready/KNOWN_COMPLETE` state, with a successful sample at least every `10` seconds,
+one fixed code/runtime/product/Policy identity, positive monitored scope, only Inverse instrument
+names and units, and no Linear/USDC contamination. `NOT_EVALUATED` or `NO_ACTIVE_COMBO` remains a
+neutral diagnostic. After stability passes, that same process continues waiting for the first
+official-reader-complete Inverse schema-v4 `MATURE_KNOWN` or `MATURE_UNKNOWN` Outcome.
 
 ## Allowed work
 
-- read the stopped state root and exact terminal facts without mutation;
-- run deterministic offline checks over the accepted code and Policies;
-- close stale permission text and report the failed gate truthfully.
+- start and monitor one Inverse process on a fresh state root;
+- on failure, stop, diagnose, make one minimal local repair, run its focused test, and restart on
+  another fresh state root;
+- keep the stable process running until the first qualifying Inverse v4 Outcome;
+- consolidate Authority, full checks, and remote publication once after stability/business closure.
 
 ## Forbidden work
 
-- any restart, new Inverse or Linear public process, source probe, smoke, second state root, or live
-  retry without fresh Authority;
-- any code or Policy change, threshold/target/reserve tuning, manufactured clue/Candidate/Case,
-  source replay, injected market fact, deletion or mutation of the stopped state root, or reuse of
-  the five Linear Case directories;
+- simultaneous runtimes, concurrent Linear observation, hot code replacement, reuse or mutation of
+  a prior attempt state root, or automatic restart before the failure is diagnosed;
+- Policy or threshold/target/reserve tuning, manufactured clue/Candidate/Case, source replay,
+  injected market fact, or reuse of the five Linear Case directories;
 - any private/account API call, credential, balance, margin, order, fill, capital, settlement
   action, actual exposure, deployment, or commissioning;
 - interpreting two valid snapshots, the rejected gate, `NOT_EVALUATED`, Candidate zero, Case zero,
@@ -133,8 +145,6 @@ subsystem.
 
 ## Acceptance boundary
 
-The requested first Inverse v4 Outcome was not achieved. The exact attempt is terminal, cleanly
-stopped, and non-restartable; the truthful product result is zero Cases and zero Outcomes after a
-rejected precondition gate. The active validation remains incomplete until a human explicitly
-authorizes a new attempt. No current permission can be inferred from the retained code, state root,
-tests, CI, or prior Authority.
+The active validation remains incomplete. Codex continues the local repair/restart/monitor loop
+until one process passes the 600-second stability boundary and yields the first qualifying Inverse
+v4 Outcome. Point-in-time health, a short gate, tests, or a clean stop alone do not close the task.

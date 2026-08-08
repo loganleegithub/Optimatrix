@@ -2,17 +2,18 @@
 
 **Status:** ACTIVE
 
-**Task kind:** VALIDATION_ONLY
+**Task kind:** IMPLEMENTATION
 
-**Runtime implementation:** FORBIDDEN
+**Runtime implementation:** REQUIRED only when a measured failure identifies its owning boundary
 
-**Live commands:** FORBIDDEN — the one authorized attempt is consumed and its gate is `REJECTED`
+**Live commands:** REQUIRED — iterative local repair/restart/monitor loop authorized
 
 **Base commit:** `89a6eb02ab3771c5e6d2874a98463c6100b04165`
 
-**Target branch/PR:** `codex/close-inverse-btc-gate-failure` / closure Draft PR
-[#29](https://github.com/loganleegithub/Optimatrix/pull/29); authorization history is PR
-[#28](https://github.com/loganleegithub/Optimatrix/pull/28)
+**Target branch/PR:** `codex/inverse-btc-stability-loop` / local loop; consolidate and publish once
+after stability/business closure. Authorization history is PR
+[#28](https://github.com/loganleegithub/Optimatrix/pull/28); rejected-attempt closure is PR
+[#29](https://github.com/loganleegithub/Optimatrix/pull/29).
 
 **Owning authority/contract:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md),
@@ -33,12 +34,11 @@
 `RUNNING/CURRENT/ready` and isolated snapshots but the samples were `100,000 ms` apart against the
 frozen `30,000 ms` maximum. It stopped cleanly with `0` Candidate, `0` Cases, and `0` Outcomes.
 
-**Primary blocker:** `GATE_OBSERVATION_INTERVAL_UNPROVEN`; the first-600-second precondition cannot
-be accepted and the one-start Authority is consumed.
+**Primary blocker:** `GATE_OBSERVATION_INTERVAL_UNPROVEN`; repair the external sampling order, then
+continue the authorized local loop until stable.
 
-**Expected user-visible delta:** current Authority no longer exposes stale start permission and
-reports the exact failed gate, clean stop, zero Case/Outcome result, and upgrade condition of fresh
-human Authority plus a fully prepared sampling procedure before any later start.
+**Expected user-visible delta:** one Inverse process passes 600 consecutive seconds of sampled
+CURRENT/product isolation and then continues to the first qualifying schema-v4 Outcome.
 
 **Durable-data effect:** the consumed process wrote no Case business file. The official verifier
 reports `case_count=0`; this closure changes only Authority/docs/tests.
@@ -73,17 +73,18 @@ acceptance; no additional live check is authorized.
 
 **Outcome/evaluation contract change:** NONE
 
-**Stage/authorization change:** mark the one-start authorization consumed, the gate rejected, the
-service cleanly stopped, and every live command forbidden pending fresh human Authority.
+**Stage/authorization change:** replace repeated one-start human approvals with one local
+repair/restart/monitor loop. Non-major fixes use focused checks and direct restart; consolidate PR,
+full gate, and remote CI once after stability/business closure.
 
 ## Scope
 
 **In:** Authority/contracts, README, this active but incomplete validation task, direct Authority
 tests, and read-only terminal verification of the consumed state root.
 
-**Out:** every live command; runtime or Policy edits; second process/restart/state root; threshold
-tuning; private APIs/orders/fills/capital/account margin; injected/replayed data; qualification;
-execution; application commissioning; broad evidence package; host inspection or supervision.
+**Out:** simultaneous runtimes, Policy/threshold tuning, private APIs/orders/fills/capital/account
+margin, injected/replayed data, qualification, execution, application commissioning, broad evidence
+package, host inspection, or a generic supervisor.
 
 **Owning module:** the accepted `radar_runtime` composition owns the one process; `options_domain`
 owns product economics; `short_vol_underwriting.ShadowCaseStore` remains the sole durable reader and
@@ -93,13 +94,14 @@ writer.
 
 - focused tests: `pytest -q tests/test_authority_and_architecture.py`;
 - repository gate: `make check`;
-- public observation: `NOT_APPLICABLE`; the one authorized attempt is consumed;
+- public observation: iterative local Inverse attempts on fresh roots until the 600-second stable
+  gate passes, then the same-process Outcome wait;
 - durable result: official Case-directory verification with `--allow-zero` reports `case_count=0`;
 - no manifest, receipt, commissioning, host inspection, or broad evidence package.
 
 ## Definition of done
 
-The requested validation is not done. This terminal closure is complete only when stale permission
-is removed, the exact rejected-gate/zero-Case truth is authoritative, checks and merged-main CI
-pass, and no restart occurs. A later attempt requires fresh human Authority and is not implied by
-this task, code, tests, or CI.
+The requested validation is done only when one attempt passes the 600-second stable gate, the same
+process yields a qualifying Inverse v4 Outcome, the official reader accepts it, and the final
+consolidated checks/publication pass. Intermediate non-major repairs do not require repeated human
+Authority, Draft PR, full gate, or merged-main CI.
