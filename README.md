@@ -40,13 +40,13 @@ control Cases and one terminalized `UNKNOWN_CONSUMED` on receive skew. All five 
 `CENSORED_AT_STOP`; `COMPLETE` means lifecycle-terminal, not known economics or profitability.
 
 PR #27 accepted `INVERSE_BTC_V1` construction at merged-main code identity `89a6eb02...` while
-preserving exact Linear schema-v3 behavior. The sole active task is now `VALIDATION_ONLY`: after its
-Authority PR and merged-main CI pass, exactly one registered Inverse-only process may start. Its
-first 600 seconds are the same process's `CURRENT` and negative cross-product/Combo-contamination
-gate. Only a passing gate permits that uninterrupted process to keep waiting for the first natural
-Inverse schema-v4 Outcome. Zero business events during the gate is valid; `NO_ACTIVE_COMBO` is a
-separate diagnostic; process restart, concurrent Linear observation, and code/Policy tuning remain
-forbidden. Public facts do not establish account margin, which remains `UNKNOWN`.
+preserving exact Linear schema-v3 behavior. PR #28 authorized one Inverse-only process, which
+reached exact-identity `RUNNING/CURRENT/ready` snapshots with `128 / 128` current-known instruments
+and no product contamination. The snapshots were `100,000 ms` apart against the frozen `30,000 ms`
+maximum, so the first-600-second gate is `REJECTED / GATE_OBSERVATION_INTERVAL_UNPROVEN`. The process
+stopped cleanly without restart; the official verifier reports zero Cases and zero Outcomes. Every
+live command is now forbidden pending fresh human Authority. This validation failure does not
+establish a runtime defect, account margin, frequency, edge, profitability, or qualification.
 
 See:
 

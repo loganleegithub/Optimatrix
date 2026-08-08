@@ -12,11 +12,11 @@
 
 **Production Short Vol Radar:** `LINEAR_BTC_USDC_V1_ACCEPTED`
 
-**Persistent service:** `ONE_INVERSE_BTC_RUNTIME_AUTHORIZED`
+**Persistent service:** `STOPPED_CLEANLY__AUTHORIZED_ATTEMPT_CONSUMED`
 
-**Live commands:** `ONE_EXACT_INVERSE_START_REQUIRED`
+**Live commands:** `FORBIDDEN`
 
-**Sole authorized closure:** `SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION`
+**Sole authorized closure:** `SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION__GATE_FAILED`
 
 ## Current truth
 
@@ -57,24 +57,19 @@ and `outcome.json`; the official reader reports `COMPLETE`. Every terminal Outco
 lifecycle-terminal, not known economics, profitability, or Policy quality.
 
 PR [#27](https://github.com/loganleegithub/Optimatrix/pull/27) merged as
-`89a6eb02ab3771c5e6d2874a98463c6100b04165`; that exact merged main passed the repository CI. It
-accepted `INVERSE_BTC_V1` construction beside `LINEAR_BTC_USDC_V1`: strict startup product
-selection, content-distinct Policy chains, Inverse BTC-native economics with explicit USD
-valuation, schema-v4 Case bytes, cross-product rejection, and unchanged Linear schema-v3 behavior.
-Construction and green checks provide no natural Inverse market, funnel, Case, or Outcome result.
-Public facts do not establish actual account margin, which remains `UNKNOWN`.
+`89a6eb02ab3771c5e6d2874a98463c6100b04165`; that exact merged main passed CI and accepted
+`INVERSE_BTC_V1` construction beside `LINEAR_BTC_USDC_V1`. Public facts still do not establish
+actual account margin, which remains `UNKNOWN`.
 
-## Exact authorized runtime
+## Consumed Inverse validation attempt
 
-This Authority becomes executable only after the Authority PR containing it is merged to `main`
-and that merged main passes CI. Before both conditions, the registered topology remains `NONE` and
-the command below is forbidden.
-
-After activation, exactly one clean process may be started with:
+PR [#28](https://github.com/loganleegithub/Optimatrix/pull/28) merged as
+`fb82716b9ee98d045a88014db1ac70d763ac939e`; its merged-main CI run `31241795968` passed. That
+activated exactly one Inverse-only natural Shadow start using:
 
 ```text
 implementation code identity: 89a6eb02ab3771c5e6d2874a98463c6100b04165
-product:                      inverse-btc / INVERSE_BTC_V1
+runtime identity:             sha256:689b679415117dc881ca751e78a84b39e641bb7465e3facc0edf1c8a7e75f845
 product spec identity:        sha256:ff90da92cefe8e530339df38505fe7726b92b45b1855b751f2633ffd4fdb2172
 Radar Policy identity:        sha256:283c2a8cc5e14cbed94b0f2a41ddd18ff2410772ae45d07abfea80d04446b1af
 Underwriting Policy identity: sha256:76a93725bb4923a70a2865b1e06add3b5a23ae80a831029c558ce188be6e7834
@@ -83,107 +78,63 @@ state root:                   /private/tmp/optimatrix-inverse-btc-natural-shadow
 Workbench:                    http://127.0.0.1:8765
 ```
 
-The exact invocation, from a clean checkout of the registered implementation commit, is:
+The process started once from a clean exact-code checkout. Its first complete Workbench snapshot
+had fact monotonic boundary `324556817` and reported schema `5`, `RUNNING/CURRENT/ready`,
+`KNOWN_COMPLETE`, `128` monitored and `128` current-known Inverse instruments, the exact registered
+product and Policy identities, and only `BTC-...` option names. All `128` atomic Combo diagnostics
+were `NOT_EVALUATED`; no `BTC_USDC`, `LINEAR_BTC_USDC`, `_usdc` field, cross-product leg, Candidate,
+Case, or Outcome was present.
 
-```bash
-python -m radar_runtime serve-shadow \
-  --state-root /private/tmp/optimatrix-inverse-btc-natural-shadow-validation-v1 \
-  --workbench-host 127.0.0.1 \
-  --workbench-port 8765 \
-  --product inverse-btc
-```
+The next strict snapshot had fact monotonic boundary `324656817`. It again reported the same
+runtime, `RUNNING/CURRENT/ready`, `KNOWN_COMPLETE`, `128 / 128` current-known instruments, zero
+reconnects, zero Candidate/Case/Outcome, and passed every product/Policy/unit/name isolation check.
+The two fact boundaries were `100,000 ms` apart, exceeding the pre-registered maximum observation
+interval of `30,000 ms`.
 
-This is the natural Shadow process, not a preliminary probe or disposable smoke. No Linear process
-may run concurrently. The state root must be new at first start and may be owned only by this
-process. An in-process public-transport reconnect may create a new session epoch while preserving
-the runtime identity and owners; it is not a process restart. Once the process exits for any
-reason, this Authority is spent and does not permit another start.
+The earliest terminal blocker is therefore `GATE_OBSERVATION_INTERVAL_UNPROVEN`. This is an
+external validation-protocol failure: it does not establish a runtime-currentness or product-
+isolation defect, and it does not permit the unobserved interval to be imputed as success. The
+600-second `CURRENT_AND_COMBO_ISOLATION` gate is `REJECTED`, so post-gate Outcome waiting was never
+authorized.
 
-## First-600-second gate
+The same process received one clean stop and exited `0` with terminal kind `RADAR_RUN_SUMMARY`.
+Workbench closed. The official Case-directory verifier reported `case_count=0`; no Inverse schema-
+v4 Case or Outcome exists, complete, censored, or otherwise. The one-start Authority is consumed
+and cannot be restarted.
 
-Let `T0` be the monotonic instant at which the one authorized process is invoked. The first
-`600 seconds` of that process are one non-durable, read-only `CURRENT_AND_COMBO_ISOLATION` gate.
-Read the existing immutable `/api/workbench/current` snapshot at bounded intervals no wider than
-`30 seconds`; do not add a runtime gate, evidence store, manifest, or long-lived observer service.
+## Current boundary
 
-Identity and isolation apply to every complete snapshot successfully read from the first Workbench
-response through the terminal sample at or after `T0 + 600 seconds`:
-
-- Workbench schema is `5`; code, runtime, product-spec, and all three Policy identities remain
-  fixed, with the code/product/Policy values registered above;
-- the selected product is `inverse-btc`, market family is `DERIBIT_BTC_OPTIONS`, price index is
-  `btc_usd`, public/native/settlement currency is BTC, valuation is `USD_EQUIVALENT`, and Case
-  schema is `4`;
-- the index-history source is the Inverse `BTC_USD` source; every visible Radar, Underwriting,
-  selected-decision, Shadow, Position, Outcome, leg, and Combo fact belongs to the registered
-  product; every visible option or leg name matches the Inverse `BTC-...` family;
-- the serialized Inverse document contains no Linear `BTC_USDC`, `LINEAR_BTC_USDC`, or `_usdc`
-  field-name contamination. `NO_ACTIVE_COMBO`, `NOT_EVALUATED`, or no visible Combo is neutral and
-  must not be reclassified as a liquidity, funnel, or isolation failure;
-- after the first successful Workbench response, an unreadable/malformed snapshot, changed runtime
-  identity, changed code/Policy/product identity, Linear fact, mixed-product leg, or second process
-  fails the gate immediately.
-
-Startup `STARTING`, `CONNECTING`, `UNKNOWN`, or `DEGRADED` before first `CURRENT` is not itself a
-failure. To pass at `T0 + 600 seconds`, however, at least one sample in the window and the terminal
-sample must report `service.phase=RUNNING`, `service.data_state=CURRENT`, `service.ready=true`,
-`system.coverage_state=KNOWN_COMPLETE`, and a positive monitored-instrument count. Business counts
-may remain zero, and Radar evaluations may truthfully remain warmup or `UNKNOWN`.
-
-If the process exits, the terminal sample is not `CURRENT`, or any identity/isolation condition
-fails, stop cleanly when possible, report the exact earliest failure, and do not restart. A failed
-gate authorizes neither repair nor another process under this task. A naturally opened Case or
-Outcome before the terminal gate sample does not waive the gate and is not interpreted until the
-gate passes.
-
-## Post-gate Outcome wait
-
-Only after the gate passes may the same uninterrupted process, same runtime identity, same Policy
-chain, and same state root continue waiting for the first natural Inverse schema-v4 Outcome. Passing
-the gate is not permission to stop and start a fresh observation.
-
-The first qualifying result is an official-reader `COMPLETE` schema-v4 Case whose product identity
-is the registered `INVERSE_BTC_V1` identity and whose Outcome terminal state is `MATURE_KNOWN` or
-`MATURE_UNKNOWN`. It may be an admitted-Candidate Case or the separately labeled future-blind
-selected WATCH/ABSTAIN no-trade control; its enrollment kind must be reported and the latter cannot
-change canonical Candidate conversion counts. `CENSORED_AT_STOP`, `CENSORED_AT_FAILURE`, an
-incomplete Case, a Workbench row alone, or an Outcome from another product/runtime does not satisfy
-the closure.
-
-After the first qualifying Outcome is read through the official Case reader, stop the same process
-cleanly once and re-read the Case. If no qualifying Outcome has formed, zero remains a truthful
-nonterminal result and the same process continues. Fatal process exit ends the authorization
-without restart and leaves the task incomplete.
+No public command is authorized. A later retry would require an explicit new human instruction,
+fresh Authority, a fresh state root, and a pre-tested external sampling procedure before—not
+during—the one-start window. The accepted runtime, product semantics, and three Policies remain
+unchanged; this failure authorizes no code change, Policy change, threshold tuning, or monitoring
+subsystem.
 
 ## Allowed work
 
-- merge this bounded Authority-only change, wait for merged-main CI, and then perform the one exact
-  public-only Inverse startup;
-- read the loopback immutable Workbench during the gate and subsequent wait;
-- let the existing owner write only natural Inverse schema-v4 Case transitions and Outcomes under
-  the registered state root;
-- read a terminal Case through the existing official reader and issue one clean stop after success.
+- read the stopped state root and exact terminal facts without mutation;
+- run deterministic offline checks over the accepted code and Policies;
+- close stale permission text and report the failed gate truthfully.
 
 ## Forbidden work
 
-- any start before Authority merge plus merged-main CI success, any restart, a second runtime,
-  concurrent Linear observation, another state root, another port, or another code/Policy/product
-  identity;
+- any restart, new Inverse or Linear public process, source probe, smoke, second state root, or live
+  retry without fresh Authority;
 - any code or Policy change, threshold/target/reserve tuning, manufactured clue/Candidate/Case,
-  source replay, injected market fact, deletion or mutation of natural Case bytes, or reuse of the
-  five Linear Case directories;
+  source replay, injected market fact, deletion or mutation of the stopped state root, or reuse of
+  the five Linear Case directories;
 - any private/account API call, credential, balance, margin, order, fill, capital, settlement
-  action, actual exposure, supervised deployment, or commissioning;
-- treating a 600-second gate, `NO_ACTIVE_COMBO`, Candidate zero, a censored Case, green CI, or a
-  Workbench display as evidence of frequency, fillability, edge, profitability, qualification, or
-  execution readiness;
-- a manifest, receipt chain, application-owned gate, extra schema, full-feed persistence, replay
-  platform, host PID/log/`lsof` inspection, supervisor, or automatic restart.
+  action, actual exposure, deployment, or commissioning;
+- interpreting two valid snapshots, the rejected gate, `NOT_EVALUATED`, Candidate zero, Case zero,
+  clean exit, or green CI as frequency, fillability, edge, profitability, qualification, or
+  execution evidence;
+- a manifest, receipt chain, application-owned gate, new persistence/schema, full-feed replay,
+  host PID/log/`lsof` inspection, supervisor, or automatic restart.
 
 ## Acceptance boundary
 
-The task closes only when the exact one-start topology is activated after Authority merged-main CI,
-the same runtime passes the full first-600-second gate, one qualifying natural Inverse schema-v4
-Outcome is verified by the official reader, and the process stops cleanly without restart. The gate
-alone is an intermediate prerequisite, not business closure. If the market produces no qualifying
-Outcome, the runtime keeps waiting and the task remains active; no threshold change is authorized.
+The requested first Inverse v4 Outcome was not achieved. The exact attempt is terminal, cleanly
+stopped, and non-restartable; the truthful product result is zero Cases and zero Outcomes after a
+rejected precondition gate. The active validation remains incomplete until a human explicitly
+authorizes a new attempt. No current permission can be inferred from the retained code, state root,
+tests, CI, or prior Authority.
