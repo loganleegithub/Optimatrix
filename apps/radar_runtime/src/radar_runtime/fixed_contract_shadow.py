@@ -62,12 +62,28 @@ from short_vol_underwriting.owner import (
 
 from radar_runtime.runtime import (
     AtomicScopeSnapshot,
+    CausalCause,
     CausalCommit,
     FactBoundary,
     RadarReducer,
     RpcPurpose,
     RpcState,
     ShadowRpcIntent,
+)
+
+_POSITION_COMPONENT_SOURCE_CAUSES = frozenset(
+    {
+        CausalCause.OPTION_BOOK_FACT,
+        CausalCause.OPTION_BOOK_CHANGED,
+        CausalCause.OPTION_BOOK_GAP,
+    }
+)
+_POSITION_IRRELEVANT_COMBO_BOOK_CAUSES = frozenset(
+    {
+        CausalCause.COMBO_BOOK_FACT,
+        CausalCause.COMBO_BOOK_CHANGED,
+        CausalCause.COMBO_BOOK_GAP,
+    }
 )
 
 
@@ -412,7 +428,7 @@ class FixedContractShadowRuntimeAdapter:
             )
         )
 
-        for anchor in tuple(self._anchors.values()):
+        for anchor in self._position_anchors_for_commit(reducer=reducer, commit=commit):
             if not boundary.is_strictly_after(anchor.entry_boundary):
                 continue
             facts = self._project_position(
@@ -427,6 +443,41 @@ class FixedContractShadowRuntimeAdapter:
             )
             intents.extend(self._consume_transition(position_transition, projected))
         return tuple(intents)
+
+    def _position_anchors_for_commit(
+        self,
+        *,
+        reducer: RadarReducer,
+        commit: CausalCommit,
+    ) -> tuple[_Anchor, ...]:
+        anchors = tuple(self._anchors.values())
+        if not anchors or reducer.clock is None:
+            return anchors
+        if commit.cause in _POSITION_IRRELEVANT_COMBO_BOOK_CAUSES:
+            return ()
+        if (
+            commit.cause not in _POSITION_COMPONENT_SOURCE_CAUSES
+            and commit.cause is not CausalCause.TICKER_APPLIED
+        ):
+            return anchors
+        scopes = commit.transaction_affected_scopes
+        if "GLOBAL" in scopes or "OPTION_LOCAL" in scopes:
+            return anchors
+        instrument_names = {
+            scope.removeprefix("OPTION:") for scope in scopes if scope.startswith("OPTION:")
+        }
+        if len(instrument_names) != len(scopes):
+            return anchors
+        if commit.cause is CausalCause.TICKER_APPLIED:
+            return tuple(
+                anchor for anchor in anchors if anchor.short_instrument_name in instrument_names
+            )
+        return tuple(
+            anchor
+            for anchor in anchors
+            if anchor.short_instrument_name in instrument_names
+            or anchor.long_instrument_name in instrument_names
+        )
 
     def on_request_sent(
         self,

@@ -2680,3 +2680,67 @@ def test_component_quote_fingerprint_is_stable_scalar_identity_input(
     )
     assert tuple(owner.state_store.objects) != before
     assert _object_payloads(owner, "POSITION_ACTION")[-1]["serialized_action"] == "HOLD"
+
+
+def test_position_projection_only_consumes_relevant_high_frequency_market_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reducer, adapter, _owner = _shadow_system(tmp_path)
+    _admit_component_shadow(reducer, adapter)
+    projected_anchor_ids: list[str] = []
+    original = adapter._project_position
+
+    def count_projection(**kwargs: Any) -> Any:
+        projected_anchor_ids.append(kwargs["anchor"].anchor_identity)
+        return original(**kwargs)
+
+    monkeypatch.setattr(adapter, "_project_position", count_projection)
+
+    for causal_seq, cause, failure_domain, scopes in (
+        (
+            6,
+            CausalCause.OPTION_BOOK_CHANGED,
+            FailureScope.OPTION,
+            ("OPTION:BTC_USDC-UNRELATED",),
+        ),
+        (
+            7,
+            CausalCause.TICKER_APPLIED,
+            FailureScope.OPTION,
+            ("OPTION:BTC_USDC-LONG",),
+        ),
+        (
+            8,
+            CausalCause.COMBO_BOOK_CHANGED,
+            FailureScope.COMBO_LAYER,
+            ("OPTION:BTC_USDC-LONG", "OPTION:BTC_USDC-SHORT"),
+        ),
+    ):
+        adapter.on_settled_transaction(
+            reducer=reducer,
+            commit=CausalCommit(
+                boundary=FactBoundary(1, causal_seq, 100 + causal_seq * 10, causal_seq),
+                cause=cause,
+                failure_domain=failure_domain,
+                affected_scopes=scopes,
+            ),
+        )
+    assert projected_anchor_ids == []
+
+    for causal_seq, cause, instrument_name in (
+        (9, CausalCause.OPTION_BOOK_FACT, "BTC_USDC-SHORT"),
+        (10, CausalCause.OPTION_BOOK_CHANGED, "BTC_USDC-LONG"),
+        (11, CausalCause.TICKER_APPLIED, "BTC_USDC-SHORT"),
+    ):
+        adapter.on_settled_transaction(
+            reducer=reducer,
+            commit=CausalCommit(
+                boundary=FactBoundary(1, causal_seq, 100 + causal_seq * 10, causal_seq),
+                cause=cause,
+                failure_domain=FailureScope.OPTION,
+                affected_scopes=(f"OPTION:{instrument_name}",),
+            ),
+        )
+    assert len(projected_anchor_ids) == 3
+    assert set(projected_anchor_ids) == set(adapter._anchors)
