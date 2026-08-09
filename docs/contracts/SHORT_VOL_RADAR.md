@@ -6,12 +6,11 @@
 
 ## Purpose
 
-Maintain the current 0–72 hour Deribit BTC option market for exactly one startup-selected product
-profile in memory and tell the trader whether a target-size executable sell-side implied-volatility
-witness is unusually rich relative to one exact causal, conservative multi-horizon BTC
-realized-volatility baseline. The profile is `LINEAR_BTC_USDC_V1` or `INVERSE_BTC_V1`; one runtime
-never mixes or aggregates them. A positive detector state is a selective `RICHNESS_CLUE`, not a
-downstream Underwriting `CANDIDATE`, forecast, trade, or profitability claim.
+Maintain the current 0–72 hour Deribit `INVERSE_BTC_V1` option market in memory and tell the trader
+whether a target-size executable sell-side implied-volatility witness is unusually rich relative to
+one exact causal, conservative multi-horizon BTC realized-volatility baseline. The product is fixed
+at startup; there is no product selector or fallback. A positive detector state is a selective
+`RICHNESS_CLUE`, not a downstream Underwriting `CANDIDATE`, forecast, trade, or profitability claim.
 
 The Radar separately supplies a ranked protective-vertical review and reports official
 atomic-combo availability as a diagnostic. Review context cannot create detector truth. One frozen
@@ -21,13 +20,12 @@ not create admission or execution permission by itself.
 ## Authorized sources and universe
 
 - production endpoint `wss://www.deribit.com/ws/api/v2` and public methods only;
-- exactly one startup-selected product scope: active BTC-USDC Linear options or active BTC Inverse
-  options, selected by actual expiry timestamp and exact product metadata;
+- active Inverse BTC options selected by actual expiry timestamp and exact product metadata;
 - trusted-time scope `0 < TTE <= 72 hours`, with the final 30 minutes excluded;
 - Calls and Puts evaluated separately;
 - official option/combo metadata, aggregated `agg2` option ticker and option order books, combo order
-  books, the selected product's streaming `btc_usdc | btc_usd` index and matching index-chart
-  history, platform status, heartbeat, and public time;
+  books, the fixed product's streaming `btc_usd` index and matching index-chart history, platform
+  status, heartbeat, and public time;
 - one exact target quantity, product identity, and matching content-identified Policy chain for the
   full run.
 
@@ -38,9 +36,9 @@ but may create the explicitly non-atomic Shadow counterfactual defined by the Un
 ## Source contract
 
 `IndexHistoryReducer` is the sole validator and bounded in-memory owner of
-`public/get_index_chart_data(index_name=<selected-product-index>, range=1d)`, where the index is
-`btc_usdc` for Linear and `btc_usd` for Inverse. It accepts only a bounded chronological array of
-positive finite `[timestamp, average_index_price]` pairs for that one index. It exposes:
+`public/get_index_chart_data(index_name=btc_usd, range=1d)`. It accepts only a bounded
+chronological array of positive finite `[timestamp, average_index_price]` pairs for that one index.
+It exposes:
 
 - response point count and interval histogram;
 - modal timestamp interval;
@@ -58,16 +56,15 @@ currentness.
 
 ## Product and unit boundary
 
-The startup-selected product specification is immutable and binds market family, exact source
+The fixed `INVERSE_BTC_V1` product specification is immutable and binds market family, exact source
 metadata, native option-price and settlement currency, strike currency, price index,
 economic-semantics version, model-normalization rule, valuation-conversion rule, fee rule, payoff
 convention, and Case schema. The Radar Policy must bind the same product identity; any mismatch or
-mixed-product leg is rejected before it can create Radar or downstream truth.
+foreign-product leg is rejected before it can create Radar or downstream truth.
 
-Depth walking and adverse tick stress always occur first in the exchange-native premium unit. For
-Linear BTC-USDC, native and Black-model premium are USDC. For Inverse BTC, native premium is BTC and
-the product-owned model conversion multiplies it by the declared expiry forward before Black
-inversion. The forward is a model input, not the current cash-valuation index. Current Inverse BTC
+Depth walking and adverse tick stress always occur first in the exchange-native BTC premium unit.
+The product-owned model conversion multiplies native premium by the declared expiry forward before
+Black inversion. The forward is a model input, not the current cash-valuation index. BTC-native
 cashflows are separately valued at the causal `btc_usd` index and labeled `USD_EQUIVALENT`; they are
 not USDC cashflows or account-margin facts.
 
@@ -91,14 +88,14 @@ requires complete relevant scope.
 
 For one short-leg option at one causal boundary:
 
-1. prove selected-product identity, trusted TTE applicability, lifecycle, target amount rules,
+1. prove the fixed product identity, trusted TTE applicability, lifecycle, target amount rules,
    current forward, and OTM status;
 2. consume full target quantity from both bid and ask; reject an absent side, locked/crossed target
    VWAP, or invalid amount grid;
 3. consume official native `tick_size` and `tick_size_steps` metadata;
 4. move every consumed bid level down by one native legal tick, respecting tick-regime boundaries;
    a non-positive stressed price is known ineligible;
-5. convert raw bid, stressed bid, and ask native VWAPs through the selected product's model rule,
+5. convert raw bid, stressed bid, and ask native VWAPs through the fixed product's model rule,
    then invert Black total volatility from those model-domain prices;
 6. derive the short-leg Delta interval and classify its explicit review bucket;
 7. consume the exact confirmed five-minute average-index suffix and compute 30/120/360-minute
@@ -199,7 +196,7 @@ Rank changes attention only and cannot change any business truth.
 
 ## Episode semantics
 
-One Episode identity is namespaced by runtime, selected product, Radar Policy, instrument, and
+One Episode identity is namespaced by runtime, fixed product, Radar Policy, instrument, and
 activation causal sequence. Repeated bytes, heartbeat, polling, display publication, unchanged recomputation, and
 multiple changes inside one separation interval do not advance persistence.
 

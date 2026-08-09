@@ -47,21 +47,7 @@ No other durable file belongs to the product runtime.
 
 ## Case identity
 
-Schema v3 Linear `case_id` remains the byte-exact canonical SHA-256 identity derived from:
-
-```text
-"ShadowCaseIdentity"
-code_identity
-runtime_identity
-Radar Policy identity
-Underwriting Policy identity
-Position Policy identity
-enrollment identity (`SHADOW_ENTRY` or selected-decision-control open)
-opened FactBoundary
-```
-
-Schema v4 Inverse inserts the fixed schema marker and exact product identity before the enrollment
-identity and opened boundary:
+The accepted Inverse schema-v4 `case_id` is the canonical SHA-256 identity derived from:
 
 ```text
 "ShadowCaseIdentity"
@@ -80,10 +66,9 @@ Policy identities are exact content digests. The code identity is the exact Git 
 contract bytes, file paths, host identity, PID, manifest, receipt, directory inventory, and
 Workbench publication sequence do not enter the Case identity.
 
-Every record binds the same Case, product, and frozen Policy semantics. `SHADOW_CASE_OPENED` binds
-the origin code/runtime. Each Segment and any later first-close or Outcome record binds the exact
-code/runtime that emitted it plus its Segment identity. Existing v3 records bind Linear implicitly
-through the fixed Linear Policy chain without adding a key; v4 binds Inverse explicitly.
+Every record binds the same Case, `INVERSE_BTC_V1` product, and frozen Policy semantics.
+`SHADOW_CASE_OPENED` binds the origin code/runtime. Each Segment and any later first-close or
+Outcome record binds the exact code/runtime that emitted it plus its Segment identity.
 FactBoundaries must increase strictly inside one Segment. Cross-runtime ordering comes only from an
 acyclic, single-predecessor Segment chain; runtimes' monotonic clocks are never compared directly.
 
@@ -112,20 +97,16 @@ The opened record contains:
   states `NOT_A_CANDIDATE_ACTIVATION`, `NOT_A_SHADOW_ENTRY`, `NOT_AN_ADMITTED_TRADE`, and
   `NO_CAPITAL_EXPOSURE`.
 
-The exact economic shape is versioned inside this one record family:
+The exact economic shape is the accepted Inverse schema-v4 record. It contains one exact product
+object with native premium/settlement currency, price index, strike and valuation currencies,
+economic-semantics identity, and the declared valuation basis. Entry legs retain BTC-native
+consumed levels, VWAPs, and fees. Entry economics retain BTC-native gross/fee/net values and
+separately named USD boundary valuations at the causal entry index. USD-defined strike
+width/payoff/reserve values remain distinct from native BTC cashflow and from actual account
+margin, which is `UNKNOWN`.
 
-- schema v3 is accepted Linear BTC-USDC only. Its key set, field names, values, canonical JSON, and
-  identity algorithm remain byte-compatible and are never widened or rewritten;
-- schema v4 is Inverse BTC only. It adds one exact product object with native premium/settlement
-  currency, price index, strike and valuation currencies, economic-semantics identity, and the
-  declared valuation basis. Entry legs retain BTC-native consumed levels, VWAPs, and fees. Entry
-  economics retain BTC-native gross/fee/net values and separately named USD boundary valuations at
-  the causal entry index. USD-defined strike width/payoff/reserve values remain distinct from native
-  BTC cashflow and from actual account margin, which is `UNKNOWN`. A schema v4 field with a legacy
-  `*_usdc` suffix may not contain an Inverse USD-equivalent value.
-
-Process-independent recovery does not add a key to either accepted `opened.json` shape and does not
-change either product schema identity. Entry Position baselines belong only to the origin Segment.
+Process-independent recovery does not add a key to the accepted `opened.json` shape and does not
+change its product schema identity. Entry Position baselines belong only to the origin Segment.
 
 Each entry leg's consumed amounts must sum exactly to the full quantity. Pair session and continuity
 epochs must match, measured receive skew must agree with the two receipt boundaries, and both skews
@@ -214,11 +195,11 @@ same frozen legs. It stores the pair/source identities, raw/stressed full-quanti
 legs, gross close cashflow, both close fee reserves, net close cashflow, gross PnL, total public fee
 reserve, net PnL after reserve, and net loss.
 
-For schema v3 those values retain their exact accepted USDC fields. For schema v4 the Outcome also
-stores BTC-native close cashflow, fees, gross/net PnL, the causal close valuation index, the net PnL
-formed from entry- and close-boundary USD valuations, and the distinct view that values total native
-BTC PnL at the close index. Both views are predeclared and conserved; neither is chosen after the
-Outcome. They are counterfactual valuations, not fills, settlement actions, or account-margin facts.
+The Outcome stores BTC-native close cashflow, fees, gross/net PnL, the causal close valuation index,
+the net PnL formed from entry- and close-boundary USD valuations, and the distinct view that values
+total native BTC PnL at the close index. Both views are predeclared and conserved; neither is chosen
+after the Outcome. They are counterfactual valuations, not fills, settlement actions, or
+account-margin facts.
 
 `MATURE_UNKNOWN` means the Case reached its natural terminal condition without an eligible paired
 component-book exit under the frozen contract. Component close facts and economic exit/PnL fields
@@ -232,8 +213,8 @@ eligibility remain distinct.
 
 A handled clean stop or failure ends only the admitted Entry's current Segment. Selected no-trade
 Controls are not recoverable aggregates and may retain `CENSORED_AT_STOP | CENSORED_AT_FAILURE`
-with null economics under their existing bounded lifecycle. Historical schema-v3/v4 admitted
-censoring is interpreted differently only through an explicit legacy migration record. A stable
+with null economics under their existing bounded lifecycle. Historical admitted Inverse censoring
+is interpreted differently only through an explicit legacy migration record. A stable
 owner that emits a censored admitted aggregate Outcome is rejected; stop/failure must use the
 Segment-close boundary directly.
 
@@ -302,8 +283,7 @@ writer exclusion.
 ## Minimal reader
 
 The startup scanner enumerates direct Case-directory names under the one stable repository; the
-product reader then validates each requested Case independently and selects exactly one schema
-branch:
+Inverse product reader then validates each requested Case independently:
 
 - exact record key/type shape;
 - identity format and same Case/product/frozen-Policy binding;
@@ -323,11 +303,10 @@ branch:
 - no conflicting duplicate files.
 
 It returns active/terminal Entry status, current Segment status, `CONTINUOUS | GAPPED`, and Control
-status separately. The runtime restores every compatible active admitted Entry and no Control. The
-reader does not validate Git trees, inspect host state, run migration, reconstruct market state, or
-form a qualification Cohort. It reads exact Linear schema v3, Inverse schema v4, and the explicit
-process-independent aggregate/segment extension only. Supporting old versions is bounded
-compatibility, not a generic legacy-schema framework.
+status separately. The runtime restores every compatible active admitted Inverse Entry and no
+Control. The reader does not validate Git trees, inspect host state, run migration, reconstruct
+market state, or form a qualification Cohort. It reads only the exact Inverse schema-v4 family and
+its process-independent aggregate/segment extension; unsupported product or schema input fails.
 
 ## No-trade controls and Cohorts
 
@@ -349,10 +328,9 @@ continuous-observation Cohort. The Online Runtime never writes Cohort or aligned
 
 Direct tests prove zero pre-enrollment files, exact one-open/one-first-close/one-outcome cardinality,
 atomic initial admitted Entry `opened.json + segments/0/opened.json` directory publication with no
-visible half-Case across a crash boundary,
-byte-compatible Linear schema v3 reads and enrollment discrimination, explicit Inverse schema v4
-product binding and native/boundary/exit valuation conservation, rejection of schema/product/Policy
-mixing, original/refreshed selection boundary ordering, zero Candidate/`SHADOW_ENTRY` for controls,
+visible half-Case across a crash boundary, explicit Inverse schema-v4 product binding and
+native/boundary/exit valuation conservation, rejection of schema/product/Policy mixing,
+original/refreshed selection boundary ordering, zero Candidate/`SHADOW_ENTRY` for controls,
 atomic file publication, duplicate handling, pair/source identity and boundary binding, both-leg
 arithmetic, repeated process recovery, Segment close/incomplete/gap truth, recovery-first UNKNOWN,
 combined first-close/attempt durability, no retry after uncertain loss, and gapped mature Outcome

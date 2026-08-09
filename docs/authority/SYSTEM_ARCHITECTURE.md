@@ -7,15 +7,15 @@
 Optimatrix is one event-driven modular monolith. Market transport, current-state reduction, Radar,
 Underwriting, Shadow admission, Position management, bounded process-independent Shadow Entry
 persistence, funnel
-projection, and the loopback Workbench run in one process. Each process selects exactly one product
-profile at startup: `LINEAR_BTC_USDC_V1` or `INVERSE_BTC_V1`. That profile binds the public source
-universe, native/model/valuation units, one exact three-Policy chain, Case schema, funnel, and
-Workbench projection for the full run. One process never observes, aggregates, or switches between
-both products. No network service split, database, message bus, replay job, generic scheduler, or
+projection, and the loopback Workbench run in one process. Each process starts with the fixed
+`INVERSE_BTC_V1` profile. It binds the public source universe,
+native/model/valuation units, one exact three-Policy chain, Inverse Case schema, funnel, and
+Workbench projection for the full run. There is no product selector, fallback profile, or runtime
+product switch. No network service split, database, message bus, replay job, generic scheduler, or
 browser strategy engine is part of the current slice.
 
 ```text
-Deribit public WebSocket for one selected product
+Deribit public WebSocket for `INVERSE_BTC_V1`
 → one bounded application queue
 → one synchronous causal reducer
 → Radar current state
@@ -34,7 +34,7 @@ aligned comparisons, Challenger datasets, and promotion decisions are offline co
 
 ```text
 market_monitor
-    selected-product public source parsing, clock, catalogs, books, index continuity
+    Inverse BTC public source parsing, clock, catalogs, books, `btc_usd` index continuity
         ↓
 options_domain
     one product specification, instruments, amount rules, native target-depth/tick stress,
@@ -55,14 +55,14 @@ own strategy formulas.
 
 ## One causal application path
 
-Before constructing the graph, startup resolves one canonical product specification and its exact
-matching Radar, Underwriting, and Position Policies. Product/Policy mismatch fails before any
-business owner is constructed. The selected product is immutable for the runtime; there is no
-second product reducer, owner, queue, Case store, Workbench, or in-process cross-product funnel.
+Before constructing the graph, startup resolves the canonical `INVERSE_BTC_V1` product
+specification and its exact matching Radar, Underwriting, and Position Policies. Product/Policy
+mismatch fails before any business owner is constructed. There is no product argument, second
+product reducer, owner, queue, Case store, Workbench, or in-process product-comparison funnel.
 
 After acquiring the stable state-root lease and before public intake, startup scans
 `state-root/cases` and validates every Case directory through the one official reader. It restores
-all and only non-terminal `ADMITTED_SHADOW_TRADE` Entries bound to the selected product and the
+all and only non-terminal `ADMITTED_SHADOW_TRADE` Entries bound to `INVERSE_BTC_V1` and the
 exact frozen Policy chain. A malformed, unsupported, or mixed active Entry fails the whole startup;
 the runtime cannot skip it. Terminal admitted Entries and selected no-trade Controls remain
 research history and are not restored. No CLI allowlist chooses business Entries.
@@ -138,17 +138,11 @@ publication. A crash before publication leaves no visible Entry Case; after publ
 records are visible. This protects the Entry boundary using the existing single-instance lease and
 is not a manifest or fencing protocol.
 
-The one store/reader owns exactly two compatible versions of the same Case family:
-
-- schema v3 remains the byte-exact Linear BTC-USDC record contract. It has no added keys and binds
-  its product implicitly through the fixed Linear Policy chain;
-- schema v4 is the accepted Inverse BTC Case. It binds the product explicitly and conserves BTC-
-  native entry/close/fee/PnL facts plus separately named USD valuation facts at their declared
-  causal index boundaries.
-
-These are version branches inside one validator, not parallel business schemas. Their accepted
-`opened.json` key sets and product schema identities are not widened for recovery. A new admitted
-Entry's origin Segment instead persists `entry_position_baseline`: the exact entry index and
+The one store/reader owns the accepted Inverse schema-v4 Case family. It binds `INVERSE_BTC_V1`
+explicitly and conserves BTC-native entry/close/fee/PnL facts plus separately named USD valuation
+facts at their declared causal index boundaries. There is no online legacy-product or alternate
+schema branch. The accepted `opened.json` key set and product schema identity are not widened for
+recovery. A new admitted Entry's origin Segment instead persists `entry_position_baseline`: the exact entry index and
 short-leg mark-IV source references required by a future Position owner. A migrated legacy Entry
 without those accepted source references records the baseline as `UNKNOWN`; source bytes remain
 unchanged and no value is inferred.
@@ -197,8 +191,8 @@ Workbench rows; it cannot create an unbounded aggregate reason-key set.
 
 For Radar knownness, the funnel uses the canonical `IndexHistoryReducer` tail state already owned
 by the settled reducer; it does not recalculate the Radar formula. The history reducer is the sole
-validator and in-memory owner of the official `public/get_index_chart_data` response for the
-startup-selected product index: `btc_usdc` for Linear or `btc_usd` for Inverse. It accepts only
+validator and in-memory owner of the official `public/get_index_chart_data` response for the fixed
+`btc_usd` index. It accepts only
 bounded, strictly chronological, positive finite average-price points for that one index, applies
 the configured completed-interval cutoff, exposes cadence/age/exact-suffix facts including whether
 the newest response point falls outside that cutoff, and detects completed-overlap revision. It
@@ -219,12 +213,11 @@ never interpolates or fills a gap. The warmup gate is per Policy TTE band:
 
 
 The hard-screen calculator in `short_vol_radar` is the sole owner of target-size bid/ask use,
-official native tick stress, product-owned Black-model normalization, Black inversion, TTE/Delta
-clue eligibility, and stressed IV/RV detector truth. Depth walking and adverse tick stress happen
-in the exchange-native premium unit before conversion. Linear native premium is already in the
-Black strike-currency domain; Inverse BTC native premium is converted with the declared forward for
-model use. The forward used for model normalization is not the causal index used to value BTC
-cashflows. The separate review calculator may derive semivariance/jump context, surface-lite context,
+official native tick stress, Inverse product-owned Black-model normalization, Black inversion,
+TTE/Delta clue eligibility, and stressed IV/RV detector truth. Depth walking and adverse tick stress
+happen in the exchange-native BTC premium unit before conversion. Native BTC premium is converted
+with the declared forward for model use. The forward used for model normalization is not the causal
+index used to value BTC cashflows. The separate review calculator may derive semivariance/jump context, surface-lite context,
 protective vertical references, and transparent attention rank from already settled current state.
 Its bounded Top 3 is display-only and cannot select an Underwriting structure or feed detector
 truth. For each active Episode, composition waits for a complete positive option scope, excludes
@@ -240,8 +233,8 @@ short bids and long asks at the full target quantity, stresses short sells down 
 tick and long buys up one native legal tick, then applies both standard fees in the product's native
 settlement currency. Close walks short asks and long bids, stresses short buys up one native tick
 and long sells down one native tick, then applies both native fees. The calculator also produces one
-explicit valuation projection at the causal selected-product index. Linear values remain USDC;
-Inverse native values remain BTC and their valuation fields are explicitly USD-equivalent. Strike
+explicit valuation projection at the causal `btc_usd` index. Native values remain BTC and their
+valuation fields are explicitly USD-equivalent. Strike
 width and contractual payoff cap are USD-defined; Inverse BTC liability depends on settlement
 price, while actual account margin remains `UNKNOWN`. The same product-aware value object owns the
 canonical scalar fingerprint projection used by Underwriting and Position; no second leg-price
@@ -314,7 +307,7 @@ immediately; pending state flushes before reconnect or stop.
 HTTP handlers read one immutable complete byte snapshot. They never traverse mutable reducer
 state, read Shadow Case files, compute strategy truth, modify Policy, contact Deribit, or expose a
 write route. The server binds only to loopback and supports the declared GET/HEAD surface. The
-snapshot contains the one selected product identity, public/index/native/settlement/valuation units,
+snapshot contains the fixed `INVERSE_BTC_V1` identity, public/index/native/settlement/valuation units,
 a bounded Top-N attention view plus `ALL`, exact rank inputs, source-contract facts, hard-screen
 fields, a separate selected-decision panel with original/refreshed actions and margin vectors,
 enrollment/Outcome state, and diagnostic non-claims. Browser code only renders server-owned typed
@@ -350,9 +343,9 @@ Every external trust boundary has one validator:
 - durable aggregate, segment, transition, Outcome, and migration records: Shadow Case store/reader.
 
 No emitted result is re-run through a second business schema, relationship graph, provenance graph,
-or validator-of-validator. The one Case store/reader may select its exact v3 Linear or v4 Inverse
-version branch from the product-bound Policy chain; it never passes one record through both. Unit
-tests may independently exercise pure formulas; they do not create a second runtime truth path.
+or validator-of-validator. The one Case store/reader accepts exactly the Inverse schema-v4 record
+family bound to the fixed Policy chain. Unit tests may independently exercise pure formulas; they
+do not create a second runtime truth path.
 
 ## Structural non-goals
 

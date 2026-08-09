@@ -10,7 +10,6 @@ PREMIUM_FEE_CAP_FRACTION = Decimal("0.125")
 
 
 class OptionProductName(StrEnum):
-    LINEAR_BTC_USDC = "linear-btc-usdc"
     INVERSE_BTC = "inverse-btc"
 
 
@@ -47,8 +46,6 @@ class OptionProductSpec:
         )
         if any(not value for value in members):
             raise ValueError("option product specification members must be non-empty")
-        if self.base_currency != "BTC":
-            raise ValueError("the current product family supports BTC options only")
         if self.instrument_type not in {"linear", "reversed"}:
             raise ValueError("option product instrument_type must be linear or reversed")
 
@@ -103,11 +100,13 @@ class OptionProductSpec:
 
     @property
     def economic_semantics_version(self) -> str:
-        return "INVERSE_BTC_V1" if self.is_inverse else "LINEAR_BTC_USDC_V1"
+        if self.is_inverse:
+            return "INVERSE_BTC_V1"
+        return f"{self.name.value.upper().replace('-', '_')}_V1"
 
     @property
     def case_schema_version(self) -> int:
-        return 4 if self.is_inverse else 3
+        return 4
 
     @property
     def model_premium_rule(self) -> str:
@@ -119,13 +118,13 @@ class OptionProductSpec:
     def valuation_rule(self) -> str:
         if self.is_inverse:
             return "NATIVE_BTC_AMOUNT_TIMES_CAUSAL_BTC_USD_INDEX"
-        return "NATIVE_USDC_AMOUNT_ONE_FOR_ONE"
+        return "NATIVE_AMOUNT_ONE_FOR_ONE"
 
     @property
     def fee_rule(self) -> str:
         if self.is_inverse:
             return "MIN_BASE_RATE_OR_12_5_PERCENT_NATIVE_PREMIUM_IN_BTC"
-        return "MIN_INDEX_RATE_OR_12_5_PERCENT_NATIVE_PREMIUM_IN_USDC"
+        return "MIN_INDEX_RATE_OR_12_5_PERCENT_NATIVE_PREMIUM"
 
     @property
     def native_settlement_payoff_rule(self) -> str:
@@ -200,7 +199,7 @@ class OptionProductSpec:
         """Value a native cash amount at one causal BTC index boundary."""
         _require_finite(native_amount, "native_amount")
         _require_positive(index_price, "index_price")
-        if self.native_premium_currency == "BTC":
+        if self.native_premium_currency == self.base_currency:
             return native_amount * index_price
         return native_amount
 
@@ -255,21 +254,6 @@ def _require_non_negative(value: Decimal, field: str) -> None:
         raise ValueError(f"{field} must be non-negative")
 
 
-LINEAR_BTC_USDC = OptionProductSpec(
-    name=OptionProductName.LINEAR_BTC_USDC,
-    public_currency="USDC",
-    base_currency="BTC",
-    quote_currency="USDC",
-    settlement_currency="USDC",
-    counter_currency="USDC",
-    price_index="btc_usdc",
-    instrument_type="linear",
-    instrument_prefix="BTC_USDC-",
-    native_premium_currency="USDC",
-    valuation_currency="USDC",
-    strike_currency="USDC",
-)
-
 INVERSE_BTC = OptionProductSpec(
     name=OptionProductName.INVERSE_BTC,
     public_currency="BTC",
@@ -284,7 +268,6 @@ INVERSE_BTC = OptionProductSpec(
 )
 
 PRODUCT_SPECS = {
-    LINEAR_BTC_USDC.name: LINEAR_BTC_USDC,
     INVERSE_BTC.name: INVERSE_BTC,
 }
 

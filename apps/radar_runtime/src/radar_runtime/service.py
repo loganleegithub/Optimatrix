@@ -15,7 +15,7 @@ from typing import Protocol, cast
 
 from market_monitor import ContinuityGap
 from market_monitor.types import SourceDataError
-from options_domain import LINEAR_BTC_USDC, OptionProductName, OptionProductSpec
+from options_domain import INVERSE_BTC, OptionProductName, OptionProductSpec
 from short_vol_radar.evidence import RadarEventSink
 from short_vol_underwriting.case_store import ShadowCaseStore
 from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
@@ -274,7 +274,7 @@ def prepare_persistent_service_startup(
     process_cwd: Path,
     workbench_host: str,
     workbench_port: int,
-    product: OptionProductName | str | OptionProductSpec = LINEAR_BTC_USDC,
+    product: OptionProductName | str | OptionProductSpec = INVERSE_BTC,
     code_identity: str | None = None,
     startup_monotonic_ms: int | None = None,
     process_id: int | None = None,
@@ -600,7 +600,7 @@ async def run_persistent_service(
     process_cwd: Path,
     workbench_host: str,
     workbench_port: int,
-    product: OptionProductName | str | OptionProductSpec = LINEAR_BTC_USDC,
+    product: OptionProductName | str | OptionProductSpec = INVERSE_BTC,
 ) -> tuple[PersistentServiceStartup, Mapping[str, object]]:
     repository = git_repository_root(process_cwd)
     resolved_state_root = prepare_persistent_state_root(state_root, repository)

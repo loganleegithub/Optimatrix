@@ -30,10 +30,10 @@ def index_channel(index_name: str) -> str:
     return f"deribit_price_index.{index_name}"
 
 
-OPTION_LIFECYCLE_CHANNEL = option_lifecycle_channel("USDC")
-COMBO_LIFECYCLE_CHANNEL = combo_lifecycle_channel("USDC")
+OPTION_LIFECYCLE_CHANNEL = option_lifecycle_channel("BTC")
+COMBO_LIFECYCLE_CHANNEL = combo_lifecycle_channel("BTC")
 PLATFORM_CHANNELS = ("platform_state", "platform_state.public_methods_state")
-INDEX_CHANNEL = index_channel("btc_usdc")
+INDEX_CHANNEL = index_channel("btc_usd")
 DEFAULT_SUBSCRIPTION_BATCH_SIZE = 100
 MAX_BUFFERED_LIFECYCLE_EVENTS = 10_000
 
@@ -124,7 +124,7 @@ class CatalogBootstrap:
 
 @dataclass
 class PlatformReadiness:
-    price_index: str = "btc_usdc"
+    price_index: str = "btc_usd"
     bootstrap_epoch: int = 0
     platform_subscription_acknowledged: bool = False
     public_methods_subscription_acknowledged: bool = False

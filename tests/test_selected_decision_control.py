@@ -17,9 +17,9 @@ from short_vol_underwriting import (
     selected_decision_rule_identity,
 )
 from short_vol_underwriting.constants import (
-    POSITION_POLICY_IDENTITY,
-    RADAR_POLICY_IDENTITY,
-    UNDERWRITING_POLICY_IDENTITY,
+    INVERSE_BTC_POSITION_POLICY_IDENTITY,
+    INVERSE_BTC_RADAR_POLICY_IDENTITY,
+    INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
 )
 
 
@@ -38,9 +38,9 @@ def _bindings() -> RuntimeBindings:
     return RuntimeBindings(
         code_identity="a" * 40,
         runtime_identity="sha256:" + "b" * 64,
-        radar_policy_identity=RADAR_POLICY_IDENTITY,
-        underwriting_policy_identity=UNDERWRITING_POLICY_IDENTITY,
-        position_policy_identity=POSITION_POLICY_IDENTITY,
+        radar_policy_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+        underwriting_policy_identity=INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
+        position_policy_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
     )
 
 

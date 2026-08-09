@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from market_monitor import BookState, ContinuousOrderBook, TimeInterval
 from options_domain import (
-    LINEAR_BTC_USDC,
+    INVERSE_BTC,
     AmountState,
     OptionInstrument,
     OptionType,
@@ -99,9 +99,9 @@ class DetectorCalculation:
     implied_total_variance: DecimalInterval
     raw_richness: DecimalInterval
     richness: DecimalInterval
-    product_spec_identity: str = LINEAR_BTC_USDC.identity
-    product_name: str = LINEAR_BTC_USDC.name.value
-    native_premium_currency: str = LINEAR_BTC_USDC.native_premium_currency
+    product_spec_identity: str = INVERSE_BTC.identity
+    product_name: str = INVERSE_BTC.name.value
+    native_premium_currency: str = INVERSE_BTC.native_premium_currency
     native_price_tick: Decimal | None = None
     native_target_spread: Decimal | None = None
     native_executable_sell_price: Decimal | None = None

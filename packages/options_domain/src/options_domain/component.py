@@ -7,7 +7,7 @@ from enum import StrEnum
 from market_monitor import PriceLevel
 
 from options_domain.instruments import InstrumentLifecycleState, OptionInstrument, OptionType
-from options_domain.product import LINEAR_BTC_USDC, OptionProductSpec
+from options_domain.product import OptionProductSpec
 from options_domain.quotes import (
     AmountState,
     DepthWalk,
@@ -184,22 +184,6 @@ def component_quote_matches_product_contract(
         )
     except (ArithmeticError, AttributeError, TypeError, ValueError):
         return False
-
-
-def standard_option_fee_usdc(
-    *,
-    index_usdc_per_btc: Decimal,
-    option_price_usdc_per_btc: Decimal,
-    quantity_btc: Decimal,
-    fee_rate_index_fraction: Decimal,
-) -> Decimal:
-    """Backward-compatible Linear BTC-USDC standard option fee."""
-    return LINEAR_BTC_USDC.native_option_fee(
-        native_option_price=option_price_usdc_per_btc,
-        index_price=index_usdc_per_btc,
-        quantity_btc=quantity_btc,
-        fee_rate=fee_rate_index_fraction,
-    )
 
 
 def standard_option_fee_native(

@@ -3,41 +3,59 @@
 ## Shape
 
 ```text
-Deribit public WebSocket
-  → one startup-selected `LINEAR_BTC_USDC_V1 | INVERSE_BTC_V1` profile and Policy chain
+Deribit public Inverse BTC WebSocket
+  → fixed `INVERSE_BTC_V1` product specification and three-Policy chain
   → one bounded application queue
   → one RadarReducer
   → one in-memory Underwriting/Shadow/Position owner
+  → stable process-independent Shadow Entry repository
   → coalesced immutable Workbench snapshot
   → loopback GET/HEAD HTTP
-
-explicit Shadow admission
-  → minimal Shadow Case store
 ```
 
-The Workbench renders current in-memory state. It never reads durable Case files and never performs
-strategy calculations. Ordinary status-stable updates publish at most 2 Hz; readiness/currentness
-changes publish immediately; pending state flushes before reconnect or stop.
+There is no online product selector, fallback profile, or product switch. The fixed product owns
+the `btc_usd` public source, BTC-native premium/fees/settlement/PnL, explicit `USD_EQUIVALENT`
+valuation, Inverse Case schema, funnel, and Workbench unit projection.
 
-One process owns exactly one immutable product profile, source universe, index, three-Policy chain,
-funnel, Case schema branch, and Workbench unit projection. It cannot mix or switch products.
+The Workbench renders server-owned current state. It never reads durable Case files and never
+performs strategy calculations. Ordinary status-stable updates publish at most 2 Hz;
+readiness/currentness changes publish immediately; pending state flushes before reconnect or stop.
+Every active admitted Entry appears once by `shadow_entry_identity`, with origin runtime, current
+Observation Segment, gap/currentness, first-CLOSE attempt, Outcome quality, and qualification
+eligibility kept distinct from runtime health.
 
 ## Persistence
 
-A run may create only:
+The external stable state root may contain only the bounded Case family:
 
 ```text
-runs/<runtime>/cases/<case-id>/opened.json
-runs/<runtime>/cases/<case-id>/first-close.json   # optional, at most one
-runs/<runtime>/cases/<case-id>/outcome.json       # optional, at most one
+service.lock
+cases/<case-id>/opened.json
+cases/<case-id>/segments/<segment-sequence>/opened.json
+cases/<case-id>/segments/<segment-sequence>/closed.json   # optional
+cases/<case-id>/first-close.json                          # optional
+cases/<case-id>/outcome.json                              # optional
+cases/<case-id>/legacy-migration.json                     # optional
 ```
 
-No Radar event, anomaly, quote, Underwriting evaluation, Candidate, Workbench snapshot, service
-lifecycle, host metric, manifest, receipt, inventory, or full market fact is persisted.
+The first durable product boundary is `SHADOW_CASE_OPENED`; for an admitted Entry its origin
+Segment is published in the same complete initial Case directory. Market facts, Radar events,
+anomalies, quotes, Underwriting evaluations, Candidates, Workbench snapshots, service lifecycle,
+host metrics, manifests, receipts, inventories, and full-market facts are not persisted.
+
+The stable repository owns admitted Entry continuity across processes. A runtime owns only its
+Observation Segment. A later externally started runtime restores compatible non-terminal Inverse
+Entries, starts their fresh current data at `UNKNOWN`, and records an observation gap without
+synthesizing `HOLD` or `CLOSE`.
 
 ## Operations
 
-The application exposes `/healthz`, `/readyz`, and `/api/workbench/current`. Process supervision,
-restart policy, CPU, memory, and host logs are external operational concerns. The application does
-not inspect or manage them. Endpoint capability is not invocation authority: the current Inverse
-construction closure forbids probes, smoke, service start, restart, and natural Shadow observation.
+The application exposes `/healthz`, `/readyz`, and `/api/workbench/current` on loopback. Process
+supervision, restart policy, CPU, memory, and host logs are external operational concerns. The
+application does not inspect or manage them.
+
+During `SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP`, live commands are forbidden. The existing
+`127.0.0.1:8765` process continues from its pre-cleanup code identity
+`270920fb1fcb255c648e95361f31c1e5075ec294`; repository edits do not hot-swap it and do not prove
+the cleanup deployed. It must not be stopped, restarted, or repointed by this task. External state
+roots are not opened, migrated, rewritten, or deleted.

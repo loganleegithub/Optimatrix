@@ -314,7 +314,7 @@ def test_clock_refresh_preserves_established_index_generation_and_history(
         stale_deadline_ms=60_000,
     )
     reducer._plan_channel_change(
-        ("deribit_price_index.btc_usdc",),
+        ("deribit_price_index.btc_usd",),
         subscribe=True,
         origin_boundary=reducer._current_fact_boundary(),
         failure_scope=FailureScope.CLOCK_INDEX,
@@ -363,14 +363,14 @@ def test_pre_ack_frames_do_not_change_truth_and_reconcile_once_after_ack(
 ) -> None:
     reducer = make_reducer(tmp_path, policy_factory)
     subscribe, seq = begin_through_bootstrap_subscribe(reducer)
-    channel = "instrument.state.option.USDC"
+    channel = "instrument.state.option.BTC"
     lifecycle = envelope(
         {
             "method": "subscription",
             "params": {
                 "channel": channel,
                 "data": {
-                    "instrument_name": "BTC_USDC-08AUG26-100000-C",
+                    "instrument_name": "BTC-08AUG26-100000-C",
                     "state": "closed",
                 },
             },
@@ -390,7 +390,7 @@ def test_pre_ack_frames_do_not_change_truth_and_reconcile_once_after_ack(
     assert reducer.channel_state(channel) is ChannelState.ACKNOWLEDGED
     assert reducer.option_catalog.buffered_events == [
         {
-            "instrument_name": "BTC_USDC-08AUG26-100000-C",
+            "instrument_name": "BTC-08AUG26-100000-C",
             "state": "closed",
         }
     ]
@@ -986,7 +986,7 @@ def test_index_ack_then_clock_failure_still_releases_held_tick_once_on_recovery(
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.pending_rpcs.clear()
     reducer._plan_channel_change(
-        ("deribit_price_index.btc_usdc",),
+        ("deribit_price_index.btc_usd",),
         subscribe=True,
         origin_boundary=reducer._current_fact_boundary(),
         failure_scope=FailureScope.CLOCK_INDEX,
@@ -1018,11 +1018,11 @@ def test_index_ack_then_clock_failure_still_releases_held_tick_once_on_recovery(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "deribit_price_index.btc_usdc",
+                    "channel": "deribit_price_index.btc_usd",
                     "data": {
                         "timestamp": 660_010,
                         "price": 100,
-                        "index_name": "btc_usdc",
+                        "index_name": "btc_usd",
                     },
                 },
             },
@@ -1041,11 +1041,11 @@ def test_index_ack_then_clock_failure_still_releases_held_tick_once_on_recovery(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "deribit_price_index.btc_usdc",
+                    "channel": "deribit_price_index.btc_usd",
                     "data": {
                         "timestamp": 660_020,
                         "price": 200,
-                        "index_name": "btc_usdc",
+                        "index_name": "btc_usd",
                     },
                 },
             },
@@ -1123,7 +1123,7 @@ def test_queue_lag_edge_rebuilds_once_when_clock_releases_two_held_index_ticks(
     reducer = make_reducer(tmp_path, policy_factory)
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.pending_rpcs.clear()
-    index_channel = "deribit_price_index.btc_usdc"
+    index_channel = "deribit_price_index.btc_usd"
     reducer._plan_channel_change(
         (index_channel,),
         subscribe=True,
@@ -1141,7 +1141,7 @@ def test_queue_lag_edge_rebuilds_once_when_clock_releases_two_held_index_ticks(
                         "data": {
                             "timestamp": timestamp,
                             "price": 100,
-                            "index_name": "btc_usdc",
+                            "index_name": "btc_usd",
                         },
                     },
                 },
@@ -1217,7 +1217,7 @@ def test_index_coverage_starts_at_trusted_upper_bound(
         stale_deadline_ms=60_000,
     )
     reducer._plan_channel_change(
-        ("deribit_price_index.btc_usdc",),
+        ("deribit_price_index.btc_usd",),
         subscribe=True,
         origin_boundary=reducer._current_fact_boundary(),
         failure_scope=FailureScope.CLOCK_INDEX,
@@ -1256,7 +1256,7 @@ def test_pre_ack_frame_holding_is_globally_bounded_and_fails_session_closed(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "instrument.state.option.USDC",
+                    "channel": "instrument.state.option.BTC",
                     "data": {"instrument_name": "OPTION", "state": "open"},
                 },
             },
@@ -1271,7 +1271,7 @@ def test_pre_ack_frame_holding_is_globally_bounded_and_fails_session_closed(
                 {
                     "method": "subscription",
                     "params": {
-                        "channel": "instrument.state.option_combo.USDC",
+                        "channel": "instrument.state.option_combo.BTC",
                         "data": {"instrument_name": "COMBO", "state": "open"},
                     },
                 },
@@ -1342,7 +1342,7 @@ def test_response_then_later_ingress_with_earlier_receive_time_cannot_regress_bo
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "instrument.state.option.USDC",
+                    "channel": "instrument.state.option.BTC",
                     "data": {"instrument_name": "CLOSED", "state": "closed"},
                 },
             },
@@ -1366,7 +1366,7 @@ def test_retired_channel_generation_frame_has_zero_business_effect(
         response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
-    channel = "instrument.state.option.USDC"
+    channel = "instrument.state.option.BTC"
     reducer._plan_channel_change(
         (channel,),
         subscribe=False,
@@ -1413,7 +1413,7 @@ def test_every_frame_reduces_once_and_retired_epoch_has_zero_business_effect(
         {
             "method": "subscription",
             "params": {
-                "channel": "instrument.state.option.USDC",
+                "channel": "instrument.state.option.BTC",
                 "data": {"instrument_name": "OLD", "state": "open"},
             },
         },
@@ -1856,7 +1856,7 @@ def test_invalid_core_status_shape_is_fatal_protocol_incompatibility(
         )
 
 
-def test_post_status_schedules_the_official_btc_usdc_index_history_boundary(
+def test_post_status_schedules_the_official_btc_usd_index_history_boundary(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
@@ -1871,7 +1871,7 @@ def test_post_status_schedules_the_official_btc_usdc_index_history_boundary(
     history = only(commands, RpcPurpose.INDEX_HISTORY)
 
     assert history.method == "public/get_index_chart_data"
-    assert history.params == {"index_name": "btc_usdc", "range": "1d"}
+    assert history.params == {"index_name": "btc_usd", "range": "1d"}
     assert history.scope == "INDEX_HISTORY"
     assert history.failure_scope is FailureScope.CLOCK_INDEX
     assert RpcPurpose.INDEX_HISTORY not in runtime_module.POST_STATUS_BOOTSTRAP_PURPOSES
@@ -1941,14 +1941,14 @@ def test_index_history_rpc_failure_preserves_clock_and_last_valid_history(
     ]
     retry_commands = reducer.advance_time(1_001 + reducer.policy.runtime_limits.rpc_deadline_ms)
     retry = only(retry_commands, RpcPurpose.INDEX_HISTORY)
-    assert retry.params == {"index_name": "btc_usdc", "range": "1d"}
+    assert retry.params == {"index_name": "btc_usd", "range": "1d"}
 
 
 @pytest.mark.parametrize(
     "status",
     [
         {"locked": True},
-        {"locked": "partial", "locked_indices": ["btc_usdc"]},
+        {"locked": "partial", "locked_indices": ["btc_usd"]},
     ],
 )
 def test_relevant_platform_lock_status_fails_epoch_canonically(
@@ -2409,9 +2409,9 @@ def test_unsupported_target_option_lifecycle_enters_catalog_recovery_not_session
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "instrument.state.option.USDC",
+                    "channel": "instrument.state.option.BTC",
                     "data": {
-                        "instrument_name": "BTC_USDC-08AUG26-100000-C",
+                        "instrument_name": "BTC-08AUG26-100000-C",
                         "state": "future_protocol_state",
                     },
                 },
@@ -2434,14 +2434,14 @@ def test_open_close_then_metadata_response_cannot_resurrect_contract(
 ) -> None:
     reducer = make_reducer(tmp_path, policy_factory)
     seq = complete_empty_option_bootstrap(reducer)
-    name = "BTC_USDC-TEST-110000-C"
+    name = "BTC-TEST-110000-C"
 
     commands = reducer.reduce(
         envelope(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "instrument.state.option.USDC",
+                    "channel": "instrument.state.option.BTC",
                     "data": {"instrument_name": name, "state": "open"},
                 },
             },
@@ -2455,7 +2455,7 @@ def test_open_close_then_metadata_response_cannot_resurrect_contract(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "instrument.state.option.USDC",
+                    "channel": "instrument.state.option.BTC",
                     "data": {"instrument_name": name, "state": "inactive"},
                 },
             },
@@ -2478,7 +2478,7 @@ def test_open_option_is_catalog_incomplete_until_matching_metadata_commits(
 ) -> None:
     reducer = make_reducer(tmp_path, policy_factory)
     seq = complete_empty_option_bootstrap(reducer)
-    name = "BTC_USDC-TEST-110000-C"
+    name = "BTC-TEST-110000-C"
     assert reducer.option_catalog.complete
 
     commands = reducer.reduce(
@@ -2486,7 +2486,7 @@ def test_open_option_is_catalog_incomplete_until_matching_metadata_commits(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "instrument.state.option.USDC",
+                    "channel": "instrument.state.option.BTC",
                     "data": {"instrument_name": name, "state": "open"},
                 },
             },
@@ -2520,7 +2520,7 @@ def test_same_name_metadata_response_replaces_current_option_object(
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
     clock = only(commands, RpcPurpose.CLOCK_BOOTSTRAP)
     catalog = only(commands, RpcPurpose.OPTION_CATALOG)
-    name = "BTC_USDC-TEST-110000-C"
+    name = "BTC-TEST-110000-C"
     reducer.reduce(
         response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
@@ -2544,7 +2544,7 @@ def test_same_name_metadata_response_replaces_current_option_object(
                 {
                     "method": "subscription",
                     "params": {
-                        "channel": "instrument.state.option.USDC",
+                        "channel": "instrument.state.option.BTC",
                         "data": {"instrument_name": name, "state": "open"},
                     },
                 },
@@ -2575,7 +2575,7 @@ def test_same_name_metadata_response_replaces_current_option_object(
         ("XRP_USDC-08AUG26-1-C", "future_protocol_state"),
     ],
 )
-def test_non_btc_usdc_lifecycle_is_shape_only_and_has_no_business_side_effect(
+def test_non_btc_usd_lifecycle_is_shape_only_and_has_no_business_side_effect(
     tmp_path: Path,
     policy_factory: PolicyFactory,
     name: str,
@@ -2607,7 +2607,7 @@ def test_non_btc_usdc_lifecycle_is_shape_only_and_has_no_business_side_effect(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "instrument.state.option.USDC",
+                    "channel": "instrument.state.option.BTC",
                     "data": {"instrument_name": name, "state": state},
                 },
             },
@@ -2651,7 +2651,7 @@ def test_temporary_option_lifecycle_state_retains_member_as_local_unknown(
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
     clock = only(commands, RpcPurpose.CLOCK_BOOTSTRAP)
     catalog = only(commands, RpcPurpose.OPTION_CATALOG)
-    name = "BTC_USDC-TEST-110000-C"
+    name = "BTC-TEST-110000-C"
     reducer.reduce(
         response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
@@ -2666,7 +2666,7 @@ def test_temporary_option_lifecycle_state_retains_member_as_local_unknown(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "instrument.state.option.USDC",
+                    "channel": "instrument.state.option.BTC",
                     "data": {"instrument_name": name, "state": "halted"},
                 },
             },
@@ -2687,14 +2687,14 @@ def test_unseen_temporary_lifecycle_state_stays_incomplete_until_identity_snapsh
 ) -> None:
     reducer = make_reducer(tmp_path, policy_factory)
     seq = complete_empty_option_bootstrap(reducer)
-    name = "BTC_USDC-UNKNOWN-HALTED"
+    name = "BTC-UNKNOWN-HALTED"
 
     reducer.reduce(
         envelope(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "instrument.state.option.USDC",
+                    "channel": "instrument.state.option.BTC",
                     "data": {"instrument_name": name, "state": "halted"},
                 },
             },
@@ -2727,14 +2727,14 @@ def test_direct_option_metadata_cannot_recover_unavailable_contract_as_usable(
 ) -> None:
     reducer = make_reducer(tmp_path, policy_factory)
     seq = complete_empty_option_bootstrap(reducer)
-    name = "BTC_USDC-TEST-110000-C"
+    name = "BTC-TEST-110000-C"
     metadata = only(
         reducer.reduce(
             envelope(
                 {
                     "method": "subscription",
                     "params": {
-                        "channel": "instrument.state.option.USDC",
+                        "channel": "instrument.state.option.BTC",
                         "data": {"instrument_name": name, "state": "open"},
                     },
                 },
@@ -2784,7 +2784,7 @@ def test_bootstrap_unavailable_option_state_is_complete_local_unknown(
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
     clock = only(commands, RpcPurpose.CLOCK_BOOTSTRAP)
     catalog = only(commands, RpcPurpose.OPTION_CATALOG)
-    name = "BTC_USDC-TEST-110000-C"
+    name = "BTC-TEST-110000-C"
     reducer.reduce(
         response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
@@ -2820,7 +2820,7 @@ def test_bootstrap_final_option_state_is_complete_and_out_of_scope(
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
     clock = only(commands, RpcPurpose.CLOCK_BOOTSTRAP)
     catalog = only(commands, RpcPurpose.OPTION_CATALOG)
-    name = "BTC_USDC-TEST-110000-C"
+    name = "BTC-TEST-110000-C"
     reducer.reduce(
         response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
@@ -2875,8 +2875,8 @@ def test_metadata_response_commits_after_sustained_market_ingress(
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
     clock = only(commands, RpcPurpose.CLOCK_BOOTSTRAP)
     catalog = only(commands, RpcPurpose.OPTION_CATALOG)
-    existing = "BTC_USDC-TEST-100010-C"
-    name = "BTC_USDC-TEST-110000-C"
+    existing = "BTC-TEST-100010-C"
+    name = "BTC-TEST-110000-C"
     reducer.reduce(
         response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
@@ -2904,7 +2904,7 @@ def test_metadata_response_commits_after_sustained_market_ingress(
                 {
                     "method": "subscription",
                     "params": {
-                        "channel": "instrument.state.option.USDC",
+                        "channel": "instrument.state.option.BTC",
                         "data": {"instrument_name": name, "state": "open"},
                     },
                 },
@@ -2926,7 +2926,7 @@ def test_metadata_response_commits_after_sustained_market_ingress(
                             "instrument_name": existing,
                             "timestamp": source_timestamp,
                             "underlying_price": 100_000,
-                            "underlying_index": "BTC_USDC-TEST",
+                            "underlying_index": "BTC-TEST",
                         },
                     },
                 },
@@ -2957,14 +2957,14 @@ def test_close_while_option_snapshot_is_pending_wins_over_old_snapshot(
     )
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
     catalog = only(commands, RpcPurpose.OPTION_CATALOG)
-    name = "BTC_USDC-TEST-110000-C"
+    name = "BTC-TEST-110000-C"
 
     reducer.reduce(
         envelope(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "instrument.state.option.USDC",
+                    "channel": "instrument.state.option.BTC",
                     "data": {"instrument_name": name, "state": "inactive"},
                 },
             },
@@ -2999,7 +2999,7 @@ def test_heartbeat_is_live_while_unsubscribe_ack_is_blocked(
         response(reducer, subscribe, exact_channels(subscribe), seq=seq),
         processed_monotonic_ms=1_000 + seq,
     )
-    channel = "instrument.state.option.USDC"
+    channel = "instrument.state.option.BTC"
     reducer._plan_channel_change(
         (channel,),
         subscribe=False,
@@ -3047,7 +3047,7 @@ def test_combo_refresh_repeats_until_one_generation_has_no_lifecycle_crossing(
                     {
                         "method": "subscription",
                         "params": {
-                            "channel": "instrument.state.option_combo.USDC",
+                            "channel": "instrument.state.option_combo.BTC",
                             "data": {
                                 "instrument_name": f"COMBO-{current_seq}",
                                 "state": "open",
@@ -3075,7 +3075,7 @@ def test_combo_refresh_repeats_until_one_generation_has_no_lifecycle_crossing(
                 {
                     "method": "subscription",
                     "params": {
-                        "channel": "instrument.state.option_combo.USDC",
+                        "channel": "instrument.state.option_combo.BTC",
                         "data": {
                             "instrument_name": f"TRAILING-{current_seq}",
                             "state": "inactive",
@@ -3117,16 +3117,16 @@ def test_nonempty_combo_catalog_fetches_metadata_once_and_reuses_unchanged(
     reducer.option_catalog.complete = True
     reducer.option_catalog.source_complete = True
     reducer.options = {
-        "BTC_USDC-SHORT": _option_for_combo_test("BTC_USDC-SHORT", 100),
-        "BTC_USDC-LONG": _option_for_combo_test("BTC_USDC-LONG", 110),
+        "BTC-SHORT": _option_for_combo_test("BTC-SHORT", 100),
+        "BTC-LONG": _option_for_combo_test("BTC-LONG", 110),
     }
     catalog = only(commands, RpcPurpose.COMBO_CATALOG)
     summary = {
         "id": "COMBO",
         "state": "active",
         "legs": [
-            {"instrument_name": "BTC_USDC-SHORT", "amount": -1},
-            {"instrument_name": "BTC_USDC-LONG", "amount": 1},
+            {"instrument_name": "BTC-SHORT", "amount": -1},
+            {"instrument_name": "BTC-LONG", "amount": 1},
         ],
     }
 
@@ -3143,10 +3143,10 @@ def test_nonempty_combo_catalog_fetches_metadata_once_and_reuses_unchanged(
                 "instrument_name": "COMBO",
                 "kind": "option_combo",
                 "base_currency": "BTC",
-                "quote_currency": "USDC",
-                "settlement_currency": "USDC",
-                "counter_currency": "USDC",
-                "instrument_type": "linear",
+                "quote_currency": "BTC",
+                "settlement_currency": "BTC",
+                "counter_currency": "USD",
+                "instrument_type": "reversed",
                 "is_active": True,
                 "state": "open",
                 "contract_size": 1,
@@ -3196,8 +3196,8 @@ def test_unavailable_combo_metadata_never_enters_atomic_catalog(
     reducer.option_catalog.complete = True
     reducer.option_catalog.source_complete = True
     reducer.options = {
-        "BTC_USDC-SHORT": _option_for_combo_test("BTC_USDC-SHORT", 100),
-        "BTC_USDC-LONG": _option_for_combo_test("BTC_USDC-LONG", 110),
+        "BTC-SHORT": _option_for_combo_test("BTC-SHORT", 100),
+        "BTC-LONG": _option_for_combo_test("BTC-LONG", 110),
     }
     catalog = only(commands, RpcPurpose.COMBO_CATALOG)
     metadata = only(
@@ -3210,8 +3210,8 @@ def test_unavailable_combo_metadata_never_enters_atomic_catalog(
                         "id": "COMBO",
                         "state": "active",
                         "legs": [
-                            {"instrument_name": "BTC_USDC-SHORT", "amount": -1},
-                            {"instrument_name": "BTC_USDC-LONG", "amount": 1},
+                            {"instrument_name": "BTC-SHORT", "amount": -1},
+                            {"instrument_name": "BTC-LONG", "amount": 1},
                         ],
                     }
                 ],
@@ -3230,10 +3230,10 @@ def test_unavailable_combo_metadata_never_enters_atomic_catalog(
                 "instrument_name": "COMBO",
                 "kind": "option_combo",
                 "base_currency": "BTC",
-                "quote_currency": "USDC",
-                "settlement_currency": "USDC",
-                "counter_currency": "USDC",
-                "instrument_type": "linear",
+                "quote_currency": "BTC",
+                "settlement_currency": "BTC",
+                "counter_currency": "USD",
+                "instrument_type": "reversed",
                 "is_active": is_active,
                 "state": metadata_state,
                 "contract_size": 1,
@@ -3313,7 +3313,7 @@ def test_incomplete_option_snapshot_cannot_create_membership_loss(
     commands, seq = accept_platform_status(reducer, commands, seq=seq + 1)
     clock = only(commands, RpcPurpose.CLOCK_BOOTSTRAP)
     catalog = only(commands, RpcPurpose.OPTION_CATALOG)
-    name = "BTC_USDC-TEST-110000-C"
+    name = "BTC-TEST-110000-C"
     reducer.reduce(
         response(reducer, clock, 1_000_000, seq=seq + 1),
         processed_monotonic_ms=1_001 + seq,
@@ -3382,7 +3382,7 @@ def test_lifecycle_during_option_catalog_recovery_wins_over_snapshot(
 ) -> None:
     reducer = make_reducer(tmp_path, policy_factory)
     seq = complete_empty_option_bootstrap(reducer)
-    name = "BTC_USDC-TEST-110000-C"
+    name = "BTC-TEST-110000-C"
     reducer.option_catalog.mark_incomplete()
     reducer._next_option_catalog_recovery_ms = 2_000
 
@@ -3392,7 +3392,7 @@ def test_lifecycle_during_option_catalog_recovery_wins_over_snapshot(
             {
                 "method": "subscription",
                 "params": {
-                    "channel": "instrument.state.option.USDC",
+                    "channel": "instrument.state.option.BTC",
                     "data": {"instrument_name": name, "state": "inactive"},
                 },
             },

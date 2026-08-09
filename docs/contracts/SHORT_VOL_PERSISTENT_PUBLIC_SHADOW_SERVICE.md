@@ -7,10 +7,9 @@
 ## Purpose
 
 Run one public Deribit → Radar → Underwriting → process-independent Shadow Entry → Position →
-Outcome path for exactly
-one startup-selected product profile in one long-lived process and expose current settled state
-through a loopback read-only Workbench. The profile is `LINEAR_BTC_USDC_V1` or `INVERSE_BTC_V1` and
-is immutable for the process.
+Outcome path for the fixed `INVERSE_BTC_V1` product in one long-lived process and expose current
+settled state through a loopback read-only Workbench. There is no product selector, fallback, or
+runtime product switch.
 
 The service adds no account, order, fill, capital, replay, database, qualification, or deployment
 authority. Live invocation comes only from `CURRENT_STAGE`.
@@ -19,17 +18,17 @@ authority. Live invocation comes only from `CURRENT_STAGE`.
 
 One process owns:
 
-- one canonical product specification and one matching three-Policy chain;
-- one selected-product public Deribit client and bounded application queue;
+- the canonical `INVERSE_BTC_V1` product specification and matching three-Policy chain;
+- one Inverse BTC public Deribit client and bounded application queue;
 - one synchronous Radar reducer;
 - one in-memory Underwriting/Admission/Position owner;
 - one stable minimal Shadow Case repository and every compatible active admitted Entry it restores;
 - one coalesced immutable Workbench snapshot store;
 - one loopback GET/HEAD HTTP server.
 
-Startup rejects an unsupported product, product/Policy mismatch, cross-product leg, or attempt to
-compose both products. There is no second queue, reducer, owner, Case store, Workbench, or
-cross-product funnel inside the process.
+Startup rejects an unsupported product, product/Policy mismatch, or foreign-product leg. There is
+no second queue, reducer, owner, Case store, Workbench, or product-comparison funnel inside the
+process.
 
 Recoverable transport failure starts a new session epoch without replacing the in-process owners.
 A process restart creates a fresh runtime identity and reuses the stable Case repository. After
@@ -43,9 +42,8 @@ and one latest terminal Case for trader display. Terminal identities are evicted
 boundary. Durable Case files remain the source for historical research; neither the owner nor
 Workbench keeps a second in-memory event history.
 
-Every retained source, current-state identity, funnel denominator, and Case belongs to the one
-selected product. Product comparison and aggregation are offline derived work, never a live
-in-process projection.
+Every retained source, current-state identity, funnel denominator, and Case belongs to
+`INVERSE_BTC_V1`. Product comparison is not part of the Online Runtime.
 
 ## State root
 
@@ -88,7 +86,7 @@ The application does not inspect or control them.
 
 Live invocation is governed only by `CURRENT_STAGE`. Reusing the stable Case repository is required
 business recovery, not authority for automatic process restart: an external operator still decides
-when to launch a process. Exactly one selected-product runtime may hold the repository lease.
+when to launch a process. Exactly one Inverse runtime may hold the repository lease.
 
 Legacy conversion is a separate offline command over one explicitly supplied stopped source run.
 It scans all compatible admitted records, never accepts a Case allowlist, and is not a
@@ -119,7 +117,7 @@ publishes one complete immutable schema snapshot:
 - at most once per 500 monotonic milliseconds for ordinary status-stable updates;
 - once for pending state before reconnect or stop.
 
-The snapshot identifies the one selected product, exact product-spec identity, public/index/native
+The snapshot identifies `INVERSE_BTC_V1`, its exact product-spec identity, public/index/native
 premium/settlement/strike/valuation units, and Policy chain. Every monetary value is labeled with
 its server-owned native or valuation unit. Browser code may not infer a unit from a legacy key
 suffix or convert between native, model, and valuation values.
@@ -196,11 +194,11 @@ contract.
 
 ## Direct verification
 
-Offline tests cover exactly one selected-product owner graph, product/Policy compatibility and
-mixing rejection, fixed Policies, reconnect without owner replacement, pre-Shadow file count zero,
-paired component admission/close, exact Linear v3 and product-aware Inverse v4 reader states,
+Offline tests cover exactly one fixed Inverse owner graph, product/Policy compatibility and
+foreign-product rejection, fixed Policies, reconnect without owner replacement, pre-Shadow file
+count zero, paired component admission/close, exact Inverse schema-v4 reader states,
 Workbench product/unit projection, coalescing/status bypass/flush, loopback HTTP, truthful
-zero/UNKNOWN, and selected-product public-method allowlisting. Repeated Episode, Candidate,
+zero/UNKNOWN, and Inverse public-method allowlisting. Repeated Episode, Candidate,
 scope-replacement, and completed-Case tests must prove that retained collections return to the
 active-set bound. Public observation requires explicit `CURRENT_STAGE` authority. A bounded gate
 may establish current-state reachability and negative product contamination only; a later natural

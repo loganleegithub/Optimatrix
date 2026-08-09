@@ -10,7 +10,6 @@ from options_domain.component import (
     evaluate_component_book_vertical,
     is_protective_vertical,
     standard_option_fee_native,
-    standard_option_fee_usdc,
 )
 from options_domain.instruments import (
     FINAL_INSTRUMENT_LIFECYCLE_STATES,
@@ -31,7 +30,6 @@ from options_domain.instruments import (
 )
 from options_domain.product import (
     INVERSE_BTC,
-    LINEAR_BTC_USDC,
     PRODUCT_SPECS,
     OptionProductName,
     OptionProductSpec,
@@ -52,7 +50,6 @@ __all__ = [
     "FINAL_INSTRUMENT_LIFECYCLE_STATES",
     "INSTRUMENT_LIFECYCLE_STATES",
     "INVERSE_BTC",
-    "LINEAR_BTC_USDC",
     "PRODUCT_SPECS",
     "TEMPORARILY_UNAVAILABLE_INSTRUMENT_STATES",
     "AmountCheck",
@@ -83,7 +80,6 @@ __all__ = [
     "product_for_identity",
     "product_for_name",
     "standard_option_fee_native",
-    "standard_option_fee_usdc",
     "stress_depth_walk_down_one_tick",
     "stress_depth_walk_up_one_tick",
 ]

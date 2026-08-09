@@ -10,21 +10,16 @@ from typing import cast
 import pytest
 from options_domain import (
     INVERSE_BTC,
-    LINEAR_BTC_USDC,
     OptionProductName,
     product_for_name,
 )
 
 
-def test_product_profiles_are_strict_and_distinct() -> None:
-    assert product_for_name(OptionProductName.LINEAR_BTC_USDC) is LINEAR_BTC_USDC
+def test_product_profile_is_inverse_only() -> None:
+    assert product_for_name(OptionProductName.INVERSE_BTC) is INVERSE_BTC
     assert product_for_name("inverse-btc") is INVERSE_BTC
-    assert LINEAR_BTC_USDC.identity != INVERSE_BTC.identity
-    assert LINEAR_BTC_USDC.public_currency == "USDC"
-    assert LINEAR_BTC_USDC.price_index == "btc_usdc"
-    assert LINEAR_BTC_USDC.instrument_type == "linear"
-    assert LINEAR_BTC_USDC.valuation_currency == "USDC"
-    assert LINEAR_BTC_USDC.strike_currency == "USDC"
+    with pytest.raises(ValueError, match="unsupported option product: linear-btc-usdc"):
+        product_for_name("linear-btc-usdc")
     assert INVERSE_BTC.public_currency == "BTC"
     assert INVERSE_BTC.price_index == "btc_usd"
     assert INVERSE_BTC.instrument_type == "reversed"
@@ -43,11 +38,9 @@ def test_inverse_native_premium_has_separate_model_and_boundary_values() -> None
     index = Decimal("99500")
     assert INVERSE_BTC.model_premium(native, forward_price=forward) == Decimal("2000.0000")
     assert INVERSE_BTC.valuation(native, index_price=index) == Decimal("1990.0000")
-    assert LINEAR_BTC_USDC.model_premium(Decimal("2000"), forward_price=forward) == Decimal("2000")
-    assert LINEAR_BTC_USDC.valuation(Decimal("2000"), index_price=index) == Decimal("2000")
 
 
-def test_native_fee_formulas_preserve_product_currency() -> None:
+def test_inverse_native_fee_preserves_native_and_valuation_currency() -> None:
     q = Decimal("0.1")
     rate = Decimal("0.0003")
     index = Decimal("100000")
@@ -59,13 +52,6 @@ def test_native_fee_formulas_preserve_product_currency() -> None:
     )
     assert inverse_fee == Decimal("0.000030")
     assert INVERSE_BTC.valuation(inverse_fee, index_price=index) == Decimal("3.000000")
-    linear_fee = LINEAR_BTC_USDC.native_option_fee(
-        native_option_price=Decimal("2000"),
-        index_price=index,
-        quantity_btc=q,
-        fee_rate=rate,
-    )
-    assert linear_fee == Decimal("3.00000")
 
 
 def test_inverse_native_payoff_liability_depends_on_expiry_delivery_price() -> None:
@@ -83,10 +69,6 @@ def test_inverse_native_payoff_liability_depends_on_expiry_delivery_price() -> N
     assert high_delivery_liability == Decimal("0.001")
     assert low_delivery_liability == Decimal("0.002")
     assert low_delivery_liability > high_delivery_liability
-    assert LINEAR_BTC_USDC.native_payoff_from_strike_value(
-        contractual_usd_payoff,
-        settlement_price=Decimal("50000"),
-    ) == Decimal("100")
 
 
 def test_inverse_underwriting_margins_use_declared_valuation_unit() -> None:
@@ -145,7 +127,13 @@ def test_inverse_instrument_parser_uses_exact_profile() -> None:
     assert instrument.amount.min_trade_amount == Decimal("0.1")
     assert instrument.price_tick is not None
     assert instrument.price_tick.previous_legal_price(Decimal("0.005")) == Decimal("0.0049")
-    assert parse_option_instrument(_inverse_option_payload(), product=LINEAR_BTC_USDC) is None
+    assert (
+        parse_option_instrument(
+            {**_inverse_option_payload(), "quote_currency": "USDC"},
+            product=INVERSE_BTC,
+        )
+        is None
+    )
     assert (
         parse_option_instrument(
             {**_inverse_option_payload(), "instrument_name": "BTC_USDC-8AUG26-100000-C"},
@@ -192,28 +180,6 @@ def test_inverse_combo_parser_rejects_cross_product_leg_names() -> None:
         ],
     }
     assert parse_combo_instrument(contaminated, metadata, product=INVERSE_BTC) is None
-
-
-def test_cross_product_legs_are_not_one_protective_vertical() -> None:
-    from options_domain import OptionInstrument, OptionType, is_protective_vertical
-
-    short = OptionInstrument(
-        instrument_name="BTC_USDC-8AUG26-100000-C",
-        expiration_timestamp_ms=1_800_000_000_000,
-        strike=Decimal("100000"),
-        option_type=OptionType.CALL,
-        amount=None,
-        product=LINEAR_BTC_USDC,
-    )
-    long = OptionInstrument(
-        instrument_name="BTC-8AUG26-110000-C",
-        expiration_timestamp_ms=1_800_000_000_000,
-        strike=Decimal("110000"),
-        option_type=OptionType.CALL,
-        amount=None,
-        product=INVERSE_BTC,
-    )
-    assert not is_protective_vertical(short, long)
 
 
 def test_inverse_component_quote_stresses_native_ticks_then_values_at_index() -> None:
@@ -296,7 +262,7 @@ def test_inverse_component_quote_stresses_native_ticks_then_values_at_index() ->
     assert reference_object["stressed_gross_credit_valuation"] == "34.00000"
 
 
-def test_inverse_owner_fails_closed_on_linear_component_quote(repository_root: Path) -> None:
+def test_inverse_owner_fails_closed_on_tampered_component_quote(repository_root: Path) -> None:
     from dataclasses import replace
 
     from market_monitor import PriceLevel
@@ -327,36 +293,37 @@ def test_inverse_owner_fails_closed_on_linear_component_quote(repository_root: P
     runtime = "sha256:" + "b" * 64
     boundary = FactBoundary(code, runtime, 1, 2, 102, 2)
     amount = AmountMetadata(Decimal("1"), Decimal("0.1"), Decimal("0.1"))
-    tick = PriceTickMetadata(Decimal("1"))
+    tick = PriceTickMetadata(Decimal("0.0001"))
     short = OptionInstrument(
-        "BTC_USDC-8AUG26-100000-C",
+        "BTC-8AUG26-100000-C",
         1_800_000_000_000,
         Decimal("100000"),
         OptionType.CALL,
         amount,
         tick,
-        product=LINEAR_BTC_USDC,
+        product=INVERSE_BTC,
     )
     long = OptionInstrument(
-        "BTC_USDC-8AUG26-101000-C",
+        "BTC-8AUG26-101000-C",
         1_800_000_000_000,
         Decimal("101000"),
         OptionType.CALL,
         amount,
         tick,
-        product=LINEAR_BTC_USDC,
+        product=INVERSE_BTC,
     )
-    quote, reasons = evaluate_component_book_vertical(
+    valid_quote, reasons = evaluate_component_book_vertical(
         kind=ComponentBookQuoteKind.ENTRY,
         short_instrument=short,
         long_instrument=long,
-        short_side_levels=(PriceLevel(Decimal("300"), Decimal("0.1")),),
-        long_side_levels=(PriceLevel(Decimal("100"), Decimal("0.1")),),
+        short_side_levels=(PriceLevel(Decimal("0.0060"), Decimal("0.1")),),
+        long_side_levels=(PriceLevel(Decimal("0.0020"), Decimal("0.1")),),
         index_usdc_per_btc=Decimal("100000"),
         target_quantity_btc=Decimal("0.1"),
         fee_rate_index_fraction=Decimal("0.0003"),
     )
-    assert quote is not None and reasons == ()
+    assert valid_quote is not None and reasons == ()
+    quote = replace(valid_quote, product_spec_identity="sha256:" + "0" * 64)
 
     policies = load_policy_chain(
         radar_path=repository_root / "policies/short-vol-inverse-btc-public-shadow-radar.json",
@@ -449,17 +416,21 @@ def test_inverse_owner_fails_closed_on_linear_component_quote(repository_root: P
         for value in state_store.objects
     )
 
-    linear_close_quote, close_reasons = evaluate_component_book_vertical(
+    valid_close_quote, close_reasons = evaluate_component_book_vertical(
         kind=ComponentBookQuoteKind.CLOSE,
         short_instrument=short,
         long_instrument=long,
-        short_side_levels=(PriceLevel(Decimal("120"), Decimal("0.1")),),
-        long_side_levels=(PriceLevel(Decimal("80"), Decimal("0.1")),),
+        short_side_levels=(PriceLevel(Decimal("0.0030"), Decimal("0.1")),),
+        long_side_levels=(PriceLevel(Decimal("0.0010"), Decimal("0.1")),),
         index_usdc_per_btc=Decimal("100000"),
         target_quantity_btc=Decimal("0.1"),
         fee_rate_index_fraction=Decimal("0.0003"),
     )
-    assert linear_close_quote is not None and close_reasons == ()
+    assert valid_close_quote is not None and close_reasons == ()
+    mismatched_close_quote = replace(
+        valid_close_quote,
+        product_spec_identity="sha256:" + "0" * 64,
+    )
     from short_vol_underwriting import (
         CloseOpportunityEligibility,
         CloseQuoteState,
@@ -481,41 +452,25 @@ def test_inverse_owner_fails_closed_on_linear_component_quote(repository_root: P
         expected_short_leg_instrument_name=short.instrument_name,
         expected_long_leg_instrument_name=long.instrument_name,
         expected_width_usdc_per_btc=Decimal("1000"),
-        component_quote=linear_close_quote,
+        component_quote=mismatched_close_quote,
     )
     assert close_opportunity.eligibility is CloseOpportunityEligibility.UNKNOWN
     assert close_opportunity.eligibility_reason == "COMPONENT_PRODUCT_MISMATCH"
     assert close_opportunity.economics is None
 
-    forged_inverse_metadata_quote = replace(
-        quote,
-        product_spec_identity=INVERSE_BTC.identity,
-        product_name=INVERSE_BTC.name.value,
-        native_premium_currency=INVERSE_BTC.native_premium_currency,
-        settlement_currency=INVERSE_BTC.settlement_currency,
-        price_index=INVERSE_BTC.price_index,
-        valuation_currency=INVERSE_BTC.valuation_currency,
-        short_leg=replace(
-            quote.short_leg,
-            instrument_name="BTC-8AUG26-100000-C",
-            native_premium_currency=INVERSE_BTC.native_premium_currency,
-        ),
-        long_leg=replace(
-            quote.long_leg,
-            instrument_name="BTC-8AUG26-101000-C",
-            native_premium_currency=INVERSE_BTC.native_premium_currency,
-        ),
+    forged_inverse_economics_quote = replace(
+        valid_quote,
+        native_gross_cashflow=valid_quote.native_gross_cashflow + Decimal("0.000001"),
     )
     forged_facts = replace(
         facts,
         boundary=FactBoundary(code, runtime, 1, 3, 103, 3),
         radar_scope_identity="sha256:" + "8" * 64,
         active_episode_identity=(
-            f"{runtime}:{INVERSE_BTC_RADAR_POLICY_IDENTITY}:BTC-8AUG26-100000-C:1"
+            f"{runtime}:{INVERSE_BTC_RADAR_POLICY_IDENTITY}:{short.instrument_name}:2"
         ),
-        short_leg_instrument_name="BTC-8AUG26-100000-C",
-        long_leg_instrument_name="BTC-8AUG26-101000-C",
-        component_quote=forged_inverse_metadata_quote,
+        anomaly_activation_seq=2,
+        component_quote=forged_inverse_economics_quote,
     )
     owner.settle_underwriting((forged_facts,), allocate_request_id=lambda: 2)
     forged_availability = [
@@ -528,23 +483,8 @@ def test_inverse_owner_fails_closed_on_linear_component_quote(repository_root: P
     assert forged_payload["unknown_reasons"] == ["COMPONENT_PRODUCT_MISMATCH"]
 
     forged_inverse_close = replace(
-        linear_close_quote,
-        product_spec_identity=INVERSE_BTC.identity,
-        product_name=INVERSE_BTC.name.value,
-        native_premium_currency=INVERSE_BTC.native_premium_currency,
-        settlement_currency=INVERSE_BTC.settlement_currency,
-        price_index=INVERSE_BTC.price_index,
-        valuation_currency=INVERSE_BTC.valuation_currency,
-        short_leg=replace(
-            linear_close_quote.short_leg,
-            instrument_name="BTC-8AUG26-100000-C",
-            native_premium_currency=INVERSE_BTC.native_premium_currency,
-        ),
-        long_leg=replace(
-            linear_close_quote.long_leg,
-            instrument_name="BTC-8AUG26-101000-C",
-            native_premium_currency=INVERSE_BTC.native_premium_currency,
-        ),
+        valid_close_quote,
+        native_total_fee_reserve=(valid_close_quote.native_total_fee_reserve + Decimal("0.000001")),
     )
     forged_close_opportunity = evaluate_close_opportunity(
         quote_state=CloseQuoteState.COMPONENT_BOOK_CLOSE_QUOTE,
@@ -566,19 +506,8 @@ def test_inverse_owner_fails_closed_on_linear_component_quote(repository_root: P
     assert forged_close_opportunity.eligibility is CloseOpportunityEligibility.UNKNOWN
     assert forged_close_opportunity.eligibility_reason == "COMPONENT_PRODUCT_MISMATCH"
 
-    inverse_tick = PriceTickMetadata(Decimal("0.0001"))
-    inverse_short = replace(
-        short,
-        instrument_name="BTC-8AUG26-100000-C",
-        price_tick=inverse_tick,
-        product=INVERSE_BTC,
-    )
-    inverse_long = replace(
-        long,
-        instrument_name="BTC-8AUG26-101000-C",
-        price_tick=inverse_tick,
-        product=INVERSE_BTC,
-    )
+    inverse_short = short
+    inverse_long = long
     inverse_close_quote, inverse_close_reasons = evaluate_component_book_vertical(
         kind=ComponentBookQuoteKind.CLOSE,
         short_instrument=inverse_short,
@@ -801,6 +730,7 @@ def test_inverse_owner_fails_closed_on_linear_component_quote(repository_root: P
 
 def test_inverse_radar_converts_native_btc_premium_to_black_model_price() -> None:
     import math
+    from dataclasses import replace
     from types import SimpleNamespace
 
     from conftest import encode_policy, policy_document
@@ -813,8 +743,6 @@ def test_inverse_radar_converts_native_btc_premium_to_black_model_price() -> Non
     from short_vol_radar.review import build_review_contexts
 
     document = policy_document(activation_count=1, clear_count=1, separation_ms=0)
-    document["policy_schema_version"] = 7
-    document["product_spec_identity"] = INVERSE_BTC.identity
     exact, digest = encode_policy(document)
     policy = load_policy_bytes(exact, digest)
     forward = Decimal("100000")
@@ -864,12 +792,12 @@ def test_inverse_radar_converts_native_btc_premium_to_black_model_price() -> Non
     midpoint = (calculation.total_volatility.lower + calculation.total_volatility.upper) / 2
     assert abs(midpoint - Decimal(str(total_volatility))) < Decimal("1e-15")
 
-    linear_exact, linear_digest = encode_policy(
-        policy_document(activation_count=1, clear_count=1, separation_ms=0)
+    mismatched_policy = replace(
+        policy,
+        product_spec_identity="sha256:" + "0" * 64,
     )
-    linear_policy = load_policy_bytes(linear_exact, linear_digest)
     mismatch = calculate_current_evaluation(
-        policy=linear_policy,
+        policy=mismatched_policy,
         instrument=instrument,
         trusted_time=TimeInterval(0, 0),
         causal_seq=1,
@@ -983,7 +911,7 @@ def test_inverse_platform_readiness_tracks_only_btc_usd_lock() -> None:
     from market_monitor.deribit import PlatformReadiness
 
     readiness = PlatformReadiness(price_index="btc_usd")
-    readiness.apply_status({"locked": "partial", "locked_indices": ["btc_usdc"]})
+    readiness.apply_status({"locked": "partial", "locked_indices": ["eth_usd"]})
     assert readiness.lock_snapshot is False
     readiness = PlatformReadiness(price_index="btc_usd")
     readiness.apply_status({"locked": "partial", "locked_indices": ["btc_usd"]})
@@ -995,8 +923,6 @@ def test_radar_policy_v7_binds_inverse_product_identity() -> None:
     from short_vol_radar.policy import load_policy_bytes
 
     document = policy_document()
-    document["policy_schema_version"] = 7
-    document["product_spec_identity"] = INVERSE_BTC.identity
     exact, digest = encode_policy(document)
 
     policy = load_policy_bytes(exact, digest)
@@ -1005,15 +931,17 @@ def test_radar_policy_v7_binds_inverse_product_identity() -> None:
     assert policy.product_spec_identity == INVERSE_BTC.identity
 
 
-def test_radar_policy_v6_remains_bound_to_linear_product() -> None:
+def test_radar_policy_rejects_removed_schema_v6() -> None:
     from conftest import encode_policy, policy_document
-    from short_vol_radar.policy import load_policy_bytes
+    from short_vol_radar.policy import PolicyError, load_policy_bytes
 
-    exact, digest = encode_policy(policy_document())
-    policy = load_policy_bytes(exact, digest)
+    document = policy_document()
+    document["policy_schema_version"] = 6
+    document.pop("product_spec_identity")
+    exact, digest = encode_policy(document)
 
-    assert policy.schema_version == 6
-    assert policy.product_spec_identity == LINEAR_BTC_USDC.identity
+    with pytest.raises(PolicyError, match="policy_schema_version must be exactly 7"):
+        load_policy_bytes(exact, digest)
 
 
 def test_inverse_policy_chain_is_exact_and_product_bound(repository_root: Path) -> None:
@@ -1074,8 +1002,6 @@ def test_inverse_reducer_keeps_selected_index_across_session_bootstrap() -> None
     from short_vol_radar.policy import load_policy_bytes
 
     document = policy_document()
-    document["policy_schema_version"] = 7
-    document["product_spec_identity"] = INVERSE_BTC.identity
     exact, digest = encode_policy(document)
     policy = load_policy_bytes(exact, digest)
     reducer = RadarReducer(
@@ -1096,7 +1022,6 @@ def test_inverse_reducer_keeps_selected_index_across_session_bootstrap() -> None
     assert reducer.option_lifecycle_channel == "instrument.state.option.BTC"
     assert reducer.combo_lifecycle_channel == "instrument.state.option_combo.BTC"
     assert reducer.index_channel == "deribit_price_index.btc_usd"
-    assert reducer.option_lifecycle_channel != "instrument.state.option.USDC"
 
 
 def test_inverse_workbench_identifies_native_and_valuation_units(

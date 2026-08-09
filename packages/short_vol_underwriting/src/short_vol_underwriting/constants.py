@@ -1,11 +1,5 @@
 from __future__ import annotations
 
-RADAR_POLICY_IDENTITY = "sha256:74f286e07f8013e6178b44421db1d4d04808e5e0b0c604a80a0fdbc50f276c21"
-UNDERWRITING_POLICY_IDENTITY = (
-    "sha256:5cbff45fc342489a0c34b476d1947a54e490e04610dadd7f54a1e18f4681d79a"
-)
-POSITION_POLICY_IDENTITY = "sha256:e7c38b12cb8c8d79c0f6409ee31289386f7f313a60ef593771648c0504016ef3"
-
 INVERSE_BTC_RADAR_POLICY_IDENTITY = (
     "sha256:283c2a8cc5e14cbed94b0f2a41ddd18ff2410772ae45d07abfea80d04446b1af"
 )
@@ -77,16 +71,3 @@ POSITION_CLOSE_REASONS = (
     "LIQUIDITY_EXIT_BOUNDARY_REACHED",
     "ECONOMIC_EXIT_BOUNDARY_REACHED",
 )
-
-ACTUAL_AVAILABILITY_UNKNOWN = {
-    "actual_entry_fee_usdc": "UNKNOWN",
-    "actual_close_fee_usdc": "UNKNOWN",
-    "actual_total_fee_usdc": "UNKNOWN",
-    "actual_pnl_usdc": "UNKNOWN",
-    "actual_exposure_quantity_btc": "UNKNOWN",
-    "actual_exposure_duration_ms": "UNKNOWN",
-    "actual_all_in_loss_usdc": "UNKNOWN",
-    "actual_all_in_max_loss_usdc": "UNKNOWN",
-    "actual_fill_identity": "UNKNOWN",
-    "actual_settlement_cashflow_usdc": "UNKNOWN",
-}

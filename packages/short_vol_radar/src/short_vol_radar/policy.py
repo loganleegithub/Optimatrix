@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Any
 
 from market_monitor.types import SourceDataError, TimeInterval
-from options_domain import INVERSE_BTC, LINEAR_BTC_USDC, OptionType
+from options_domain import INVERSE_BTC, OptionType
 from options_domain.instruments import MAX_TTE_MS, SETTLEMENT_WINDOW_MS
 
 POLICY_FAMILY = "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS"
@@ -239,33 +239,19 @@ def _bands_are_adjacent(touched: tuple[TteBand, ...]) -> bool:
 
 def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:
     schema_version = _positive_int(raw.get("policy_schema_version"), "policy_schema_version")
-    if schema_version == 6:
-        expected_keys = {
-            "policy_schema_version",
-            "policy_family",
-            "target_base_quantity_btc",
-            "runtime_limits",
-            "tte_bands",
-        }
-        product_spec_identity = LINEAR_BTC_USDC.identity
-    elif schema_version == 7:
-        expected_keys = {
-            "policy_schema_version",
-            "policy_family",
-            "product_spec_identity",
-            "target_base_quantity_btc",
-            "runtime_limits",
-            "tte_bands",
-        }
-        raw_product_spec_identity = raw.get("product_spec_identity")
-        if not isinstance(raw_product_spec_identity, str) or raw_product_spec_identity not in {
-            LINEAR_BTC_USDC.identity,
-            INVERSE_BTC.identity,
-        }:
-            raise PolicyError("product_spec_identity is not an authorized option product")
-        product_spec_identity = raw_product_spec_identity
-    else:
-        raise PolicyError("policy_schema_version must be exactly 6 or 7")
+    if schema_version != 7:
+        raise PolicyError("policy_schema_version must be exactly 7")
+    expected_keys = {
+        "policy_schema_version",
+        "policy_family",
+        "product_spec_identity",
+        "target_base_quantity_btc",
+        "runtime_limits",
+        "tte_bands",
+    }
+    product_spec_identity = raw.get("product_spec_identity")
+    if product_spec_identity != INVERSE_BTC.identity:
+        raise PolicyError("product_spec_identity must be the authorized Inverse BTC product")
     _require_exact_keys(raw, expected_keys, "Policy")
     family = raw["policy_family"]
     if family != POLICY_FAMILY:

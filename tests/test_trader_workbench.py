@@ -46,9 +46,6 @@ from short_vol_underwriting.constants import (
     INVERSE_BTC_POSITION_POLICY_IDENTITY,
     INVERSE_BTC_RADAR_POLICY_IDENTITY,
     INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
-    POSITION_POLICY_IDENTITY,
-    RADAR_POLICY_IDENTITY,
-    UNDERWRITING_POLICY_IDENTITY,
 )
 from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
 from short_vol_underwriting.policy import PolicyChain, load_policy_chain
@@ -58,12 +55,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _policies() -> PolicyChain:
     return load_policy_chain(
-        radar_path=ROOT / "policies/short-vol-fixed-public-shadow-radar.json",
-        underwriting_path=ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json",
-        position_path=ROOT / "policies/short-vol-fixed-public-shadow-position.json",
-        radar_identity=RADAR_POLICY_IDENTITY,
-        underwriting_identity=UNDERWRITING_POLICY_IDENTITY,
-        position_identity=POSITION_POLICY_IDENTITY,
+        radar_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-radar.json",
+        underwriting_path=(ROOT / "policies/short-vol-inverse-btc-public-shadow-underwriting.json"),
+        position_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-position.json",
+        radar_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+        underwriting_identity=INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
+        position_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
     )
 
 
@@ -152,6 +149,7 @@ def test_radar_projection_binds_atomic_state_to_active_episode_identity() -> Non
                     expiration_timestamp_ms=10_000,
                     option_type=SimpleNamespace(value="call"),
                     strike=100,
+                    product=INVERSE_BTC,
                 )
             },
             results={
@@ -227,6 +225,7 @@ def test_radar_projection_explains_candidate_baseline_sampling_and_selection() -
                     expiration_timestamp_ms=10_000,
                     option_type=SimpleNamespace(value="call"),
                     strike=100,
+                    product=INVERSE_BTC,
                 )
             },
             results={
@@ -271,6 +270,7 @@ def test_radar_projection_uses_not_evaluated_without_active_detector_truth() -> 
                     expiration_timestamp_ms=10_000,
                     option_type=SimpleNamespace(value="call"),
                     strike=100,
+                    product=INVERSE_BTC,
                 )
             },
             results={

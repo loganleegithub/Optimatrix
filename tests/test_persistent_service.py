@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from argparse import Namespace
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
-from dataclasses import FrozenInstanceError, dataclass, field, replace
+from dataclasses import FrozenInstanceError, dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import NoReturn
@@ -14,8 +15,8 @@ import pytest
 import radar_runtime.__main__ as runtime_cli
 import radar_runtime.service as service_module
 import radar_runtime.workbench as workbench_module
-import test_shadow_case_store as shadow_case_fixture
 from conftest import PolicyFactory
+from options_domain import INVERSE_BTC
 from radar_runtime.deribit_public import (
     InboundEnvelope,
     PublicProtocolIncompatibility,
@@ -29,12 +30,10 @@ from radar_runtime.runtime import (
     LiveRadarRuntime,
     PublicClient,
     RadarReducer,
-    RpcPurpose,
     RpcState,
     ShadowRpcIntent,
 )
 from radar_runtime.service import (
-    PersistentServiceComposition,
     PersistentServiceStartup,
     PersistentServiceStartupError,
     PersistentStopEvent,
@@ -63,62 +62,6 @@ def _startup(tmp_path: Path, *, nonce: str = "nonce-a") -> PersistentServiceStar
         process_id=123,
         nonce_factory=lambda: nonce,
     )
-
-
-@dataclass(frozen=True)
-class _RestartedEntryCompositions:
-    first: PersistentServiceComposition
-    second: PersistentServiceComposition
-    workspace: Path
-    entry_identity: str
-    case_directory: Path
-    opened_record: bytes
-
-
-@pytest.fixture
-def restarted_entry_compositions(tmp_path: Path) -> Iterator[_RestartedEntryCompositions]:
-    first_startup = _startup(tmp_path, nonce="process-a")
-    first_bindings = replace(
-        first_startup.runtime_bindings,
-        runtime_identity=shadow_case_fixture.RUNTIME,
-    )
-    first_startup = replace(
-        first_startup,
-        runtime_identity=first_bindings.runtime_identity,
-        runtime_bindings=first_bindings,
-    )
-    first = build_persistent_service_composition(first_startup)
-    second: PersistentServiceComposition | None = None
-    try:
-        _availability, _action, candidate_identity = shadow_case_fixture._seed_pre_shadow(
-            first.shadow_state
-        )
-        entry_identity = shadow_case_fixture._open_case(
-            first.shadow_state,
-            candidate_identity,
-        )
-        case_id = first.case_store.case_id_for_entry(entry_identity)
-        assert case_id is not None
-        first.adapter.terminate(
-            source="STOP",
-            boundary=FactBoundary(1, 5, 105, 5),
-        )
-        case_directory = first.startup.cases_directory / case_id.removeprefix("sha256:")
-        opened_record = (case_directory / "opened.json").read_bytes()
-
-        second = build_persistent_service_composition(_startup(tmp_path, nonce="process-b"))
-        yield _RestartedEntryCompositions(
-            first=first,
-            second=second,
-            workspace=tmp_path,
-            entry_identity=entry_identity,
-            case_directory=case_directory,
-            opened_record=opened_record,
-        )
-    finally:
-        if second is not None:
-            second.workbench.close()
-        first.workbench.close()
 
 
 def test_single_instance_lease_rejects_duplicate_and_releases(tmp_path: Path) -> None:
@@ -156,7 +99,11 @@ def test_offline_migration_uses_a_stopped_source_and_stable_destination(
     monkeypatch.setattr(
         runtime_cli,
         "load_persistent_product_policies",
-        lambda _repository, _product: (product, policies),
+        lambda _repository, selected_product: (
+            (product, policies)
+            if selected_product is INVERSE_BTC
+            else pytest.fail("migration selected a non-Inverse product")
+        ),
     )
 
     def migrate(source: Path, destination: Path, *, policies: object) -> tuple[object, ...]:
@@ -168,7 +115,6 @@ def test_offline_migration_uses_a_stopped_source_and_stable_destination(
         source_state_root=source_root,
         source_cases=source_cases,
         destination_state_root=destination_root,
-        product="inverse-btc",
     )
 
     with SingleInstanceLease(source_root):
@@ -208,6 +154,36 @@ def test_offline_migration_uses_a_stopped_source_and_stable_destination(
     assert not arguments.destination_state_root.exists()
 
 
+@pytest.mark.parametrize("command", ("serve-shadow", "migrate-shadow-cases"))
+def test_online_cli_exposes_no_product_switch(
+    command: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["radar_runtime", command, "--help"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        runtime_cli.main()
+
+    assert exit_info.value.code == 0
+    assert "--product" not in capsys.readouterr().out
+
+
+def test_persistent_startup_rejects_removed_linear_product(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unsupported option product: linear-btc-usdc"):
+        prepare_persistent_service_startup(
+            state_root=(tmp_path / "linear-state").resolve(),
+            process_cwd=ROOT,
+            workbench_host="127.0.0.1",
+            workbench_port=0,
+            product="linear-btc-usdc",
+            code_identity=CODE,
+            startup_monotonic_ms=100,
+            process_id=123,
+            nonce_factory=lambda: "removed-linear",
+        )
+
+
 def test_startup_builds_one_business_owner_graph_without_service_ledger(tmp_path: Path) -> None:
     startup = _startup(tmp_path)
     composition = build_persistent_service_composition(startup)
@@ -235,146 +211,6 @@ def test_restarts_reuse_one_business_case_repository_with_new_runtime_identity(
     assert first.cases_directory == second.cases_directory
     assert first.cases_directory == first.state_root / "cases"
     assert sorted(path.name for path in first.state_root.iterdir()) == ["cases"]
-
-
-def test_restart_stages_entry_legs_before_first_commit_and_adopts_without_replay(
-    restarted_entry_compositions: _RestartedEntryCompositions,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fixture = restarted_entry_compositions
-    composition = fixture.second
-
-    assert composition.owner.active_trade_identities == frozenset()
-    assert composition.adapter.required_option_instrument_names == (
-        "BTC_USDC-8AUG26-100000-C",
-        "BTC_USDC-8AUG26-102000-C",
-    )
-    staged_objects: tuple[Mapping[str, object], ...] = composition.shadow_state.objects
-    assert {value["object_kind"] for value in staged_objects} == {
-        "SHADOW_ENTRY",
-        "SHADOW_OUTCOME_OBSERVATION",
-    }
-    staged_entry = next(value for value in staged_objects if value["object_kind"] == "SHADOW_ENTRY")
-    staged_payload = staged_entry["payload"]
-    assert isinstance(staged_payload, Mapping)
-    assert staged_payload["tracking_state"] == "RECOVERING"
-    assert staged_payload["current_segment_identity"] is None
-    assert staged_payload["current_segment_sequence"] is None
-    initial_document = json.loads(composition.snapshot_store.read().workbench_body)
-    assert initial_document["service"]["phase"] == "STARTING"
-    assert initial_document["service"]["data_state"] == "UNKNOWN"
-    assert len(initial_document["shadow_entries"]["rows"]) == 1
-    assert initial_document["shadow_entries"]["rows"][0]["tracking_state"] == "RECOVERING"
-    assert len(initial_document["positions"]["rows"]) == 1
-    assert initial_document["positions"]["rows"][0]["position_action"] == "UNKNOWN"
-
-    reducer = composition.runtime.reducer
-    reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
-
-    def forbidden_position_settlement(**_kwargs: object) -> NoReturn:
-        raise AssertionError("the recovery adoption commit is not a Position fact boundary")
-
-    monkeypatch.setattr(composition.owner, "settle_position", forbidden_position_settlement)
-    commit = CausalCommit(
-        boundary=FactBoundary(1, 0, 1_010, 1),
-        cause=CausalCause.RUNTIME_START,
-        failure_domain=FailureScope.SESSION,
-        affected_scopes=("GLOBAL",),
-    )
-    reducer._settle_fact(commit=commit, affected_instruments=(), countable=False)
-
-    current_objects: tuple[Mapping[str, object], ...] = composition.shadow_state.objects
-    current_kinds = {value["object_kind"] for value in current_objects}
-    assert current_kinds == {"SHADOW_ENTRY", "SHADOW_OUTCOME_OBSERVATION"}
-    assert composition.shadow_state.take_pending_records() == ()
-    assert composition.owner.active_candidate_identities == frozenset()
-    assert composition.owner.active_trade_identities == frozenset({fixture.entry_identity})
-    assert composition.adapter.retained_state_counts["active_anchors"] == 1
-    assert all(
-        request.purpose not in {RpcPurpose.ADMISSION_REFRESH, RpcPurpose.POST_CLOSE_REFRESH}
-        for request in composition.runtime.reducer.pending_rpcs.values()
-    )
-    assert (fixture.case_directory / "opened.json").read_bytes() == fixture.opened_record
-    assert sorted(path.name for path in (fixture.case_directory / "segments").iterdir()) == [
-        "0",
-        "1",
-    ]
-    assert not (fixture.case_directory / "outcome.json").exists()
-
-    composition.adapter.terminate(
-        source="STOP",
-        boundary=FactBoundary(1, 1, 1_020, 2),
-    )
-    case = composition.case_store.read_case(
-        composition.case_store.case_id_for_entry(fixture.entry_identity) or ""
-    )
-    assert case.outcome is None
-    assert case.segments[-1].status.value == "CENSORED_AT_STOP"
-
-    third = build_persistent_service_composition(_startup(fixture.workspace, nonce="process-c"))
-    try:
-        assert third.startup.runtime_identity != composition.startup.runtime_identity
-        assert third.owner.active_trade_identities == frozenset()
-        assert third.adapter.required_option_instrument_names == (
-            "BTC_USDC-8AUG26-100000-C",
-            "BTC_USDC-8AUG26-102000-C",
-        )
-        third_staged = third.shadow_state.objects
-        assert {value["object_kind"] for value in third_staged} == {
-            "SHADOW_ENTRY",
-            "SHADOW_OUTCOME_OBSERVATION",
-        }
-        third_initial = json.loads(third.snapshot_store.read().workbench_body)
-        assert len(third_initial["shadow_entries"]["rows"]) == 1
-        assert third_initial["shadow_entries"]["rows"][0]["tracking_state"] == "RECOVERING"
-
-        third_reducer = third.runtime.reducer
-        third_reducer.begin_session(session_epoch=1, monotonic_ms=2_000)
-        monkeypatch.setattr(third.owner, "settle_position", forbidden_position_settlement)
-        third_commit = CausalCommit(
-            boundary=FactBoundary(1, 0, 2_010, 1),
-            cause=CausalCause.RUNTIME_START,
-            failure_domain=FailureScope.SESSION,
-            affected_scopes=("GLOBAL",),
-        )
-        third_reducer._settle_fact(
-            commit=third_commit,
-            affected_instruments=(),
-            countable=False,
-        )
-
-        assert third.owner.active_candidate_identities == frozenset()
-        assert third.owner.active_trade_identities == frozenset({fixture.entry_identity})
-        assert third.shadow_state.take_pending_records() == ()
-        third_objects: tuple[Mapping[str, object], ...] = third.shadow_state.objects
-        assert {value["object_kind"] for value in third_objects} == {
-            "SHADOW_ENTRY",
-            "SHADOW_OUTCOME_OBSERVATION",
-        }
-        assert third.adapter.retained_state_counts["active_anchors"] == 1
-        assert (fixture.case_directory / "opened.json").read_bytes() == fixture.opened_record
-        assert sorted(path.name for path in (fixture.case_directory / "segments").iterdir()) == [
-            "0",
-            "1",
-            "2",
-        ]
-        third_case_id = third.case_store.case_id_for_entry(fixture.entry_identity)
-        assert third_case_id is not None
-        third_case = third.case_store.read_case(third_case_id, runtime_active=True)
-        assert third_case.opened["shadow_entry_identity"] == fixture.entry_identity
-        assert third_case.outcome is None
-        assert third_case.segments[-1].opened["observation_quality"] == "GAPPED"
-        assert third_case.segments[-1].opened["gap_count"] == 2
-
-        third.adapter.terminate(
-            source="STOP",
-            boundary=FactBoundary(1, 1, 2_020, 2),
-        )
-        final_case = third.case_store.read_case(third_case_id)
-        assert final_case.outcome is None
-        assert final_case.segments[-1].status.value == "CENSORED_AT_STOP"
-    finally:
-        third.workbench.close()
 
 
 def test_runtime_identity_changes_each_start() -> None:

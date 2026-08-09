@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from options_domain import LINEAR_BTC_USDC
+from options_domain import INVERSE_BTC
 from short_vol_underwriting import (
     CANDIDATE_INVALIDATION_REASONS,
     DECISION_CONTROL_OBJECT_KINDS,
@@ -45,8 +45,6 @@ from short_vol_underwriting import (
     RpcAdmissionRefreshWitness,
     RpcComponentLegRefreshWitness,
     RuntimeBindings,
-    ShadowCaseStore,
-    ShadowCaseStoreError,
     ShadowStateError,
     ShadowStateStore,
     SourceFact,
@@ -67,9 +65,9 @@ from short_vol_underwriting import (
 )
 from short_vol_underwriting.case_store import ShadowCaseSegmentStatus
 from short_vol_underwriting.constants import (
-    POSITION_POLICY_IDENTITY,
-    RADAR_POLICY_IDENTITY,
-    UNDERWRITING_POLICY_IDENTITY,
+    INVERSE_BTC_POSITION_POLICY_IDENTITY,
+    INVERSE_BTC_RADAR_POLICY_IDENTITY,
+    INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
 )
 from short_vol_underwriting.domain import EntryTerms, PositionDecision
 from short_vol_underwriting.model import (
@@ -134,7 +132,7 @@ def _boundary(causal_seq: int, monotonic_ms: int | None = None) -> FactBoundary:
 def _radar_episode_identity(
     *,
     runtime_identity: str = "sha256:" + "b" * 64,
-    policy_identity: str = RADAR_POLICY_IDENTITY,
+    policy_identity: str = INVERSE_BTC_RADAR_POLICY_IDENTITY,
     instrument_name: str = "BTC-SHORT",
     activation_causal_seq: int = 1,
 ) -> str:
@@ -262,19 +260,19 @@ def _owner(
 ) -> tuple[FixedContractShadowOwner, RuntimeBindings]:
     del close_enrollment
     policies = load_policy_chain(
-        radar_path=ROOT / "policies/short-vol-fixed-public-shadow-radar.json",
-        underwriting_path=ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json",
-        position_path=ROOT / "policies/short-vol-fixed-public-shadow-position.json",
-        radar_identity=RADAR_POLICY_IDENTITY,
-        underwriting_identity=UNDERWRITING_POLICY_IDENTITY,
-        position_identity=POSITION_POLICY_IDENTITY,
+        radar_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-radar.json",
+        underwriting_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-underwriting.json",
+        position_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-position.json",
+        radar_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+        underwriting_identity=INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
+        position_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
     )
     bindings = RuntimeBindings(
         code_identity="a" * 40,
         runtime_identity="sha256:" + "b" * 64,
-        radar_policy_identity=RADAR_POLICY_IDENTITY,
-        underwriting_policy_identity=UNDERWRITING_POLICY_IDENTITY,
-        position_policy_identity=POSITION_POLICY_IDENTITY,
+        radar_policy_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+        underwriting_policy_identity=INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
+        position_policy_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
     )
     history = _HistoryObserver()
     state_store = ShadowStateStore(bindings=bindings, observer=history)
@@ -309,7 +307,7 @@ def _recovery_projection(
     case_id = canonical_identity("ShadowCaseIdentity", "recovery")
     segment_identity = canonical_identity("ShadowCaseSegmentIdentity", case_id, 1)
     opened: dict[str, object] = {
-        "schema_version": 3,
+        "schema_version": 4,
         "case_id": case_id,
         "code_identity": origin_bindings.code_identity,
         "runtime_identity": origin_bindings.runtime_identity,
@@ -321,18 +319,26 @@ def _recovery_projection(
         "enrollment_kind": "ADMITTED_SHADOW_TRADE",
         "shadow_entry_identity": entry_identity,
         "candidate_identity": canonical_identity("CandidateIdentity", "recovery"),
+        "product": {
+            "product_spec_identity": INVERSE_BTC.identity,
+            "product_name": INVERSE_BTC.name.value,
+            "native_premium_currency": INVERSE_BTC.native_premium_currency,
+            "settlement_currency": INVERSE_BTC.settlement_currency,
+            "valuation_currency": INVERSE_BTC.valuation_currency,
+            "price_index": INVERSE_BTC.price_index,
+        },
         "structure": {
             "execution_model": "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL",
             "canonical_leg_identities": [
                 canonical_identity("LegIdentity", "recovery-short"),
                 canonical_identity("LegIdentity", "recovery-long"),
             ],
-            "short_leg_instrument_name": "BTC_USDC-8AUG26-101000-C",
-            "long_leg_instrument_name": "BTC_USDC-8AUG26-102000-C",
+            "short_leg_instrument_name": "BTC-8AUG26-101000-C",
+            "long_leg_instrument_name": "BTC-8AUG26-102000-C",
             "expiry_ms": 10_000_000,
             "option_type": "call",
-            "short_strike_usdc_per_btc": "101000",
-            "long_strike_usdc_per_btc": "102000",
+            "short_strike_usd_per_btc": "101000",
+            "long_strike_usd_per_btc": "102000",
             "entry_direction": "SELL",
             "full_quantity_btc": "0.1",
             "entry_component_pair_identity": canonical_identity(
@@ -350,15 +356,21 @@ def _recovery_projection(
             "radar_scope_identity": canonical_identity("RadarScopeIdentity", "recovery"),
         },
         "entry_economics": {
-            "gross_entry_credit_usdc": "29.8",
-            "entry_fee_reserve_usdc": "4.2625",
-            "net_entry_credit_usdc": "25.5375",
-            "width_usdc_per_btc": "1000",
-            "payoff_cap_usdc": "100",
-            "contractual_payoff_max_loss_ex_fees_usdc": "70.2",
-            "entry_fee_reserved_payoff_loss_usdc": "74.4625",
-            "future_cost_reserve_usdc": "12",
-            "underwriting_reserved_loss_usdc": "86.4625",
+            "gross_entry_credit_usd": "29.8",
+            "entry_fee_reserve_usd": "4.2625",
+            "net_entry_credit_usd": "25.5375",
+            "width_usd_per_btc": "1000",
+            "contractual_payoff_cap_usd": "100",
+            "entry_boundary_valued_payoff_loss_ex_fees_usd": "70.2",
+            "entry_boundary_valued_payoff_loss_including_entry_fee_usd": "74.4625",
+            "future_cost_reserve_usd": "12",
+            "underwriting_reserved_loss_usd": "86.4625",
+        },
+        "native_entry_economics": {
+            "native_gross_entry_credit": "0.000298",
+            "native_entry_fee_reserve": "0.000042625",
+            "native_net_entry_credit": "0.000255375",
+            "entry_valuation_index_price": "100000",
         },
         "non_claims": ["NOT_AN_ORDER", "NOT_A_FILL"],
     }
@@ -371,7 +383,7 @@ def _recovery_projection(
         "receipt_fact_boundary": origin_boundary.as_object(),
     }
     baseline = {
-        "entry_index_usdc_per_btc": "100000" if known_entry_baseline else None,
+        "entry_index_usd_per_btc": "100000" if known_entry_baseline else None,
         "entry_index_source_ref": index_source if known_entry_baseline else None,
         "entry_short_leg_mark_iv_fraction": "0.5" if known_entry_baseline else None,
         "entry_short_leg_mark_iv_source_ref": ticker_source if known_entry_baseline else None,
@@ -431,6 +443,7 @@ def _typed_recovery_entry(
     opened = cast(Mapping[str, object], projection["opened"])
     structure = cast(Mapping[str, object], opened["structure"])
     economics = cast(Mapping[str, object], opened["entry_economics"])
+    native_economics = cast(Mapping[str, object], opened["native_entry_economics"])
     baseline = cast(Mapping[str, object], projection["entry_position_baseline"])
     index_source_value = baseline["entry_index_source_ref"]
     ticker_source_value = baseline["entry_short_leg_mark_iv_source_ref"]
@@ -469,13 +482,13 @@ def _typed_recovery_entry(
         canonical_combo_identity=None,
         combo_instrument_name=None,
         option_type=cast(str, structure["option_type"]),
-        short_strike_usdc_per_btc=Decimal(str(structure["short_strike_usdc_per_btc"])),
-        long_strike_usdc_per_btc=Decimal(str(structure["long_strike_usdc_per_btc"])),
+        short_strike_usdc_per_btc=Decimal(str(structure["short_strike_usd_per_btc"])),
+        long_strike_usdc_per_btc=Decimal(str(structure["long_strike_usd_per_btc"])),
         expiry_ms=cast(int, structure["expiry_ms"]),
         target_quantity_btc=Decimal(str(structure["full_quantity_btc"])),
         entry_direction=cast(str, structure["entry_direction"]),
         index_usdc_per_btc=(
-            Decimal(str(baseline["entry_index_usdc_per_btc"])) if index_source is not None else None
+            Decimal(str(baseline["entry_index_usd_per_btc"])) if index_source is not None else None
         ),
         index_source=index_source,
         short_mark_iv_fraction=(
@@ -487,17 +500,17 @@ def _typed_recovery_entry(
         short_leg_taker_commission_fraction=Decimal("0.0003"),
         long_leg_taker_commission_fraction=Decimal("0.0003"),
         execution_model=cast(str, structure["execution_model"]),
-        product_spec_identity=LINEAR_BTC_USDC.identity,
-        product_name=LINEAR_BTC_USDC.name.value,
-        native_premium_currency=LINEAR_BTC_USDC.native_premium_currency,
-        settlement_currency=LINEAR_BTC_USDC.settlement_currency,
-        valuation_currency=LINEAR_BTC_USDC.valuation_currency,
-        price_index=LINEAR_BTC_USDC.price_index,
-        native_gross_entry_credit=Decimal(str(economics["gross_entry_credit_usdc"])),
-        native_entry_fee_reserve=Decimal(str(economics["entry_fee_reserve_usdc"])),
-        native_net_entry_credit=Decimal(str(economics["net_entry_credit_usdc"])),
-        entry_valuation_index_price=Decimal(1),
-        width_usdc_per_btc=Decimal(str(economics["width_usdc_per_btc"])),
+        product_spec_identity=INVERSE_BTC.identity,
+        product_name=INVERSE_BTC.name.value,
+        native_premium_currency=INVERSE_BTC.native_premium_currency,
+        settlement_currency=INVERSE_BTC.settlement_currency,
+        valuation_currency=INVERSE_BTC.valuation_currency,
+        price_index=INVERSE_BTC.price_index,
+        native_gross_entry_credit=Decimal(str(native_economics["native_gross_entry_credit"])),
+        native_entry_fee_reserve=Decimal(str(native_economics["native_entry_fee_reserve"])),
+        native_net_entry_credit=Decimal(str(native_economics["native_net_entry_credit"])),
+        entry_valuation_index_price=Decimal(str(native_economics["entry_valuation_index_price"])),
+        width_usdc_per_btc=Decimal(str(economics["width_usd_per_btc"])),
         entry_component_legs=tuple(
             cast(Mapping[str, object], member)
             for member in cast(list[object], structure["entry_component_legs"])
@@ -506,19 +519,19 @@ def _typed_recovery_entry(
     entry_economics = EntryEconomics(
         full_quantity_btc=terms.target_quantity_btc,
         required_side_total_quote_usdc=Decimal(0),
-        gross_entry_credit_usdc=Decimal(str(economics["gross_entry_credit_usdc"])),
-        entry_fee_reserve_usdc=Decimal(str(economics["entry_fee_reserve_usdc"])),
-        net_entry_credit_usdc=Decimal(str(economics["net_entry_credit_usdc"])),
-        width_usdc_per_btc=Decimal(str(economics["width_usdc_per_btc"])),
-        payoff_cap_usdc=Decimal(str(economics["payoff_cap_usdc"])),
+        gross_entry_credit_usdc=Decimal(str(economics["gross_entry_credit_usd"])),
+        entry_fee_reserve_usdc=Decimal(str(economics["entry_fee_reserve_usd"])),
+        net_entry_credit_usdc=Decimal(str(economics["net_entry_credit_usd"])),
+        width_usdc_per_btc=Decimal(str(economics["width_usd_per_btc"])),
+        payoff_cap_usdc=Decimal(str(economics["contractual_payoff_cap_usd"])),
         contractual_payoff_max_loss_ex_fees_usdc=Decimal(
-            str(economics["contractual_payoff_max_loss_ex_fees_usdc"])
+            str(economics["entry_boundary_valued_payoff_loss_ex_fees_usd"])
         ),
         entry_fee_reserved_payoff_loss_usdc=Decimal(
-            str(economics["entry_fee_reserved_payoff_loss_usdc"])
+            str(economics["entry_boundary_valued_payoff_loss_including_entry_fee_usd"])
         ),
-        future_cost_reserve_usdc=Decimal(str(economics["future_cost_reserve_usdc"])),
-        underwriting_reserved_loss_usdc=Decimal(str(economics["underwriting_reserved_loss_usdc"])),
+        future_cost_reserve_usdc=Decimal(str(economics["future_cost_reserve_usd"])),
+        underwriting_reserved_loss_usdc=Decimal(str(economics["underwriting_reserved_loss_usd"])),
     )
     first_close_value = projection["first_close"]
     first_close_decision = None
@@ -593,7 +606,7 @@ def _typed_recovery_entry(
         shadow_entry_identity=cast(str, projection["shadow_entry_identity"]),
         origin_outcome_contract_identity=cast(str, opened["shadow_case_contract_identity"]),
         origin_runtime_identity=cast(str, opened["runtime_identity"]),
-        product_spec_identity=LINEAR_BTC_USDC.identity,
+        product_spec_identity=INVERSE_BTC.identity,
         policy_identities=(
             bindings.radar_policy_identity,
             bindings.underwriting_policy_identity,
@@ -896,18 +909,18 @@ def test_canonical_identity_matches_all_normative_vectors() -> None:
 
 def test_exact_policy_chain_loads_before_runtime() -> None:
     chain = load_policy_chain(
-        radar_path=ROOT / "policies/short-vol-fixed-public-shadow-radar.json",
-        underwriting_path=ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json",
-        position_path=ROOT / "policies/short-vol-fixed-public-shadow-position.json",
-        radar_identity=RADAR_POLICY_IDENTITY,
-        underwriting_identity=UNDERWRITING_POLICY_IDENTITY,
-        position_identity=POSITION_POLICY_IDENTITY,
+        radar_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-radar.json",
+        underwriting_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-underwriting.json",
+        position_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-position.json",
+        radar_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+        underwriting_identity=INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
+        position_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
     )
 
     assert chain.identities == (
-        RADAR_POLICY_IDENTITY,
-        UNDERWRITING_POLICY_IDENTITY,
-        POSITION_POLICY_IDENTITY,
+        INVERSE_BTC_RADAR_POLICY_IDENTITY,
+        INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
+        INVERSE_BTC_POSITION_POLICY_IDENTITY,
     )
     assert chain.underwriting.target_base_quantity_btc == Decimal("0.1")
     assert chain.underwriting.future_cost_reserve_usdc == Decimal("12")
@@ -916,12 +929,12 @@ def test_exact_policy_chain_loads_before_runtime() -> None:
     assert chain.position.maximum_component_pair_source_skew_ms == 6_000
     assert chain.position.maximum_component_pair_receive_skew_ms == 4_000
     assert chain.position.latest_exit_lead_ms == 1_800_000
-    assert chain.position.underwriting_policy_identity == UNDERWRITING_POLICY_IDENTITY
+    assert chain.position.underwriting_policy_identity == INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY
 
 
 def test_policy_loader_rejects_unknown_member_and_cross_identity(tmp_path: Path) -> None:
     underwriting = json.loads(
-        (ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json").read_text()
+        (ROOT / "policies/short-vol-inverse-btc-public-shadow-underwriting.json").read_text()
     )
     underwriting["admission_policy_identity"] = "sha256:" + "0" * 64
     changed = tmp_path / "underwriting.json"
@@ -929,12 +942,12 @@ def test_policy_loader_rejects_unknown_member_and_cross_identity(tmp_path: Path)
 
     with pytest.raises(PolicyChainError, match=r"exact keys|digest"):
         load_policy_chain(
-            radar_path=ROOT / "policies/short-vol-fixed-public-shadow-radar.json",
+            radar_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-radar.json",
             underwriting_path=changed,
-            position_path=ROOT / "policies/short-vol-fixed-public-shadow-position.json",
-            radar_identity=RADAR_POLICY_IDENTITY,
+            position_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-position.json",
+            radar_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
             underwriting_identity="sha256:" + "0" * 64,
-            position_identity=POSITION_POLICY_IDENTITY,
+            position_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
         )
 
 
@@ -1242,7 +1255,7 @@ def test_position_action_unknown_is_not_hold_and_close_latches_once() -> None:
     assert len(POSITION_CLOSE_REASONS) == 9
     state = PositionDecisionState(
         shadow_entry_identity="sha256:" + "2" * 64,
-        position_policy_identity=POSITION_POLICY_IDENTITY,
+        position_policy_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
         entry_boundary=_boundary(1),
     )
     unknown = state.evaluate(
@@ -1318,7 +1331,7 @@ def test_recovered_position_policy_restores_first_close_in_a_new_segment() -> No
     )
     state = PositionDecisionState.recovered(
         shadow_entry_identity="sha256:" + "2" * 64,
-        position_policy_identity=POSITION_POLICY_IDENTITY,
+        position_policy_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
         entry_boundary=entry,
         segment_baseline_boundary=baseline,
         recovery_seed=seed,
@@ -1370,14 +1383,14 @@ def test_gapped_segment_baseline_cannot_latch_close_or_synthesize_hold() -> None
     with pytest.raises(ValueError, match="later Case segment"):
         PositionDecisionState.recovered(
             shadow_entry_identity="sha256:" + "2" * 64,
-            position_policy_identity=POSITION_POLICY_IDENTITY,
+            position_policy_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
             entry_boundary=entry,
             segment_baseline_boundary=CaseFactBoundary(0, _boundary(2)),
             recovery_seed=PositionDecisionRecoverySeed(),
         )
     state = PositionDecisionState.recovered(
         shadow_entry_identity="sha256:" + "2" * 64,
-        position_policy_identity=POSITION_POLICY_IDENTITY,
+        position_policy_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
         entry_boundary=entry,
         segment_baseline_boundary=baseline,
         recovery_seed=PositionDecisionRecoverySeed(),
@@ -1439,7 +1452,7 @@ def test_position_recovery_seed_rejects_incomplete_or_noncanonical_close_state()
 def test_each_position_close_reason_independently_latches_close(reason: str) -> None:
     state = PositionDecisionState(
         shadow_entry_identity="sha256:" + "2" * 64,
-        position_policy_identity=POSITION_POLICY_IDENTITY,
+        position_policy_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
         entry_boundary=_boundary(1),
     )
 
@@ -1825,1998 +1838,29 @@ def test_admission_late_or_truncated_rpc_consumes_attempt_without_entry() -> Non
     assert truncated.terminal_outcome is AdmissionTerminalOutcome.UNKNOWN_CONSUMED
 
 
-def test_owner_candidate_to_subscription_admission_round_trip(tmp_path: Path) -> None:
+def test_inverse_atomic_underwriting_is_unknown_and_cannot_schedule_admission(
+    tmp_path: Path,
+) -> None:
     owner, bindings = _owner(tmp_path)
-    origin_facts = _underwriting_facts(
+    facts = _underwriting_facts(
         boundary=_boundary(1, 110),
         change_id=10,
         previous_change_id=None,
         snapshot_kind="snapshot",
-    )
-    transition = owner.settle_underwriting(
-        (origin_facts,),
-        allocate_request_id=lambda: 41,
-    )
-    assert [intent.request_id for intent in transition.request_intents] == [41]
-    assert [item.object_kind for item in transition.emitted] == [
-        "UNDERWRITING_AVAILABILITY_EVALUATION",
-        "UNDERWRITING_ACTION",
-        "CANDIDATE_ACTIVATION",
-        "ADMISSION_ATTEMPT_SCHEDULED",
-    ]
-    candidate_identity = next(
-        item.object_identity
-        for item in transition.emitted
-        if item.object_kind == "CANDIDATE_ACTIVATION"
-    )
-    assert candidate_identity.startswith("sha256:")
-    owner.note_request_sent(
-        request_id=41,
-        boundary=_boundary(2, 120),
-    )
-    refreshed = _underwriting_facts(
-        boundary=_boundary(3, 130),
-        change_id=11,
-        previous_change_id=10,
-        snapshot_kind="change",
-    )
-    admitted = owner.settle_underwriting(
-        (refreshed,),
-        allocate_request_id=lambda: 42,
-    )
-    assert [item.object_kind for item in admitted.emitted] == [
-        "ADMISSION_ATTEMPT_TERMINAL",
-        "SHADOW_ENTRY",
-        "SHADOW_OUTCOME_OBSERVATION",
-    ]
-    assert owner.required_combo_instrument_names == ("BTC-TEST-COMBO",)
-    objects = _written_objects(tmp_path, bindings=bindings)
-    assert {value["object_kind"] for value in objects.values()} == {
-        "UNDERWRITING_AVAILABILITY_EVALUATION",
-        "UNDERWRITING_ACTION",
-        "CANDIDATE_ACTIVATION",
-        "ADMISSION_ATTEMPT_SCHEDULED",
-        "ADMISSION_ATTEMPT_TERMINAL",
-        "SHADOW_ENTRY",
-        "SHADOW_OUTCOME_OBSERVATION",
-    }
-
-
-def test_owner_treats_negative_public_commission_as_unknown(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    facts = replace(
-        _underwriting_facts(
-            boundary=_boundary(1, 110),
-            change_id=10,
-            previous_change_id=None,
-            snapshot_kind="snapshot",
-        ),
-        short_leg_taker_commission_fraction=Decimal("-0.0001"),
     )
 
     transition = owner.settle_underwriting((facts,), allocate_request_id=lambda: 41)
 
-    assert [item.object_kind for item in transition.emitted] == [
-        "UNDERWRITING_AVAILABILITY_EVALUATION"
-    ]
-    objects = _written_objects(tmp_path, bindings=bindings)
-    availability = next(iter(objects.values()))
-    assert _object(availability["payload"])["availability"] == "UNKNOWN"
-
-
-def test_owner_rejects_initial_target_quantity_mismatch_before_any_write(
-    tmp_path: Path,
-) -> None:
-    owner, _bindings = _owner(tmp_path)
-    facts = replace(
-        _underwriting_facts(
-            boundary=_boundary(1, 110),
-            change_id=10,
-            previous_change_id=None,
-            snapshot_kind="snapshot",
-        ),
-        target_quantity_btc=Decimal("0.2"),
-        entry_consumed_levels=((Decimal("300"), Decimal("0.2")),),
-    )
-
-    with pytest.raises(RuntimeError, match="target quantity"):
-        owner.settle_underwriting((facts,), allocate_request_id=lambda: 41)
-
-    assert owner.state_store.objects == ()
-
-
-def test_owner_rejects_refresh_target_quantity_mismatch_without_consuming_candidate(
-    tmp_path: Path,
-) -> None:
-    owner, _bindings = _owner(tmp_path)
-    origin = _underwriting_facts(
-        boundary=_boundary(1, 110),
-        change_id=10,
-        previous_change_id=None,
-        snapshot_kind="snapshot",
-    )
-    activated = owner.settle_underwriting((origin,), allocate_request_id=lambda: 41)
-    candidate_identity = next(
-        item.object_identity
-        for item in activated.emitted
-        if item.object_kind == "CANDIDATE_ACTIVATION"
-    )
-    before = tuple(owner.state_store.objects)
-    refreshed = replace(
-        _underwriting_facts(
-            boundary=_boundary(2, 120),
-            change_id=11,
-            previous_change_id=10,
-            snapshot_kind="change",
-        ),
-        target_quantity_btc=Decimal("0.2"),
-        entry_consumed_levels=((Decimal("300"), Decimal("0.2")),),
-    )
-    witness = refreshed.quote_refresh_witness
-    assert witness is not None
-
-    with pytest.raises(RuntimeError, match="target quantity"):
-        owner.settle_admission(
-            candidate_identity=candidate_identity,
-            refreshed_facts=refreshed,
-            refresh_witness=witness,
-        )
-
-    assert tuple(owner.state_store.objects) == before
-
-
-def test_owner_explicit_unknown_reasons_prevent_economic_action(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    facts = replace(
-        _underwriting_facts(
-            boundary=_boundary(1, 110),
-            change_id=10,
-            previous_change_id=None,
-            snapshot_kind="snapshot",
-        ),
-        unknown_reasons=("INDEX_SOURCE_UNKNOWN",),
-    )
-
-    transition = owner.settle_underwriting((facts,), allocate_request_id=lambda: 41)
-
-    assert [item.object_kind for item in transition.emitted] == [
-        "UNDERWRITING_AVAILABILITY_EVALUATION"
-    ]
     assert transition.request_intents == ()
-    objects = _written_objects(tmp_path, bindings=bindings)
-    payload = _object(next(iter(objects.values()))["payload"])
-    assert payload["availability"] == "UNKNOWN"
-    assert payload["unknown_reasons"] == ["INDEX_SOURCE_UNKNOWN"]
-
-
-def test_owner_action_carries_complete_margin_truth_beyond_primary_blocker(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    facts = replace(
-        _underwriting_facts(
-            boundary=_boundary(1, 110),
-            change_id=10,
-            previous_change_id=None,
-            snapshot_kind="snapshot",
-        ),
-        entry_consumed_levels=((Decimal("150"), Decimal("0.1")),),
-    )
-
-    owner.settle_underwriting((facts,), allocate_request_id=lambda: 41)
-
-    action = next(
-        value
-        for value in _written_objects(tmp_path, bindings=bindings).values()
-        if value["object_kind"] == "UNDERWRITING_ACTION"
-    )
-    payload = _object(action["payload"])
-    assert payload["economic_action"] == "ABSTAIN"
-    assert payload["decision_blockers"] == ["CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE"]
-    assert payload["failed_predicates"] == [
-        "CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE",
-        "MINIMUM_NET_ENTRY_CREDIT",
-    ]
-    vector = payload["predicate_margin_vector"]
-    assert isinstance(vector, list)
-    assert len(vector) == 6
-    assert payload["selected_long_leg_instrument_name"] == "BTC-LONG"
-
-
-def test_owner_unknown_refresh_invalidates_candidate_before_admission(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    origin = _underwriting_facts(
-        boundary=_boundary(1, 110),
-        change_id=10,
-        previous_change_id=None,
-        snapshot_kind="snapshot",
-    )
-    owner.settle_underwriting((origin,), allocate_request_id=lambda: 41)
-    refreshed = replace(
-        _underwriting_facts(
-            boundary=_boundary(2, 120),
-            change_id=11,
-            previous_change_id=10,
-            snapshot_kind="change",
-        ),
-        unknown_reasons=("COMBO_BOOK_SOURCE_UNKNOWN",),
-    )
-
-    transition = owner.settle_underwriting((refreshed,), allocate_request_id=lambda: 42)
-
-    assert [item.object_kind for item in transition.emitted] == [
-        "ADMISSION_ATTEMPT_TERMINAL",
-        "CANDIDATE_INVALIDATION",
-    ]
-    objects = _written_objects(tmp_path, bindings=bindings)
-    kinds = {value["object_kind"] for value in objects.values()}
-    assert "SHADOW_ENTRY" not in kinds
-    terminal = next(
-        _object(value["payload"])
-        for value in objects.values()
-        if value["object_kind"] == "ADMISSION_ATTEMPT_TERMINAL"
-    )
-    invalidation = next(
-        _object(value["payload"])
-        for value in objects.values()
-        if value["object_kind"] == "CANDIDATE_INVALIDATION"
-    )
-    assert terminal["terminal_outcome"] == "KNOWN_INVALIDATED_BEFORE_REFRESH"
-    assert invalidation["primary_reason"] == (
-        "SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN"
-    )
-
-
-def test_owner_opens_admitted_observation_without_online_cohort_membership(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-
-    _admit_owner(owner)
-
-    objects = _written_objects(tmp_path, bindings=bindings)
-    observation = next(
-        value for value in objects.values() if value["object_kind"] == "SHADOW_OUTCOME_OBSERVATION"
-    )
-    assert "cohort_enrolled" not in _object(observation["payload"])
-    assert not any(
-        value["object_kind"] == "ALIGNED_POLICY_NO_TRADE_PAIR" for value in objects.values()
-    )
-
-
-def test_owner_emits_slot_consumed_availability_after_entry(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    _admit_owner(owner)
-    after_entry = _underwriting_facts(
-        boundary=_boundary(4, 140),
-        change_id=12,
-        previous_change_id=11,
-        snapshot_kind="change",
-    )
-
-    transition = owner.settle_underwriting(
-        (after_entry,),
-        allocate_request_id=lambda: 42,
-    )
-
-    assert [item.object_kind for item in transition.emitted] == [
-        "UNDERWRITING_AVAILABILITY_EVALUATION"
-    ]
-    emitted_identity = transition.emitted[0].object_identity
-    objects = _written_objects(tmp_path, bindings=bindings)
-    payload = _object(objects[emitted_identity]["payload"])
-    assert payload["availability"] == "NOT_EVALUATED"
-
-
-def test_owner_first_close_then_strictly_future_subscription_exit_round_trip(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-
-    first_close = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(4, 140),
-            change_id=12,
-            previous_change_id=11,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-    assert [item.object_kind for item in first_close.emitted] == [
-        "POSITION_EVALUATION",
-        "POSITION_ACTION",
-        "POST_CLOSE_ATTEMPT_SCHEDULED",
-        "CLOSE_QUOTE_EVALUATION",
-    ]
-    assert [intent.request_id for intent in first_close.request_intents] == [42]
-
-    future = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(5, 150),
-            change_id=13,
-            previous_change_id=12,
-        ),
-        allocate_request_id=lambda: 43,
-    )
-    assert [item.object_kind for item in future.emitted] == [
-        "CLOSE_QUOTE_EVALUATION",
-        "POST_CLOSE_ATTEMPT_TERMINAL",
-        "CLOSE_OPPORTUNITY_EVALUATION",
-        "SHADOW_CLOSE_OPPORTUNITY",
-        "SHADOW_COUNTERFACTUAL_EXIT",
-        "SHADOW_OUTCOME",
-    ]
-    assert future.request_intents == ()
-    objects = _written_objects(tmp_path, bindings=bindings)
-    assert (
-        sum(value["object_kind"] == "SHADOW_COUNTERFACTUAL_EXIT" for value in objects.values()) == 1
-    )
-    assert sum(value["object_kind"] == "SHADOW_OUTCOME" for value in objects.values()) == 1
-
-
-def test_owner_matches_equal_distinct_first_close_subscription_witnesses(
-    tmp_path: Path,
-) -> None:
-    owner, _bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    first_close_facts = _position_facts(
-        boundary=_boundary(4, 140),
-        change_id=12,
-        previous_change_id=11,
-    )
-    quote_witness = cast(
-        SubscriptionAdmissionRefreshWitness,
-        first_close_facts.quote_refresh_witness,
-    )
-    distinct_origin_witness = replace(quote_witness)
-    assert distinct_origin_witness == quote_witness
-    assert distinct_origin_witness is not quote_witness
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            first_close_facts,
-            current_combo_subscription_witness=distinct_origin_witness,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(5, 150),
-            change_id=13,
-            previous_change_id=12,
-        ),
-        allocate_request_id=lambda: 43,
-    )
-
-    assert {
-        "POST_CLOSE_ATTEMPT_TERMINAL",
-        "CLOSE_QUOTE_EVALUATION",
-        "SHADOW_CLOSE_OPPORTUNITY",
-        "SHADOW_COUNTERFACTUAL_EXIT",
-        "SHADOW_OUTCOME",
-    }.issubset(item.object_kind for item in transition.emitted)
-
-
-def test_owner_does_not_promote_retained_first_close_quote_on_a_later_tick(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    first_close_facts = _position_facts(
-        boundary=_boundary(4, 140),
-        change_id=12,
-        previous_change_id=11,
-    )
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=first_close_facts,
-        allocate_request_id=lambda: 42,
-    )
-
-    later = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            first_close_facts,
-            boundary=_boundary(5, 150),
-            trusted_time_lower_ms=1_000_102,
-            trusted_time_upper_ms=1_000_103,
-            quote_refresh_witness=None,
-        ),
-        allocate_request_id=lambda: 43,
-    )
-
-    forbidden = {
-        "CLOSE_QUOTE_EVALUATION",
-        "POST_CLOSE_ATTEMPT_TERMINAL",
-        "CLOSE_OPPORTUNITY_EVALUATION",
-        "SHADOW_CLOSE_OPPORTUNITY",
-        "SHADOW_COUNTERFACTUAL_EXIT",
-        "SHADOW_OUTCOME",
-    }
-    assert not forbidden.intersection(item.object_kind for item in later.emitted)
-    objects = _written_objects(tmp_path, bindings=bindings)
-    kinds = [value["object_kind"] for value in objects.values()]
-    assert kinds.count("CLOSE_QUOTE_EVALUATION") == 1
-    assert "POST_CLOSE_ATTEMPT_TERMINAL" not in kinds
-    assert "CLOSE_OPPORTUNITY_EVALUATION" not in kinds
-    assert "SHADOW_CLOSE_OPPORTUNITY" not in kinds
-    assert "SHADOW_COUNTERFACTUAL_EXIT" not in kinds
-    assert "SHADOW_OUTCOME" not in kinds
-
-
-def test_owner_does_not_promote_a_malformed_post_close_rpc_payload(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    first_close_boundary = _boundary(4, 140)
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=first_close_boundary,
-            change_id=12,
-            previous_change_id=11,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-    sent_boundary = _boundary(5, 145)
-    owner.note_request_sent(request_id=42, boundary=sent_boundary)
-    response_boundary = _boundary(6, 150)
-    combo_identity = "sha256:" + "3" * 64
-    instrument_name = "BTC-TEST-COMBO"
-    params = {"instrument_name": instrument_name, "depth": 10000}
-    response_identity = canonical_identity(
-        "RpcAdmissionRefreshSourceIdentity",
-        response_boundary.runtime_identity,
-        42,
-        "public/get_order_book",
-        combo_identity,
-        params,
-        first_close_boundary.as_object(),
-        sent_boundary.as_object(),
-        13,
-        2_013,
-        response_boundary.as_object(),
-    )
-    witness = RpcAdmissionRefreshWitness(
-        source_identity=response_identity,
-        boundary=response_boundary,
-        canonical_combo_identity=combo_identity,
-        instrument_name=instrument_name,
-        request_params=params,
-        change_id=13,
-        source_timestamp_ms=2_013,
-        request_id=42,
-        candidate_origin_boundary=first_close_boundary,
-        sent_boundary=sent_boundary,
-        market_frontier_change_id=13,
-        market_frontier_session_epoch=response_boundary.session_epoch,
-        response_matches_frontier=True,
-        response_covers_full_quantity=True,
-        payload_matches_request=False,
-        payload_well_formed=True,
-    )
-    facts = _position_facts(
-        boundary=response_boundary,
-        change_id=13,
-        previous_change_id=12,
-    )
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            facts,
-            quote_source=SourceFact(response_identity, response_boundary),
-            quote_refresh_witness=witness,
-        ),
-        allocate_request_id=lambda: 43,
-    )
-
-    forbidden = {
-        "CLOSE_QUOTE_EVALUATION",
-        "SHADOW_CLOSE_OPPORTUNITY",
-        "SHADOW_COUNTERFACTUAL_EXIT",
-        "SHADOW_OUTCOME",
-    }
-    assert not forbidden.intersection(item.object_kind for item in transition.emitted)
-    objects = _written_objects(tmp_path, bindings=bindings)
-    terminal = next(
-        _object(value["payload"])
-        for value in objects.values()
-        if value["object_kind"] == "POST_CLOSE_ATTEMPT_TERMINAL"
-    )
-    assert terminal["terminal_status"] == "ERROR"
-    assert terminal["matched_response_identity"] is None
-    opportunities = [
-        _object(value["payload"])
-        for value in objects.values()
-        if value["object_kind"] == "CLOSE_OPPORTUNITY_EVALUATION"
-    ]
-    assert len(opportunities) == 1
-    assert opportunities[0]["close_quote_evaluation_identity"] is None
-    assert (
-        opportunities[0]["attempt_terminal_identity"]
-        == terminal["post_close_attempt_terminal_identity"]
-    )
-    assert opportunities[0]["eligibility"] == "UNKNOWN"
-
-
-@pytest.mark.parametrize(
-    (
-        "snapshot_kind",
-        "change_id",
-        "previous_change_id",
-        "subscription_generation",
-        "session_epoch",
-    ),
-    (
-        ("snapshot", 12, None, 1, 1),
-        ("snapshot", 11, None, 1, 1),
-        ("change", 13, 12, 2, 1),
-        ("change", 13, 12, 1, 2),
-        ("change", 13, 11, 1, 1),
-    ),
-)
-def test_owner_rejects_unqualified_subscription_after_post_close_rpc_error(
-    tmp_path: Path,
-    snapshot_kind: str,
-    change_id: int,
-    previous_change_id: int | None,
-    subscription_generation: int,
-    session_epoch: int,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(4, 140),
-            change_id=12,
-            previous_change_id=11,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-    owner.note_request_failure(
-        request_id=42,
-        boundary=_boundary(5, 145),
-    )
-    boundary = replace(_boundary(6, 150), session_epoch=session_epoch)
-    witness = _position_subscription_witness(
-        boundary=boundary,
-        change_id=change_id,
-        previous_change_id=previous_change_id,
-        snapshot_kind=snapshot_kind,
-        subscription_generation=subscription_generation,
-    )
-    facts = _position_facts(
-        boundary=boundary,
-        change_id=13,
-        previous_change_id=12,
-    )
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            facts,
-            quote_source=SourceFact(witness.source_identity, boundary),
-            quote_refresh_witness=witness,
-            current_combo_subscription_witness=witness,
-        ),
-        allocate_request_id=lambda: 43,
-    )
-
-    forbidden = {
-        "CLOSE_QUOTE_EVALUATION",
-        "CLOSE_OPPORTUNITY_EVALUATION",
-        "SHADOW_CLOSE_OPPORTUNITY",
-        "SHADOW_COUNTERFACTUAL_EXIT",
-        "SHADOW_OUTCOME",
-    }
-    assert not forbidden.intersection(item.object_kind for item in transition.emitted)
-    objects = _written_objects(tmp_path, bindings=bindings)
-    kinds = [value["object_kind"] for value in objects.values()]
-    assert kinds.count("CLOSE_QUOTE_EVALUATION") == 1
-    assert kinds.count("CLOSE_OPPORTUNITY_EVALUATION") == 1
-    assert "SHADOW_CLOSE_OPPORTUNITY" not in kinds
-    assert "SHADOW_COUNTERFACTUAL_EXIT" not in kinds
-    assert "SHADOW_OUTCOME" not in kinds
-
-
-@pytest.mark.parametrize(
-    (
-        "snapshot_kind",
-        "change_id",
-        "previous_change_id",
-        "subscription_generation",
-        "session_epoch",
-    ),
-    (
-        ("change", 13, 12, 1, 1),
-        ("snapshot", 1, None, 2, 1),
-        ("snapshot", 1, None, 1, 2),
-    ),
-)
-def test_owner_accepts_valid_subscription_after_post_close_rpc_error(
-    tmp_path: Path,
-    snapshot_kind: str,
-    change_id: int,
-    previous_change_id: int | None,
-    subscription_generation: int,
-    session_epoch: int,
-) -> None:
-    owner, _bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(4, 140),
-            change_id=12,
-            previous_change_id=11,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-    owner.note_request_failure(
-        request_id=42,
-        boundary=_boundary(5, 145),
-    )
-    boundary = replace(_boundary(6, 150), session_epoch=session_epoch)
-    witness = _position_subscription_witness(
-        boundary=boundary,
-        change_id=change_id,
-        previous_change_id=previous_change_id,
-        snapshot_kind=snapshot_kind,
-        subscription_generation=subscription_generation,
-    )
-    facts = _position_facts(
-        boundary=boundary,
-        change_id=13,
-        previous_change_id=12,
-    )
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            facts,
-            quote_source=SourceFact(witness.source_identity, boundary),
-            quote_refresh_witness=witness,
-            current_combo_subscription_witness=witness,
-        ),
-        allocate_request_id=lambda: 43,
-    )
-
-    assert {
-        "CLOSE_QUOTE_EVALUATION",
-        "SHADOW_CLOSE_OPPORTUNITY",
-        "SHADOW_COUNTERFACTUAL_EXIT",
-        "SHADOW_OUTCOME",
-    }.issubset(item.object_kind for item in transition.emitted)
-
-
-def test_owner_accepts_snapshot_after_not_requestable_first_close(
-    tmp_path: Path,
-) -> None:
-    owner, _bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    first_close = _quiet_position_facts(boundary=_boundary(4, 140))
-    first_close = replace(
-        first_close,
-        current_short_delta=Decimal("0.6"),
-        close_quote_facts=CloseQuoteFacts(
-            option_availability=CloseOptionAvailability.UNKNOWN,
-            atomic_availability=CloseAtomicAvailability.UNKNOWN,
-            component_reference=PredicateTruth.UNKNOWN,
-            book_availability=CloseBookAvailability.UNKNOWN,
-            consumed_levels=(),
-        ),
-        quote_source=None,
-        quote_refresh_witness=None,
-        current_combo_subscription_witness=None,
-    )
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=first_close,
-        allocate_request_id=lambda: 42,
-    )
-    boundary = _boundary(5, 150)
-    witness = _position_subscription_witness(
-        boundary=boundary,
-        change_id=1,
-        previous_change_id=None,
-        snapshot_kind="snapshot",
-        subscription_generation=2,
-    )
-    facts = _position_facts(
-        boundary=boundary,
-        change_id=13,
-        previous_change_id=12,
-    )
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            facts,
-            quote_source=SourceFact(witness.source_identity, boundary),
-            quote_refresh_witness=witness,
-            current_combo_subscription_witness=witness,
-        ),
-        allocate_request_id=lambda: 43,
-    )
-
-    assert {
-        "CLOSE_QUOTE_EVALUATION",
-        "SHADOW_CLOSE_OPPORTUNITY",
-        "SHADOW_COUNTERFACTUAL_EXIT",
-        "SHADOW_OUTCOME",
-    }.issubset(item.object_kind for item in transition.emitted)
-
-
-def test_owner_accepts_later_unbroken_subscription_after_unknown_opportunity(
-    tmp_path: Path,
-) -> None:
-    owner, _bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(4, 140),
-            change_id=12,
-            previous_change_id=11,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-    owner.note_request_failure(
-        request_id=42,
-        boundary=_boundary(5, 145),
-    )
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _position_facts(
-                boundary=_boundary(6, 150),
-                change_id=13,
-                previous_change_id=12,
-            ),
-            short_leg_taker_commission_fraction=None,
-        ),
-        allocate_request_id=lambda: 43,
-    )
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(7, 160),
-            change_id=14,
-            previous_change_id=13,
-        ),
-        allocate_request_id=lambda: 44,
-    )
-
-    assert {
-        "SHADOW_CLOSE_OPPORTUNITY",
-        "SHADOW_COUNTERFACTUAL_EXIT",
-        "SHADOW_OUTCOME",
-    }.issubset(item.object_kind for item in transition.emitted)
-
-
-def test_owner_advances_lineage_after_equal_business_new_generation_snapshot(
-    tmp_path: Path,
-) -> None:
-    owner, _bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(4, 140),
-            change_id=12,
-            previous_change_id=11,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-    owner.note_request_failure(
-        request_id=42,
-        boundary=_boundary(5, 145),
-    )
-    snapshot_boundary = _boundary(6, 150)
-    snapshot = _position_subscription_witness(
-        boundary=snapshot_boundary,
-        change_id=1,
-        previous_change_id=None,
-        snapshot_kind="snapshot",
-        subscription_generation=2,
-    )
-    snapshot_facts = _position_facts(
-        boundary=snapshot_boundary,
-        change_id=13,
-        previous_change_id=12,
-    )
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            snapshot_facts,
-            quote_source=SourceFact(snapshot.source_identity, snapshot_boundary),
-            quote_refresh_witness=snapshot,
-            current_combo_subscription_witness=snapshot,
-            short_leg_taker_commission_fraction=None,
-        ),
-        allocate_request_id=lambda: 43,
-    )
-    change_boundary = _boundary(7, 160)
-    change = _position_subscription_witness(
-        boundary=change_boundary,
-        change_id=2,
-        previous_change_id=1,
-        subscription_generation=2,
-    )
-    change_facts = _position_facts(
-        boundary=change_boundary,
-        change_id=14,
-        previous_change_id=13,
-    )
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            change_facts,
-            quote_source=SourceFact(change.source_identity, change_boundary),
-            quote_refresh_witness=change,
-            current_combo_subscription_witness=change,
-        ),
-        allocate_request_id=lambda: 44,
-    )
-
-    assert {
-        "SHADOW_CLOSE_OPPORTUNITY",
-        "SHADOW_COUNTERFACTUAL_EXIT",
-        "SHADOW_OUTCOME",
-    }.issubset(item.object_kind for item in transition.emitted)
-
-
-@pytest.mark.parametrize("state", ("inactive", "locked", "halted"))
-def test_position_option_discontinuity_states_are_hard_close(
-    tmp_path: Path,
-    state: str,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _quiet_position_facts(boundary=_boundary(4, 140)),
-            short_leg_state=state,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("PLATFORM_OR_SOURCE_DISCONTINUITY")] == "TRUE"
-    action_identity = next(
-        item.object_identity for item in transition.emitted if item.object_kind == "POSITION_ACTION"
-    )
-    action = _object(_written_objects(tmp_path, bindings=bindings)[action_identity]["payload"])
-    assert action["serialized_action"] == "CLOSE"
-    assert action["primary_close_reason"] == "PLATFORM_OR_SOURCE_DISCONTINUITY"
-
-
-def test_position_open_inactive_option_is_a_hard_discontinuity(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    facts = _quiet_position_facts(boundary=_boundary(4, 140))
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(facts, short_leg_active=False),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("PLATFORM_OR_SOURCE_DISCONTINUITY")] == "TRUE"
-
-
-def test_position_unrecognized_option_state_keeps_discontinuity_unknown(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _quiet_position_facts(boundary=_boundary(4, 140)),
-            short_leg_state="unexpected",
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("PLATFORM_OR_SOURCE_DISCONTINUITY")] == "UNKNOWN"
-
-
-@pytest.mark.parametrize(
-    "delta",
-    (
-        Decimal("2"),
-        Decimal("NaN"),
-        Decimal("Infinity"),
-        Decimal("-Infinity"),
-    ),
-)
-def test_position_invalid_delta_is_unknown_not_a_close_trigger(
-    tmp_path: Path,
-    delta: Decimal,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _quiet_position_facts(boundary=_boundary(4, 140)),
-            current_short_delta=delta,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("SHORT_LEG_RISK_BOUNDARY_REACHED")] == "UNKNOWN"
-
-
-@pytest.mark.parametrize(
-    "index",
-    (
-        Decimal("0"),
-        Decimal("-1"),
-        Decimal("NaN"),
-        Decimal("Infinity"),
-    ),
-)
-def test_position_invalid_index_is_unknown_for_risk_and_path(
-    tmp_path: Path,
-    index: Decimal,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _quiet_position_facts(boundary=_boundary(4, 140)),
-            current_index_usdc_per_btc=index,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("SHORT_LEG_RISK_BOUNDARY_REACHED")] == "UNKNOWN"
-    assert truths[POSITION_CLOSE_REASONS.index("PATH_OR_JUMP_RISK_BOUNDARY_REACHED")] == "UNKNOWN"
-
-
-@pytest.mark.parametrize(
-    "mark_iv",
-    (
-        Decimal("-0.1"),
-        Decimal("NaN"),
-        Decimal("Infinity"),
-    ),
-)
-def test_position_invalid_mark_iv_is_unknown(
-    tmp_path: Path,
-    mark_iv: Decimal,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _quiet_position_facts(boundary=_boundary(4, 140)),
-            current_short_mark_iv_fraction=mark_iv,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("VOLATILITY_STATE_BOUNDARY_REACHED")] == "UNKNOWN"
-
-
-def test_owner_quiet_current_combo_schedules_post_close_rpc_when_time_latches_close(
-    tmp_path: Path,
-) -> None:
-    owner, _bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    retained = _position_facts(
-        boundary=_boundary(4, 140),
-        change_id=12,
-        previous_change_id=11,
-    )
-    retained = replace(
-        retained,
-        close_quote_facts=replace(
-            retained.close_quote_facts,
-            consumed_levels=((Decimal("300"), Decimal("0.1")),),
-        ),
-    )
-    held = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=retained,
-        allocate_request_id=lambda: 42,
-    )
-    assert held.request_intents == ()
-
-    time_boundary = replace(
-        retained,
-        boundary=_boundary(5, 150),
-        trusted_time_lower_ms=8_200_000,
-        trusted_time_upper_ms=8_200_000,
-        quote_refresh_witness=None,
-    )
-    closed = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=time_boundary,
-        allocate_request_id=lambda: 42,
-    )
-
-    assert [item.object_kind for item in closed.emitted] == [
-        "POSITION_EVALUATION",
-        "POSITION_ACTION",
-        "POST_CLOSE_ATTEMPT_SCHEDULED",
-    ]
-    assert [intent.request_id for intent in closed.request_intents] == [42]
-
-
-def test_owner_post_close_request_failure_emits_attempt_owned_unknown_opportunity(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(4, 140),
-            change_id=12,
-            previous_change_id=11,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-    owner.note_request_sent(request_id=42, boundary=_boundary(5, 145))
-
-    failed = owner.note_request_failure(
-        request_id=42,
-        boundary=_boundary(6, 150),
-    )
-
-    assert [item.object_kind for item in failed.emitted] == [
-        "POST_CLOSE_ATTEMPT_TERMINAL",
-        "CLOSE_OPPORTUNITY_EVALUATION",
-    ]
-    objects = _written_objects(tmp_path, bindings=bindings)
-    opportunity = next(
-        value
-        for value in objects.values()
-        if value["object_kind"] == "CLOSE_OPPORTUNITY_EVALUATION"
-    )
-    payload = _object(opportunity["payload"])
-    assert payload["close_quote_evaluation_identity"] is None
-    assert payload["attempt_terminal_identity"] is not None
-    assert payload["attempt_terminal_fact_boundary"] == _boundary(6, 150).as_object()
-    assert payload["eligibility"] == "UNKNOWN"
-    assert payload["eligibility_reason"] == "QUOTE_OR_ATTEMPT_UNKNOWN"
-    assert payload["gross_cashflow_availability"] == "UNKNOWN"
-    assert payload["derived_economics_availability"] == "UNKNOWN"
-    assert payload["commission_source_refs"] == []
-    assert payload["index_source_ref"] is None
-
-
-def test_owner_reconnect_retirement_invalidates_pending_admission_as_source_gap(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    origin = _underwriting_facts(
-        boundary=_boundary(1, 110),
-        change_id=10,
-        previous_change_id=None,
-        snapshot_kind="snapshot",
-    )
-    activated = owner.settle_underwriting((origin,), allocate_request_id=lambda: 41)
-    assert any(item.object_kind == "CANDIDATE_ACTIVATION" for item in activated.emitted)
-    owner.note_request_sent(request_id=41, boundary=_boundary(2, 120))
-
-    retired = owner.note_request_failure(
-        request_id=41,
-        boundary=_boundary(3, 130),
-        terminal_status=PostCloseAttemptStatus.RETIRED,
-    )
-
-    assert [item.object_kind for item in retired.emitted] == [
-        "ADMISSION_ATTEMPT_TERMINAL",
-        "CANDIDATE_INVALIDATION",
-    ]
-    objects = _written_objects(tmp_path, bindings=bindings)
-    terminal = next(
-        _object(value["payload"])
-        for value in objects.values()
-        if value["object_kind"] == "ADMISSION_ATTEMPT_TERMINAL"
-    )
-    invalidation = next(
-        _object(value["payload"])
-        for value in objects.values()
-        if value["object_kind"] == "CANDIDATE_INVALIDATION"
-    )
-    assert terminal["terminal_outcome"] == "KNOWN_INVALIDATED_BEFORE_REFRESH"
-    assert invalidation["primary_reason"] == (
-        "SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN"
-    )
-
-
-def test_owner_episode_retirement_terminalizes_its_active_candidate(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    origin = _underwriting_facts(
-        boundary=_boundary(1, 110),
-        change_id=10,
-        previous_change_id=None,
-        snapshot_kind="snapshot",
-    )
-    activated = owner.settle_underwriting((origin,), allocate_request_id=lambda: 41)
-    assert any(item.object_kind == "CANDIDATE_ACTIVATION" for item in activated.emitted)
-    episode_identity = origin.active_episode_identity
-    assert episode_identity is not None
-
-    retired = owner.retire_radar_episode(
-        episode_identity,
-        boundary=_boundary(2, 120),
-    )
-
-    assert [item.object_kind for item in retired.emitted] == [
-        "ADMISSION_ATTEMPT_TERMINAL",
-        "CANDIDATE_INVALIDATION",
-    ]
-    assert owner.retained_state_counts["active_candidates"] == 0
-    objects = _written_objects(tmp_path, bindings=bindings)
-    terminal = next(
-        _object(value["payload"])
-        for value in objects.values()
-        if value["object_kind"] == "ADMISSION_ATTEMPT_TERMINAL"
-    )
-    invalidation = next(
-        _object(value["payload"])
-        for value in objects.values()
-        if value["object_kind"] == "CANDIDATE_INVALIDATION"
-    )
-    assert terminal["terminal_outcome"] == "KNOWN_INVALIDATED_BEFORE_REFRESH"
-    assert invalidation["primary_reason"] == ("RADAR_POLICY_OR_EPISODE_PAUSED_ENDED_OR_CHANGED")
-
-
-def test_owner_close_opportunity_deduplicates_receipts_but_reacts_to_consumed_facts(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=_position_facts(
-            boundary=_boundary(4, 140),
-            change_id=12,
-            previous_change_id=11,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    commission_unknown = replace(
-        _position_facts(
-            boundary=_boundary(5, 150),
-            change_id=13,
-            previous_change_id=12,
-        ),
-        short_leg_taker_commission_fraction=None,
-    )
-    first = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=commission_unknown,
-        allocate_request_id=lambda: 43,
-    )
-    assert [item.object_kind for item in first.emitted] == [
-        "POSITION_EVALUATION",
-        "POSITION_ACTION",
-        "CLOSE_QUOTE_EVALUATION",
-        "POST_CLOSE_ATTEMPT_TERMINAL",
-        "CLOSE_OPPORTUNITY_EVALUATION",
-    ]
-
-    repeated = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _position_facts(
-                boundary=_boundary(6, 160),
-                change_id=14,
-                previous_change_id=13,
-            ),
-            short_leg_taker_commission_fraction=None,
-        ),
-        allocate_request_id=lambda: 44,
-    )
-    assert repeated.emitted == ()
-
-    above_policy = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _position_facts(
-                boundary=_boundary(7, 170),
-                change_id=15,
-                previous_change_id=14,
-            ),
-            short_leg_taker_commission_fraction=Decimal("0.0004"),
-        ),
-        allocate_request_id=lambda: 45,
-    )
-    assert [item.object_kind for item in above_policy.emitted] == [
-        "POSITION_EVALUATION",
-        "POSITION_ACTION",
-        "CLOSE_OPPORTUNITY_EVALUATION",
-    ]
-    objects = _written_objects(tmp_path, bindings=bindings)
-    opportunities = [
-        _object(value["payload"])
-        for value in objects.values()
-        if value["object_kind"] == "CLOSE_OPPORTUNITY_EVALUATION"
-    ]
-    assert {payload["eligibility_reason"] for payload in opportunities} == {
-        "COMMISSION_UNKNOWN",
-        "COMMISSION_ABOVE_POLICY",
-    }
-
-
-def test_owner_position_fingerprint_reacts_when_fee_economics_become_known(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    unknown_fee = replace(
-        _position_facts(
-            boundary=_boundary(4, 140),
-            change_id=12,
-            previous_change_id=11,
-        ),
-        short_leg_taker_commission_fraction=None,
-        long_leg_taker_commission_fraction=None,
-        short_commission_source=None,
-        long_commission_source=None,
-    )
-    first = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=unknown_fee,
-        allocate_request_id=lambda: 42,
-    )
-    first_action_identity = next(
-        item.object_identity for item in first.emitted if item.object_kind == "POSITION_ACTION"
-    )
-    first_objects = _written_objects(tmp_path, bindings=bindings)
-    assert (
-        _object(first_objects[first_action_identity]["payload"])["serialized_action"] == "UNKNOWN"
-    )
-
-    known_fee = _position_facts(
-        boundary=_boundary(5, 150),
-        change_id=13,
-        previous_change_id=12,
-    )
-    second = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=known_fee,
-        allocate_request_id=lambda: 42,
-    )
-
-    assert [item.object_kind for item in second.emitted[:3]] == [
-        "POSITION_EVALUATION",
-        "POSITION_ACTION",
-        "POST_CLOSE_ATTEMPT_SCHEDULED",
-    ]
-    second_action_identity = next(
-        item.object_identity for item in second.emitted if item.object_kind == "POSITION_ACTION"
-    )
-    second_objects = _written_objects(tmp_path, bindings=bindings)
-    assert (
-        _object(second_objects[second_action_identity]["payload"])["serialized_action"] == "CLOSE"
-    )
-
-
-def test_position_source_less_index_is_unknown_and_does_not_advance_anchor(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    first = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _quiet_position_facts(boundary=_boundary(4, 140)),
-            current_index_usdc_per_btc=Decimal("100500"),
-            index_source=None,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, first)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("SHORT_LEG_RISK_BOUNDARY_REACHED")] == "UNKNOWN"
-    assert truths[POSITION_CLOSE_REASONS.index("PATH_OR_JUMP_RISK_BOUNDARY_REACHED")] == "UNKNOWN"
-    assert payload["current_index_usdc_per_btc"] is None
-    assert payload["current_index_source_identity"] is None
-    assert payload["current_index_fact_boundary"] is None
-    assert payload["current_index_availability"] == "UNKNOWN"
-    assert payload["next_evaluation_index_usdc_per_btc"] == "100000"
-
-    second = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _quiet_position_facts(
-                boundary=_boundary(5, 150),
-                change_id=13,
-                previous_change_id=12,
-            ),
-            current_index_usdc_per_btc=Decimal("101000"),
-        ),
-        allocate_request_id=lambda: 43,
-    )
-    second_payload = _position_evaluation_payload(tmp_path, bindings, second)
-    second_truths = cast(list[str], second_payload["ordered_predicate_truth_vector"])
-    assert second_payload["prior_evaluation_index_usdc_per_btc"] == "100000"
-    assert (
-        second_truths[POSITION_CLOSE_REASONS.index("PATH_OR_JUMP_RISK_BOUNDARY_REACHED")] == "TRUE"
-    )
-
-
-def test_position_source_less_ticker_cannot_trigger_risk_or_volatility_close(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _quiet_position_facts(boundary=_boundary(4, 140)),
-            current_short_delta=Decimal("0.9"),
-            current_short_mark_iv_fraction=Decimal("0.9"),
-            ticker_source=None,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("SHORT_LEG_RISK_BOUNDARY_REACHED")] == "UNKNOWN"
-    assert truths[POSITION_CLOSE_REASONS.index("VOLATILITY_STATE_BOUNDARY_REACHED")] == "UNKNOWN"
-
-
-def test_position_source_less_atomic_quote_has_no_quote_economics(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _position_facts(
-                boundary=_boundary(4, 140),
-                change_id=12,
-                previous_change_id=11,
-            ),
-            quote_source=None,
-            quote_refresh_witness=None,
-            current_combo_subscription_witness=None,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("LIQUIDITY_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
-    assert truths[POSITION_CLOSE_REASONS.index("ECONOMIC_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
-    objects = _written_objects(tmp_path, bindings=bindings)
-    assert all(value["object_kind"] != "CLOSE_QUOTE_EVALUATION" for value in objects.values())
-
-
-@pytest.mark.parametrize(
-    "fault",
-    (
-        "SOURCE_IDENTITY",
-        "SOURCE_BOUNDARY",
-        "CANONICAL_COMBO",
-        "INSTRUMENT",
-        "LINEAGE",
-    ),
-)
-def test_preclose_atomic_quote_requires_exact_source_witness_and_lineage(
-    tmp_path: Path,
-    fault: str,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    facts = _position_facts(
-        boundary=_boundary(4, 140),
-        change_id=12,
-        previous_change_id=11,
-    )
-    witness = facts.current_combo_subscription_witness
-    assert witness is not None
-    quote_source = facts.quote_source
-    refresh_witness = facts.quote_refresh_witness
-    if fault == "SOURCE_IDENTITY":
-        quote_source = SourceFact(canonical_identity("WrongQuoteSource"), witness.boundary)
-        refresh_witness = None
-    elif fault == "SOURCE_BOUNDARY":
-        quote_source = SourceFact(witness.source_identity, _boundary(3, 130))
-        refresh_witness = None
-    elif fault == "CANONICAL_COMBO":
-        witness = _position_subscription_witness(
-            boundary=facts.boundary,
-            change_id=12,
-            previous_change_id=11,
-            canonical_combo_identity=canonical_identity("WrongCombo"),
-        )
-        quote_source = SourceFact(witness.source_identity, witness.boundary)
-        refresh_witness = witness
-    elif fault == "INSTRUMENT":
-        witness = _position_subscription_witness(
-            boundary=facts.boundary,
-            change_id=12,
-            previous_change_id=11,
-            instrument_name="WRONG-COMBO",
-        )
-        quote_source = SourceFact(witness.source_identity, witness.boundary)
-        refresh_witness = witness
-    elif fault == "LINEAGE":
-        witness = _position_subscription_witness(
-            boundary=facts.boundary,
-            change_id=12,
-            previous_change_id=999,
-        )
-        quote_source = SourceFact(witness.source_identity, witness.boundary)
-        refresh_witness = witness
-    else:
-        raise AssertionError(f"unhandled fault: {fault}")
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            facts,
-            quote_source=quote_source,
-            quote_refresh_witness=refresh_witness,
-            current_combo_subscription_witness=witness,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("LIQUIDITY_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
-    assert truths[POSITION_CLOSE_REASONS.index("ECONOMIC_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
-    objects = _written_objects(tmp_path, bindings=bindings)
-    assert all(value["object_kind"] != "CLOSE_QUOTE_EVALUATION" for value in objects.values())
-
-
-@pytest.mark.parametrize(
-    ("hard_close_kind", "expected_reason"),
-    (
-        (
-            "SETTLEMENT",
-            "SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED",
-        ),
-        (
-            "LATEST_EXIT",
-            "LATEST_EXIT_BOUNDARY_REACHED",
-        ),
-    ),
-)
-def test_invalid_quote_lineage_does_not_mask_hard_close(
-    tmp_path: Path,
-    hard_close_kind: str,
-    expected_reason: str,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    facts = _position_facts(
-        boundary=_boundary(4, 140),
-        change_id=12,
-        previous_change_id=11,
-    )
-    invalid_witness = _position_subscription_witness(
-        boundary=facts.boundary,
-        change_id=12,
-        previous_change_id=999,
-    )
-    facts = replace(
-        facts,
-        quote_source=SourceFact(
-            invalid_witness.source_identity,
-            invalid_witness.boundary,
-        ),
-        quote_refresh_witness=invalid_witness,
-        current_combo_subscription_witness=invalid_witness,
-    )
-    if hard_close_kind == "SETTLEMENT":
-        facts = replace(facts, short_leg_state="settlement")
-    elif hard_close_kind == "LATEST_EXIT":
-        facts = replace(
-            facts,
-            trusted_time_lower_ms=8_200_000,
-            trusted_time_upper_ms=8_200_001,
-        )
-    else:
-        raise AssertionError(f"unhandled hard close kind: {hard_close_kind}")
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=facts,
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("LIQUIDITY_EXIT_BOUNDARY_REACHED")] == "UNKNOWN"
-    objects = _written_objects(tmp_path, bindings=bindings)
-    action = next(
-        _object(value["payload"])
-        for value in objects.values()
-        if value["object_kind"] == "POSITION_ACTION"
-    )
-    assert action["serialized_action"] == "CLOSE"
-    assert action["primary_close_reason"] == expected_reason
-    assert transition.request_intents == ()
-    assert all(value["object_kind"] != "CLOSE_QUOTE_EVALUATION" for value in objects.values())
-
-
-def test_known_position_source_loss_closes_and_still_schedules_quote_rpc(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    facts = _position_facts(
-        boundary=_boundary(4, 140),
-        change_id=12,
-        previous_change_id=11,
-    )
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            facts,
-            required_sources_continuous=False,
-            current_index_usdc_per_btc=None,
-            current_short_delta=None,
-            current_short_mark_iv_fraction=None,
-            index_source=None,
-            ticker_source=None,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("PLATFORM_OR_SOURCE_DISCONTINUITY")] == "TRUE"
-    objects = _written_objects(tmp_path, bindings=bindings)
-    action = next(
-        _object(value["payload"])
-        for value in objects.values()
-        if value["object_kind"] == "POSITION_ACTION"
-    )
-    assert action["serialized_action"] == "CLOSE"
-    assert action["primary_close_reason"] == "PLATFORM_OR_SOURCE_DISCONTINUITY"
-    assert len(transition.request_intents) == 1
-
-
-def test_exact_expiry_has_only_settlement_primary_and_latest_exit_secondary(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    facts = _position_facts(
-        boundary=_boundary(4, 140),
-        change_id=12,
-        previous_change_id=11,
-    )
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            facts,
-            trusted_time_lower_ms=10_000_000,
-            trusted_time_upper_ms=10_000_001,
-            required_sources_continuous=True,
-            close_quote_facts=replace(
-                facts.close_quote_facts,
-                atomic_availability=CloseAtomicAvailability.UNKNOWN,
-                book_availability=CloseBookAvailability.UNKNOWN,
-                consumed_levels=(),
-            ),
-            quote_source=None,
-            quote_refresh_witness=None,
-            current_combo_subscription_witness=None,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    objects = _written_objects(tmp_path, bindings=bindings)
-    action = next(
-        _object(value["payload"])
-        for value in objects.values()
-        if value["object_kind"] == "POSITION_ACTION"
-    )
-    assert action["primary_close_reason"] == "SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED"
-    assert action["secondary_close_reasons"] == ["LATEST_EXIT_BOUNDARY_REACHED"]
-    assert transition.request_intents == ()
-
-
-def test_admitted_position_evaluation_persists_complete_index_source_graph(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    facts = _quiet_position_facts(boundary=_boundary(4, 140))
-    assert facts.index_source is not None
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=facts,
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    assert payload["entry_index_usdc_per_btc"] == "100000"
-    assert payload["entry_index_source_identity"] == "sha256:" + "a" * 64
-    assert payload["entry_index_fact_boundary"] == _boundary(3, 130).as_object()
-    assert payload["entry_short_leg_mark_iv_fraction"] == "0.5"
-    assert payload["entry_short_leg_mark_iv_source_identity"] == "sha256:" + "b" * 64
-    assert payload["entry_short_leg_mark_iv_fact_boundary"] == _boundary(3, 130).as_object()
-    assert payload["prior_evaluation_index_usdc_per_btc"] == "100000"
-    assert payload["prior_evaluation_index_source_identity"] == "sha256:" + "a" * 64
-    assert payload["prior_evaluation_index_fact_boundary"] == _boundary(3, 130).as_object()
-    assert payload["current_index_usdc_per_btc"] == "100000"
-    assert payload["current_index_source_identity"] == facts.index_source.source_identity
-    assert payload["current_index_fact_boundary"] == facts.index_source.boundary.as_object()
-    assert payload["current_index_availability"] == "KNOWN"
-    assert payload["next_evaluation_index_usdc_per_btc"] == "100000"
-
-
-def test_known_above_policy_position_fee_is_hard_discontinuity(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _quiet_position_facts(boundary=_boundary(4, 140)),
-            short_leg_taker_commission_fraction=Decimal("0.0004"),
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    discontinuity_index = POSITION_CLOSE_REASONS.index("PLATFORM_OR_SOURCE_DISCONTINUITY")
-    assert truths[discontinuity_index] == "TRUE"
-    action = next(
-        _object(value["payload"])
-        for value in _written_objects(tmp_path, bindings=bindings).values()
-        if value["object_kind"] == "POSITION_ACTION"
-    )
-    assert action["serialized_action"] == "CLOSE"
-    assert action["primary_close_reason"] == "PLATFORM_OR_SOURCE_DISCONTINUITY"
-
-
-def test_initial_missing_position_fee_remains_unknown_not_hard_discontinuity(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=replace(
-            _quiet_position_facts(boundary=_boundary(4, 140)),
-            short_leg_taker_commission_fraction=None,
-            short_commission_source=None,
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("PLATFORM_OR_SOURCE_DISCONTINUITY")] == "UNKNOWN"
-    action = next(
-        _object(value["payload"])
-        for value in _written_objects(tmp_path, bindings=bindings).values()
-        if value["object_kind"] == "POSITION_ACTION"
-    )
-    assert action["serialized_action"] == "UNKNOWN"
-
-
-def test_first_match_quote_fields_do_not_manufacture_new_business_objects(
-    tmp_path: Path,
-) -> None:
-    owner, _bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    first = _position_facts(
-        boundary=_boundary(4, 140),
-        change_id=12,
-        previous_change_id=11,
-    )
-    first = replace(
-        first,
-        close_quote_facts=replace(
-            first.close_quote_facts,
-            option_availability=CloseOptionAvailability.UNKNOWN,
-        ),
-    )
-    owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=first,
-        allocate_request_id=lambda: 42,
-    )
-    second = _position_facts(
-        boundary=_boundary(5, 150),
-        change_id=13,
-        previous_change_id=12,
-    )
-    second = replace(
-        second,
-        close_quote_facts=replace(
-            second.close_quote_facts,
-            option_availability=CloseOptionAvailability.UNKNOWN,
-            component_reference=PredicateTruth.TRUE,
-            consumed_levels=((Decimal("75"), Decimal("0.1")),),
-        ),
-    )
-
-    repeated = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=second,
-        allocate_request_id=lambda: 43,
-    )
-
-    assert repeated.emitted == ()
-    assert repeated.request_intents == ()
-
-
-def test_negative_signed_close_level_preserves_atomic_quote_and_credit(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    facts = _position_facts(
-        boundary=_boundary(4, 140),
-        change_id=12,
-        previous_change_id=11,
-    )
-    facts = replace(
-        facts,
-        close_quote_facts=replace(
-            facts.close_quote_facts,
-            consumed_levels=((Decimal("-1"), Decimal("0.1")),),
-        ),
-    )
-
-    transition = owner.settle_position(
-        anchor_identity=entry_identity,
-        facts=facts,
-        allocate_request_id=lambda: 42,
-    )
-
-    payload = _position_evaluation_payload(tmp_path, bindings, transition)
-    truths = cast(list[str], payload["ordered_predicate_truth_vector"])
-    assert truths[POSITION_CLOSE_REASONS.index("LIQUIDITY_EXIT_BOUNDARY_REACHED")] == "FALSE"
-    quotes = [
-        _object(value["payload"])
-        for value in _written_objects(tmp_path, bindings=bindings).values()
-        if value["object_kind"] == "CLOSE_QUOTE_EVALUATION"
-    ]
-    assert len(quotes) == 1
-    assert quotes[0]["close_quote_state"] == "ATOMIC_COMBO_CLOSE_QUOTE"
-    assert quotes[0]["consumed_levels"] == [{"price_usdc_per_btc": "-1", "amount_btc": "0.1"}]
-    assert quotes[0]["gross_close_cashflow_usdc"] == "0.1"
-
-
-def test_watch_and_abstain_remain_current_state_without_automatic_counterfactual_cases(
-    tmp_path: Path,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    watch_facts = replace(
-        _underwriting_facts(
-            boundary=_boundary(1, 110),
-            change_id=10,
-            previous_change_id=None,
-            snapshot_kind="snapshot",
-        ),
-        entry_consumed_levels=((Decimal("150"), Decimal("0.1")),),
-    )
-
-    first = owner.settle_underwriting((watch_facts,), allocate_request_id=lambda: 41)
-    repeated = owner.settle_underwriting(
-        (
-            replace(
-                watch_facts,
-                boundary=_boundary(2, 120),
-                quote_source=SourceFact(
-                    cast(
-                        SubscriptionAdmissionRefreshWitness, watch_facts.quote_refresh_witness
-                    ).source_identity,
-                    _boundary(2, 120),
-                ),
-            ),
-        ),
-        allocate_request_id=lambda: 42,
-    )
-
-    emitted_kinds = {item.object_kind for item in (*first.emitted, *repeated.emitted)}
-    assert "UNDERWRITING_ACTION" in emitted_kinds
-    assert not any(kind.startswith("REJECTED_COUNTERFACTUAL") for kind in emitted_kinds)
-    assert "ALIGNED_POLICY_NO_TRADE_PAIR" not in emitted_kinds
-    objects = _written_objects(tmp_path, bindings=bindings)
-    assert not any(
-        str(value["object_kind"]).startswith("REJECTED_COUNTERFACTUAL")
-        for value in objects.values()
-    )
-
-
-def test_owner_invalidates_broken_subscription_chain_without_replacement_candidate(
-    tmp_path: Path,
-) -> None:
-    owner, _bindings = _owner(tmp_path)
-    origin = _underwriting_facts(
-        boundary=_boundary(1, 110),
-        change_id=10,
-        previous_change_id=None,
-        snapshot_kind="snapshot",
-    )
-    owner.settle_underwriting((origin,), allocate_request_id=lambda: 41)
-    broken = _underwriting_facts(
-        boundary=_boundary(2, 120),
-        change_id=12,
-        previous_change_id=9,
-        snapshot_kind="change",
-    )
-    transition = owner.settle_underwriting((broken,), allocate_request_id=lambda: 42)
-    assert [item.object_kind for item in transition.emitted] == [
-        "ADMISSION_ATTEMPT_TERMINAL",
-        "CANDIDATE_INVALIDATION",
-    ]
-    invalidation_identity = next(
-        item.object_identity
-        for item in transition.emitted
-        if item.object_kind == "CANDIDATE_INVALIDATION"
-    )
-    payload = _object(
-        _written_objects(tmp_path, bindings=_bindings)[invalidation_identity]["payload"]
-    )
-    assert payload["primary_reason"] == ("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN")
     assert not any(item.object_kind == "CANDIDATE_ACTIVATION" for item in transition.emitted)
-
-
-def test_owner_replaces_candidate_only_after_ordinary_economic_fingerprint_change(
-    tmp_path: Path,
-) -> None:
-    owner, _bindings = _owner(tmp_path)
-    origin = _underwriting_facts(
-        boundary=_boundary(1, 110),
-        change_id=10,
-        previous_change_id=None,
-        snapshot_kind="snapshot",
+    availability = next(
+        value
+        for value in _written_objects(tmp_path, bindings=bindings).values()
+        if value["object_kind"] == "UNDERWRITING_AVAILABILITY_EVALUATION"
     )
-    activated = owner.settle_underwriting((origin,), allocate_request_id=lambda: 41)
-    first_candidate = next(
-        item.object_identity
-        for item in activated.emitted
-        if item.object_kind == "CANDIDATE_ACTIVATION"
-    )
-    later_boundary = _boundary(2, 120)
-    changed = replace(
-        origin,
-        boundary=later_boundary,
-        index_usdc_per_btc=Decimal("101000"),
-        index_source=SourceFact("sha256:" + "c" * 64, later_boundary),
-    )
-    replacement = owner.settle_underwriting((changed,), allocate_request_id=lambda: 42)
-    assert [item.object_kind for item in replacement.emitted] == [
-        "ADMISSION_ATTEMPT_TERMINAL",
-        "CANDIDATE_INVALIDATION",
-        "UNDERWRITING_ACTION",
-        "CANDIDATE_ACTIVATION",
-        "ADMISSION_ATTEMPT_SCHEDULED",
-    ]
-    second_candidate = next(
-        item.object_identity
-        for item in replacement.emitted
-        if item.object_kind == "CANDIDATE_ACTIVATION"
-    )
-    assert second_candidate != first_candidate
-
-
-def test_owner_failure_does_not_settle_pending_admitted_observation(tmp_path: Path) -> None:
-    owner, bindings = _owner(tmp_path, close_enrollment=False)
-    _admit_owner(owner)
-    failure_boundary = _boundary(6, 150)
-    failure_identity = canonical_identity(
-        "PublicShadowRuntimeTerminalSourceIdentity",
-        bindings.runtime_identity,
-        "PROCESS_FAILURE",
-        failure_boundary.as_object(),
-    )
-
-    transition = owner.terminate(
-        boundary=failure_boundary,
-        terminal_source_identity=failure_identity,
-        terminal_source=TerminalSource.FAILURE,
-    )
-
-    objects = _written_objects(tmp_path, bindings=bindings)
-    assert not any(value["object_kind"] == "SHADOW_OUTCOME" for value in objects.values())
-    assert not any(item.object_kind == "SHADOW_OUTCOME" for item in transition.emitted)
-    assert len(owner.active_trade_identities) == 1
-
-
-@pytest.mark.parametrize(
-    ("terminal_source", "expected_state"),
-    (
-        (TerminalSource.STOP, "CENSORED_AT_STOP"),
-        (TerminalSource.FAILURE, "CENSORED_AT_FAILURE"),
-    ),
-)
-def test_owner_process_end_preserves_control_censor_outcome(
-    tmp_path: Path,
-    terminal_source: TerminalSource,
-    expected_state: str,
-) -> None:
-    owner, bindings = _owner(tmp_path)
-    entry_identity = _admit_owner(owner)
-    owner._trades[entry_identity].enrollment_kind = "SELECTED_UNDERWRITING_DECISION_CONTROL"
-    boundary = _boundary(6, 160)
-    source_identity = canonical_identity(
-        "PublicShadowRuntimeTerminalSourceIdentity",
-        bindings.runtime_identity,
-        terminal_source.value,
-        boundary.as_object(),
-    )
-
-    transition = owner.terminate(
-        boundary=boundary,
-        terminal_source_identity=source_identity,
-        terminal_source=terminal_source,
-    )
-
-    outcome = next(
-        item
-        for item in transition.emitted
-        if item.object_kind == "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME"
-    )
-    record = owner.state_store.get_object(outcome.object_kind, outcome.object_identity)
-    assert record is not None
-    payload = cast(Mapping[str, object], record["payload"])
-    assert payload["terminal_state"] == expected_state
-    assert payload["economic_availability"] == "UNKNOWN"
+    payload = cast(Mapping[str, object], availability["payload"])
+    assert payload["availability"] == "UNKNOWN"
+    assert payload["unknown_reasons"] == ["INVERSE_ATOMIC_ECONOMICS_UNSUPPORTED"]
 
 
 def test_owner_restores_entry_without_replaying_admission_and_skips_adoption_baseline(
@@ -3837,8 +1881,8 @@ def test_owner_restores_entry_without_replaying_admission_and_skips_adoption_bas
     )
 
     assert staged[0].required_option_instrument_names == (
-        "BTC_USDC-8AUG26-101000-C",
-        "BTC_USDC-8AUG26-102000-C",
+        "BTC-8AUG26-101000-C",
+        "BTC-8AUG26-102000-C",
     )
     assert staged[0].expiry_ms == 10_000_000
     assert owner.active_trade_identities == frozenset()
@@ -3956,9 +2000,9 @@ def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_p
     bindings = RuntimeBindings(
         code_identity="a" * 40,
         runtime_identity="sha256:" + "b" * 64,
-        radar_policy_identity=RADAR_POLICY_IDENTITY,
-        underwriting_policy_identity=UNDERWRITING_POLICY_IDENTITY,
-        position_policy_identity=POSITION_POLICY_IDENTITY,
+        radar_policy_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+        underwriting_policy_identity=INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
+        position_policy_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
     )
     writer = ShadowStateStore(bindings=bindings)
     _STATE_BY_DIRECTORY[tmp_path.resolve()] = writer
@@ -4033,39 +2077,6 @@ def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_p
     assert writer.revision == 2
     assert writer.objects is not first_snapshot
     assert attempt.scheduled_identity in _written_objects(tmp_path, bindings=bindings)
-
-
-def test_legacy_atomic_shadow_entry_cannot_open_a_component_book_case(tmp_path: Path) -> None:
-    policies = load_policy_chain(
-        radar_path=ROOT / "policies/short-vol-fixed-public-shadow-radar.json",
-        underwriting_path=ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json",
-        position_path=ROOT / "policies/short-vol-fixed-public-shadow-position.json",
-        radar_identity=RADAR_POLICY_IDENTITY,
-        underwriting_identity=UNDERWRITING_POLICY_IDENTITY,
-        position_identity=POSITION_POLICY_IDENTITY,
-    )
-    bindings = RuntimeBindings(
-        code_identity="a" * 40,
-        runtime_identity="sha256:" + "b" * 64,
-        radar_policy_identity=RADAR_POLICY_IDENTITY,
-        underwriting_policy_identity=UNDERWRITING_POLICY_IDENTITY,
-        position_policy_identity=POSITION_POLICY_IDENTITY,
-    )
-    cases = tmp_path / "cases"
-    cases.mkdir()
-    case_store = ShadowCaseStore(cases, bindings=bindings, policies=policies)
-    state_store = ShadowStateStore(bindings=bindings, observer=case_store)
-    owner = FixedContractShadowOwner(
-        policies=policies,
-        bindings=bindings,
-        state_store=state_store,
-    )
-
-    with pytest.raises(ShadowCaseStoreError, match="execution_model"):
-        _admit_owner(owner)
-
-    assert case_store.case_count == 0
-    assert list(cases.iterdir()) == []
 
 
 def test_close_quote_classifier_follows_the_frozen_first_match_order() -> None:
@@ -4166,64 +2177,27 @@ def test_first_match_ignores_malformed_levels_after_unexecutable_option() -> Non
     assert classify_close_quote(facts) is CloseQuoteState.UNEXECUTABLE
 
 
-def test_close_opportunity_preserves_unknown_and_only_full_quote_is_eligible() -> None:
-    unknown = evaluate_close_opportunity(
-        quote_state=CloseQuoteState.UNKNOWN,
-        full_quantity_btc=Decimal("0.1"),
-        consumed_levels=(),
-        close_direction="BUY",
-        short_leg_taker_commission_fraction=None,
-        long_leg_taker_commission_fraction=None,
-        fee_rate_index_fraction=Decimal("0.0003"),
-        close_index_usdc_per_btc=None,
-        net_entry_credit_usdc=Decimal("16.4"),
-        expected_product=LINEAR_BTC_USDC,
-        entry_product_spec_identity=None,
-        expected_short_leg_instrument_name=None,
-        expected_long_leg_instrument_name=None,
-        expected_width_usdc_per_btc=None,
-    )
-    assert unknown.eligibility is CloseOpportunityEligibility.UNKNOWN
-    assert unknown.economics is None
-
-    incompatible_fee = evaluate_close_opportunity(
+def test_inverse_atomic_close_opportunity_is_fail_closed() -> None:
+    opportunity = evaluate_close_opportunity(
         quote_state=CloseQuoteState.ATOMIC_COMBO_CLOSE_QUOTE,
         full_quantity_btc=Decimal("0.1"),
-        consumed_levels=((Decimal("50"), Decimal("0.1")),),
-        close_direction="BUY",
-        short_leg_taker_commission_fraction=Decimal("0.0004"),
-        long_leg_taker_commission_fraction=Decimal("0.0003"),
-        fee_rate_index_fraction=Decimal("0.0003"),
-        close_index_usdc_per_btc=Decimal("100000"),
-        net_entry_credit_usdc=Decimal("16.4"),
-        expected_product=LINEAR_BTC_USDC,
-        entry_product_spec_identity=None,
-        expected_short_leg_instrument_name=None,
-        expected_long_leg_instrument_name=None,
-        expected_width_usdc_per_btc=None,
-    )
-    assert incompatible_fee.eligibility is CloseOpportunityEligibility.INELIGIBLE
-    assert incompatible_fee.economics is None
-
-    eligible = evaluate_close_opportunity(
-        quote_state=CloseQuoteState.ATOMIC_COMBO_CLOSE_QUOTE,
-        full_quantity_btc=Decimal("0.1"),
-        consumed_levels=((Decimal("50"), Decimal("0.1")),),
+        consumed_levels=((Decimal("0.0005"), Decimal("0.1")),),
         close_direction="BUY",
         short_leg_taker_commission_fraction=Decimal("0.0003"),
         long_leg_taker_commission_fraction=Decimal("0.0003"),
         fee_rate_index_fraction=Decimal("0.0003"),
         close_index_usdc_per_btc=Decimal("100000"),
         net_entry_credit_usdc=Decimal("16.4"),
-        expected_product=LINEAR_BTC_USDC,
-        entry_product_spec_identity=None,
-        expected_short_leg_instrument_name=None,
-        expected_long_leg_instrument_name=None,
-        expected_width_usdc_per_btc=None,
+        expected_product=INVERSE_BTC,
+        entry_product_spec_identity=INVERSE_BTC.identity,
+        expected_short_leg_instrument_name="BTC-SHORT",
+        expected_long_leg_instrument_name="BTC-LONG",
+        expected_width_usdc_per_btc=Decimal("1000"),
     )
-    assert eligible.eligibility is CloseOpportunityEligibility.ELIGIBLE
-    assert eligible.economics is not None
-    assert eligible.economics.projected_shadow_net_pnl_usdc == Decimal("8.4")
+
+    assert opportunity.eligibility is CloseOpportunityEligibility.UNKNOWN
+    assert opportunity.eligibility_reason == "INVERSE_ATOMIC_ECONOMICS_UNSUPPORTED"
+    assert opportunity.economics is None
 
 
 def test_post_close_attempt_is_one_shot_and_barrier_owner_is_explicit() -> None:

@@ -526,7 +526,7 @@ def test_index_tail_treats_unstarted_bootstrap_as_warmup_not_continuity_gap() ->
 
 
 def test_exact_channels_bounded_subscriptions_and_acknowledgements() -> None:
-    assert INDEX_CHANNEL == "deribit_price_index.btc_usdc"
+    assert INDEX_CHANNEL == "deribit_price_index.btc_usd"
     assert ticker_channel("X") == "ticker.X.agg2"
     assert book_channel("X") == "book.X.agg2"
     assert subscription_batches(["a", "b", "a", "c"], maximum_size=2) == (
@@ -596,11 +596,11 @@ def test_platform_readiness_accepts_official_lock_notification_union() -> None:
     platform.apply_platform_notification({"price_index": "eth_usdc", "locked": True})
     assert platform.usable
 
-    platform.apply_platform_notification({"price_index": "btc_usdc", "locked": True})
+    platform.apply_platform_notification({"price_index": "btc_usd", "locked": True})
     assert not platform.usable
     assert platform.reason == "RELEVANT_PLATFORM_LOCK"
 
-    platform.apply_platform_notification({"price_index": "btc_usdc", "locked": False})
+    platform.apply_platform_notification({"price_index": "btc_usd", "locked": False})
     assert not platform.usable
     platform.apply_status({"locked": "false"})
     assert not platform.usable
@@ -611,7 +611,7 @@ def test_relevant_status_locks_and_public_method_denial_fail_closed() -> None:
     platform = PlatformReadiness()
     platform.acknowledge(("platform_state", "platform_state.public_methods_state"))
     platform.apply_status(
-        {"locked": "partial", "locked_indices": ["btc_usdc"], "locked_currencies": []}
+        {"locked": "partial", "locked_indices": ["btc_usd"], "locked_currencies": []}
     )
     assert not platform.status_usable
     platform.apply_public_methods_notification({"allow_unauthenticated_public_requests": False})

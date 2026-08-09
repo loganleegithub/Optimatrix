@@ -25,7 +25,12 @@ from short_vol_radar.radar import (
     parse_ticker,
 )
 
-TEST_PRICE_TICK = PriceTickMetadata(Decimal("0.00000001"))
+TEST_PRICE_TICK = PriceTickMetadata(Decimal("0.0000000001"))
+TEST_FORWARD = Decimal(100)
+
+
+def inverse_native_price(model_price: float) -> Decimal:
+    return Decimal(str(model_price)) / TEST_FORWARD
 
 
 def make_book(
@@ -66,7 +71,7 @@ def make_engine_inputs(
     target_iv = 0.5
     time_years = 60 / (365 * 24 * 60)
     total_volatility = target_iv * math.sqrt(time_years)
-    price = Decimal(str(black_price(100, float(strike), total_volatility, OptionType.CALL)))
+    price = inverse_native_price(black_price(100, float(strike), total_volatility, OptionType.CALL))
     instrument = OptionInstrument(
         "SHORT",
         expiry,
@@ -84,7 +89,7 @@ def make_engine_inputs(
 
 
 def test_ticker_forward_basis_must_match_the_option_expiry_future_or_index() -> None:
-    instrument_name = "BTC_USDC-27SEP24-110000-C"
+    instrument_name = "BTC-27SEP24-110000-C"
     common = {
         "instrument_name": instrument_name,
         "timestamp": 1,
@@ -99,18 +104,18 @@ def test_ticker_forward_basis_must_match_the_option_expiry_future_or_index() -> 
     )
     assert (
         parse_ticker(
-            {**common, "underlying_index": "BTC_USDC-27SEP24"}, instrument_name
+            {**common, "underlying_index": "BTC-27SEP24"}, instrument_name
         ).underlying_index
-        == "BTC_USDC-27SEP24"
+        == "BTC-27SEP24"
     )
 
-    for invalid_basis in ("BTC_USDC-26SEP24", "BTC-27SEP24", "garbage"):
+    for invalid_basis in ("BTC-26SEP24", "BTC_USDC-27SEP24", "garbage"):
         with pytest.raises(ValueError, match="forward basis"):
             parse_ticker({**common, "underlying_index": invalid_basis}, instrument_name)
 
 
 def test_ticker_preserves_official_signed_delta_and_normalizes_mark_iv() -> None:
-    instrument_name = "BTC_USDC-27SEP24-110000-C"
+    instrument_name = "BTC-27SEP24-110000-C"
     common = {
         "instrument_name": instrument_name,
         "timestamp": 1,
@@ -141,7 +146,7 @@ def test_ticker_preserves_official_signed_delta_and_normalizes_mark_iv() -> None
 def test_ticker_invalid_official_delta_is_unknown_without_hiding_valid_mark_iv(
     delta: object,
 ) -> None:
-    instrument_name = "BTC_USDC-27SEP24-110000-C"
+    instrument_name = "BTC-27SEP24-110000-C"
 
     ticker = parse_ticker(
         {
@@ -166,7 +171,7 @@ def test_ticker_invalid_official_delta_is_unknown_without_hiding_valid_mark_iv(
 def test_ticker_invalid_mark_iv_is_unknown_without_hiding_valid_delta(
     mark_iv: object,
 ) -> None:
-    instrument_name = "BTC_USDC-27SEP24-110000-C"
+    instrument_name = "BTC-27SEP24-110000-C"
 
     ticker = parse_ticker(
         {
@@ -195,7 +200,7 @@ def test_full_baseline_iv_delta_richness_path_can_activate(
         trusted_time=TimeInterval(0, 0),
         causal_seq=1,
         option_book=make_book("SHORT", price),
-        ticker=TickerState(Decimal(100), "BTC_USDC-27SEP24", 1),
+        ticker=TickerState(TEST_FORWARD, "BTC-27SEP24", 1),
         causal_closes=(Decimal(100),) * 6,
     )
     assert result.known_evaluation
@@ -217,8 +222,8 @@ def test_activation_boundary_span_is_one_unknown_and_next_fact_can_activate(
         expiration_timestamp_ms=trusted_midpoint_ms + 60 * 60 * 1_000,
     )
     total_volatility = 0.1199999 * math.sqrt(60 / (365 * 24 * 60))
-    boundary_price = Decimal(
-        str(black_price(100, float(instrument.strike), total_volatility, OptionType.CALL))
+    boundary_price = inverse_native_price(
+        black_price(100, float(instrument.strike), total_volatility, OptionType.CALL)
     )
 
     boundary = evaluate_instrument(
@@ -241,14 +246,12 @@ def test_activation_boundary_span_is_one_unknown_and_next_fact_can_activate(
     assert tracker.episode_id is None
 
     activation_total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
-    activation_price = Decimal(
-        str(
-            black_price(
-                100,
-                float(instrument.strike),
-                activation_total_volatility,
-                OptionType.CALL,
-            )
+    activation_price = inverse_native_price(
+        black_price(
+            100,
+            float(instrument.strike),
+            activation_total_volatility,
+            OptionType.CALL,
         )
     )
     recovered = evaluate_instrument(
@@ -295,8 +298,8 @@ def test_clear_boundary_span_ends_active_episode_as_unknown_not_clear() -> None:
         instrument_name=instrument.instrument_name,
     )
     activation_total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
-    activation_price = Decimal(
-        str(black_price(100, float(strike), activation_total_volatility, OptionType.CALL))
+    activation_price = inverse_native_price(
+        black_price(100, float(strike), activation_total_volatility, OptionType.CALL)
     )
     activated = evaluate_instrument(
         policy=policy,
@@ -311,8 +314,8 @@ def test_clear_boundary_span_ends_active_episode_as_unknown_not_clear() -> None:
     assert activated.detector_state is DetectorState.ANOMALY_ACTIVE
 
     clear_boundary_total_volatility = 0.1049999 * math.sqrt(60 / (365 * 24 * 60))
-    clear_boundary_price = Decimal(
-        str(black_price(100, float(strike), clear_boundary_total_volatility, OptionType.CALL))
+    clear_boundary_price = inverse_native_price(
+        black_price(100, float(strike), clear_boundary_total_volatility, OptionType.CALL)
     )
     unresolved = evaluate_instrument(
         policy=policy,
@@ -384,7 +387,7 @@ def test_activation_uses_one_tick_stressed_richness_not_raw_richness(
     strike = Decimal("100.01")
     raw_iv = 0.13
     total_volatility = raw_iv * math.sqrt(60 / (365 * 24 * 60))
-    price = Decimal(str(black_price(100, float(strike), total_volatility, OptionType.CALL)))
+    price = inverse_native_price(black_price(100, float(strike), total_volatility, OptionType.CALL))
     instrument = OptionInstrument(
         "SHORT",
         expiry,
@@ -423,7 +426,7 @@ def test_clock_only_recalculation_is_not_a_countable_persistence_observation(
     expiry = 60 * 60 * 1_000
     strike = Decimal("100.01")
     total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
-    price = Decimal(str(black_price(100, float(strike), total_volatility, OptionType.CALL)))
+    price = inverse_native_price(black_price(100, float(strike), total_volatility, OptionType.CALL))
     instrument = OptionInstrument(
         "SHORT",
         expiry,
@@ -657,7 +660,7 @@ def test_observation_identity_ignores_ask_and_depth_beyond_target(
         instrument=instrument,
         trusted_time=TimeInterval(0, 0),
         option_book=book,
-        ticker=TickerState(Decimal(100), "BTC_USDC-27SEP24", 2),
+        ticker=TickerState(Decimal(100), "BTC-27SEP24", 2),
         baseline_identity=baseline_identity,
     )
 
@@ -931,7 +934,7 @@ def test_near_atm_delta_is_review_only_and_cannot_activate_a_radar_clue() -> Non
     policy = load_policy_bytes(exact, digest)
     strike = Decimal("100.01")
     total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
-    price = Decimal(str(black_price(100, float(strike), total_volatility, OptionType.CALL)))
+    price = inverse_native_price(black_price(100, float(strike), total_volatility, OptionType.CALL))
     instrument = OptionInstrument(
         "SHORT",
         60 * 60 * 1_000,

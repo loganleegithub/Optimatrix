@@ -12,7 +12,6 @@ from options_domain import (
     OptionInstrument,
     OptionType,
     evaluate_component_book_vertical,
-    standard_option_fee_usdc,
 )
 
 from short_vol_radar.detector import DetectorState
@@ -937,5 +936,4 @@ __all__ = [
     "ReviewContext",
     "SurfaceContext",
     "build_review_contexts",
-    "standard_option_fee_usdc",
 ]

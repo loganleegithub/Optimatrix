@@ -291,8 +291,8 @@ def test_radar_sink_accepts_long_atomic_identity_without_filesystem_names(
 ) -> None:
     runtime_identity = "sha256:" + "0" * 64
     policy_identity = "sha256:" + "1" * 64
-    short_instrument_name = "BTC_USDC-2AUG26-63000-C"
-    combo_instrument_name = "BTC_USDC-CS-2AUG26-63000_64500"
+    short_instrument_name = "BTC-2AUG26-63000-C"
+    combo_instrument_name = "BTC-CS-2AUG26-63000_64500"
     episode_identity = f"{runtime_identity}:{policy_identity}:{short_instrument_name}:416138"
     source = atomic_evidence()
     event = project_atomic_event(
@@ -304,7 +304,7 @@ def test_radar_sink_accepts_long_atomic_identity_without_filesystem_names(
             short_instrument_name=short_instrument_name,
             combo_legs=(
                 (short_instrument_name, Decimal(-1)),
-                ("BTC_USDC-2AUG26-64500-C", Decimal(1)),
+                ("BTC-2AUG26-64500-C", Decimal(1)),
             ),
             quote=replace(
                 source.quote,
