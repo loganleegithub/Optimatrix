@@ -27,6 +27,13 @@ short_vol_radar = "packages/short_vol_radar/src/short_vol_radar"
 short_vol_underwriting = "packages/short_vol_underwriting/src/short_vol_underwriting"
 radar_runtime = "apps/radar_runtime/src/radar_runtime"
 
+[tool.setuptools.package-data]
+radar_runtime = [
+  "workbench_static/*.html",
+  "workbench_static/*.css",
+  "workbench_static/*.js",
+]
+
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-q"]
 testpaths = ["tests"]
