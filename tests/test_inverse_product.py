@@ -1832,11 +1832,12 @@ def test_workbench_browser_uses_product_owned_units() -> None:
     from radar_runtime.workbench import JS
 
     assert "documentValue.product" in JS
-    assert "const valuationUnit = product.valuation_currency" in JS
-    assert "const nativeUnit = product.native_premium_currency" in JS
+    assert "const valuationUnit = documentValue.product.valuation_currency" in JS
+    assert "const nativeUnit = documentValue.product.native_premium_currency" in JS
     assert "Public-quote PnL (USDC)" not in JS
     assert "模拟权利金 (USDC)" not in JS
     assert "Close debit (USDC)" not in JS
     assert "Shadow PnL (USDC)" not in JS
-    assert "Native net PnL (${nativeUnit})" in JS
+    assert "净信用\uff08${nativeUnit}\uff09" in JS
+    assert "净信用\uff08${valuationUnit}\uff09" in JS
     assert "_usdc" not in JS.lower()

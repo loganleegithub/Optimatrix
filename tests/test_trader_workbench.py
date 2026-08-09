@@ -12,6 +12,7 @@ from typing import cast
 
 import pytest
 import radar_runtime.workbench as workbench_module
+from options_domain import INVERSE_BTC
 from radar_runtime.runtime import (
     CausalCause,
     CausalCommit,
@@ -42,6 +43,9 @@ from short_vol_radar.atomic import PublicAtomicQuoteState
 from short_vol_radar.detector import DetectorState
 from short_vol_underwriting import FactBoundary as DownstreamFactBoundary
 from short_vol_underwriting.constants import (
+    INVERSE_BTC_POSITION_POLICY_IDENTITY,
+    INVERSE_BTC_RADAR_POLICY_IDENTITY,
+    INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
     POSITION_POLICY_IDENTITY,
     RADAR_POLICY_IDENTITY,
     UNDERWRITING_POLICY_IDENTITY,
@@ -1022,7 +1026,6 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "/api/workbench/current" in JS
     assert "WebSocket" not in combined
     assert "deribit.com" not in combined.lower()
-    assert "<button" not in HTML.lower()
     assert "<form" not in HTML.lower()
     assert "/private" not in combined
     assert "/policy" not in JS.lower()
@@ -1030,14 +1033,16 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "submit_order" not in JS.lower()
     assert "escapeHtml" in JS
     assert "&lt;" in JS and "&gt;" in JS and "&amp;" in JS
-    assert "safeText(rendered)" in JS
-    assert 'class="value ${' not in JS
+    assert "JSON.stringify(row, null, 2)" in JS
     assert 'id="connection"' in HTML
-    assert 'id="funnel"' in HTML
-    assert 'id="decision-control"' in HTML
+    assert 'id="runtime-status"' in HTML
+    assert 'id="runtime-state-label"' in HTML
+    assert 'id="runtime-blocker"' in HTML
+    assert 'id="channel-list"' in HTML
+    assert 'id="queue-body"' in HTML
+    assert 'id="detail-panel"' in HTML
     assert 'role="alert"' in HTML
     assert "function renderUnavailable" in JS
-    assert "businessPanelIds" in JS
     assert "lastSuccessfulFetchAtMs" in JS
     assert "lastPublicationRuntimeIdentity" in JS
     assert "lastPublicationChangeAtMs" in JS
@@ -1045,18 +1050,18 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "if (!response.ok) throw" in JS
     assert "renderUnavailable();" in JS
     assert "SUPPORTED_SCHEMA_VERSION = 5" in JS
-    assert ".table-scroll" in CSS
-    assert "overflow-x:auto" in CSS
-    assert 'class="system-details"' in JS
+    assert "runtimeStatusState" in JS
+    assert ".queue-table" in CSS
+    assert "overflow: auto" in CSS
+    assert "当前 API 未提供 Radar 与 Underwriting 共用的 Episode identity" in JS
 
 
 def test_browser_formats_business_states_and_orders_rows_without_recomputing() -> None:
     test_js = JS.replace(
-        "refresh();\nsetInterval(refresh, 2000);",
-        "globalThis.__workbenchTest = { radarCellValue, underwritingCellValue, "
-        "shadowCellValue, positionCellValue, outcomeCellValue, "
-        "orderedRadarRows, orderedUnderwritingRows, filterRows, "
-        "funnelStageLabel, funnelBlockerText, knownnessRatioText };",
+        "syncThemeControl();\nupdateResponsiveDetailState();\nrefresh();\nsetInterval(refresh, 2000);",
+        "globalThis.__workbenchTest = { structureState, radarState, orderedStructureRows, "
+        "orderedRadarRows, predicateMarginForFailure, formatMargin, formatDurationInterval, "
+        "reasonText, channelSnapshotState };",
     )
     assert test_js != JS
     harness = f"""
@@ -1066,112 +1071,60 @@ globalThis.setInterval = () => 1;
 eval({json.dumps(test_js)});
 const api = globalThis.__workbenchTest;
 
-assert.equal(api.radarCellValue({{
-  detector_state: 'UNKNOWN', known_evaluation: false
-}}, 'expiration_timestamp_ms', null), 'UNKNOWN');
-assert.equal(api.radarCellValue({{
-  detector_state: 'UNKNOWN', known_evaluation: false
-}}, 'executable_iv_interval', null), 'UNKNOWN');
-assert.equal(api.radarCellValue({{
-  detector_state: 'NO_ANOMALY', known_evaluation: true
-}}, 'executable_iv_interval', null), 'N/A');
-assert.equal(api.radarCellValue({{
-  detector_state: 'ANOMALY_ACTIVE', known_evaluation: true
-}}, 'executable_iv_interval', null), 'UNKNOWN');
-assert.equal(api.radarCellValue({{
-  detector_state: 'NO_ANOMALY', known_evaluation: true
-}}, 'active_episode_identity', null), 'N/A');
-assert.equal(api.radarCellValue({{
-  detector_state: 'UNKNOWN', known_evaluation: false
-}}, 'detector_reason', 'QUEUE_LAG_CURRENTNESS'),
-  '处理队列延迟, 行情时效性不可确认');
-assert.equal(api.radarCellValue({{
-  detector_state: 'ANOMALY_ACTIVE', known_evaluation: true
-}}, 'baseline_return_interval_minutes', 5), '5 分钟');
-assert.equal(api.radarCellValue({{
-  detector_state: 'ANOMALY_ACTIVE', known_evaluation: true,
-  baseline_source: 'OFFICIAL_INDEX_CHART_REALIZED_VARIANCE'
-}}, 'baseline_selected_lookback_minutes', 120), '120 分钟');
-assert.equal(api.radarCellValue({{
-  detector_state: 'ANOMALY_ACTIVE', known_evaluation: true,
-  baseline_source: 'ANNUALIZED_VARIANCE_FLOOR'
-}}, 'baseline_selected_lookback_minutes', null), '固定年化方差下限');
-
-assert.equal(api.underwritingCellValue({{
-  availability: 'NOT_EVALUATED', action: null
-}}, 'action', null), 'N/A');
-assert.equal(api.underwritingCellValue({{
-  availability: 'NOT_EVALUATED', gross_entry_credit_valuation: null
-}}, 'gross_entry_credit_valuation', null), 'N/A');
-assert.equal(api.underwritingCellValue({{
-  availability: 'UNKNOWN', action: null
-}}, 'availability', 'UNKNOWN'), 'UNKNOWN');
-assert.equal(api.underwritingCellValue({{
-  availability: 'UNKNOWN', action: null,
-  unknown_reasons: ['COMBO_QUOTE_RECEIPT_UNKNOWN']
-}}, 'decision_reason', 'UNDERWRITING_UNKNOWN:COMBO_QUOTE_RECEIPT_UNKNOWN'),
-  '组合报价回执不可确认');
-assert.equal(api.underwritingCellValue({{
-  availability: 'NOT_EVALUATED', action: null,
-  unknown_reasons: ['RADAR_EPISODE_NOT_ACTIVE']
-}}, 'decision_reason', 'UNDERWRITING_NOT_EVALUATED:RADAR_EPISODE_NOT_ACTIVE'),
-  '当前无活跃 Radar 候选, 承保尚未评估');
-assert.equal(api.underwritingCellValue({{
-  availability: 'NOT_EVALUATED', action: null,
-  unknown_reasons: ['NO_ACTIVE_COMBO']
-}}, 'decision_reason', 'UNDERWRITING_NOT_EVALUATED:NO_ACTIVE_COMBO'),
-  '无现成官方组合 - 仅诊断; 不阻塞双腿 Shadow');
-assert.equal(api.underwritingCellValue({{
-  availability: 'NOT_EVALUATED', action: null, unknown_reasons: []
-}}, 'decision_reason', 'UNDERWRITING_NOT_EVALUATED:NO_ADDITIONAL_REASON_PERSISTED'),
-  '已知前置条件未满足, 承保未评估');
-assert.equal(api.outcomeCellValue({{
-  state: 'MATURED'
-}}, 'actual_pnl', null), 'N/A — public Shadow 无订单、成交或实际持仓');
-assert.equal(api.shadowCellValue({{
-  shadow_entry_identity: null
-}}, 'simulated_entry_price_valuation_per_btc', null), 'N/A');
-assert.equal(api.positionCellValue({{}}, 'hard_close_countdown_interval_ms', {{
+assert.equal(api.formatDurationInterval({{
   lower_ms: 60000, upper_ms: 120000
-}}), '1.0 分钟 - 2.0 分钟');
-assert.equal(api.funnelStageLabel('COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE'),
-  '双腿盘口保守成交反事实');
-assert.equal(api.funnelBlockerText({{
-  NO_ACTIVE_COMBO: 2,
-  NO_TARGET_SIZE_CREDIT_QUOTE: 1
-}}), '无现成官方组合 - 仅诊断; 不阻塞双腿 Shadow: 2; ' +
-  '现成官方组合没有目标数量正信用报价 - 仅诊断: 1');
-assert.equal(api.knownnessRatioText({{
-  radar_known_over_applicable: {{numerator: 3, denominator: 4, ratio: '0.75'}}
-}}), '3/4 (75.00%)');
-assert.equal(api.knownnessRatioText({{
-  radar_known_over_applicable: {{numerator: 0, denominator: 0, ratio: null}}
-}}), '0/0 (UNKNOWN)');
+}}), '1.0 分钟 \u2013 2.0 分钟');
+assert.equal(api.reasonText('QUEUE_LAG_CURRENTNESS'), '处理队列延迟\uff0c行情时效性不可确认');
+assert.equal(api.reasonText('NO_ACTIVE_COMBO'), '无现成官方组合\uff1b不阻塞双腿 Shadow 模拟');
 
 const radar = api.orderedRadarRows([
-  {{instrument_name:'N', detector_state:'NO_ANOMALY', expiration_timestamp_ms:2, strike_price:'2'}},
-  {{instrument_name:'U', detector_state:'UNKNOWN', expiration_timestamp_ms:1, strike_price:'1'}},
-  {{instrument_name:'A', detector_state:'ANOMALY_ACTIVE', expiration_timestamp_ms:3, strike_price:'3'}}
+  {{instrument_name:'N', detector_state:'NO_ANOMALY', attention_rank:3}},
+  {{instrument_name:'U', detector_state:'UNKNOWN', attention_rank:2}},
+  {{instrument_name:'A', detector_state:'ANOMALY_ACTIVE', attention_rank:1}}
 ]);
 assert.deepEqual(radar.map(row => row.instrument_name), ['A', 'U', 'N']);
-assert.deepEqual(api.filterRows(radar, 'detector_state', 'UNKNOWN').map(row => row.instrument_name), ['U']);
+assert.equal(api.radarState(radar[0]).key, 'ANOMALY_ACTIVE');
 
-const underwriting = api.orderedUnderwritingRows([
-  {{radar_scope_or_short_leg_identity:'n', availability:'NOT_EVALUATED'}},
-  {{radar_scope_or_short_leg_identity:'u', availability:'UNKNOWN'}},
-  {{radar_scope_or_short_leg_identity:'a', availability:'EVALUABLE', action:'ABSTAIN'}},
-  {{radar_scope_or_short_leg_identity:'w', availability:'EVALUABLE', action:'WATCH'}},
-  {{radar_scope_or_short_leg_identity:'e', availability:'EVALUABLE', action:'CANDIDATE'}}
+const underwriting = api.orderedStructureRows([
+  {{short_leg_instrument_name:'n', availability:'NOT_EVALUATED'}},
+  {{short_leg_instrument_name:'u', availability:'UNKNOWN'}},
+  {{short_leg_instrument_name:'a', availability:'EVALUABLE', action:'ABSTAIN'}},
+  {{short_leg_instrument_name:'w', availability:'EVALUABLE', action:'WATCH'}},
+  {{short_leg_instrument_name:'e', availability:'EVALUABLE', action:'CANDIDATE'}},
+  {{short_leg_instrument_name:'s', candidate_lifecycle:'ADMITTED'}}
 ]);
 assert.deepEqual(
-  underwriting.map(row => row.radar_scope_or_short_leg_identity),
-  ['e', 'w', 'a', 'u', 'n']
+  underwriting.map(row => row.short_leg_instrument_name),
+  ['s', 'e', 'w', 'a', 'u', 'n']
 );
+
+const margin = api.predicateMarginForFailure({{
+  predicate_margin_vector: [{{
+    predicate:'CREDIT_ABOVE_FUTURE_COST_RESERVE', signed_margin:'-2.5',
+    unit:'USD_EQUIVALENT', passes:false
+  }}]
+}}, 'CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE');
+assert.equal(api.formatMargin(margin), '-2.5 USD 等值');
+
+const snapshot = {{
+  product: {{name:'inverse-btc', product_spec_identity:{json.dumps(INVERSE_BTC.identity)}}},
+  policy_identities: {{
+    radar:{json.dumps(INVERSE_BTC_RADAR_POLICY_IDENTITY)},
+    underwriting:{json.dumps(INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY)},
+    position:{json.dumps(INVERSE_BTC_POSITION_POLICY_IDENTITY)}
+  }},
+  service: {{ready:true, reason:'NONE'}},
+  system: {{data_delay_ms:1}}
+}};
+assert.equal(api.channelSnapshotState(snapshot).code, 'CONNECTED');
+assert.equal(api.channelSnapshotState({{...snapshot, product:{{...snapshot.product, name:'linear-btc-usdc'}}}}).code,
+  'IDENTITY_MISMATCH');
 """
     completed = subprocess.run(
-        ["node", "-e", harness],
+        ["node"],
         check=False,
         capture_output=True,
+        input=harness,
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
@@ -1179,85 +1132,153 @@ assert.deepEqual(
 
 def test_browser_keeps_formatted_exact_facts_in_collapsed_details() -> None:
     for exact_field in (
-        "executable IV exact",
-        "baseline return interval minutes",
-        "baseline selected lookback minutes",
-        "baseline source",
-        "baseline volatility exact",
-        "richness exact",
-        "short strike exact",
-        "long strike exact",
-        "target quantity exact",
-        "decision reason enum",
-        "evaluation fact boundary",
-        "public-quote PnL exact",
-        "actual PnL exact",
+        "native_net_entry_credit",
+        "net_entry_credit_valuation",
+        "future_cost_reserve_valuation",
+        "underwriting_reserved_loss_valuation",
+        "entry_boundary_valued_payoff_loss_ex_fees_valuation",
+        "predicate_margin_vector",
+        "positive_witness",
+        "primary_blocker",
+        "upgrade_condition",
+        "invalidation_condition",
     ):
         assert exact_field in JS
+    assert "data-evidence-details" in JS
+    assert 'class="evidence-raw"' in JS
 
 
 def test_browser_executes_fail_closed_and_recovery_paths() -> None:
-    document = initial_workbench_document(_bindings())
+    document = initial_workbench_document(_bindings(), product=INVERSE_BTC)
+    document["policy_identities"] = {
+        "radar": INVERSE_BTC_RADAR_POLICY_IDENTITY,
+        "underwriting": INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
+        "position": INVERSE_BTC_POSITION_POLICY_IDENTITY,
+    }
     document["publication_sequence"] = 1
     document["published_fact_boundary"] = {
         "causal_seq": 42,
         "received_monotonic_ms": 1_234,
     }
-    funnel = document["funnel"]
-    assert isinstance(funnel, dict)
-    funnel["radar_knownness"] = {
-        "warmup_gate": "PER_POLICY_TTE_BAND_INDEX_TAIL_AVAILABLE",
-        "startup_warmup": {
-            "phase": "STARTUP_WARMUP",
-            "applicable_market_scope_count": 2,
-            "radar_known_count": 0,
-            "radar_unknown_count": 2,
-            "radar_known_over_applicable": {
-                "numerator": 0,
-                "denominator": 2,
-                "ratio": "0",
-            },
-            "blocker_counts": {"INDEX_WARMUP": 2},
-        },
-        "post_warmup": {
-            "phase": "POST_WARMUP",
-            "applicable_market_scope_count": 4,
-            "radar_known_count": 3,
-            "radar_unknown_count": 1,
-            "radar_known_over_applicable": {
-                "numerator": 3,
-                "denominator": 4,
-                "ratio": "0.75",
-            },
-            "blocker_counts": {"OPTION_BOOK_UNKNOWN": 1},
-        },
-        "warmed_band_ids": ["operational-soak-30m-to-72h"],
+    document["service"] = {
+        "phase": "RUNNING",
+        "data_state": "CURRENT",
+        "health": True,
+        "ready": True,
+        "stale": False,
+        "reason": "NONE",
+        "recorded_monotonic_ms": 1_234,
     }
+    system = document["system"]
+    assert isinstance(system, dict)
+    system["latest_market_timestamp_ms"] = 1_700_000_000_000
+    system["data_delay_ms"] = 18
+    underwriting = document["underwriting"]
+    assert isinstance(underwriting, dict)
+    underwriting["rows"] = [
+        {
+            "underwriting_availability_evaluation_identity": "structure-current",
+            "underwriting_action_identity": "action-current",
+            "radar_scope_or_short_leg_identity": "scope-current",
+            "short_leg_instrument_name": "BTC-TEST-65000-P",
+            "long_leg_instrument_name": "BTC-TEST-62000-P",
+            "short_strike_price": "65000",
+            "long_strike_price": "62000",
+            "option_type": "put",
+            "expiry_timestamp_ms": 1_800_000_000_000,
+            "availability": "EVALUABLE",
+            "action": "WATCH",
+            "candidate_lifecycle": None,
+            "candidate_still_valid": False,
+            "candidate_identity": None,
+            "target_quantity_btc": "0.1",
+            "native_net_entry_credit": "0.001",
+            "net_entry_credit_valuation": "64.8",
+            "entry_valuation_index_price": "64800",
+            "future_cost_reserve_valuation": "80",
+            "underwriting_reserved_loss_valuation": "120",
+            "entry_boundary_valued_payoff_loss_ex_fees_valuation": "300",
+            "failed_predicates": ["CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE"],
+            "predicate_margin_vector": [
+                {
+                    "predicate": "CREDIT_ABOVE_FUTURE_COST_RESERVE",
+                    "signed_margin": "-15.2",
+                    "unit": "USD_EQUIVALENT",
+                    "passes": False,
+                }
+            ],
+        }
+    ]
+    radar = document["radar"]
+    assert isinstance(radar, dict)
+    radar["rows"] = [
+        {
+            "instrument_name": "BTC-TEST-65000-P",
+            "attention_rank": 1,
+            "detector_state": "ANOMALY_ACTIVE",
+            "detector_reason": "NONE",
+            "primary_blocker": "NONE_AT_RADAR_HARD_SCREEN",
+            "positive_witness": "TARGET_SIZE_TWO_SIDED_ONE_TICK_FORMULA_KNOWN",
+            "upgrade_condition": "OFFICIAL_ATOMIC_QUOTE_THEN_UNDERWRITING",
+            "invalidation_condition": "SOURCE_LOSS_OR_KNOWN_FORMULA_INELIGIBILITY",
+            "expiration_timestamp_ms": 1_800_000_000_000,
+            "strike_price": "65000",
+            "option_type": "put",
+            "tte_interval_ms": {"lower_ms": 3_600_000, "upper_ms": 3_600_000},
+            "delta_interval": {"lower": "-0.2", "upper": "-0.2"},
+            "executable_iv_interval": {"lower": "0.5", "upper": "0.5"},
+            "one_tick_stressed_iv_interval": {"lower": "0.49", "upper": "0.49"},
+            "baseline_annualized_volatility": "0.37",
+            "richness_ratio_interval": {"lower": "1.3", "upper": "1.3"},
+            "target_spread_ticks": "3",
+        }
+    ]
     restarted_document = json.loads(json.dumps(document))
     restarted_document["runtime_identity"] = "sha256:" + "f" * 64
+    restarted_newer_document = json.loads(json.dumps(restarted_document))
+    restarted_newer_document["publication_sequence"] = 2
+    restarted_underwriting = restarted_newer_document["underwriting"]
+    assert isinstance(restarted_underwriting, dict)
+    restarted_rows = restarted_underwriting["rows"]
+    assert isinstance(restarted_rows, list)
+    restarted_rows[0]["short_leg_instrument_name"] = "BTC-NEWER-65000-P"
+    retired_document = json.loads(json.dumps(document))
+    retired_document["publication_sequence"] = 2
     malformed_document = json.loads(json.dumps(document))
     malformed_document["runtime_identity"] = "sha256:" + "9" * 64
     malformed_document["publication_sequence"] = 9
     malformed_document["radar"] = None
 
     test_js = JS.replace(
-        "refresh();\nsetInterval(refresh, 2000);",
+        "syncThemeControl();\nupdateResponsiveDetailState();\nrefresh();\nsetInterval(refresh, 2000);",
         "globalThis.__workbenchRefresh = refresh;",
     )
     assert test_js != JS
     harness = f"""
 const assert = require('node:assert/strict');
-const panelIds = ['funnel', 'decision-control', 'zero', 'radar', 'underwriting', 'shadow', 'positions', 'outcomes'];
-const elementIds = ['connection', 'runtime', 'system', ...panelIds];
+const elementIds = [
+  'connection', 'as-of', 'runtime', 'channel-list', 'queue-context', 'queue-filters',
+  'queue-status', 'queue-head', 'queue-body', 'detail-title', 'detail-content',
+  'detail-panel', 'detail-scrim', 'shadow-jump', 'evidence-toggle', 'footer-summary',
+  'runtime-status', 'runtime-state-label', 'runtime-state-detail', 'service-phase',
+  'data-currentness', 'data-delay', 'runtime-blocker'
+];
 const elements = Object.fromEntries(elementIds.map(id => [id, {{
-  hidden: id === 'connection', textContent: '', innerHTML: ''
+  hidden: id === 'connection', textContent: '', innerHTML: '', scrollTop: 0,
+  dataset: {{}}, attributes: {{}},
+  setAttribute(name, value) {{ this.attributes[name] = String(value); }},
+  removeAttribute(name) {{ delete this.attributes[name]; }},
+  querySelector() {{ return null; }}
 }}]));
+const queueTable = {{scrollTop: 0}};
 globalThis.document = {{
-  body: {{dataset: {{}}}},
+  body: {{dataset: {{}}, classList: {{toggle() {{}}}}}},
   getElementById(id) {{
     assert.ok(elements[id], `unexpected element ${{id}}`);
     return elements[id];
-  }}
+  }},
+  querySelector(selector) {{ return selector === '.queue-table' ? queueTable : null; }},
+  querySelectorAll() {{ return []; }}
 }};
 globalThis.setInterval = () => 1;
 let nowMs = 0;
@@ -1266,6 +1287,7 @@ const fetchQueue = [];
 globalThis.fetch = async () => {{
   const item = fetchQueue.shift();
   assert.ok(item, 'unexpected fetch');
+  if (item.gate) await item.gate;
   if (item.kind === 'fetch-error') throw new Error('offline');
   if (item.kind === 'http-error') return {{ok: false, status: 503}};
   if (item.kind === 'json-error') return {{
@@ -1279,79 +1301,101 @@ const refreshAt = async (timestamp, item) => {{
   fetchQueue.push(item);
   await globalThis.__workbenchRefresh();
 }};
-const systemHas = (label, value) => elements.system.innerHTML.includes(
-  `<div class="label">${{label}}</div><div class="value">${{value}}</div>`
-);
-const assertUnavailable = (successfulFetchAge, publicationAge) => {{
+const assertUnavailable = () => {{
   assert.equal(document.body.dataset.workbenchState, 'UNKNOWN');
   assert.equal(elements.connection.hidden, false);
-  assert.equal(elements.runtime.textContent, 'runtime UNKNOWN');
-  assert.ok(systemHas('最近成功获取 age ms', successfulFetchAge));
-  assert.ok(systemHas('最后 publication sequence', 1));
-  assert.ok(systemHas('Publication 未变化 age ms', publicationAge));
-  for (const id of panelIds) {{
-    assert.match(elements[id].innerHTML, /旧业务数据已隐藏/);
-    assert.doesNotMatch(elements[id].innerHTML, /STALE SENTINEL/);
-  }}
+  assert.equal(elements['runtime-status'].dataset.state, 'unknown');
+  assert.equal(elements['runtime-state-label'].textContent, 'Runtime 状态未知');
+  assert.equal(elements.runtime.textContent, 'runtime —');
+  assert.match(elements['queue-body'].innerHTML, /旧业务数据已隐藏/);
+  assert.doesNotMatch(elements['queue-body'].innerHTML, /BTC-TEST-65000-P|STALE SENTINEL/);
+  assert.doesNotMatch(elements['detail-content'].innerHTML, /64\\.8|STALE SENTINEL/);
 }};
 const markStalePanels = () => {{
-  for (const id of panelIds) elements[id].innerHTML = 'STALE SENTINEL';
+  elements['queue-body'].innerHTML = 'STALE SENTINEL';
+  elements['detail-content'].innerHTML = 'STALE SENTINEL';
 }};
 
 (async () => {{
   await refreshAt(1000, {{kind: 'ok', value: {json.dumps(document)}}});
   assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
   assert.equal(elements.connection.hidden, true);
-  assert.ok(systemHas('Runtime identity', {json.dumps(document["runtime_identity"])}));
-  assert.match(elements.system.innerHTML, /Published fact boundary/);
-  assert.match(elements.system.innerHTML, /causal_seq/);
-  assert.match(elements.system.innerHTML, /received_monotonic_ms/);
-  assert.match(elements.funnel.innerHTML, /启动\\/恢复 warmup Radar known \\/ applicable/);
-  assert.match(elements.funnel.innerHTML, /指数基线处于启动或恢复 warmup: 2/);
-  assert.match(elements.funnel.innerHTML, /稳态 Radar known \\/ applicable/);
-  assert.match(elements.funnel.innerHTML, /3\\/4 \\(75.00%\\)/);
-  assert.match(elements.funnel.innerHTML, /期权簿不可确认: 1/);
-  assert.ok(systemHas('最近成功获取 age', '0 ms'));
-  assert.ok(systemHas('Publication 未变化 age', '0 ms'));
+  assert.equal(elements['runtime-status'].dataset.state, 'healthy');
+  assert.equal(elements['runtime-state-label'].textContent, 'Runtime 正常运行');
+  assert.match(elements['runtime-blocker'].textContent, /系统阻塞/);
+  assert.match(elements['channel-list'].innerHTML, /INVERSE_BTC_SHORT_VOL_V1/);
+  assert.match(elements['channel-list'].innerHTML, /INVERSE_ETH_LONG_GAMMA_V1/);
+  assert.match(elements['queue-body'].innerHTML, /BTC-TEST-65000-P/);
+  assert.match(elements['queue-body'].innerHTML, /继续观察/);
+  assert.match(elements['detail-content'].innerHTML, /64\\.8/);
+  assert.match(elements['detail-content'].innerHTML, /不是到期 BTC 负债/);
+
+  elements['queue-body'].innerHTML = 'UNCHANGED PUBLICATION SENTINEL';
+  await refreshAt(1500, {{kind: 'ok', value: {json.dumps(document)}}});
+  assert.equal(elements['queue-body'].innerHTML, 'UNCHANGED PUBLICATION SENTINEL');
 
   markStalePanels();
   await refreshAt(2000, {{kind: 'fetch-error'}});
-  assertUnavailable(1000, 1000);
+  assertUnavailable();
 
   await refreshAt(3000, {{kind: 'ok', value: {json.dumps(document)}}});
   assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
-  assert.ok(systemHas('最近成功获取 age', '0 ms'));
-  assert.ok(systemHas('Publication 未变化 age', '2.0 秒'));
+  assert.match(elements['queue-body'].innerHTML, /BTC-TEST-65000-P/);
 
   markStalePanels();
   await refreshAt(4000, {{kind: 'http-error'}});
-  assertUnavailable(1000, 3000);
+  assertUnavailable();
   markStalePanels();
   await refreshAt(5000, {{kind: 'json-error'}});
-  assertUnavailable(2000, 4000);
+  assertUnavailable();
   markStalePanels();
   await refreshAt(6000, {{kind: 'ok', value: {json.dumps(malformed_document)}}});
-  assertUnavailable(3000, 5000);
-  assert.ok(!systemHas('最后 publication sequence', 9));
+  assertUnavailable();
 
   await refreshAt(7000, {{kind: 'ok', value: {json.dumps(restarted_document)}}});
   assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
   assert.equal(elements.connection.hidden, true);
   assert.match(elements.runtime.textContent, /…f{{6}}$/);
-  assert.ok(systemHas('最近成功获取 age', '0 ms'));
-  assert.ok(systemHas('Publication 未变化 age', '0 ms'));
-  for (const id of panelIds) {{
-    assert.doesNotMatch(elements[id].innerHTML, /旧业务数据已隐藏|STALE SENTINEL/);
-  }}
+  assert.match(elements['queue-body'].innerHTML, /BTC-TEST-65000-P/);
+  assert.doesNotMatch(elements['queue-body'].innerHTML, /旧业务数据已隐藏|STALE SENTINEL/);
+
+  await refreshAt(7100, {{kind: 'ok', value: {json.dumps(retired_document)}}});
+  assertUnavailable();
+  await refreshAt(7200, {{kind: 'ok', value: {json.dumps(restarted_document)}}});
+  assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
+
+  let releaseOldResponse;
+  const oldResponseGate = new Promise(resolve => {{ releaseOldResponse = resolve; }});
+  fetchQueue.push({{kind: 'ok', value: {json.dumps(restarted_newer_document)}, gate: oldResponseGate}});
+  nowMs = 7300;
+  const oldRefresh = globalThis.__workbenchRefresh();
+  await Promise.resolve();
+  // Interval ticks are serialized while a slow request is pending; they cannot starve its response.
+  nowMs = 7400;
+  await globalThis.__workbenchRefresh();
+  await globalThis.__workbenchRefresh();
+  assert.equal(fetchQueue.length, 0);
+  releaseOldResponse();
+  await oldRefresh;
+  assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
+  assert.match(elements['queue-body'].innerHTML, /BTC-NEWER-65000-P/);
+  assert.doesNotMatch(elements['queue-body'].innerHTML, /旧业务数据已隐藏/);
+
+  await refreshAt(7500, {{kind: 'ok', value: {json.dumps(restarted_document)}}});
+  assertUnavailable();
+  await refreshAt(7600, {{kind: 'ok', value: {json.dumps(restarted_newer_document)}}});
+  assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
+  assert.match(elements['queue-body'].innerHTML, /BTC-NEWER-65000-P/);
 }})().catch(error => {{
   console.error(error.stack || error);
   process.exitCode = 1;
 }});
 """
     completed = subprocess.run(
-        ["node", "-e", harness],
+        ["node"],
         check=False,
         capture_output=True,
+        input=harness,
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
