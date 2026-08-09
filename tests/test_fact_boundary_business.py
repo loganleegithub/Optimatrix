@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 import radar_runtime.runtime as runtime_module
+import short_vol_radar.baseline as baseline_module
 from conftest import PolicyFactory, encode_policy, policy_document
 from market_monitor import (
     BaselinePublicationPhase,
@@ -48,6 +49,7 @@ from radar_runtime.runtime import (
     ScopeSnapshot,
 )
 from short_vol_radar.atomic import PublicAtomicQuoteState
+from short_vol_radar.baseline import BaselineStatistics
 from short_vol_radar.black import black_price
 from short_vol_radar.detector import (
     DetectorCoverage,
@@ -2645,6 +2647,7 @@ def test_source_currentness_settles_before_detector_on_every_boundary(
         option_book: ContinuousOrderBook | None,
         ticker: TickerState | None,
         causal_closes: tuple[Decimal, ...] | None,
+        baseline_statistics: BaselineStatistics | None = None,
         baseline_unavailable_reason: str = "INDEX_BASELINE_WARMUP",
         ticker_unavailable_reason: str = "FORWARD_TICKER_UNKNOWN",
         ticker_continuity_gap: bool = False,
@@ -2659,6 +2662,7 @@ def test_source_currentness_settles_before_detector_on_every_boundary(
             option_book=option_book,
             ticker=ticker,
             causal_closes=causal_closes,
+            baseline_statistics=baseline_statistics,
             baseline_unavailable_reason=baseline_unavailable_reason,
             ticker_unavailable_reason=ticker_unavailable_reason,
             ticker_continuity_gap=ticker_continuity_gap,
@@ -2962,6 +2966,128 @@ def test_high_fanout_local_fact_shares_one_history_tail_and_one_formula_call(
         )
         == known_before + 1
     )
+
+
+def test_full_scope_reuses_one_baseline_statistics_for_128_instruments(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    expiry = 1_000_000 + 60 * 60_000
+    instruments = tuple(make_option(f"OPTION-{index:03d}", expiry) for index in range(128))
+    total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
+    bid = Decimal(
+        str(
+            black_price(
+                100,
+                float(instruments[0].strike),
+                total_volatility,
+                instruments[0].option_type,
+            )
+        )
+    )
+    reducer.options = {item.instrument_name: item for item in instruments}
+    reducer.catalog_options = dict(reducer.options)
+    for instrument in instruments:
+        reducer.trackers[instrument.instrument_name] = EpisodeTracker(
+            runtime_identity="runtime",
+            policy_identity=reducer.policy.identity,
+            instrument_name=instrument.instrument_name,
+        )
+        reducer.option_books[instrument.instrument_name] = make_book(
+            instrument.instrument_name,
+            str(bid),
+        )
+        reducer.tickers[instrument.instrument_name] = TickerState(
+            Decimal(100),
+            "index_price",
+            1_000_000,
+        )
+
+    statistics_calls = 0
+    compute_statistics = baseline_module.compute_baseline_statistics
+
+    def count_statistics(**kwargs: object) -> BaselineStatistics:
+        nonlocal statistics_calls
+        statistics_calls += 1
+        return compute_statistics(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runtime_module, "compute_baseline_statistics", count_statistics)
+    reducer.settle_fact(
+        commit=fact_commit(FactBoundary(1, 1, 1_001, 1), CausalCause.TIME_BOUNDARY),
+        affected_instruments=tuple(reducer.options),
+        countable=False,
+    )
+
+    assert statistics_calls == 1
+    assert all(result.full_formula_evaluation for result in reducer.results.values())
+    assert len(reducer._baseline_statistics_by_spec) == 1
+
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 2, 1_002, 2),
+            CausalCause.OPTION_BOOK_CHANGED,
+            failure_domain=FailureScope.OPTION,
+            affected_scopes=(f"OPTION:{instruments[0].instrument_name}",),
+        ),
+        affected_instruments=(instruments[0].instrument_name,),
+        countable=False,
+    )
+
+    assert statistics_calls == 1
+
+
+def test_baseline_statistics_cache_replaces_tail_and_is_bounded_by_policy_specs(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    assert reducer.clock is not None
+    trusted = reducer.clock.interval_at(1_000)
+    tail = reducer.index_history.current_tail(
+        reducer.policy.largest_lookback_minutes,
+        trusted_time=trusted,
+        source_stale_deadline_ms=(
+            reducer.policy.runtime_limits.index_history_source_stale_deadline_ms
+        ),
+    )
+    statistics_calls = 0
+    compute_statistics = baseline_module.compute_baseline_statistics
+
+    def count_statistics(**kwargs: object) -> BaselineStatistics:
+        nonlocal statistics_calls
+        statistics_calls += 1
+        return compute_statistics(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runtime_module, "compute_baseline_statistics", count_statistics)
+    first_band, second_band = reducer.policy.tte_bands
+
+    for _ in range(128):
+        reducer._baseline_statistics_for(band=first_band, tail=tail)
+    assert statistics_calls == 1
+
+    for index in range(1, 51):
+        changed_tail = replace(
+            tail,
+            points=(
+                *tail.points[:-1],
+                replace(tail.points[-1], average_price=Decimal(100 + index)),
+            ),
+        )
+        reducer._baseline_statistics_for(band=first_band, tail=changed_tail)
+        reducer._baseline_statistics_for(band=second_band, tail=changed_tail)
+
+    assert statistics_calls == 101
+    assert len(reducer._baseline_statistics_by_spec) == 2
+
+    reducer.begin_session(session_epoch=2, monotonic_ms=2_000)
+    assert reducer._baseline_statistics_by_spec == {}
 
 
 def test_option_lifecycle_unknown_recomputes_aggregate_from_one_full_scope_snapshot(
@@ -3437,6 +3563,7 @@ def test_fact_transaction_preserves_trigger_and_concurrent_source_stale_attribut
 def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_restart(
     tmp_path: Path,
     policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     exact, digest = policy_factory()
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
@@ -3452,6 +3579,16 @@ def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_resta
     )
     count_before = counter.known_per_instrument_detector_evaluation_count
     acknowledge_channel(reducer, book_channel(instrument.instrument_name))
+    reducer._baseline_statistics_by_spec.clear()
+    statistics_calls = 0
+    compute_statistics = baseline_module.compute_baseline_statistics
+
+    def count_statistics(**kwargs: object) -> BaselineStatistics:
+        nonlocal statistics_calls
+        statistics_calls += 1
+        return compute_statistics(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runtime_module, "compute_baseline_statistics", count_statistics)
 
     delayed = subscription_frame(
         book_channel(instrument.instrument_name),
@@ -3479,6 +3616,7 @@ def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_resta
     assert reducer._coverage._current_affected_scopes == ("GLOBAL",)
     assert reducer._global_continuity_epoch == 1
     assert reducer.diagnostics.session_gap_count == 0
+    assert statistics_calls == 0
 
     catch_up = InboundEnvelope(
         {
@@ -3498,6 +3636,7 @@ def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_resta
     assert counter.known_per_instrument_detector_evaluation_count == count_before
     assert reducer._coverage._current_blocking_reason == "NONE"
     assert reducer._global_continuity_epoch == 1
+    assert statistics_calls == 1
 
     summary = reducer.clean_stop(2_200)
     coverage_segments = cast(list[dict[str, object]], summary["coverage_segments"])

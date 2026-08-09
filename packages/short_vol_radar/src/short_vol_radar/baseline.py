@@ -30,6 +30,16 @@ class WindowDiagnostics:
 
 
 @dataclass(frozen=True)
+class BaselineStatistics:
+    return_interval_minutes: int
+    window_variances: tuple[tuple[int, Decimal], ...]
+    selected_lookback_minutes: int | None
+    variance_rate_per_minute: Decimal
+    annualized_volatility: Decimal
+    window_diagnostics: tuple[WindowDiagnostics, ...] = ()
+
+
+@dataclass(frozen=True)
 class BaselineResult:
     return_interval_minutes: int
     window_variances: tuple[tuple[int, Decimal], ...]
@@ -56,6 +66,26 @@ def compute_baseline(
     remaining_life_minutes_low: Decimal,
     remaining_life_minutes_high: Decimal,
 ) -> BaselineResult:
+    statistics = compute_baseline_statistics(
+        sampled_prices=sampled_prices,
+        lookbacks=lookbacks,
+        return_interval_minutes=return_interval_minutes,
+        annualized_variance_floor=annualized_variance_floor,
+    )
+    return project_baseline(
+        statistics=statistics,
+        remaining_life_minutes_low=remaining_life_minutes_low,
+        remaining_life_minutes_high=remaining_life_minutes_high,
+    )
+
+
+def compute_baseline_statistics(
+    *,
+    sampled_prices: tuple[Decimal, ...],
+    lookbacks: tuple[int, ...],
+    return_interval_minutes: int,
+    annualized_variance_floor: Decimal,
+) -> BaselineStatistics:
     if not lookbacks:
         raise ValueError("lookbacks must be non-empty")
     if isinstance(return_interval_minutes, bool) or return_interval_minutes <= 0:
@@ -70,10 +100,7 @@ def compute_baseline(
         raise BaselineUnavailable("causal sampled-price history has not completed warm-up")
     if any(price <= 0 or not price.is_finite() for price in sampled_prices):
         raise BaselineUnavailable("sampled-price history contains an invalid price")
-    if not (
-        Decimal(0) < remaining_life_minutes_low <= remaining_life_minutes_high
-        and annualized_variance_floor > 0
-    ):
+    if not annualized_variance_floor > 0:
         raise BaselineUnavailable("remaining life or variance floor is invalid")
     try:
         with localcontext(DECIMAL_CONTEXT) as context:
@@ -137,17 +164,53 @@ def compute_baseline(
             else:
                 variance_rate = selected_rate
             annualized = context.sqrt(variance_rate * MINUTES_PER_YEAR)
-            total_low = variance_rate * remaining_life_minutes_low
-            total_high = variance_rate * remaining_life_minutes_high
-            result = BaselineResult(
+            statistics = BaselineStatistics(
                 return_interval_minutes=return_interval_minutes,
                 window_variances=windows,
                 selected_lookback_minutes=selected_lookback,
                 variance_rate_per_minute=+variance_rate,
                 annualized_volatility=+annualized,
-                total_variance_low=+total_low,
-                total_variance_high=+total_high,
                 window_diagnostics=tuple(diagnostics),
+            )
+    except (InvalidOperation, OverflowError) as exc:
+        raise BaselineUnavailable("baseline arithmetic was not finite") from exc
+    scalar_values = (
+        statistics.variance_rate_per_minute,
+        statistics.annualized_volatility,
+        *(
+            value
+            for member in statistics.window_diagnostics
+            for value in _diagnostic_decimals(member)
+        ),
+    )
+    if not all(value.is_finite() for value in scalar_values):
+        raise BaselineUnavailable("baseline arithmetic was not finite")
+    return statistics
+
+
+def project_baseline(
+    *,
+    statistics: BaselineStatistics,
+    remaining_life_minutes_low: Decimal,
+    remaining_life_minutes_high: Decimal,
+) -> BaselineResult:
+    if not Decimal(0) < remaining_life_minutes_low <= remaining_life_minutes_high:
+        raise BaselineUnavailable("remaining life or variance floor is invalid")
+    try:
+        with localcontext(DECIMAL_CONTEXT):
+            result = BaselineResult(
+                return_interval_minutes=statistics.return_interval_minutes,
+                window_variances=statistics.window_variances,
+                selected_lookback_minutes=statistics.selected_lookback_minutes,
+                variance_rate_per_minute=statistics.variance_rate_per_minute,
+                annualized_volatility=statistics.annualized_volatility,
+                total_variance_low=+(
+                    statistics.variance_rate_per_minute * remaining_life_minutes_low
+                ),
+                total_variance_high=+(
+                    statistics.variance_rate_per_minute * remaining_life_minutes_high
+                ),
+                window_diagnostics=statistics.window_diagnostics,
             )
     except (InvalidOperation, OverflowError) as exc:
         raise BaselineUnavailable("baseline arithmetic was not finite") from exc

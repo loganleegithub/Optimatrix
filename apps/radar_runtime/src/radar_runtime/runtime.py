@@ -62,6 +62,11 @@ from short_vol_radar.atomic import (
     classify_atomic_quotes,
     match_vertical_combo,
 )
+from short_vol_radar.baseline import (
+    BaselineStatistics,
+    BaselineUnavailable,
+    compute_baseline_statistics,
+)
 from short_vol_radar.detector import (
     AggregateDetectorResult,
     DetectorCoverage,
@@ -94,6 +99,7 @@ from short_vol_radar.evidence import (
 from short_vol_radar.policy import (
     RadarPolicy,
     TimeApplicability,
+    TteBand,
     classify_time_applicability,
 )
 from short_vol_radar.radar import (
@@ -638,6 +644,15 @@ class _TickerCurrentnessLatch:
     reason: str
 
 
+type _BaselineSpecKey = tuple[tuple[int, ...], int, Decimal]
+
+
+@dataclass(frozen=True)
+class _BaselineStatisticsSlot:
+    tail_identity: tuple[object, ...]
+    statistics: BaselineStatistics
+
+
 class RadarReducer:
     """Single synchronous owner for one public Radar session's reduced facts."""
 
@@ -693,6 +708,10 @@ class RadarReducer:
             maximum_lookback_minutes=policy.largest_lookback_minutes,
             return_interval_minutes=policy.return_interval_minutes,
         )
+        self._baseline_statistics_by_spec: dict[
+            _BaselineSpecKey,
+            _BaselineStatisticsSlot,
+        ] = {}
         self.clock: TrustedClock | None = None
         self.diagnostics = RuntimeDiagnostics()
         self.pending_rpcs: dict[int, PendingRpc] = {}
@@ -861,6 +880,7 @@ class RadarReducer:
             maximum_lookback_minutes=self.policy.largest_lookback_minutes,
             return_interval_minutes=self.policy.return_interval_minutes,
         )
+        self._baseline_statistics_by_spec.clear()
         self.clock = None
         self._last_time_currentness_token = None
         self._last_time_currentness_by_instrument.clear()
@@ -4153,6 +4173,36 @@ class RadarReducer:
             tail_by_lookback[lookback_minutes] = tail
         return tail
 
+    def _baseline_statistics_for(
+        self,
+        *,
+        band: TteBand,
+        tail: IndexHistoryState,
+    ) -> BaselineStatistics:
+        tail_identity = tail.economic_identity
+        sampled_prices = tail.prices
+        if tail_identity is None or sampled_prices is None:
+            raise ValueError("baseline statistics require an available index-history tail")
+        spec_key: _BaselineSpecKey = (
+            band.lookbacks_minutes,
+            band.return_interval_minutes,
+            band.annualized_variance_floor,
+        )
+        cached = self._baseline_statistics_by_spec.get(spec_key)
+        if cached is not None and cached.tail_identity == tail_identity:
+            return cached.statistics
+        statistics = compute_baseline_statistics(
+            sampled_prices=sampled_prices,
+            lookbacks=band.lookbacks_minutes,
+            return_interval_minutes=band.return_interval_minutes,
+            annualized_variance_floor=band.annualized_variance_floor,
+        )
+        self._baseline_statistics_by_spec[spec_key] = _BaselineStatisticsSlot(
+            tail_identity=tail_identity,
+            statistics=statistics,
+        )
+        return statistics
+
     def _time_currentness_token(
         self,
         trusted: TimeInterval,
@@ -4513,6 +4563,19 @@ class RadarReducer:
                     and tail.reason is not None
                     else "INDEX_WARMUP"
                 )
+                baseline_statistics: BaselineStatistics | None = None
+                if (
+                    applicability.band is not None
+                    and tail is not None
+                    and tail.availability is IndexAvailabilityState.AVAILABLE
+                ):
+                    try:
+                        baseline_statistics = self._baseline_statistics_for(
+                            band=applicability.band,
+                            tail=tail,
+                        )
+                    except BaselineUnavailable as exc:
+                        baseline_reason = str(exc) or type(exc).__name__
                 current = calculate_current_evaluation(
                     policy=self.policy,
                     instrument=instrument,
@@ -4520,12 +4583,8 @@ class RadarReducer:
                     causal_seq=self._causal_seq,
                     option_book=self.option_books.get(name),
                     ticker=current_ticker,
-                    causal_closes=(
-                        tail.prices
-                        if tail is not None
-                        and tail.availability is IndexAvailabilityState.AVAILABLE
-                        else None
-                    ),
+                    causal_closes=None,
+                    baseline_statistics=baseline_statistics,
                     baseline_unavailable_reason=baseline_reason,
                     ticker_unavailable_reason=ticker_reason,
                     ticker_continuity_gap=ticker_continuity_gap,

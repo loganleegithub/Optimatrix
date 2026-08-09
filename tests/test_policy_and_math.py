@@ -11,7 +11,13 @@ import short_vol_radar.policy as policy_module
 from conftest import PolicyFactory
 from market_monitor import TimeInterval
 from options_domain import OptionType
-from short_vol_radar.baseline import BaselineResult, BaselineUnavailable, compute_baseline
+from short_vol_radar.baseline import (
+    BaselineResult,
+    BaselineUnavailable,
+    compute_baseline,
+    compute_baseline_statistics,
+    project_baseline,
+)
 from short_vol_radar.black import (
     DecimalInterval,
     NumericalUnknown,
@@ -447,6 +453,68 @@ def test_baseline_exposes_directional_semivariance_and_jump_diagnostics_without_
     assert diagnostic.maximum_absolute_return > 0
     expected_net_return = Decimal(103).ln() - Decimal(100).ln()
     assert abs(diagnostic.net_return - expected_net_return) < Decimal("1e-27")
+
+
+def test_baseline_statistics_projection_is_exact_for_every_result_field() -> None:
+    sampled_prices = tuple(
+        Decimal(value)
+        for value in (
+            "100",
+            "101",
+            "99",
+            "104",
+            "103",
+            "108",
+            "102",
+        )
+    )
+    lookbacks = (5, 15, 30)
+    return_interval_minutes = 5
+    annualized_variance_floor = Decimal("0.000001")
+    remaining_life_minutes_low = Decimal("60.0000000000000000001")
+    remaining_life_minutes_high = Decimal("61.0000000000000000001")
+
+    direct = compute_baseline(
+        sampled_prices=sampled_prices,
+        lookbacks=lookbacks,
+        return_interval_minutes=return_interval_minutes,
+        annualized_variance_floor=annualized_variance_floor,
+        remaining_life_minutes_low=remaining_life_minutes_low,
+        remaining_life_minutes_high=remaining_life_minutes_high,
+    )
+    statistics = compute_baseline_statistics(
+        sampled_prices=sampled_prices,
+        lookbacks=lookbacks,
+        return_interval_minutes=return_interval_minutes,
+        annualized_variance_floor=annualized_variance_floor,
+    )
+    projected = project_baseline(
+        statistics=statistics,
+        remaining_life_minutes_low=remaining_life_minutes_low,
+        remaining_life_minutes_high=remaining_life_minutes_high,
+    )
+
+    assert projected == direct
+    assert projected.window_variances == statistics.window_variances
+    assert projected.window_diagnostics == statistics.window_diagnostics
+
+
+def test_flat_baseline_statistics_projection_preserves_floor_dominance_exactly() -> None:
+    statistics = compute_baseline_statistics(
+        sampled_prices=(Decimal(100), Decimal(100)),
+        lookbacks=(5,),
+        return_interval_minutes=5,
+        annualized_variance_floor=Decimal("0.04"),
+    )
+    projected = project_baseline(
+        statistics=statistics,
+        remaining_life_minutes_low=Decimal(60),
+        remaining_life_minutes_high=Decimal(60),
+    )
+
+    assert projected.selected_lookback_minutes is None
+    assert projected.annualized_volatility == Decimal("0.2")
+    assert projected.total_variance_low == projected.total_variance_high
 
 
 def test_baseline_consumes_only_the_owning_five_minute_samples() -> None:

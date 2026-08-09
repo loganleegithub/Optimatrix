@@ -15,7 +15,13 @@ from options_domain import (
 )
 from options_domain.quotes import DepthWalk, walk_target_depth
 
-from short_vol_radar.baseline import BaselineResult, BaselineUnavailable, compute_baseline
+from short_vol_radar.baseline import (
+    BaselineResult,
+    BaselineStatistics,
+    BaselineUnavailable,
+    compute_baseline,
+    project_baseline,
+)
 from short_vol_radar.black import (
     DecimalInterval,
     NumericalUnknown,
@@ -233,6 +239,7 @@ def calculate_current_evaluation(
     option_book: ContinuousOrderBook | None,
     ticker: TickerState | None,
     causal_closes: tuple[Decimal, ...] | None,
+    baseline_statistics: BaselineStatistics | None = None,
     baseline_unavailable_reason: str = "INDEX_BASELINE_WARMUP",
     ticker_unavailable_reason: str = "FORWARD_TICKER_UNKNOWN",
     ticker_continuity_gap: bool = False,
@@ -448,16 +455,25 @@ def calculate_current_evaluation(
         )
         delta_clue_eligible = delta_is_eligible(delta, rule)
         delta_bucket = classify_delta_bucket(delta, rule)
-        if causal_closes is None:
-            raise BaselineUnavailable(baseline_unavailable_reason)
-        baseline = compute_baseline(
-            sampled_prices=causal_closes,
-            lookbacks=band.lookbacks_minutes,
-            return_interval_minutes=band.return_interval_minutes,
-            annualized_variance_floor=band.annualized_variance_floor,
-            remaining_life_minutes_low=Decimal(lower_tte_ms) / MILLISECONDS_PER_MINUTE,
-            remaining_life_minutes_high=Decimal(upper_tte_ms) / MILLISECONDS_PER_MINUTE,
-        )
+        remaining_life_minutes_low = Decimal(lower_tte_ms) / MILLISECONDS_PER_MINUTE
+        remaining_life_minutes_high = Decimal(upper_tte_ms) / MILLISECONDS_PER_MINUTE
+        if baseline_statistics is None:
+            if causal_closes is None:
+                raise BaselineUnavailable(baseline_unavailable_reason)
+            baseline = compute_baseline(
+                sampled_prices=causal_closes,
+                lookbacks=band.lookbacks_minutes,
+                return_interval_minutes=band.return_interval_minutes,
+                annualized_variance_floor=band.annualized_variance_floor,
+                remaining_life_minutes_low=remaining_life_minutes_low,
+                remaining_life_minutes_high=remaining_life_minutes_high,
+            )
+        else:
+            baseline = project_baseline(
+                statistics=baseline_statistics,
+                remaining_life_minutes_low=remaining_life_minutes_low,
+                remaining_life_minutes_high=remaining_life_minutes_high,
+            )
         iv = executable_iv_interval(
             total_volatility=total_volatility,
             time_years=remaining_years,
