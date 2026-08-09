@@ -20,6 +20,7 @@ from short_vol_radar.evidence import RadarEventSink
 from short_vol_underwriting.case_store import ShadowCaseStore
 from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
 from short_vol_underwriting.identity import canonical_identity, require_code_identity
+from short_vol_underwriting.model import FactBoundary
 from short_vol_underwriting.owner import FixedContractShadowOwner
 from short_vol_underwriting.policy import PolicyChain, load_policy_chain
 from websockets.exceptions import WebSocketException
@@ -72,9 +73,15 @@ class PersistentServiceStartupError(RuntimeError):
 class SingleInstanceLease:
     """Non-blocking process lease for one configured service state root."""
 
-    def __init__(self, state_root: Path) -> None:
+    def __init__(
+        self,
+        state_root: Path,
+        *,
+        preserve_existing_lock: bool = False,
+    ) -> None:
         self.state_root = state_root
         self.path = state_root / "service.lock"
+        self.preserve_existing_lock = preserve_existing_lock
         self._descriptor: int | None = None
 
     @property
@@ -86,14 +93,26 @@ class SingleInstanceLease:
             raise RuntimeError("single-instance lease is already acquired")
         if self.state_root.is_symlink():
             raise PersistentServiceStartupError("service state root cannot be a symlink")
-        self.state_root.mkdir(parents=True, exist_ok=True)
+        if self.preserve_existing_lock:
+            if not self.state_root.is_dir():
+                raise PersistentServiceStartupError(
+                    "preserved service state root must be an existing directory"
+                )
+        else:
+            self.state_root.mkdir(parents=True, exist_ok=True)
         if self.path.is_symlink():
             raise PersistentServiceStartupError(
                 "service lock path must be a regular non-symlink file"
             )
-        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        flags = (os.O_RDONLY if self.preserve_existing_lock else os.O_RDWR | os.O_CREAT) | getattr(
+            os, "O_NOFOLLOW", 0
+        )
         try:
-            descriptor = os.open(self.path, flags, 0o600)
+            descriptor = (
+                os.open(self.path, flags)
+                if self.preserve_existing_lock
+                else os.open(self.path, flags, 0o600)
+            )
         except OSError as exc:
             raise PersistentServiceStartupError(
                 "service lock path must be a regular non-symlink file"
@@ -104,9 +123,10 @@ class SingleInstanceLease:
             raise PersistentServiceStartupError("service lock path must be one regular file")
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            os.ftruncate(descriptor, 0)
-            os.write(descriptor, f"pid={os.getpid()}\n".encode())
-            os.fsync(descriptor)
+            if not self.preserve_existing_lock:
+                os.ftruncate(descriptor, 0)
+                os.write(descriptor, f"pid={os.getpid()}\n".encode())
+                os.fsync(descriptor)
         except BlockingIOError as exc:
             os.close(descriptor)
             raise PersistentServiceStartupError(
@@ -178,7 +198,6 @@ class PersistentStopEvent(asyncio.Event):
 class PersistentServiceStartup:
     repository: Path
     state_root: Path
-    run_directory: Path
     cases_directory: Path
     code_identity: str
     runtime_identity: str
@@ -226,6 +245,29 @@ def generate_runtime_identity(
     )
 
 
+def load_persistent_product_policies(
+    repository: Path,
+    product: OptionProductName | str | OptionProductSpec,
+) -> tuple[OptionProductSpec, PolicyChain]:
+    """Load the frozen product/Policy configuration shared by service and migration."""
+
+    profile = persistent_product_profile(product)
+    selected_product = profile.product
+    policies = load_policy_chain(
+        radar_path=repository / "policies" / profile.radar_policy_filename,
+        underwriting_path=repository / "policies" / profile.underwriting_policy_filename,
+        position_path=repository / "policies" / profile.position_policy_filename,
+        radar_identity=profile.radar_policy_identity,
+        underwriting_identity=profile.underwriting_policy_identity,
+        position_identity=profile.position_policy_identity,
+    )
+    if policies.radar.product_spec_identity != selected_product.identity:
+        raise PersistentServiceStartupError(
+            "selected option product does not match the frozen Radar Policy"
+        )
+    return selected_product, policies
+
+
 def prepare_persistent_service_startup(
     *,
     state_root: Path,
@@ -243,7 +285,7 @@ def prepare_persistent_service_startup(
         workbench_host,
         workbench_port,
     )
-    resolved_state_root = _prepare_state_root(state_root, repository)
+    resolved_state_root = prepare_persistent_state_root(state_root, repository)
     resolved_code_identity = code_identity or clean_code_identity(repository)
     start_ms = _monotonic_ms() if startup_monotonic_ms is None else startup_monotonic_ms
     pid = os.getpid() if process_id is None else process_id
@@ -254,29 +296,18 @@ def prepare_persistent_service_startup(
         process_id=pid,
         nonce=nonce,
     )
-    profile = persistent_product_profile(product)
-    selected_product = profile.product
-    policies = load_policy_chain(
-        radar_path=repository / "policies" / profile.radar_policy_filename,
-        underwriting_path=repository / "policies" / profile.underwriting_policy_filename,
-        position_path=repository / "policies" / profile.position_policy_filename,
-        radar_identity=profile.radar_policy_identity,
-        underwriting_identity=profile.underwriting_policy_identity,
-        position_identity=profile.position_policy_identity,
-    )
-    if policies.radar.product_spec_identity != selected_product.identity:
-        raise PersistentServiceStartupError(
-            "selected option product does not match the frozen Radar Policy"
-        )
-    run_directory = resolved_state_root / "runs" / runtime_identity.removeprefix("sha256:")
+    selected_product, policies = load_persistent_product_policies(repository, product)
+    cases_directory = resolved_state_root / "cases"
+    if cases_directory.is_symlink():
+        raise PersistentServiceStartupError("persistent cases directory cannot be a symlink")
     try:
-        run_directory.mkdir(parents=True, exist_ok=False)
-        cases_directory = run_directory / "cases"
-        cases_directory.mkdir()
+        cases_directory.mkdir(exist_ok=True)
     except OSError as exc:
         raise PersistentServiceStartupError(
-            "cannot create a new persistent runtime directory"
+            "cannot create the persistent Shadow Case repository"
         ) from exc
+    if not cases_directory.is_dir() or cases_directory.is_symlink():
+        raise PersistentServiceStartupError("persistent cases directory is invalid")
     runtime_bindings = RuntimeBindings(
         code_identity=resolved_code_identity,
         runtime_identity=runtime_identity,
@@ -287,7 +318,6 @@ def prepare_persistent_service_startup(
     return PersistentServiceStartup(
         repository=repository,
         state_root=resolved_state_root,
-        run_directory=run_directory,
         cases_directory=cases_directory,
         code_identity=resolved_code_identity,
         runtime_identity=runtime_identity,
@@ -317,7 +347,23 @@ def build_persistent_service_composition(
         bindings=startup.runtime_bindings,
         state_store=shadow_state,
     )
-    adapter = FixedContractShadowRuntimeAdapter(owner=owner)
+    recoverable_entries = case_store.scan_active_admitted()
+    staged_recoveries = owner.stage_recovered_entries(
+        recoverable_entries,
+        recovery_projection_boundary=FactBoundary(
+            code_identity=startup.code_identity,
+            runtime_identity=startup.runtime_identity,
+            session_epoch=0,
+            ingress_seq=0,
+            received_monotonic_ms=startup.startup_monotonic_ms,
+            causal_seq=0,
+        ),
+    )
+    adapter = FixedContractShadowRuntimeAdapter(
+        owner=owner,
+        case_store=case_store,
+        recoverables=staged_recoveries,
+    )
     snapshot_store = SnapshotStore(
         initial_workbench_document(
             startup.runtime_bindings,
@@ -557,7 +603,7 @@ async def run_persistent_service(
     product: OptionProductName | str | OptionProductSpec = LINEAR_BTC_USDC,
 ) -> tuple[PersistentServiceStartup, Mapping[str, object]]:
     repository = git_repository_root(process_cwd)
-    resolved_state_root = _prepare_state_root(state_root, repository)
+    resolved_state_root = prepare_persistent_state_root(state_root, repository)
     lease = SingleInstanceLease(resolved_state_root)
     with lease:
         startup = prepare_persistent_service_startup(
@@ -639,7 +685,9 @@ def _finalize_failure(
     )
 
 
-def _prepare_state_root(state_root: Path, repository: Path) -> Path:
+def prepare_persistent_state_root(state_root: Path, repository: Path) -> Path:
+    """Validate or create the stable state root used by service and offline migration."""
+
     if not state_root.is_absolute():
         raise PersistentServiceStartupError("persistent state root must be absolute")
     if state_root.is_symlink():
@@ -653,15 +701,6 @@ def _prepare_state_root(state_root: Path, repository: Path) -> Path:
     resolved.mkdir(parents=True, exist_ok=True)
     if not resolved.is_dir():
         raise PersistentServiceStartupError("persistent state root is not a directory")
-    runs_directory = resolved / "runs"
-    if runs_directory.is_symlink():
-        raise PersistentServiceStartupError("persistent runs directory cannot be a symlink")
-    try:
-        runs_directory.mkdir(exist_ok=True)
-    except OSError as exc:
-        raise PersistentServiceStartupError("persistent runs directory cannot be created") from exc
-    if not runs_directory.is_dir() or runs_directory.is_symlink():
-        raise PersistentServiceStartupError("persistent runs directory is invalid")
     return resolved
 
 
@@ -728,7 +767,9 @@ __all__ = [
     "SingleInstanceLease",
     "build_persistent_service_composition",
     "generate_runtime_identity",
+    "load_persistent_product_policies",
     "prepare_persistent_service_startup",
+    "prepare_persistent_state_root",
     "run_persistent_service",
     "run_persistent_service_composition",
 ]

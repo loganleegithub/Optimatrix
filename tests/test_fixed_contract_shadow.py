@@ -100,6 +100,20 @@ class _HistoryObserver:
         self.records.append(dict(value))
 
 
+class _HistoryCaseStoreObserver:
+    def __init__(self, history: _HistoryObserver, case_store: ShadowCaseStore) -> None:
+        self.history = history
+        self.case_store = case_store
+
+    def on_record(
+        self,
+        value: Mapping[str, object],
+        state: ShadowStateStore,
+    ) -> None:
+        self.history.on_record(value, state)
+        self.case_store.on_record(value, state)
+
+
 _HISTORY_BY_OWNER: dict[int, _HistoryObserver] = {}
 
 
@@ -2536,6 +2550,17 @@ def test_component_close_pair_over_skew_is_workbench_visible_business_unknown(
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
+    cases = tmp_path / "cases"
+    cases.mkdir()
+    case_store = ShadowCaseStore(
+        cases,
+        bindings=owner.bindings,
+        policies=owner.policies,
+    )
+    owner.state_store.observer = _HistoryCaseStoreObserver(
+        _HISTORY_BY_OWNER[id(owner)],
+        case_store,
+    )
     _admit_component_shadow(reducer, adapter)
     _set_platform_usable(reducer, False)
     close_intents = adapter.on_settled_transaction(

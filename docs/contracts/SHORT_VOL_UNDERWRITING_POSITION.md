@@ -13,8 +13,9 @@ activation batch, and manage either enrolled Case variant under one fixed Positi
 
 Before Shadow enrollment, every evaluation, action, Candidate, request attempt, and display row is
 in-memory current state. None is a durable business record. `SHADOW_ENTRY` hands one admitted unit
-to the Shadow Case owner; the separately typed decision-control open hands one selected no-trade
-unit. Either creates the first durable record only after its paired entry witness.
+to the Shadow Case owner and creates a process-independent Entry aggregate after its paired entry
+witness. A runtime owns only the aggregate's current Observation Segment. The separately typed
+decision-control open creates one selected no-trade Case, not a recoverable Entry.
 
 ## Fixed Policy chain
 
@@ -204,9 +205,11 @@ close opportunity and Workbench business state remain explicitly `UNKNOWN`.
 
 ## Shadow enrollment handoff
 
-A successful admission creates one in-memory `SHADOW_ENTRY` and immediately asks the Shadow Case
-store to publish exactly one `SHADOW_CASE_OPENED`. The opened record freezes only the minimal facts
-required to reconstruct the admitted counterfactual:
+A successful admission creates one in-memory `SHADOW_ENTRY` and asks the Shadow Case store to stage
+one complete initial Case: exactly one `SHADOW_CASE_OPENED` plus its origin
+`SHADOW_CASE_SEGMENT_OPENED`. The store validates both inside one staging Case directory and makes
+them visible with one no-replace atomic directory publication. The opened record freezes only the
+minimal facts required to reconstruct the admitted counterfactual:
 
 - code, runtime, and three Policy identities;
 - exact product identity and Case schema rule;
@@ -220,8 +223,15 @@ required to reconstruct the admitted counterfactual:
 - the frozen protective-leg selector-rule identity and Candidate protective-leg count;
 - explicit public-quote/not-fill non-claims.
 
-If durable Case opening fails, admission fails visibly; the runtime must not silently manage an
-unrecorded Shadow Case.
+If complete directory publication fails, admission fails visibly; the runtime must not silently
+manage an unrecorded Shadow Case. A crash before publication leaves neither initial record visible,
+never only `opened.json`.
+
+For an admitted trade, the atomically published origin `SHADOW_CASE_SEGMENT_OPENED` freezes
+`entry_position_baseline`: the causal entry index and short-leg mark IV with their exact source
+identities and boundaries. Recovery does not widen the accepted v3/v4 `opened.json` shape or change
+its product schema identity. A migrated legacy Entry whose accepted records lack those source
+references carries `entry_position_baseline=UNKNOWN`; Position cannot infer the missing values.
 
 A successful selected WATCH/ABSTAIN refresh creates the separately typed no-trade control open and
 immediately requests the same durable `SHADOW_CASE_OPENED` record with
@@ -231,7 +241,8 @@ must be null, and its additional non-claims must state `NOT_A_CANDIDATE_ACTIVATI
 
 ## Position state
 
-After opening, Position consumes only strictly later settled public facts. It evaluates the exact
+After opening, Position consumes only strictly later settled public facts inside its current
+Observation Segment. It evaluates the exact
 ordered close predicates for:
 
 1. settlement/expiry;
@@ -253,7 +264,32 @@ HOLD    otherwise
 ```
 
 Individual Position evaluations and HOLD/UNKNOWN changes are in-memory only. The first latched
-CLOSE creates at most one durable `SHADOW_CASE_FIRST_CLOSE` transition.
+CLOSE and scheduling of its only paired close attempt create one atomic durable
+`SHADOW_CASE_FIRST_CLOSE / FIRST_CLOSE_AND_ATTEMPT_SCHEDULED` transition. The request intents are
+released only after publication succeeds. No runtime may create a second first CLOSE or attempt.
+
+## Cross-process recovery
+
+After acquiring the stable Case repository, a new runtime restores every non-terminal admitted
+Entry bound to its exact product and frozen Policy chain. It reconstructs the frozen structure,
+entry economics from `opened.json` and the immutable entry baseline from the origin Segment,
+restores any durable first-CLOSE latch, and opens a new runtime Observation Segment. It does not
+recreate Underwriting, Candidate, admission, slot consumption, or source Radar state. An
+`UNKNOWN` legacy baseline remains `UNKNOWN` until fresh segment facts establish only the current
+inputs; they do not rewrite the missing entry baseline.
+
+Segment data availability starts `UNKNOWN`. `HANDOFF_GAP` permanently marks observation quality but
+is not a Position predicate and cannot create `HOLD` or `CLOSE`. The first fresh complete facts are
+evaluated normally; predicates whose missing cross-gap inputs cannot be established remain
+`UNKNOWN` at that evaluation. A fresh known index becomes the new segment's prior-evaluation
+baseline only after the truthful first evaluation.
+
+If first CLOSE was already durable, it remains latched. If its one paired attempt was pending when
+the process stopped or crashed without a mature Outcome, recovery exposes
+`ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS` and does not retry. If first CLOSE occurs later from fresh
+facts, the same atomic first-close/schedule rule applies. A mature economic Outcome formed after any
+gap stores `observation_quality=GAPPED` and `qualification_eligible=false`; its public economics may
+be known, but it is not a continuous-observation qualification result.
 
 ## Close quote and opportunity
 
@@ -297,13 +333,14 @@ Missing or contaminated facts become `UNKNOWN` at their smallest consumer. A kno
 not erased by an unavailable quote.
 
 A reconnect retains the same in-process Shadow owner but requires fresh current market state.
-Current Candidate state does not survive process restart. The current slice does not resume an
-open durable Case in a new runtime.
+Current Candidate state does not survive process restart. Admitted Entry aggregates do survive:
+the externally started next process restores them from the stable repository and creates new
+Observation Segments. Selected no-trade Controls do not survive as active owners.
 
 ## In-memory owner view
 
 The owner may retain typed current state needed by Workbench, the bounded selected-decision batch,
-and active Shadow Cases. It must not
+and all validated active admitted Entries. It must not
 use a filesystem writer as an event bus, registry, or Workbench datastore. Funnel counts are
 non-durable and derived from current owner transitions.
 
@@ -312,7 +349,8 @@ longer current, its Candidate is invalidated, and its current-state indexes are 
 terminalization removes both admission-request owners; Outcome terminalization removes the active
 Position owner.
 Only one latest terminal Case and one latest terminal selected-decision batch may remain in the
-Workbench projection; all historical terminal truth comes from the bounded Shadow Case files.
+ordinary projection; every active admitted Entry is projected once from the owner. All historical
+segment and terminal truth comes from the bounded Shadow Case files.
 
 ## Required verification
 
@@ -321,6 +359,8 @@ depth, native adverse tick direction, product fee rules, native/model/valuation 
 economics, action boundaries, all-legal-leg selection outside Radar Top 3, product-labeled complete
 predicate margins, frozen-leg identity, pair session/continuity/skew boundaries, paired admission
 races, strictly post-entry Position order, first CLOSE latching, paired close classification, exact
-Linear behavior, and no pre-Shadow durable writes. Full graph manifests, parallel schemas, and
-automatic rejected-counterfactual persistence are not required. Public observation is forbidden in
-the current implementation closure.
+Linear behavior, no pre-Shadow durable writes, repeated A→B→C process recovery, segment-gap
+UNKNOWN, single durable attempt schedule, no retry after uncertain process loss, and mature gapped
+Outcome classification. Full graph manifests, parallel schemas, per-tick checkpoints, replay, and
+automatic rejected-counterfactual persistence are not required. Public observation is governed
+only by `CURRENT_STAGE`.

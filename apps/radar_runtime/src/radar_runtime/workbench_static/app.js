@@ -71,6 +71,12 @@ const reasonLabels = {
   NO_APPLICABLE_MARKET_SCOPE_OBSERVED: '当前无适用合约范围',
   PROCESS_FAILURE: 'Runtime 进程失败',
   HUMAN_STOP: '人工停止',
+  MISSING_SHADOW_ENTRY_IDENTITY: '缺少 Shadow Entry identity',
+  DUPLICATE_SHADOW_ENTRY_IDENTITY: 'Shadow Entry identity 重复',
+  MISSING_CANDIDATE_IDENTITY: '缺少 Candidate identity',
+  DUPLICATE_CANDIDATE_IDENTITY: 'Candidate identity 对应多条 Shadow Entry',
+  INVALID_ENTRY_COMPONENT_ROLES: '冻结入场腿不是唯一一条 SHORT 与一条 LONG',
+  INVALID_ENTRY_LEG_ACTIONS: '冻结入场腿方向不是 SHORT/SELL 与 LONG/BUY',
   COMBO_QUOTE_RECEIPT_UNKNOWN: '组合报价回执不可确认',
   NO_ACTIVE_COMBO: '无现成官方组合；不阻塞双腿 Shadow 模拟',
   NO_TARGET_SIZE_CREDIT_QUOTE: '现成官方组合没有目标数量正信用报价',
@@ -107,6 +113,13 @@ const predicateVectorKeys = {
   MINIMUM_NET_CREDIT_TO_PAYOFF_CAP: 'MINIMUM_NET_CREDIT_TO_PAYOFF_CAP'
 };
 
+const postCloseAttemptLabels = {
+  NOT_SCHEDULED: '尚未安排',
+  SCHEDULED: '已安排',
+  TERMINAL: '已终结',
+  ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS: '进程中断后状态未知（不重试）'
+};
+
 const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;',
   '<': '&lt;',
@@ -116,6 +129,7 @@ const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
 })[character]);
 
 const isMissing = value => value === null || value === undefined || value === '';
+const isIdentity = value => typeof value === 'string' && value.length > 0;
 const displayText = value => isMissing(value)
   ? '—'
   : (typeof value === 'object' ? JSON.stringify(value) : String(value));
@@ -235,8 +249,11 @@ const shortIdentity = value => {
 };
 
 const optionTypeText = value => value === 'put' ? 'Put' : (value === 'call' ? 'Call' : displayText(value));
-const structureTypeText = row => `${optionTypeText(row.option_type)} Spread`;
-const structureLabel = row => `${formatDate(row.expiry_timestamp_ms)} · ${formatStrike(row.short_strike_price)} / ${formatStrike(row.long_strike_price)} ${structureTypeText(row)}`;
+const structureTypeText = row => row.queue_row_kind === 'SHADOW_ENTRY'
+  ? '冻结双腿' : `${optionTypeText(row.option_type)} Spread`;
+const structureLabel = row => row.queue_row_kind === 'SHADOW_ENTRY'
+  ? '冻结入场结构'
+  : `${formatDate(row.expiry_timestamp_ms)} · ${formatStrike(row.short_strike_price)} / ${formatStrike(row.long_strike_price)} ${structureTypeText(row)}`;
 
 const badgeMarkup = (label, tone = 'neutral', extraClass = 'state-badge') =>
   `<span class="${escapeHtml(extraClass)} tone-${escapeHtml(tone)}">${safeText(label)}</span>`;
@@ -357,8 +374,32 @@ const roadmapState = channel => {
   return {label: '尚未接入', tone: 'neutral', note: '无产品与策略快照'};
 };
 
+const shadowTrackingPresentation = row => {
+  const shadow = row && row.shadow_entry_projection;
+  if (!shadow) return null;
+  const gapped = shadow.observation_quality === 'GAPPED';
+  const qualificationExcluded = shadow.qualification_eligible === false;
+  if (!gapped && !qualificationExcluded) return null;
+  return {
+    label: gapped ? '跨进程跟踪' : 'Shadow 跟踪',
+    note: gapped && qualificationExcluded
+      ? '观察有间隙 · 不计入连续观察资格'
+      : (gapped ? '观察有间隙' : '不计入连续观察资格')
+  };
+};
+
 const structureState = row => {
+  if (Array.isArray(row.shadow_projection_issues) && row.shadow_projection_issues.length) {
+    return {key: 'UNKNOWN', label: 'Shadow 投影异常', tone: 'red', priority: 1};
+  }
   if (row.candidate_lifecycle === 'ADMITTED') {
+    const tracking = shadowTrackingPresentation(row);
+    if (tracking) {
+      return {
+        key: 'SHADOW_TRACKING', label: tracking.label, tone: 'purple', priority: 0,
+        note: tracking.note
+      };
+    }
     return {key: 'SHADOW_TRACKING', label: 'Shadow 跟踪', tone: 'purple', priority: 0};
   }
   if (row.candidate_lifecycle === 'INVALIDATED') {
@@ -395,9 +436,146 @@ const radarState = row => {
   return {key: 'NO_ANOMALY', label: '当前无异常', tone: 'neutral', priority: 2};
 };
 
-const structureIdentity = (row, index = 0) => row.underwriting_availability_evaluation_identity ||
-  row.underwriting_action_identity || row.radar_scope_or_short_leg_identity || `structure-${index}`;
+const structureIdentity = (row, index = 0) => {
+  if (row.queue_row_kind === 'SHADOW_ENTRY') {
+    if (row.shadow_candidate_identity_unique === true) return row.candidate_identity;
+    if (row.shadow_entry_identity_unique === true) return row.shadow_entry_identity;
+    return row.shadow_projection_row_key || `shadow-projection-${index}`;
+  }
+  return [row.candidate_identity, row.underwriting_availability_evaluation_identity,
+    row.underwriting_action_identity, row.radar_scope_or_short_leg_identity]
+    .find(isIdentity) || `structure-${index}`;
+};
 const radarIdentity = (row, index = 0) => row.active_episode_identity || row.instrument_name || `radar-${index}`;
+
+const shadowRowsForCandidate = (row, documentValue) => {
+  if (!isIdentity(row.candidate_identity)) return [];
+  const shadowRows = documentValue.shadow_entries && Array.isArray(documentValue.shadow_entries.rows)
+    ? documentValue.shadow_entries.rows : [];
+  return shadowRows.filter(value => value.candidate_identity === row.candidate_identity);
+};
+
+const shadowRowForCandidate = (row, documentValue) => {
+  const matches = shadowRowsForCandidate(row, documentValue);
+  return matches.length === 1 ? matches[0] : null;
+};
+
+const canonicalShadowEntry = (row, documentValue) => {
+  if (row.queue_row_kind === 'SHADOW_ENTRY') {
+    const shadow = row.shadow_entry_projection;
+    if (!shadow || !isIdentity(row.shadow_entry_identity) ||
+        shadow.shadow_entry_identity !== row.shadow_entry_identity) return null;
+    if (isIdentity(row.candidate_identity) &&
+        shadow.candidate_identity !== row.candidate_identity) return null;
+    return shadow;
+  }
+  const matches = shadowRowsForCandidate(row, documentValue)
+    .filter(value => isIdentity(value.shadow_entry_identity));
+  return matches.length === 1 ? matches[0] : null;
+};
+
+const structureEntryFacts = (row, documentValue) => {
+  const shadow = row.candidate_lifecycle === 'ADMITTED'
+    ? canonicalShadowEntry(row, documentValue) : null;
+  if (shadow) {
+    return {
+      source: 'SHADOW_ENTRY',
+      status: shadow.admission_refresh_terminal_outcome || 'SHADOW_ENTRY',
+      valuationIndex: shadow.entry_valuation_index_price,
+      targetQuantity: shadow.target_quantity_btc,
+      nativeNetCredit: shadow.native_net_entry_credit,
+      nativeGrossCredit: shadow.native_gross_entry_credit,
+      nativeFeeReserve: shadow.native_entry_fee_reserve,
+      valuationGrossCredit: shadow.simulated_entry_credit_valuation
+    };
+  }
+  if (row.queue_row_kind === 'SHADOW_ENTRY') {
+    return {
+      source: 'SHADOW_ENTRY_INVALID', status: 'PROJECTION_INVALID', valuationIndex: null,
+      targetQuantity: null, nativeNetCredit: null, nativeGrossCredit: null,
+      nativeFeeReserve: null, valuationGrossCredit: null
+    };
+  }
+  return {
+    source: 'UNDERWRITING',
+    status: row.availability,
+    valuationIndex: row.entry_valuation_index_price,
+    targetQuantity: row.target_quantity_btc,
+    nativeNetCredit: row.native_net_entry_credit,
+    valuationNetCredit: row.net_entry_credit_valuation
+  };
+};
+
+const shadowStructureRow = (shadow, candidateCounts = null, entryCounts = null, index = 0) => {
+  const legs = Array.isArray(shadow.entry_component_legs) ? shadow.entry_component_legs : [];
+  const shortLegs = legs.filter(value => value.canonical_leg_role === 'SHORT');
+  const longLegs = legs.filter(value => value.canonical_leg_role === 'LONG');
+  const shortLeg = shortLegs.length === 1 ? shortLegs[0] : null;
+  const longLeg = longLegs.length === 1 ? longLegs[0] : null;
+  const candidateIdentityUnique = isIdentity(shadow.candidate_identity) &&
+    (!candidateCounts || candidateCounts.get(shadow.candidate_identity) === 1);
+  const entryIdentityUnique = isIdentity(shadow.shadow_entry_identity) &&
+    (!entryCounts || entryCounts.get(shadow.shadow_entry_identity) === 1);
+  const issues = [];
+  if (!isIdentity(shadow.shadow_entry_identity)) issues.push('MISSING_SHADOW_ENTRY_IDENTITY');
+  else if (!entryIdentityUnique) issues.push('DUPLICATE_SHADOW_ENTRY_IDENTITY');
+  if (!isIdentity(shadow.candidate_identity)) issues.push('MISSING_CANDIDATE_IDENTITY');
+  else if (!candidateIdentityUnique) issues.push('DUPLICATE_CANDIDATE_IDENTITY');
+  if (!shortLeg || !longLeg || legs.length !== 2) issues.push('INVALID_ENTRY_COMPONENT_ROLES');
+  else if (shortLeg.action !== 'SELL' || longLeg.action !== 'BUY') {
+    issues.push('INVALID_ENTRY_LEG_ACTIONS');
+  }
+  return {
+    queue_row_kind: 'SHADOW_ENTRY',
+    shadow_entry_projection: shadow,
+    shadow_projection_row_key: `shadow-projection-${index}`,
+    shadow_projection_issues: issues,
+    shadow_candidate_identity_unique: candidateIdentityUnique,
+    shadow_entry_identity_unique: entryIdentityUnique,
+    shadow_entry_identity: shadow.shadow_entry_identity,
+    candidate_identity: shadow.candidate_identity,
+    candidate_lifecycle: 'ADMITTED',
+    candidate_still_valid: false,
+    availability: 'SHADOW_ENTRY',
+    action: null,
+    short_leg_action: shortLeg && shortLeg.action,
+    long_leg_action: longLeg && longLeg.action,
+    short_leg_instrument_name: shortLeg && shortLeg.instrument_name,
+    long_leg_instrument_name: longLeg && longLeg.instrument_name,
+    target_quantity_btc: shadow.target_quantity_btc,
+    entry_valuation_index_price: shadow.entry_valuation_index_price,
+    native_gross_entry_credit: shadow.native_gross_entry_credit,
+    native_entry_fee_reserve: shadow.native_entry_fee_reserve,
+    native_net_entry_credit: shadow.native_net_entry_credit,
+    gross_entry_credit_valuation: shadow.simulated_entry_credit_valuation,
+    failed_predicates: [],
+    predicate_margin_vector: [],
+    unknown_reasons: []
+  };
+};
+
+const structureQueueRows = documentValue => {
+  const projectedShadowRows = documentValue.shadow_entries && Array.isArray(documentValue.shadow_entries.rows)
+    ? documentValue.shadow_entries.rows : [];
+  const sourceShadowRows = projectedShadowRows.filter(value =>
+    isIdentity(value.shadow_entry_identity) || value.admission_refresh_terminal_outcome === 'ENTRY_EMITTED');
+  const candidateCounts = new Map();
+  const entryCounts = new Map();
+  sourceShadowRows.forEach(value => {
+    if (isIdentity(value.candidate_identity)) {
+      candidateCounts.set(value.candidate_identity, (candidateCounts.get(value.candidate_identity) || 0) + 1);
+    }
+    if (isIdentity(value.shadow_entry_identity)) {
+      entryCounts.set(value.shadow_entry_identity, (entryCounts.get(value.shadow_entry_identity) || 0) + 1);
+    }
+  });
+  const shadowRows = sourceShadowRows.map((value, index) =>
+    shadowStructureRow(value, candidateCounts, entryCounts, index));
+  const shadowCandidates = new Set(shadowRows.map(value => value.candidate_identity).filter(isIdentity));
+  const underwritingRows = documentValue.underwriting && Array.isArray(documentValue.underwriting.rows)
+    ? documentValue.underwriting.rows.filter(value => !shadowCandidates.has(value.candidate_identity)) : [];
+  return orderedStructureRows([...shadowRows, ...underwritingRows]);
+};
 
 const orderedStructureRows = rows => [...rows].sort((left, right) =>
   structureState(left).priority - structureState(right).priority ||
@@ -429,6 +607,11 @@ const formatMargin = margin => {
 };
 
 const firstFailureSummary = row => {
+  const projectionIssues = Array.isArray(row.shadow_projection_issues)
+    ? row.shadow_projection_issues : [];
+  if (projectionIssues.length) {
+    return {label: 'Shadow 投影关联异常', margin: reasonText(projectionIssues[0])};
+  }
   const failures = Array.isArray(row.failed_predicates) ? row.failed_predicates : [];
   if (failures.length) {
     const first = failures[0];
@@ -458,6 +641,14 @@ const firstFailureSummary = row => {
 };
 
 const structureJudgement = row => {
+  const projectionIssues = Array.isArray(row.shadow_projection_issues)
+    ? row.shadow_projection_issues : [];
+  if (projectionIssues.length) {
+    return {
+      blocker: projectionIssues.map(reasonText).join('；'),
+      upgrade: '等待服务端恢复唯一 Candidate、Shadow Entry 与冻结双腿身份；浏览器拒绝补推关联。'
+    };
+  }
   const failures = Array.isArray(row.failed_predicates) ? row.failed_predicates : [];
   if (failures.length) {
     return {
@@ -508,6 +699,10 @@ const structureJudgement = row => {
     upgrade: '等待 owner 后续评估，不由浏览器推断已通过全部门槛。'
   };
 };
+
+const structureDecisionMarkup = (row, state = structureState(row)) =>
+  badgeMarkup(state.label, state.tone, 'decision-badge') +
+  (state.note ? `<span class="cell-secondary">${safeText(state.note)}</span>` : '');
 
 let lastSuccessfulFetchAtMs = null;
 let lastPublicationRuntimeIdentity = null;
@@ -671,7 +866,7 @@ const selectedChannelCanUseCurrentSnapshot = documentValue =>
 function visibleRows(documentValue) {
   if (!selectedChannelCanUseCurrentSnapshot(documentValue)) return [];
   if (queueMode === 'structures') {
-    const rows = orderedStructureRows(documentValue.underwriting.rows);
+    const rows = structureQueueRows(documentValue);
     return structureFilter === 'ALL' ? rows : rows.filter(row => structureState(row).key === structureFilter);
   }
   const rows = orderedRadarRows(documentValue.radar.rows);
@@ -681,7 +876,7 @@ function visibleRows(documentValue) {
 function totalRows(documentValue) {
   if (!selectedChannelCanUseCurrentSnapshot(documentValue)) return [];
   return queueMode === 'structures'
-    ? orderedStructureRows(documentValue.underwriting.rows)
+    ? structureQueueRows(documentValue)
     : orderedRadarRows(documentValue.radar.rows);
 }
 
@@ -712,8 +907,13 @@ function structureRowMarkup(row, index) {
   const id = structureIdentity(row, index);
   const state = structureState(row);
   const failure = firstFailureSummary(row);
+  const entryFacts = structureEntryFacts(row, currentDocument);
   const nativeUnit = currentDocument.product.native_premium_currency;
   const valuationUnit = currentDocument.product.valuation_currency;
+  const valuationCredit = entryFacts.source === 'SHADOW_ENTRY'
+    ? entryFacts.valuationGrossCredit : entryFacts.valuationNetCredit;
+  const valuationBasis = entryFacts.source === 'SHADOW_ENTRY' && !isMissing(valuationCredit)
+    ? ' · 费前' : '';
   return `<button type="button" class="queue-row structure-row" role="row" ` +
     `data-row-id="${escapeHtml(id)}" aria-pressed="${selectedStructureId === id}">` +
     `<span class="queue-priority" role="cell">${index + 1}</span>` +
@@ -721,9 +921,9 @@ function structureRowMarkup(row, index) {
     `<span class="cell-secondary">${escapeHtml(ACTIVE_CHANNEL_ID)}</span></span>` +
     `<span role="cell"><span class="cell-primary">${safeText(structureLabel(row))}</span>` +
     `<span class="cell-secondary">${safeText(row.short_leg_instrument_name)} → ${safeText(row.long_leg_instrument_name)}</span></span>` +
-    `<span role="cell">${badgeMarkup(state.label, state.tone, 'decision-badge')}</span>` +
-    `<span role="cell"><span class="cell-value">${safeText(formatNative(row.native_net_entry_credit))} ${safeText(nativeUnit)}</span>` +
-    `<span class="cell-secondary">${safeText(formatMoney(row.net_entry_credit_valuation))} ${safeText(valuationUnit)}</span></span>` +
+    `<span role="cell">${structureDecisionMarkup(row, state)}</span>` +
+    `<span role="cell"><span class="cell-value">${safeText(formatNative(entryFacts.nativeNetCredit))} ${safeText(nativeUnit)}</span>` +
+    `<span class="cell-secondary">${safeText(formatMoney(valuationCredit))} ${safeText(valuationUnit)}${valuationBasis}</span></span>` +
     `<span role="cell"><span class="cell-value ${failure.margin.startsWith('-') ? 'cell-warning' : ''}">${safeText(failure.margin)}</span>` +
     `<span class="cell-secondary">${safeText(failure.label)}</span></span></button>`;
 }
@@ -815,8 +1015,55 @@ const predicateListMarkup = row => {
   ).join('')}</div>`;
 };
 
+const postCloseAttemptText = value => isMissing(value)
+  ? '—'
+  : (postCloseAttemptLabels[value] || displayText(value));
+
+const shadowTrackingEvidenceMarkup = shadow => {
+  if (!shadow || typeof shadow !== 'object') return '';
+  const gapped = shadow.observation_quality === 'GAPPED';
+  const qualificationExcluded = shadow.qualification_eligible === false;
+  const parts = [];
+  if (gapped) {
+    parts.push(`<div class="callout info"><strong>跨进程跟踪</strong>` +
+      `观察有间隙；这是服务器声明的观察质量，不是异常或当前交易阻塞。</div>`);
+  }
+  if (qualificationExcluded) {
+    parts.push(`<div class="callout info"><strong>研究资格</strong>` +
+      `不计入连续观察资格；已登记的真实 Shadow Entry 入场经济仍保留。</div>`);
+  }
+  if (gapped) {
+    parts.push(`<div class="fact-grid">` +
+      factMarkup('Origin runtime', shortIdentity(shadow.origin_runtime_identity)) +
+      factMarkup('观察 Segment', isMissing(shadow.current_segment_sequence)
+        ? '—' : `#${displayText(shadow.current_segment_sequence)}`) +
+      factMarkup('平仓尝试', postCloseAttemptText(shadow.post_close_attempt_state)) +
+      `</div>`);
+  }
+  const entryBoundary = shadow.entry_fact_boundary && typeof shadow.entry_fact_boundary === 'object'
+    ? shadow.entry_fact_boundary : null;
+  const sourceRefs = Array.isArray(shadow.entry_component_quote_source_refs)
+    ? shadow.entry_component_quote_source_refs : [];
+  const sourceTimes = sourceRefs
+    .map(value => value && value.source_timestamp_ms)
+    .filter(value => Number.isFinite(Number(value)));
+  if (entryBoundary || sourceTimes.length) {
+    parts.push(`<div class="fact-grid">` +
+      factMarkup('入场 causal seq', entryBoundary ? displayText(entryBoundary.causal_seq) : '—') +
+      factMarkup('双腿源时间', sourceTimes.length ? sourceTimes.map(displayText).join(' / ') : '—') +
+      `</div>`);
+  }
+  return parts.join('');
+};
+
 function canonicalShadowMarkup(row, documentValue) {
-  if (isMissing(row.candidate_identity)) {
+  const projectionIssues = Array.isArray(row.shadow_projection_issues)
+    ? row.shadow_projection_issues : [];
+  if (projectionIssues.length) {
+    return `<div class="callout blocker"><strong>Shadow 投影关联异常</strong>` +
+      `${safeText(projectionIssues.map(reasonText).join('；'))}；拒绝推断 Candidate、Position 或 Outcome 关联。</div>`;
+  }
+  if (!isIdentity(row.candidate_identity)) {
     return `<div class="callout info"><strong>Shadow 状态</strong>` +
       `当前结构没有 canonical Candidate identity，未建立与 Shadow 跟踪的规范关联。</div>`;
   }
@@ -824,14 +1071,13 @@ function canonicalShadowMarkup(row, documentValue) {
     return `<div class="callout blocker"><strong>Shadow 状态</strong>` +
       `候选已失效：${safeText(reasonText(row.candidate_invalidation_reason))}；不再等待 admission。</div>`;
   }
-  const shadowRows = documentValue.shadow_entries && Array.isArray(documentValue.shadow_entries.rows)
-    ? documentValue.shadow_entries.rows : [];
-  const shadow = shadowRows.find(value => value.candidate_identity === row.candidate_identity);
-  if (!shadow || isMissing(shadow.shadow_entry_identity)) {
-    const terminal = shadow && shadow.admission_refresh_terminal_outcome;
+  const shadowProjection = shadowRowForCandidate(row, documentValue);
+  const shadow = canonicalShadowEntry(row, documentValue);
+  if (!shadow) {
+    const terminal = shadowProjection && shadowProjection.admission_refresh_terminal_outcome;
     if (!isMissing(terminal)) {
-      const unknownReasons = Array.isArray(shadow.admission_refresh_unknown_reasons)
-        ? shadow.admission_refresh_unknown_reasons.map(reasonText).join('；') : '';
+      const unknownReasons = Array.isArray(shadowProjection.admission_refresh_unknown_reasons)
+        ? shadowProjection.admission_refresh_unknown_reasons.map(reasonText).join('；') : '';
       return `<div class="callout blocker"><strong>Shadow admission 已终结</strong>` +
         `${safeText(terminal)}${unknownReasons ? ` · ${safeText(unknownReasons)}` : ''}；未建立 Shadow Entry，不再称为等待刷新。</div>`;
     }
@@ -856,6 +1102,8 @@ function canonicalShadowMarkup(row, documentValue) {
     `<div class="callout info"><strong>Shadow 模拟跟踪已建立</strong>` +
       `公共盘口反事实已登记；不是订单、成交或实际持仓。</div>`
   ];
+  const trackingEvidence = shadowTrackingEvidenceMarkup(shadow);
+  if (trackingEvidence) parts.push(trackingEvidence);
   if (position) {
     parts.push(`<div class="callout info"><strong>当前模拟建议</strong>` +
       `${safeText(position.position_action)} · ${safeText(position.primary_exit_rule)} · hard-close ${safeText(formatDurationInterval(position.hard_close_countdown_interval_ms))}</div>`);
@@ -879,44 +1127,73 @@ function structureDetailMarkup(row, documentValue) {
   const nativeUnit = documentValue.product.native_premium_currency;
   const valuationUnit = documentValue.product.valuation_currency;
   const judgement = structureJudgement(row);
+  const entryFacts = structureEntryFacts(row, documentValue);
+  const isShadowEntry = entryFacts.source !== 'UNDERWRITING';
+  const shadowLegProjectionInvalid = isShadowEntry && Array.isArray(row.shadow_projection_issues) &&
+    row.shadow_projection_issues.some(value =>
+      ['INVALID_ENTRY_COMPONENT_ROLES', 'INVALID_ENTRY_LEG_ACTIONS'].includes(value));
+  const economicsMarkup = isShadowEntry
+    ? economicsCard(`净信用（${nativeUnit}）`, formatNative(entryFacts.nativeNetCredit), '扣除双腿费用准备', 'positive') +
+      economicsCard(`费前信用（${nativeUnit}）`, formatNative(entryFacts.nativeGrossCredit), '双腿压力价差', 'positive') +
+      economicsCard(`费用准备（${nativeUnit}）`, formatNative(entryFacts.nativeFeeReserve), '两腿标准公共手续费', 'caution') +
+      economicsCard(`费前信用（${valuationUnit}）`, formatMoney(entryFacts.valuationGrossCredit), '入场边界 USD 等值')
+    : economicsCard(`净信用（${nativeUnit}）`, formatNative(entryFacts.nativeNetCredit), '原生币本位现金流', 'positive') +
+      economicsCard(`净信用（${valuationUnit}）`, formatMoney(entryFacts.valuationNetCredit), '评估边界 USD 等值', 'positive') +
+      economicsCard(`未来成本准备（${valuationUnit}）`, formatMoney(row.future_cost_reserve_valuation), '不是实际账户保证金', 'caution') +
+      economicsCard(`承保准备损失（${valuationUnit}）`, formatMoney(row.underwriting_reserved_loss_valuation), 'Policy 风险准备');
+  const riskBoundary = isShadowEntry
+    ? '当前 Shadow Entry 投影未提供到期 BTC 负债、精确最大损失或账户保证金；不由浏览器推断。'
+    : `入场边界损失代理 ${formatMoney(row.entry_boundary_valued_payoff_loss_ex_fees_valuation)} ${valuationUnit}；` +
+      '不是到期 BTC 负债、精确最大损失或账户保证金。';
+  const legTableMarkup = isShadowEntry
+    ? shadowLegProjectionInvalid
+      ? '<div class="data-gap-panel">冻结双腿的角色或方向投影不完整；拒绝由浏览器补写 SELL/BUY。</div>'
+      : `<table class="leg-table"><thead><tr><th scope="col">方向</th><th scope="col">冻结合约</th></tr></thead><tbody>` +
+        `<tr><td class="leg-sell">${safeText(row.short_leg_action)}</td><td>${safeText(row.short_leg_instrument_name)}</td></tr>` +
+        `<tr><td class="leg-buy">${safeText(row.long_leg_action)}</td><td>${safeText(row.long_leg_instrument_name)}</td></tr>` +
+        `</tbody></table>`
+    : `<table class="leg-table"><thead><tr><th scope="col">方向</th><th scope="col">合约</th><th scope="col">执行价</th></tr></thead><tbody>` +
+      `<tr><td class="leg-sell">SELL</td><td>${safeText(row.short_leg_instrument_name)}</td><td>${safeText(formatDecimal(row.short_strike_price))}</td></tr>` +
+      `<tr><td class="leg-buy">BUY</td><td>${safeText(row.long_leg_instrument_name)}</td><td>${safeText(formatDecimal(row.long_strike_price))}</td></tr>` +
+      `</tbody></table>`;
+  const predicateMarkup = isShadowEntry
+    ? '<div class="data-gap-panel">当前 Shadow Entry 投影未提供入场时的精确谓词 margin；不从当前 Underwriting 窗口补值。</div>'
+    : predicateListMarkup(row);
+  const structureSectionTitle = isShadowEntry
+    ? '结构（冻结入场双腿）'
+    : `结构（卖出 ${structureTypeText(row)}）`;
   return `<div class="detail-title-line"><h3>INVERSE BTC × SHORT VOL</h3>` +
     `${badgeMarkup(state.label, state.tone, 'decision-badge')}</div>` +
     `<p class="detail-subtitle">${safeText(structureLabel(row))}</p>` +
     `<div class="fact-grid">` +
-      factMarkup('到期日', formatDate(row.expiry_timestamp_ms)) +
-      factMarkup('评估边界指数', formatMoney(row.entry_valuation_index_price)) +
-      factMarkup('目标规模', `${formatDecimal(row.target_quantity_btc)} BTC`) +
-      factMarkup('评估状态', row.availability) +
+      (isShadowEntry
+        ? factMarkup('Shadow Entry', shortIdentity(row.shadow_entry_identity))
+        : factMarkup('到期日', formatDate(row.expiry_timestamp_ms))) +
+      factMarkup(isShadowEntry ? '入场边界指数' : '评估边界指数', formatMoney(entryFacts.valuationIndex)) +
+      factMarkup('目标规模', `${formatDecimal(entryFacts.targetQuantity)} BTC`) +
+      factMarkup(isShadowEntry ? '跟踪状态' : '评估状态', entryFacts.status) +
       factMarkup('原生现金流', nativeUnit) +
       factMarkup('估值单位', valuationUnit) +
     `</div>` +
     `<section class="detail-section" data-detail-section="structure"><div class="detail-section-title">` +
-      `<h4>结构（卖出 ${safeText(structureTypeText(row))}）</h4><span class="detail-section-note">公共盘口反事实</span></div>` +
-      `<table class="leg-table"><thead><tr><th scope="col">方向</th><th scope="col">合约</th><th scope="col">执行价</th></tr></thead><tbody>` +
-      `<tr><td class="leg-sell">SELL</td><td>${safeText(row.short_leg_instrument_name)}</td><td>${safeText(formatDecimal(row.short_strike_price))}</td></tr>` +
-      `<tr><td class="leg-buy">BUY</td><td>${safeText(row.long_leg_instrument_name)}</td><td>${safeText(formatDecimal(row.long_strike_price))}</td></tr>` +
-      `</tbody></table></section>` +
+      `<h4>${safeText(structureSectionTitle)}</h4><span class="detail-section-note">公共盘口反事实</span></div>` +
+      `${legTableMarkup}</section>` +
     `<section class="detail-section"><div class="detail-section-title"><h4>入场经济</h4>` +
-      `<span class="detail-section-note">服务器已结算 · 浏览器不重算</span></div>` +
-      `<div class="economics-grid">` +
-        economicsCard(`净信用（${nativeUnit}）`, formatNative(row.native_net_entry_credit), '原生币本位现金流', 'positive') +
-        economicsCard(`净信用（${valuationUnit}）`, formatMoney(row.net_entry_credit_valuation), '评估边界 USD 等值', 'positive') +
-        economicsCard(`未来成本准备（${valuationUnit}）`, formatMoney(row.future_cost_reserve_valuation), '不是实际账户保证金', 'caution') +
-        economicsCard(`承保准备损失（${valuationUnit}）`, formatMoney(row.underwriting_reserved_loss_valuation), 'Policy 风险准备') +
-      `</div></section>` +
+      `<span class="detail-section-note">${isShadowEntry ? 'Shadow Entry 已结算' : '服务器已结算'} · 浏览器不重算</span></div>` +
+      `<div class="economics-grid">${economicsMarkup}</div></section>` +
     `<section class="detail-section"><div class="detail-section-title"><h4>交易判断</h4></div>` +
       `<div class="callout-list">` +
         `<div class="callout blocker"><strong>主要阻塞</strong>${safeText(judgement.blocker)}</div>` +
         `<div class="callout upgrade"><strong>升级条件</strong>${safeText(judgement.upgrade)}</div>` +
-        `<div class="callout info"><strong>风险边界</strong>入场边界损失代理 ${safeText(formatMoney(row.entry_boundary_valued_payoff_loss_ex_fees_valuation))} ${safeText(valuationUnit)}；不是到期 BTC 负债、精确最大损失或账户保证金。</div>` +
+        `<div class="callout info"><strong>风险边界</strong>${safeText(riskBoundary)}</div>` +
       `</div></section>` +
     `<section class="detail-section"><div class="detail-section-title"><h4>精确谓词 margin</h4>` +
-      `<span class="detail-section-note">正值通过，负值未过门槛</span></div>${predicateListMarkup(row)}</section>` +
+      `<span class="detail-section-note">正值通过，负值未过门槛</span></div>${predicateMarkup}</section>` +
     `<section class="detail-section" data-detail-section="shadow"><div class="detail-section-title"><h4>Shadow 条件</h4></div>` +
       `<div class="callout-list">${canonicalShadowMarkup(row, documentValue)}</div></section>` +
     `<section class="detail-section"><div class="data-gap-panel"><strong>未绘制盈亏曲线：</strong>` +
       `当前 API 没有服务器结算的 payoff 序列，也没有与 Radar 线索共享的 Episode key。为避免浏览器重算 Inverse payoff 或串接不同 Episode，本页不伪造图表、IV/RV 或保护腿 Greeks。</div></section>` +
-    rawEvidenceMarkup(row);
+    rawEvidenceMarkup(row.shadow_entry_projection || row);
 }
 
 function radarDetailMarkup(row) {
@@ -1022,6 +1299,9 @@ function validateDocument(documentValue) {
       !documentValue.product.valuation_currency || !documentValue.service || !documentValue.system ||
       !documentValue.radar || !Array.isArray(documentValue.radar.rows) ||
       !documentValue.underwriting || !Array.isArray(documentValue.underwriting.rows) ||
+      !documentValue.shadow_entries || !Array.isArray(documentValue.shadow_entries.rows) ||
+      !documentValue.positions || !Array.isArray(documentValue.positions.rows) ||
+      !documentValue.outcomes || !Array.isArray(documentValue.outcomes.rows) ||
       !documentValue.funnel) {
     throw new Error('invalid workbench projection');
   }

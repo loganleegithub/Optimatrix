@@ -6,17 +6,17 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `DUAL_PRODUCT_CONSTRUCTION_ACCEPTED`
+**Current implementation status:** `PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY_AUTHORIZED`
 
 **Accepted implementation boundary:** `INVERSE_BTC_V1_CONSTRUCTION_ACCEPTED_AT_89A6EB02`
 
 **Production Short Vol Radar:** `LINEAR_BTC_USDC_V1_ACCEPTED`
 
-**Persistent service:** `LOCAL_INVERSE_STABILITY_LOOP_AUTHORIZED`
+**Persistent service:** `STABLE_CASE_REPOSITORY_RECOVERY_AUTHORIZED`
 
-**Live commands:** `ITERATIVE_INVERSE_REPAIR_RESTART_MONITOR_AUTHORIZED`
+**Live commands:** `ONE_CLEAN_LEGACY_MIGRATION_AND_RECOVERY_CUTOVER_AFTER_ACCEPTANCE`
 
-**Sole authorized closure:** `SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION`
+**Sole authorized closure:** `SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY`
 
 ## Current truth
 
@@ -102,49 +102,82 @@ Workbench closed. The official Case-directory verifier reported `case_count=0`; 
 v4 Case or Outcome exists, complete, censored, or otherwise. The one-start Authority is consumed
 and cannot be restarted.
 
-## Standing local stability loop
+## Process-independent Entry recovery closure
 
-The human explicitly authorizes Codex to continue without repeated human approval: diagnose a
-failed attempt, stop it cleanly, make the smallest owning-boundary repair, run the focused check for
-that repair, use a fresh state root, and restart the next single Inverse process. Non-major repairs
-remain local on one loop branch; they do not require a Draft PR, merged-main CI, repeated full
-repository gates, or a new Authority change before each restart.
+At task opening, the verified Inverse runtime had six real schema-v4
+`ADMITTED_SHADOW_TRADE` Entries. Their contracts, quantities, entry prices, fees, times, economics,
+product, Policies, Case identities, and `shadow_entry_identity` values were already durable, while
+`0 / 6` could be restored by a later process. The live set can grow while implementation proceeds
+and reached nine in a later read-only snapshot. Six is therefore only the task-opening denominator,
+not an authorization allowlist; the same ownership defect applies to every current and future
+admitted Entry.
 
-Exactly one runtime may exist at a time. No code is hot-swapped into a running process, no failed
-state root is reused, and the three Inverse Policies remain byte-frozen. The first repair is only to
-prepare the external sampler before process start; it is not a runtime-code defect.
+The primary blocker is `RUNTIME_OWNED_ENTRY_LIFECYCLE`. Current clean stop/failure turns an admitted
+Entry into a censored terminal Outcome and every startup creates an empty Case owner under a fresh
+run directory. That contradicts the business meaning of Entry contracts, price, quantity, fees, and
+entry time, which are process-independent.
 
-Stable means one process produces `600` consecutive seconds of sampled
-`RUNNING/CURRENT/ready/KNOWN_COMPLETE` state, with a successful sample at least every `10` seconds,
-one fixed code/runtime/product/Policy identity, positive monitored scope, only Inverse instrument
-names and units, and no Linear/USDC contamination. `NOT_EVALUATED` or `NO_ACTIVE_COMBO` remains a
-neutral diagnostic. After stability passes, that same process continues waiting for the first
-official-reader-complete Inverse schema-v4 `MATURE_KNOWN` or `MATURE_UNKNOWN` Outcome.
+The authorized implementation replaces runtime-local Case directories with one file-backed stable
+`state-root/cases` repository. A runtime owns only Observation Segments. After acquiring the one
+local lease, normal startup automatically scans and restores every compatible non-terminal admitted
+Entry bound to its selected product and exact frozen Policy chain. Controls, Candidate,
+Underwriting, Radar Episodes, and funnel history are never restored. No runtime, count, Case ID, or
+Entry allowlist appears in Authority or normal startup.
+
+Every recovery Segment is `GAPPED`. Its current business data begins `UNKNOWN` until fresh public
+facts settle. `HANDOFF_GAP` is observation quality and cannot synthesize `HOLD` or `CLOSE`. The
+Entry may later form a mature economic Outcome from fresh facts, but every gapped Outcome stores
+`qualification_eligible=false`. First CLOSE and scheduling of its only paired close attempt are one
+durable transition; a pending attempt lost across a process boundary becomes
+`ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS` and is never retried.
+
+Clean stop and handled failure close admitted Entry Segments and no longer write an admitted Entry
+Outcome. An unclean exit may leave Segment close absent; the next runtime still restores the Entry
+with truthful gap state. The stable state root is deliberately reused across externally initiated
+process starts. Exactly one runtime may hold its lease; no code is hot-swapped and the fixed
+Policies are not tuned.
+
+One independent offline legacy migration is authorized after implementation acceptance. It scans
+one user-specified stopped source run and migrates every compatible admitted record; it does not
+accept an Entry allowlist and is not part of `serve-shadow`. Legacy mature Entries remain terminal;
+legacy admitted censoring/incomplete records become process-independent non-terminal aggregates
+whose origin Segment preserves its source observation quality. The first later-runtime Segment,
+not the migrated origin Segment, records the cross-process gap as `GAPPED`. Selected no-trade
+Controls are excluded. Source bytes remain immutable, the destination publishes only after full
+validation, and rerun is idempotent.
 
 ## Allowed work
 
-- start and monitor one Inverse process on a fresh state root;
-- on failure, stop, diagnose, make one minimal local repair, run its focused test, and restart on
-  another fresh state root;
-- keep the stable process running until the first qualifying Inverse v4 Outcome;
-- consolidate Authority, full checks, and remote publication once after stability/business closure.
+- implement the stable Case repository, Observation Segments, automatic all-active Entry recovery,
+  combined first-close/attempt transition, gapped mature Outcome, Workbench projection, official
+  reader, and one offline legacy migration command;
+- use one bounded branch and Draft PR, focused tests, `make check`, and merged-main CI;
+- after acceptance, cleanly stop the current Inverse process, migrate its user-selected legacy run
+  once, and start one Inverse runtime on the stable destination state root;
+- externally restart that runtime on the same stable root when needed; application code restores
+  business Entries but never decides or supervises process restart.
 
 ## Forbidden work
 
-- simultaneous runtimes, concurrent Linear observation, hot code replacement, reuse or mutation of
-  a prior attempt state root, or automatic restart before the failure is diagnosed;
-- Policy or threshold/target/reserve tuning, manufactured clue/Candidate/Case, source replay,
-  injected market fact, or reuse of the five Linear Case directories;
-- any private/account API call, credential, balance, margin, order, fill, capital, settlement
-  action, actual exposure, deployment, or commissioning;
-- interpreting two valid snapshots, the rejected gate, `NOT_EVALUATED`, Candidate zero, Case zero,
-  clean exit, or green CI as frequency, fillability, edge, profitability, qualification, or
-  execution evidence;
-- a manifest, receipt chain, application-owned gate, new persistence/schema, full-feed replay,
-  host PID/log/`lsof` inspection, supervisor, or automatic restart.
+- hard-coded predecessor runtime, six-Entry or Case-ID allowlist, `--carry-case` startup surface,
+  special `SHADOW_CASE_CONTINUATION` object, partial active-book recovery, or Control recovery;
+- synthetic `CLOSE` from a process gap, replay/backfill of missed facts, retry of an uncertain
+  post-CLOSE attempt, or claiming a gapped Outcome qualification-eligible;
+- database, manifest, receipt chain, distributed fencing, per-tick Position checkpoint, generic
+  event log, full-feed replay, supervisor, host PID/log/`lsof` inspection, or commissioning;
+- Policy or threshold/target/reserve tuning, manufactured clue/Candidate/Case, private/account API,
+  credential, balance, margin, order, fill, capital, settlement action, actual exposure, or
+  deployment;
+- simultaneous runtimes, concurrent Linear observation, hot code replacement, or mutation of the
+  stopped legacy source run.
 
 ## Acceptance boundary
 
-The active validation remains incomplete. Codex continues the local repair/restart/monitor loop
-until one process passes the 600-second stability boundary and yields the first qualifying Inverse
-v4 Outcome. Point-in-time health, a short gate, tests, or a clean stop alone do not close the task.
+The closure is complete only when deterministic runtime A → B → C tests prove the same Entry
+identities recover twice from one repository, recovery begins UNKNOWN, segment gaps remain truthful,
+Controls and terminal Entries are excluded, first CLOSE schedules one durable attempt only, an
+uncertain attempt is not retried, and a mature gapped Outcome has qualification false. Migration
+must select all compatible admitted source records without a count/ID special case, preserve source
+bytes, and publish all-or-nothing. Focused tests, `make check`, Draft PR CI, one clean migration, and
+the real Workbench showing all recovered active Entries are required; tests or a point-in-time
+heartbeat alone are insufficient.

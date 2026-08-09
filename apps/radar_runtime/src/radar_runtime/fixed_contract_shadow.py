@@ -51,6 +51,7 @@ from short_vol_underwriting import (
     FactBoundary as DownstreamFactBoundary,
 )
 from short_vol_underwriting.admission import RpcRequestIntent
+from short_vol_underwriting.case_store import RecoverableShadowEntry, ShadowCaseStore
 from short_vol_underwriting.constants import ADMISSION_CUTOFF_LEAD_MS
 from short_vol_underwriting.owner import (
     COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE,
@@ -151,8 +152,14 @@ class FixedContractShadowRuntimeAdapter:
         self,
         *,
         owner: FixedContractShadowOwner,
+        case_store: ShadowCaseStore | None = None,
+        recoverables: Sequence[RecoverableShadowEntry] = (),
     ) -> None:
+        if recoverables and case_store is None:
+            raise ValueError("recovered Entries require their stable Shadow Case store")
         self.owner = owner
+        self._case_store = case_store
+        self._staged_recoveries = tuple(recoverables)
         self._session_epoch: int | None = None
         self._option_sources: dict[str, _OptionSource] = {}
         self._options_by_identity: dict[str, _OptionSource] = {}
@@ -184,7 +191,10 @@ class FixedContractShadowRuntimeAdapter:
 
     @property
     def required_option_instrument_names(self) -> tuple[str, ...]:
-        return self.owner.required_option_instrument_names
+        names = set(self.owner.required_option_instrument_names)
+        for recovery in self._staged_recoveries:
+            names.update(recovery.required_option_instrument_names)
+        return tuple(sorted(names))
 
     @property
     def retained_state_counts(self) -> Mapping[str, int]:
@@ -324,7 +334,7 @@ class FixedContractShadowRuntimeAdapter:
                     ),
                 )
             )
-        pending_position_names = self.owner.required_option_instrument_names
+        pending_position_names = self.required_option_instrument_names
         if pending_position_names:
             crossings.extend(
                 self._currentness_crossings(
@@ -409,6 +419,7 @@ class FixedContractShadowRuntimeAdapter:
         self._require_bindings(reducer)
         self._last_reducer = reducer
         self._refresh_sources(reducer, boundary)
+        self._activate_staged_recoveries(boundary)
 
         projected, scope_retirements, episode_retirements = self._project_underwriting(
             reducer,
@@ -1242,6 +1253,38 @@ class FixedContractShadowRuntimeAdapter:
             terminal_source=terminal_kind,
         )
         self._consume_transition(transition, ())
+        if self._case_store is not None:
+            self._case_store.close_active_admitted_segments(
+                boundary=downstream,
+                terminal_state=("CENSORED_AT_STOP" if source == "STOP" else "CENSORED_AT_FAILURE"),
+            )
+
+    def _activate_staged_recoveries(
+        self,
+        boundary: DownstreamFactBoundary,
+    ) -> None:
+        if not self._staged_recoveries:
+            return
+        case_store = self._case_store
+        if case_store is None:
+            raise RuntimeError("recovered Entries lost their stable Shadow Case store")
+        recovered = tuple(
+            case_store.open_recovery_segment(
+                seed.case_id,
+                adoption_fact_boundary=boundary,
+            )
+            for seed in self._staged_recoveries
+        )
+        self.owner.activate_recovered_entries(recovered)
+        for entry in recovered:
+            value = self.owner.state_store.get_object(
+                "SHADOW_ENTRY",
+                entry.shadow_entry_identity,
+            )
+            if value is None:
+                raise RuntimeError("recovered Shadow Entry lacks its current projection")
+            self._remember_anchor(value)
+        self._staged_recoveries = ()
 
     def _refresh_sources(
         self,
