@@ -47,7 +47,7 @@ from market_monitor.types import (
 from options_domain import (
     FINAL_INSTRUMENT_LIFECYCLE_STATES,
     INSTRUMENT_LIFECYCLE_STATES,
-    LINEAR_BTC_USDC,
+    INVERSE_BTC,
     TEMPORARILY_UNAVAILABLE_INSTRUMENT_STATES,
     ComboInstrument,
     OptionInstrument,
@@ -663,7 +663,7 @@ class RadarReducer:
         code_identity: str,
         event_sink: RadarEventSink,
         runtime_identity: str,
-        product: OptionProductSpec = LINEAR_BTC_USDC,
+        product: OptionProductSpec = INVERSE_BTC,
         shadow_adapter: ShadowRuntimeAdapter | None = None,
         snapshot_publisher: SettledSnapshotPublisher | None = None,
     ) -> None:
@@ -6325,7 +6325,7 @@ class LiveRadarRuntime:
         code_identity: str,
         event_sink: RadarEventSink,
         runtime_identity: str | None = None,
-        product: OptionProductSpec = LINEAR_BTC_USDC,
+        product: OptionProductSpec = INVERSE_BTC,
         shadow_adapter: ShadowRuntimeAdapter | None = None,
         snapshot_publisher: SettledSnapshotPublisher | None = None,
     ) -> None:

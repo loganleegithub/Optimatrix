@@ -4,9 +4,24 @@
 
 **Long-term product:** autonomous 0–3DTE options decision and trading system
 
-**Current product slice:** Deribit BTC options defined-risk Short Vol — accepted Linear BTC-USDC
-plus accepted Inverse BTC construction, with process-independent admitted Shadow Entry recovery
-under production-public Shadow permission
+**Current product slice:** Deribit `INVERSE_BTC_V1` options defined-risk Short Vol, with
+process-independent admitted Shadow Entry recovery under production-public Shadow permission
+
+## Product roadmap (non-authorizing)
+
+The roadmap is a 2×2 product direction, not an accepted runtime surface. Only the upper-left
+channel is implemented or authorized. `INVERSE_BTC_SHORT_VOL_V1` remains the current implementation
+identifier for that channel; the roadmap name does not rename records in the accepted repository.
+
+| Channel | Implementation | Policy | Runtime authority |
+| --- | --- | --- | --- |
+| `INVERSE_BTC_SHORT_VOL` (`INVERSE_BTC_SHORT_VOL_V1`) | `IMPLEMENTED` | fixed Inverse three-Policy chain | `PUBLIC_SHADOW` |
+| `INVERSE_BTC_LONG_GAMMA` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
+| `INVERSE_ETH_SHORT_VOL` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
+| `INVERSE_ETH_LONG_GAMMA` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
+
+An unimplemented roadmap cell creates no product specification, module, Policy, selector, runtime,
+Case schema, task, or permission. It cannot be inferred from the implemented BTC Short Vol channel.
 
 ## North star
 
@@ -55,23 +70,20 @@ CI, or historical runs grant no additional authority.
 
 ## Product identity and unit boundary
 
-Linear BTC-USDC and Inverse BTC share one opportunity, Underwriting, admission, Position, and
-Outcome state machine, but they are separate economic products. Each runtime selects exactly one
-product profile at startup and binds exactly one matching three-Policy chain for the full run. Every
-active Policy chain and every durable Shadow Case binds one product identity. Existing Linear schema
-v3 Cases bind `LINEAR_BTC_USDC_V1` implicitly and exclusively through their frozen Policy chain so
-their bytes remain unchanged; Inverse schema v4 Cases bind `INVERSE_BTC_V1` explicitly. The product
-identity declares the market family, quote and settlement currencies, price index, native
-option-price unit, economic-semantics version, model-normalization rule, valuation-conversion rule,
-payoff convention, standard fee rule, and Case schema version. A runtime must reject a mixed
-product, mixed Policy chain, or mixed-leg structure before it can become Candidate or Case.
+The sole Online Runtime product is `INVERSE_BTC_V1`. Startup binds its one canonical product
+specification and exact matching Radar, Underwriting, and Position Policies for the full run. There
+is no product selector, fallback product, compatibility profile, or in-process product switch.
+Every active Policy chain and every durable Shadow Case binds the same Inverse product identity. A
+foreign product, mismatched Policy chain, or non-Inverse leg fails before Candidate or Case.
 
-Linear BTC-USDC uses USDC-native premium, fees, settlement, payoff, and PnL. Inverse BTC uses BTC-
-native premium, fees, settlement cashflow, and PnL; a declared BTC index converts those native
-amounts to a current USD valuation boundary. The model-normalized premium and current USD valuation
-are different quantities and may not be substituted. Defined strike width limits USD payoff, while
-the corresponding BTC liability depends on settlement price. Public facts do not establish actual
-account margin, which remains `UNKNOWN`.
+The product identity declares the market family, quote and settlement currencies, `btc_usd` price
+index, BTC-native option-price unit, economic-semantics version, model-normalization rule,
+valuation-conversion rule, payoff convention, standard fee rule, and Inverse Case schema version.
+Premium, fees, settlement cashflow, and PnL are BTC-native; the causal BTC index converts those
+native amounts to an explicitly labeled current USD valuation boundary. Model-normalized premium
+and current USD valuation are different quantities and may not be substituted. Defined strike
+width limits USD payoff, while the corresponding BTC liability depends on settlement price. Public
+facts do not establish actual account margin, which remains `UNKNOWN`.
 
 ## Product funnel
 
@@ -150,7 +162,7 @@ facts, including the protective-leg selector-rule identity and Candidate protect
 cannot be reconstructed after option scope is released. `enrollment_kind` discriminates an admitted
 Candidate trade from one pre-outcome selected no-trade decision control; a control has no Candidate
 or `SHADOW_ENTRY` identity. Strictly future bounded transitions and one terminal Outcome may then be
-stored. The accepted v3/v4 `SHADOW_CASE_OPENED` shapes and product schema identities remain
+stored. The accepted Inverse `SHADOW_CASE_OPENED` shape and product schema identity remain
 unchanged. For a new admitted Entry, its origin `SHADOW_CASE_SEGMENT_OPENED` instead freezes the
 `entry_position_baseline` needed after restart: the entry index and short-leg mark IV with their
 exact source identities and boundaries. A migrated legacy Entry that lacks those accepted source

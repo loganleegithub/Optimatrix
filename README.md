@@ -1,17 +1,16 @@
 # Optimatrix
 
 Optimatrix is a trader-facing BTC 0–3DTE options opportunity-discovery and Shadow-learning system.
-The accepted implementation contains Deribit Linear BTC-USDC and Inverse BTC defined-risk Short Vol
-as two strict product profiles without a second runtime architecture. One process selects exactly
-one product and its matching three-Policy chain at startup; it never mixes products, legs, funnels,
-state roots, or Outcomes. The system has no private account, order, fill, capital, actual-margin, or
-actual-position capability.
+The Online Runtime has one product: Deribit `INVERSE_BTC_V1` defined-risk Short Vol. One process
+binds the canonical Inverse product specification and its exact three-Policy chain for the full
+run; there is no product selector, fallback, or runtime product switch. The system has no private
+account, order, fill, capital, actual-margin, or actual-position capability.
 
 ## Product flow
 
 ```text
 Deribit public facts
-→ one startup-selected product profile and Policy chain
+→ fixed `INVERSE_BTC_V1` product specification and Policy chain
 → bounded current market state
 → Short Vol Radar
 → Underwriting-selected frozen protective vertical
@@ -23,6 +22,18 @@ Deribit public facts
 → strictly future Shadow Case Outcome
 ```
 
+## Product roadmap
+
+The roadmap is non-authorizing. Only the upper-left channel is implemented; the other cells create
+no Policy, runtime, module, or placeholder in this repository.
+
+| Channel | Implementation | Policy | Runtime |
+| --- | --- | --- | --- |
+| `INVERSE_BTC_SHORT_VOL` (`INVERSE_BTC_SHORT_VOL_V1`) | `IMPLEMENTED` | fixed Inverse three-Policy chain | `PUBLIC_SHADOW` |
+| `INVERSE_BTC_LONG_GAMMA` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
+| `INVERSE_ETH_SHORT_VOL` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
+| `INVERSE_ETH_LONG_GAMMA` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
+
 Before Shadow enrollment, market facts, Radar results, anomalies, quotes, Underwriting, Candidate,
 and Workbench projections are in-memory current state. They are not durable research records. The
 first durable product record is `SHADOW_CASE_OPENED`; a later qualification Cohort is derived
@@ -30,26 +41,18 @@ offline from Shadow Cases.
 
 ## Current stage
 
-The permission boundary remains `PUBLIC_SHADOW`. The final accepted Linear process is
-`STOPPED_CLEANLY`, is not authorized to restart, and reached
-`5,043,177` applicable and `5,040,616` Radar-known evaluations, `11` Episodes, `6`
-Underwriting-evaluable structures, and zero Candidates or admitted-Candidate Cases. All six
-evaluable structures stopped at `CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE`. The separate
-selected-decision projection made six future-blind selections: five opened complete no-trade
-control Cases and one terminalized `UNKNOWN_CONSUMED` on receive skew. All five Outcomes are
-`CENSORED_AT_STOP`; `COMPLETE` means lifecycle-terminal, not known economics or profitability.
+The permission boundary remains `PUBLIC_SHADOW`. The repository's accepted online surface is
+Inverse BTC only: the canonical startup, product specification, public source, Policy chain, and
+schema family all resolve to `INVERSE_BTC_V1`. There is no active implementation task and no live
+command is authorized by the accepted repository state.
 
-PR #27 accepted `INVERSE_BTC_V1` construction at merged-main code identity `89a6eb02...` while
-preserving exact Linear schema-v3 behavior. PR #28 authorized one Inverse-only process, which
-reached exact-identity `RUNNING/CURRENT/ready` snapshots with `128 / 128` current-known instruments
-and no product contamination. The snapshots were `100,000 ms` apart against the frozen `30,000 ms`
-maximum, so the first-600-second gate is `REJECTED / GATE_OBSERVATION_INTERVAL_UNPROVEN`. The process
-stopped cleanly without restart; the official verifier reports zero Cases and zero Outcomes. The
-human now authorizes one local repair/restart/monitor loop without repeated per-fix PR/CI or human
-approval: use focused checks and fresh state roots until one process is stable for 600 sampled
-CURRENT seconds, then keep that process waiting for the first Inverse v4 Outcome. This validation
-failure does not establish a runtime defect, account margin, frequency, edge, profitability, or
-qualification.
+The existing loopback process at `127.0.0.1:8765` was observed from the older code identity
+`270920fb1fcb255c648e95361f31c1e5075ec294`. It has not been hot-swapped, stopped, restarted, or
+repointed, and no external state root was opened, migrated, rewritten, or deleted for this
+repository closure. Repository checks do not prove the accepted source is deployed or establish
+current market health, fillability, account margin, frequency, edge, profitability, or
+qualification. Exact live identity and permission details are in
+`docs/authority/CURRENT_STAGE.md`.
 
 See:
 

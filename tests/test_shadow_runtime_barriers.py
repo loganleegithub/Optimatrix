@@ -543,7 +543,7 @@ def test_ahead_index_candidate_does_not_overwrite_downstream_receipt(
     first_boundary = FactBoundary(1, 1, 1_030, 1)
     assert runtime.reducer._apply_index(
         {
-            "index_name": "btc_usdc",
+            "index_name": "btc_usd",
             "timestamp": 2_000,
             "price": "100000.25",
         },
@@ -557,7 +557,7 @@ def test_ahead_index_candidate_does_not_overwrite_downstream_receipt(
     trusted_upper = runtime.reducer.clock.interval_at(ahead_boundary.received_monotonic_ms).upper_ms
     assert runtime.reducer._apply_index(
         {
-            "index_name": "btc_usdc",
+            "index_name": "btc_usd",
             "timestamp": trusted_upper + 1,
             "price": "999999.00",
         },

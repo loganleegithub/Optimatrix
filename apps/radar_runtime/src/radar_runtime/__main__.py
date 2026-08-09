@@ -4,7 +4,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from options_domain import OptionProductName
+from options_domain import INVERSE_BTC
 from short_vol_underwriting import migrate_legacy_admitted_cases
 
 from radar_runtime.identity import clean_code_identity, git_repository_root
@@ -52,7 +52,7 @@ def _run_legacy_migration(arguments: argparse.Namespace) -> int:
         raise PersistentServiceStartupError(
             "migration source and destination state roots cannot overlap"
         )
-    product, policies = load_persistent_product_policies(repository, arguments.product)
+    product, policies = load_persistent_product_policies(repository, INVERSE_BTC)
     with SingleInstanceLease(source_root, preserve_existing_lock=True):
         destination_root = prepare_persistent_state_root(
             arguments.destination_state_root,
@@ -84,20 +84,10 @@ def main() -> int:
     service_parser.add_argument("--state-root", type=Path, required=True)
     service_parser.add_argument("--workbench-host", default="127.0.0.1")
     service_parser.add_argument("--workbench-port", type=int, default=8765)
-    service_parser.add_argument(
-        "--product",
-        choices=tuple(product.value for product in OptionProductName),
-        default=OptionProductName.LINEAR_BTC_USDC.value,
-    )
     migration_parser = subparsers.add_parser("migrate-shadow-cases")
     migration_parser.add_argument("--source-state-root", type=Path, required=True)
     migration_parser.add_argument("--source-cases", type=Path, required=True)
     migration_parser.add_argument("--destination-state-root", type=Path, required=True)
-    migration_parser.add_argument(
-        "--product",
-        choices=tuple(product.value for product in OptionProductName),
-        required=True,
-    )
     arguments = parser.parse_args()
     if arguments.command == "migrate-shadow-cases":
         return _run_legacy_migration(arguments)
@@ -107,7 +97,7 @@ def main() -> int:
             process_cwd=Path.cwd(),
             workbench_host=arguments.workbench_host,
             workbench_port=arguments.workbench_port,
-            product=arguments.product,
+            product=INVERSE_BTC,
         )
     )
     print(

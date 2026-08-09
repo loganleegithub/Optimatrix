@@ -5,11 +5,13 @@ from decimal import Decimal
 
 from market_monitor import ContinuousOrderBook, PriceLevel
 from options_domain import (
+    INVERSE_BTC,
     AmountMetadata,
     DepthWalk,
     OptionInstrument,
     OptionType,
     PriceTickMetadata,
+    standard_option_fee_native,
 )
 from short_vol_radar.baseline import BaselineResult, WindowDiagnostics
 from short_vol_radar.black import DecimalInterval, TotalVolatilityInterval
@@ -21,14 +23,13 @@ from short_vol_radar.review import (
     DiagnosticState,
     LeggedReferenceState,
     build_review_contexts,
-    standard_option_fee_usdc,
 )
 
 TARGET_QUANTITY = Decimal("0.1")
 FEE_RATE = Decimal("0.0003")
 EXPIRY_MS = 86_400_000
 AMOUNT = AmountMetadata(Decimal(1), TARGET_QUANTITY, TARGET_QUANTITY)
-PRICE_TICK = PriceTickMetadata(Decimal("0.1"))
+PRICE_TICK = PriceTickMetadata(Decimal("0.000001"))
 
 
 def _option(
@@ -49,7 +50,7 @@ def _option(
 
 
 def _walk(price: str) -> DepthWalk:
-    parsed = Decimal(price)
+    parsed = Decimal(price) / Decimal("100000")
     return DepthWalk(
         consumed=(PriceLevel(parsed, TARGET_QUANTITY),),
         target_amount=TARGET_QUANTITY,
@@ -59,6 +60,8 @@ def _walk(price: str) -> DepthWalk:
 
 
 def _book(name: str, *, bid: str, ask: str) -> ContinuousOrderBook:
+    native_bid = Decimal(bid) / Decimal("100000")
+    native_ask = Decimal(ask) / Decimal("100000")
     book = ContinuousOrderBook(name)
     book.apply(
         {
@@ -66,8 +69,8 @@ def _book(name: str, *, bid: str, ask: str) -> ContinuousOrderBook:
             "timestamp": 1,
             "instrument_name": name,
             "change_id": 1,
-            "bids": [["new", bid, str(TARGET_QUANTITY)]],
-            "asks": [["new", ask, str(TARGET_QUANTITY)]],
+            "bids": [["new", native_bid, str(TARGET_QUANTITY)]],
+            "asks": [["new", native_ask, str(TARGET_QUANTITY)]],
         },
         1,
     )
@@ -184,22 +187,24 @@ def _ticker(delta: str, mark_iv: str) -> TickerState:
     )
 
 
-def test_standard_option_fee_uses_index_formula_and_premium_cap() -> None:
-    capped = standard_option_fee_usdc(
-        index_usdc_per_btc=Decimal("100000"),
-        option_price_usdc_per_btc=Decimal(2),
+def test_inverse_standard_option_fee_uses_native_rate_and_premium_cap() -> None:
+    capped = standard_option_fee_native(
+        product=INVERSE_BTC,
+        index_price=Decimal("100000"),
+        native_option_price=Decimal("0.00002"),
         quantity_btc=TARGET_QUANTITY,
-        fee_rate_index_fraction=FEE_RATE,
+        fee_rate=FEE_RATE,
     )
-    index_limited = standard_option_fee_usdc(
-        index_usdc_per_btc=Decimal("100000"),
-        option_price_usdc_per_btc=Decimal(1000),
+    rate_limited = standard_option_fee_native(
+        product=INVERSE_BTC,
+        index_price=Decimal("100000"),
+        native_option_price=Decimal("0.01"),
         quantity_btc=TARGET_QUANTITY,
-        fee_rate_index_fraction=FEE_RATE,
+        fee_rate=FEE_RATE,
     )
 
-    assert capped == Decimal("0.0250")
-    assert index_limited == Decimal("3.0000")
+    assert capped == Decimal("0.000000250")
+    assert rate_limited == Decimal("0.000030")
 
 
 def test_review_builds_regime_surface_and_non_atomic_vertical_reference() -> None:

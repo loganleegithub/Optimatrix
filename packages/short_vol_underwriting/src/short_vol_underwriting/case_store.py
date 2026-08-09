@@ -14,7 +14,6 @@ from pathlib import Path
 from types import MappingProxyType
 
 from options_domain import (
-    LINEAR_BTC_USDC,
     OptionProductSpec,
     product_for_identity,
 )
@@ -47,8 +46,7 @@ from short_vol_underwriting.model import (
 )
 from short_vol_underwriting.policy import PolicyChain
 
-SHADOW_CASE_SCHEMA_VERSION = 3
-PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION = 4
+SHADOW_CASE_SCHEMA_VERSION = 4
 OPENED_KIND = "SHADOW_CASE_OPENED"
 FIRST_CLOSE_KIND = "SHADOW_CASE_FIRST_CLOSE"
 OUTCOME_KIND = "SHADOW_CASE_OUTCOME"
@@ -336,7 +334,7 @@ class ShadowCaseStore:
         *,
         runtime_active: bool = False,
     ) -> ShadowCaseRead:
-        """Safely read one immutable schema-v3/v4 run Case for offline migration."""
+        """Safely read one immutable schema-v4 run-layout Case for offline migration."""
 
         require_identity(case_id, "case_id")
         case_directory = self._case_directory(case_id)
@@ -710,60 +708,55 @@ class ShadowCaseStore:
             },
             "non_claims": payload.get("non_claims"),
         }
-        if self.schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-            contractual_payoff_cap = _decimal(
-                payload.get("payoff_cap_usdc"),
-                "payoff_cap_usdc",
-            )
-            entry_valuation_index = _decimal(
-                payload.get("entry_valuation_index_price"),
-                "entry_valuation_index_price",
-            )
-            native_payoff_cap_at_entry_index = self.product.native_payoff_from_strike_value(
-                contractual_payoff_cap,
-                settlement_price=entry_valuation_index,
-            )
-            opened.update(
-                {
-                    "product": _product_record(self.product),
-                    "native_entry_economics": {
-                        "native_gross_entry_credit": payload.get("native_gross_entry_credit"),
-                        "native_entry_fee_reserve": payload.get("native_entry_fee_reserve"),
-                        "native_net_entry_credit": payload.get("native_net_entry_credit"),
-                        "entry_valuation_index_price": payload.get("entry_valuation_index_price"),
-                        "boundary_valued_gross_entry_credit_usd": payload.get(
-                            "gross_entry_credit_usdc"
-                        ),
-                        "boundary_valued_entry_fee_reserve_usd": payload.get(
-                            "entry_fee_reserve_usdc"
-                        ),
-                        "boundary_valued_net_entry_credit_usd": payload.get(
-                            "net_entry_credit_usdc"
-                        ),
-                        "contractual_payoff_cap_strike_currency": contractual_payoff_cap,
-                        "native_contractual_payoff_cap_at_entry_index": (
-                            native_payoff_cap_at_entry_index
-                        ),
-                        "native_contractual_payoff_cap_basis": (
-                            "ENTRY_INDEX_COUNTERFACTUAL_NOT_EXPIRY_SETTLEMENT"
-                        ),
-                        "expiry_delivery_price": None,
-                        "native_contractual_payoff_at_expiry": None,
-                    },
-                }
-            )
-            opened["structure"] = _renamed_fields(
-                _mapping(opened.get("structure"), "structure"),
-                _V4_STRUCTURE_FIELDS,
-            )
-            opened["underwriting"] = _renamed_fields(
-                _mapping(opened.get("underwriting"), "underwriting"),
-                _V4_UNDERWRITING_FIELDS,
-            )
-            opened["entry_economics"] = _renamed_fields(
-                _mapping(opened.get("entry_economics"), "entry_economics"),
-                _V4_ENTRY_ECONOMICS_FIELDS,
-            )
+        contractual_payoff_cap = _decimal(
+            payload.get("payoff_cap_usdc"),
+            "payoff_cap_usdc",
+        )
+        entry_valuation_index = _decimal(
+            payload.get("entry_valuation_index_price"),
+            "entry_valuation_index_price",
+        )
+        native_payoff_cap_at_entry_index = self.product.native_payoff_from_strike_value(
+            contractual_payoff_cap,
+            settlement_price=entry_valuation_index,
+        )
+        opened.update(
+            {
+                "product": _product_record(self.product),
+                "native_entry_economics": {
+                    "native_gross_entry_credit": payload.get("native_gross_entry_credit"),
+                    "native_entry_fee_reserve": payload.get("native_entry_fee_reserve"),
+                    "native_net_entry_credit": payload.get("native_net_entry_credit"),
+                    "entry_valuation_index_price": payload.get("entry_valuation_index_price"),
+                    "boundary_valued_gross_entry_credit_usd": payload.get(
+                        "gross_entry_credit_usdc"
+                    ),
+                    "boundary_valued_entry_fee_reserve_usd": payload.get("entry_fee_reserve_usdc"),
+                    "boundary_valued_net_entry_credit_usd": payload.get("net_entry_credit_usdc"),
+                    "contractual_payoff_cap_strike_currency": contractual_payoff_cap,
+                    "native_contractual_payoff_cap_at_entry_index": (
+                        native_payoff_cap_at_entry_index
+                    ),
+                    "native_contractual_payoff_cap_basis": (
+                        "ENTRY_INDEX_COUNTERFACTUAL_NOT_EXPIRY_SETTLEMENT"
+                    ),
+                    "expiry_delivery_price": None,
+                    "native_contractual_payoff_at_expiry": None,
+                },
+            }
+        )
+        opened["structure"] = _renamed_fields(
+            _mapping(opened.get("structure"), "structure"),
+            _V4_STRUCTURE_FIELDS,
+        )
+        opened["underwriting"] = _renamed_fields(
+            _mapping(opened.get("underwriting"), "underwriting"),
+            _V4_UNDERWRITING_FIELDS,
+        )
+        opened["entry_economics"] = _renamed_fields(
+            _mapping(opened.get("entry_economics"), "entry_economics"),
+            _V4_ENTRY_ECONOMICS_FIELDS,
+        )
         normalized = _normalized_mapping(opened)
         _validate_opened(
             normalized,
@@ -963,22 +956,21 @@ class ShadowCaseStore:
             "censor_mask": payload.get("censor_mask"),
             "non_claims": payload.get("non_claims"),
         }
-        if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-            outcome_record["native_outcome_economics"] = {
-                "native_gross_close_cashflow": payload.get("native_gross_close_cashflow"),
-                "native_close_fee_reserve": payload.get("native_close_fee_reserve"),
-                "native_net_close_cashflow": payload.get("native_net_close_cashflow"),
-                "native_gross_pnl": payload.get("native_gross_pnl"),
-                "native_total_fee_reserve": payload.get("native_total_fee_reserve"),
-                "native_net_pnl": payload.get("native_net_pnl"),
-                "close_valuation_index_price": payload.get("close_valuation_index_price"),
-                "boundary_valued_net_pnl_usd": payload.get("boundary_valued_net_pnl_usd"),
-                "exit_valued_native_net_pnl_usd": payload.get("exit_valued_native_net_pnl_usd"),
-            }
-            outcome_record = _renamed_fields(
-                outcome_record,
-                _V4_OUTCOME_ECONOMICS_FIELDS,
-            )
+        outcome_record["native_outcome_economics"] = {
+            "native_gross_close_cashflow": payload.get("native_gross_close_cashflow"),
+            "native_close_fee_reserve": payload.get("native_close_fee_reserve"),
+            "native_net_close_cashflow": payload.get("native_net_close_cashflow"),
+            "native_gross_pnl": payload.get("native_gross_pnl"),
+            "native_total_fee_reserve": payload.get("native_total_fee_reserve"),
+            "native_net_pnl": payload.get("native_net_pnl"),
+            "close_valuation_index_price": payload.get("close_valuation_index_price"),
+            "boundary_valued_net_pnl_usd": payload.get("boundary_valued_net_pnl_usd"),
+            "exit_valued_native_net_pnl_usd": payload.get("exit_valued_native_net_pnl_usd"),
+        }
+        outcome_record = _renamed_fields(
+            outcome_record,
+            _V4_OUTCOME_ECONOMICS_FIELDS,
+        )
         producing_case: ShadowCaseRead | None = None
         if admitted:
             if terminal_state not in {"MATURE_KNOWN", "MATURE_UNKNOWN"}:
@@ -1681,19 +1673,11 @@ def _plan_legacy_migration(
 
 
 def _legacy_entry_position_baseline(opened: Mapping[str, object]) -> dict[str, object]:
-    schema_version = _record_schema_version(opened)
-    index_field = (
-        "entry_index_usd_per_btc"
-        if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION
-        else "entry_index_usdc_per_btc"
-    )
-    index_value: object = None
-    if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-        native = _mapping(opened.get("native_entry_economics"), "native_entry_economics")
-        index_value = native.get("entry_valuation_index_price")
+    _record_schema_version(opened)
+    native = _mapping(opened.get("native_entry_economics"), "native_entry_economics")
     return _normalized_mapping(
         {
-            index_field: index_value,
+            "entry_index_usd_per_btc": native.get("entry_valuation_index_price"),
             "entry_index_source_ref": None,
             "entry_short_leg_mark_iv_fraction": None,
             "entry_short_leg_mark_iv_source_ref": None,
@@ -1989,17 +1973,12 @@ def _entry_position_baseline(
     schema_version: int,
     opened_boundary: Mapping[str, object],
 ) -> dict[str, object]:
-    index_field = (
-        "entry_index_usd_per_btc"
-        if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION
-        else "entry_index_usdc_per_btc"
-    )
     entry_index = payload.get("entry_index_usdc_per_btc")
     if entry_index is None:
         entry_index = payload.get("entry_valuation_index_price")
     baseline = _normalized_mapping(
         {
-            index_field: entry_index,
+            "entry_index_usd_per_btc": entry_index,
             "entry_index_source_ref": payload.get("entry_index_source_ref"),
             "entry_short_leg_mark_iv_fraction": payload.get("entry_short_leg_mark_iv_fraction"),
             "entry_short_leg_mark_iv_source_ref": payload.get("entry_short_leg_mark_iv_source_ref"),
@@ -2022,22 +2001,18 @@ def _validate_entry_position_baseline(
     require_complete: bool = False,
 ) -> None:
     baseline = _mapping(value, "entry_position_baseline")
-    index_field = (
-        "entry_index_usd_per_btc"
-        if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION
-        else "entry_index_usdc_per_btc"
-    )
+    index_field = "entry_index_usd_per_btc"
     _exact_keys(
         baseline,
         {
-            index_field,
+            "entry_index_usd_per_btc",
             "entry_index_source_ref",
             "entry_short_leg_mark_iv_fraction",
             "entry_short_leg_mark_iv_source_ref",
         },
         "entry_position_baseline",
     )
-    index_value = baseline.get(index_field)
+    index_value = baseline.get("entry_index_usd_per_btc")
     mark_value = baseline.get("entry_short_leg_mark_iv_fraction")
     if index_value is not None and _decimal(index_value, index_field) <= 0:
         raise ShadowCaseStoreError("entry Position index baseline must be positive")
@@ -2536,11 +2511,8 @@ def _recoverable_entry_values(
     structure = _mapping(opened.get("structure"), "structure")
     economics = _mapping(opened.get("entry_economics"), "entry_economics")
 
-    def economic(legacy: str, product_key: str) -> Decimal:
-        return _decimal(
-            economics.get(product_key if schema_version == 4 else legacy),
-            product_key if schema_version == 4 else legacy,
-        )
+    def economic(product_key: str) -> Decimal:
+        return _decimal(economics.get(product_key), product_key)
 
     leg_identities = _sequence(
         structure.get("canonical_leg_identities"),
@@ -2552,8 +2524,8 @@ def _recoverable_entry_values(
         structure.get("entry_component_legs"),
         schema_version=schema_version,
     )
-    strike_suffix = "usd_per_btc" if schema_version == 4 else "usdc_per_btc"
-    index_key = "entry_index_usd_per_btc" if schema_version == 4 else "entry_index_usdc_per_btc"
+    strike_suffix = "usd_per_btc"
+    index_key = "entry_index_usd_per_btc"
     entry_index_source = _recoverable_source(
         baseline.get("entry_index_source_ref"),
         "entry_index_source_ref",
@@ -2576,31 +2548,27 @@ def _recoverable_entry_values(
         and entry_mark_source is not None
         else None
     )
-    gross = economic("gross_entry_credit_usdc", "gross_entry_credit_usd")
-    fee = economic("entry_fee_reserve_usdc", "entry_fee_reserve_usd")
-    net = economic("net_entry_credit_usdc", "net_entry_credit_usd")
-    width = economic("width_usdc_per_btc", "width_usd_per_btc")
-    if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-        native = _mapping(opened.get("native_entry_economics"), "native_entry_economics")
-        native_gross = _decimal(
-            native.get("native_gross_entry_credit"),
-            "native_gross_entry_credit",
-        )
-        native_fee = _decimal(
-            native.get("native_entry_fee_reserve"),
-            "native_entry_fee_reserve",
-        )
-        native_net = _decimal(
-            native.get("native_net_entry_credit"),
-            "native_net_entry_credit",
-        )
-        valuation_index = _decimal(
-            native.get("entry_valuation_index_price"),
-            "entry_valuation_index_price",
-        )
-    else:
-        native_gross, native_fee, native_net = gross, fee, net
-        valuation_index = Decimal(1)
+    gross = economic("gross_entry_credit_usd")
+    fee = economic("entry_fee_reserve_usd")
+    net = economic("net_entry_credit_usd")
+    width = economic("width_usd_per_btc")
+    native = _mapping(opened.get("native_entry_economics"), "native_entry_economics")
+    native_gross = _decimal(
+        native.get("native_gross_entry_credit"),
+        "native_gross_entry_credit",
+    )
+    native_fee = _decimal(
+        native.get("native_entry_fee_reserve"),
+        "native_entry_fee_reserve",
+    )
+    native_net = _decimal(
+        native.get("native_net_entry_credit"),
+        "native_net_entry_credit",
+    )
+    valuation_index = _decimal(
+        native.get("entry_valuation_index_price"),
+        "entry_valuation_index_price",
+    )
     quantity = _decimal(structure.get("full_quantity_btc"), "full_quantity_btc")
     terms = EntryTerms(
         short_leg_identity=_identity(leg_identities[0], "short_leg_identity"),
@@ -2654,20 +2622,15 @@ def _recoverable_entry_values(
         entry_fee_reserve_usdc=fee,
         net_entry_credit_usdc=net,
         width_usdc_per_btc=width,
-        payoff_cap_usdc=economic("payoff_cap_usdc", "contractual_payoff_cap_usd"),
+        payoff_cap_usdc=economic("contractual_payoff_cap_usd"),
         contractual_payoff_max_loss_ex_fees_usdc=economic(
-            "contractual_payoff_max_loss_ex_fees_usdc",
-            "entry_boundary_valued_payoff_loss_ex_fees_usd",
+            "entry_boundary_valued_payoff_loss_ex_fees_usd"
         ),
         entry_fee_reserved_payoff_loss_usdc=economic(
-            "entry_fee_reserved_payoff_loss_usdc",
-            "entry_boundary_valued_payoff_loss_including_entry_fee_usd",
+            "entry_boundary_valued_payoff_loss_including_entry_fee_usd"
         ),
-        future_cost_reserve_usdc=economic("future_cost_reserve_usdc", "future_cost_reserve_usd"),
-        underwriting_reserved_loss_usdc=economic(
-            "underwriting_reserved_loss_usdc",
-            "underwriting_reserved_loss_usd",
-        ),
+        future_cost_reserve_usdc=economic("future_cost_reserve_usd"),
+        underwriting_reserved_loss_usdc=economic("underwriting_reserved_loss_usd"),
     )
 
 
@@ -2677,8 +2640,6 @@ def _runtime_component_legs(
     schema_version: int,
 ) -> tuple[Mapping[str, object], ...]:
     legs = _sequence(value, "entry_component_legs")
-    if schema_version != PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-        return tuple(_freeze_mapping(_mapping(leg, "entry component leg")) for leg in legs)
     inverse_fields = {
         product_key: legacy for legacy, product_key in _V4_COMPONENT_LEG_FIELDS.items()
     }
@@ -2951,8 +2912,7 @@ def _validate_opened(
         "entry_economics",
         "non_claims",
     }
-    if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-        required.update({"product", "native_entry_economics"})
+    required.update({"product", "native_entry_economics"})
     if set(value) != required:
         raise ShadowCaseStoreError("opened record has an invalid key set")
     if value.get("record_kind") != OPENED_KIND or value.get("schema_version") != schema_version:
@@ -3069,10 +3029,9 @@ def _validate_opened(
         structure.get("long_leg_instrument_name"),
         "long_leg_instrument_name",
     )
-    if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION and (
-        not product.matches_instrument_name(short_instrument_name)
-        or not product.matches_instrument_name(long_instrument_name)
-    ):
+    if not product.matches_instrument_name(
+        short_instrument_name
+    ) or not product.matches_instrument_name(long_instrument_name):
         raise ShadowCaseStoreError("opened component instrument does not match its option product")
     expiry_ms = structure.get("expiry_ms")
     if isinstance(expiry_ms, bool) or not isinstance(expiry_ms, int) or expiry_ms <= 0:
@@ -3100,26 +3059,24 @@ def _validate_opened(
         ),
         "long_strike_usdc_per_btc",
     )
-    if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION and (
-        (option_type == "call" and long_strike <= short_strike)
-        or (option_type == "put" and long_strike >= short_strike)
+    if (option_type == "call" and long_strike <= short_strike) or (
+        option_type == "put" and long_strike >= short_strike
     ):
         raise ShadowCaseStoreError("opened component strikes are not a protective vertical")
-    if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-        _validate_product_instrument_semantics(
-            short_instrument_name,
-            product=product,
-            expiry_ms=expiry_ms,
-            strike=short_strike,
-            option_type=option_type,
-        )
-        _validate_product_instrument_semantics(
-            long_instrument_name,
-            product=product,
-            expiry_ms=expiry_ms,
-            strike=long_strike,
-            option_type=option_type,
-        )
+    _validate_product_instrument_semantics(
+        short_instrument_name,
+        product=product,
+        expiry_ms=expiry_ms,
+        strike=short_strike,
+        option_type=option_type,
+    )
+    _validate_product_instrument_semantics(
+        long_instrument_name,
+        product=product,
+        expiry_ms=expiry_ms,
+        strike=long_strike,
+        option_type=option_type,
+    )
     quantity = _decimal(structure.get("full_quantity_btc"), "full_quantity_btc")
     if quantity <= 0:
         raise ShadowCaseStoreError("opened quantity must be positive")
@@ -3359,15 +3316,14 @@ def _validate_opened(
     )
     if predicate_margins != expected_margins:
         raise ShadowCaseStoreError("opened predicate margins do not match entry economics")
-    if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-        _validate_product_aware_entry(
-            value,
-            product=product,
-            component=entry_component,
-            gross_entry=gross_entry,
-            entry_fee=entry_fee,
-            net_entry=net_entry,
-        )
+    _validate_product_aware_entry(
+        value,
+        product=product,
+        component=entry_component,
+        gross_entry=gross_entry,
+        entry_fee=entry_fee,
+        net_entry=net_entry,
+    )
     non_claims = _string_sequence(value.get("non_claims"), "non_claims")
     component_non_claims = (
         "NOT_AN_ORDER",
@@ -3524,7 +3480,7 @@ def _validate_followup(
             schema_version=schema_version,
             mapping=_V4_OUTCOME_ECONOMICS_FIELDS,
         )
-    if expected_kind == OUTCOME_KIND and schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
+    if expected_kind == OUTCOME_KIND:
         expected_keys.add("native_outcome_economics")
     _exact_keys(value, expected_keys, "Case follow-up")
     if value.get("record_kind") != expected_kind or value.get("schema_version") != schema_version:
@@ -3643,31 +3599,30 @@ def _validate_followup(
                 != close_component.valuation_total_fee
             ):
                 raise ShadowCaseStoreError("Outcome economics do not match component close legs")
-            if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-                native = _mapping(
-                    value.get("native_outcome_economics"),
-                    "native_outcome_economics",
+            native = _mapping(
+                value.get("native_outcome_economics"),
+                "native_outcome_economics",
+            )
+            if (
+                _decimal(
+                    native.get("native_gross_close_cashflow"),
+                    "native_gross_close_cashflow",
                 )
-                if (
-                    _decimal(
-                        native.get("native_gross_close_cashflow"),
-                        "native_gross_close_cashflow",
-                    )
-                    != close_component.native_gross_cashflow
-                    or _decimal(
-                        native.get("native_close_fee_reserve"),
-                        "native_close_fee_reserve",
-                    )
-                    != close_component.native_total_fee
-                    or _decimal(
-                        native.get("close_valuation_index_price"),
-                        "close_valuation_index_price",
-                    )
-                    != close_component.valuation_index_price
-                ):
-                    raise ShadowCaseStoreError(
-                        "native Outcome economics do not match component close legs"
-                    )
+                != close_component.native_gross_cashflow
+                or _decimal(
+                    native.get("native_close_fee_reserve"),
+                    "native_close_fee_reserve",
+                )
+                != close_component.native_total_fee
+                or _decimal(
+                    native.get("close_valuation_index_price"),
+                    "close_valuation_index_price",
+                )
+                != close_component.valuation_index_price
+            ):
+                raise ShadowCaseStoreError(
+                    "native Outcome economics do not match component close legs"
+                )
         elif (
             value.get("close_component_pair_identity") is not None
             or value.get("close_component_quote_source_refs") != []
@@ -3707,8 +3662,7 @@ def _validate_outcome_economics(
             raise ShadowCaseStoreError("unknown/censored Outcome carries known economics")
         if outcome.get("economic_availability") != "UNKNOWN":
             raise ShadowCaseStoreError("unknown/censored Outcome availability is invalid")
-        if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-            _validate_product_aware_outcome(opened, outcome)
+        _validate_product_aware_outcome(opened, outcome)
         return
     if outcome.get("economic_availability") != "KNOWN":
         raise ShadowCaseStoreError("known Outcome availability is invalid")
@@ -3768,8 +3722,7 @@ def _validate_outcome_economics(
         )
         if _decimal(raw_value, field) != expected_value:
             raise ShadowCaseStoreError(f"Outcome arithmetic mismatch: {field}")
-    if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-        _validate_product_aware_outcome(opened, outcome)
+    _validate_product_aware_outcome(opened, outcome)
 
 
 def _schema_version_for_product(product: OptionProductSpec) -> int:
@@ -3781,8 +3734,7 @@ def _record_schema_version(value: Mapping[str, object]) -> int:
     if (
         isinstance(schema_version, bool)
         or not isinstance(schema_version, int)
-        or schema_version
-        not in {SHADOW_CASE_SCHEMA_VERSION, PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION}
+        or schema_version != SHADOW_CASE_SCHEMA_VERSION
     ):
         raise ShadowCaseStoreError("Shadow Case schema version is invalid")
     return schema_version
@@ -3803,8 +3755,7 @@ def _shadow_case_identity(
         bindings.underwriting_policy_identity,
         bindings.position_policy_identity,
     ]
-    if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-        members.extend(("schema-v4", product.identity))
+    members.extend(("schema-v4", product.identity))
     members.extend((enrollment_identity, opened_boundary))
     return canonical_identity("ShadowCaseIdentity", *members)
 
@@ -3894,8 +3845,7 @@ def _deribit_expiry_date(value: str) -> date:
 
 
 def _product_from_opened(opened: Mapping[str, object]) -> OptionProductSpec:
-    if _record_schema_version(opened) == SHADOW_CASE_SCHEMA_VERSION:
-        return LINEAR_BTC_USDC
+    _record_schema_version(opened)
     product = _mapping(opened.get("product"), "product")
     return product_for_identity(
         _identity(product.get("product_spec_identity"), "product_spec_identity")
@@ -3903,36 +3853,19 @@ def _product_from_opened(opened: Mapping[str, object]) -> OptionProductSpec:
 
 
 def _component_legs_for_schema(value: object, *, schema_version: int) -> object:
-    if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-        projected_v4: list[dict[str, object]] = []
-        for index, raw in enumerate(_sequence(value, "component legs")):
-            leg = _mapping(raw, f"component leg[{index}]")
-            projected_leg = _renamed_fields(leg, _V4_COMPONENT_LEG_FIELDS)
-            for field in ("raw_consumed_levels_usd", "stressed_consumed_levels_usd"):
-                projected_leg[field] = [
-                    _renamed_fields(
-                        _mapping(level, f"{field} level"),
-                        {"price_usdc_per_btc": "price_usd_per_btc"},
-                    )
-                    for level in _sequence(projected_leg.get(field), field)
-                ]
-            projected_v4.append(projected_leg)
-        return projected_v4
-    legs = _sequence(value, "component legs")
-    legacy_keys = (
-        "canonical_leg_role",
-        "instrument_name",
-        "action",
-        "raw_consumed_levels",
-        "raw_vwap_usdc_per_btc",
-        "stressed_consumed_levels",
-        "stressed_vwap_usdc_per_btc",
-        "fee_reserve_usdc",
-    )
     projected: list[dict[str, object]] = []
-    for index, raw in enumerate(legs):
+    for index, raw in enumerate(_sequence(value, "component legs")):
         leg = _mapping(raw, f"component leg[{index}]")
-        projected.append({key: leg.get(key) for key in legacy_keys})
+        projected_leg = _renamed_fields(leg, _V4_COMPONENT_LEG_FIELDS)
+        for field in ("raw_consumed_levels_usd", "stressed_consumed_levels_usd"):
+            projected_leg[field] = [
+                _renamed_fields(
+                    _mapping(level, f"{field} level"),
+                    {"price_usdc_per_btc": "price_usd_per_btc"},
+                )
+                for level in _sequence(projected_leg.get(field), field)
+            ]
+        projected.append(projected_leg)
     return projected
 
 
@@ -4126,9 +4059,7 @@ def _normalized_mapping(value: Mapping[str, object]) -> dict[str, object]:
 
 
 def _versioned_key(schema_version: int, legacy_key: str, mapping: Mapping[str, str]) -> str:
-    if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-        return mapping.get(legacy_key, legacy_key)
-    return legacy_key
+    return mapping.get(legacy_key, legacy_key)
 
 
 def _versioned_get(
@@ -4515,7 +4446,7 @@ def _validate_predicate_margin_vector(
     value: object,
     field: str,
     *,
-    valuation_unit: str = "USDC",
+    valuation_unit: str,
 ) -> UnderwritingThresholdMargins:
     if not valuation_unit:
         raise ShadowCaseStoreError(f"{field} valuation unit must be non-empty")
@@ -4756,6 +4687,8 @@ def _validate_component_legs(
     product: OptionProductSpec,
     fee_rate_index_fraction: Decimal,
 ) -> _ValidatedComponentEconomics:
+    if schema_version != SHADOW_CASE_SCHEMA_VERSION:
+        raise ShadowCaseStoreError("component legs require Shadow Case schema v4")
     legs = _sequence(value, field)
     if len(legs) != 2:
         raise ShadowCaseStoreError("component entry requires exactly two leg quotes")
@@ -4795,11 +4728,7 @@ def _validate_component_legs(
             schema_version=schema_version,
             mapping=_V4_COMPONENT_LEG_FIELDS,
         )
-        expected_keys = (
-            valuation_keys | product_keys
-            if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION
-            else valuation_keys
-        )
+        expected_keys = valuation_keys | product_keys
         _exact_keys(leg, expected_keys, f"{role} component leg")
         if (
             leg.get("canonical_leg_role") != role
@@ -4825,11 +4754,7 @@ def _validate_component_legs(
             ),
             "stressed_consumed_levels",
         )
-        valuation_price_field = (
-            "price_usd_per_btc"
-            if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION
-            else "price_usdc_per_btc"
-        )
+        valuation_price_field = "price_usd_per_btc"
         if (
             _levels_amount(
                 raw_levels,
@@ -4890,95 +4815,87 @@ def _validate_component_legs(
         )
         valuation_total_fee += valuation_fee
 
-        if schema_version == PRODUCT_AWARE_SHADOW_CASE_SCHEMA_VERSION:
-            native_currency = _text(
-                leg.get("native_premium_currency"),
-                "native_premium_currency",
-            )
-            if native_currency != product.native_premium_currency:
-                raise ShadowCaseStoreError("component native premium currency mismatch")
-            valuation_index = _decimal(
-                leg.get("valuation_index_price"),
-                "valuation_index_price",
-            )
-            if valuation_index <= 0:
-                raise ShadowCaseStoreError("component valuation index must be positive")
-            if observed_index is None:
-                observed_index = valuation_index
-            elif observed_index != valuation_index:
-                raise ShadowCaseStoreError("component legs use different valuation indices")
-            raw_native_levels = _sequence(
-                leg.get("raw_consumed_levels_native"),
-                "raw_consumed_levels_native",
-            )
-            stressed_native_levels = _sequence(
-                leg.get("stressed_consumed_levels_native"),
-                "stressed_consumed_levels_native",
-            )
-            if (
-                _native_levels_amount(raw_native_levels) != quantity
-                or _native_levels_amount(stressed_native_levels) != quantity
-            ):
-                raise ShadowCaseStoreError("native component levels do not cover full quantity")
-            raw_native_vwap = _decimal(leg.get("raw_vwap_native"), "raw native VWAP")
-            stressed_native_vwap = _decimal(
-                leg.get("stressed_vwap_native"),
-                "stressed native VWAP",
-            )
-            native_fee = _decimal(leg.get("native_fee_reserve"), "native fee reserve")
-            if raw_native_vwap <= 0 or stressed_native_vwap <= 0 or native_fee < 0:
-                raise ShadowCaseStoreError("native component economics must be non-negative")
-            expected_native_fee = product.native_option_fee(
-                native_option_price=stressed_native_vwap,
-                index_price=valuation_index,
-                quantity_btc=quantity,
-                fee_rate=fee_rate_index_fraction,
-            )
-            if native_fee != expected_native_fee:
-                raise ShadowCaseStoreError("component native fee does not match the Policy rule")
-            if raw_native_vwap * quantity != _native_levels_value(
-                raw_native_levels
-            ) or stressed_native_vwap * quantity != _native_levels_value(stressed_native_levels):
-                raise ShadowCaseStoreError("native component VWAP does not match consumed levels")
-            if (action == "SELL" and stressed_native_vwap > raw_native_vwap) or (
-                action == "BUY" and stressed_native_vwap < raw_native_vwap
-            ):
-                raise ShadowCaseStoreError("native component stress direction is not conservative")
-            _validate_native_valuation_levels(
-                native_levels=raw_native_levels,
-                valuation_levels=raw_levels,
-                product=product,
-                valuation_index=valuation_index,
-                valuation_price_field=valuation_price_field,
-                field="raw component levels",
-            )
-            _validate_native_valuation_levels(
-                native_levels=stressed_native_levels,
-                valuation_levels=stressed_levels,
-                product=product,
-                valuation_index=valuation_index,
-                valuation_price_field=valuation_price_field,
-                field="stressed component levels",
-            )
-            if product.valuation(raw_native_vwap, index_price=valuation_index) != raw_vwap:
-                raise ShadowCaseStoreError("raw component valuation VWAP mismatch")
-            if (
-                product.valuation(stressed_native_vwap, index_price=valuation_index)
-                != stressed_vwap
-            ):
-                raise ShadowCaseStoreError("stressed component valuation VWAP mismatch")
-            if product.valuation(native_fee, index_price=valuation_index) != valuation_fee:
-                raise ShadowCaseStoreError("component fee valuation mismatch")
-            native_gross_cashflow += (
-                stressed_native_vwap * quantity
-                if action == "SELL"
-                else -stressed_native_vwap * quantity
-            )
-            native_total_fee += native_fee
-        else:
-            native_gross_cashflow = valuation_gross_cashflow
-            native_total_fee = valuation_total_fee
-
+        native_currency = _text(
+            leg.get("native_premium_currency"),
+            "native_premium_currency",
+        )
+        if native_currency != product.native_premium_currency:
+            raise ShadowCaseStoreError("component native premium currency mismatch")
+        valuation_index = _decimal(
+            leg.get("valuation_index_price"),
+            "valuation_index_price",
+        )
+        if valuation_index <= 0:
+            raise ShadowCaseStoreError("component valuation index must be positive")
+        if observed_index is None:
+            observed_index = valuation_index
+        elif observed_index != valuation_index:
+            raise ShadowCaseStoreError("component legs use different valuation indices")
+        raw_native_levels = _sequence(
+            leg.get("raw_consumed_levels_native"),
+            "raw_consumed_levels_native",
+        )
+        stressed_native_levels = _sequence(
+            leg.get("stressed_consumed_levels_native"),
+            "stressed_consumed_levels_native",
+        )
+        if (
+            _native_levels_amount(raw_native_levels) != quantity
+            or _native_levels_amount(stressed_native_levels) != quantity
+        ):
+            raise ShadowCaseStoreError("native component levels do not cover full quantity")
+        raw_native_vwap = _decimal(leg.get("raw_vwap_native"), "raw native VWAP")
+        stressed_native_vwap = _decimal(
+            leg.get("stressed_vwap_native"),
+            "stressed native VWAP",
+        )
+        native_fee = _decimal(leg.get("native_fee_reserve"), "native fee reserve")
+        if raw_native_vwap <= 0 or stressed_native_vwap <= 0 or native_fee < 0:
+            raise ShadowCaseStoreError("native component economics must be non-negative")
+        expected_native_fee = product.native_option_fee(
+            native_option_price=stressed_native_vwap,
+            index_price=valuation_index,
+            quantity_btc=quantity,
+            fee_rate=fee_rate_index_fraction,
+        )
+        if native_fee != expected_native_fee:
+            raise ShadowCaseStoreError("component native fee does not match the Policy rule")
+        if raw_native_vwap * quantity != _native_levels_value(
+            raw_native_levels
+        ) or stressed_native_vwap * quantity != _native_levels_value(stressed_native_levels):
+            raise ShadowCaseStoreError("native component VWAP does not match consumed levels")
+        if (action == "SELL" and stressed_native_vwap > raw_native_vwap) or (
+            action == "BUY" and stressed_native_vwap < raw_native_vwap
+        ):
+            raise ShadowCaseStoreError("native component stress direction is not conservative")
+        _validate_native_valuation_levels(
+            native_levels=raw_native_levels,
+            valuation_levels=raw_levels,
+            product=product,
+            valuation_index=valuation_index,
+            valuation_price_field=valuation_price_field,
+            field="raw component levels",
+        )
+        _validate_native_valuation_levels(
+            native_levels=stressed_native_levels,
+            valuation_levels=stressed_levels,
+            product=product,
+            valuation_index=valuation_index,
+            valuation_price_field=valuation_price_field,
+            field="stressed component levels",
+        )
+        if product.valuation(raw_native_vwap, index_price=valuation_index) != raw_vwap:
+            raise ShadowCaseStoreError("raw component valuation VWAP mismatch")
+        if product.valuation(stressed_native_vwap, index_price=valuation_index) != stressed_vwap:
+            raise ShadowCaseStoreError("stressed component valuation VWAP mismatch")
+        if product.valuation(native_fee, index_price=valuation_index) != valuation_fee:
+            raise ShadowCaseStoreError("component fee valuation mismatch")
+        native_gross_cashflow += (
+            stressed_native_vwap * quantity
+            if action == "SELL"
+            else -stressed_native_vwap * quantity
+        )
+        native_total_fee += native_fee
     return _ValidatedComponentEconomics(
         valuation_gross_cashflow=valuation_gross_cashflow,
         valuation_total_fee=valuation_total_fee,

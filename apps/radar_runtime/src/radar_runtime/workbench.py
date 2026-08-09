@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import Protocol, cast
 
 from market_monitor import ContinuityGap, TimeInterval
-from options_domain import LINEAR_BTC_USDC, OptionProductSpec, product_for_identity
+from options_domain import INVERSE_BTC, OptionProductSpec, product_for_identity
 from short_vol_radar.black import DecimalInterval
 from short_vol_radar.detector import DetectorState
 from short_vol_radar.evidence import CoverageBlockingReason, CoverageState
@@ -633,7 +633,7 @@ class WorkbenchPublisher:
 def initial_workbench_document(
     bindings: RuntimeBindings,
     *,
-    product: OptionProductSpec = LINEAR_BTC_USDC,
+    product: OptionProductSpec = INVERSE_BTC,
     recorded_monotonic_ms: int = 0,
 ) -> dict[str, object]:
     status = ServiceStatus(
@@ -938,7 +938,7 @@ def _radar_rows(
     contexts = review_contexts or {}
     trusted_interval = trusted
     for name, instrument in sorted(reducer.options.items()):
-        product = getattr(instrument, "product", LINEAR_BTC_USDC)
+        product = instrument.product
         result = reducer.results.get(name)
         tracker = reducer.trackers.get(name)
         calculation = result.calculation if result is not None else None

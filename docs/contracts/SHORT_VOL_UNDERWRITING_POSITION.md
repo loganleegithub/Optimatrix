@@ -19,7 +19,8 @@ decision-control open creates one selected no-trade Case, not a recoverable Entr
 
 ## Fixed Policy chain
 
-One runtime selects exactly one immutable product profile and loads exactly one matching chain:
+One runtime loads the immutable `INVERSE_BTC_V1` product specification and exactly one matching
+chain:
 
 ```text
 Product specification
@@ -30,8 +31,8 @@ Product specification
 
 Target quantity, shared source-currentness budgets, fee role, fee reserve, and source metadata must
 be compatible in the product's declared units. Product, Policy, or leg mismatch fails before
-Candidate or Case. The runtime cannot observe both products, hot-reload, tune, approve, or replace
-its product or any Policy.
+Candidate or Case. The runtime has no product selector and cannot hot-reload, tune, approve, or
+replace its product or any Policy.
 
 Policy files are content-identified. Markdown contract bytes are not runtime business identities.
 
@@ -78,8 +79,9 @@ native_entry_fee_reserve = native_short_fee + native_long_fee
 native_net_entry_credit = native_gross_entry_credit - native_entry_fee_reserve
 ```
 
-Each native fee uses the selected product's standard public taker-fee rule and premium cap. Only
-after native arithmetic conserves does the calculator value each cashflow at the causal entry index:
+Each native fee uses the fixed Inverse product's standard public taker-fee rule and premium cap.
+Only after native arithmetic conserves does the calculator value each cashflow at the causal entry
+index:
 
 ```text
 boundary_valued_gross_entry_credit = value(native_gross_entry_credit, entry_index)
@@ -93,13 +95,11 @@ underwriting_reserved_loss_valuation =
     + future_cost_reserve_valuation
 ```
 
-For `LINEAR_BTC_USDC_V1`, native and valuation amounts are USDC and this is the exact accepted v3
-arithmetic. For `INVERSE_BTC_V1`, native premium, fees, settlement cashflow, and PnL are BTC while
-the Underwriting comparison unit is explicitly `USD_EQUIVALENT`. Strike width caps contractual USD
+For `INVERSE_BTC_V1`, native premium, fees, settlement cashflow, and PnL are BTC while the
+Underwriting comparison unit is explicitly `USD_EQUIVALENT`. Strike width caps contractual USD
 payoff; the corresponding BTC settlement liability depends on settlement price. This public
-counterfactual does not establish actual account margin, which remains `UNKNOWN`. New Inverse
-Policy, product-value, Workbench, and schema v4 fields use explicit native or valuation names; they
-must not reinterpret a legacy `*_usdc` suffix as USD equivalent.
+counterfactual does not establish actual account margin, which remains `UNKNOWN`. Policy,
+product-value, Workbench, and schema-v4 fields use explicit native or valuation names.
 
 Each leg's consumed amounts must sum exactly to `q`. No rounding, mark, mid, theoretical price,
 imagined maker price, cross-product conversion, or official-Combo assumption may enter admission
@@ -117,7 +117,7 @@ lexicographically by:
 1. action class `CANDIDATE > WATCH > ABSTAIN`;
 2. signed margin for positive credit, credit above future-cost reserve, reserved-loss headroom,
    minimum credit, minimum credit/payoff ratio, and consumed-level headroom, in that order, with all
-   monetary members labeled in the selected product's valuation unit;
+   monetary members labeled in the fixed product's valuation unit;
 3. narrower width;
 4. protective instrument name.
 
@@ -216,8 +216,8 @@ minimal facts required to reconstruct the admitted counterfactual:
 - entry and decision boundaries;
 - frozen canonical legs, directions, expiry, strikes, and full quantity;
 - paired source identity and both raw/stressed consumed leg levels;
-- native entry levels/fees/economics and explicitly named causal valuation facts for schema v4, or
-  the byte-exact accepted Linear v3 projection;
+- BTC-native entry levels/fees/economics and explicitly named causal USD valuation facts for the
+  accepted Inverse schema-v4 record;
 - USD-defined payoff facts and fixed valuation reserve components;
 - the consumed Radar/Underwriting state required to explain the admission;
 - the frozen protective-leg selector-rule identity and Candidate protective-leg count;
@@ -229,8 +229,8 @@ never only `opened.json`.
 
 For an admitted trade, the atomically published origin `SHADOW_CASE_SEGMENT_OPENED` freezes
 `entry_position_baseline`: the causal entry index and short-leg mark IV with their exact source
-identities and boundaries. Recovery does not widen the accepted v3/v4 `opened.json` shape or change
-its product schema identity. A migrated legacy Entry whose accepted records lack those source
+identities and boundaries. Recovery does not widen the accepted Inverse `opened.json` shape or
+change its product schema identity. A migrated legacy Entry whose accepted records lack those source
 references carries `entry_position_baseline=UNKNOWN`; Position cannot infer the missing values.
 
 A successful selected WATCH/ABSTAIN refresh creates the separately typed no-trade control open and
@@ -321,8 +321,8 @@ exit_valued_native_net_pnl = value(native_net_pnl, close_index)
 ```
 
 The boundary-valued and exit-valued views answer different declared questions and remain distinct;
-neither may be selected after observing the Outcome. Linear preserves its exact USDC values. An
-Inverse known Outcome conserves BTC-native PnL plus both explicitly USD-labeled valuation views.
+neither may be selected after observing the Outcome. A known Outcome conserves BTC-native PnL plus
+both explicitly USD-labeled valuation views.
 Actual account margin, settlement action, and fill PnL remain outside the public contract.
 
 ## Currentness and failure behavior
@@ -354,12 +354,12 @@ segment and terminal truth comes from the bounded Shadow Case files.
 
 ## Required verification
 
-Direct tests cover one-product/one-chain compatibility, mixed-product rejection, both-leg target
+Direct tests cover the one fixed Inverse product/chain, foreign-product rejection, both-leg target
 depth, native adverse tick direction, product fee rules, native/model/valuation conservation, signed
 economics, action boundaries, all-legal-leg selection outside Radar Top 3, product-labeled complete
 predicate margins, frozen-leg identity, pair session/continuity/skew boundaries, paired admission
 races, strictly post-entry Position order, first CLOSE latching, paired close classification, exact
-Linear behavior, no pre-Shadow durable writes, repeated A→B→C process recovery, segment-gap
+Inverse behavior, no pre-Shadow durable writes, repeated A→B→C process recovery, segment-gap
 UNKNOWN, single durable attempt schedule, no retry after uncertain process loss, and mature gapped
 Outcome classification. Full graph manifests, parallel schemas, per-tick checkpoints, replay, and
 automatic rejected-counterfactual persistence are not required. Public observation is governed

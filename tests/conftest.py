@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 import pytest
+from options_domain import INVERSE_BTC
 
 type OptionPayloadFactory = Callable[..., dict[str, object]]
 
@@ -42,8 +43,9 @@ def policy_document(
         "minimum_separation_ms": separation_ms,
     }
     return {
-        "policy_schema_version": 6,
+        "policy_schema_version": 7,
         "policy_family": "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS",
+        "product_spec_identity": INVERSE_BTC.identity,
         "target_base_quantity_btc": target,
         "runtime_limits": {
             "heartbeat_interval_seconds": 30,
@@ -116,7 +118,7 @@ def policy_factory() -> PolicyFactory:
 def option_payload_factory() -> OptionPayloadFactory:
     def factory(
         *,
-        name: str = "BTC_USDC-TEST-110000-C",
+        name: str = "BTC-TEST-110000-C",
         expiry: int = 10_000_000,
         strike: int = 110_000,
         option_type: str = "call",
@@ -126,11 +128,11 @@ def option_payload_factory() -> OptionPayloadFactory:
             "instrument_name": name,
             "kind": "option",
             "base_currency": "BTC",
-            "quote_currency": "USDC",
-            "settlement_currency": "USDC",
-            "counter_currency": "USDC",
-            "price_index": "btc_usdc",
-            "instrument_type": "linear",
+            "quote_currency": "BTC",
+            "settlement_currency": "BTC",
+            "counter_currency": "USD",
+            "price_index": "btc_usd",
+            "instrument_type": "reversed",
             "is_active": True,
             "state": "open",
             "option_type": option_type,
@@ -138,7 +140,7 @@ def option_payload_factory() -> OptionPayloadFactory:
             "strike": strike,
             "contract_size": 1,
             "min_trade_amount": 0.1,
-            "tick_size": 0.01,
+            "tick_size": 0.0001,
             "tick_size_steps": [],
             "unrelated_future_field": "tolerated",
         }

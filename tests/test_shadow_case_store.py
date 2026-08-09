@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import short_vol_underwriting.case_store as case_store_module
+from options_domain import INVERSE_BTC
 from short_vol_underwriting import (
     UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
     FixedContractShadowOwner,
@@ -21,13 +22,13 @@ from short_vol_underwriting import (
     migrate_legacy_admitted_cases,
 )
 from short_vol_underwriting.constants import (
-    POSITION_POLICY_IDENTITY as POSITION_POLICY,
+    INVERSE_BTC_POSITION_POLICY_IDENTITY as POSITION_POLICY,
 )
 from short_vol_underwriting.constants import (
-    RADAR_POLICY_IDENTITY as RADAR_POLICY,
+    INVERSE_BTC_RADAR_POLICY_IDENTITY as RADAR_POLICY,
 )
 from short_vol_underwriting.constants import (
-    UNDERWRITING_POLICY_IDENTITY as UNDERWRITING_POLICY,
+    INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY as UNDERWRITING_POLICY,
 )
 from short_vol_underwriting.model import FactBoundary
 
@@ -70,9 +71,9 @@ def _runtime_boundary(
 
 def _system(tmp_path: Path) -> tuple[ShadowStateStore, ShadowCaseStore, RuntimeBindings]:
     policies = load_policy_chain(
-        radar_path=ROOT / "policies/short-vol-fixed-public-shadow-radar.json",
-        underwriting_path=ROOT / "policies/short-vol-fixed-public-shadow-underwriting.json",
-        position_path=ROOT / "policies/short-vol-fixed-public-shadow-position.json",
+        radar_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-radar.json",
+        underwriting_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-underwriting.json",
+        position_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-position.json",
         radar_identity=RADAR_POLICY,
         underwriting_identity=UNDERWRITING_POLICY,
         position_identity=POSITION_POLICY,
@@ -156,7 +157,7 @@ def _component_legs(*, close: bool = False) -> list[dict[str, object]]:
     specifications = (
         (
             "SHORT",
-            "BTC_USDC-8AUG26-100000-C",
+            "BTC-8AUG26-100000-C",
             "BUY" if close else "SELL",
             "50" if close else "400",
             "51" if close else "399",
@@ -164,28 +165,45 @@ def _component_legs(*, close: bool = False) -> list[dict[str, object]]:
         ),
         (
             "LONG",
-            "BTC_USDC-8AUG26-102000-C",
+            "BTC-8AUG26-102000-C",
             "SELL" if close else "BUY",
             "20" if close else "100",
             "19" if close else "101",
             "0.2375" if close else "1.2625",
         ),
     )
-    return [
-        {
-            "canonical_leg_role": role,
-            "instrument_name": instrument_name,
-            "action": action,
-            "raw_consumed_levels": [{"price_usdc_per_btc": raw_price, "amount_btc": "0.1"}],
-            "raw_vwap_usdc_per_btc": raw_price,
-            "stressed_consumed_levels": [
-                {"price_usdc_per_btc": stressed_price, "amount_btc": "0.1"}
-            ],
-            "stressed_vwap_usdc_per_btc": stressed_price,
-            "fee_reserve_usdc": fee,
-        }
-        for role, instrument_name, action, raw_price, stressed_price, fee in specifications
-    ]
+    index = Decimal("100000")
+    legs: list[dict[str, object]] = []
+    for role, instrument_name, action, raw_price, stressed_price, fee in specifications:
+        raw_native = Decimal(raw_price) / index
+        stressed_native = Decimal(stressed_price) / index
+        native_fee = Decimal(fee) / index
+        legs.append(
+            {
+                "canonical_leg_role": role,
+                "instrument_name": instrument_name,
+                "action": action,
+                "native_premium_currency": "BTC",
+                "valuation_index_price": str(index),
+                "raw_consumed_levels_native": [
+                    {"price_native": str(raw_native), "amount_btc": "0.1"}
+                ],
+                "raw_vwap_native": str(raw_native),
+                "stressed_consumed_levels_native": [
+                    {"price_native": str(stressed_native), "amount_btc": "0.1"}
+                ],
+                "stressed_vwap_native": str(stressed_native),
+                "native_fee_reserve": str(native_fee),
+                "raw_consumed_levels": [{"price_usdc_per_btc": raw_price, "amount_btc": "0.1"}],
+                "raw_vwap_usdc_per_btc": raw_price,
+                "stressed_consumed_levels": [
+                    {"price_usdc_per_btc": stressed_price, "amount_btc": "0.1"}
+                ],
+                "stressed_vwap_usdc_per_btc": stressed_price,
+                "fee_reserve_usdc": fee,
+            }
+        )
+    return legs
 
 
 def _predicate_margin_vector() -> list[dict[str, object]]:
@@ -197,10 +215,10 @@ def _predicate_margin_vector() -> list[dict[str, object]]:
             "passes": True,
         }
         for predicate, margin, unit in (
-            ("POSITIVE_NET_ENTRY_CREDIT", "25.5375", "USDC"),
-            ("CREDIT_ABOVE_FUTURE_COST_RESERVE", "13.5375", "USDC"),
-            ("UNDERWRITING_RESERVED_LOSS_WITHIN_LIMIT", "63.5375", "USDC"),
-            ("MINIMUM_NET_ENTRY_CREDIT", "10.5375", "USDC"),
+            ("POSITIVE_NET_ENTRY_CREDIT", "25.5375", "USD_EQUIVALENT"),
+            ("CREDIT_ABOVE_FUTURE_COST_RESERVE", "13.5375", "USD_EQUIVALENT"),
+            ("UNDERWRITING_RESERVED_LOSS_WITHIN_LIMIT", "63.5375", "USD_EQUIVALENT"),
+            ("MINIMUM_NET_ENTRY_CREDIT", "10.5375", "USD_EQUIVALENT"),
             ("MINIMUM_NET_CREDIT_TO_PAYOFF_CAP", "0.0276875", "FRACTION"),
             ("ENTRY_CONSUMED_LEVEL_LIMIT", 9998, "LEVEL_COUNT"),
         )
@@ -283,8 +301,8 @@ def _open_case(
         canonical_identity("Leg", f"{suffix}-long"),
     )
     instrument_names = (
-        "BTC_USDC-8AUG26-100000-C",
-        "BTC_USDC-8AUG26-102000-C",
+        "BTC-8AUG26-100000-C",
+        "BTC-8AUG26-102000-C",
     )
     entry_source_refs = _component_source_refs(
         suffix=f"{suffix}-entry",
@@ -318,10 +336,16 @@ def _open_case(
             "entry_underwriting_candidate_protective_leg_count": 1,
             "entry_underwriting_decision_fact_boundary": _boundary(causal_seq).as_object(),
             "active_episode_identity": (
-                f"{RUNTIME}:{RADAR_POLICY}:BTC_USDC-8AUG26-100000-C:{causal_seq}"
+                f"{RUNTIME}:{RADAR_POLICY}:BTC-8AUG26-100000-C:{causal_seq}"
             ),
             "radar_scope_identity": _scope_identity(suffix),
             "execution_model": "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL",
+            "product_spec_identity": INVERSE_BTC.identity,
+            "product_name": INVERSE_BTC.name.value,
+            "native_premium_currency": INVERSE_BTC.native_premium_currency,
+            "settlement_currency": INVERSE_BTC.settlement_currency,
+            "valuation_currency": INVERSE_BTC.valuation_currency,
+            "price_index": INVERSE_BTC.price_index,
             "component_state": "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE",
             "atomic_state_diagnostic": "NO_ACTIVE_COMBO",
             "radar_band_id": "six-to-twenty-four-hours",
@@ -350,6 +374,9 @@ def _open_case(
             },
             "entry_component_quote_source_refs": entry_source_refs,
             "entry_component_legs": _component_legs(),
+            "native_gross_entry_credit": "0.000298",
+            "native_entry_fee_reserve": "0.000042625",
+            "native_net_entry_credit": "0.000255375",
             "entry_index_usdc_per_btc": "100000",
             "entry_index_source_ref": {
                 "source_identity": canonical_identity("IndexSource", suffix),
@@ -360,6 +387,7 @@ def _open_case(
                 "source_identity": canonical_identity("TickerSource", suffix),
                 "receipt_fact_boundary": _boundary(causal_seq).as_object(),
             },
+            "entry_valuation_index_price": "100000",
             "gross_entry_credit_usdc": "29.8",
             "entry_fee_reserve_usdc": "4.2625",
             "net_entry_credit_usdc": "25.5375",
@@ -401,8 +429,8 @@ def _record_first_close_and_schedule(
     )
     request_ids = [41, 42]
     request_params = [
-        {"instrument_name": "BTC_USDC-8AUG26-100000-C", "depth": 10000},
-        {"instrument_name": "BTC_USDC-8AUG26-102000-C", "depth": 10000},
+        {"instrument_name": "BTC-8AUG26-100000-C", "depth": 10000},
+        {"instrument_name": "BTC-8AUG26-102000-C", "depth": 10000},
     ]
     schedule_identity = canonical_identity(
         "ScheduledComponentPostCloseAttemptIdentity",
@@ -456,6 +484,15 @@ def _mature_unknown_case(
             "total_public_fee_reserve_usdc": None,
             "net_pnl_after_public_standard_fee_reserve_usdc": None,
             "net_loss_usdc": None,
+            "native_gross_close_cashflow": None,
+            "native_close_fee_reserve": None,
+            "native_net_close_cashflow": None,
+            "native_gross_pnl": None,
+            "native_total_fee_reserve": None,
+            "native_net_pnl": None,
+            "close_valuation_index_price": None,
+            "boundary_valued_net_pnl_usd": None,
+            "exit_valued_native_net_pnl_usd": None,
             "economic_availability": "UNKNOWN",
             "close_component_pair_identity": None,
             "close_component_quote_source_refs": [],
@@ -488,13 +525,24 @@ def _legacy_unknown_outcome(
         "terminal_state": terminal_state,
         "selected_exit_identity": None,
         "first_latched_close_action_identity": first_close_identity,
-        "gross_close_cashflow_usdc": None,
-        "close_fee_reserve_usdc": None,
-        "net_close_cashflow_usdc": None,
-        "gross_pnl_usdc": None,
-        "total_public_fee_reserve_usdc": None,
-        "net_pnl_after_public_standard_fee_reserve_usdc": None,
-        "net_loss_usdc": None,
+        "gross_close_cashflow_usd": None,
+        "close_fee_reserve_usd": None,
+        "net_close_cashflow_usd": None,
+        "gross_pnl_usd": None,
+        "total_public_fee_reserve_usd": None,
+        "net_pnl_after_public_standard_fee_reserve_usd": None,
+        "net_loss_usd": None,
+        "native_outcome_economics": {
+            "native_gross_close_cashflow": None,
+            "native_close_fee_reserve": None,
+            "native_net_close_cashflow": None,
+            "native_gross_pnl": None,
+            "native_total_fee_reserve": None,
+            "native_net_pnl": None,
+            "close_valuation_index_price": None,
+            "boundary_valued_net_pnl_usd": None,
+            "exit_valued_native_net_pnl_usd": None,
+        },
         "economic_availability": "UNKNOWN",
         "close_component_pair_identity": None,
         "close_component_quote_source_refs": [],
@@ -535,6 +583,15 @@ def _censor_case(
             "total_public_fee_reserve_usdc": None,
             "net_pnl_after_public_standard_fee_reserve_usdc": None,
             "net_loss_usdc": None,
+            "native_gross_close_cashflow": None,
+            "native_close_fee_reserve": None,
+            "native_net_close_cashflow": None,
+            "native_gross_pnl": None,
+            "native_total_fee_reserve": None,
+            "native_net_pnl": None,
+            "close_valuation_index_price": None,
+            "boundary_valued_net_pnl_usd": None,
+            "exit_valued_native_net_pnl_usd": None,
             "economic_availability": "UNKNOWN",
             "close_component_pair_identity": None,
             "close_component_quote_source_refs": [],
@@ -682,7 +739,7 @@ def test_active_admitted_entry_scans_and_opens_a_gapped_recovery_segment(
     with pytest.raises(TypeError):
         recoverable.entry_payload["origin_case_id"] = "tampered"  # type: ignore[index]
     expected_baseline = {
-        "entry_index_usdc_per_btc": "100000",
+        "entry_index_usd_per_btc": "100000",
         "entry_index_source_ref": {
             "source_identity": canonical_identity("IndexSource", "one"),
             "receipt_fact_boundary": _boundary(4).as_object(),
@@ -1030,6 +1087,15 @@ def test_first_close_and_known_outcome_complete_case_with_recomputable_economics
             "total_public_fee_reserve_usdc": "5.1375",
             "net_pnl_after_public_standard_fee_reserve_usdc": "21.4625",
             "net_loss_usdc": "0",
+            "native_gross_close_cashflow": "-0.000032",
+            "native_close_fee_reserve": "0.00000875",
+            "native_net_close_cashflow": "-0.00004075",
+            "native_gross_pnl": "0.000266",
+            "native_total_fee_reserve": "0.000051375",
+            "native_net_pnl": "0.000214625",
+            "close_valuation_index_price": "100000",
+            "boundary_valued_net_pnl_usd": "21.4625",
+            "exit_valued_native_net_pnl_usd": "21.4625",
             "economic_availability": "KNOWN",
             "close_component_pair_identity": canonical_identity("ComponentPair", "one", "close"),
             "close_component_quote_source_refs": _component_source_refs(
@@ -1053,7 +1119,7 @@ def test_first_close_and_known_outcome_complete_case_with_recomputable_economics
     assert read.status is ShadowCaseReadStatus.COMPLETE
     assert read.first_close is not None
     assert read.outcome is not None
-    assert read.outcome["net_pnl_after_public_standard_fee_reserve_usdc"] == "21.4625"
+    assert read.outcome["net_pnl_after_public_standard_fee_reserve_usd"] == "21.4625"
 
     for filename in ("first-close.json", "outcome.json"):
         path = case_directory / filename
@@ -1097,8 +1163,8 @@ def test_first_close_is_durable_only_with_its_attempt_and_is_never_retried(
 
     request_ids = [51, 52]
     request_params = [
-        {"instrument_name": "BTC_USDC-8AUG26-100000-C", "depth": 10000},
-        {"instrument_name": "BTC_USDC-8AUG26-102000-C", "depth": 10000},
+        {"instrument_name": "BTC-8AUG26-100000-C", "depth": 10000},
+        {"instrument_name": "BTC-8AUG26-102000-C", "depth": 10000},
     ]
     schedule_identity = canonical_identity(
         "ScheduledComponentPostCloseAttemptIdentity",
@@ -1562,49 +1628,56 @@ def test_case_reader_rejects_tampered_known_outcome_arithmetic(tmp_path: Path) -
     case_id = case_store.case_id_for_entry(entry_identity)
     assert case_id is not None
     case_directory = tmp_path / "cases" / case_id.removeprefix("sha256:")
-    segment_opened = json.loads(
-        (case_directory / "segments" / "0" / "opened.json").read_text(encoding="utf-8")
+    close_identity = _record_first_close_and_schedule(
+        state,
+        entry_identity,
+        suffix="tampered",
+        causal_seq=5,
     )
-    opened_boundary = _boundary(4)
-    tampered = {
-        "record_kind": "SHADOW_CASE_OUTCOME",
-        "schema_version": 3,
-        "case_id": case_id,
-        "code_identity": CODE,
-        "runtime_identity": RUNTIME,
-        "radar_policy_identity": RADAR_POLICY,
-        "underwriting_policy_identity": UNDERWRITING_POLICY,
-        "position_policy_identity": POSITION_POLICY,
-        "product_spec_identity": case_store.product.identity,
-        "segment_sequence": 0,
-        "segment_identity": segment_opened["segment_identity"],
-        "observation_quality": "CONTINUOUS",
-        "gap_count": 0,
-        "qualification_eligible": True,
-        "outcome_fact_boundary": _boundary(6).as_object(),
-        "shadow_outcome_identity": canonical_identity("ShadowOutcomeIdentity", "tampered"),
-        "terminal_state": "MATURE_KNOWN",
-        "selected_exit_identity": canonical_identity("ShadowExit", "tampered"),
-        "first_latched_close_action_identity": canonical_identity("PositionAction", "tampered"),
-        "gross_close_cashflow_usdc": "-3.2",
-        "close_fee_reserve_usdc": "0.875",
-        "net_close_cashflow_usdc": "-4.075",
-        "gross_pnl_usdc": "999",
-        "total_public_fee_reserve_usdc": "5.1375",
-        "net_pnl_after_public_standard_fee_reserve_usdc": "21.4625",
-        "net_loss_usdc": "0",
-        "economic_availability": "KNOWN",
-        "close_component_pair_identity": canonical_identity("ComponentPair", "tampered", "close"),
-        "close_component_quote_source_refs": _component_source_refs(
-            suffix="tampered-close",
-            causal_seq=6,
-        ),
-        "close_component_legs": _component_legs(close=True),
-        "censor_mask": [],
-        "non_claims": COMPONENT_NON_CLAIMS,
-    }
-    assert _boundary(6).is_strictly_after(opened_boundary)
-    (case_directory / "outcome.json").write_text(json.dumps(tampered), encoding="utf-8")
+    outcome_identity = canonical_identity("ShadowOutcomeIdentity", "tampered")
+    state.record(
+        object_kind="SHADOW_OUTCOME",
+        object_identity=outcome_identity,
+        fact_boundary=_boundary(6),
+        payload={
+            "shadow_outcome_identity": outcome_identity,
+            "shadow_entry_identity": entry_identity,
+            "terminal_state": "MATURE_KNOWN",
+            "selected_exit_identity": canonical_identity("ShadowExit", "tampered"),
+            "first_latched_close_action_identity": close_identity,
+            "gross_close_cashflow_usdc": "-3.2",
+            "close_fee_reserve_usdc": "0.875",
+            "net_close_cashflow_usdc": "-4.075",
+            "gross_pnl_usdc": "26.6",
+            "total_public_fee_reserve_usdc": "5.1375",
+            "net_pnl_after_public_standard_fee_reserve_usdc": "21.4625",
+            "net_loss_usdc": "0",
+            "native_gross_close_cashflow": "-0.000032",
+            "native_close_fee_reserve": "0.00000875",
+            "native_net_close_cashflow": "-0.00004075",
+            "native_gross_pnl": "0.000266",
+            "native_total_fee_reserve": "0.000051375",
+            "native_net_pnl": "0.000214625",
+            "close_valuation_index_price": "100000",
+            "boundary_valued_net_pnl_usd": "21.4625",
+            "exit_valued_native_net_pnl_usd": "21.4625",
+            "economic_availability": "KNOWN",
+            "close_component_pair_identity": canonical_identity(
+                "ComponentPair", "tampered", "close"
+            ),
+            "close_component_quote_source_refs": _component_source_refs(
+                suffix="tampered-close",
+                causal_seq=6,
+            ),
+            "close_component_legs": _component_legs(close=True),
+            "censor_mask": [],
+            "non_claims": COMPONENT_NON_CLAIMS,
+        },
+    )
+    outcome_path = case_directory / "outcome.json"
+    tampered = json.loads(outcome_path.read_text(encoding="utf-8"))
+    tampered["gross_pnl_usd"] = "999"
+    outcome_path.write_text(json.dumps(tampered), encoding="utf-8")
 
     restarted_reader = ShadowCaseStore(
         tmp_path / "cases",

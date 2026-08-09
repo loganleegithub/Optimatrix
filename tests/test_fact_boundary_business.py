@@ -132,7 +132,7 @@ def make_option(name: str, expiry_ms: int, *, amount_known: bool = True) -> Opti
 
 def make_book(name: str, price: str | None) -> ContinuousOrderBook:
     book = ContinuousOrderBook(name)
-    bid = None if price is None else Decimal(price)
+    bid = None if price is None else Decimal(price) / Decimal(100)
     asks = [] if bid is None else [["new", bid + Decimal("0.00000002"), "0.1"]]
     book.apply(
         {
@@ -140,7 +140,7 @@ def make_book(name: str, price: str | None) -> ContinuousOrderBook:
             "timestamp": 1,
             "instrument_name": name,
             "change_id": 1,
-            "bids": [] if price is None else [["new", price, "0.1"]],
+            "bids": [] if bid is None else [["new", bid, "0.1"]],
             "asks": asks,
         },
         1_000,
@@ -368,8 +368,8 @@ def test_one_global_index_gap_makes_every_instrument_unknown_in_same_fact_bounda
     exact, digest = policy_factory(activation_count=1)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     expiry = 1_000_000 + 60 * 60_000
-    first = make_option("BTC_USDC-27SEP24-100010-C", expiry)
-    second = make_option("BTC_USDC-27SEP24-100020-C", expiry)
+    first = make_option("BTC-27SEP24-100010-C", expiry)
+    second = make_option("BTC-27SEP24-100020-C", expiry)
     reducer.options = {first.instrument_name: first, second.instrument_name: second}
     reducer.catalog_options = dict(reducer.options)
     activate_directly(reducer, first)
@@ -384,7 +384,7 @@ def test_one_global_index_gap_makes_every_instrument_unknown_in_same_fact_bounda
     }
     seed_flat_available_index(reducer)
     assert not reducer._apply_index(
-        {"timestamp": 500_000, "price": 100, "index_name": "btc_usdc"},
+        {"timestamp": 500_000, "price": 100, "index_name": "btc_usd"},
         FactBoundary(1, 1, 1_001, 2),
     )
 
@@ -402,7 +402,7 @@ def test_index_regression_commits_platform_detector_aggregate_and_coverage_atomi
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_available_index(reducer)
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     reducer.options = {instrument.instrument_name: instrument}
@@ -431,7 +431,7 @@ def test_index_regression_commits_platform_detector_aggregate_and_coverage_atomi
         {
             "timestamp": 900_000,
             "price": 100,
-            "index_name": "btc_usdc",
+            "index_name": "btc_usd",
         },
         FactBoundary(1, 2, 1_002, 2),
     )
@@ -477,7 +477,7 @@ def test_non_index_boundary_seals_ready_index_minute_before_tail_classification(
     )
     reducer.index_history.apply_chart_result([[300_000, 100], [600_000, 100]])
     instrument = make_option(
-        "BTC_USDC-08AUG26-100000-C",
+        "BTC-08AUG26-100000-C",
         1_020_000 + 60 * 60_000,
     )
     configure_full_formula_scope(
@@ -521,7 +521,7 @@ def test_bootstrap_warmup_does_not_report_or_recover_a_real_index_gap(
     exact, digest = policy_factory()
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     configure_full_formula_scope(reducer, instrument)
@@ -547,7 +547,7 @@ def test_funnel_partitions_the_real_reducer_index_tail_at_first_availability(
     exact, digest = policy_factory()
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     configure_full_formula_scope(reducer, instrument)
@@ -593,7 +593,7 @@ def setup_same_millisecond_watermark_phase(
     exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     establish_joint_witness(reducer, instrument)
@@ -639,7 +639,7 @@ def test_persistent_history_window_gap_stays_radar_local_without_live_resubscrib
     exact, digest = policy_factory()
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     configure_full_formula_scope(reducer, instrument)
@@ -658,7 +658,7 @@ def test_persistent_history_window_gap_stays_radar_local_without_live_resubscrib
         {
             "timestamp": 1_000_000,
             "price": 100,
-            "index_name": "btc_usdc",
+            "index_name": "btc_usd",
         },
         FactBoundary(1, 1, 1_001, 1),
     )
@@ -672,7 +672,7 @@ def test_persistent_history_window_gap_stays_radar_local_without_live_resubscrib
         {
             "timestamp": 1_000_001,
             "price": 100,
-            "index_name": "btc_usdc",
+            "index_name": "btc_usd",
         },
         FactBoundary(1, 2, 1_002, 2),
     )
@@ -692,7 +692,7 @@ def test_countable_history_tuple_is_observed_once_without_live_index_backfill(
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_flat_available_index(reducer)
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     configure_full_formula_scope(reducer, instrument)
@@ -802,7 +802,7 @@ def test_clock_refresh_failure_keeps_fresh_clock_until_real_stale_boundary(
     reducer.pending_rpcs.clear()
     seed_available_index(reducer)
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     reducer.options = {instrument.instrument_name: instrument}
@@ -857,7 +857,7 @@ def test_clock_refresh_response_settles_final_window_in_same_fact_boundary(
     exact, digest = policy_factory(activation_count=1)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     expiry = 1_000_000 + 30 * 60_000 + 50
-    instrument = make_option("BTC_USDC-27SEP24-100010-C", expiry)
+    instrument = make_option("BTC-27SEP24-100010-C", expiry)
     reducer.options = {instrument.instrument_name: instrument}
     reducer.catalog_options = dict(reducer.options)
     activate_directly(reducer, instrument)
@@ -897,7 +897,7 @@ def test_negative_platform_guard_ends_episode_once_as_session_gap(
     exact, digest = policy_factory(activation_count=1)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     reducer.options = {instrument.instrument_name: instrument}
@@ -939,7 +939,7 @@ def test_subscription_evidence_failure_is_not_reclassified_as_public_payload(
         raise EvidenceError("injected local evidence failure")
 
     monkeypatch.setattr(reducer, "_apply_book", fail_evidence_write)
-    channel = "book.BTC_USDC-2AUG26-63000-C.agg2"
+    channel = "book.BTC-2AUG26-63000-C.agg2"
     acknowledge_channel(reducer, channel)
 
     with pytest.raises(EvidenceError, match="local evidence failure"):
@@ -961,7 +961,7 @@ def test_subscription_does_not_relabel_business_value_error_as_public_payload(
 ) -> None:
     exact, digest = policy_factory()
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
-    instrument = make_option("BTC_USDC-2AUG26-63000-C", 10_000_000)
+    instrument = make_option("BTC-2AUG26-63000-C", 10_000_000)
     reducer.options = {instrument.instrument_name: instrument}
     channel = f"ticker.{instrument.instrument_name}.agg2"
     acknowledge_channel(reducer, channel)
@@ -995,8 +995,8 @@ def test_final_window_time_poll_ends_whole_scope_without_market_update(
     exact, digest = policy_factory(activation_count=1)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     expiry = 1_000_000 + 30 * 60_000 + 500
-    first = make_option("BTC_USDC-27SEP24-100010-C", expiry)
-    second = make_option("BTC_USDC-27SEP24-100020-C", expiry)
+    first = make_option("BTC-27SEP24-100010-C", expiry)
+    second = make_option("BTC-27SEP24-100020-C", expiry)
     reducer.options = {first.instrument_name: first, second.instrument_name: second}
     reducer.catalog_options = dict(reducer.options)
     first_episode = activate_directly(reducer, first)
@@ -1021,8 +1021,8 @@ def test_policy_gap_time_poll_ends_whole_scope_without_market_update(
     exact, digest = encode_policy(document)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     expiry = 1_000_000 + 420 * 60_000 + 500
-    first = make_option("BTC_USDC-27SEP24-100010-C", expiry)
-    second = make_option("BTC_USDC-27SEP24-100020-C", expiry)
+    first = make_option("BTC-27SEP24-100010-C", expiry)
+    second = make_option("BTC-27SEP24-100020-C", expiry)
     reducer.options = {first.instrument_name: first, second.instrument_name: second}
     reducer.catalog_options = dict(reducer.options)
     activate_directly(reducer, first, band_index=1)
@@ -1043,7 +1043,7 @@ def test_amount_unknown_to_valid_establishes_known_current_without_activation_co
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_available_index(reducer)
     expiry = 1_000_000 + 60 * 60_000
-    unknown = make_option("BTC_USDC-27SEP24-100010-C", expiry, amount_known=False)
+    unknown = make_option("BTC-27SEP24-100010-C", expiry, amount_known=False)
     reducer.options = {unknown.instrument_name: unknown}
     reducer.catalog_options = dict(reducer.options)
     reducer.trackers[unknown.instrument_name] = EpisodeTracker(
@@ -1103,7 +1103,7 @@ def test_active_amount_loss_ends_episode_and_layer_two_in_same_boundary(
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_available_index(reducer)
     expiry = 1_000_000 + 60 * 60_000
-    valid = make_option("BTC_USDC-27SEP24-100010-C", expiry)
+    valid = make_option("BTC-27SEP24-100010-C", expiry)
     reducer.options = {valid.instrument_name: valid}
     reducer.catalog_options = dict(reducer.options)
     episode_id = activate_directly(reducer, valid)
@@ -1139,7 +1139,7 @@ def test_late_ticker_snapshot_is_shape_valid_and_has_no_truth_side_effects(
     )
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     establish_joint_witness(reducer, instrument)
@@ -1191,7 +1191,7 @@ def test_equal_ticker_timestamp_applies_in_later_ingress_order(
 ) -> None:
     exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
-    name = "BTC_USDC-27SEP24-100010-C"
+    name = "BTC-27SEP24-100010-C"
     instrument = make_option(name, 1_000_000 + 60 * 60_000)
     establish_joint_witness(reducer, instrument)
     channel = ticker_channel(name)
@@ -1226,7 +1226,7 @@ def test_older_ticker_is_late_ignored_even_when_candidate_timestamp_is_ahead(
 ) -> None:
     exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
-    name = "BTC_USDC-27SEP24-100010-C"
+    name = "BTC-27SEP24-100010-C"
     establish_joint_witness(
         reducer,
         make_option(name, 1_000_000 + 60 * 60_000),
@@ -1266,7 +1266,7 @@ def test_ticker_candidate_without_trusted_time_is_not_classified_current(
 ) -> None:
     exact, digest = policy_factory()
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
-    name = "BTC_USDC-27SEP24-100010-C"
+    name = "BTC-27SEP24-100010-C"
     reducer.options[name] = make_option(name, 1_000_000 + 60 * 60_000)
     acknowledge_channel(reducer, ticker_channel(name), generation=2)
     reducer.clock = None
@@ -1292,7 +1292,7 @@ def test_latched_stale_generation_candidate_is_not_counted_as_timestamp_regressi
 ) -> None:
     exact, digest = policy_factory(ticker_source_stale_deadline_ms=1_000)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
-    name = "BTC_USDC-27SEP24-100010-C"
+    name = "BTC-27SEP24-100010-C"
     establish_joint_witness(
         reducer,
         make_option(name, 1_000_000 + 60 * 60_000),
@@ -1333,7 +1333,7 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
     )
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_flat_available_index(reducer)
-    name = "BTC_USDC-27SEP24-100010-C"
+    name = "BTC-27SEP24-100010-C"
     instrument = make_option(name, 1_000_000 + 60 * 60_000)
     reducer.options = {name: instrument}
     reducer.catalog_options = dict(reducer.options)
@@ -1486,7 +1486,7 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
     )
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_flat_available_index(reducer)
-    name = "BTC_USDC-27SEP24-100010-C"
+    name = "BTC-27SEP24-100010-C"
     instrument = make_option(name, 1_000_000 + 60 * 60_000)
     reducer.options = {name: instrument}
     reducer.catalog_options = dict(reducer.options)
@@ -1530,10 +1530,10 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
                 "instrument_name": name,
                 "change_id": 2,
                 "prev_change_id": 1,
-                "bids": [["delete", "1", "0"], ["new", "2", "0.1"]],
+                "bids": [["delete", "0.01", "0"], ["new", "0.02", "0.1"]],
                 "asks": [
-                    ["delete", "1.00000002", "0"],
-                    ["new", "2.00000002", "0.1"],
+                    ["delete", "0.01000002", "0"],
+                    ["new", "0.02000002", "0.1"],
                 ],
             },
             ingress_seq=reducer._last_ingress_seq + 1,
@@ -1616,7 +1616,7 @@ def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recov
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     reducer.pending_rpcs.clear()
     seed_flat_available_index(reducer)
-    name = "BTC_USDC-27SEP24-100010-C"
+    name = "BTC-27SEP24-100010-C"
     instrument = make_option(name, 1_000_000 + 60 * 60_000)
     reducer.options = {name: instrument}
     reducer.catalog_options = dict(reducer.options)
@@ -1746,7 +1746,7 @@ def test_ticker_channel_rpc_failure_preserves_known_insufficient_book_depth(
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     reducer.pending_rpcs.clear()
     seed_flat_available_index(reducer)
-    name = "BTC_USDC-27SEP24-100010-C"
+    name = "BTC-27SEP24-100010-C"
     instrument = make_option(name, 1_000_000 + 60 * 60_000)
     reducer.options = {name: instrument}
     reducer.catalog_options = dict(reducer.options)
@@ -1820,7 +1820,7 @@ def test_option_channel_rpc_failure_is_scoped_to_exact_failed_channels(
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     reducer.pending_rpcs.clear()
     seed_flat_available_index(reducer)
-    name = "BTC_USDC-27SEP24-100010-C"
+    name = "BTC-27SEP24-100010-C"
     instrument = make_option(name, 1_000_000 + 60 * 60_000)
     reducer.options = {name: instrument}
     reducer.catalog_options = dict(reducer.options)
@@ -1888,7 +1888,7 @@ def test_ahead_and_malformed_ticker_candidates_do_not_overwrite_or_resync(
     )
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     establish_joint_witness(reducer, instrument)
@@ -2096,7 +2096,7 @@ def test_index_publication_pending_preserves_episode_layer_two_and_known_coverag
     exact, digest = policy_factory(activation_count=1, ticker_source_stale_deadline_ms=300_000)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     establish_joint_witness(reducer, instrument)
@@ -2202,7 +2202,7 @@ def test_membership_sync_retries_missing_desired_option_channels(
     exact, digest = policy_factory()
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     reducer.catalog_options = {instrument.instrument_name: instrument}
@@ -2230,7 +2230,7 @@ def test_membership_sync_retries_missing_desired_option_channels(
     assert requested == {
         ticker_channel(instrument.instrument_name),
         book_channel(instrument.instrument_name),
-        "deribit_price_index.btc_usdc",
+        "deribit_price_index.btc_usd",
     }
 
 
@@ -2241,7 +2241,7 @@ def test_combo_lifecycle_immediately_invalidates_old_layer_two_negative(
     exact, digest = policy_factory(activation_count=1)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     seed_flat_available_index(reducer)
@@ -2411,7 +2411,7 @@ def test_noncountable_known_current_advances_active_duration_without_persistence
     exact, digest = policy_factory(activation_count=1)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_available_index(reducer)
-    instrument = make_option("BTC_USDC-27SEP24-100010-C", 1_000_000 + 60 * 60_000)
+    instrument = make_option("BTC-27SEP24-100010-C", 1_000_000 + 60 * 60_000)
     reducer.options = {instrument.instrument_name: instrument}
     reducer.catalog_options = dict(reducer.options)
     reducer.option_books[instrument.instrument_name] = make_book(instrument.instrument_name, "1")
@@ -2440,7 +2440,7 @@ def test_noncountable_known_current_advances_active_duration_without_persistence
     assert reducer.trackers[instrument.instrument_name].episode_id == episode_id
 
     assert not reducer._apply_index(
-        {"timestamp": 500_000, "price": 100, "index_name": "btc_usdc"},
+        {"timestamp": 500_000, "price": 100, "index_name": "btc_usd"},
         FactBoundary(1, 2, 2_000, 3),
     )
 
@@ -2454,7 +2454,7 @@ def test_index_publication_pending_remains_known_active_duration(
     exact, digest = policy_factory(activation_count=1, ticker_source_stale_deadline_ms=300_000)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     establish_joint_witness(reducer, instrument)
@@ -2603,7 +2603,7 @@ def test_clock_incident_stays_open_through_clock_rebootstrap_until_index_recover
     assert reducer._active_continuity_incident is incident
 
     assert not reducer._apply_index(
-        {"timestamp": "invalid", "price": 100, "index_name": "btc_usdc"},
+        {"timestamp": "invalid", "price": 100, "index_name": "btc_usd"},
         FactBoundary(1, 3, 1_003, 3),
     )
     assert reducer._active_continuity_incident is incident
@@ -2621,7 +2621,7 @@ def test_source_currentness_settles_before_detector_on_every_boundary(
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_flat_available_index(reducer)
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     configure_full_formula_scope(
@@ -2704,7 +2704,7 @@ def test_settle_source_currentness_is_network_free(
     exact, digest = policy_factory(ticker_source_stale_deadline_ms=1_000)
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     configure_full_formula_scope(
@@ -2896,7 +2896,7 @@ def test_high_fanout_local_fact_shares_one_history_tail_and_one_formula_call(
     seed_flat_available_index(reducer)
     expiry = 1_000_000 + 60 * 60_000
     instruments = tuple(
-        make_option(f"BTC_USDC-08AUG26-{100_000 + index}-C", expiry) for index in range(320)
+        make_option(f"BTC-08AUG26-{100_000 + index}-C", expiry) for index in range(320)
     )
     reducer.options = {item.instrument_name: item for item in instruments}
     reducer.catalog_options = dict(reducer.options)
@@ -3099,8 +3099,8 @@ def test_option_lifecycle_unknown_recomputes_aggregate_from_one_full_scope_snaps
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_flat_available_index(reducer)
     expiry = 1_000_000 + 60 * 60_000
-    first = make_option("BTC_USDC-08AUG26-100000-C", expiry)
-    second = make_option("BTC_USDC-08AUG26-101000-C", expiry)
+    first = make_option("BTC-08AUG26-100000-C", expiry)
+    second = make_option("BTC-08AUG26-101000-C", expiry)
     configure_full_formula_scope(reducer, first)
     reducer.options[second.instrument_name] = second
     reducer.catalog_options[second.instrument_name] = second
@@ -3140,8 +3140,8 @@ def test_option_lifecycle_unknown_recomputes_aggregate_from_one_full_scope_snaps
 
     assert len(captured) == 1
     assert tuple(item.instrument.instrument_name for item in captured[0].current) == (
-        "BTC_USDC-08AUG26-100000-C",
-        "BTC_USDC-08AUG26-101000-C",
+        "BTC-08AUG26-100000-C",
+        "BTC-08AUG26-101000-C",
     )
     assert reducer.results[first.instrument_name].reason == "OPTION_LIFECYCLE_HALTED"
     aggregate = next(iter(reducer.aggregate_results.values()))
@@ -3157,11 +3157,11 @@ def test_final_btc_lifecycle_reuses_unaffected_immutable_current_results(
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_flat_available_index(reducer)
     expiry = 1_000_000 + 60 * 60_000
-    target = make_option("BTC_USDC-08AUG26-100000-C", expiry)
-    peer = make_option("BTC_USDC-08AUG26-101000-C", expiry)
-    other_expiry = make_option("BTC_USDC-09AUG26-100000-C", expiry + 60 * 60_000)
+    target = make_option("BTC-08AUG26-100000-C", expiry)
+    peer = make_option("BTC-08AUG26-101000-C", expiry)
+    other_expiry = make_option("BTC-09AUG26-100000-C", expiry + 60 * 60_000)
     other_type = OptionInstrument(
-        "BTC_USDC-08AUG26-100000-P",
+        "BTC-08AUG26-100000-P",
         expiry,
         Decimal("100"),
         OptionType.PUT,
@@ -3226,14 +3226,14 @@ def test_deribit_0800_expiry_burst_never_recomputes_other_scopes(
     expiry_0800_ms = 8 * 60 * 60_000
     expiring_calls = tuple(
         make_option(
-            f"BTC_USDC-08AUG26-{100_000 + index}-C",
+            f"BTC-08AUG26-{100_000 + index}-C",
             expiry_0800_ms,
         )
         for index in range(32)
     )
     protected_puts = tuple(
         OptionInstrument(
-            f"BTC_USDC-08AUG26-{100_000 + index}-P",
+            f"BTC-08AUG26-{100_000 + index}-P",
             expiry_0800_ms,
             Decimal(100_000 + index),
             OptionType.PUT,
@@ -3243,7 +3243,7 @@ def test_deribit_0800_expiry_burst_never_recomputes_other_scopes(
     )
     protected_next_expiry = tuple(
         make_option(
-            f"BTC_USDC-09AUG26-{100_000 + index}-C",
+            f"BTC-09AUG26-{100_000 + index}-C",
             expiry_0800_ms + 60 * 60_000,
         )
         for index in range(16)
@@ -3312,7 +3312,7 @@ def test_late_ticker_after_ttl_settles_the_accepted_ticker_to_unknown(
         ticker_source_stale_deadline_ms=1_000,
     )
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
-    name = "BTC_USDC-27SEP24-100010-C"
+    name = "BTC-27SEP24-100010-C"
     instrument = make_option(name, 1_000_000 + 60 * 60_000)
     establish_joint_witness(reducer, instrument)
     accepted = reducer.tickers[name]
@@ -3568,7 +3568,7 @@ def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_resta
     exact, digest = policy_factory()
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     instrument = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     establish_joint_witness(reducer, instrument)
@@ -3659,11 +3659,11 @@ def test_sustained_queue_lag_rebuilds_only_enter_and_recovery_edges(
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_flat_available_index(reducer)
     first = make_option(
-        "BTC_USDC-27SEP24-100010-C",
+        "BTC-27SEP24-100010-C",
         1_000_000 + 60 * 60_000,
     )
     second = make_option(
-        "BTC_USDC-27SEP24-100020-C",
+        "BTC-27SEP24-100020-C",
         1_000_000 + 120 * 60_000,
     )
     reducer.options = {
@@ -3770,8 +3770,8 @@ def test_coverage_preserves_heterogeneous_nonpublication_blockers(
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_flat_available_index(reducer)
     expiry = 1_000_000 + 60 * 60_000
-    first = make_option("BTC_USDC-27SEP24-100010-C", expiry)
-    second = make_option("BTC_USDC-27SEP24-100020-C", expiry)
+    first = make_option("BTC-27SEP24-100010-C", expiry)
+    second = make_option("BTC-27SEP24-100020-C", expiry)
     reducer.options = {
         first.instrument_name: first,
         second.instrument_name: second,
@@ -3853,8 +3853,8 @@ def test_coverage_blocker_scopes_follow_current_truth_across_scope_transfer(
     reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
     seed_flat_available_index(reducer)
     expiry = 1_000_000 + 60 * 60_000
-    first = make_option("BTC_USDC-27SEP24-100010-C", expiry)
-    second = make_option("BTC_USDC-27SEP24-100020-C", expiry)
+    first = make_option("BTC-27SEP24-100010-C", expiry)
+    second = make_option("BTC-27SEP24-100020-C", expiry)
     reducer.options = {
         first.instrument_name: first,
         second.instrument_name: second,

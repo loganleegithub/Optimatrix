@@ -15,7 +15,7 @@ from market_monitor.types import (
     require_str,
 )
 
-from options_domain.product import LINEAR_BTC_USDC, OptionProductSpec
+from options_domain.product import INVERSE_BTC, OptionProductSpec
 
 MAX_TTE_MS = 72 * 60 * 60 * 1_000
 SETTLEMENT_WINDOW_MS = 30 * 60 * 1_000
@@ -145,7 +145,7 @@ class OptionInstrument:
     lifecycle_state: InstrumentLifecycleState = InstrumentLifecycleState.OPEN
     is_active: bool = True
     taker_commission: Decimal | None = None
-    product: OptionProductSpec = LINEAR_BTC_USDC
+    product: OptionProductSpec = INVERSE_BTC
 
     def legal_tick_size(self, price: Decimal) -> Decimal | None:
         return self.price_tick.tick_size_for_price(price) if self.price_tick is not None else None
@@ -163,13 +163,13 @@ class ComboInstrument:
     state: str
     legs: tuple[ComboLeg, ComboLeg]
     amount: AmountMetadata | None
-    product: OptionProductSpec = LINEAR_BTC_USDC
+    product: OptionProductSpec = INVERSE_BTC
 
 
 def parse_option_instrument(
     payload: object,
     *,
-    product: OptionProductSpec = LINEAR_BTC_USDC,
+    product: OptionProductSpec = INVERSE_BTC,
 ) -> OptionInstrument | None:
     data = require_mapping(payload, "instrument")
     product_fields = {
@@ -243,7 +243,7 @@ def parse_combo_instrument(
     summary_payload: object,
     metadata_payload: object,
     *,
-    product: OptionProductSpec = LINEAR_BTC_USDC,
+    product: OptionProductSpec = INVERSE_BTC,
 ) -> ComboInstrument | None:
     summary = require_mapping(summary_payload, "combo")
     metadata = require_mapping(metadata_payload, "combo metadata")

@@ -181,57 +181,99 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_process_independent_entry_recovery() -> None:
+def test_current_stage_accepts_inverse_only_repository() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY_AUTHORIZED`" in current
-    assert "`INVERSE_BTC_V1_CONSTRUCTION_ACCEPTED_AT_89A6EB02`" in current
-    assert "**Production Short Vol Radar:** `LINEAR_BTC_USDC_V1_ACCEPTED`" in current
-    assert "**Persistent service:** `STABLE_CASE_REPOSITORY_RECOVERY_AUTHORIZED`" in current
-    assert (
-        "**Live commands:** `ONE_CLEAN_LEGACY_MIGRATION_AND_RECOVERY_CUTOVER_AFTER_ACCEPTANCE`"
-        in current
-    )
-    assert "**Sole authorized closure:** `SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY`" in (
-        current
-    )
+    assert "**Current task kind:** `NONE`" in current
+    assert "`INVERSE_ONLY_REPOSITORY_ACCEPTED`" in current
+    assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
+    assert "**Persistent service:** `STABLE_CASE_REPOSITORY_RECOVERY_ACCEPTED`" in current
+    assert "**Live commands:** `FORBIDDEN_PENDING_SEPARATE_RESTART_AUTHORITY`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     for phrase in (
-        "only the task-opening denominator",
-        "`0 / 6` could be restored",
-        "reached nine in a later read-only snapshot",
-        "`RUNTIME_OWNED_ENTRY_LIFECYCLE`",
-        "stable `state-root/cases` repository",
-        "automatically scans and restores every compatible non-terminal admitted Entry",
-        "Every recovery Segment is `GAPPED`",
-        "begins `UNKNOWN`",
-        "cannot synthesize `HOLD` or `CLOSE`",
-        "`ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS`",
-        "`qualification_eligible=false`",
-        "not part of `serve-shadow`",
-        "not the migrated origin Segment, records the cross-process gap",
-        "runtime A → B → C",
+        "The sole Online Runtime product is `INVERSE_BTC_V1`",
+        "There is no product selector, fallback product, compatibility profile",
+        "The repository contains only those three Inverse Policy artifacts",
+        "code identity: 270920fb1fcb255c648e95361f31c1e5075ec294",
+        "runtime identity: sha256:33dedd47cff3f6cb10bb5b2844f58b79218f40c931bf02221440a1894a785bf4",
+        "pre-Inverse-only checkout",
+        "must not be hot-swapped, stopped, restarted",
+        "The accepted repository result is `1 / 1`",
+        "The obsolete product specification",
+        "durable-data effect `NONE`",
+        "External state roots and Shadow Case repositories were not enumerated",
     ):
         assert phrase in normalized
-    for forbidden in (
-        "--carry-case",
-        "SHADOW_CASE_CONTINUATION",
-        "hard-coded predecessor runtime",
+    for identity in (
+        "sha256:ff90da92cefe8e530339df38505fe7726b92b45b1855b751f2633ffd4fdb2172",
+        "sha256:283c2a8cc5e14cbed94b0f2a41ddd18ff2410772ae45d07abfea80d04446b1af",
+        "sha256:76a93725bb4923a70a2865b1e06add3b5a23ae80a831029c558ce188be6e7834",
+        "sha256:cb3866b8efd45d5c05ed23ab56658c2cdbf0359132e39f52ce329761ad933b8e",
     ):
-        assert forbidden in current
-    recovery_task = ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md"
-    assert recovery_task.exists()
-    assert not (ROOT / "tasks/SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION.md").exists()
-    task = recovery_task.read_text(encoding="utf-8")
-    assert "**Task kind:** IMPLEMENTATION" in task
-    assert "**Runtime implementation:** REQUIRED" in task
-    assert "**Primary blocker:** `RUNTIME_OWNED_ENTRY_LIFECYCLE`" in task
-    assert "runtime A → B → C" in task
-    assert "No Entry disappears" in task
-    assert "No pre-Shadow or per-tick durable write is added" in " ".join(task.split())
-    assert "no count, runtime, Entry, or Case-ID allowlist exists" in " ".join(task.split())
-    assert not (ROOT / "tasks/SHORT_VOL_QUEUE_LAG_CURRENTNESS_THROUGHPUT.md").exists()
+        assert identity in current
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
+    assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
+
+
+def test_online_product_surface_is_inverse_only() -> None:
+    active_product_docs = (
+        ROOT / "README.md",
+        *AUTHORITY_FILES,
+        *IMPLEMENTATION_CONTRACTS,
+        ROOT / "docs/architecture/PERSISTENT_RUNTIME_TRADER_WORKBENCH.md",
+    )
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in active_product_docs)
+    assert "INVERSE_BTC_V1" in combined
+    for forbidden in (
+        "LINEAR_BTC_USDC_V1",
+        "Linear BTC-USDC",
+        "schema v3",
+        "schema-v3",
+        "v3/v4",
+        "`btc_usdc`",
+        "both products",
+    ):
+        assert forbidden not in combined
+
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for root in (ROOT / "apps", ROOT / "packages")
+        for path in root.rglob("*.py")
+    )
+    for forbidden in (
+        "LINEAR_BTC_USDC",
+        "OptionProductName.LINEAR",
+        "short-vol-fixed-public-shadow",
+        "btc_usdc",
+    ):
+        assert forbidden not in production_source
+
+    for obsolete in (
+        "short-vol-fixed-public-shadow-radar.json",
+        "short-vol-fixed-public-shadow-underwriting.json",
+        "short-vol-fixed-public-shadow-position.json",
+    ):
+        assert not (ROOT / "policies" / obsolete).exists()
+
+
+def test_product_roadmap_does_not_grant_policy_or_runtime_authority() -> None:
+    product = (ROOT / "docs/authority/PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for document in (product, readme):
+        normalized = " ".join(document.split())
+        assert "Only the upper-left channel is implemented" in normalized
+        assert "INVERSE_BTC_SHORT_VOL_V1" in document
+        assert (
+            "| `INVERSE_BTC_SHORT_VOL` (`INVERSE_BTC_SHORT_VOL_V1`) | `IMPLEMENTED` |" in document
+        )
+        for channel in (
+            "INVERSE_BTC_LONG_GAMMA",
+            "INVERSE_ETH_SHORT_VOL",
+            "INVERSE_ETH_LONG_GAMMA",
+        ):
+            assert f"| `{channel}` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |" in document
 
 
 def test_entry_aggregate_segment_and_migration_contracts_are_consistent() -> None:
@@ -266,7 +308,7 @@ def test_entry_aggregate_segment_and_migration_contracts_are_consistent() -> Non
         "never uses a hard-coded runtime, count, Case ID, or Entry allowlist",
         "not part of `serve-shadow`",
         "entry_position_baseline",
-        "product schema identities remain unchanged",
+        "accepted Inverse `SHADOW_CASE_OPENED` shape and product schema identity remain unchanged",
         "entry_position_baseline=UNKNOWN",
         "opened.json + segments/0/opened.json",
         "one no-replace atomic directory publication",
@@ -346,16 +388,16 @@ def test_internal_package_dependency_direction() -> None:
             assert not forbidden, f"{path} imports higher layers: {sorted(forbidden)}"
 
 
-def test_fixed_policy_files_remain_content_identified_after_pair_timing_rebind() -> None:
+def test_inverse_policy_files_remain_byte_exact_and_content_identified() -> None:
     expected = {
-        "policies/short-vol-fixed-public-shadow-radar.json": (
-            "74f286e07f8013e6178b44421db1d4d04808e5e0b0c604a80a0fdbc50f276c21"
+        "policies/short-vol-inverse-btc-public-shadow-radar.json": (
+            "283c2a8cc5e14cbed94b0f2a41ddd18ff2410772ae45d07abfea80d04446b1af"
         ),
-        "policies/short-vol-fixed-public-shadow-underwriting.json": (
-            "5cbff45fc342489a0c34b476d1947a54e490e04610dadd7f54a1e18f4681d79a"
+        "policies/short-vol-inverse-btc-public-shadow-underwriting.json": (
+            "76a93725bb4923a70a2865b1e06add3b5a23ae80a831029c558ce188be6e7834"
         ),
-        "policies/short-vol-fixed-public-shadow-position.json": (
-            "e7c38b12cb8c8d79c0f6409ee31289386f7f313a60ef593771648c0504016ef3"
+        "policies/short-vol-inverse-btc-public-shadow-position.json": (
+            "cb3866b8efd45d5c05ed23ab56658c2cdbf0359132e39f52ce329761ad933b8e"
         ),
     }
     for relative, digest in expected.items():
@@ -365,7 +407,12 @@ def test_fixed_policy_files_remain_content_identified_after_pair_timing_rebind()
         parsed = json.loads(raw)
         assert raw == json.dumps(parsed, ensure_ascii=False, indent=2).encode() + b"\n"
 
-    radar = json.loads((ROOT / "policies/short-vol-fixed-public-shadow-radar.json").read_bytes())
+    radar = json.loads(
+        (ROOT / "policies/short-vol-inverse-btc-public-shadow-radar.json").read_bytes()
+    )
+    assert radar["product_spec_identity"] == (
+        "sha256:ff90da92cefe8e530339df38505fe7726b92b45b1855b751f2633ffd4fdb2172"
+    )
     limits = radar["runtime_limits"]
     assert (
         limits["clock_refresh_interval_ms"]

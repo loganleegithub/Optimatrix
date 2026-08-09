@@ -29,7 +29,7 @@ from options_domain.quotes import (
 )
 
 
-def test_option_filter_uses_official_usdc_product_fields(
+def test_option_filter_uses_official_inverse_btc_product_fields(
     option_payload_factory: OptionPayloadFactory,
 ) -> None:
     payload = option_payload_factory()
@@ -38,16 +38,16 @@ def test_option_filter_uses_official_usdc_product_fields(
     assert instrument.option_type is OptionType.CALL
     assert instrument.amount is not None
     assert instrument.amount.qty_tick_size == Decimal("0.1")
-    assert instrument.price_tick == PriceTickMetadata(Decimal("0.01"))
+    assert instrument.price_tick == PriceTickMetadata(Decimal("0.0001"))
 
     for field, wrong in (
         ("kind", "future"),
         ("base_currency", "ETH"),
-        ("quote_currency", "USD"),
-        ("settlement_currency", "BTC"),
-        ("counter_currency", "USD"),
-        ("price_index", "btc_usd"),
-        ("instrument_type", "reversed"),
+        ("quote_currency", "USDC"),
+        ("settlement_currency", "USDC"),
+        ("counter_currency", "USDC"),
+        ("price_index", "btc_usdc"),
+        ("instrument_type", "linear"),
     ):
         changed = dict(payload)
         changed[field] = wrong
@@ -157,18 +157,18 @@ def test_combo_parser_requires_open_active_metadata() -> None:
         "id": "COMBO",
         "state": "active",
         "legs": [
-            {"instrument_name": "BTC_USDC-SHORT", "amount": -1},
-            {"instrument_name": "BTC_USDC-LONG", "amount": 1},
+            {"instrument_name": "BTC-SHORT", "amount": -1},
+            {"instrument_name": "BTC-LONG", "amount": 1},
         ],
     }
     metadata = {
         "instrument_name": "COMBO",
         "kind": "option_combo",
         "base_currency": "BTC",
-        "quote_currency": "USDC",
-        "settlement_currency": "USDC",
-        "counter_currency": "USDC",
-        "instrument_type": "linear",
+        "quote_currency": "BTC",
+        "settlement_currency": "BTC",
+        "counter_currency": "USD",
+        "instrument_type": "reversed",
         "state": "open",
         "is_active": True,
         "contract_size": 1,
@@ -274,18 +274,18 @@ def test_component_vertical_uses_two_full_books_two_tick_stresses_and_two_fee_ca
     option_payload_factory: OptionPayloadFactory,
 ) -> None:
     short_payload = option_payload_factory(
-        name="BTC_USDC-SHORT",
+        name="BTC-SHORT",
         strike=100_000,
         option_type="call",
     )
     long_payload = option_payload_factory(
-        name="BTC_USDC-LONG",
+        name="BTC-LONG",
         strike=101_000,
         option_type="call",
     )
     for payload in (short_payload, long_payload):
         payload["taker_commission"] = "0.0003"
-        payload["tick_size"] = "1"
+        payload["tick_size"] = "0.0001"
         payload["tick_size_steps"] = []
     short = parse_option_instrument(short_payload)
     long = parse_option_instrument(long_payload)
@@ -295,8 +295,8 @@ def test_component_vertical_uses_two_full_books_two_tick_stresses_and_two_fee_ca
         kind=ComponentBookQuoteKind.ENTRY,
         short_instrument=short,
         long_instrument=long,
-        short_side_levels=(PriceLevel(Decimal("300"), Decimal("0.1")),),
-        long_side_levels=(PriceLevel(Decimal("100"), Decimal("0.1")),),
+        short_side_levels=(PriceLevel(Decimal("0.0060"), Decimal("0.1")),),
+        long_side_levels=(PriceLevel(Decimal("0.0020"), Decimal("0.1")),),
         index_usdc_per_btc=Decimal("100000"),
         target_quantity_btc=Decimal("0.1"),
         fee_rate_index_fraction=Decimal("0.0003"),
@@ -306,20 +306,24 @@ def test_component_vertical_uses_two_full_books_two_tick_stresses_and_two_fee_ca
     assert entry is not None
     assert entry.short_leg.action is ComponentBookAction.SELL
     assert entry.long_leg.action is ComponentBookAction.BUY
-    assert entry.short_leg.stressed.vwap == Decimal("299")
-    assert entry.long_leg.stressed.vwap == Decimal("101")
-    assert entry.gross_cashflow_usdc == Decimal("19.8")
-    # The rich short pays the index fee; the cheap hedge is premium-capped.
-    assert entry.short_leg.fee_reserve_usdc == Decimal("3.00000")
-    assert entry.long_leg.fee_reserve_usdc == Decimal("1.2625")
-    assert entry.net_cashflow_usdc == Decimal("15.53750")
+    assert entry.short_leg.stressed.vwap == Decimal("0.0059")
+    assert entry.long_leg.stressed.vwap == Decimal("0.0021")
+    assert entry.native_gross_cashflow == Decimal("0.00038")
+    assert entry.gross_cashflow_usdc == Decimal("38.00000")
+    # The rich short pays the base-rate fee; the cheap hedge is native-premium-capped.
+    assert entry.short_leg.native_fee_reserve == Decimal("0.000030")
+    assert entry.long_leg.native_fee_reserve == Decimal("0.00002625")
+    assert entry.short_leg.fee_reserve_usdc == Decimal("3.000000")
+    assert entry.long_leg.fee_reserve_usdc == Decimal("2.62500000")
+    assert entry.native_net_cashflow == Decimal("0.00032375")
+    assert entry.net_cashflow_usdc == Decimal("32.37500000")
 
     close, close_reasons = evaluate_component_book_vertical(
         kind=ComponentBookQuoteKind.CLOSE,
         short_instrument=short,
         long_instrument=long,
-        short_side_levels=(PriceLevel(Decimal("250"), Decimal("0.1")),),
-        long_side_levels=(PriceLevel(Decimal("80"), Decimal("0.1")),),
+        short_side_levels=(PriceLevel(Decimal("0.0025"), Decimal("0.1")),),
+        long_side_levels=(PriceLevel(Decimal("0.0008"), Decimal("0.1")),),
         index_usdc_per_btc=Decimal("100000"),
         target_quantity_btc=Decimal("0.1"),
         fee_rate_index_fraction=Decimal("0.0003"),
@@ -328,10 +332,14 @@ def test_component_vertical_uses_two_full_books_two_tick_stresses_and_two_fee_ca
     assert close is not None
     assert close.short_leg.action is ComponentBookAction.BUY
     assert close.long_leg.action is ComponentBookAction.SELL
-    assert close.short_leg.stressed.vwap == Decimal("251")
-    assert close.long_leg.stressed.vwap == Decimal("79")
-    assert close.gross_cashflow_usdc == Decimal("-17.2")
-    assert close.net_cashflow_usdc == Decimal("-21.1875")
+    assert close.short_leg.stressed.vwap == Decimal("0.0026")
+    assert close.long_leg.stressed.vwap == Decimal("0.0007")
+    assert close.native_gross_cashflow == Decimal("-0.00019")
+    assert close.gross_cashflow_usdc == Decimal("-19.00000")
+    assert close.short_leg.native_fee_reserve == Decimal("0.000030")
+    assert close.long_leg.native_fee_reserve == Decimal("0.00000875")
+    assert close.native_net_cashflow == Decimal("-0.00022875")
+    assert close.net_cashflow_usdc == Decimal("-22.87500000")
 
 
 def test_invalid_tick_metadata_is_local_unknown_not_an_instrument_rejection(

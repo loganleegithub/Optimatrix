@@ -10,7 +10,7 @@ import pytest
 import short_vol_radar.policy as policy_module
 from conftest import PolicyFactory
 from market_monitor import TimeInterval
-from options_domain import OptionType
+from options_domain import INVERSE_BTC, OptionType
 from short_vol_radar.baseline import (
     BaselineResult,
     BaselineUnavailable,
@@ -44,7 +44,6 @@ def _policy_with_ticker_stale_deadline(
 ) -> tuple[bytes, str]:
     exact, _ = policy_factory()
     document: dict[str, Any] = json.loads(exact)
-    document["policy_schema_version"] = 6
     runtime_limits = document["runtime_limits"]
     assert isinstance(runtime_limits, dict)
     runtime_limits["ticker_source_stale_deadline_ms"] = deadline_ms
@@ -59,7 +58,8 @@ def test_policy_requires_and_binds_ticker_source_stale_deadline(
 
     policy = load_policy_bytes(exact, digest)
 
-    assert policy.schema_version == 6
+    assert policy.schema_version == 7
+    assert policy.product_spec_identity == INVERSE_BTC.identity
     assert policy.runtime_limits.ticker_source_stale_deadline_ms == 5_000
     assert policy.runtime_limits.as_object()["ticker_source_stale_deadline_ms"] == 5_000
 
@@ -94,7 +94,8 @@ def test_policy_loads_exact_bytes_once_and_binds_digest(
     path.write_bytes(exact)
     policy = load_policy(path, digest)
     assert policy.identity == digest
-    assert policy.schema_version == 6
+    assert policy.schema_version == 7
+    assert policy.product_spec_identity == INVERSE_BTC.identity
     assert policy.target_base_quantity_btc == Decimal("0.1")
     assert policy.runtime_limits.index_history_refresh_interval_ms == 300_000
     assert policy.runtime_limits.index_history_source_stale_deadline_ms == 900_000
@@ -110,11 +111,12 @@ def test_policy_loads_exact_bytes_once_and_binds_digest(
 
 
 def test_production_radar_policy_is_the_exact_credible_clue_screen() -> None:
-    path = ROOT / "policies/short-vol-fixed-public-shadow-radar.json"
+    path = ROOT / "policies/short-vol-inverse-btc-public-shadow-radar.json"
     exact = path.read_bytes()
     policy = load_policy_bytes(exact, digest_policy_bytes(exact))
 
-    assert policy.schema_version == 6
+    assert policy.schema_version == 7
+    assert policy.product_spec_identity == INVERSE_BTC.identity
     assert policy.family == "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS"
     assert policy.target_base_quantity_btc == Decimal("0.1")
     assert policy.runtime_limits.index_history_refresh_interval_ms == 300_000

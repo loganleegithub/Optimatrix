@@ -89,11 +89,11 @@ def option_payload(name: str, expiry_ms: int, strike: str) -> dict[str, object]:
         "instrument_name": name,
         "kind": "option",
         "base_currency": "BTC",
-        "quote_currency": "USDC",
-        "settlement_currency": "USDC",
-        "counter_currency": "USDC",
-        "price_index": "btc_usdc",
-        "instrument_type": "linear",
+        "quote_currency": "BTC",
+        "settlement_currency": "BTC",
+        "counter_currency": "USD",
+        "price_index": "btc_usd",
+        "instrument_type": "reversed",
         "is_active": True,
         "state": "open",
         "option_type": "call",
@@ -135,8 +135,8 @@ def run_nonempty_scenario(
         event_sink=sink,
         runtime_identity="runtime",
     )
-    short_name = "BTC_USDC-TEST-10001-C"
-    long_name = "BTC_USDC-TEST-110-C"
+    short_name = "BTC-TEST-10001-C"
+    long_name = "BTC-TEST-110-C"
     expiry_ms = 4_620_000
     summary = {
         "id": "COMBO",
@@ -239,10 +239,10 @@ def run_nonempty_scenario(
                 "instrument_name": "COMBO",
                 "kind": "option_combo",
                 "base_currency": "BTC",
-                "quote_currency": "USDC",
-                "settlement_currency": "USDC",
-                "counter_currency": "USDC",
-                "instrument_type": "linear",
+                "quote_currency": "BTC",
+                "settlement_currency": "BTC",
+                "counter_currency": "USD",
+                "instrument_type": "reversed",
                 "is_active": True,
                 "state": "open",
                 "contract_size": 1,
@@ -302,11 +302,11 @@ def run_nonempty_scenario(
                 {
                     "method": "subscription",
                     "params": {
-                        "channel": "deribit_price_index.btc_usdc",
+                        "channel": "deribit_price_index.btc_usd",
                         "data": {
                             "timestamp": source_ms,
                             "price": 100,
-                            "index_name": "btc_usdc",
+                            "index_name": "btc_usd",
                         },
                     },
                 },
@@ -322,7 +322,7 @@ def run_nonempty_scenario(
         reducer.platform.public_method_guard,
         reducer.platform.post_status_probe,
         reducer.platform.fresh_index_coverage,
-        reducer.channel_state("deribit_price_index.btc_usdc"),
+        reducer.channel_state("deribit_price_index.btc_usd"),
     )
 
     final_ms = 422_000
@@ -369,7 +369,9 @@ def run_nonempty_scenario(
         processed_monotonic_ms=final_ms + 1,
     )
     total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
-    first_price = Decimal(str(black_price(100, 100.01, total_volatility, OptionType.CALL)))
+    first_price = Decimal(
+        str(black_price(100, 100.01, total_volatility, OptionType.CALL))
+    ) / Decimal(100)
     seq += 1
     reducer.reduce(
         envelope(
