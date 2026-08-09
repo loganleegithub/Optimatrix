@@ -1147,9 +1147,10 @@ def _underwriting_rows(
         str(_payload(value).get("candidate_identity")): value
         for value in kinds.get("CANDIDATE_INVALIDATION", ())
     }
-    entries_by_scope = {
-        str(_payload(value).get("radar_scope_identity")): value
+    entries_by_candidate = {
+        str(_payload(value).get("candidate_identity")): value
         for value in kinds.get("SHADOW_ENTRY", ())
+        if isinstance(_payload(value).get("candidate_identity"), str)
     }
     rows: list[dict[str, object]] = []
     for availability_value in _latest_by_payload_key(
@@ -1167,14 +1168,10 @@ def _underwriting_rows(
             candidates_by_action.get(action_identity) if action_identity is not None else None
         )
         candidate_identity = str(candidate["object_identity"]) if candidate is not None else None
-        admitted_entry = entries_by_scope.get(str(scope_identity))
+        admitted_entry = (
+            entries_by_candidate.get(candidate_identity) if candidate_identity is not None else None
+        )
         if admitted_entry is not None:
-            admitted_candidate = _payload(admitted_entry).get("candidate_identity")
-            candidate_identity = (
-                str(admitted_candidate)
-                if isinstance(admitted_candidate, str)
-                else candidate_identity
-            )
             lifecycle = "ADMITTED"
         elif candidate_identity in invalidations:
             lifecycle = "INVALIDATED"

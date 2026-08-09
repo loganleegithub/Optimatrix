@@ -287,7 +287,9 @@ def test_opportunity_blotter_maps_server_states_without_recomputing_strategy_tru
         "globalThis.__workbenchTest = { channelSnapshotState, roadmapState, structureState, "
         "radarState, orderedStructureRows, orderedRadarRows, predicateMarginForFailure, "
         "formatMargin, firstFailureSummary, structureJudgement, canonicalShadowMarkup, "
-        "reasonText, escapeHtml, runtimeStatusState };",
+        "canonicalShadowEntry, structureEntryFacts, structureIdentity, structureDetailMarkup, "
+        "shadowStructureRow, structureQueueRows, validateDocument, reasonText, escapeHtml, "
+        "runtimeStatusState };",
     )
     assert test_js != JS
     harness = f"""
@@ -353,6 +355,21 @@ assert.equal(api.channelSnapshotState({{
 assert.equal(api.channelSnapshotState({{...connected, service: {{ready: false, reason: 'CLOCK_GAP'}}}}).code,
   'DATA_BLOCKED');
 assert.equal(api.roadmapState({{id: 'INVERSE_BTC_LONG_GAMMA_V1'}}).label, '尚未接入');
+const validProjection = {{
+  ...connected, schema_version: 5,
+  product: {{
+    ...connected.product, native_premium_currency: 'BTC', valuation_currency: 'USD_EQUIVALENT',
+    actual_account_margin_availability: 'UNKNOWN', actual_account_margin_reason: 'ACCOUNT_MARGIN_UNKNOWN'
+  }},
+  radar: {{rows: []}}, underwriting: {{rows: []}}, shadow_entries: {{rows: []}},
+  positions: {{rows: []}}, outcomes: {{rows: []}}, funnel: {{}}
+}};
+assert.doesNotThrow(() => api.validateDocument(validProjection));
+for (const missingProjection of ['shadow_entries', 'positions', 'outcomes']) {{
+  const incomplete = {{...validProjection}};
+  delete incomplete[missingProjection];
+  assert.throws(() => api.validateDocument(incomplete), /invalid workbench projection/);
+}}
 
 assert.deepEqual(api.structureState({{candidate_lifecycle: 'ADMITTED'}}),
   {{key: 'SHADOW_TRACKING', label: 'Shadow 跟踪', tone: 'purple', priority: 0}});
@@ -401,6 +418,125 @@ assert.match(api.canonicalShadowMarkup({{
   admission_refresh_terminal_outcome: 'UNKNOWN_CONSUMED',
   admission_refresh_unknown_reasons: ['OPTION_BOOK_UNKNOWN']
 }}]}}}}), /已终结/);
+const admitted = {{
+  candidate_identity: 'candidate', candidate_lifecycle: 'ADMITTED',
+  availability: 'NOT_EVALUATED', native_net_entry_credit: null,
+  net_entry_credit_valuation: null, entry_valuation_index_price: null
+}};
+const matchingShadow = {{
+  candidate_identity: 'candidate', shadow_entry_identity: 'entry',
+  admission_refresh_terminal_outcome: 'ENTRY_EMITTED',
+  native_gross_entry_credit: '0.00029', native_entry_fee_reserve: '0.00004',
+  native_net_entry_credit: '0.00025', simulated_entry_credit_valuation: '18.8206781',
+  entry_valuation_index_price: '64898.89', target_quantity_btc: '0.1',
+  entry_component_legs: [
+    {{canonical_leg_role: 'SHORT', action: 'SELL', instrument_name: 'BTC-11AUG26-64500-P'}},
+    {{canonical_leg_role: 'LONG', action: 'BUY', instrument_name: 'BTC-11AUG26-63000-P'}}
+  ]
+}};
+const shadowDocument = {{shadow_entries: {{rows: [matchingShadow]}}}};
+assert.equal(api.canonicalShadowEntry(admitted, shadowDocument), matchingShadow);
+assert.deepEqual(api.structureEntryFacts(admitted, shadowDocument), {{
+  source: 'SHADOW_ENTRY', status: 'ENTRY_EMITTED',
+  valuationIndex: '64898.89', targetQuantity: '0.1', nativeNetCredit: '0.00025',
+  nativeGrossCredit: '0.00029', nativeFeeReserve: '0.00004',
+  valuationGrossCredit: '18.8206781'
+}});
+assert.equal(api.structureIdentity({{
+  candidate_identity: 'candidate', underwriting_availability_evaluation_identity: 'changing-evaluation'
+}}), 'candidate');
+assert.equal(api.canonicalShadowEntry(admitted, {{shadow_entries: {{rows: [{{
+  ...matchingShadow, candidate_identity: 'different-candidate'
+}}]}}}}), null);
+const currentUnderwriting = {{
+  availability: 'NOT_EVALUATED', candidate_identity: null, candidate_lifecycle: null,
+  underwriting_availability_evaluation_identity: 'current-evaluation',
+  short_leg_instrument_name: 'BTC-11AUG26-64500-P',
+  long_leg_instrument_name: 'BTC-11AUG26-62000-P', failed_predicates: [],
+  predicate_margin_vector: [], unknown_reasons: []
+}};
+const queueDocument = {{
+  ...shadowDocument,
+  underwriting: {{rows: [currentUnderwriting]}},
+  product: {{native_premium_currency: 'BTC', valuation_currency: 'USD_EQUIVALENT'}},
+  positions: {{rows: []}}, outcomes: {{rows: []}}
+}};
+const queueRows = api.structureQueueRows(queueDocument);
+assert.equal(queueRows.length, 2);
+assert.equal(queueRows[0].queue_row_kind, 'SHADOW_ENTRY');
+assert.equal(api.structureIdentity(queueRows[0]), 'candidate');
+assert.equal(queueRows[0].short_leg_instrument_name, 'BTC-11AUG26-64500-P');
+assert.equal(queueRows[0].long_leg_instrument_name, 'BTC-11AUG26-63000-P');
+assert.equal(api.structureState(currentUnderwriting).key, 'NOT_EVALUATED');
+const duplicateDecorated = api.structureQueueRows({{
+  ...queueDocument, underwriting: {{rows: [admitted]}}
+}});
+assert.equal(duplicateDecorated.length, 1);
+const secondShadow = {{...matchingShadow, candidate_identity: 'candidate-2', shadow_entry_identity: 'entry-2'}};
+assert.equal(api.structureQueueRows({{
+  ...queueDocument, underwriting: {{rows: []}}, shadow_entries: {{rows: [matchingShadow, secondShadow]}}
+}}).length, 2);
+const repeatedCandidateShadow = {{
+  ...matchingShadow, shadow_entry_identity: 'entry-duplicate-candidate',
+  native_net_entry_credit: '0.00031'
+}};
+const repeatedCandidateDocument = {{
+  ...queueDocument, underwriting: {{rows: []}},
+  shadow_entries: {{rows: [matchingShadow, repeatedCandidateShadow]}}
+}};
+const repeatedCandidateRows = api.structureQueueRows(repeatedCandidateDocument);
+assert.equal(repeatedCandidateRows.length, 2);
+assert.deepEqual(repeatedCandidateRows.map(value => api.structureIdentity(value)).sort(),
+  ['entry', 'entry-duplicate-candidate']);
+for (const value of repeatedCandidateRows) {{
+  assert.equal(api.structureState(value).key, 'UNKNOWN');
+  assert.equal(api.canonicalShadowEntry(value, repeatedCandidateDocument), value.shadow_entry_projection);
+}}
+assert.equal(api.structureEntryFacts(
+  repeatedCandidateRows.find(value => value.shadow_entry_identity === 'entry-duplicate-candidate'),
+  repeatedCandidateDocument
+).nativeNetCredit, '0.00031');
+const missingCandidateShadow = {{...matchingShadow, candidate_identity: null, shadow_entry_identity: 'entry-no-candidate'}};
+const missingCandidateDocument = {{
+  ...queueDocument, underwriting: {{rows: []}}, shadow_entries: {{rows: [missingCandidateShadow]}}
+}};
+const [missingCandidateRow] = api.structureQueueRows(missingCandidateDocument);
+assert.equal(api.structureState(missingCandidateRow).key, 'UNKNOWN');
+assert.equal(api.structureIdentity(missingCandidateRow), 'entry-no-candidate');
+assert.match(api.structureDetailMarkup(missingCandidateRow, missingCandidateDocument), /Shadow 投影关联异常/);
+const invalidIdentityShadow = {{
+  ...matchingShadow, candidate_identity: {{value: 'candidate'}}, shadow_entry_identity: 17
+}};
+const invalidIdentityDocument = {{
+  ...queueDocument, underwriting: {{rows: []}}, shadow_entries: {{rows: [invalidIdentityShadow]}}
+}};
+const [invalidIdentityRow] = api.structureQueueRows(invalidIdentityDocument);
+assert.equal(api.structureState(invalidIdentityRow).key, 'UNKNOWN');
+assert.equal(api.structureIdentity(invalidIdentityRow), 'shadow-projection-0');
+assert.equal(api.canonicalShadowEntry(invalidIdentityRow, invalidIdentityDocument), null);
+const invalidLegsShadow = {{
+  ...matchingShadow, shadow_entry_identity: 'entry-invalid-legs', candidate_identity: 'candidate-invalid-legs',
+  entry_component_legs: [
+    {{canonical_leg_role: 'SHORT', action: 'BUY', instrument_name: 'BTC-11AUG26-64500-P'}},
+    {{canonical_leg_role: 'LONG', action: 'SELL', instrument_name: 'BTC-11AUG26-63000-P'}}
+  ]
+}};
+const invalidLegsDocument = {{
+  ...queueDocument, underwriting: {{rows: []}}, shadow_entries: {{rows: [invalidLegsShadow]}}
+}};
+const [invalidLegsRow] = api.structureQueueRows(invalidLegsDocument);
+const invalidLegsDetail = api.structureDetailMarkup(invalidLegsRow, invalidLegsDocument);
+assert.equal(api.structureState(invalidLegsRow).key, 'UNKNOWN');
+assert.match(invalidLegsDetail, new RegExp('拒绝由浏览器补写 SELL/BUY'));
+const shadowDetail = api.structureDetailMarkup(queueRows[0], queueDocument);
+assert.match(shadowDetail, /ENTRY_EMITTED/);
+assert.match(shadowDetail, /64898\\.89/);
+assert.match(shadowDetail, /0\\.00025/);
+assert.match(shadowDetail, /18\\.82/);
+assert.match(shadowDetail, /费前信用/);
+assert.match(shadowDetail, /BTC-11AUG26-64500-P/);
+assert.match(shadowDetail, /BTC-11AUG26-63000-P/);
+assert.doesNotMatch(shadowDetail, /NOT_EVALUATED/);
 assert.equal(api.reasonText('CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE'), '净权利金未覆盖未来成本准备');
 assert.equal(api.escapeHtml('<script>&'), '&lt;script&gt;&amp;');
 """
