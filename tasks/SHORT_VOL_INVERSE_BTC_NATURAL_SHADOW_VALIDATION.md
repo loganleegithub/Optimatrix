@@ -98,6 +98,41 @@ account margin, deployment health, or execution permission.
 **Complexity:** the old multi-tab backend-status presentation is replaced by one queue/detail
 blotter; no runtime subsystem is added.
 
+### Shadow tracking display truth repair
+
+**Baseline:** one live schema-v5 snapshot projected `6` admitted Shadow Entries, while the unified
+queue showed only `3`. One visible row combined a historical `ADMITTED` Candidate with the latest
+same-scope `NOT_EVALUATED` Underwriting window, so the detail showed a Shadow badge beside an empty
+entry index and economics even though the matching Shadow Entry contained frozen entry facts.
+
+**Primary blocker:** `_underwriting_rows` joined an admitted Entry to the latest Underwriting row by
+Radar scope rather than the exact current `availability → action → candidate → entry` identity
+chain. The browser then read entry economics from that mixed Underwriting row instead of the
+canonical Shadow Entry.
+
+**Expected user-visible delta:** current Underwriting rows no longer inherit historical Candidate
+state. Every canonical Shadow Entry appears once in the Shadow queue and renders its frozen legs,
+entry index, native gross/fee/net credit, explicitly gross valuation credit, Position, and Outcome
+through exact Candidate and Shadow Entry identities. Missing admission-time margin/reserve fields
+remain visibly unavailable and are never copied from a later Underwriting window.
+
+**Exact known-at boundary:** Underwriting state follows only its exact current action chain. Shadow
+entry facts come only from `shadow_entries`; Position and Outcome join only by
+`shadow_entry_identity`. No leg-name or Radar-scope association establishes Shadow truth.
+
+**Durable-data effect:** `NONE`; no Case bytes, schema, persistence path, or state root changes.
+
+**Change axes:** public input `NONE`; Decision Policy `NONE`; Outcome/evaluation `NONE`;
+authorization remains the existing read-only loopback Workbench repair/restart loop.
+
+**Bounded files and verification:** `radar_runtime/workbench.py`, `workbench_static/app.js`, this
+task, and direct Workbench/frontend tests. Add one old-Entry/new-Underwriting boundary regression,
+one independent Shadow queue/detail regression, focused tests, and `make check`. No new route,
+dependency, persistence, product, or browser-side economic calculation.
+
+**Complexity:** replace one scope-based historical overlay with exact Candidate identity and one
+display-only normalization of already-projected Shadow rows; add no subsystem or durable object.
+
 ## Business closure
 
 **Given:** PR #28 and its merged-main CI authorized one exact Inverse start.

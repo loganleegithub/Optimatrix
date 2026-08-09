@@ -794,6 +794,93 @@ def test_underwriting_projection_joins_only_settled_display_metadata() -> None:
     assert row["target_quantity_btc"] == "0.1"
 
 
+def test_underwriting_projection_does_not_attach_old_shadow_entry_by_scope() -> None:
+    scope_identity = "sha256:" + "1" * 64
+    old_availability_identity = "sha256:" + "2" * 64
+    current_availability_identity = "sha256:" + "3" * 64
+    action_identity = "sha256:" + "4" * 64
+    candidate_identity = "sha256:" + "5" * 64
+
+    def boundary(sequence: int) -> dict[str, object]:
+        return {
+            "code_identity": "a" * 40,
+            "runtime_identity": "sha256:" + "b" * 64,
+            "session_epoch": 1,
+            "ingress_seq": sequence,
+            "received_monotonic_ms": sequence,
+            "causal_seq": sequence,
+        }
+
+    kinds: dict[str, list[dict[str, object]]] = {
+        "UNDERWRITING_AVAILABILITY_EVALUATION": [
+            {
+                "object_identity": old_availability_identity,
+                "fact_boundary": boundary(1),
+                "payload": {
+                    "radar_scope_or_short_leg_identity": scope_identity,
+                    "availability": "EVALUABLE",
+                    "availability_evaluation_fact_boundary": {"causal_seq": 1},
+                },
+            },
+            {
+                "object_identity": current_availability_identity,
+                "fact_boundary": boundary(5),
+                "payload": {
+                    "radar_scope_or_short_leg_identity": scope_identity,
+                    "availability": "NOT_EVALUATED",
+                    "availability_evaluation_fact_boundary": {"causal_seq": 5},
+                },
+            },
+        ],
+        "UNDERWRITING_ACTION": [
+            {
+                "object_identity": action_identity,
+                "fact_boundary": boundary(2),
+                "payload": {
+                    "underwriting_availability_evaluation_identity": old_availability_identity,
+                    "economic_action": "CANDIDATE",
+                },
+            }
+        ],
+        "CANDIDATE_ACTIVATION": [
+            {
+                "object_identity": candidate_identity,
+                "fact_boundary": boundary(3),
+                "payload": {"underwriting_action_identity": action_identity},
+            }
+        ],
+        "SHADOW_ENTRY": [
+            {
+                "object_identity": "sha256:" + "6" * 64,
+                "fact_boundary": boundary(4),
+                "payload": {
+                    "candidate_identity": candidate_identity,
+                    "radar_scope_identity": scope_identity,
+                    "full_quantity_btc": "0.1",
+                    "entry_component_legs": [],
+                },
+            }
+        ],
+    }
+
+    (row,) = workbench_module._underwriting_rows(kinds, _policies())
+
+    assert row["underwriting_availability_evaluation_identity"] == current_availability_identity
+    assert row["availability"] == "NOT_EVALUATED"
+    assert row["underwriting_action_identity"] is None
+    assert row["candidate_identity"] is None
+    assert row["candidate_lifecycle"] is None
+
+    coherent_kinds = {
+        **kinds,
+        "UNDERWRITING_AVAILABILITY_EVALUATION": [kinds["UNDERWRITING_AVAILABILITY_EVALUATION"][0]],
+    }
+    (admitted_row,) = workbench_module._underwriting_rows(coherent_kinds, _policies())
+    assert admitted_row["underwriting_action_identity"] == action_identity
+    assert admitted_row["candidate_identity"] == candidate_identity
+    assert admitted_row["candidate_lifecycle"] == "ADMITTED"
+
+
 def test_position_projection_separates_gross_remaining_premium_from_net_close_debit() -> None:
     entry_identity = "sha256:" + "5" * 64
     boundary = {
