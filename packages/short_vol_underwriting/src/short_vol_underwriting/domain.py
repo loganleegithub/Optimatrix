@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -13,11 +13,28 @@ from short_vol_underwriting.constants import (
 )
 from short_vol_underwriting.identity import canonical_identity, require_identity
 from short_vol_underwriting.model import (
+    CaseFactBoundary,
     FactBoundary,
     OutcomeState,
+    PositionDecisionRecoverySeed,
     PredicateTruth,
     TerminalSource,
 )
+
+
+@dataclass(frozen=True)
+class SourceFact:
+    source_identity: str
+    boundary: FactBoundary
+
+    def __post_init__(self) -> None:
+        require_identity(self.source_identity, "source_identity")
+
+    def as_ref(self) -> dict[str, object]:
+        return {
+            "source_identity": self.source_identity,
+            "receipt_fact_boundary": self.boundary.as_object(),
+        }
 
 
 class UnderwritingAvailability(StrEnum):
@@ -60,6 +77,47 @@ class EntryEconomics:
     underwriting_reserved_loss_usdc: Decimal
     actual_all_in_max_loss_usdc: None = None
     actual_all_in_max_loss_availability: str = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class EntryTerms:
+    """Frozen Entry fields consumed by Position, Outcome, and recovery."""
+
+    short_leg_identity: str
+    long_leg_identity: str
+    short_leg_instrument_name: str
+    long_leg_instrument_name: str
+    canonical_combo_identity: str | None
+    combo_instrument_name: str | None
+    option_type: str
+    short_strike_usdc_per_btc: Decimal
+    long_strike_usdc_per_btc: Decimal
+    expiry_ms: int
+    target_quantity_btc: Decimal
+    entry_direction: str
+    index_usdc_per_btc: Decimal | None
+    index_source: SourceFact | None
+    short_mark_iv_fraction: Decimal | None
+    ticker_source: SourceFact | None
+    short_leg_taker_commission_fraction: Decimal
+    long_leg_taker_commission_fraction: Decimal
+    execution_model: str
+    product_spec_identity: str | None
+    product_name: str | None
+    native_premium_currency: str | None
+    settlement_currency: str | None
+    valuation_currency: str | None
+    price_index: str | None
+    native_gross_entry_credit: Decimal | None
+    native_entry_fee_reserve: Decimal | None
+    native_net_entry_credit: Decimal | None
+    entry_valuation_index_price: Decimal | None
+    width_usdc_per_btc: Decimal
+    entry_component_legs: tuple[Mapping[str, object], ...]
+
+    @property
+    def uses_component_books(self) -> bool:
+        return bool(self.entry_component_legs)
 
 
 @dataclass(frozen=True)
@@ -219,7 +277,12 @@ class PositionDecision:
     primary_close_reason: str | None
     secondary_close_reasons: tuple[str, ...]
     first_latched_close_action_identity: str | None
-    action_fact_boundary: FactBoundary
+    action_case_boundary: CaseFactBoundary
+
+    @property
+    def action_fact_boundary(self) -> FactBoundary:
+        """Runtime-local compatibility view for the current owner emission path."""
+        return self.action_case_boundary.fact_boundary
 
 
 @dataclass
@@ -260,20 +323,62 @@ class CandidateState:
 class PositionDecisionState:
     shadow_entry_identity: str
     position_policy_identity: str
-    entry_boundary: FactBoundary
+    entry_boundary: CaseFactBoundary | FactBoundary
+    segment_baseline_boundary: CaseFactBoundary | None = None
     first_latched_close_action_identity: str | None = None
     _latched_reasons: set[str] | None = None
+    _first_latched_close_reasons: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         require_identity(self.shadow_entry_identity, "shadow_entry_identity")
         require_identity(self.position_policy_identity, "position_policy_identity")
+        if isinstance(self.entry_boundary, FactBoundary):
+            self.entry_boundary = CaseFactBoundary(0, self.entry_boundary)
+        elif not isinstance(self.entry_boundary, CaseFactBoundary):
+            raise ValueError("entry_boundary must be a CaseFactBoundary or FactBoundary")
+        if self.segment_baseline_boundary is not None:
+            if not isinstance(self.segment_baseline_boundary, CaseFactBoundary):
+                raise ValueError("segment_baseline_boundary must be a CaseFactBoundary")
+            if (
+                self.segment_baseline_boundary.segment_sequence
+                <= self.entry_boundary.segment_sequence
+            ):
+                raise ValueError("recovery baseline must belong to a later Case segment")
         if self._latched_reasons is None:
             self._latched_reasons = set()
+
+    @classmethod
+    def recovered(
+        cls,
+        *,
+        shadow_entry_identity: str,
+        position_policy_identity: str,
+        entry_boundary: CaseFactBoundary,
+        segment_baseline_boundary: CaseFactBoundary,
+        recovery_seed: PositionDecisionRecoverySeed,
+    ) -> PositionDecisionState:
+        """Continue one durable Position Policy in a later, gapped Segment."""
+        return cls(
+            shadow_entry_identity=shadow_entry_identity,
+            position_policy_identity=position_policy_identity,
+            entry_boundary=entry_boundary,
+            segment_baseline_boundary=segment_baseline_boundary,
+            first_latched_close_action_identity=(recovery_seed.first_latched_close_action_identity),
+            _latched_reasons=set(recovery_seed.ordered_latched_close_reason_vector),
+            _first_latched_close_reasons=(recovery_seed.ordered_latched_close_reason_vector),
+        )
+
+    def recovery_seed(self) -> PositionDecisionRecoverySeed:
+        reasons = self._first_latched_close_reasons or ()
+        return PositionDecisionRecoverySeed(
+            first_latched_close_action_identity=self.first_latched_close_action_identity,
+            ordered_latched_close_reason_vector=reasons,
+        )
 
     def evaluate(
         self,
         predicate_truth: dict[str, PredicateTruth],
-        boundary: FactBoundary,
+        boundary: CaseFactBoundary | FactBoundary,
         *,
         consumed_position_fact_fingerprint: str,
     ) -> PositionDecision:
@@ -281,7 +386,24 @@ class PositionDecisionState:
             consumed_position_fact_fingerprint,
             "consumed_position_fact_fingerprint",
         )
-        if not boundary.is_strictly_after(self.entry_boundary):
+        assert isinstance(self.entry_boundary, CaseFactBoundary)
+        evaluation_floor = self.segment_baseline_boundary or self.entry_boundary
+        if isinstance(boundary, FactBoundary):
+            case_boundary = CaseFactBoundary(
+                evaluation_floor.segment_sequence,
+                boundary,
+            )
+        elif isinstance(boundary, CaseFactBoundary):
+            case_boundary = boundary
+        else:
+            raise ValueError("boundary must be a CaseFactBoundary or FactBoundary")
+        if case_boundary.segment_sequence != evaluation_floor.segment_sequence:
+            raise ValueError("Position evaluation must belong to the active Segment")
+        if not case_boundary.is_strictly_after(evaluation_floor):
+            if self.segment_baseline_boundary is not None:
+                raise ValueError(
+                    "Position evaluation must be strictly after the recovery segment baseline"
+                )
             raise ValueError("Position evaluation must be strictly post-entry")
         if set(predicate_truth) != set(POSITION_CLOSE_REASONS):
             raise ValueError("Position evaluation requires the exact nine predicates")
@@ -306,7 +428,7 @@ class PositionDecisionState:
             self.shadow_entry_identity,
             self.position_policy_identity,
             consumed_position_fact_fingerprint,
-            boundary.as_object(),
+            case_boundary.fact_boundary.as_object(),
         )
         action_identity = canonical_identity(
             "PositionActionIdentity",
@@ -317,6 +439,7 @@ class PositionDecisionState:
         )
         if self.first_latched_close_action_identity is None and action == "CLOSE":
             self.first_latched_close_action_identity = action_identity
+            self._first_latched_close_reasons = ordered_latched
         return PositionDecision(
             position_evaluation_identity=evaluation_identity,
             position_action_identity=action_identity,
@@ -326,20 +449,29 @@ class PositionDecisionState:
             primary_close_reason=ordered_latched[0] if ordered_latched else None,
             secondary_close_reasons=ordered_latched[1:],
             first_latched_close_action_identity=self.first_latched_close_action_identity,
-            action_fact_boundary=boundary,
+            action_case_boundary=case_boundary,
         )
 
 
 @dataclass
 class OutcomeReducer:
-    entry_boundary: FactBoundary
+    entry_boundary: CaseFactBoundary
     state: OutcomeState = OutcomeState.PENDING
     first_close_identity: str | None = None
-    first_close_boundary: FactBoundary | None = None
+    first_close_boundary: CaseFactBoundary | None = None
     selected_exit_identity: str | None = None
-    terminal_boundary: FactBoundary | None = None
+    terminal_case_boundary: CaseFactBoundary | None = None
 
-    def latch_close(self, action_identity: str, boundary: FactBoundary) -> None:
+    @property
+    def terminal_boundary(self) -> FactBoundary | None:
+        """Runtime-local compatibility view for the current owner emission path."""
+        return (
+            self.terminal_case_boundary.fact_boundary
+            if self.terminal_case_boundary is not None
+            else None
+        )
+
+    def latch_close(self, action_identity: str, boundary: CaseFactBoundary) -> None:
         require_identity(action_identity, "first_close_action_identity")
         if not boundary.is_strictly_after(self.entry_boundary):
             raise ValueError("first CLOSE must be strictly post-entry")
@@ -350,11 +482,10 @@ class OutcomeReducer:
     def settle(
         self,
         *,
-        boundary: FactBoundary,
+        boundary: CaseFactBoundary,
         eligible_exit_identity: str | None = None,
         ordinary_attempt_terminal: bool = False,
         lifecycle_ready: bool = False,
-        terminal_source: TerminalSource | None = None,
     ) -> OutcomeState:
         if self.state is not OutcomeState.PENDING:
             return self.state
@@ -371,13 +502,28 @@ class OutcomeReducer:
             self.state = OutcomeState.MATURE_KNOWN
         elif close_is_earlier and ordinary_attempt_terminal and lifecycle_ready:
             self.state = OutcomeState.MATURE_UNKNOWN
-        elif terminal_source is TerminalSource.STOP:
-            self.state = OutcomeState.CENSORED_AT_STOP
-        elif terminal_source is TerminalSource.FAILURE:
-            self.state = OutcomeState.CENSORED_AT_FAILURE
         else:
             return self.state
-        self.terminal_boundary = boundary
+        self.terminal_case_boundary = boundary
+        return self.state
+
+    def censor_control_at_process_end(
+        self,
+        *,
+        boundary: CaseFactBoundary,
+        terminal_source: TerminalSource,
+    ) -> OutcomeState:
+        """Preserve the bounded lifecycle of a selected no-trade Control only."""
+        if self.state is not OutcomeState.PENDING:
+            return self.state
+        if not boundary.is_strictly_after(self.entry_boundary):
+            raise ValueError("Control terminal facts must be strictly post-entry")
+        self.state = (
+            OutcomeState.CENSORED_AT_STOP
+            if terminal_source is TerminalSource.STOP
+            else OutcomeState.CENSORED_AT_FAILURE
+        )
+        self.terminal_case_boundary = boundary
         return self.state
 
 

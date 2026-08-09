@@ -363,6 +363,7 @@ def test_shadow_projection_derives_vertical_credit_only_from_persisted_component
         "SHADOW_ENTRY": [
             {
                 "object_identity": entry_identity,
+                "runtime_identity": "sha256:" + "b" * 64,
                 "payload": {
                     "candidate_identity": candidate_identity,
                     "full_quantity_btc": "0.1",
@@ -381,6 +382,14 @@ def test_shadow_projection_derives_vertical_credit_only_from_persisted_component
                         },
                     ],
                     "gross_entry_credit_usdc": "19.7",
+                    "origin_runtime_identity": "sha256:" + "b" * 64,
+                    "current_segment_identity": "sha256:" + "3" * 64,
+                    "current_segment_sequence": 0,
+                    "observation_quality": "CONTINUOUS",
+                    "gap_count": 0,
+                    "qualification_eligible": True,
+                    "tracking_state": "ACTIVE",
+                    "post_close_attempt_state": "NOT_SCHEDULED",
                 },
             }
         ],
@@ -398,6 +407,141 @@ def test_shadow_projection_derives_vertical_credit_only_from_persisted_component
     )
     assert row["matched_refresh_source_identity"] == "sha256:" + "4" * 64
     assert row["simulation_label"] == SIMULATION_LABEL
+    assert {
+        key: row[key]
+        for key in (
+            "origin_runtime_identity",
+            "current_segment_identity",
+            "current_segment_sequence",
+            "observation_quality",
+            "gap_count",
+            "qualification_eligible",
+            "tracking_state",
+            "post_close_attempt_state",
+        )
+    } == {
+        "origin_runtime_identity": "sha256:" + "b" * 64,
+        "current_segment_identity": "sha256:" + "3" * 64,
+        "current_segment_sequence": 0,
+        "observation_quality": "CONTINUOUS",
+        "gap_count": 0,
+        "qualification_eligible": True,
+        "tracking_state": "ACTIVE",
+        "post_close_attempt_state": "NOT_SCHEDULED",
+    }
+
+
+def test_recovered_entry_stays_one_shadow_row_and_position_starts_unknown() -> None:
+    entry_identity = "sha256:" + "2" * 64
+    current_runtime = "sha256:" + "b" * 64
+    entry = {
+        "object_kind": "SHADOW_ENTRY",
+        "object_identity": entry_identity,
+        "runtime_identity": current_runtime,
+        "payload": {
+            "candidate_identity": "sha256:" + "1" * 64,
+            "canonical_leg_identities": [],
+            "origin_runtime_identity": "sha256:" + "a" * 64,
+            "current_segment_identity": None,
+            "current_segment_sequence": None,
+            "observation_quality": "GAPPED",
+            "gap_count": 2,
+            "qualification_eligible": False,
+            "tracking_state": "RECOVERING",
+            "post_close_attempt_state": "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS",
+        },
+    }
+    kinds = {"SHADOW_ENTRY": [entry]}
+
+    shadow_rows = workbench_module._shadow_rows(kinds, _policies())
+    position_rows = workbench_module._position_rows(
+        kinds,
+        _policies(),
+        trusted_time=None,
+        option_metadata=(),
+    )
+    projection = workbench_module._build_downstream_projection(
+        objects=(entry,),
+        policies=_policies(),
+        underwriting_metadata=(),
+    )
+
+    assert len(shadow_rows) == len(projection.shadow_rows) == 1
+    assert shadow_rows[0]["shadow_entry_identity"] == entry_identity
+    assert shadow_rows[0]["origin_runtime_identity"] == "sha256:" + "a" * 64
+    assert shadow_rows[0]["current_segment_identity"] is None
+    assert shadow_rows[0]["current_segment_sequence"] is None
+    assert shadow_rows[0]["observation_quality"] == "GAPPED"
+    assert shadow_rows[0]["gap_count"] == 2
+    assert shadow_rows[0]["qualification_eligible"] is False
+    assert shadow_rows[0]["tracking_state"] == "RECOVERING"
+    assert shadow_rows[0]["post_close_attempt_state"] == "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS"
+    assert len(position_rows) == 1
+    assert position_rows[0]["position_action"] == "UNKNOWN"
+    assert position_rows[0]["observation_quality"] == "GAPPED"
+    assert position_rows[0]["qualification_eligible"] is False
+    assert projection.underwriting_counts == {
+        "candidate_count": 0,
+        "underwriting_availability_evaluable_count": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value", "message"),
+    (
+        ("current_segment_sequence", -1, "current_segment_sequence"),
+        ("observation_quality", "BROKEN", "observation_quality"),
+        ("gap_count", 0, "positive gap_count"),
+        ("qualification_eligible", True, "qualification eligible"),
+        ("tracking_state", "PAUSED", "tracking_state"),
+        ("post_close_attempt_state", "RETRYING", "post_close_attempt_state"),
+    ),
+)
+def test_shadow_entry_recovery_tracking_schema_rejects_invalid_values(
+    field: str,
+    invalid_value: object,
+    message: str,
+) -> None:
+    payload: dict[str, object] = {
+        "origin_runtime_identity": "sha256:" + "a" * 64,
+        "current_segment_identity": "sha256:" + "3" * 64,
+        "current_segment_sequence": 1,
+        "observation_quality": "GAPPED",
+        "gap_count": 1,
+        "qualification_eligible": False,
+        "tracking_state": "ACTIVE",
+        "post_close_attempt_state": "NOT_SCHEDULED",
+    }
+    payload[field] = invalid_value
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        workbench_module._entry_tracking_projection(
+            {
+                "object_identity": "sha256:" + "2" * 64,
+                "runtime_identity": "sha256:" + "b" * 64,
+                "payload": payload,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {},
+        {"origin_runtime_identity": "sha256:" + "a" * 64},
+    ),
+)
+def test_shadow_entry_recovery_tracking_schema_rejects_missing_payload(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="recovery tracking payload is incomplete"):
+        workbench_module._entry_tracking_projection(
+            {
+                "object_identity": "sha256:" + "2" * 64,
+                "runtime_identity": "sha256:" + "b" * 64,
+                "payload": payload,
+            }
+        )
 
 
 def test_selected_decision_projection_keeps_original_refresh_and_outcome_together() -> None:
@@ -895,7 +1039,18 @@ def test_position_projection_separates_gross_remaining_premium_from_net_close_de
         "SHADOW_ENTRY": [
             {
                 "object_identity": entry_identity,
-                "payload": {"canonical_leg_identities": []},
+                "runtime_identity": "sha256:" + "b" * 64,
+                "payload": {
+                    "canonical_leg_identities": [],
+                    "origin_runtime_identity": "sha256:" + "b" * 64,
+                    "current_segment_identity": "sha256:" + "7" * 64,
+                    "current_segment_sequence": 0,
+                    "observation_quality": "CONTINUOUS",
+                    "gap_count": 0,
+                    "qualification_eligible": True,
+                    "tracking_state": "ACTIVE",
+                    "post_close_attempt_state": "NOT_SCHEDULED",
+                },
             }
         ],
         "CLOSE_OPPORTUNITY_EVALUATION": [
@@ -940,6 +1095,8 @@ def test_position_projection_separates_gross_remaining_premium_from_net_close_de
     assert row["remaining_premium_basis"] == ("MAX_ZERO_NEGATIVE_GROSS_CLOSE_CASHFLOW_VALUATION")
     assert row["current_close_debit_valuation"] == "26"
     assert row["projected_shadow_pnl_valuation"] == "8"
+    assert row["observation_quality"] == "CONTINUOUS"
+    assert row["qualification_eligible"] is True
     assert row["component_pair_timing"] == {
         "source_timestamp_skew_ms": 7_000,
         "receive_skew_ms": 5_000,

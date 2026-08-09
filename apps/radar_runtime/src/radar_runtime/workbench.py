@@ -65,6 +65,28 @@ _INTERRUPTED_REASONS = frozenset(
         CoverageBlockingReason.QUEUE_OVERFLOW.value,
     }
 )
+_ENTRY_TRACKING_PAYLOAD_KEYS = frozenset(
+    {
+        "origin_runtime_identity",
+        "current_segment_identity",
+        "current_segment_sequence",
+        "observation_quality",
+        "gap_count",
+        "qualification_eligible",
+        "tracking_state",
+        "post_close_attempt_state",
+    }
+)
+_OBSERVATION_QUALITIES = frozenset({"CONTINUOUS", "GAPPED"})
+_TRACKING_STATES = frozenset({"RECOVERING", "ACTIVE"})
+_POST_CLOSE_ATTEMPT_STATES = frozenset(
+    {
+        "NOT_SCHEDULED",
+        "SCHEDULED",
+        "TERMINAL",
+        "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS",
+    }
+)
 
 
 class PanelState(StrEnum):
@@ -343,17 +365,87 @@ class WorkbenchPublisher:
         )
         self._published_status_key = _status_key(self._status)
         self._last_publication_monotonic_ms = initial_recorded_monotonic_ms
-        self._last_business: Mapping[str, object] = MappingProxyType(
-            _empty_business_projection(self.product)
+        has_staged_recovery = any(
+            value.get("object_kind") == "SHADOW_ENTRY"
+            and isinstance((payload := value.get("payload")), Mapping)
+            and payload.get("tracking_state") == "RECOVERING"
+            for value in self.shadow_state.objects
         )
+        initial_underwriting_metadata = (
+            self.shadow_metadata.workbench_underwriting_metadata() if has_staged_recovery else ()
+        )
+        initial_downstream: _DownstreamProjection | None = None
+        initial_business = _empty_business_projection(self.product)
+        if has_staged_recovery:
+            initial_downstream = _build_downstream_projection(
+                objects=self.shadow_state.objects,
+                policies=self.policies,
+                underwriting_metadata=initial_underwriting_metadata,
+            )
+            position_rows = _position_rows(
+                initial_downstream.kinds,
+                self.policies,
+                trusted_time=None,
+                option_metadata=(),
+            )
+            initial_business.update(
+                {
+                    "underwriting": {
+                        "panel_state": panel_state(initial_downstream.underwriting_rows).value,
+                        "empty_label": (
+                            EMPTY_PANEL_LABEL if not initial_downstream.underwriting_rows else None
+                        ),
+                        "predicate_margin_summary": _underwriting_margin_summary(
+                            initial_downstream.underwriting_rows
+                        ),
+                        "rows": initial_downstream.underwriting_rows,
+                    },
+                    "decision_controls": {
+                        "panel_state": panel_state(initial_downstream.decision_control_rows).value,
+                        "empty_label": (
+                            EMPTY_PANEL_LABEL
+                            if not initial_downstream.decision_control_rows
+                            else None
+                        ),
+                        "rows": initial_downstream.decision_control_rows,
+                    },
+                    "shadow_entries": {
+                        "panel_state": panel_state(initial_downstream.shadow_rows).value,
+                        "empty_label": (
+                            EMPTY_PANEL_LABEL if not initial_downstream.shadow_rows else None
+                        ),
+                        "simulation_label": SIMULATION_LABEL,
+                        "rows": initial_downstream.shadow_rows,
+                    },
+                    "positions": {
+                        "panel_state": panel_state(position_rows).value,
+                        "empty_label": EMPTY_PANEL_LABEL if not position_rows else None,
+                        "rows": position_rows,
+                    },
+                    "outcomes": {
+                        "panel_state": panel_state(initial_downstream.outcome_rows).value,
+                        "empty_label": (
+                            EMPTY_PANEL_LABEL if not initial_downstream.outcome_rows else None
+                        ),
+                        "rows": initial_downstream.outcome_rows,
+                    },
+                }
+            )
+        self._last_business: Mapping[str, object] = MappingProxyType(initial_business)
         self._latest_reducer: RadarReducer | None = None
         self._latest_commit: CausalCommit | None = None
         self._dirty = False
         self._business_dirty = False
-        self._cached_downstream_revision: int | None = None
-        self._cached_underwriting_metadata: tuple[Mapping[str, object], ...] | None = None
-        self._cached_admission_terminal_diagnostics: tuple[Mapping[str, object], ...] | None = None
-        self._cached_downstream_projection: _DownstreamProjection | None = None
+        self._cached_downstream_revision: int | None = (
+            self.shadow_state.revision if initial_downstream is not None else None
+        )
+        self._cached_underwriting_metadata: tuple[Mapping[str, object], ...] | None = (
+            tuple(initial_underwriting_metadata) if initial_downstream is not None else None
+        )
+        self._cached_admission_terminal_diagnostics: tuple[Mapping[str, object], ...] | None = (
+            () if initial_downstream is not None else None
+        )
+        self._cached_downstream_projection: _DownstreamProjection | None = initial_downstream
         self._admission_terminal_diagnostics_by_episode: dict[str, Mapping[str, object]] = {}
         initial_document = self._document(self._last_business, status=self._status)
         self._preencoded_members = {
@@ -1626,6 +1718,7 @@ def _shadow_rows(
         )
     for entry in kinds.get("SHADOW_ENTRY", ()):
         entry_payload = _payload(entry)
+        tracking = _entry_tracking_projection(entry)
         candidate_identity = str(entry_payload.get("candidate_identity"))
         target_quantity = entry_payload.get("full_quantity_btc") or str(
             policies.underwriting.target_base_quantity_btc
@@ -1650,6 +1743,10 @@ def _shadow_rows(
                 "execution_model": entry_payload.get("execution_model"),
                 "entry_component_pair_identity": entry_payload.get("entry_component_pair_identity"),
                 "entry_component_pair_timing": entry_payload.get("entry_component_pair_timing"),
+                "entry_fact_boundary": entry_payload.get("entry_fact_boundary"),
+                "entry_component_quote_source_refs": entry_payload.get(
+                    "entry_component_quote_source_refs"
+                ),
                 "entry_component_legs": _workbench_component_legs(
                     entry_payload.get("entry_component_legs")
                 ),
@@ -1673,6 +1770,7 @@ def _shadow_rows(
                 "target_quantity_btc": target_quantity,
                 "no_entry_reason": None,
                 "simulation_label": SIMULATION_LABEL,
+                **tracking,
             }
         )
     return rows
@@ -1722,6 +1820,7 @@ def _position_rows(
     for entry in kinds.get("SHADOW_ENTRY", ()):
         entry_identity = str(entry["object_identity"])
         entry_payload = _payload(entry)
+        tracking = _entry_tracking_projection(entry)
         latest_action = _latest(actions_by_entry.get(entry_identity, ()))
         action_payload = _payload(latest_action) if latest_action is not None else {}
         quote = _latest(quotes_by_entry.get(entry_identity, ()))
@@ -1775,6 +1874,8 @@ def _position_rows(
             {
                 "shadow_entry_identity": entry_identity,
                 "position_action": action_payload.get("serialized_action", "UNKNOWN"),
+                "observation_quality": tracking["observation_quality"],
+                "qualification_eligible": tracking["qualification_eligible"],
                 "remaining_premium_valuation": remaining_premium,
                 "remaining_premium_availability": (
                     "AVAILABLE_FROM_PERSISTED_COMPONENT_CLOSE_ECONOMICS"
@@ -1827,6 +1928,77 @@ def _position_rows(
             }
         )
     return rows
+
+
+def _entry_tracking_projection(entry: Mapping[str, object]) -> dict[str, object]:
+    payload = _payload(entry)
+    outer_runtime = entry.get("runtime_identity")
+    if not isinstance(outer_runtime, str) or not outer_runtime:
+        raise TypeError("SHADOW_ENTRY.runtime_identity must be a non-empty string")
+
+    present = _ENTRY_TRACKING_PAYLOAD_KEYS.intersection(payload)
+    if present != _ENTRY_TRACKING_PAYLOAD_KEYS:
+        missing = sorted(_ENTRY_TRACKING_PAYLOAD_KEYS - present)
+        raise ValueError(f"SHADOW_ENTRY recovery tracking payload is incomplete: {missing!r}")
+
+    origin_runtime = payload["origin_runtime_identity"]
+    if not isinstance(origin_runtime, str) or not origin_runtime:
+        raise TypeError("origin_runtime_identity must be a non-empty string")
+    segment_identity = payload["current_segment_identity"]
+    segment_sequence = payload["current_segment_sequence"]
+    observation_quality = payload["observation_quality"]
+    if (
+        not isinstance(observation_quality, str)
+        or observation_quality not in _OBSERVATION_QUALITIES
+    ):
+        raise ValueError("observation_quality must be CONTINUOUS or GAPPED")
+    gap_count = _integer(payload["gap_count"], "gap_count")
+    _require_count(gap_count, "gap_count")
+    qualification_eligible = payload["qualification_eligible"]
+    if not isinstance(qualification_eligible, bool):
+        raise TypeError("qualification_eligible must be boolean")
+    tracking_state = payload["tracking_state"]
+    if not isinstance(tracking_state, str) or tracking_state not in _TRACKING_STATES:
+        raise ValueError("tracking_state must be RECOVERING or ACTIVE")
+    if segment_identity is None:
+        if tracking_state != "RECOVERING" or segment_sequence is not None:
+            raise TypeError(
+                "only a RECOVERING Entry may lack current Segment identity and sequence"
+            )
+    elif not isinstance(segment_identity, str) or not segment_identity:
+        raise TypeError("current_segment_identity must be a non-empty string or null")
+    elif tracking_state == "RECOVERING" or segment_sequence is None:
+        raise TypeError("an ACTIVE Entry requires current Segment identity and sequence")
+    else:
+        segment_sequence = _integer(segment_sequence, "current_segment_sequence")
+        _require_count(segment_sequence, "current_segment_sequence")
+    post_close_attempt_state = payload["post_close_attempt_state"]
+    if post_close_attempt_state is not None and (
+        not isinstance(post_close_attempt_state, str)
+        or post_close_attempt_state not in _POST_CLOSE_ATTEMPT_STATES
+    ):
+        raise ValueError("post_close_attempt_state is not an allowed lifecycle state")
+
+    if observation_quality == "CONTINUOUS" and gap_count != 0:
+        raise ValueError("CONTINUOUS observation_quality requires gap_count zero")
+    if observation_quality == "GAPPED":
+        if gap_count == 0:
+            raise ValueError("GAPPED observation_quality requires a positive gap_count")
+        if qualification_eligible:
+            raise ValueError("GAPPED observation_quality cannot be qualification eligible")
+    if tracking_state == "RECOVERING" and observation_quality != "GAPPED":
+        raise ValueError("RECOVERING tracking_state requires GAPPED observation quality")
+
+    return {
+        "origin_runtime_identity": origin_runtime,
+        "current_segment_identity": segment_identity,
+        "current_segment_sequence": segment_sequence,
+        "observation_quality": observation_quality,
+        "gap_count": gap_count,
+        "qualification_eligible": qualification_eligible,
+        "tracking_state": tracking_state,
+        "post_close_attempt_state": post_close_attempt_state,
+    }
 
 
 def _outcome_rows(

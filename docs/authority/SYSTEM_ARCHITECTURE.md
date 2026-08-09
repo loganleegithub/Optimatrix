@@ -5,7 +5,8 @@
 ## Architectural position
 
 Optimatrix is one event-driven modular monolith. Market transport, current-state reduction, Radar,
-Underwriting, Shadow admission, Position management, bounded Shadow Case persistence, funnel
+Underwriting, Shadow admission, Position management, bounded process-independent Shadow Entry
+persistence, funnel
 projection, and the loopback Workbench run in one process. Each process selects exactly one product
 profile at startup: `LINEAR_BTC_USDC_V1` or `INVERSE_BTC_V1`. That profile binds the public source
 universe, native/model/valuation units, one exact three-Policy chain, Case schema, funnel, and
@@ -20,13 +21,14 @@ Deribit public WebSocket for one selected product
 → Radar current state
 → fixed Underwriting/admission/Position owner
 → in-memory current view + bounded funnel diagnostics
-→ optional SHADOW_CASE_OPENED / transition / outcome records
+→ stable Case repository: aggregate / Observation Segment / transition / Outcome records
 → coalesced immutable Workbench snapshot
 → loopback GET/HEAD HTTP
 ```
 
-The Online Runtime owns current decisions and Shadow Cases. Qualification Cohorts, aligned
-comparisons, Challenger datasets, and promotion decisions are offline concerns.
+The Online Runtime owns current decisions and one Observation Segment for each active admitted
+Entry. The stable Case repository owns Entry aggregates across processes. Qualification Cohorts,
+aligned comparisons, Challenger datasets, and promotion decisions are offline concerns.
 
 ## Ownership and dependency direction
 
@@ -58,6 +60,13 @@ matching Radar, Underwriting, and Position Policies. Product/Policy mismatch fai
 business owner is constructed. The selected product is immutable for the runtime; there is no
 second product reducer, owner, queue, Case store, Workbench, or in-process cross-product funnel.
 
+After acquiring the stable state-root lease and before public intake, startup scans
+`state-root/cases` and validates every Case directory through the one official reader. It restores
+all and only non-terminal `ADMITTED_SHADOW_TRADE` Entries bound to the selected product and the
+exact frozen Policy chain. A malformed, unsupported, or mixed active Entry fails the whole startup;
+the runtime cannot skip it. Terminal admitted Entries and selected no-trade Controls remain
+research history and are not restored. No CLI allowlist chooses business Entries.
+
 One application-sequence allocator stamps every accepted decoded frame and transport-control fact
 with a session epoch, consecutive ingress sequence, and monotonic receive boundary. One bounded
 transport queue preserves application order; runtime does not drain it into a second unbounded
@@ -69,6 +78,10 @@ The reducer settles one accepted fact completely before calling the downstream o
 then settles Underwriting, admission, every open Shadow Position, and Outcome before Workbench or
 funnel publication. No second reducer, response-future owner, or persisted replay path may apply
 business truth.
+
+For a restored Entry, its new Observation Segment begins at the first accepted settled boundary.
+Until required fresh facts arrive, current observation and Position availability are `UNKNOWN`.
+`HANDOFF_GAP` records observation quality and never manufactures a Position predicate or `CLOSE`.
 
 ## Transient state boundary
 
@@ -97,46 +110,81 @@ not make a snapshot a durable business record.
 
 The first durable record is `SHADOW_CASE_OPENED`, emitted only after a pre-outcome enrollment and
 its strictly later accepted paired entry witness. Enrollment is either an admitted Candidate trade
-or the one action-blind selected no-trade decision for a causal Radar activation batch. A Case
-directory may then contain at most:
+or the one action-blind selected no-trade decision for a causal Radar activation batch. The stable
+repository is reused across runtime identities:
 
 ```text
-opened.json
-first-close.json       optional, at most one
-outcome.json           optional, at most one
+state-root/
+  service.lock
+  cases/<case-id>/
+    opened.json
+    first-close.json                       optional, at most one
+    outcome.json                           optional, at most one mature Entry Outcome
+    legacy-migration.json                  optional, migration only
+    segments/<segment-sequence>/opened.json
+    segments/<segment-sequence>/closed.json      optional
 ```
 
 The store owns atomic file publication, exact record validation, duplicate conflict rejection, and
-a minimal read path. It does not own market reconstruction, runtime recovery, qualification,
-Cohort membership, or host acceptance.
+a bounded startup scan of this one Case repository. It does not own market reconstruction,
+qualification, Cohort membership, process supervision, host acceptance, a database, manifest, or
+fencing service. `service.lock` prevents simultaneous writers on one host; it is not a distributed
+lease or commissioning proof.
+
+A new admitted Entry Case is not visible record-by-record. The writer builds and validates
+`opened.json` plus the origin `segments/0/opened.json` inside one staging Case directory on the same
+filesystem, then makes that complete directory visible with one no-replace atomic directory
+publication. A crash before publication leaves no visible Entry Case; after publication both
+records are visible. This protects the Entry boundary using the existing single-instance lease and
+is not a manifest or fencing protocol.
 
 The one store/reader owns exactly two compatible versions of the same Case family:
 
 - schema v3 remains the byte-exact Linear BTC-USDC record contract. It has no added keys and binds
   its product implicitly through the fixed Linear Policy chain;
-- schema v4 is reserved for a future authorized Inverse BTC Case. It binds the product explicitly
-  and conserves BTC-native entry/close/fee/PnL facts plus separately named USD valuation facts at
-  their declared causal index boundaries.
+- schema v4 is the accepted Inverse BTC Case. It binds the product explicitly and conserves BTC-
+  native entry/close/fee/PnL facts plus separately named USD valuation facts at their declared
+  causal index boundaries.
 
-These are version branches inside one validator, not parallel business schemas or a migration of
-existing records. The current implementation closure writes neither version because live commands
-are forbidden.
+These are version branches inside one validator, not parallel business schemas. Their accepted
+`opened.json` key sets and product schema identities are not widened for recovery. A new admitted
+Entry's origin Segment instead persists `entry_position_baseline`: the exact entry index and
+short-leg mark-IV source references required by a future Position owner. A migrated legacy Entry
+without those accepted source references records the baseline as `UNKNOWN`; source bytes remain
+unchanged and no value is inferred.
 
-A new runtime never resumes another runtime's Case. If a hard crash leaves only `opened.json`, the
-offline reader reports `INCOMPLETE_UNCLEAN_EXIT`. Clean stop and handled process failure ask the
-business owner to emit a censored Outcome before process exit.
+Each admitted Entry has one or more Observation Segments. Segment-open freezes current
+code/runtime, product/Policy binding, adoption FactBoundary, predecessor segment, and observation
+quality. The origin Segment alone owns the immutable `entry_position_baseline`; later Segments read
+it without copying or rewriting it. Segment-close freezes clean-stop or handled-failure boundary
+and reason. A hard crash may leave segment-open without segment-close; the reader reports that segment
+`INCOMPLETE_UNCLEAN_EXIT`, and the next runtime opens a `HANDOFF_GAP` segment rather than completing
+the missing record. FactBoundaries order facts only inside one segment. The immutable predecessor
+chain orders segments without pretending that different runtime clocks are directly comparable.
+
+Clean stop and handled failure close each active admitted Entry's current segment; they no longer
+write `CENSORED_AT_STOP` or `CENSORED_AT_FAILURE` as the admitted Entry's mature Outcome. The Entry
+remains recoverable until `outcome.json` exists. Selected no-trade Controls are not restored and
+retain their existing bounded terminal Case semantics.
+
+The first Position CLOSE and scheduling of the one paired close attempt publish atomically as one
+durable transition. No request may be sent before that transition exists. Presence of the
+transition prevents every later runtime from latching another first CLOSE or scheduling another
+attempt. If its attempt was pending when a segment became incomplete, recovery exposes
+`ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS` and does not retry.
 
 ## Internal state versus durable records
 
 Internal owner transitions may retain detailed typed state for correct in-process decisions and
 Workbench projection. They are implementation details, not durable object contracts and not
-inputs to offline research. They must not require filesystem I/O, content manifests, repository
-readers, or whole-history relationship validation.
+inputs to offline research. Recovery uses only validated bounded Case records; it does not persist
+per-tick Position state, replay facts, content manifests, or whole-history relationship graphs.
 
-The durable Case store consumes only three bounded transition classes from that current state:
-Case opening, first CLOSE, and terminal Outcome. Any new durable record requires explicit Product
-Constitution authority and a direct offline consumer that cannot derive it from existing Case
-records.
+The durable Case store consumes only Case opening, segment open/close, combined first-CLOSE/attempt
+schedule, mature Outcome, and the one legacy-migration mapping. Runtime owner, trader Workbench, and
+AI Researcher directly consume segment provenance and quality; the migration mapping is consumed by
+the restored Entry reader and AI Researcher. Neither can be derived from the original opened record
+because later processes and the user-authorized legacy reinterpretation did not yet exist.
 
 ## Funnel diagnostics
 
@@ -231,6 +279,11 @@ SHADOW_CASE_OUTCOME
 The last two canonical stages count admitted-Candidate Cases only; selected no-trade Cases use the
 separate research projection below despite sharing the durable Case record family.
 
+Restoring an admitted Entry does not recreate Candidate, admission, or `SHADOW_CASE_OPENED` and
+does not increment those funnel counters. A mature Outcome is counted once for the Entry aggregate,
+regardless of which runtime segment produced it. Observation quality and qualification eligibility
+remain separate from funnel lifecycle completeness.
+
 `APPLICABLE_MARKET_SCOPE` and `RADAR_KNOWN` use post-warmup countable instrument evaluations. The
 separate `radar_knownness.startup_warmup` projection retains startup/recovery counts and reasons, so
 `INDEX_WARMUP` remains visible without becoming the steady-state primary blocker. Every Radar
@@ -243,6 +296,11 @@ pre-outcome selected decisions, Decision Cases, and strictly future Outcomes. It
 Candidate, WATCH, or ABSTAIN decisions, but a WATCH/ABSTAIN Case never increments the canonical
 Candidate, `SHADOW_CASE_OPENED`, or `SHADOW_CASE_OUTCOME` stages. The projection retains cumulative
 scalars and only current/latest bounded identities.
+
+The Workbench projects every active admitted Entry once by `shadow_entry_identity`, with origin
+runtime, current segment runtime, segment availability, gap count, observation quality, and
+qualification eligibility. A recovered Entry begins `UNKNOWN` until fresh facts settle. The browser
+never infers `HOLD` or `CLOSE` from `HANDOFF_GAP`.
 
 Funnel diagnostics may be displayed and logged externally, but they are not business evidence or
 qualification data.
@@ -271,10 +329,14 @@ structure economics, or decision-control membership.
   until one stable follow-up response; neither condition reconnects the streaming index;
 - local option/book/ticker missingness: `UNKNOWN` at the smallest consumer;
 - reconnect: rebuild current session facts without replacing the same in-process Shadow owner;
+- process restart: after the external operator starts the service, validate and restore every
+  compatible non-terminal admitted Entry, then expose `UNKNOWN` until fresh facts settle;
 - Workbench publication error: explicit process failure in the current simple topology, not stale
   success;
 - Shadow Case write conflict or I/O failure after enrollment: explicit process failure because an
   enrolled research Case must not be silently lost;
+- active Case corruption, unsupported frozen Policy, segment-chain conflict, or omitted compatible
+  admitted Entry: fail startup before public intake; never continue with a partial active book;
 - host CPU, memory, process restart, launchd/systemd, logs, and deployment health: external
   operations, not application business truth.
 
@@ -285,7 +347,7 @@ Every external trust boundary has one validator:
 - public JSON and source shapes: market/transport owner;
 - Policy JSON and chain compatibility: Policy loader;
 - business decisions: Radar/Underwriting/Position owner;
-- durable Case records: Shadow Case store/reader.
+- durable aggregate, segment, transition, Outcome, and migration records: Shadow Case store/reader.
 
 No emitted result is re-run through a second business schema, relationship graph, provenance graph,
 or validator-of-validator. The one Case store/reader may select its exact v3 Linear or v4 Inverse
@@ -304,6 +366,8 @@ The current architecture forbids:
   qualification controller;
 - full-feed capture/replay, database, generic event platform, feature store, scheduler, workflow
   engine, or premature microservices;
+- per-tick Position checkpoints, gap backfill, restart-time `CLOSE` synthesis, Entry allowlists,
+  process-owned continuation claims, manifests, or a distributed fencing service;
 - private/account/order/fill/capital modules before separate authority.
 
 ## Complexity stop rule

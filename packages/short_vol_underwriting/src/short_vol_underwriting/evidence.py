@@ -154,6 +154,43 @@ class ShadowStateStore:
         fact_boundary: FactBoundary,
         payload: Mapping[str, object],
     ) -> None:
+        self._store_current_record(
+            object_kind=object_kind,
+            object_identity=object_identity,
+            fact_boundary=fact_boundary,
+            payload=payload,
+            publish=True,
+        )
+
+    def restore_current_record(
+        self,
+        *,
+        object_kind: str,
+        object_identity: str,
+        fact_boundary: FactBoundary,
+        payload: Mapping[str, object],
+        replace_existing: bool = False,
+    ) -> None:
+        """Rehydrate current state without pending records or observer notification."""
+        self._store_current_record(
+            object_kind=object_kind,
+            object_identity=object_identity,
+            fact_boundary=fact_boundary,
+            payload=payload,
+            publish=False,
+            replace_existing=replace_existing,
+        )
+
+    def _store_current_record(
+        self,
+        *,
+        object_kind: str,
+        object_identity: str,
+        fact_boundary: FactBoundary,
+        payload: Mapping[str, object],
+        publish: bool,
+        replace_existing: bool = False,
+    ) -> None:
         value = build_current_shadow_object(
             object_kind=object_kind,
             object_identity=object_identity,
@@ -163,8 +200,12 @@ class ShadowStateStore:
         )
         key = (object_kind, object_identity)
         previous = self._objects.get(key)
-        if previous is not None and previous != value:
+        if previous is not None and previous != value and not replace_existing:
             raise ShadowStateError(f"conflicting in-memory object: {object_kind}/{object_identity}")
+        if previous is None and replace_existing:
+            raise ShadowStateError(
+                f"cannot replace absent in-memory object: {object_kind}/{object_identity}"
+            )
         if previous == value:
             return
 
@@ -178,11 +219,12 @@ class ShadowStateStore:
             current_by_kind[object_kind] = key
 
         self._objects[key] = value
-        self._pending_records.append(value)
         self._revision += 1
         self._object_snapshot = None
-        if self.observer is not None:
-            self.observer.on_record(value, self)
+        if publish:
+            self._pending_records.append(value)
+            if self.observer is not None:
+                self.observer.on_record(value, self)
 
     def retire_scope(self, scope_identity: str) -> None:
         self._retire_owner("scope", scope_identity)

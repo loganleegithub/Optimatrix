@@ -133,10 +133,19 @@ def test_product_data_boundary_is_unambiguous() -> None:
     assert "No pre-Shadow component may open a file" in architecture
     assert "Pre-Shadow persistence is forbidden by default" in " ".join(delivery.split())
     assert "No market fact, clue, diagnostic, rank, atomic quote" in radar
-    assert "Exactly three record kinds are authorized" in shadow_case
-    assert "SHADOW_CASE_OPENED" in shadow_case
-    assert "SHADOW_CASE_FIRST_CLOSE" in shadow_case
-    assert "SHADOW_CASE_OUTCOME" in shadow_case
+    assert "Exactly six record kinds are authorized" in shadow_case
+    for kind in (
+        "SHADOW_CASE_OPENED",
+        "SHADOW_CASE_SEGMENT_OPENED",
+        "SHADOW_CASE_SEGMENT_CLOSED",
+        "SHADOW_CASE_FIRST_CLOSE",
+        "SHADOW_CASE_OUTCOME",
+        "SHADOW_CASE_LEGACY_MIGRATION",
+    ):
+        assert kind in delivery
+        assert kind in shadow_case
+    assert "SHADOW_CASE_OBSERVATION_SEGMENT" not in delivery
+    assert "SHADOW_CASE_TRANSITION" not in delivery
 
 
 def test_online_runtime_has_no_rejected_counterfactual_or_cohort_surface() -> None:
@@ -172,74 +181,108 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_local_inverse_stability_loop() -> None:
+def test_current_stage_authorizes_process_independent_entry_recovery() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`DUAL_PRODUCT_CONSTRUCTION_ACCEPTED`" in current
+    assert "`PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY_AUTHORIZED`" in current
     assert "`INVERSE_BTC_V1_CONSTRUCTION_ACCEPTED_AT_89A6EB02`" in current
     assert "**Production Short Vol Radar:** `LINEAR_BTC_USDC_V1_ACCEPTED`" in current
-    assert "**Persistent service:** `LOCAL_INVERSE_STABILITY_LOOP_AUTHORIZED`" in current
-    assert "**Live commands:** `ITERATIVE_INVERSE_REPAIR_RESTART_MONITOR_AUTHORIZED`" in current
+    assert "**Persistent service:** `STABLE_CASE_REPOSITORY_RECOVERY_AUTHORIZED`" in current
     assert (
-        "**Sole authorized closure:** `SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION`" in current
+        "**Live commands:** `ONE_CLEAN_LEGACY_MIGRATION_AND_RECOVERY_CUTOVER_AFTER_ACCEPTANCE`"
+        in current
     )
-    assert "5,043,177 contract evaluations" in current
-    assert "5,040,616 contract evaluations" in current
-    assert "11 distinct Episodes" in current
-    assert "6 distinct Episodes" in current
-    assert "`CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE 6`" in current
-    assert "`OPTION_BOOK_UNKNOWN 1,792`" in current
-    assert "`POST_STATUS_BOOTSTRAP_REQUIRED 768`" in current
-    assert "`NUMERICAL_BOUNDARY_UNRESOLVED 1`" in current
-    assert "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE" in current
-    assert "five Case directories" in normalized
-    assert "`CENSORED_AT_STOP`" in current
-    assert "`UNKNOWN_CONSUMED`" in current
-    assert "`7,100 ms`" in current
-    assert "6dee819961d76b622dbc6b77997e1f987451a096" in current
-    assert "sha256:fdb4f0b3eadfc0f892cfad210142d14c521394cfeb6fbd5c761554228c45998f" in current
-    assert "started once from a clean exact-code checkout" in normalized
-    assert "actual account margin" in normalized.lower()
-    assert "remains `UNKNOWN`" in current
-    assert "cannot be restarted" in normalized
-    assert "without repeated human approval" in normalized
-    assert "non-major repairs remain local" in normalized.lower()
-    assert "do not require a Draft PR" in normalized
-    assert "`600` consecutive seconds" in normalized
-    assert "at least every `10` seconds" in normalized
-    assert "CURRENT_AND_COMBO_ISOLATION" in current
-    assert "GATE_OBSERVATION_INTERVAL_UNPROVEN" in current
-    assert "`100,000 ms` apart" in normalized
-    assert "`30,000 ms`" in current
-    assert "`128` monitored and `128` current-known" in normalized
-    assert "All `128` atomic Combo diagnostics" in normalized
-    assert "`NOT_EVALUATED`" in current
-    assert "case_count=0" in current
-    assert "CENSORED_AT_STOP" in current
-    assert "89a6eb02ab3771c5e6d2874a98463c6100b04165" in current
-    assert "/private/tmp/optimatrix-inverse-btc-natural-shadow-validation-v1" in current
-    assert "terminal kind `RADAR_RUN_SUMMARY`" in normalized
-    assert not (ROOT / "tasks/SHORT_VOL_RADAR_CANDIDATE_VALIDITY.md").exists()
-    assert not (ROOT / "tasks/SHORT_VOL_RADAR_CREDIBLE_CLUE_FREEZE.md").exists()
-    assert not (ROOT / "tasks/SHORT_VOL_COMPONENT_BOOK_SHADOW_LIFECYCLE.md").exists()
-    assert not (ROOT / "tasks/SHORT_VOL_NATURAL_SHADOW_OPERATION.md").exists()
-    assert not (ROOT / "tasks/SHORT_VOL_UNDERWRITING_SELECTION_AND_MARGIN_TRUTH.md").exists()
-    assert not (ROOT / "tasks/SHORT_VOL_SELECTED_UNDERWRITING_DECISION_OUTCOME.md").exists()
-    assert not (ROOT / "tasks/SHORT_VOL_SELECTED_DECISION_NATURAL_VALIDATION.md").exists()
-    assert not (ROOT / "tasks/SHORT_VOL_INVERSE_BTC_PRODUCT_CONTRACT_AND_NORMALIZATION.md").exists()
-    validation_task = ROOT / "tasks/SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION.md"
-    assert validation_task.exists()
-    task = validation_task.read_text(encoding="utf-8")
+    assert "**Sole authorized closure:** `SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY`" in (
+        current
+    )
+    for phrase in (
+        "only the task-opening denominator",
+        "`0 / 6` could be restored",
+        "reached nine in a later read-only snapshot",
+        "`RUNTIME_OWNED_ENTRY_LIFECYCLE`",
+        "stable `state-root/cases` repository",
+        "automatically scans and restores every compatible non-terminal admitted Entry",
+        "Every recovery Segment is `GAPPED`",
+        "begins `UNKNOWN`",
+        "cannot synthesize `HOLD` or `CLOSE`",
+        "`ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS`",
+        "`qualification_eligible=false`",
+        "not part of `serve-shadow`",
+        "not the migrated origin Segment, records the cross-process gap",
+        "runtime A → B → C",
+    ):
+        assert phrase in normalized
+    for forbidden in (
+        "--carry-case",
+        "SHADOW_CASE_CONTINUATION",
+        "hard-coded predecessor runtime",
+    ):
+        assert forbidden in current
+    recovery_task = ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md"
+    assert recovery_task.exists()
+    assert not (ROOT / "tasks/SHORT_VOL_INVERSE_BTC_NATURAL_SHADOW_VALIDATION.md").exists()
+    task = recovery_task.read_text(encoding="utf-8")
     assert "**Task kind:** IMPLEMENTATION" in task
-    assert "**Runtime implementation:** REQUIRED only when" in task
-    assert "**Live commands:** REQUIRED" in task
-    assert "`GATE_OBSERVATION_INTERVAL_UNPROVEN`" in task
-    assert "CURRENT_AND_COMBO_ISOLATION" in task
-    assert "`case_count=0`" in task
-    assert "intermediate non-major repairs do not require" in task.lower()
+    assert "**Runtime implementation:** REQUIRED" in task
+    assert "**Primary blocker:** `RUNTIME_OWNED_ENTRY_LIFECYCLE`" in task
+    assert "runtime A → B → C" in task
+    assert "No Entry disappears" in task
+    assert "No pre-Shadow or per-tick durable write is added" in " ".join(task.split())
+    assert "no count, runtime, Entry, or Case-ID allowlist exists" in " ".join(task.split())
     assert not (ROOT / "tasks/SHORT_VOL_QUEUE_LAG_CURRENTNESS_THROUGHPUT.md").exists()
+
+
+def test_entry_aggregate_segment_and_migration_contracts_are_consistent() -> None:
+    product = (ROOT / "docs/authority/PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
+    delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
+    architecture = (ROOT / "docs/authority/SYSTEM_ARCHITECTURE.md").read_text(encoding="utf-8")
+    position = (ROOT / "docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md").read_text(
+        encoding="utf-8"
+    )
+    shadow = (ROOT / "docs/contracts/SHORT_VOL_SHADOW_CASE.md").read_text(encoding="utf-8")
+    service = (ROOT / "docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md").read_text(
+        encoding="utf-8"
+    )
+    combined = " ".join(
+        "\n".join((product, delivery, architecture, position, shadow, service)).split()
+    )
+
+    for phrase in (
+        "process-independent Shadow Entry aggregate",
+        "runtime owns only one bounded Observation Segment",
+        "state-root/cases",
+        "automatically restores all compatible non-terminal admitted Entries",
+        "HANDOFF_GAP",
+        "cannot synthesize `CLOSE`",
+        "recovery data starts `UNKNOWN`",
+        "FIRST_CLOSE_AND_ATTEMPT_SCHEDULED",
+        "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS",
+        "observation_quality=GAPPED",
+        "qualification_eligible=false",
+        "Selected no-trade Controls are not restored",
+        "one offline",
+        "never uses a hard-coded runtime, count, Case ID, or Entry allowlist",
+        "not part of `serve-shadow`",
+        "entry_position_baseline",
+        "product schema identities remain unchanged",
+        "entry_position_baseline=UNKNOWN",
+        "opened.json + segments/0/opened.json",
+        "one no-replace atomic directory publication",
+        "not a manifest or fencing protocol",
+        "No database",
+    ):
+        assert phrase.lower() in combined.lower()
+    normalized_shadow = " ".join(shadow.split())
+    assert "origin Segment remains `CONTINUOUS`" in normalized_shadow
+    assert "Only the later Segment opened by a new runtime" in normalized_shadow
+    assert "not the migrated origin Segment" in normalized_shadow
+    assert "origin Segment retains the separately declared `GAPPED`" not in shadow
+    assert "runs/<runtime-id>/cases/<case-id>" not in combined
+    assert "A new runtime never resumes another runtime's Case" not in combined
+    assert "immutable entry baselines from `opened.json`" not in combined
+    assert "publishes its first `SHADOW_CASE_SEGMENT_OPENED` immediately after" not in combined
     entrypoint = (ROOT / "apps/radar_runtime/src/radar_runtime/__main__.py").read_text(
         encoding="utf-8"
     )
