@@ -54,8 +54,8 @@ The application exposes `/healthz`, `/readyz`, and `/api/workbench/current` on l
 supervision, restart policy, CPU, memory, and host logs are external operational concerns. The
 application does not inspect or manage them.
 
-During `SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP`, live commands are forbidden. The existing
-`127.0.0.1:8765` process continues from its pre-cleanup code identity
-`270920fb1fcb255c648e95361f31c1e5075ec294`; repository edits do not hot-swap it and do not prove
-the cleanup deployed. It must not be stopped, restarted, or repointed by this task. External state
-roots are not opened, migrated, rewritten, or deleted.
+The accepted repository state authorizes no live command. The existing `127.0.0.1:8765` process
+was observed from the older code identity `270920fb1fcb255c648e95361f31c1e5075ec294`; repository
+acceptance did not hot-swap, stop, restart, or repoint it and does not prove the accepted source is
+deployed. A later restart requires a separate explicit task and permission boundary. External
+state roots were not opened, migrated, rewritten, or deleted for the repository closure.

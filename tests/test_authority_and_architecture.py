@@ -181,28 +181,28 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_inverse_only_repository_cleanup() -> None:
+def test_current_stage_accepts_inverse_only_repository() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_ONLY_REPOSITORY_CLEANUP_AUTHORIZED`" in current
+    assert "**Current task kind:** `NONE`" in current
+    assert "`INVERSE_ONLY_REPOSITORY_ACCEPTED`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert "**Persistent service:** `STABLE_CASE_REPOSITORY_RECOVERY_ACCEPTED`" in current
-    assert "**Live commands:** `FORBIDDEN_DURING_INVERSE_ONLY_REPOSITORY_CLEANUP`" in current
-    assert "**Sole authorized closure:** `SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP`" in current
+    assert "**Live commands:** `FORBIDDEN_PENDING_SEPARATE_RESTART_AUTHORITY`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
-        "This cleanup does not change any value or byte in those three Policy artifacts",
+        "The repository contains only those three Inverse Policy artifacts",
         "code identity: 270920fb1fcb255c648e95361f31c1e5075ec294",
         "runtime identity: sha256:33dedd47cff3f6cb10bb5b2844f58b79218f40c931bf02221440a1894a785bf4",
-        "old, pre-cleanup checkout",
-        "must not be hot-swapped, restarted, or repointed",
-        "`0 / 1` default startup routes are Inverse-safe",
-        "`LINEAR_DEFAULT_RESTART_MISROUTE`",
-        "Durable-data effect is `NONE`",
-        "state roots and Shadow Case repositories live outside the Git repository",
+        "pre-Inverse-only checkout",
+        "must not be hot-swapped, stopped, restarted",
+        "The accepted repository result is `1 / 1`",
+        "The obsolete product specification",
+        "durable-data effect `NONE`",
+        "External state roots and Shadow Case repositories were not enumerated",
     ):
         assert phrase in normalized
     for identity in (
@@ -212,20 +212,9 @@ def test_current_stage_authorizes_inverse_only_repository_cleanup() -> None:
         "sha256:cb3866b8efd45d5c05ed23ab56658c2cdbf0359132e39f52ce329761ad933b8e",
     ):
         assert identity in current
-    cleanup_task = ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md"
-    assert cleanup_task.exists()
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
-    task = cleanup_task.read_text(encoding="utf-8")
-    assert "**Task kind:** IMPLEMENTATION" in task
-    assert "**Runtime implementation:** REQUIRED" in task
-    assert "**Live commands:** FORBIDDEN" in task
-    assert "**Primary blocker:** `LINEAR_DEFAULT_RESTART_MISROUTE`" in task
-    assert "**Durable-data effect:** `NONE`" in task
-    assert "**Complexity added:** `NONE`" in task
-    assert "`1 / 1` canonical default startup routes are Inverse-safe" in task
-    assert "The old 8765 process and every external state root remain untouched" in (
-        " ".join(task.split())
-    )
 
 
 def test_online_product_surface_is_inverse_only() -> None:

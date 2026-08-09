@@ -41,17 +41,18 @@ offline from Shadow Cases.
 
 ## Current stage
 
-The permission boundary remains `PUBLIC_SHADOW`. The sole active closure is
-`SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP`: eliminate the default startup misroute and every
-obsolete online product/schema compatibility surface while preserving the exact Inverse product,
-Policy, Shadow Entry, Position, and Outcome economics.
+The permission boundary remains `PUBLIC_SHADOW`. The repository's accepted online surface is
+Inverse BTC only: the canonical startup, product specification, public source, Policy chain, and
+schema family all resolve to `INVERSE_BTC_V1`. There is no active implementation task and no live
+command is authorized by the accepted repository state.
 
-The existing loopback process at `127.0.0.1:8765` continues from pre-cleanup code identity
-`270920fb1fcb255c648e95361f31c1e5075ec294`. This task does not hot-swap, stop, restart, or repoint
-that process, and it does not open, migrate, rewrite, or delete any external state root. Repository
-checks do not prove the cleanup is deployed or establish current market health, fillability,
-account margin, frequency, edge, profitability, or qualification. Exact live identity and
-permission details are in `docs/authority/CURRENT_STAGE.md`.
+The existing loopback process at `127.0.0.1:8765` was observed from the older code identity
+`270920fb1fcb255c648e95361f31c1e5075ec294`. It has not been hot-swapped, stopped, restarted, or
+repointed, and no external state root was opened, migrated, rewritten, or deleted for this
+repository closure. Repository checks do not prove the accepted source is deployed or establish
+current market health, fillability, account margin, frequency, edge, profitability, or
+qualification. Exact live identity and permission details are in
+`docs/authority/CURRENT_STAGE.md`.
 
 See:
 

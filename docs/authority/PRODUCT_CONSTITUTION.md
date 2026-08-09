@@ -11,7 +11,7 @@ process-independent admitted Shadow Entry recovery under production-public Shado
 
 The roadmap is a 2×2 product direction, not an accepted runtime surface. Only the upper-left
 channel is implemented or authorized. `INVERSE_BTC_SHORT_VOL_V1` remains the current implementation
-identifier for that channel; the roadmap name does not rename runtime records in this cleanup.
+identifier for that channel; the roadmap name does not rename records in the accepted repository.
 
 | Channel | Implementation | Policy | Runtime authority |
 | --- | --- | --- | --- |
