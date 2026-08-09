@@ -10,7 +10,10 @@
 
 **Base commit:** `0f937475ee92a6fa9c280a24c4f74759e39222f4`
 
-**Target branch/PR:** `codex/shadow-entry-recovery` / one Draft PR to `main`
+**Implementation commit:** `00277fe6ec7e234286a7ab3cb2735650765e695d`
+
+**Draft PR:** [#32](https://github.com/loganleegithub/Optimatrix/pull/32) from
+`codex/shadow-entry-recovery` to `main`
 
 **Owning authority/contract:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md),
