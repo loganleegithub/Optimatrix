@@ -8,12 +8,18 @@
 
 **Live commands:** REQUIRED — iterative local repair/restart/monitor loop authorized
 
+**Trader Workbench source launch:** AUTHORIZED — loopback-only read-only frontend publication;
+no hosted deployment, commissioning, private API, or execution expansion
+
 **Base commit:** `89a6eb02ab3771c5e6d2874a98463c6100b04165`
 
 **Target branch/PR:** `codex/inverse-btc-stability-loop` / local loop; consolidate and publish once
 after stability/business closure. Authorization history is PR
 [#28](https://github.com/loganleegithub/Optimatrix/pull/28); rejected-attempt closure is PR
-[#29](https://github.com/loganleegithub/Optimatrix/pull/29).
+[#29](https://github.com/loganleegithub/Optimatrix/pull/29). The bounded trader-Workbench source
+launch uses `codex/trader-workbench-opportunity-blotter-v1` / one Draft PR to `main`; it publishes
+only the read-only presentation layer and does not publish or close the later Inverse runtime
+repair commits.
 
 **Owning authority/contract:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md),
@@ -48,6 +54,50 @@ and official reader.
 
 **Complexity deleted:** stale one-start permission after that start was consumed.
 
+## Trader Workbench source launch
+
+**Given:** the accepted loopback Workbench already exposes one immutable schema-v5 snapshot, while
+the design fixture at `127.0.0.1:4173` is not Runtime evidence and the actual `127.0.0.1:8765`
+service is offline.
+
+**When:** the trader-readable opportunity blotter is published from one clean commit and the one
+authorized Inverse process starts on a fresh state root.
+
+**Then:** the actual loopback Workbench renders the `2 × 2` product roadmap without fabricating the
+three unimplemented channels, gives the selected structure more detail width, supports explicit
+day/night themes, and distinguishes Runtime process state from decision-data blockage. Stale or
+identity-mismatched business data remains hidden.
+
+**Current user-visible blocker:** the redesigned static assets are an uncommitted fixture-backed
+working tree and therefore cannot satisfy the clean-code startup guard.
+
+**Expected user-visible delta:** the browser moves from fixture port `4173` to the same-process
+read-only Runtime at `127.0.0.1:8765`; only the identity-matched `INVERSE_BTC_SHORT_VOL_V1` channel
+may display business rows.
+
+**Exact known-at boundary:** every displayed business fact comes from one complete immutable
+Workbench snapshot published after reducer-plus-owner settlement. Browser code may format but not
+recalculate or join Radar and Underwriting across an absent shared Episode identity.
+
+**Durable-data effect:** the frontend writes nothing. The fresh authorized Runtime may write only
+the already-authorized schema-v4 `SHADOW_CASE_OPENED`, transition, and Outcome records produced by
+natural public-market flow; it never resumes or mutates an older root.
+
+**Change axes:** public input `NONE`; Decision Policy `NONE`; Outcome/evaluation `NONE`;
+authorization is limited to publishing the read-only frontend source and starting the already
+authorized single local Inverse process.
+
+**Bounded files:** `workbench_static/{index.html,styles.css,app.js}` and direct Workbench/product
+rendering tests. No new route, schema, dependency, persistence, service manager, or writable UI.
+
+**Direct verification and non-claims:** focused executable frontend tests, `make check`, exact clean
+Git identity, and the real loopback `/healthz`, `/readyz`, and `/api/workbench/current` surface.
+Success does not establish strategy frequency, fillability, edge, profitability, qualification,
+account margin, deployment health, or execution permission.
+
+**Complexity:** the old multi-tab backend-status presentation is replaced by one queue/detail
+blotter; no runtime subsystem is added.
+
 ## Business closure
 
 **Given:** PR #28 and its merged-main CI authorized one exact Inverse start.
@@ -80,7 +130,8 @@ full gate, and remote CI once after stability/business closure.
 ## Scope
 
 **In:** Authority/contracts, README, this active but incomplete validation task, direct Authority
-tests, and read-only terminal verification of the consumed state root.
+tests, the bounded Workbench static assets and rendering tests, one Draft PR for the read-only
+source launch, and read-only terminal verification of the consumed state root.
 
 **Out:** simultaneous runtimes, Policy/threshold tuning, private APIs/orders/fills/capital/account
 margin, injected/replayed data, qualification, execution, application commissioning, broad evidence
@@ -93,6 +144,7 @@ writer.
 ## Validation
 
 - focused tests: `pytest -q tests/test_authority_and_architecture.py`;
+- Workbench tests: `pytest -q tests/test_workbench_frontend_v1.py tests/test_trader_workbench.py`;
 - repository gate: `make check`;
 - public observation: iterative local Inverse attempts on fresh roots until the 600-second stable
   gate passes, then the same-process Outcome wait;
@@ -104,4 +156,6 @@ writer.
 The requested validation is done only when one attempt passes the 600-second stable gate, the same
 process yields a qualifying Inverse v4 Outcome, the official reader accepts it, and the final
 consolidated checks/publication pass. Intermediate non-major repairs do not require repeated human
-Authority, Draft PR, full gate, or merged-main CI.
+Authority, Draft PR, full gate, or merged-main CI. The Workbench source-launch subclosure is complete
+when its Draft PR passes CI, merges to `main`, and one clean authorized local Inverse process serves
+the new assets on `127.0.0.1:8765`; it does not by itself complete the natural-Shadow validation.

@@ -1,4 +1,111 @@
 const SUPPORTED_SCHEMA_VERSION = 5;
+const ACTIVE_CHANNEL_ID = 'INVERSE_BTC_SHORT_VOL_V1';
+const DRAWER_MEDIA_QUERY = '(max-width: 1471px)';
+const THEME_STORAGE_KEY = 'optimatrix-workbench-theme';
+const ACTIVE_PRODUCT_SPEC_IDENTITY = 'sha256:ff90da92cefe8e530339df38505fe7726b92b45b1855b751f2633ffd4fdb2172';
+const ACTIVE_POLICY_IDENTITIES = Object.freeze({
+  radar: 'sha256:283c2a8cc5e14cbed94b0f2a41ddd18ff2410772ae45d07abfea80d04446b1af',
+  underwriting: 'sha256:76a93725bb4923a70a2865b1e06add3b5a23ae80a831029c558ce188be6e7834',
+  position: 'sha256:cb3866b8efd45d5c05ed23ab56658c2cdbf0359132e39f52ce329761ad933b8e'
+});
+
+const CHANNELS = [
+  {id: ACTIVE_CHANNEL_ID, label: 'BTC Short Vol', product: 'inverse-btc', strategy: 'SHORT_VOL'},
+  {id: 'INVERSE_BTC_LONG_GAMMA_V1', label: 'BTC Long Gamma', product: 'inverse-btc', strategy: 'LONG_GAMMA'},
+  {id: 'INVERSE_ETH_SHORT_VOL_V1', label: 'ETH Short Vol', product: 'inverse-eth', strategy: 'SHORT_VOL'},
+  {id: 'INVERSE_ETH_LONG_GAMMA_V1', label: 'ETH Long Gamma', product: 'inverse-eth', strategy: 'LONG_GAMMA'}
+];
+
+const STRUCTURE_FILTERS = [
+  ['ALL', '全部'],
+  ['SHADOW_TRACKING', 'Shadow 跟踪'],
+  ['CANDIDATE', 'Shadow 候选'],
+  ['WATCH', '继续观察'],
+  ['ABSTAIN', '暂不参与'],
+  ['UNKNOWN', '暂不可判断']
+];
+
+const RADAR_FILTERS = [
+  ['ALL', '全部'],
+  ['ANOMALY_ACTIVE', '机会线索'],
+  ['UNKNOWN', '暂不可判断'],
+  ['NO_ANOMALY', '当前无异常']
+];
+
+const reasonLabels = {
+  NONE: '无',
+  NOT_OTM: '不是虚值合约，不进入当前 Short Vol 风险桶',
+  QUEUE_LAG_CURRENTNESS: '处理队列延迟，行情时效性不可确认',
+  CLOCK_GAP: '可信时间不连续',
+  INDEX_WARMUP: '指数基线处于启动或恢复阶段',
+  INDEX_WINDOW_GAP: '指数基线窗口存在缺口',
+  INDEX_SOURCE_STALE: '指数来源已陈旧',
+  INDEX_CONTINUITY_GAP: '指数行情连续性中断',
+  INDEX_HISTORY_REVISION: '官方指数历史发生修订，等待下一响应确认',
+  POST_STATUS_BOOTSTRAP_REQUIRED: '平台状态变化后等待期权簿重新建立',
+  OPTION_BOOK_UNKNOWN: '期权簿不可确认',
+  OPTION_AMOUNT_METADATA_UNKNOWN: '期权数量元数据不可确认',
+  OPTION_PRICE_TICK_METADATA_UNKNOWN: '官方价格 tick 规则不可确认',
+  INSUFFICIENT_TARGET_ASK_DEPTH: '目标数量买回深度不足',
+  NON_POSITIVE_TARGET_SPREAD: '目标规模盘口锁定或交叉',
+  ONE_TICK_STRESSED_BID_NON_POSITIVE: '卖价下压一个合法 tick 后不再为正',
+  DELTA_INELIGIBLE: 'Delta 不在冻结的可行动风险桶',
+  REVIEW_ONLY_TTE_BAND: '临近 admission cutoff，仅供审查',
+  REVIEW_ONLY_DELTA_BUCKET: 'Delta 位于线索风险桶之外，仅供审查',
+  REVIEW_ONLY_TTE_AND_DELTA: 'TTE 与 Delta 均位于 review-only 范围',
+  FORWARD_TICKER_UNKNOWN: '远期价格不可确认',
+  INVALID_FORWARD: '远期价格无效',
+  NUMERICAL_BOUNDARY_UNRESOLVED: '数值区间跨越决策边界',
+  NUMERICAL_UNKNOWN: '数值模型输入不可确认',
+  SESSION_GAP: '公共行情会话中断',
+  REMOTE_CONNECTION_CLOSED: '公共行情连接已关闭',
+  SESSION_RPC_FAILURE: '公共接口响应超时',
+  RUNTIME_SESSION_FAILURE: '公共行情会话运行失败',
+  TRANSPORT_READ_FAILURE: '公共行情传输读取失败',
+  PROTOCOL_INCOMPATIBILITY: '公共数据协议不兼容',
+  INGRESS_GAP_OR_DUPLICATE: '行情输入序列存在缺口或重复',
+  QUEUE_OVERFLOW: '行情处理队列溢出',
+  TICKER_SOURCE_STALE: '期权行情来源已陈旧',
+  KNOWN_DEGRADED: '已知覆盖降级',
+  NO_APPLICABLE_SCOPE: '当前无适用合约范围',
+  NO_APPLICABLE_MARKET_SCOPE_OBSERVED: '当前无适用合约范围',
+  PROCESS_FAILURE: 'Runtime 进程失败',
+  HUMAN_STOP: '人工停止',
+  COMBO_QUOTE_RECEIPT_UNKNOWN: '组合报价回执不可确认',
+  NO_ACTIVE_COMBO: '无现成官方组合；不阻塞双腿 Shadow 模拟',
+  NO_TARGET_SIZE_CREDIT_QUOTE: '现成官方组合没有目标数量正信用报价',
+  NO_PROTECTIVE_COMPONENT: '没有可冻结的同到期保护腿',
+  NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE: '双腿盘口不能同时覆盖目标数量',
+  COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN: '双腿保守成交反事实不可确认',
+  MINIMUM_NET_ENTRY_CREDIT: '净入场权利金低于 Policy 最低值',
+  MINIMUM_NET_CREDIT_TO_PAYOFF_CAP: '净权利金相对保护宽度不足',
+  CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE: '净权利金未覆盖未来成本准备',
+  CREDIT_ABOVE_FUTURE_COST_RESERVE: '净权利金高于未来成本准备',
+  UNDERWRITING_RESERVED_LOSS_LIMIT: '承保准备损失超过 Policy 上限',
+  UNDERWRITING_RESERVED_LOSS_WITHIN_LIMIT: '承保准备损失位于 Policy 上限内',
+  ENTRY_CONSUMED_LEVEL_LIMIT: '双腿消耗盘口层数位于限制内',
+  POSITIVE_NET_ENTRY_CREDIT: '净入场权利金为正',
+  RADAR_EPISODE_NOT_ACTIVE: '当前无活跃 Radar 线索，尚未进入结构评估',
+  ACCOUNT_MARGIN_UNKNOWN: '未接入私有账户保证金事实',
+  TARGET_SIZE_TWO_SIDED_ONE_TICK_FORMULA_KNOWN: '目标规模双边盘口和 one-tick 公式已知',
+  NONE_AT_RADAR_HARD_SCREEN: 'Radar hard screen 当前无阻塞',
+  OFFICIAL_ATOMIC_QUOTE_THEN_UNDERWRITING: '下一步查看官方组合诊断与入场经济评估',
+  SOURCE_LOSS_OR_REVIEW_BUCKET_OR_STRESSED_RICHNESS_CLEAR_PERSISTENCE: '数据丢失、进入 review-only 风险桶或 richness 持续性消失时失效',
+  RESTORE_REQUIRED_HARD_SCREEN_FACTS: '恢复缺失的 hard-screen 必需事实',
+  NOT_APPLICABLE_WITHOUT_A_KNOWN_FORMULA: '公式未知时不适用失效判断',
+  ENTER_CLUE_ELIGIBLE_TTE_AND_DELTA_BUCKETS: '进入可激活线索的 TTE 与 Delta 风险桶',
+  ENTER_CLUE_ELIGIBLE_TTE_BUCKET: '进入可激活线索的 TTE 风险桶',
+  ENTER_CLUE_ELIGIBLE_DELTA_BUCKET: '进入可激活线索的 Delta 风险桶',
+  MEET_STRESSED_RICHNESS_AND_TIME_PERSISTENCE: '满足 one-tick richness 与持续时间门槛',
+  SOURCE_LOSS_OR_KNOWN_FORMULA_INELIGIBILITY: '数据丢失或已知公式变为不合格时失效'
+};
+
+const predicateVectorKeys = {
+  CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE: 'CREDIT_ABOVE_FUTURE_COST_RESERVE',
+  UNDERWRITING_RESERVED_LOSS_LIMIT: 'UNDERWRITING_RESERVED_LOSS_WITHIN_LIMIT',
+  MINIMUM_NET_ENTRY_CREDIT: 'MINIMUM_NET_ENTRY_CREDIT',
+  MINIMUM_NET_CREDIT_TO_PAYOFF_CAP: 'MINIMUM_NET_CREDIT_TO_PAYOFF_CAP'
+};
 
 const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;',
@@ -9,1179 +116,1129 @@ const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
 })[character]);
 
 const isMissing = value => value === null || value === undefined || value === '';
-const displayText = value => {
-  if (isMissing(value)) return 'UNKNOWN';
-  return typeof value === 'object' ? JSON.stringify(value) : String(value);
-};
-const safeText = value => escapeHtml(displayText(value));
-const rawText = value => isMissing(value)
-  ? 'null'
+const displayText = value => isMissing(value)
+  ? '—'
   : (typeof value === 'object' ? JSON.stringify(value) : String(value));
+const safeText = value => escapeHtml(displayText(value));
+const reasonText = value => isMissing(value) ? '—' : (reasonLabels[value] || String(value));
 
-const card = (label, value, options = {}) => {
-  const className = options.primary ? 'card card-primary' : 'card';
-  const meta = options.meta ? `<span class="meta">${safeText(options.meta)}</span>` : '';
-  return `<div class="${className}"><div class="label">${escapeHtml(label)}</div>` +
-    `<div class="value">${safeText(value)}</div>${meta}</div>`;
-};
+function syncThemeControl() {
+  if (!document.documentElement || typeof document.querySelectorAll !== 'function') return;
+  const currentTheme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+  for (const button of document.querySelectorAll('[data-theme-option]')) {
+    button.setAttribute('aria-pressed', button.dataset.themeOption === currentTheme ? 'true' : 'false');
+  }
+}
 
-const summaryStat = (label, value, state = null) => {
-  const stateMarkup = state
-    ? `<span class="status-pill ${escapeHtml(state)}">${safeText(state)}</span>`
-    : '';
-  return `<div class="summary-stat"><span class="label">${escapeHtml(label)}</span>` +
-    `<span class="summary-value">${safeText(value)}</span>${stateMarkup}</div>`;
-};
+function setTheme(theme) {
+  if (!['light', 'dark'].includes(theme) || !document.documentElement) return;
+  document.documentElement.dataset.theme = theme;
+  try {
+    const storage = globalThis.localStorage;
+    if (storage && typeof storage.setItem === 'function') storage.setItem(THEME_STORAGE_KEY, theme);
+  } catch (_error) {
+    // Theme persistence is optional; the visible selection remains active for this page.
+  }
+  syncThemeControl();
+}
 
-const statusPill = value => {
-  const text = displayText(value);
-  const className = text.replace(/[^A-Za-z0-9_-]/g, '-');
-  return `<span class="status-pill ${escapeHtml(className)}">${safeText(text)}</span>`;
-};
+function restoreThemePreference() {
+  if (!document.documentElement) return;
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage || typeof storage.getItem !== 'function') return;
+    const savedTheme = storage.getItem(THEME_STORAGE_KEY);
+    if (['light', 'dark'].includes(savedTheme)) document.documentElement.dataset.theme = savedTheme;
+  } catch (_error) {
+    // The HTML default remains the truthful fallback when browser storage is unavailable.
+  }
+}
 
-const reasonLabels = {
-  NONE: '无',
-  QUEUE_LAG_CURRENTNESS: '处理队列延迟, 行情时效性不可确认',
-  CLOCK_GAP: '可信时间不连续',
-  INDEX_WARMUP: '指数基线处于启动或恢复 warmup',
-  INDEX_WINDOW_GAP: '指数基线窗口存在缺口',
-  INDEX_SOURCE_STALE: '指数来源已陈旧',
-  INDEX_CONTINUITY_GAP: '指数行情连续性中断',
-  INDEX_HISTORY_REVISION: '官方指数历史已完成点发生修订，等待下一响应确认',
-  POST_STATUS_BOOTSTRAP_REQUIRED: '平台状态变化后等待期权簿重新建立',
-  OPTION_BOOK_UNKNOWN: '期权簿不可确认',
-  OPTION_AMOUNT_METADATA_UNKNOWN: '期权数量元数据不可确认',
-  OPTION_PRICE_TICK_METADATA_UNKNOWN: '官方价格 tick 规则不可确认',
-  INSUFFICIENT_TARGET_ASK_DEPTH: '目标数量买回深度不足',
-  NON_POSITIVE_TARGET_SPREAD: '目标规模双边盘口锁定或交叉',
-  ONE_TICK_STRESSED_BID_NON_POSITIVE: '卖价下压一个合法 tick 后不再为正',
-  DELTA_INELIGIBLE: 'Delta 不在冻结的可行动风险桶',
-  REVIEW_ONLY_TTE_BAND: '临近 admission cutoff，仅供审查不可激活 clue',
-  REVIEW_ONLY_DELTA_BUCKET: 'Delta 位于冻结的 clue 风险桶之外，仅供审查',
-  REVIEW_ONLY_TTE_AND_DELTA: 'TTE 与 Delta 均位于 review-only 范围',
-  FORWARD_TICKER_UNKNOWN: '远期价格 ticker 不可确认',
-  INVALID_FORWARD: '远期价格无效',
-  NUMERICAL_BOUNDARY_UNRESOLVED: '数值区间跨越决策边界',
-  NUMERICAL_UNKNOWN: '数值模型输入不可确认',
-  OTHER_INDEX_UNKNOWN: '其他指数输入不可确认',
-  OTHER_TICKER_UNKNOWN: '其他 ticker 输入不可确认',
-  OTHER_OPTION_UNKNOWN: '其他期权输入不可确认',
-  OTHER_RUNTIME_UNKNOWN: '其他运行时输入不可确认',
-  OTHER_RADAR_UNKNOWN: '其他 Radar 输入不可确认',
-  SESSION_GAP: '公共行情会话中断',
-  SESSION_RPC_FAILURE: '公共接口响应超时',
-  COMBO_QUOTE_RECEIPT_UNKNOWN: '组合报价回执不可确认',
-  NO_ACTIVE_COMBO: '无现成官方组合 - 仅诊断; 不阻塞双腿 Shadow',
-  NO_TARGET_SIZE_CREDIT_QUOTE: '现成官方组合没有目标数量正信用报价 - 仅诊断',
-  NO_PROTECTIVE_COMPONENT: '没有可冻结的同到期保护腿',
-  NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE: '双腿盘口不能同时覆盖目标数量',
-  COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN: '双腿保守成交反事实不可确认',
-  NO_APPLICABLE_MARKET_SCOPE_OBSERVED: '尚未观察到适用的市场范围',
-  NO_ANOMALY_ACTIVATION_OBSERVED: '已完成 Radar 计算，尚未出现异常激活',
-  ATOMIC_AVAILABILITY_UNKNOWN: '异常已激活，但组合可用性仍不可确认',
-  ATOMIC_AVAILABILITY_NOT_SETTLED: '异常已激活，尚未结算组合可用性',
-  PUBLIC_ATOMIC_QUOTE_NOT_OBSERVED: '组合可用性已结算，尚无目标数量原子报价',
-  MINIMUM_NET_ENTRY_CREDIT: '净入场权利金低于 Policy 最低值',
-  MINIMUM_NET_CREDIT_TO_PAYOFF_CAP: '净权利金相对保护宽度不足',
-  CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE: '净权利金未覆盖未来成本准备',
-  UNDERWRITING_RESERVED_LOSS_LIMIT: '承保准备损失超过 Policy 上限',
-  ADMISSION_PENDING_OR_NOT_REFRESHED: 'Candidate 尚未获得严格未来的成对双腿盘口刷新',
-  OUTCOME_PENDING: 'Shadow Case 已打开，Outcome 尚未终结',
-  NO_MATERIAL_BLOCKER_OBSERVED: '当前已观察漏斗没有实质转换阻塞',
-  POSITION_SLOT_CONSUMED_BY_SHADOW_ENTRY: '该承保槽位已被 Shadow Entry 使用',
-  RADAR_EPISODE_NOT_ACTIVE: '当前无活跃 Radar 候选, 承保尚未评估',
-  CONTROL_OPENED: '无交易研究对照 Case 已建立',
-  REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION: '刷新为 Candidate, 必须走规范 admission',
-  KNOWN_NO_CONTROL: '刷新结果已知, 未建立 no-trade control Case',
-  ENTRY_EMITTED: 'Shadow Case 已建立',
-  KNOWN_COMPLETE_NO_ENTRY: '严格未来刷新已完成, 未建立 Case',
-  KNOWN_INVALIDATED_BEFORE_REFRESH: 'Candidate 在刷新前已失效',
-  UNKNOWN_CONSUMED: '刷新事实 UNKNOWN, 本次选择已消费',
-  NOT_STARTED: '服务尚未启动'
-};
-const reasonText = value => reasonLabels[value] || String(value);
-
-const productLabels = {
-  'inverse-btc': 'BTC 币本位反向期权',
-  'linear-btc-usdc': 'BTC-USDC 线性期权'
-};
-const productLabel = value => productLabels[value] || displayText(value);
-
-const actionLabels = {
-  CANDIDATE: 'Candidate',
-  WATCH: '观察',
-  ABSTAIN: '观望',
-  HOLD: '继续持有',
-  CLOSE: '建议平仓',
-  UNKNOWN: 'UNKNOWN',
-  NOT_EVALUATED: '未评估'
-};
-const actionText = value => actionLabels[value] || displayText(value);
-
-const detectorLabels = {
-  ANOMALY_ACTIVE: 'Radar clue 已激活',
-  NO_ANOMALY: '无 Radar clue',
-  UNKNOWN: 'Radar 状态 UNKNOWN'
-};
-const detectorText = value => detectorLabels[value] || displayText(value);
-
-const deltaBucketLabels = {
-  EXTREME_TAIL_LT_05: '<5Δ 极深虚值',
-  TAIL_05_15: '5–15Δ 尾部',
-  WING_15_30: '15–30Δ 翼部',
-  ATM_GT_40: '>40Δ 近 ATM',
-  UNKNOWN: 'UNKNOWN'
-};
-const deltaBucketText = value => deltaBucketLabels[value] || displayText(value);
-
-const formatEpochMs = value => {
-  if (isMissing(value) || !Number.isFinite(Number(value))) return 'UNKNOWN';
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-  }).format(new Date(Number(value)));
-};
-
-const formatDurationMs = value => {
-  if (isMissing(value) || !Number.isFinite(Number(value))) return 'UNKNOWN';
-  const milliseconds = Math.max(0, Number(value));
-  if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
-  if (milliseconds < 60000) return `${(milliseconds / 1000).toFixed(1)} 秒`;
-  if (milliseconds < 3600000) return `${(milliseconds / 60000).toFixed(1)} 分钟`;
-  return `${(milliseconds / 3600000).toFixed(2)} 小时`;
-};
-
-const formatDurationInterval = value => {
-  if (!value || !Number.isFinite(Number(value.lower_ms)) ||
-      !Number.isFinite(Number(value.upper_ms))) return 'UNKNOWN';
-  const lower = formatDurationMs(value.lower_ms);
-  const upper = formatDurationMs(value.upper_ms);
-  return lower === upper ? lower : `${lower} - ${upper}`;
-};
-
-const formatDecimal = value => {
-  if (isMissing(value)) return 'UNKNOWN';
-  const text = String(value);
-  const match = text.match(/^(-?)(\d+)(\.\d+)?$/);
-  if (!match) return text;
-  return `${match[1]}${match[2].replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${match[3] || ''}`;
-};
+restoreThemePreference();
 
 const formatCompactNumber = (value, digits = 2) => {
-  if (isMissing(value) || !Number.isFinite(Number(value))) return 'UNKNOWN';
+  if (isMissing(value) || !Number.isFinite(Number(value))) return '—';
   return Number(value).toLocaleString('zh-CN', {
     minimumFractionDigits: 0,
     maximumFractionDigits: digits
   });
 };
 
-const formatPercent = value => {
-  if (isMissing(value) || !Number.isFinite(Number(value))) return 'UNKNOWN';
-  return `${(Number(value) * 100).toFixed(2)}%`;
+const formatDecimal = value => {
+  if (isMissing(value)) return '—';
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return displayText(value);
+  return numeric.toLocaleString('zh-CN', {maximumFractionDigits: 8});
 };
+
+const formatMoney = value => isMissing(value) ? '—' : formatCompactNumber(value, 2);
+const formatNative = value => isMissing(value) ? '—' : formatCompactNumber(value, 8);
+const formatPercent = value => isMissing(value) || !Number.isFinite(Number(value))
+  ? '—'
+  : `${(Number(value) * 100).toFixed(1)}%`;
 
 const formatInterval = (value, formatter) => {
-  if (!value || isMissing(value.lower) || isMissing(value.upper)) return 'UNKNOWN';
+  if (!value || isMissing(value.lower) || isMissing(value.upper)) return '—';
   const lower = formatter(value.lower);
   const upper = formatter(value.upper);
-  return lower === upper ? lower : `${lower} - ${upper}`;
+  return lower === upper ? lower : `${lower} – ${upper}`;
 };
 
-const formatCompactInterval = (value, formatter, suffix = '') => {
-  if (!value || isMissing(value.lower) || isMissing(value.upper)) return 'UNKNOWN';
-  const lower = formatter(value.lower);
-  const upper = formatter(value.upper);
-  return lower === upper ? `${lower}${suffix}` : `${lower}${suffix} – ${upper}${suffix}`;
+const formatDurationMs = value => {
+  if (isMissing(value) || !Number.isFinite(Number(value))) return '—';
+  const milliseconds = Math.max(0, Number(value));
+  if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
+  if (milliseconds < 60000) return `${(milliseconds / 1000).toFixed(1)} 秒`;
+  if (milliseconds < 3600000) return `${(milliseconds / 60000).toFixed(1)} 分钟`;
+  if (milliseconds < 86400000) return `${(milliseconds / 3600000).toFixed(1)} 小时`;
+  return `${Math.floor(milliseconds / 86400000)}d ${Math.floor((milliseconds % 86400000) / 3600000)}h`;
+};
+
+const formatDurationInterval = value => {
+  if (!value || !Number.isFinite(Number(value.lower_ms)) || !Number.isFinite(Number(value.upper_ms))) {
+    return '—';
+  }
+  const lower = formatDurationMs(value.lower_ms);
+  const upper = formatDurationMs(value.upper_ms);
+  return lower === upper ? lower : `${lower} – ${upper}`;
+};
+
+const formatDate = value => {
+  if (isMissing(value) || !Number.isFinite(Number(value))) return '—';
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'UTC', day: '2-digit', month: 'short'
+  }).format(new Date(Number(value))).toUpperCase();
+};
+
+const formatTimestamp = value => {
+  if (isMissing(value) || !Number.isFinite(Number(value))) return '—';
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+  }).format(new Date(Number(value)));
+};
+
+const formatStrike = value => {
+  if (isMissing(value) || !Number.isFinite(Number(value))) return '—';
+  const numeric = Number(value);
+  if (Math.abs(numeric) >= 1000) {
+    const scaled = numeric / 1000;
+    return `${scaled.toLocaleString('en-US', {maximumFractionDigits: 1})}k`;
+  }
+  return formatCompactNumber(numeric, 1);
 };
 
 const shortIdentity = value => {
-  if (isMissing(value)) return 'UNKNOWN';
+  if (isMissing(value)) return '—';
   const text = String(value);
-  return text.length <= 24 ? text : `${text.slice(0, 14)}…${text.slice(-6)}`;
+  return text.length <= 22 ? text : `${text.slice(0, 12)}…${text.slice(-6)}`;
 };
 
-const unavailableRadarCalculation = row =>
-  row.detector_state === 'NO_ANOMALY' && row.known_evaluation ? 'N/A' : 'UNKNOWN';
+const optionTypeText = value => value === 'put' ? 'Put' : (value === 'call' ? 'Call' : displayText(value));
+const structureTypeText = row => `${optionTypeText(row.option_type)} Spread`;
+const structureLabel = row => `${formatDate(row.expiry_timestamp_ms)} · ${formatStrike(row.short_strike_price)} / ${formatStrike(row.long_strike_price)} ${structureTypeText(row)}`;
 
-const radarCellValue = (row, field, value) => {
-  if (field === 'expiration_timestamp_ms') return formatEpochMs(value);
-  if (field === 'tte_interval_ms') return formatDurationInterval(value);
-  if (field === 'attention_rank') return isMissing(value) ? 'N/A' : `#${formatDecimal(value)}`;
-  if (field === 'strike_price') return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
-  if (['model_executable_sell_price', 'model_executable_buy_price',
-      'model_one_tick_stressed_sell_price'].includes(field)) {
-    return isMissing(value) ? unavailableRadarCalculation(row) : formatDecimal(value);
-  }
-  if (['executable_iv_interval', 'executable_ask_iv_interval',
-      'one_tick_stressed_iv_interval'].includes(field)) {
-    return isMissing(value) ? unavailableRadarCalculation(row)
-      : formatInterval(value, formatPercent);
-  }
-  if (field === 'baseline_annualized_volatility') {
-    return isMissing(value) ? unavailableRadarCalculation(row) : formatPercent(value);
-  }
-  if (field === 'baseline_return_interval_minutes') {
-    return isMissing(value) ? unavailableRadarCalculation(row) : `${formatDecimal(value)} 分钟`;
-  }
-  if (field === 'baseline_selected_lookback_minutes') {
-    if (!isMissing(value)) return `${formatDecimal(value)} 分钟`;
-    return row.baseline_source === 'ANNUALIZED_VARIANCE_FLOOR'
-      ? '固定年化方差下限'
-      : unavailableRadarCalculation(row);
-  }
-  if (['richness_ratio_interval', 'raw_richness_ratio_interval'].includes(field)) {
-    return isMissing(value) ? unavailableRadarCalculation(row)
-      : formatInterval(value, formatDecimal);
-  }
-  if (['target_spread_ticks', 'bid_premium_ticks', 'surface_residual',
-      'best_legged_credit_to_payoff_cap_fraction'].includes(field)) {
-    return isMissing(value) ? unavailableRadarCalculation(row) : formatDecimal(value);
-  }
-  if (['regime_jump_share', 'regime_adverse_semivariance_share'].includes(field)) {
-    return isMissing(value) ? 'UNKNOWN' : formatPercent(value);
-  }
-  if (field === 'detector_reason' || field === 'option_book_reason') {
-    return isMissing(value) ? unavailableRadarCalculation(row) : reasonText(value);
-  }
-  if (field === 'active_episode_identity' || field === 'anomaly_started_monotonic_ms') {
-    return isMissing(value)
-      ? (row.detector_state === 'ANOMALY_ACTIVE' ? 'UNKNOWN' : 'N/A')
-      : shortIdentity(value);
-  }
-  if (field === 'anomaly_active_duration_ms') {
-    return isMissing(value)
-      ? (row.detector_state === 'ANOMALY_ACTIVE' ? 'UNKNOWN' : 'N/A')
-      : formatDurationMs(value);
-  }
-  if (field === 'option_type') {
-    return value === 'call' ? 'Call' : (value === 'put' ? 'Put' : displayText(value));
-  }
-  return displayText(value);
+const badgeMarkup = (label, tone = 'neutral', extraClass = 'state-badge') =>
+  `<span class="${escapeHtml(extraClass)} tone-${escapeHtml(tone)}">${safeText(label)}</span>`;
+
+const factMarkup = (label, value) =>
+  `<div class="fact"><span class="fact-label">${escapeHtml(label)}</span>` +
+  `<span class="fact-value">${safeText(value)}</span></div>`;
+
+const economicsCard = (label, value, meta, variant = '') =>
+  `<div class="economics-card${variant ? ` ${escapeHtml(variant)}` : ''}">` +
+  `<span class="economics-label">${escapeHtml(label)}</span>` +
+  `<span class="economics-value">${safeText(value)}</span>` +
+  `<span class="economics-meta">${safeText(meta)}</span></div>`;
+
+const stageCount = (documentValue, stageName) => {
+  const stages = documentValue && documentValue.funnel && documentValue.funnel.stages;
+  if (!Array.isArray(stages)) return null;
+  const stage = stages.find(value => value.stage === stageName);
+  return stage ? stage.observed_count : null;
 };
 
-const radarPrimaryCellValue = (row, field, value) => {
-  if (field === 'richness_ratio_interval') {
-    return isMissing(value) ? unavailableRadarCalculation(row)
-      : formatCompactInterval(value, item => formatCompactNumber(item, 2), '×');
+const channelSnapshotState = documentValue => {
+  if (!documentValue) {
+    return {code: 'UNAVAILABLE', label: '连接中断', tone: 'amber', note: '旧快照已隐藏'};
   }
-  if (field === 'executable_iv_interval') {
-    return isMissing(value) ? unavailableRadarCalculation(row)
-      : formatCompactInterval(value, item => `${(Number(item) * 100).toFixed(1)}%`);
+  const product = documentValue.product || {};
+  const policies = documentValue.policy_identities || {};
+  if (product.name !== 'inverse-btc' ||
+      product.product_spec_identity !== ACTIVE_PRODUCT_SPEC_IDENTITY ||
+      policies.radar !== ACTIVE_POLICY_IDENTITIES.radar ||
+      policies.underwriting !== ACTIVE_POLICY_IDENTITIES.underwriting ||
+      policies.position !== ACTIVE_POLICY_IDENTITIES.position) {
+    return {code: 'IDENTITY_MISMATCH', label: '身份不匹配', tone: 'red', note: '拒绝展示'};
   }
-  if (field === 'baseline_annualized_volatility') {
-    return isMissing(value) ? unavailableRadarCalculation(row)
-      : `${(Number(value) * 100).toFixed(1)}%`;
+  if (!documentValue.service || !documentValue.service.ready) {
+    return {code: 'DATA_BLOCKED', label: '数据不可判断', tone: 'amber',
+      note: reasonText(documentValue.service && documentValue.service.reason)};
   }
-  if (field === 'delta_interval') {
-    if (value && !isMissing(value.lower) && !isMissing(value.upper)) {
-      return formatCompactInterval(value, item => formatCompactNumber(item, 3));
+  return {code: 'CONNECTED', label: '当前可用', tone: 'green',
+    note: `${formatCompactNumber(documentValue.system && documentValue.system.data_delay_ms, 0)} ms`};
+};
+
+const runtimeStatusState = documentValue => {
+  if (!documentValue) {
+    return {
+      key: 'unknown', label: 'Runtime 状态未知', detail: '工作台连接中断',
+      blocker: '系统阻塞：当前快照不可用；旧业务数据已隐藏'
+    };
+  }
+  const snapshotState = channelSnapshotState(documentValue);
+  const identityMismatch = snapshotState.code === 'IDENTITY_MISMATCH';
+  const service = documentValue.service || {};
+  if (typeof service.phase !== 'string' || typeof service.data_state !== 'string' ||
+      typeof service.health !== 'boolean' || typeof service.ready !== 'boolean' ||
+      typeof service.stale !== 'boolean') {
+    return {
+      key: 'unknown', label: 'Runtime 状态未知', detail: '服务状态字段不完整',
+      blocker: '系统阻塞：无法从当前快照确认 Runtime 状态'
+    };
+  }
+  const phaseAndData = `${service.phase} · ${service.data_state}`;
+  const reason = reasonText(service.reason);
+  if (service.phase === 'STOPPED') {
+    return {key: 'stopped', label: 'Runtime 已停止', detail: phaseAndData,
+      blocker: `停止原因：${reason}${identityMismatch ? '；决策快照身份不匹配' : ''}`};
+  }
+  if (service.phase === 'FAILED' || !service.health) {
+    return {key: 'failed', label: 'Runtime 运行失败', detail: phaseAndData,
+      blocker: `运行失败：${reason}${identityMismatch ? '；决策快照身份不匹配' : ''}`};
+  }
+  if (service.phase === 'STARTING' || service.phase === 'CONNECTING') {
+    return {key: 'starting', label: 'Runtime 准备中', detail: phaseAndData,
+      blocker: `准备原因：${reason}`};
+  }
+  if (service.phase === 'STOPPING') {
+    return {key: 'starting', label: 'Runtime 正在停止', detail: phaseAndData,
+      blocker: `停止原因：${reason}`};
+  }
+  if (service.phase === 'RECONNECTING') {
+    return {key: 'degraded', label: 'Runtime 连接受阻', detail: phaseAndData,
+      blocker: `连接阻塞：${reason}`};
+  }
+  if (service.phase === 'RUNNING' && service.ready && service.data_state === 'CURRENT') {
+    if (identityMismatch) {
+      return {
+        key: 'degraded', label: 'Runtime 正常运行', detail: '决策快照受阻',
+        blocker: '快照受阻：产品或 Policy 身份不匹配，当前业务数据拒绝展示'
+      };
     }
-    return deltaBucketText(row.delta_bucket);
+    return {
+      key: 'healthy', label: 'Runtime 正常运行', detail: '决策数据当前可用',
+      blocker: '系统阻塞：无；业务机会仍以队列门槛为准'
+    };
   }
-  if (field === 'surface_residual') {
-    return isMissing(value) ? unavailableRadarCalculation(row)
-      : `${(Number(value) * 100).toFixed(1)}%`;
+  if (service.phase === 'RUNNING') {
+    const noApplicableScope = ['NO_APPLICABLE_SCOPE', 'NO_APPLICABLE_MARKET_SCOPE_OBSERVED']
+      .includes(service.reason);
+    return {
+      key: 'degraded', label: 'Runtime 正常运行', detail: `决策数据 ${service.data_state}`,
+      blocker: noApplicableScope
+        ? '决策数据：当前无适用合约范围（非 Runtime 故障）'
+        : `决策数据受阻：${reason}`
+    };
   }
-  if (field === 'detector_state') return detectorText(value);
-  return radarCellValue(row, field, value);
+  return {
+    key: 'unknown', label: 'Runtime 状态未知', detail: phaseAndData,
+    blocker: `系统阻塞：未识别的服务阶段 ${service.phase}`
+  };
 };
 
-const underwritingReasonText = (row, value) => {
-  if (row.availability === 'NOT_EVALUATED') {
-    const reasons = Array.isArray(row.unknown_reasons) ? row.unknown_reasons : [];
-    if (reasons.includes('RADAR_EPISODE_NOT_ACTIVE')) {
-      return reasonText('RADAR_EPISODE_NOT_ACTIVE');
-    }
-    return reasons.length
-      ? reasons.map(reasonText).join('; ')
-      : '已知前置条件未满足, 承保未评估';
+const roadmapState = channel => {
+  if (channel.id === 'INVERSE_BTC_LONG_GAMMA_V1') {
+    return {label: '尚未接入', tone: 'neutral', note: '无 Long Gamma 决策契约'};
+  }
+  if (channel.id === 'INVERSE_ETH_SHORT_VOL_V1') {
+    return {label: '尚未接入', tone: 'neutral', note: '无 ETH 产品快照'};
+  }
+  return {label: '尚未接入', tone: 'neutral', note: '无产品与策略快照'};
+};
+
+const structureState = row => {
+  if (row.candidate_lifecycle === 'ADMITTED') {
+    return {key: 'SHADOW_TRACKING', label: 'Shadow 跟踪', tone: 'purple', priority: 0};
+  }
+  if (row.candidate_lifecycle === 'INVALIDATED') {
+    return {key: 'INVALIDATED', label: '候选已失效', tone: 'red', priority: 7};
+  }
+  if (row.candidate_lifecycle === 'VALID' && row.candidate_still_valid === true) {
+    return {key: 'CANDIDATE', label: 'Shadow 候选', tone: 'green', priority: 1};
   }
   if (row.availability === 'UNKNOWN') {
-    const reasons = Array.isArray(row.unknown_reasons) ? row.unknown_reasons : [];
-    return reasons.length
-      ? reasons.map(reasonText).join('; ')
-      : '承保所需事实不可确认';
+    return {key: 'UNKNOWN', label: '暂不可判断', tone: 'amber', priority: 5};
   }
-  if (row.availability === 'EVALUABLE' && !isMissing(row.action)) {
-    const failures = Array.isArray(row.failed_predicates) ? row.failed_predicates : [];
-    return failures.length
-      ? `已结算承保动作: ${row.action}; 未通过: ${failures.map(reasonText).join('; ')}`
-      : `已结算承保动作: ${row.action}; 全部经济谓词通过`;
+  if (row.availability === 'NOT_EVALUATED') {
+    return {key: 'NOT_EVALUATED', label: '尚未评估', tone: 'neutral', priority: 6};
   }
-  return isMissing(value) ? 'N/A' : reasonText(value);
+  if (row.action === 'CANDIDATE') {
+    return {key: 'CANDIDATE_UNCONFIRMED', label: '承保通过 · 待确认', tone: 'blue', priority: 2};
+  }
+  if (row.action === 'WATCH') {
+    return {key: 'WATCH', label: '继续观察', tone: 'amber', priority: 3};
+  }
+  if (row.action === 'ABSTAIN') {
+    return {key: 'ABSTAIN', label: '暂不参与', tone: 'neutral', priority: 4};
+  }
+  return {key: 'UNKNOWN', label: '暂不可判断', tone: 'amber', priority: 5};
 };
 
-const underwritingCellValue = (row, field, value) => {
-  if (field === 'expiry_timestamp_ms') return isMissing(value) ? 'UNKNOWN' : formatEpochMs(value);
-  if (field.endsWith('_strike_price') || field === 'target_quantity_btc') {
-    return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
+const radarState = row => {
+  if (row.detector_state === 'ANOMALY_ACTIVE') {
+    return {key: 'ANOMALY_ACTIVE', label: '机会线索', tone: 'blue', priority: 0};
   }
-  if (field === 'radar_scope_or_short_leg_identity' || field.endsWith('_identity')) {
-    return isMissing(value) ? 'UNKNOWN' : shortIdentity(value);
+  if (row.detector_state === 'UNKNOWN') {
+    return {key: 'UNKNOWN', label: '暂不可判断', tone: 'amber', priority: 1};
   }
-  if (field === 'decision_reason') return underwritingReasonText(row, value);
-  if (field === 'action') return isMissing(value)
-    ? (row.availability === 'EVALUABLE' ? 'UNKNOWN' : 'N/A')
-    : actionText(value);
-  const unavailableFields = new Set([
-    'action', 'gross_entry_credit_valuation', 'entry_fee_reserve_valuation',
-    'net_entry_credit_valuation',
-    'entry_boundary_valued_payoff_loss_ex_fees_valuation',
-    'future_cost_reserve_valuation', 'underwriting_reserved_loss_valuation',
-    'candidate_lifecycle', 'candidate_still_valid', 'candidate_invalidation_reason'
-  ]);
-  if (unavailableFields.has(field) && isMissing(value)) {
-    return row.availability === 'EVALUABLE' ? 'UNKNOWN' : 'N/A';
-  }
-  return displayText(value);
+  return {key: 'NO_ANOMALY', label: '当前无异常', tone: 'neutral', priority: 2};
 };
 
-const compactMoney = value => isMissing(value) ? 'UNKNOWN' : formatCompactNumber(value, 2);
-const compactNative = value => isMissing(value) ? 'UNKNOWN' : formatCompactNumber(value, 8);
+const structureIdentity = (row, index = 0) => row.underwriting_availability_evaluation_identity ||
+  row.underwriting_action_identity || row.radar_scope_or_short_leg_identity || `structure-${index}`;
+const radarIdentity = (row, index = 0) => row.active_episode_identity || row.instrument_name || `radar-${index}`;
 
-const shadowCellValue = (row, field, value) => {
-  if (field.endsWith('_identity')) return isMissing(value) ? 'N/A' : shortIdentity(value);
-  if (field === 'target_quantity_btc') return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
-  if (field === 'simulated_entry_price_valuation_per_btc' ||
-      field === 'simulated_entry_credit_valuation') {
-    return isMissing(value)
-      ? (isMissing(row.shadow_entry_identity) ? 'N/A' : 'UNKNOWN')
-      : formatDecimal(value);
-  }
-  if (field === 'no_entry_reason') {
-    return isMissing(value) ? (isMissing(row.shadow_entry_identity) ? 'UNKNOWN' : 'N/A')
-      : reasonText(value);
-  }
-  return displayText(value);
-};
-
-const positionCellValue = (row, field, value) => {
-  if (field.endsWith('_identity')) return isMissing(value) ? 'N/A' : shortIdentity(value);
-  if (field === 'hard_close_countdown_interval_ms') return formatDurationInterval(value);
-  if (field.endsWith('_valuation')) return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
-  return displayText(value);
-};
-
-const outcomeCellValue = (row, field, value) => {
-  if (field.endsWith('_identity')) return isMissing(value) ? 'N/A' : shortIdentity(value);
-  if (field === 'actual_pnl' && isMissing(value)) {
-    return 'N/A — public Shadow 无订单、成交或实际持仓';
-  }
-  if (field.endsWith('_valuation')) return isMissing(value) ? 'UNKNOWN' : formatDecimal(value);
-  return displayText(value);
-};
-
-const outcomeValuationCellValue = (row, product) => {
-  const value = product.name === 'inverse-btc'
-    ? row.boundary_valued_net_pnl_usd
-    : row.public_quote_net_pnl_valuation;
-  return isMissing(value) ? 'UNKNOWN' : compactMoney(value);
-};
-
-const caseStateLabels = {
-  NOT_OPENED: '未建立 Case',
-  PENDING_OUTCOME: '等待严格未来 Outcome',
-  MATURE_KNOWN: '已终结, 经济结果已知',
-  MATURE_UNKNOWN: '已终结, 经济结果 UNKNOWN',
-  CENSORED_AT_STOP: '停止时删失',
-  CENSORED_AT_FAILURE: '失败时删失'
-};
-const caseStateText = value => caseStateLabels[value] || displayText(value);
-
-const enrollmentLabels = {
-  ADMITTED_CANDIDATE: '规范 Candidate Case',
-  SELECTED_UNDERWRITING_DECISION_CONTROL: '无交易研究对照 Case'
-};
-const enrollmentText = value => enrollmentLabels[value] || displayText(value);
-
-const radarPriority = {ANOMALY_ACTIVE: 0, UNKNOWN: 1, NO_ANOMALY: 2};
-const underwritingPriority = {EVALUABLE: 0, UNKNOWN: 1, NOT_EVALUATED: 2};
-const underwritingActionPriority = {CANDIDATE: 0, WATCH: 1, ABSTAIN: 2};
+const orderedStructureRows = rows => [...rows].sort((left, right) =>
+  structureState(left).priority - structureState(right).priority ||
+  Number(left.expiry_timestamp_ms || 0) - Number(right.expiry_timestamp_ms || 0) ||
+  String(left.short_leg_instrument_name || '').localeCompare(String(right.short_leg_instrument_name || ''))
+);
 
 const orderedRadarRows = rows => [...rows].sort((left, right) =>
   (Number.isFinite(Number(left.attention_rank)) ? Number(left.attention_rank) : 999999) -
     (Number.isFinite(Number(right.attention_rank)) ? Number(right.attention_rank) : 999999) ||
-  (radarPriority[left.detector_state] ?? 9) - (radarPriority[right.detector_state] ?? 9) ||
+  radarState(left).priority - radarState(right).priority ||
   Number(left.expiration_timestamp_ms || 0) - Number(right.expiration_timestamp_ms || 0) ||
-  String(left.option_type || '').localeCompare(String(right.option_type || '')) ||
-  String(left.strike_price || '').localeCompare(String(right.strike_price || ''), undefined, {numeric: true}) ||
   String(left.instrument_name || '').localeCompare(String(right.instrument_name || ''))
 );
 
-const orderedUnderwritingRows = rows => [...rows].sort((left, right) =>
-  (underwritingPriority[left.availability] ?? 9) -
-    (underwritingPriority[right.availability] ?? 9) ||
-  (underwritingActionPriority[left.action] ?? 9) -
-    (underwritingActionPriority[right.action] ?? 9) ||
-  Number(left.expiry_timestamp_ms || 0) - Number(right.expiry_timestamp_ms || 0) ||
-  String(left.short_leg_instrument_name || left.radar_scope_or_short_leg_identity || '').localeCompare(
-    String(right.short_leg_instrument_name || right.radar_scope_or_short_leg_identity || '')
-  )
-);
-
-const filterRows = (rows, field, selected) => selected === 'ALL'
-  ? [...rows]
-  : (selected === 'TOP_N'
-    ? rows.filter(row => row.within_attention_top_n)
-    : rows.filter(row => row[field] === selected));
-
-const stableRowIdentity = (row, fallback) => [
-  row.instrument_name,
-  row.underwriting_action_identity,
-  row.selected_underwriting_decision_identity,
-  row.shadow_entry_identity,
-  row.shadow_observation_identity,
-  row.radar_scope_or_short_leg_identity,
-  row.enrollment_identity,
-  row.active_episode_identity
-].find(value => !isMissing(value)) || fallback;
-
-const details = (row, fields, stateKey) => {
-  const body = fields.map(([label, key]) =>
-    `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(rawText(row[key]))}</dd>`
-  ).join('');
-  return `<details class="raw-details" data-detail-key="${escapeHtml(stateKey)}">` +
-    `<summary>原始详情</summary><dl>${body}</dl></details>`;
+const predicateMarginForFailure = (row, failedPredicate) => {
+  const vector = Array.isArray(row.predicate_margin_vector) ? row.predicate_margin_vector : [];
+  const vectorKey = predicateVectorKeys[failedPredicate] || failedPredicate;
+  return vector.find(value => value.predicate === vectorKey) || null;
 };
 
-const table = (panel, columns, rows = panel.rows, detailFields = []) => {
-  if (panel.panel_state === 'EMPTY_NO_SETTLED_OBJECT') {
-    return `<div class="empty-state"><strong>当前没有已结算对象</strong>` +
-      `${safeText(panel.empty_label)}</div>`;
-  }
-  if (!rows.length) {
-    return '<div class="empty-state"><strong>当前筛选结果为空</strong>原始对象仍可通过其他筛选查看。</div>';
-  }
-  const header = columns.map(column => `<th scope="col">${escapeHtml(column[0])}</th>`).join('');
-  const detailHeader = detailFields.length ? '<th scope="col">详情</th>' : '';
-  const body = rows.map((row, rowIndex) => {
-    const cells = columns.map(column => {
-      const rendered = column[2]
-        ? column[2](row, column[1], row[column[1]])
-        : displayText(row[column[1]]);
-      const renderedText = String(rendered);
-      const semanticClass = renderedText.startsWith('N/A')
-        ? 'na'
-        : (['UNKNOWN', 'STALE', 'INTERRUPTED', 'CURRENT', 'PROVEN_ZERO',
-          'ANOMALY_ACTIVE', 'EVALUABLE', 'DEGRADED', 'NOT_EVALUATED',
-          'CANDIDATE', 'WATCH', 'ABSTAIN'].includes(renderedText) ? renderedText : '');
-      const configuredClass = column[3] || '';
-      const className = [semanticClass, configuredClass].filter(Boolean).join(' ');
-      return `<td${className ? ` class="${escapeHtml(className)}"` : ''}>${safeText(rendered)}</td>`;
-    }).join('');
-    const detailKey = `${detailFields[0] ? detailFields[0][1] : 'row'}:${stableRowIdentity(row, rowIndex)}`;
-    const detailCell = detailFields.length
-      ? `<td>${details(row, detailFields, detailKey)}</td>`
-      : '';
-    return `<tr>${cells}${detailCell}</tr>`;
-  }).join('');
-  return `<div class="table-scroll"><table><thead><tr>${header}${detailHeader}</tr></thead>` +
-    `<tbody>${body}</tbody></table></div>`;
+const formatMargin = margin => {
+  if (!margin || isMissing(margin.signed_margin)) return '—';
+  const value = formatCompactNumber(margin.signed_margin, margin.unit === 'FRACTION' ? 4 : 2);
+  if (margin.unit === 'USD_EQUIVALENT') return `${value} USD 等值`;
+  if (margin.unit === 'FRACTION') return `${value} 比例`;
+  if (margin.unit === 'LEVEL_COUNT') return `${value} 层`;
+  return `${value} ${displayText(margin.unit)}`;
 };
 
-const businessPanelIds = [
-  'funnel', 'decision-control', 'zero', 'radar', 'underwriting', 'shadow', 'positions',
-  'outcomes'
-];
+const firstFailureSummary = row => {
+  const failures = Array.isArray(row.failed_predicates) ? row.failed_predicates : [];
+  if (failures.length) {
+    const first = failures[0];
+    return {label: reasonText(first), margin: formatMargin(predicateMarginForFailure(row, first))};
+  }
+  const state = structureState(row);
+  if (state.key === 'SHADOW_TRACKING') {
+    return {label: '已进入 Shadow 模拟跟踪', margin: '非当前 Candidate'};
+  }
+  if (state.key === 'INVALIDATED') {
+    return {label: '候选已失效', margin: reasonText(row.candidate_invalidation_reason)};
+  }
+  if (state.key === 'UNKNOWN') {
+    const reasons = Array.isArray(row.unknown_reasons) ? row.unknown_reasons : [];
+    return {label: '结构经济暂不可判断', margin: reasonText(reasons[0])};
+  }
+  if (state.key === 'NOT_EVALUATED') {
+    return {label: '尚未进入经济评估', margin: '不可判断门槛'};
+  }
+  if (state.key === 'CANDIDATE_UNCONFIRMED') {
+    return {label: '承保通过', margin: '生命周期未确认'};
+  }
+  if (state.key === 'CANDIDATE') {
+    return {label: '经济谓词通过', margin: '等待 admission'};
+  }
+  return {label: `服务器未列失败谓词`, margin: `当前 ${state.label}`};
+};
+
+const structureJudgement = row => {
+  const failures = Array.isArray(row.failed_predicates) ? row.failed_predicates : [];
+  if (failures.length) {
+    return {
+      blocker: failures.map(reasonText).join('；'),
+      upgrade: `未通过 ${failures.length} 项条件；下方逐项显示 owner 已结算的 signed margin。`
+    };
+  }
+  const state = structureState(row);
+  if (state.key === 'SHADOW_TRACKING') {
+    return {
+      blocker: '无当前承保阻塞：该 Candidate 已进入 Shadow 模拟跟踪。',
+      upgrade: '等待严格未来的 Position 与 Outcome 公共行情事实。'
+    };
+  }
+  if (state.key === 'INVALIDATED') {
+    return {
+      blocker: `候选已失效：${reasonText(row.candidate_invalidation_reason)}`,
+      upgrade: '该候选不再等待 admission；需要新的独立机会重新通过承保。'
+    };
+  }
+  if (state.key === 'UNKNOWN') {
+    const reasons = Array.isArray(row.unknown_reasons) ? row.unknown_reasons : [];
+    return {
+      blocker: `结构经济暂不可判断：${reasons.map(reasonText).join('；') || '服务器未提供原因'}`,
+      upgrade: '等待缺失的组件盘口或估值事实恢复后重新评估。'
+    };
+  }
+  if (state.key === 'NOT_EVALUATED') {
+    return {
+      blocker: '尚未进入入场经济评估。',
+      upgrade: '等待官方组合诊断与完整承保评估。'
+    };
+  }
+  if (state.key === 'CANDIDATE_UNCONFIRMED') {
+    return {
+      blocker: '承保 action 已通过，但 Candidate 生命周期尚未确认。',
+      upgrade: '等待 owner 发出 VALID 生命周期，再等待严格未来的 admission 刷新。'
+    };
+  }
+  if (state.key === 'CANDIDATE') {
+    return {
+      blocker: '当前承保经济谓词已通过。',
+      upgrade: '等待严格未来的 admission 刷新。'
+    };
+  }
+  return {
+    blocker: `服务器未列失败谓词；当前 action 为${state.label}。`,
+    upgrade: '等待 owner 后续评估，不由浏览器推断已通过全部门槛。'
+  };
+};
+
 let lastSuccessfulFetchAtMs = null;
 let lastPublicationRuntimeIdentity = null;
 let lastPublicationSequence = null;
 let lastPublicationChangeAtMs = null;
-let radarFilterValue = 'TOP_N';
-let underwritingFilterValue = 'ALL';
-let lastRenderedDocument = null;
-const ageMs = timestamp => timestamp === null ? 'UNKNOWN' : Math.max(0, Date.now() - timestamp);
+let refreshInFlight = false;
+const retiredRuntimeIdentities = new Set();
+let currentDocument = null;
+let selectedChannelId = 'ALL';
+let queueMode = 'structures';
+let structureFilter = 'ALL';
+let radarFilter = 'ALL';
+let selectedStructureId = null;
+let selectedRadarId = null;
+let drawerOpen = false;
+let lastDetailTriggerId = null;
+let evidenceExpanded = false;
 
-const captureOpenDetailKeys = () => {
-  if (typeof document.querySelectorAll !== 'function') return new Set();
-  return new Set(Array.from(document.querySelectorAll('details[open][data-detail-key]'))
-    .map(detail => detail.dataset.detailKey));
+const isDrawerViewport = () => typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' && window.matchMedia(DRAWER_MEDIA_QUERY).matches;
+
+const setElementInert = (selector, inert) => {
+  if (typeof document.querySelector !== 'function') return;
+  const element = document.querySelector(selector);
+  if (element) element.inert = inert;
 };
 
-const restoreOpenDetailKeys = keys => {
+const captureFocusIdentity = () => {
+  const active = document.activeElement;
+  if (!active || active === document.body) return null;
+  if (active.id) return {kind: 'id', value: active.id};
+  for (const key of ['channelId', 'queueMode', 'queueFilter', 'rowId']) {
+    if (active.dataset && active.dataset[key]) return {kind: key, value: active.dataset[key]};
+  }
+  if (typeof active.matches === 'function' && active.matches('[data-evidence-details] summary')) {
+    return {kind: 'evidence', value: 'summary'};
+  }
+  return null;
+};
+
+const restoreFocusIdentity = identity => {
+  if (!identity) return;
+  let target = null;
+  if (identity.kind === 'id') {
+    target = document.getElementById(identity.value);
+  } else if (identity.kind === 'evidence' && typeof document.querySelector === 'function') {
+    target = document.querySelector('[data-evidence-details] summary');
+  } else if (typeof document.querySelectorAll === 'function') {
+    target = Array.from(document.querySelectorAll(`[data-${identity.kind.replace(/[A-Z]/g, value => `-${value.toLowerCase()}`)}]`))
+      .find(element => element.dataset && element.dataset[identity.kind] === identity.value);
+  }
+  if (target && typeof target.focus === 'function' && !target.hidden) target.focus();
+};
+
+function updateResponsiveDetailState() {
+  const panel = document.getElementById('detail-panel');
+  const scrim = document.getElementById('detail-scrim');
+  if (!panel || !scrim) return;
+  const drawer = isDrawerViewport();
+  const open = drawer && drawerOpen;
+  if (document.body && document.body.classList) {
+    document.body.classList.toggle('detail-open', open);
+  }
+  panel.setAttribute('aria-hidden', drawer && !open ? 'true' : 'false');
+  if (drawer) {
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+  } else {
+    panel.setAttribute('role', 'complementary');
+    panel.removeAttribute('aria-modal');
+  }
+  scrim.hidden = !open;
+  setElementInert('.channel-rail', open);
+  setElementInert('.queue-workspace', open);
+  setElementInert('.topbar', open);
+  setElementInert('#detail-panel', drawer && !open);
+}
+
+function focusDetailPanel() {
+  const close = document.getElementById('detail-close');
+  const panel = document.getElementById('detail-panel');
+  const target = close || panel;
+  if (target && typeof target.focus === 'function') target.focus();
+}
+
+function openDetail(rowId) {
+  lastDetailTriggerId = rowId;
+  if (!isDrawerViewport()) return;
+  drawerOpen = true;
+  updateResponsiveDetailState();
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(focusDetailPanel);
+  else focusDetailPanel();
+}
+
+function restoreDetailTriggerFocus() {
   if (typeof document.querySelectorAll !== 'function') return;
-  document.querySelectorAll('details[data-detail-key]').forEach(detail => {
-    detail.open = keys.has(detail.dataset.detailKey);
-  });
-};
-
-function renderUnavailable() {
-  lastRenderedDocument = null;
-  const connection = document.getElementById('connection');
-  connection.hidden = false;
-  connection.textContent = '工作台连接中断: 旧业务数据已隐藏, 当前状态 UNKNOWN。';
-  document.body.dataset.workbenchState = 'UNKNOWN';
-  document.getElementById('runtime').textContent = 'runtime UNKNOWN';
-  document.getElementById('system').innerHTML =
-    card('工作台连接', 'UNKNOWN') +
-    card('最近成功获取 age ms', ageMs(lastSuccessfulFetchAtMs)) +
-    card('最后 publication sequence', lastPublicationSequence) +
-    card('Publication 未变化 age ms', ageMs(lastPublicationChangeAtMs));
-  const unavailable = '<p class="warning UNKNOWN">工作台连接中断; 旧业务数据已隐藏。</p>';
-  businessPanelIds.forEach(id => { document.getElementById(id).innerHTML = unavailable; });
+  const trigger = Array.from(document.querySelectorAll('[data-row-id]'))
+    .find(value => value.dataset.rowId === lastDetailTriggerId);
+  if (trigger && typeof trigger.focus === 'function') trigger.focus();
 }
 
-const zeroClaimText = (claim, noun) => claim.state === 'PROVEN_ZERO'
-  ? `已证明当前 0 ${noun}`
-  : (claim.state === 'NOT_ZERO' ? `当前 ${claim.value} ${noun}` : `无法证明当前为 0 ${noun}`);
-
-const toolbar = (label, id, selected, choices, shown, total) =>
-  `<div class="panel-toolbar"><label>${escapeHtml(label)}<select id="${escapeHtml(id)}">` +
-  choices.map(choice => `<option value="${escapeHtml(choice)}"${choice === selected ? ' selected' : ''}>${escapeHtml(choice)}</option>`).join('') +
-  `</select></label><span>显示 ${shown} / ${total}</span></div>`;
-
-const countBy = (rows, field) => rows.reduce((result, row) => {
-  const key = displayText(row[field]);
-  result[key] = (result[key] || 0) + 1;
-  return result;
-}, {});
-
-const compactCountMap = values => Object.entries(values)
-  .filter(([, count]) => Number(count) > 0)
-  .sort((left, right) => Number(right[1]) - Number(left[1]) || left[0].localeCompare(right[0]))
-  .map(([key, count]) => `${actionText(key)} ${count}`)
-  .join(' · ') || '无';
-
-function renderRadarPanel(documentValue) {
-  const product = documentValue.product;
-  const ordered = orderedRadarRows(documentValue.radar.rows);
-  const rows = filterRows(ordered, 'detector_state', radarFilterValue);
-  const active = ordered.filter(row => row.detector_state === 'ANOMALY_ACTIVE').length;
-  const unknown = ordered.filter(row => row.detector_state === 'UNKNOWN').length;
-  const topN = ordered.filter(row => row.within_attention_top_n).length;
-  const summary = '<div class="summary-grid">' +
-    summaryStat('Attention Top-N', topN, 'ATTENTION') +
-    summaryStat('Radar clue 激活', active, active ? 'CURRENT' : 'NO_ANOMALY') +
-    summaryStat('Radar UNKNOWN', unknown, unknown ? 'UNKNOWN' : 'CURRENT') +
-    summaryStat('当前展示', `${rows.length} / ${ordered.length}`) +
-    '</div>';
-  document.getElementById('radar').innerHTML = summary +
-    toolbar('注意力筛选', 'radar-filter', radarFilterValue,
-      ['TOP_N', 'ALL', 'ANOMALY_ACTIVE', 'UNKNOWN', 'NO_ANOMALY'], rows.length, ordered.length) +
-    table(documentValue.radar, [
-      ['Rank', 'attention_rank', radarPrimaryCellValue, 'numeric'],
-      ['合约', 'instrument_name', null, 'instrument'],
-      ['到期', 'expiration_timestamp_ms', radarPrimaryCellValue],
-      ['TTE', 'tte_interval_ms', radarPrimaryCellValue, 'numeric'],
-      ['类型', 'option_type', radarPrimaryCellValue],
-      ['Delta', 'delta_interval', radarPrimaryCellValue],
-      ['可执行 IV', 'executable_iv_interval', radarPrimaryCellValue, 'numeric'],
-      ['RV 基线', 'baseline_annualized_volatility', radarPrimaryCellValue, 'numeric'],
-      ['One-tick IV/RV', 'richness_ratio_interval', radarPrimaryCellValue, 'numeric'],
-      ['价差', 'target_spread_ticks', (row, field, value) => {
-        const rendered = radarPrimaryCellValue(row, field, value);
-        return rendered === 'UNKNOWN' || rendered === 'N/A' ? rendered : `${rendered} ticks`;
-      }, 'numeric'],
-      ['Radar 状态', 'detector_state', radarPrimaryCellValue],
-      ['当前原因', 'detector_reason', radarPrimaryCellValue, 'reason']
-    ], rows, [
-      ['rank explanation', 'rank_explanation'],
-      ['hard screen label', 'hard_screen_label'],
-      ['episode identity', 'active_episode_identity'],
-      ['expiration timestamp ms', 'expiration_timestamp_ms'],
-      ['TTE interval ms', 'tte_interval_ms'],
-      [`strike exact (${product.strike_currency})`, 'strike_price'],
-      [`model executable sell price (${product.strike_currency})`, 'model_executable_sell_price'],
-      [`native executable sell price (${product.native_premium_currency})`, 'native_executable_sell_price'],
-      [`native executable buy price (${product.native_premium_currency})`, 'native_executable_buy_price'],
-      [`native stressed sell price (${product.native_premium_currency})`, 'native_one_tick_stressed_sell_price'],
-      [`native price tick (${product.native_premium_currency})`, 'native_price_tick'],
-      [`native target spread (${product.native_premium_currency})`, 'native_target_spread'],
-      ['model conversion forward', 'model_conversion_forward'],
-      ['product spec identity', 'product_spec_identity'],
-      ['executable IV exact', 'executable_iv_interval'],
-      ['baseline return interval minutes', 'baseline_return_interval_minutes'],
-      ['baseline selected lookback minutes', 'baseline_selected_lookback_minutes'],
-      ['baseline source', 'baseline_source'],
-      ['baseline volatility exact', 'baseline_annualized_volatility'],
-      ['raw richness exact', 'raw_richness_ratio_interval'],
-      ['one-tick richness exact', 'richness_ratio_interval'],
-      ['delta exact', 'delta_interval'],
-      ['quote ask exact', 'model_executable_buy_price'],
-      ['one-tick stressed bid exact', 'model_one_tick_stressed_sell_price'],
-      ['model price tick exact', 'model_price_tick'],
-      ['model spread exact', 'model_target_spread'],
-      ['premium ticks', 'bid_premium_ticks'],
-      ['surface residual exact', 'surface_residual'],
-      ['regime context', 'regime_context'],
-      ['surface context', 'surface_context'],
-      ['legged structure', 'legged_structure_context'],
-      ['detector reason enum', 'detector_reason'],
-      ['option book state', 'option_book_state'],
-      ['option book reason', 'option_book_reason'],
-      ['episode start monotonic ms', 'anomaly_started_monotonic_ms'],
-      ['episode duration ms', 'anomaly_active_duration_ms']
-    ]);
+function closeDetail() {
+  if (!isDrawerViewport()) return;
+  drawerOpen = false;
+  updateResponsiveDetailState();
+  restoreDetailTriggerFocus();
 }
 
-function renderUnderwritingPanel(documentValue) {
-  const product = documentValue.product;
-  const valuationUnit = product.valuation_currency;
-  const nativeUnit = product.native_premium_currency;
-  const ordered = orderedUnderwritingRows(documentValue.underwriting.rows);
-  const rows = filterRows(ordered, 'availability', underwritingFilterValue);
-  const evaluable = ordered.filter(row => row.availability === 'EVALUABLE').length;
-  const candidates = ordered.filter(row => row.action === 'CANDIDATE').length;
-  const watches = ordered.filter(row => row.action === 'WATCH').length;
-  const abstains = ordered.filter(row => row.action === 'ABSTAIN').length;
-  const availabilitySummary = compactCountMap(countBy(ordered, 'availability'));
-  const actionSummary = compactCountMap(countBy(ordered.filter(row => !isMissing(row.action)), 'action'));
-  const summary = '<div class="summary-grid">' +
-    summaryStat('可评估结构', evaluable, evaluable ? 'EVALUABLE' : 'NOT_EVALUATED') +
-    summaryStat('Candidate', candidates, candidates ? 'CANDIDATE' : 'NO_ANOMALY') +
-    summaryStat('观察 / 观望', `${watches} / ${abstains}`, watches ? 'WATCH' : 'ABSTAIN') +
-    summaryStat('Availability', availabilitySummary) +
-    summaryStat('Action 分布', actionSummary) +
-    '</div>';
-  const marginSummary = Array.isArray(documentValue.underwriting.predicate_margin_summary)
-    ? documentValue.underwriting.predicate_margin_summary : [];
-  const marginDetails = marginSummary.length
-    ? `<details class="system-details" data-detail-key="underwriting-margin"><summary>当前承保谓词 margin 分布</summary><div class="grid">${
-        marginSummary.map(value => card(value.predicate,
-          `n=${value.count}; min=${value.min}; p50=${value.p50}; max=${value.max}; ${value.unit}`
-        )).join('')
-      }</div></details>`
-    : '';
-  document.getElementById('underwriting').innerHTML = summary +
-    toolbar('可用性筛选', 'underwriting-filter', underwritingFilterValue,
-      ['ALL', 'EVALUABLE', 'UNKNOWN', 'NOT_EVALUATED'], rows.length, ordered.length) +
-    marginDetails + table(documentValue.underwriting, [
-      ['Short leg', 'short_leg_instrument_name', underwritingCellValue, 'instrument'],
-      ['Long leg', 'long_leg_instrument_name', underwritingCellValue, 'instrument'],
-      ['到期', 'expiry_timestamp_ms', underwritingCellValue],
-      ['Availability', 'availability', underwritingCellValue],
-      ['Action', 'action', underwritingCellValue],
-      [`原生净权利金 (${nativeUnit})`, 'native_net_entry_credit',
-        (_row, _field, value) => isMissing(value) ? 'N/A' : compactNative(value), 'numeric'],
-      [`当前估值净权利金 (${valuationUnit})`, 'net_entry_credit_valuation',
-        (_row, _field, value) => isMissing(value) ? 'N/A' : compactMoney(value), 'numeric'],
-      [`未来成本准备 (${valuationUnit})`, 'future_cost_reserve_valuation',
-        (_row, _field, value) => isMissing(value) ? 'N/A' : compactMoney(value), 'numeric'],
-      ['最早失败原因', 'decision_reason', underwritingCellValue, 'reason']
-    ], rows, [
-      ['radar scope', 'radar_scope_or_short_leg_identity'],
-      ['option type', 'option_type'],
-      ['short strike exact', 'short_strike_price'],
-      ['long strike exact', 'long_strike_price'],
-      ['target quantity exact', 'target_quantity_btc'],
-      ['availability identity', 'underwriting_availability_evaluation_identity'],
-      ['action identity', 'underwriting_action_identity'],
-      ['availability enum', 'availability'],
-      ['decision reason enum', 'decision_reason'],
-      ['unknown reasons', 'unknown_reasons'],
-      ['failed predicates', 'failed_predicates'],
-      ['predicate margin vector', 'predicate_margin_vector'],
-      ['protective-leg selection rule identity', 'protective_leg_selection_rule_identity'],
-      ['Candidate protective-leg count', 'candidate_protective_leg_count'],
-      ['component blockers', 'component_blockers'],
-      ['product spec identity', 'product_spec_identity'],
-      ['product name', 'product_name'],
-      ['native premium currency', 'native_premium_currency'],
-      ['valuation currency', 'valuation_currency'],
-      [`native gross entry credit (${product.native_premium_currency})`, 'native_gross_entry_credit'],
-      [`native entry fee reserve (${product.native_premium_currency})`, 'native_entry_fee_reserve'],
-      [`native net entry credit (${product.native_premium_currency})`, 'native_net_entry_credit'],
-      ['entry valuation index price', 'entry_valuation_index_price'],
-      [`gross entry credit (${product.valuation_currency})`, 'gross_entry_credit_valuation'],
-      ['entry fee reserve exact', 'entry_fee_reserve_valuation'],
-      ['net entry credit exact', 'net_entry_credit_valuation'],
-      [`entry-boundary payoff loss proxy (${product.valuation_currency}; not native liability, expiry loss, or account margin)`,
-        'entry_boundary_valued_payoff_loss_ex_fees_valuation'],
-      ['future cost reserve exact', 'future_cost_reserve_valuation'],
-      ['reserved loss exact', 'underwriting_reserved_loss_valuation'],
-      ['reserve breakdown', 'reserve_breakdown_valuation'],
-      ['evaluation fact boundary', 'evaluation_fact_boundary']
-    ]);
+function renderChannelRail(documentValue) {
+  const list = document.getElementById('channel-list');
+  if (!list) return;
+  const currentState = channelSnapshotState(documentValue);
+  const allState = currentState.code === 'CONNECTED'
+    ? {label: '1 / 4 已接入', tone: 'purple', note: '仅一条真实通道'}
+    : {label: currentState.label, tone: currentState.tone, note: currentState.note};
+  const allCard = `<button type="button" class="channel-card all-opportunities" data-channel-id="ALL" ` +
+    `aria-pressed="${selectedChannelId === 'ALL'}"><span class="channel-name">全部机会</span>` +
+    `<span class="channel-meta">${badgeMarkup(allState.label, allState.tone)}` +
+    `<span class="channel-note">${safeText(allState.note)}</span></span></button>`;
+  const cards = CHANNELS.map(channel => {
+    const state = channel.id === ACTIVE_CHANNEL_ID ? currentState : roadmapState(channel);
+    return `<button type="button" class="channel-card" data-channel-id="${escapeHtml(channel.id)}" ` +
+      `aria-pressed="${selectedChannelId === channel.id}">` +
+      `<span class="channel-name">${escapeHtml(channel.id)}</span>` +
+      `<span class="channel-meta">${badgeMarkup(state.label, state.tone)}` +
+      `<span class="channel-note">${safeText(state.note)}</span></span></button>`;
+  }).join('');
+  list.innerHTML = allCard + cards;
 }
 
-const funnelStageLabels = {
-  APPLICABLE_MARKET_SCOPE: '适用市场评估',
-  RADAR_KNOWN: 'Radar 已知评估',
-  ANOMALY_ACTIVE: '异常 Episode',
-  STRUCTURE_REVIEWABLE: '结构可审查',
-  COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE: '双腿盘口保守成交反事实',
-  UNDERWRITING_EVALUABLE: 'Underwriting 可评估',
-  CANDIDATE: 'Candidate',
-  SHADOW_CASE_OPENED: 'Shadow Case',
-  SHADOW_CASE_OUTCOME: 'Outcome'
-};
-const funnelStageLabel = value => funnelStageLabels[value] || String(value);
+function renderHeader(documentValue) {
+  const asOf = document.getElementById('as-of');
+  const runtime = document.getElementById('runtime');
+  const status = document.getElementById('runtime-status');
+  const stateLabel = document.getElementById('runtime-state-label');
+  const stateDetail = document.getElementById('runtime-state-detail');
+  const servicePhase = document.getElementById('service-phase');
+  const dataCurrentness = document.getElementById('data-currentness');
+  const dataDelay = document.getElementById('data-delay');
+  const blocker = document.getElementById('runtime-blocker');
+  if (!asOf || !runtime || !status || !stateLabel || !stateDetail || !servicePhase ||
+      !dataCurrentness || !dataDelay || !blocker) return;
+  const state = runtimeStatusState(documentValue);
+  const service = documentValue && documentValue.service;
+  const system = documentValue && documentValue.system;
+  status.dataset.state = state.key;
+  stateLabel.textContent = state.label;
+  stateDetail.textContent = state.detail;
+  servicePhase.textContent = `服务 ${service ? displayText(service.phase) : '—'}`;
+  dataCurrentness.textContent = `行情 ${service ? displayText(service.data_state) : '—'}`;
+  dataDelay.textContent = `延迟 ${system ? formatDurationMs(system.data_delay_ms) : '—'}`;
+  asOf.textContent = `行情时间 ${system ? formatTimestamp(system.latest_market_timestamp_ms) : '—'}`;
+  runtime.textContent = `runtime ${documentValue ? shortIdentity(documentValue.runtime_identity) : '—'}`;
+  blocker.textContent = state.blocker;
+}
 
-const funnelUnitLabels = {
-  POST_WARMUP_COUNTABLE_INSTRUMENT_EVALUATION: '合约评估',
-  POST_WARMUP_KNOWN_INSTRUMENT_EVALUATION: '已知合约评估',
-  DISTINCT_ANOMALY_EPISODE: '独立 Episode',
-  DISTINCT_ADMITTED_SHADOW_CASE: '已接纳 Case'
-};
-const funnelUnitText = value => funnelUnitLabels[value] || displayText(value);
+const selectedChannelCanUseCurrentSnapshot = documentValue =>
+  ['ALL', ACTIVE_CHANNEL_ID].includes(selectedChannelId) &&
+  channelSnapshotState(documentValue).code === 'CONNECTED';
 
-const funnelBlockerText = values => {
-  if (!values || typeof values !== 'object') return '无';
-  const entries = Object.entries(values).filter(([, count]) => Number(count) > 0);
-  if (!entries.length) return '无';
-  return entries
-    .sort((left, right) => Number(right[1]) - Number(left[1]) || left[0].localeCompare(right[0]))
-    .map(([reason, count]) => `${reasonText(reason)}: ${count}`)
-    .join('; ');
-};
-
-const knownnessRatioText = slice => {
-  const value = slice && slice.radar_known_over_applicable;
-  if (!value) return 'UNKNOWN';
-  const counts = `${displayText(value.numerator)}/${displayText(value.denominator)}`;
-  if (Number(value.denominator) === 0 || isMissing(value.ratio)) return `${counts} (UNKNOWN)`;
-  const percentage = Number(value.ratio) * 100;
-  return Number.isFinite(percentage) ? `${counts} (${percentage.toFixed(2)}%)` : `${counts} (UNKNOWN)`;
-};
-
-function renderFunnel(documentValue) {
-  const funnel = documentValue.funnel;
-  const knownness = funnel && funnel.radar_knownness;
-  if (!funnel || !Array.isArray(funnel.stages) || !funnel.primary_blocker ||
-      !knownness || !knownness.startup_warmup || !knownness.post_warmup) {
-    throw new Error('invalid funnel projection');
+function visibleRows(documentValue) {
+  if (!selectedChannelCanUseCurrentSnapshot(documentValue)) return [];
+  if (queueMode === 'structures') {
+    const rows = orderedStructureRows(documentValue.underwriting.rows);
+    return structureFilter === 'ALL' ? rows : rows.filter(row => structureState(row).key === structureFilter);
   }
-  const primary = funnel.primary_blocker;
-  const startup = knownness.startup_warmup;
-  const steady = knownness.post_warmup;
-  const summary = '<div class="grid">' +
-    card('首要漏斗阻塞阶段', funnelStageLabel(primary.stage)) +
-    card('首要阻塞原因', reasonText(primary.reason)) +
-    card('受阻数量', primary.blocked_count) +
-    card('该阶段上游/已通过', `${primary.upstream_count}/${primary.observed_count}`) +
-    card('启动/恢复 warmup Radar known / applicable', knownnessRatioText(startup)) +
-    card('启动/恢复 warmup UNKNOWN', funnelBlockerText(startup.blocker_counts)) +
-    card('稳态 Radar known / applicable', knownnessRatioText(steady)) +
-    card('稳态 Radar UNKNOWN', funnelBlockerText(steady.blocker_counts)) +
-    '</div>';
-  const ladder = '<div class="funnel-ladder">' + funnel.stages.map(stage => {
-    const isPrimary = stage.stage === primary.stage;
-    return `<div class="funnel-step${isPrimary ? ' is-primary' : ''}">` +
-      `<div class="funnel-stage">${safeText(funnelStageLabel(stage.stage))}</div>` +
-      `<div class="funnel-count">${safeText(formatCompactNumber(stage.observed_count, 0))}</div>` +
-      `<div class="funnel-unit">${safeText(funnelUnitText(stage.unit))}</div>` +
-      `<div class="funnel-blocker">${safeText(funnelBlockerText(stage.blocker_counts))}</div>` +
-      '</div>';
-  }).join('') + '</div>';
-  const header = '<tr><th scope="col">阶段</th><th scope="col">已观察</th>' +
-    '<th scope="col">单位</th><th scope="col">上游</th><th scope="col">阻塞归因</th></tr>';
-  const rows = funnel.stages.map(stage => '<tr>' +
-    `<td>${safeText(funnelStageLabel(stage.stage))}</td>` +
-    `<td class="numeric">${safeText(stage.observed_count)}</td>` +
-    `<td>${safeText(stage.unit)}</td>` +
-    `<td class="numeric">${safeText(stage.upstream_count)}</td>` +
-    `<td class="reason">${safeText(funnelBlockerText(stage.blocker_counts))}</td>` +
-    '</tr>').join('');
-  const exactTable = `<details class="detail-group" data-detail-key="funnel-exact">` +
-    `<summary>查看精确阶段表</summary>` +
-    `<div class="table-scroll"><table><thead>${header}</thead><tbody>${rows}</tbody></table></div></details>`;
-  document.getElementById('funnel').innerHTML = summary + ladder + exactTable;
+  const rows = orderedRadarRows(documentValue.radar.rows);
+  return radarFilter === 'ALL' ? rows : rows.filter(row => radarState(row).key === radarFilter);
 }
 
-function renderDecisionControlResearch(documentValue) {
+function totalRows(documentValue) {
+  if (!selectedChannelCanUseCurrentSnapshot(documentValue)) return [];
+  return queueMode === 'structures'
+    ? orderedStructureRows(documentValue.underwriting.rows)
+    : orderedRadarRows(documentValue.radar.rows);
+}
+
+function renderFilters() {
+  const filters = queueMode === 'structures' ? STRUCTURE_FILTERS : RADAR_FILTERS;
+  const selected = queueMode === 'structures' ? structureFilter : radarFilter;
+  document.getElementById('queue-filters').innerHTML = filters.map(([value, label]) =>
+    `<button type="button" data-queue-filter="${escapeHtml(value)}" ` +
+    `aria-pressed="${selected === value}">${escapeHtml(label)}</button>`
+  ).join('');
+  if (typeof document.querySelectorAll === 'function') {
+    document.querySelectorAll('[data-queue-mode]').forEach(button => {
+      button.setAttribute('aria-pressed', String(button.dataset.queueMode === queueMode));
+    });
+  }
+}
+
+function renderQueueHead() {
+  const labels = queueMode === 'structures'
+    ? ['优先级', '策略通道', '结构', '决策', '入场经济', '首项门槛差']
+    : ['优先级', '策略通道', '合约', '线索状态', 'IV / RV', '当前阻塞'];
+  document.getElementById('queue-head').innerHTML = labels.map(value =>
+    `<span role="columnheader">${escapeHtml(value)}</span>`
+  ).join('');
+}
+
+function structureRowMarkup(row, index) {
+  const id = structureIdentity(row, index);
+  const state = structureState(row);
+  const failure = firstFailureSummary(row);
+  const nativeUnit = currentDocument.product.native_premium_currency;
+  const valuationUnit = currentDocument.product.valuation_currency;
+  return `<button type="button" class="queue-row structure-row" role="row" ` +
+    `data-row-id="${escapeHtml(id)}" aria-pressed="${selectedStructureId === id}">` +
+    `<span class="queue-priority" role="cell">${index + 1}</span>` +
+    `<span role="cell"><span class="cell-primary">BTC Short Vol</span>` +
+    `<span class="cell-secondary">${escapeHtml(ACTIVE_CHANNEL_ID)}</span></span>` +
+    `<span role="cell"><span class="cell-primary">${safeText(structureLabel(row))}</span>` +
+    `<span class="cell-secondary">${safeText(row.short_leg_instrument_name)} → ${safeText(row.long_leg_instrument_name)}</span></span>` +
+    `<span role="cell">${badgeMarkup(state.label, state.tone, 'decision-badge')}</span>` +
+    `<span role="cell"><span class="cell-value">${safeText(formatNative(row.native_net_entry_credit))} ${safeText(nativeUnit)}</span>` +
+    `<span class="cell-secondary">${safeText(formatMoney(row.net_entry_credit_valuation))} ${safeText(valuationUnit)}</span></span>` +
+    `<span role="cell"><span class="cell-value ${failure.margin.startsWith('-') ? 'cell-warning' : ''}">${safeText(failure.margin)}</span>` +
+    `<span class="cell-secondary">${safeText(failure.label)}</span></span></button>`;
+}
+
+function radarRowMarkup(row, index) {
+  const id = radarIdentity(row, index);
+  const state = radarState(row);
+  const richness = formatInterval(row.richness_ratio_interval, value => `${formatCompactNumber(value, 2)}×`);
+  const iv = formatInterval(row.one_tick_stressed_iv_interval || row.executable_iv_interval, formatPercent);
+  const rv = formatPercent(row.baseline_annualized_volatility);
+  const rank = isMissing(row.attention_rank) ? index + 1 : row.attention_rank;
+  return `<button type="button" class="queue-row radar-row" role="row" ` +
+    `data-row-id="${escapeHtml(id)}" aria-pressed="${selectedRadarId === id}">` +
+    `<span class="queue-priority" role="cell">${safeText(rank)}</span>` +
+    `<span role="cell"><span class="cell-primary">BTC Short Vol</span>` +
+    `<span class="cell-secondary">${escapeHtml(ACTIVE_CHANNEL_ID)}</span></span>` +
+    `<span role="cell"><span class="cell-primary">${safeText(row.instrument_name)}</span>` +
+    `<span class="cell-secondary">${safeText(formatDate(row.expiration_timestamp_ms))} · ${safeText(formatStrike(row.strike_price))} ${safeText(optionTypeText(row.option_type))}</span></span>` +
+    `<span role="cell">${badgeMarkup(state.label, state.tone, 'decision-badge')}</span>` +
+    `<span role="cell"><span class="cell-value">${safeText(richness)}</span>` +
+    `<span class="cell-secondary">IV ${safeText(iv)} · RV ${safeText(rv)}</span></span>` +
+    `<span role="cell"><span class="cell-primary">${safeText(reasonText(row.primary_blocker || row.detector_reason))}</span>` +
+    `<span class="cell-secondary">持续 ${safeText(formatDurationMs(row.anomaly_active_duration_ms))}</span></span></button>`;
+}
+
+function emptyQueueMarkup(documentValue) {
+  if (!["ALL", ACTIVE_CHANNEL_ID].includes(selectedChannelId)) {
+    const channel = CHANNELS.find(value => value.id === selectedChannelId);
+    const state = channel ? roadmapState(channel) : roadmapState({id: ''});
+    return `<div class="queue-empty"><strong>${safeText(state.label)}：${safeText(channel && channel.id)}</strong>` +
+      `${safeText(state.note)}。此状态表示产品或策略真值尚未接入，不可解释为当前 0 个机会。</div>`;
+  }
+  const snapshotState = channelSnapshotState(documentValue);
+  if (snapshotState.code !== 'CONNECTED') {
+    return `<div class="queue-empty"><strong>${safeText(snapshotState.label)}</strong>` +
+      `${safeText(snapshotState.note)}。旧业务数据已隐藏，恢复完整且身份匹配的快照后再显示。</div>`;
+  }
+  return `<div class="queue-empty"><strong>当前筛选没有匹配项</strong>` +
+    `这只是当前筛选结果，不改变服务器报告的业务分母或状态。</div>`;
+}
+
+function renderQueue(documentValue) {
+  const table = document.querySelector && document.querySelector('.queue-table');
+  const previousScrollTop = table ? table.scrollTop : 0;
+  renderFilters();
+  renderQueueHead();
+  const rows = visibleRows(documentValue);
+  const total = totalRows(documentValue);
+  const body = document.getElementById('queue-body');
+  const context = document.getElementById('queue-context');
+  const status = document.getElementById('queue-status');
+  const roadmapOnly = !['ALL', ACTIVE_CHANNEL_ID].includes(selectedChannelId);
+  const snapshotState = channelSnapshotState(documentValue);
+  context.textContent = queueMode === 'structures'
+    ? '结构队列与 Radar 线索分开呈现，避免浏览器误拼不同 Episode。'
+    : '这里只显示当前 Radar 合约事实，不把线索称为 Candidate。';
+  if (roadmapOnly) {
+    status.textContent = '尚未接入 · 无独立队列快照';
+  } else if (snapshotState.code !== 'CONNECTED') {
+    status.textContent = `${snapshotState.label} · 不报告业务零值`;
+  } else {
+    status.textContent = `显示 ${rows.length} / ${total.length} · ` +
+      (queueMode === 'structures' ? '按服务器已结算的结构状态排序' : '按服务器 Attention rank 排序');
+  }
+  if (!rows.length) {
+    body.innerHTML = emptyQueueMarkup(documentValue);
+  } else if (queueMode === 'structures') {
+    const ids = rows.map(structureIdentity);
+    if (!selectedStructureId || !ids.includes(selectedStructureId)) selectedStructureId = ids[0];
+    body.innerHTML = rows.map(structureRowMarkup).join('');
+  } else {
+    const ids = rows.map(radarIdentity);
+    if (!selectedRadarId || !ids.includes(selectedRadarId)) selectedRadarId = ids[0];
+    body.innerHTML = rows.map(radarRowMarkup).join('');
+  }
+  if (table) table.scrollTop = previousScrollTop;
+}
+
+const rawEvidenceMarkup = row => `<details class="evidence-details" data-evidence-details${evidenceExpanded ? ' open' : ''}>` +
+  `<summary>展开服务器原始证据</summary><pre class="evidence-raw">${escapeHtml(JSON.stringify(row, null, 2))}</pre></details>`;
+
+const predicateListMarkup = row => {
+  const vector = Array.isArray(row.predicate_margin_vector) ? row.predicate_margin_vector : [];
+  if (!vector.length) return '<div class="data-gap-panel">当前结构没有可显示的精确谓词 margin。</div>';
+  return `<div class="predicate-list">${vector.map(value =>
+    `<div class="predicate-row${value.passes ? ' predicate-pass' : ''}">` +
+    `<span>${safeText(reasonText(value.predicate))}</span>` +
+    `<span class="predicate-margin">${safeText(formatMargin(value))}</span></div>`
+  ).join('')}</div>`;
+};
+
+function canonicalShadowMarkup(row, documentValue) {
+  if (isMissing(row.candidate_identity)) {
+    return `<div class="callout info"><strong>Shadow 状态</strong>` +
+      `当前结构没有 canonical Candidate identity，未建立与 Shadow 跟踪的规范关联。</div>`;
+  }
+  if (row.candidate_lifecycle === 'INVALIDATED') {
+    return `<div class="callout blocker"><strong>Shadow 状态</strong>` +
+      `候选已失效：${safeText(reasonText(row.candidate_invalidation_reason))}；不再等待 admission。</div>`;
+  }
+  const shadowRows = documentValue.shadow_entries && Array.isArray(documentValue.shadow_entries.rows)
+    ? documentValue.shadow_entries.rows : [];
+  const shadow = shadowRows.find(value => value.candidate_identity === row.candidate_identity);
+  if (!shadow || isMissing(shadow.shadow_entry_identity)) {
+    const terminal = shadow && shadow.admission_refresh_terminal_outcome;
+    if (!isMissing(terminal)) {
+      const unknownReasons = Array.isArray(shadow.admission_refresh_unknown_reasons)
+        ? shadow.admission_refresh_unknown_reasons.map(reasonText).join('；') : '';
+      return `<div class="callout blocker"><strong>Shadow admission 已终结</strong>` +
+        `${safeText(terminal)}${unknownReasons ? ` · ${safeText(unknownReasons)}` : ''}；未建立 Shadow Entry，不再称为等待刷新。</div>`;
+    }
+    if (row.candidate_lifecycle === 'ADMITTED') {
+      return `<div class="callout blocker"><strong>Shadow 关联缺口</strong>` +
+        `Candidate lifecycle 为 ADMITTED，但当前投影没有匹配的 Shadow Entry identity；拒绝推断已建立跟踪。</div>`;
+    }
+    if (row.candidate_lifecycle !== 'VALID' || row.candidate_still_valid !== true) {
+      return `<div class="callout info"><strong>Shadow 状态</strong>` +
+        `承保 action 已通过，但 Candidate 生命周期尚未确认为 VALID；不计为等待 admission 的 Shadow 候选。</div>`;
+    }
+    return `<div class="callout info"><strong>Shadow 状态</strong>` +
+      `Shadow 候选正在等待严格未来的成对双腿公共盘口刷新；不是订单或成交。</div>`;
+  }
+  const positionRows = documentValue.positions && Array.isArray(documentValue.positions.rows)
+    ? documentValue.positions.rows : [];
+  const position = positionRows.find(value => value.shadow_entry_identity === shadow.shadow_entry_identity);
+  const outcomeRows = documentValue.outcomes && Array.isArray(documentValue.outcomes.rows)
+    ? documentValue.outcomes.rows : [];
+  const outcome = outcomeRows.find(value => value.shadow_entry_identity === shadow.shadow_entry_identity);
+  const parts = [
+    `<div class="callout info"><strong>Shadow 模拟跟踪已建立</strong>` +
+      `公共盘口反事实已登记；不是订单、成交或实际持仓。</div>`
+  ];
+  if (position) {
+    parts.push(`<div class="callout info"><strong>当前模拟建议</strong>` +
+      `${safeText(position.position_action)} · ${safeText(position.primary_exit_rule)} · hard-close ${safeText(formatDurationInterval(position.hard_close_countdown_interval_ms))}</div>`);
+    if (position.valid_shadow_close_opportunity === true && !isMissing(position.projected_shadow_pnl_valuation)) {
+      parts.push(`<div class="callout upgrade"><strong>公共盘口模拟盈亏</strong>` +
+        `${safeText(formatMoney(position.projected_shadow_pnl_valuation))} ${safeText(documentValue.product.valuation_currency)}；不是实际账户 PnL。</div>`);
+    }
+  }
+  if (!outcome || ['PENDING', 'PENDING_OUTCOME'].includes(outcome.state)) {
+    parts.push(`<div class="callout blocker"><strong>Outcome</strong>` +
+      `等待严格未来的合格双腿平仓事实；当前 PnL 不是 0，而是尚不可得。</div>`);
+  } else {
+    parts.push(`<div class="callout info"><strong>Outcome</strong>${safeText(outcome.state)}；` +
+      `只有经济字段已知时才显示公共盘口 Shadow 结果。</div>`);
+  }
+  return parts.join('');
+}
+
+function structureDetailMarkup(row, documentValue) {
+  const state = structureState(row);
+  const nativeUnit = documentValue.product.native_premium_currency;
+  const valuationUnit = documentValue.product.valuation_currency;
+  const judgement = structureJudgement(row);
+  return `<div class="detail-title-line"><h3>INVERSE BTC × SHORT VOL</h3>` +
+    `${badgeMarkup(state.label, state.tone, 'decision-badge')}</div>` +
+    `<p class="detail-subtitle">${safeText(structureLabel(row))}</p>` +
+    `<div class="fact-grid">` +
+      factMarkup('到期日', formatDate(row.expiry_timestamp_ms)) +
+      factMarkup('评估边界指数', formatMoney(row.entry_valuation_index_price)) +
+      factMarkup('目标规模', `${formatDecimal(row.target_quantity_btc)} BTC`) +
+      factMarkup('评估状态', row.availability) +
+      factMarkup('原生现金流', nativeUnit) +
+      factMarkup('估值单位', valuationUnit) +
+    `</div>` +
+    `<section class="detail-section" data-detail-section="structure"><div class="detail-section-title">` +
+      `<h4>结构（卖出 ${safeText(structureTypeText(row))}）</h4><span class="detail-section-note">公共盘口反事实</span></div>` +
+      `<table class="leg-table"><thead><tr><th scope="col">方向</th><th scope="col">合约</th><th scope="col">执行价</th></tr></thead><tbody>` +
+      `<tr><td class="leg-sell">SELL</td><td>${safeText(row.short_leg_instrument_name)}</td><td>${safeText(formatDecimal(row.short_strike_price))}</td></tr>` +
+      `<tr><td class="leg-buy">BUY</td><td>${safeText(row.long_leg_instrument_name)}</td><td>${safeText(formatDecimal(row.long_strike_price))}</td></tr>` +
+      `</tbody></table></section>` +
+    `<section class="detail-section"><div class="detail-section-title"><h4>入场经济</h4>` +
+      `<span class="detail-section-note">服务器已结算 · 浏览器不重算</span></div>` +
+      `<div class="economics-grid">` +
+        economicsCard(`净信用（${nativeUnit}）`, formatNative(row.native_net_entry_credit), '原生币本位现金流', 'positive') +
+        economicsCard(`净信用（${valuationUnit}）`, formatMoney(row.net_entry_credit_valuation), '评估边界 USD 等值', 'positive') +
+        economicsCard(`未来成本准备（${valuationUnit}）`, formatMoney(row.future_cost_reserve_valuation), '不是实际账户保证金', 'caution') +
+        economicsCard(`承保准备损失（${valuationUnit}）`, formatMoney(row.underwriting_reserved_loss_valuation), 'Policy 风险准备') +
+      `</div></section>` +
+    `<section class="detail-section"><div class="detail-section-title"><h4>交易判断</h4></div>` +
+      `<div class="callout-list">` +
+        `<div class="callout blocker"><strong>主要阻塞</strong>${safeText(judgement.blocker)}</div>` +
+        `<div class="callout upgrade"><strong>升级条件</strong>${safeText(judgement.upgrade)}</div>` +
+        `<div class="callout info"><strong>风险边界</strong>入场边界损失代理 ${safeText(formatMoney(row.entry_boundary_valued_payoff_loss_ex_fees_valuation))} ${safeText(valuationUnit)}；不是到期 BTC 负债、精确最大损失或账户保证金。</div>` +
+      `</div></section>` +
+    `<section class="detail-section"><div class="detail-section-title"><h4>精确谓词 margin</h4>` +
+      `<span class="detail-section-note">正值通过，负值未过门槛</span></div>${predicateListMarkup(row)}</section>` +
+    `<section class="detail-section" data-detail-section="shadow"><div class="detail-section-title"><h4>Shadow 条件</h4></div>` +
+      `<div class="callout-list">${canonicalShadowMarkup(row, documentValue)}</div></section>` +
+    `<section class="detail-section"><div class="data-gap-panel"><strong>未绘制盈亏曲线：</strong>` +
+      `当前 API 没有服务器结算的 payoff 序列，也没有与 Radar 线索共享的 Episode key。为避免浏览器重算 Inverse payoff 或串接不同 Episode，本页不伪造图表、IV/RV 或保护腿 Greeks。</div></section>` +
+    rawEvidenceMarkup(row);
+}
+
+function radarDetailMarkup(row) {
+  const state = radarState(row);
+  const stressedIv = formatInterval(row.one_tick_stressed_iv_interval || row.executable_iv_interval, formatPercent);
+  const executableIv = formatInterval(row.executable_iv_interval, formatPercent);
+  const richness = formatInterval(row.richness_ratio_interval, value => `${formatCompactNumber(value, 2)}×`);
+  const delta = formatInterval(row.delta_interval, value => formatCompactNumber(value, 3));
+  return `<div class="detail-title-line"><h3>INVERSE BTC × SHORT VOL</h3>` +
+    `${badgeMarkup(state.label, state.tone, 'decision-badge')}</div>` +
+    `<p class="detail-subtitle">${safeText(row.instrument_name)} · ${safeText(formatDate(row.expiration_timestamp_ms))}</p>` +
+    `<div class="fact-grid">` +
+      factMarkup('TTE', formatDurationInterval(row.tte_interval_ms)) +
+      factMarkup('执行价', formatDecimal(row.strike_price)) +
+      factMarkup('Delta', delta) +
+      factMarkup('可执行 IV', executableIv) +
+      factMarkup('One-tick IV', stressedIv) +
+      factMarkup('RV 基线', formatPercent(row.baseline_annualized_volatility)) +
+    `</div>` +
+    `<section class="detail-section"><div class="detail-section-title"><h4>当前线索证据</h4>` +
+      `<span class="detail-section-note">单腿 Radar · 非 Candidate</span></div>` +
+      `<div class="economics-grid">` +
+        economicsCard('One-tick IV / RV', richness, '服务器 hard-screen richness', state.key === 'ANOMALY_ACTIVE' ? 'positive' : '') +
+        economicsCard('目标规模价差', isMissing(row.target_spread_ticks) ? '—' : `${formatDecimal(row.target_spread_ticks)} ticks`, '当前 Radar 合约') +
+      `</div></section>` +
+    `<section class="detail-section"><div class="detail-section-title"><h4>为什么值得看</h4></div>` +
+      `<div class="callout-list">` +
+        `<div class="callout info"><strong>正向证据</strong>${safeText(reasonText(row.positive_witness))}</div>` +
+        `<div class="callout blocker"><strong>当前阻塞</strong>${safeText(reasonText(row.primary_blocker || row.detector_reason))}</div>` +
+        `<div class="callout upgrade"><strong>升级条件</strong>${safeText(reasonText(row.upgrade_condition))}</div>` +
+        `<div class="callout invalidation"><strong>失效条件</strong>${safeText(reasonText(row.invalidation_condition))}</div>` +
+      `</div></section>` +
+    `<section class="detail-section"><div class="data-gap-panel"><strong>关联边界：</strong>` +
+      `当前 API 未提供 Radar 与 Underwriting 共用的 Episode identity。本线索不会按合约名拼接双腿结构、Candidate 或 Shadow 状态。</div></section>` +
+    rawEvidenceMarkup(row);
+}
+
+function selectedRow(documentValue) {
+  const rows = visibleRows(documentValue);
+  if (!rows.length) return null;
+  if (queueMode === 'structures') {
+    return rows.find((row, index) => structureIdentity(row, index) === selectedStructureId) || rows[0];
+  }
+  return rows.find((row, index) => radarIdentity(row, index) === selectedRadarId) || rows[0];
+}
+
+function renderDetail(documentValue) {
+  const title = document.getElementById('detail-title');
+  const content = document.getElementById('detail-content');
+  const openEvidence = content && typeof content.querySelector === 'function'
+    ? content.querySelector('[data-evidence-details]') : null;
+  if (openEvidence) evidenceExpanded = openEvidence.open;
+  const previousScrollTop = content ? content.scrollTop : 0;
+  const row = selectedRow(documentValue);
+  const shadowJump = document.getElementById('shadow-jump');
+  const evidenceToggle = document.getElementById('evidence-toggle');
+  if (!row) {
+    title.textContent = '当前没有可显示的详情';
+    content.innerHTML = `<div class="detail-placeholder">${emptyQueueMarkup(documentValue)}</div>`;
+  } else if (queueMode === 'structures') {
+    title.textContent = '已结算结构详情';
+    content.innerHTML = structureDetailMarkup(row, documentValue);
+  } else {
+    title.textContent = 'Radar 线索详情';
+    content.innerHTML = radarDetailMarkup(row);
+  }
+  if (shadowJump) shadowJump.hidden = !row || queueMode !== 'structures';
+  if (evidenceToggle) {
+    evidenceToggle.hidden = !row;
+    evidenceToggle.textContent = evidenceExpanded ? '收起证据' : '展开证据';
+  }
+  if (content) content.scrollTop = previousScrollTop;
+  updateResponsiveDetailState();
+}
+
+function renderFooter(documentValue) {
+  const footer = document.getElementById('footer-summary');
+  if (!documentValue) {
+    footer.textContent = '规范 Shadow Case — · 等待 Outcome —';
+    return;
+  }
+  const cases = stageCount(documentValue, 'SHADOW_CASE_OPENED');
+  const outcomes = stageCount(documentValue, 'SHADOW_CASE_OUTCOME');
+  const pending = cases === null || outcomes === null ? null : Math.max(0, Number(cases) - Number(outcomes));
   const research = documentValue.funnel && documentValue.funnel.decision_control_research;
-  const panel = documentValue.decision_controls;
-  const product = documentValue.product;
-  const valuationUnit = product.valuation_currency;
-  const nativeUnit = product.native_premium_currency;
-  if (!research || !research.pending_counts || !research.selected_action_counts ||
-      !research.attempt_terminal_counts || !Array.isArray(research.non_claims) ||
-      !panel || !Array.isArray(panel.rows) || !product) {
-    throw new Error('invalid selected-decision research projection');
-  }
-  const summary = '<div class="summary-grid">' +
-    summaryStat('因果 activation batch', research.activation_batch_count) +
-    summaryStat('预先选定决策', research.selected_decision_count) +
-    summaryStat('No-trade control Case', research.decision_case_opened_count, 'RESEARCH') +
-    summaryStat('严格未来 Outcome', research.decision_outcome_count,
-      research.decision_outcome_count ? 'CURRENT' :
-        (research.pending_counts.case_without_outcome ? 'PENDING' : 'NO_ANOMALY')) +
-    summaryStat('选定 action', compactCountMap(research.selected_action_counts)) +
-    summaryStat('刷新终局', funnelBlockerText(research.attempt_terminal_counts)) +
-    summaryStat('尚无可评估选定决策', research.pending_counts.batch_without_selected_evaluable_decision) +
-    summaryStat('选定但未开 Case', research.pending_counts.selected_without_case) +
-    summaryStat('Case 等待 Outcome', research.pending_counts.case_without_outcome,
-      research.pending_counts.case_without_outcome ? 'PENDING' : 'NO_ANOMALY') +
-    '</div>';
-  const boundary = `<div class="boundary-strip"><strong>研究边界：</strong>${
-    safeText(research.non_claims.join('; '))}</div>`;
-  const detailed = table(panel, [
-    ['选定 action', 'selected_economic_action', (_row, _field, value) => actionText(value)],
-    ['刷新后 action', 'refreshed_economic_action', (_row, _field, value) => actionText(value)],
-    ['刷新终局', 'refresh_terminal_outcome', (_row, _field, value) => reasonText(value)],
-    ['Enrollment', 'enrollment_kind', (_row, _field, value) => enrollmentText(value)],
-    ['Case / Outcome', 'case_state', (_row, _field, value) => caseStateText(value)],
-    [`Public-quote PnL (${valuationUnit})`, 'public_quote_net_pnl_valuation',
-      row => outcomeValuationCellValue(row, product), 'numeric'],
-    [`Native PnL (${nativeUnit})`, 'native_net_pnl',
-      (_row, _field, value) => isMissing(value) ? 'UNKNOWN' : compactNative(value), 'numeric']
-  ], panel.rows, [
-    ['selection identity', 'selected_underwriting_decision_identity'],
-    ['activation batch identity', 'activation_batch_identity'],
-    ['active episode', 'active_episode_identity'],
-    ['selected failed predicates', 'selected_failed_predicates'],
-    ['selected predicate margin vector', 'selected_predicate_margin_vector'],
-    ['protective-leg selection rule identity', 'protective_leg_selection_rule_identity'],
-    ['Candidate protective-leg count', 'candidate_protective_leg_count'],
-    ['selection fact boundary', 'selection_fact_boundary'],
-    ['refresh unknown reasons', 'refresh_unknown_reasons'],
-    ['refresh pair timing', 'refresh_component_pair_timing'],
-    ['refresh pair limits', 'refresh_component_pair_limits'],
-    ['refreshed failed predicates', 'refreshed_failed_predicates'],
-    ['refreshed predicate margin vector', 'refreshed_predicate_margin_vector'],
-    ['refreshed fact boundary', 'refreshed_fact_boundary'],
-    ['enrollment identity', 'enrollment_identity'],
-    ['boundary-valued PnL', 'boundary_valued_net_pnl_usd'],
-    ['exit-valued native PnL', 'exit_valued_native_net_pnl_usd'],
-    ['native premium currency', 'native_premium_currency'],
-    ['non claims', 'non_claims']
-  ]);
-  const detail = panel.panel_state === 'EMPTY_NO_SETTLED_OBJECT'
-    ? detailed
-    : `<details class="detail-group" data-detail-key="research-case-rows">` +
-      `<summary>查看 ${panel.rows.length} 条研究 Case 明细（默认折叠）</summary>` +
-      `<div class="detail-content">${detailed}</div></details>`;
-  document.getElementById('decision-control').innerHTML = summary + boundary + detail;
+  const controls = research ? research.decision_case_opened_count : null;
+  footer.textContent = `规范 Shadow Case ${formatCompactNumber(cases, 0)} · 等待 Outcome ${formatCompactNumber(pending, 0)} · 无交易研究对照 ${formatCompactNumber(controls, 0)}`;
 }
 
-function renderShadowPanel(documentValue) {
-  const panel = documentValue.shadow_entries;
-  const product = documentValue.product;
-  const valuationUnit = product.valuation_currency;
-  const nativeUnit = product.native_premium_currency;
-  const rows = panel.rows;
-  const opened = rows.filter(row => !isMissing(row.shadow_entry_identity)).length;
-  const noEntry = rows.length - opened;
-  const summary = '<div class="summary-grid">' +
-    summaryStat('当前 Shadow Entry', opened, opened ? 'CURRENT' : 'NO_ANOMALY') +
-    summaryStat('未入场 / 失败刷新', noEntry, noEntry ? 'ABSTAIN' : 'CURRENT') +
-    '</div>';
-  const detailed = table(panel, [
-    ['刷新结果', 'admission_refresh_terminal_outcome', shadowCellValue],
-    ['目标数量 (BTC)', 'target_quantity_btc', shadowCellValue, 'numeric'],
-    [`模拟垂直毛信用 (${valuationUnit}/BTC)`, 'simulated_entry_price_valuation_per_btc', shadowCellValue, 'numeric'],
-    ['模拟入场价状态', 'simulated_entry_price_availability'],
-    [`模拟毛权利金 (${valuationUnit})`, 'simulated_entry_credit_valuation', shadowCellValue, 'numeric'],
-    [`原生净权利金 (${nativeUnit})`, 'native_net_entry_credit', shadowCellValue, 'numeric'],
-    ['未入场原因', 'no_entry_reason', shadowCellValue, 'reason'],
-    ['声明', 'simulation_label']
-  ], rows, [
-    ['candidate identity', 'candidate_identity'],
-    ['active episode', 'active_episode_identity'],
-    ['formed boundary', 'candidate_formed_fact_boundary'],
-    ['refresh source identity', 'matched_refresh_source_identity'],
-    ['shadow entry identity', 'shadow_entry_identity'],
-    ['target quantity exact', 'target_quantity_btc'],
-    ['simulated entry price exact', 'simulated_entry_price_valuation_per_btc'],
-    ['simulated entry credit exact', 'simulated_entry_credit_valuation'],
-    ['native gross entry credit', 'native_gross_entry_credit'],
-    ['native entry fee reserve', 'native_entry_fee_reserve'],
-    ['native net entry credit', 'native_net_entry_credit'],
-    ['entry valuation index price', 'entry_valuation_index_price'],
-    ['native premium currency', 'native_premium_currency'],
-    ['execution model', 'execution_model'],
-    ['component pair identity', 'entry_component_pair_identity'],
-    ['component pair timing', 'entry_component_pair_timing'],
-    ['admission refresh unknown reasons', 'admission_refresh_unknown_reasons'],
-    ['admission pair timing', 'admission_component_pair_timing'],
-    ['admission pair limits', 'admission_component_pair_limits'],
-    ['component legs', 'entry_component_legs']
-  ]);
-  document.getElementById('shadow').innerHTML = summary + detailed;
+function renderWorkspace(documentValue) {
+  renderChannelRail(documentValue);
+  renderQueue(documentValue);
+  renderDetail(documentValue);
+  renderFooter(documentValue);
 }
 
-function renderPositionPanel(documentValue) {
-  const panel = documentValue.positions;
-  const product = documentValue.product;
-  const valuationUnit = product.valuation_currency;
-  const nativeUnit = product.native_premium_currency;
-  const rows = panel.rows;
-  const actions = countBy(rows, 'position_action');
-  const summary = '<div class="summary-grid">' +
-    summaryStat('当前监督对象', rows.length, rows.length ? 'CURRENT' : 'NO_ANOMALY') +
-    summaryStat('Action 分布', compactCountMap(actions)) +
-    '</div>';
-  const detailed = table(panel, [
-    ['Action', 'position_action', (_row, _field, value) => actionText(value)],
-    [`剩余权利金 (${valuationUnit})`, 'remaining_premium_valuation', positionCellValue, 'numeric'],
-    ['剩余权利金状态', 'remaining_premium_availability'],
-    ['Component close', 'close_quote_state'],
-    [`Close debit (${valuationUnit})`, 'current_close_debit_valuation', positionCellValue, 'numeric'],
-    [`Boundary-valued Shadow PnL (${valuationUnit})`, 'projected_shadow_pnl_valuation', positionCellValue, 'numeric'],
-    [`Native projected PnL (${nativeUnit})`, 'native_projected_shadow_net_pnl', positionCellValue, 'numeric'],
-    ['Hard-close 倒计时', 'hard_close_countdown_interval_ms', positionCellValue],
-    ['首要退出规则', 'primary_exit_rule'],
-    ['Outcome', 'outcome_state']
-  ], rows, [
-    ['shadow entry identity', 'shadow_entry_identity'],
-    ['remaining premium exact', 'remaining_premium_valuation'],
-    ['close debit exact', 'current_close_debit_valuation'],
-    ['component pair timing', 'component_pair_timing'],
-    ['component pair limits', 'component_pair_limits'],
-    ['component pair business state', 'component_pair_business_state'],
-    ['component pair unknown reasons', 'component_pair_unknown_reasons'],
-    ['projected Shadow PnL exact', 'projected_shadow_pnl_valuation'],
-    ['native close cashflow', 'native_net_close_cashflow'],
-    ['native projected Shadow PnL', 'native_projected_shadow_net_pnl'],
-    ['boundary-valued projected Shadow PnL', 'boundary_valued_projected_shadow_net_pnl_usd'],
-    ['exit-valued native projected PnL', 'exit_valued_native_projected_pnl_usd'],
-    ['native premium currency', 'native_premium_currency'],
-    ['hard-close interval ms', 'hard_close_countdown_interval_ms'],
-    ['remaining premium basis', 'remaining_premium_basis'],
-    ['ordered exit rules', 'ordered_latched_exit_rules']
-  ]);
-  document.getElementById('positions').innerHTML = summary + detailed;
-}
-
-function renderOutcomePanel(documentValue) {
-  const panel = documentValue.outcomes;
-  const product = documentValue.product;
-  const valuationUnit = product.valuation_currency;
-  const nativeUnit = product.native_premium_currency;
-  const rows = panel.rows;
-  const stateCounts = countBy(rows, 'state');
-  const pending = rows.filter(row => row.maturity === 'PENDING').length;
-  const known = rows.filter(row => row.maturity === 'MATURE_KNOWN').length;
-  const unknown = rows.filter(row => row.maturity === 'MATURE_UNKNOWN').length;
-  const censored = rows.filter(row => row.maturity === 'CENSORED').length;
-  const economicKnown = known;
-  const summary = '<div class="summary-grid">' +
-    summaryStat('当前 Outcome 对象', rows.length) +
-    summaryStat('等待未来事实', pending, pending ? 'PENDING' : 'CURRENT') +
-    summaryStat('Mature known', known, known ? 'CURRENT' : 'NO_ANOMALY') +
-    summaryStat('Mature unknown', unknown, unknown ? 'UNKNOWN' : 'NO_ANOMALY') +
-    summaryStat('Censored', censored, censored ? 'ABSTAIN' : 'NO_ANOMALY') +
-    summaryStat('经济结果可用', economicKnown, economicKnown ? 'CURRENT' : 'UNKNOWN') +
-    summaryStat('状态分布', compactCountMap(stateCounts)) +
-    '</div>';
-  const detailed = table(panel, [
-    ['状态', 'state'],
-    ['成熟度', 'maturity'],
-    [`Boundary-valued public-quote PnL (${valuationUnit})`, 'public_quote_net_pnl_valuation',
-      row => outcomeValuationCellValue(row, product), 'numeric'],
-    [`Native net PnL (${nativeUnit})`, 'native_net_pnl', outcomeCellValue, 'numeric'],
-    ['Actual PnL', 'actual_pnl', outcomeCellValue]
-  ], rows, [
-    ['observation identity', 'shadow_observation_identity'],
-    ['selected exit identity', 'selected_exit_identity'],
-    ['public-quote PnL exact', 'public_quote_net_pnl_valuation'],
-    ['native net PnL', 'native_net_pnl'],
-    ['boundary-valued net PnL', 'boundary_valued_net_pnl_usd'],
-    ['exit-valued native net PnL', 'exit_valued_native_net_pnl_usd'],
-    ['native premium currency', 'native_premium_currency'],
-    ['actual PnL exact', 'actual_pnl']
-  ]);
-  const detail = panel.panel_state === 'EMPTY_NO_SETTLED_OBJECT'
-    ? detailed
-    : `<details class="detail-group" data-detail-key="outcome-rows">` +
-      `<summary>查看 ${rows.length} 条 Outcome 明细（默认折叠）</summary>` +
-      `<div class="detail-content">${detailed}</div></details>`;
-  document.getElementById('outcomes').innerHTML = summary + detail;
-}
-
-const primaryBlockerSummary = documentValue => {
-  const primary = documentValue.funnel && documentValue.funnel.primary_blocker;
-  if (!primary || primary.reason === 'NO_MATERIAL_BLOCKER_OBSERVED') return '当前无实质漏斗阻塞';
-  return `${funnelStageLabel(primary.stage)} · ${reasonText(primary.reason)} · ${primary.blocked_count}`;
-};
-
-const runCaseOutcomeSummary = documentValue => {
-  const stages = documentValue.funnel && documentValue.funnel.stages;
-  const research = documentValue.funnel && documentValue.funnel.decision_control_research;
-  if (!Array.isArray(stages) || !research || !research.pending_counts) return 'UNKNOWN';
-  const stageCount = stageName => {
-    const stage = stages.find(value => value.stage === stageName);
-    return stage ? formatCompactNumber(stage.observed_count, 0) : 'UNKNOWN';
-  };
-  return `规范 ${stageCount('SHADOW_CASE_OPENED')} Case / ` +
-    `${stageCount('SHADOW_CASE_OUTCOME')} Outcome · ` +
-    `研究待未来事实 ${formatCompactNumber(research.pending_counts.case_without_outcome, 0)}`;
-};
-
-const buildExecutiveSummary = documentValue => {
-  const service = documentValue.service;
-  const anomaly = documentValue.zero_claims.anomaly;
-  const candidate = documentValue.zero_claims.candidate;
-  if (!service.ready) {
-    return `当前数据不可用于判定：${reasonText(service.reason)}。Attention、Candidate 与 Outcome 均不得据此升级。`;
-  }
-  const anomalyText = anomaly.state === 'PROVEN_ZERO'
-    ? '当前已证明无 Radar clue'
-    : (anomaly.state === 'NOT_ZERO' ? `当前有 ${anomaly.value} 个 Radar clue` : '当前 Radar clue 不能证明为零');
-  const candidateText = candidate.state === 'PROVEN_ZERO'
-    ? '已证明当前无 Candidate'
-    : (candidate.state === 'NOT_ZERO' ? `当前有 ${candidate.value} 个 Candidate` : '当前 Candidate 不能证明为零');
-  return `${anomalyText}；${candidateText}。最早阻塞：${primaryBlockerSummary(documentValue)}。`;
-};
-
-function render(documentValue) {
+function validateDocument(documentValue) {
   if (!documentValue || documentValue.schema_version !== SUPPORTED_SCHEMA_VERSION) {
     throw new Error('unsupported workbench projection schema');
   }
-  const product = documentValue.product;
-  if (!product || !product.product_spec_identity || !product.name ||
-      !product.native_premium_currency || !product.valuation_currency || !product.price_index ||
-      !product.native_settlement_payoff_rule || !product.native_settlement_liability_profile ||
-      product.actual_account_margin_availability !== 'UNKNOWN' ||
-      product.actual_account_margin_reason !== 'ACCOUNT_MARGIN_UNKNOWN') {
-    throw new Error('invalid product projection');
+  if (!documentValue.product || !documentValue.product.name ||
+      !documentValue.product.product_spec_identity || !documentValue.product.native_premium_currency ||
+      !documentValue.product.valuation_currency || !documentValue.service || !documentValue.system ||
+      !documentValue.radar || !Array.isArray(documentValue.radar.rows) ||
+      !documentValue.underwriting || !Array.isArray(documentValue.underwriting.rows) ||
+      !documentValue.funnel) {
+    throw new Error('invalid workbench projection');
   }
-  const openDetailKeys = captureOpenDetailKeys();
+  if (documentValue.product.actual_account_margin_availability !== 'UNKNOWN' ||
+      documentValue.product.actual_account_margin_reason !== 'ACCOUNT_MARGIN_UNKNOWN') {
+    throw new Error('invalid public-only margin boundary');
+  }
+}
+
+function render(documentValue) {
+  validateDocument(documentValue);
+  const focusIdentity = captureFocusIdentity();
+  currentDocument = documentValue;
   const connection = document.getElementById('connection');
   connection.hidden = true;
   connection.textContent = '';
   document.body.dataset.workbenchState = 'CURRENT_FETCH';
-  document.getElementById('runtime').textContent = `runtime ${shortIdentity(documentValue.runtime_identity)}`;
-  const service = documentValue.service;
-  const system = documentValue.system;
-  const zero = documentValue.zero_claims;
-  document.getElementById('system').innerHTML =
-    card('当前结论', buildExecutiveSummary(documentValue), {primary: true,
-      meta: '当前快照；Attention ≠ Radar clue ≠ Candidate ≠ Case ≠ Outcome'}) +
-    card('产品与经济单位', `${productLabel(product.name)} · ${product.native_premium_currency} 原生 / ${product.valuation_currency} 估值`,
-      {meta: `${product.price_index} · ${product.settlement_currency} 结算`}) +
-    card('数据状态', `${service.phase} / ${service.data_state}`, {meta: service.ready ? '可用于当前判定' : '不可用于当前判定'}) +
-    card('当前覆盖', `${system.known_current_instrument_evaluation_count}/${system.monitored_instrument_count}`,
-      {meta: isMissing(system.coverage_ratio_percent) ? '覆盖率 UNKNOWN' : `${formatCompactNumber(system.coverage_ratio_percent, 2)}%`}) +
-    card('Radar clue', zeroClaimText(zero.anomaly, 'Radar clue'), {meta: `分母 ${displayText(zero.anomaly.denominator)}`}) +
-    card('Candidate', zeroClaimText(zero.candidate, 'Candidate'), {meta: `Underwriting-evaluable 分母 ${displayText(zero.candidate.denominator)}`}) +
-    card('Case / Outcome（本次运行）', runCaseOutcomeSummary(documentValue),
-      {meta: '规范 Candidate 漏斗 · Selected Decision 独立研究'}) +
-    card('当前最早阻塞', primaryBlockerSummary(documentValue)) +
-    card('数据延迟', isMissing(system.data_delay_ms) ? 'UNKNOWN' : formatDurationMs(system.data_delay_ms),
-      {meta: `last-wire ${isMissing(system.last_wire_age_ms) ? 'UNKNOWN' : formatDurationMs(system.last_wire_age_ms)}`}) +
-    card('实际账户保证金', 'UNKNOWN — 未接入私有账户数据', {meta: product.actual_account_margin_reason}) +
-    '<details class="system-details" data-detail-key="system-audit">' +
-    '<summary>运行、产品与 Policy 审计详情</summary><div class="grid">' +
-    card('Ready', service.ready) +
-    card('Publication sequence', documentValue.publication_sequence) +
-    card('最近成功获取 age', formatDurationMs(ageMs(lastSuccessfulFetchAtMs))) +
-    card('Publication 未变化 age', formatDurationMs(ageMs(lastPublicationChangeAtMs))) +
-    card('Session epoch', system.session_epoch) +
-    card('Platform', reasonText(system.platform_reason)) +
-    card('最近行情时间', isMissing(system.latest_market_timestamp_ms) ? 'UNKNOWN' : formatEpochMs(system.latest_market_timestamp_ms)) +
-    card('Last-wire age', isMissing(system.last_wire_age_ms) ? 'UNKNOWN' : formatDurationMs(system.last_wire_age_ms)) +
-    card('Coverage', system.coverage_state) +
-    card('Coverage blocker', system.coverage_blocking_reason) +
-    card('覆盖率', isMissing(system.coverage_ratio_percent) ? 'UNKNOWN' : `${formatDecimal(system.coverage_ratio_percent)}%`) +
-    card('断线/重连', system.reconnect_count) +
-    card('Session gaps', system.session_gap_count) +
-    card('最近断线记录', system.disconnect_records.slice(-1)[0]) +
-    card('RV source', system.index_history.source) +
-    card('RV value semantics', system.index_history.value_semantics) +
-    card('History cadence', isMissing(system.index_history.modal_interval_ms)
-      ? 'UNKNOWN' : formatDurationMs(system.index_history.modal_interval_ms)) +
-    card('History confirmed suffix', `${system.index_history.exact_suffix_point_count} points / ${formatDecimal(system.index_history.exact_suffix_minutes)} minutes`) +
-    card('History confirmed age', isMissing(system.index_history.latest_source_age_ms)
-      ? 'UNKNOWN' : formatDurationMs(system.index_history.latest_source_age_ms)) +
-    card('History newest point outside completion cutoff', system.index_history.newest_response_point_excluded_by_completion_cutoff) +
-    card('History revisions', `${system.index_history.revision_count}; pending=${system.index_history.revision_pending}`) +
-    card('Runtime identity', documentValue.runtime_identity) +
-    card('Code identity', documentValue.code_identity) +
-    card('Published fact boundary', documentValue.published_fact_boundary) +
-    card('Policy / Radar', documentValue.policy_identities.radar) +
-    card('Policy / Underwriting', documentValue.policy_identities.underwriting) +
-    card('Policy / Position', documentValue.policy_identities.position) +
-    card('Product spec identity', product.product_spec_identity) +
-    card('Product instrument type', product.instrument_type) +
-    card('Product quote/counter', `${product.quote_currency}/${product.counter_currency}`) +
-    card('Native settlement payoff rule', product.native_settlement_payoff_rule) +
-    card('Native settlement liability profile', product.native_settlement_liability_profile) +
-    '</div></details>';
-
-  document.getElementById('zero').innerHTML =
-    card('零异常', zero.anomaly.value === null ? zero.anomaly.explanation : `${zero.anomaly.value} (${zero.anomaly.state})`) +
-    card('异常监控分母', zero.anomaly.denominator) +
-    card('零 Candidate', zero.candidate.value === null ? zero.candidate.explanation : `${zero.candidate.value} (${zero.candidate.state})`) +
-    card('Underwriting-evaluable 分母', zero.candidate.denominator);
-
-  renderFunnel(documentValue);
-  renderDecisionControlResearch(documentValue);
-  renderRadarPanel(documentValue);
-  renderUnderwritingPanel(documentValue);
-  renderShadowPanel(documentValue);
-  renderPositionPanel(documentValue);
-  renderOutcomePanel(documentValue);
-  restoreOpenDetailKeys(openDetailKeys);
-  lastRenderedDocument = documentValue;
+  renderHeader(documentValue);
+  renderWorkspace(documentValue);
+  restoreFocusIdentity(focusIdentity);
 }
 
-function activateTab(targetId) {
-  if (typeof document.querySelectorAll !== 'function') return;
-  const views = document.querySelectorAll('[data-tab-view]');
-  const links = document.querySelectorAll('[data-tab-target]');
-  const availableTarget = Array.from(views).some(view => view.id === targetId)
-    ? targetId
-    : 'decision-view';
-  views.forEach(view => { view.hidden = view.id !== availableTarget; });
-  links.forEach(link => {
-    if (link.dataset.tabTarget === availableTarget) link.setAttribute('aria-current', 'page');
-    else link.removeAttribute('aria-current');
-  });
-  return availableTarget;
+function renderUnavailable() {
+  currentDocument = null;
+  selectedStructureId = null;
+  selectedRadarId = null;
+  drawerOpen = false;
+  evidenceExpanded = false;
+  const connection = document.getElementById('connection');
+  connection.hidden = false;
+  connection.textContent = '工作台连接中断：旧业务数据已隐藏，当前状态暂不可判断。';
+  document.body.dataset.workbenchState = 'UNKNOWN';
+  renderHeader(null);
+  renderWorkspace(null);
+}
+
+function activateChannel(channelId) {
+  if (channelId !== 'ALL' && !CHANNELS.some(value => value.id === channelId)) return;
+  const focusIdentity = captureFocusIdentity();
+  selectedChannelId = channelId;
+  selectedStructureId = null;
+  selectedRadarId = null;
+  drawerOpen = false;
+  evidenceExpanded = false;
+  renderWorkspace(currentDocument);
+  restoreFocusIdentity(focusIdentity);
+}
+
+function activateQueueMode(mode) {
+  if (!['structures', 'radar'].includes(mode)) return;
+  const focusIdentity = captureFocusIdentity();
+  queueMode = mode;
+  drawerOpen = false;
+  evidenceExpanded = false;
+  renderWorkspace(currentDocument);
+  restoreFocusIdentity(focusIdentity);
+}
+
+function activateFilter(filter) {
+  const focusIdentity = captureFocusIdentity();
+  if (queueMode === 'structures') structureFilter = filter;
+  else radarFilter = filter;
+  drawerOpen = false;
+  evidenceExpanded = false;
+  renderWorkspace(currentDocument);
+  restoreFocusIdentity(focusIdentity);
+}
+
+function activateRow(rowId) {
+  if (!currentDocument) return;
+  const focusIdentity = captureFocusIdentity();
+  if (queueMode === 'structures') selectedStructureId = rowId;
+  else selectedRadarId = rowId;
+  evidenceExpanded = false;
+  renderQueue(currentDocument);
+  renderDetail(currentDocument);
+  restoreFocusIdentity(focusIdentity);
+  openDetail(rowId);
+}
+
+function trapDrawerFocus(event) {
+  if (event.key !== 'Tab' || !drawerOpen || !isDrawerViewport()) return;
+  const panel = document.getElementById('detail-panel');
+  if (!panel || typeof panel.querySelectorAll !== 'function') return;
+  const focusable = Array.from(panel.querySelectorAll(
+    'button:not([disabled]), summary, a[href], [tabindex]:not([tabindex="-1"])'
+  )).filter(element => !element.hidden);
+  if (!focusable.length) {
+    event.preventDefault();
+    panel.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 if (typeof document.addEventListener === 'function') {
-  document.addEventListener('change', event => {
-    if (!lastRenderedDocument || !event.target) return;
-    if (event.target.id === 'radar-filter') {
-      radarFilterValue = event.target.value;
-      renderRadarPanel(lastRenderedDocument);
-    } else if (event.target.id === 'underwriting-filter') {
-      underwritingFilterValue = event.target.value;
-      renderUnderwritingPanel(lastRenderedDocument);
-    }
-  });
   document.addEventListener('click', event => {
-    const target = event.target && typeof event.target.closest === 'function'
-      ? event.target.closest('[data-tab-target]') : null;
+    const target = event.target && typeof event.target.closest === 'function' ? event.target : null;
     if (!target) return;
-    event.preventDefault();
-    const activeTarget = activateTab(target.dataset.tabTarget);
-    if (typeof history.replaceState === 'function') history.replaceState(null, '', `#${activeTarget}`);
-    const activeView = document.getElementById(activeTarget);
-    if (activeView && typeof activeView.scrollIntoView === 'function') {
-      activeView.scrollIntoView({block: 'start'});
+    const themeOption = target.closest('[data-theme-option]');
+    if (themeOption) {
+      setTheme(themeOption.dataset.themeOption);
+      return;
     }
+    const channel = target.closest('[data-channel-id]');
+    if (channel) {
+      activateChannel(channel.dataset.channelId);
+      return;
+    }
+    const mode = target.closest('[data-queue-mode]');
+    if (mode) {
+      activateQueueMode(mode.dataset.queueMode);
+      return;
+    }
+    const filter = target.closest('[data-queue-filter]');
+    if (filter) {
+      activateFilter(filter.dataset.queueFilter);
+      return;
+    }
+    const row = target.closest('[data-row-id]');
+    if (row) {
+      activateRow(row.dataset.rowId);
+      return;
+    }
+    const detailAction = target.closest('[data-detail-action]');
+    if (detailAction && detailAction.dataset.detailAction === 'shadow') {
+      const section = document.querySelector('[data-detail-section="shadow"]');
+      if (section && typeof section.scrollIntoView === 'function') section.scrollIntoView({block: 'start'});
+      return;
+    }
+    if (detailAction && detailAction.dataset.detailAction === 'evidence') {
+      const evidence = document.querySelector('[data-evidence-details]');
+      if (evidence) {
+        evidence.open = !evidence.open;
+        evidenceExpanded = evidence.open;
+        detailAction.textContent = evidenceExpanded ? '收起证据' : '展开证据';
+        if (evidenceExpanded && typeof evidence.scrollIntoView === 'function') evidence.scrollIntoView({block: 'nearest'});
+      }
+      return;
+    }
+    if (target.closest('#detail-close') || target.closest('#detail-scrim')) closeDetail();
   });
-  document.addEventListener('DOMContentLoaded', () => {
-    const requested = typeof location !== 'undefined' ? location.hash.slice(1) : '';
-    activateTab(requested || 'decision-view');
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && drawerOpen) {
+      event.preventDefault();
+      closeDetail();
+      return;
+    }
+    trapDrawerFocus(event);
   });
 }
 
+if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+  const drawerMedia = window.matchMedia(DRAWER_MEDIA_QUERY);
+  if (typeof drawerMedia.addEventListener === 'function') {
+    drawerMedia.addEventListener('change', () => {
+      const panel = document.getElementById('detail-panel');
+      const focusWasInPanel = panel && typeof panel.contains === 'function' && panel.contains(document.activeElement);
+      drawerOpen = false;
+      updateResponsiveDetailState();
+      if (focusWasInPanel) restoreDetailTriggerFocus();
+    });
+  }
+}
+
 async function refresh() {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
   try {
     const response = await fetch('/api/workbench/current', {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const documentValue = await response.json();
+    validateDocument(documentValue);
     const fetchedAtMs = Date.now();
-    const previousSuccessfulFetchAtMs = lastSuccessfulFetchAtMs;
-    const previousPublicationRuntimeIdentity = lastPublicationRuntimeIdentity;
-    const previousPublicationSequence = lastPublicationSequence;
-    const previousPublicationChangeAtMs = lastPublicationChangeAtMs;
-    lastSuccessfulFetchAtMs = fetchedAtMs;
-    if (
-      documentValue.runtime_identity !== lastPublicationRuntimeIdentity ||
-      documentValue.publication_sequence !== lastPublicationSequence
-    ) {
-      lastPublicationRuntimeIdentity = documentValue.runtime_identity;
-      lastPublicationSequence = documentValue.publication_sequence;
-      lastPublicationChangeAtMs = fetchedAtMs;
+    const incomingRuntimeIdentity = documentValue.runtime_identity;
+    const incomingSequence = Number(documentValue.publication_sequence);
+    if (typeof incomingRuntimeIdentity !== 'string' || !incomingRuntimeIdentity ||
+        !Number.isSafeInteger(incomingSequence) || incomingSequence < 0) {
+      throw new Error('invalid publication identity');
     }
-    try {
+    if (incomingRuntimeIdentity === lastPublicationRuntimeIdentity &&
+        lastPublicationSequence !== null && incomingSequence < Number(lastPublicationSequence)) {
+      throw new Error('publication sequence regressed');
+    }
+    if (incomingRuntimeIdentity !== lastPublicationRuntimeIdentity &&
+        retiredRuntimeIdentities.has(incomingRuntimeIdentity)) {
+      throw new Error('retired runtime identity returned');
+    }
+    const publicationChanged = incomingRuntimeIdentity !== lastPublicationRuntimeIdentity ||
+      incomingSequence !== lastPublicationSequence;
+    if (publicationChanged || currentDocument === null) {
       render(documentValue);
-    } catch (error) {
-      lastSuccessfulFetchAtMs = previousSuccessfulFetchAtMs;
-      lastPublicationRuntimeIdentity = previousPublicationRuntimeIdentity;
-      lastPublicationSequence = previousPublicationSequence;
-      lastPublicationChangeAtMs = previousPublicationChangeAtMs;
-      throw error;
     }
+    if (lastPublicationRuntimeIdentity && incomingRuntimeIdentity !== lastPublicationRuntimeIdentity) {
+      retiredRuntimeIdentities.add(lastPublicationRuntimeIdentity);
+    }
+    lastSuccessfulFetchAtMs = fetchedAtMs;
+    lastPublicationRuntimeIdentity = incomingRuntimeIdentity;
+    lastPublicationSequence = incomingSequence;
+    if (publicationChanged) lastPublicationChangeAtMs = fetchedAtMs;
   } catch (_error) {
     renderUnavailable();
+  } finally {
+    refreshInFlight = false;
   }
 }
 
+syncThemeControl();
+updateResponsiveDetailState();
 refresh();
 setInterval(refresh, 2000);
