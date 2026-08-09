@@ -174,9 +174,10 @@ assert.equal(document.documentElement.dataset.theme, 'light');
 assert.equal(light.attributes['aria-pressed'], 'true');
 """
     completed = subprocess.run(
-        ["node", "-e", harness],
+        ["node"],
         check=False,
         capture_output=True,
+        input=harness,
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
@@ -271,9 +272,10 @@ assert.equal(panel.attributes.role, 'complementary');
 assert.equal(document.activeElement, trigger);
 """
     completed = subprocess.run(
-        ["node", "-e", harness],
+        ["node"],
         check=False,
         capture_output=True,
+        input=harness,
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
@@ -403,9 +405,10 @@ assert.equal(api.reasonText('CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE'), '净权利�
 assert.equal(api.escapeHtml('<script>&'), '&lt;script&gt;&amp;');
 """
     completed = subprocess.run(
-        ["node", "-e", harness],
+        ["node"],
         check=False,
         capture_output=True,
+        input=harness,
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
