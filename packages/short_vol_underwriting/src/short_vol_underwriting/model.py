@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from short_vol_underwriting.constants import POSITION_CLOSE_REASONS
 from short_vol_underwriting.identity import require_code_identity, require_identity
 
 
@@ -18,6 +19,11 @@ class OutcomeState(StrEnum):
     MATURE_UNKNOWN = "MATURE_UNKNOWN"
     CENSORED_AT_STOP = "CENSORED_AT_STOP"
     CENSORED_AT_FAILURE = "CENSORED_AT_FAILURE"
+
+
+class ObservationQuality(StrEnum):
+    CONTINUOUS = "CONTINUOUS"
+    GAPPED = "GAPPED"
 
 
 class TerminalSource(StrEnum):
@@ -96,3 +102,62 @@ class FactBoundary:
             received_monotonic_ms=integers["received_monotonic_ms"],
             causal_seq=integers["causal_seq"],
         )
+
+
+@dataclass(frozen=True)
+class CaseFactBoundary:
+    """One Case-local ordering point over a runtime-owned fact boundary."""
+
+    segment_sequence: int
+    fact_boundary: FactBoundary
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.segment_sequence, bool)
+            or not isinstance(self.segment_sequence, int)
+            or self.segment_sequence < 0
+        ):
+            raise ValueError("segment_sequence must be a non-negative integer")
+
+    def as_object(self) -> dict[str, object]:
+        return {
+            "segment_sequence": self.segment_sequence,
+            "fact_boundary": self.fact_boundary.as_object(),
+        }
+
+    def is_strictly_after(self, other: CaseFactBoundary) -> bool:
+        if self.segment_sequence == other.segment_sequence:
+            return self.fact_boundary.is_strictly_after(other.fact_boundary)
+        return self.segment_sequence > other.segment_sequence
+
+
+@dataclass(frozen=True)
+class PositionDecisionRecoverySeed:
+    """Durable first-CLOSE state needed to continue one Position Policy."""
+
+    first_latched_close_action_identity: str | None = None
+    ordered_latched_close_reason_vector: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        reasons = self.ordered_latched_close_reason_vector
+        if not isinstance(reasons, tuple):
+            raise ValueError("ordered_latched_close_reason_vector must be a tuple")
+        ordered = tuple(reason for reason in POSITION_CLOSE_REASONS if reason in reasons)
+        if reasons != ordered or len(set(reasons)) != len(reasons):
+            raise ValueError("latched CLOSE reasons must be unique and canonically ordered")
+        if self.first_latched_close_action_identity is None:
+            if reasons:
+                raise ValueError("latched CLOSE reasons require the first CLOSE identity")
+        else:
+            require_identity(
+                self.first_latched_close_action_identity,
+                "first_latched_close_action_identity",
+            )
+            if not reasons:
+                raise ValueError("first CLOSE identity requires at least one latched reason")
+
+    def as_object(self) -> dict[str, object]:
+        return {
+            "first_latched_close_action_identity": self.first_latched_close_action_identity,
+            "ordered_latched_close_reason_vector": list(self.ordered_latched_close_reason_vector),
+        }

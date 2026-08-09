@@ -5,7 +5,7 @@
 **Long-term product:** autonomous 0–3DTE options decision and trading system
 
 **Current product slice:** Deribit BTC options defined-risk Short Vol — accepted Linear BTC-USDC
-plus accepted Inverse BTC construction, with a local Inverse repair/restart/monitor stability loop
+plus accepted Inverse BTC construction, with process-independent admitted Shadow Entry recovery
 under production-public Shadow permission
 
 ## North star
@@ -20,11 +20,20 @@ diagnostics, Underwriting state, Candidate state, and Workbench projections are 
 decision state** before Shadow enrollment. They may be known, degraded, or `UNKNOWN`; they are not
 durable research records.
 
-The first durable business object is `SHADOW_CASE_OPENED`. It exists only after one admitted
-counterfactual trade, or a future explicitly selected no-trade control, is enrolled for strictly
-future observation. Persistence serves trader review, AI research, and later qualification. It
-never serves online UI, process commissioning, host monitoring, full-market reconstruction, or
-proof that the software did not deceive itself.
+The first durable business object is `SHADOW_CASE_OPENED`. For an admitted trade it creates one
+process-independent Shadow Entry aggregate: the frozen `shadow_entry_identity`, contracts,
+quantity, entry prices, fees, entry time, economics, product, and Policies survive every process.
+A runtime owns only one bounded Observation Segment over that Entry. Persistence serves online
+recovery, trader review, AI research, and later qualification. It never serves process
+commissioning, host monitoring, full-market reconstruction, or proof that the software did not
+deceive itself.
+
+Every admitted Entry without a mature `SHADOW_CASE_OUTCOME` is non-terminal. A later runtime using
+the same stable Case repository automatically restores all compatible non-terminal admitted
+Entries. It never reconstructs Candidate, Underwriting, Radar Episode, or missed market facts.
+The interval between Observation Segments is explicitly `HANDOFF_GAP`; recovery data starts
+`UNKNOWN` until fresh public facts settle. A gap is observation quality, not a Position predicate,
+and cannot synthesize `CLOSE`.
 
 A qualification Cohort is an offline, pre-registered view derived from completed Shadow Cases. The
 Online Runtime does not own Cohort membership, windows, aligned-pair records, qualification
@@ -134,18 +143,24 @@ snapshots are immutable bytes for readers but are not durable records.
 
 ### Shadow Case data
 
-An enrolled `SHADOW_CASE_OPENED` freezes the exact code and three Policy identities, decision
+An enrolled `SHADOW_CASE_OPENED` freezes the origin code/runtime and exact three Policy identities, decision
 boundary, frozen two-leg structure, target quantity, one strictly later paired public option-book
 snapshot, conservative stressed leg prices, standard public fees, and the minimum consumed decision
 facts, including the protective-leg selector-rule identity and Candidate protective-leg count that
 cannot be reconstructed after option scope is released. `enrollment_kind` discriminates an admitted
 Candidate trade from one pre-outcome selected no-trade decision control; a control has no Candidate
 or `SHADOW_ENTRY` identity. Strictly future bounded transitions and one terminal Outcome may then be
-stored.
+stored. The accepted v3/v4 `SHADOW_CASE_OPENED` shapes and product schema identities remain
+unchanged. For a new admitted Entry, its origin `SHADOW_CASE_SEGMENT_OPENED` instead freezes the
+`entry_position_baseline` needed after restart: the entry index and short-leg mark IV with their
+exact source identities and boundaries. A migrated legacy Entry that lacks those accepted source
+references records that baseline as `UNKNOWN`; it is never inferred or added to `opened.json`.
 
 An opened Case without a terminal record after an unclean process loss is
-`INCOMPLETE_UNCLEAN_EXIT`. It is never silently completed, resumed by a new runtime, or removed from
-research denominators without an explicit offline rule.
+not silently completed. Its open Observation Segment is `INCOMPLETE_UNCLEAN_EXIT`, while the
+admitted Entry remains non-terminal and is recovered into a new `HANDOFF_GAP` segment. Missing
+facts across the gap remain `UNKNOWN` and the gap permanently changes observation quality. Selected
+no-trade Controls are not Entry aggregates and retain their bounded terminal Case lifecycle.
 
 ### Qualification data
 
@@ -215,15 +230,20 @@ admitted-trade counts.
 ## Position and Outcome
 
 After Case opening, one fixed Position Policy continuously returns `HOLD | CLOSE | UNKNOWN` from
-strictly later public facts. `CLOSE` is an instruction, not a closing fact. The first CLOSE may
-produce at most one durable `FIRST_CLOSE_LATCHED` Case transition.
+strictly later public facts inside the current Observation Segment. `CLOSE` is an instruction, not
+a closing fact. The first CLOSE and scheduling of its only paired close attempt are one durable
+transition. A restart never creates a second first CLOSE or schedules a second attempt. If the one
+scheduled attempt is pending when a process is lost, recovery reports that attempt `UNKNOWN` and
+does not retry it.
 
 A known Shadow Outcome requires the first eligible strictly later paired component-book close
 snapshot: buy back the short at ask stressed up one tick and sell the same frozen protective long at
 bid stressed down one tick, both at full quantity with both standard fees. Natural maturity without
 such an exit may be `MATURE_UNKNOWN`. Clean stop, handled failure, and unclean process loss remain
-distinct censoring/incomplete states. Unknown and censored post-enrollment results are valid
-research data and must not be discarded as failed software.
+distinct Observation Segment endings and do not terminate an admitted Entry. After recovery and
+fresh facts, the Entry may still form a mature economic Outcome. Any Entry whose segment chain has
+a gap stores `observation_quality=GAPPED` and `qualification_eligible=false`; known economics remain
+truthful, but the result cannot enter a continuous-observation qualification Cohort.
 
 ## AI Researcher and qualification
 
@@ -238,8 +258,9 @@ requirements.
 ## Hard invariants
 
 1. Current decision facts are known at or before their causal boundary.
-2. Shadow observations and Outcomes are strictly after `SHADOW_CASE_OPENED`; the enrollment
-   decision and its paired witness are strictly pre-open.
+2. Shadow observations are strictly ordered inside one runtime Observation Segment. Cross-runtime
+   order is established only by the durable segment predecessor chain; an interval between
+   segments is `HANDOFF_GAP`, never imputed continuous observation.
 3. Missing, stale, discontinuous, incomplete, or contaminated required facts remain `UNKNOWN` at
    the smallest consumer.
 4. A known positive witness is not erased by unrelated missingness; negative absence claims require
@@ -253,10 +274,13 @@ requirements.
    They are counterfactuals, not orders, fills, atomic quotes, or liquidity reservations.
 7. Pre-Shadow durable business record count is exactly zero; Shadow begins only at explicit Case
    enrollment.
-8. The Online Runtime persists only bounded Shadow Case records; it does not persist Cohort,
-   aligned-pair, Workbench, service, host, or full-market records.
+8. The Online Runtime persists only bounded Shadow Entry aggregate and Observation Segment
+   records; it does not persist Cohort, aligned-pair, Workbench, service, host, or full-market
+   records.
 9. One run binds one exact three-Policy chain and cannot hot-reload, train, promote, or tune it.
-10. A new runtime never resumes an open Case from another runtime in the current slice.
+10. A runtime never owns an admitted Entry. Under the stable repository lease, every new runtime
+    automatically restores all compatible non-terminal admitted Entries and opens a new segment;
+    Controls and pre-Shadow state are never restored.
 11. Qualification criteria are frozen before evaluating a derived Cohort.
 12. Private execution remains a separate authorization and security boundary.
 
@@ -269,3 +293,5 @@ requirements.
 - application commissioning, host PID/log inspection, resource acceptance controller, manifest,
   receipt chain, validator-of-validator, or duplicated business schema;
 - automatic Policy training, qualification, promotion, or private execution.
+- database, fencing service, generic event log, per-tick Position persistence, market replay, or
+  synthesis of facts across a process gap.

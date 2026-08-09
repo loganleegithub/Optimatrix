@@ -288,8 +288,9 @@ def test_opportunity_blotter_maps_server_states_without_recomputing_strategy_tru
         "radarState, orderedStructureRows, orderedRadarRows, predicateMarginForFailure, "
         "formatMargin, firstFailureSummary, structureJudgement, canonicalShadowMarkup, "
         "canonicalShadowEntry, structureEntryFacts, structureIdentity, structureDetailMarkup, "
-        "shadowStructureRow, structureQueueRows, validateDocument, reasonText, escapeHtml, "
-        "runtimeStatusState };",
+        "shadowStructureRow, structureQueueRows, shadowTrackingPresentation, "
+        "structureDecisionMarkup, shadowTrackingEvidenceMarkup, postCloseAttemptText, "
+        "validateDocument, reasonText, escapeHtml, runtimeStatusState };",
     )
     assert test_js != JS
     harness = f"""
@@ -468,6 +469,73 @@ assert.equal(api.structureIdentity(queueRows[0]), 'candidate');
 assert.equal(queueRows[0].short_leg_instrument_name, 'BTC-11AUG26-64500-P');
 assert.equal(queueRows[0].long_leg_instrument_name, 'BTC-11AUG26-63000-P');
 assert.equal(api.structureState(currentUnderwriting).key, 'NOT_EVALUATED');
+assert.equal(api.shadowTrackingEvidenceMarkup(matchingShadow), '');
+assert.doesNotMatch(api.structureDecisionMarkup(queueRows[0]), /观察有间隙/);
+const gappedShadow = {{
+  ...matchingShadow,
+  origin_runtime_identity: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  current_segment_identity: null,
+  current_segment_sequence: null,
+  observation_quality: 'GAPPED', gap_count: 2,
+  qualification_eligible: false, tracking_state: 'RECOVERING',
+  post_close_attempt_state: 'ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS',
+  entry_fact_boundary: {{causal_seq: 4}},
+  entry_component_quote_source_refs: [
+    {{canonical_leg_role: 'SHORT', source_timestamp_ms: 1000}},
+    {{canonical_leg_role: 'LONG', source_timestamp_ms: 1001}}
+  ]
+}};
+const gappedDocument = {{
+  ...queueDocument,
+  shadow_entries: {{rows: [gappedShadow]}},
+  positions: {{rows: [{{
+    shadow_entry_identity: 'entry', position_action: 'UNKNOWN',
+    observation_quality: 'GAPPED', qualification_eligible: false,
+    primary_exit_rule: null, hard_close_countdown_interval_ms: null,
+    valid_shadow_close_opportunity: false
+  }}]}}
+}};
+const [gappedRow] = api.structureQueueRows(gappedDocument);
+assert.deepEqual(api.shadowTrackingPresentation(gappedRow), {{
+  label: '跨进程跟踪', note: '观察有间隙 · 不计入连续观察资格'
+}});
+assert.deepEqual(api.shadowTrackingPresentation({{
+  candidate_lifecycle: 'ADMITTED',
+  shadow_entry_projection: {{...matchingShadow, observation_quality: 'CONTINUOUS',
+    qualification_eligible: false}}
+}}), {{label: 'Shadow 跟踪', note: '不计入连续观察资格'}});
+assert.equal(api.structureState(gappedRow).key, 'SHADOW_TRACKING');
+assert.equal(api.structureState(gappedRow).tone, 'purple');
+const gappedDecision = api.structureDecisionMarkup(gappedRow);
+assert.match(gappedDecision, /跨进程跟踪/);
+assert.match(gappedDecision, /观察有间隙/);
+assert.match(gappedDecision, /不计入连续观察资格/);
+assert.doesNotMatch(gappedDecision, /tone-red|tone-amber|异常|阻塞/);
+assert.equal(api.postCloseAttemptText('NOT_SCHEDULED'), '尚未安排');
+assert.equal(api.postCloseAttemptText('SCHEDULED'), '已安排');
+assert.equal(api.postCloseAttemptText('TERMINAL'), '已终结');
+assert.equal(api.postCloseAttemptText('ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS'),
+  '进程中断后状态未知\\uFF08不重试\\uFF09');
+const trackingEvidence = api.shadowTrackingEvidenceMarkup(gappedShadow);
+assert.match(trackingEvidence, /跨进程跟踪/);
+assert.match(trackingEvidence, /观察有间隙/);
+assert.match(trackingEvidence, /不计入连续观察资格/);
+assert.match(trackingEvidence, /sha256:aaaa/);
+assert.doesNotMatch(trackingEvidence, /#2/);
+assert.match(trackingEvidence, /入场 causal seq/);
+assert.match(trackingEvidence, />4</);
+assert.match(trackingEvidence, /双腿源时间/);
+assert.match(trackingEvidence, new RegExp('1000 / 1001'));
+assert.match(trackingEvidence, /进程中断后状态未知\\uFF08不重试\\uFF09/);
+assert.doesNotMatch(trackingEvidence, /callout blocker/);
+const gappedShadowMarkup = api.canonicalShadowMarkup(gappedRow, gappedDocument);
+assert.match(gappedShadowMarkup, /跨进程跟踪/);
+assert.match(gappedShadowMarkup, /UNKNOWN/);
+const gappedDetail = api.structureDetailMarkup(gappedRow, gappedDocument);
+assert.match(gappedDetail, /观察有间隙/);
+assert.match(gappedDetail, /不计入连续观察资格/);
+assert.match(gappedDetail, /0\\.00025/);
+assert.match(gappedDetail, /18\\.82/);
 const duplicateDecorated = api.structureQueueRows({{
   ...queueDocument, underwriting: {{rows: [admitted]}}
 }});
@@ -537,6 +605,7 @@ assert.match(shadowDetail, /费前信用/);
 assert.match(shadowDetail, /BTC-11AUG26-64500-P/);
 assert.match(shadowDetail, /BTC-11AUG26-63000-P/);
 assert.doesNotMatch(shadowDetail, /NOT_EVALUATED/);
+assert.doesNotMatch(shadowDetail, /跨进程跟踪|观察有间隙|不计入连续观察资格/);
 assert.equal(api.reasonText('CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE'), '净权利金未覆盖未来成本准备');
 assert.equal(api.escapeHtml('<script>&'), '&lt;script&gt;&amp;');
 """

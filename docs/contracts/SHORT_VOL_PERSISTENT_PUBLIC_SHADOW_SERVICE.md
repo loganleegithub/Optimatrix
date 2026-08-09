@@ -6,7 +6,8 @@
 
 ## Purpose
 
-Run one public Deribit → Radar → Underwriting → Shadow Case → Position → Outcome path for exactly
+Run one public Deribit → Radar → Underwriting → process-independent Shadow Entry → Position →
+Outcome path for exactly
 one startup-selected product profile in one long-lived process and expose current settled state
 through a loopback read-only Workbench. The profile is `LINEAR_BTC_USDC_V1` or `INVERSE_BTC_V1` and
 is immutable for the process.
@@ -22,7 +23,7 @@ One process owns:
 - one selected-product public Deribit client and bounded application queue;
 - one synchronous Radar reducer;
 - one in-memory Underwriting/Admission/Position owner;
-- one minimal Shadow Case store;
+- one stable minimal Shadow Case repository and every compatible active admitted Entry it restores;
 - one coalesced immutable Workbench snapshot store;
 - one loopback GET/HEAD HTTP server.
 
@@ -31,10 +32,13 @@ compose both products. There is no second queue, reducer, owner, Case store, Wor
 cross-product funnel inside the process.
 
 Recoverable transport failure starts a new session epoch without replacing the in-process owners.
-A process restart creates a fresh runtime and does not resume prior open Cases.
+A process restart creates a fresh runtime identity and reuses the stable Case repository. After
+acquiring its lease, it restores every compatible non-terminal admitted Entry and opens a new
+Observation Segment. Runtime identity is segment provenance, not Entry ownership.
 
 The long-lived process retains only current option/Combo sources, frozen protective-leg bindings,
-active Underwriting scopes, active Candidates and their bounded paired requests, open Shadow Cases,
+active Underwriting scopes, active Candidates and their bounded paired requests, restored/open
+admitted Entries,
 and one latest terminal Case for trader display. Terminal identities are evicted at their owning
 boundary. Durable Case files remain the source for historical research; neither the owner nor
 Workbench keeps a second in-memory event history.
@@ -45,36 +49,51 @@ in-process projection.
 
 ## State root
 
-One external absolute state root contains:
+One external absolute state root is the stable business repository across process starts:
 
 ```text
 service.lock
-runs/<runtime-id>/cases/<case-id>/...
+cases/<case-id>/opened.json
+cases/<case-id>/segments/<segment-sequence>/opened.json
+cases/<case-id>/segments/<segment-sequence>/closed.json     # optional
+cases/<case-id>/first-close.json                      # optional
+cases/<case-id>/outcome.json                          # optional
+cases/<case-id>/legacy-migration.json                 # optional
 ```
 
 There is no `radar/` or `downstream/` evidence directory. The lock prevents two processes from
-owning the same state root. A runtime cannot reuse another product's run directory or resume its
-Case. The lock is not a commissioning or host-identity proof.
+writing the same local repository concurrently. Startup rejects any active Entry whose product or
+frozen Policies differ from the selected runtime. The lock is not distributed fencing,
+commissioning, or host-identity proof.
 
 ## Runtime lifecycle
 
 `serve-shadow` performs only:
 
 1. resolve one product specification, clean code identity, and exact matching three-Policy chain;
-2. acquire the state-root lease and create a fresh runtime/cases directory;
-3. start loopback Workbench;
-4. connect/reconnect one public Deribit session;
-5. settle each accepted fact through Radar and the current owner;
-6. publish admitted Shadow Case records and their bounded future results;
-7. stop on the first SIGINT/SIGTERM or fatal process failure.
+2. acquire the stable state-root lease and validate every Case in `state-root/cases`;
+3. restore all compatible non-terminal admitted Entries and no Controls;
+4. start loopback Workbench and connect/reconnect one public Deribit session;
+5. on the first settled boundary, open one new `GAPPED` Observation Segment per restored Entry;
+6. settle each accepted fact through Radar and the current owner, beginning restored current state
+   at `UNKNOWN` until required fresh facts arrive;
+7. publish each new admission only as one complete initial Case directory containing
+   `opened.json + segments/0/opened.json`; publish later Segment records, the combined
+   first-close/attempt transition, and mature Outcomes individually;
+8. on SIGINT/SIGTERM or handled failure, close active Segments without terminating admitted Entry
+   Outcomes.
 
 Process supervision, restart policy, CPU, memory, host logs, and uptime monitoring are external.
 The application does not inspect or control them.
 
-Live invocation is governed only by `CURRENT_STAGE`. A `VALIDATION_ONLY` task may name one exact
-code/product/Policy/state-root topology and one process start. A same-process read-only gate may
-permit that process to continue, but a failed, stopped, or consumed attempt never permits a restart
-or second product process.
+Live invocation is governed only by `CURRENT_STAGE`. Reusing the stable Case repository is required
+business recovery, not authority for automatic process restart: an external operator still decides
+when to launch a process. Exactly one selected-product runtime may hold the repository lease.
+
+Legacy conversion is a separate offline command over one explicitly supplied stopped source run.
+It scans all compatible admitted records, never accepts a Case allowlist, and is not a
+`serve-shadow` option. The destination repository is published only after the full compatible set
+validates; source bytes are never modified.
 
 ## Current state and Workbench
 
@@ -105,6 +124,13 @@ premium/settlement/strike/valuation units, and Policy chain. Every monetary valu
 its server-owned native or valuation unit. Browser code may not infer a unit from a legacy key
 suffix or convert between native, model, and valuation values.
 
+Every active admitted Entry appears once by its original `shadow_entry_identity`, whether opened in
+this runtime or restored. The snapshot distinguishes origin runtime from current Segment runtime
+and exposes Segment state, `CONTINUOUS | GAPPED`, gap count, current-data availability, durable
+first-CLOSE/attempt status, Outcome quality, and qualification eligibility. A restored row is
+`UNKNOWN` until fresh facts settle; the browser cannot turn `HANDOFF_GAP` into `HOLD` or `CLOSE`.
+Runtime health/readiness remains a separate service signal.
+
 There is no publication timer, event stream, durable Workbench file, SSE, partial patch, or browser
 strategy engine. HTTP readers see old or new complete bytes only.
 
@@ -113,6 +139,10 @@ strategy engine. HTTP readers see old or new complete bytes only.
 The service exposes non-durable funnel counts and a primary blocker in the Workbench. They are
 computed from current reducer/owner transitions and reset with the runtime. They do not create Case
 files or qualify a Policy.
+
+Restoring an Entry increments no Candidate, admission, or `SHADOW_CASE_OPENED` counter. The Entry's
+mature `SHADOW_CASE_OUTCOME` is counted once when it first becomes durable, while
+`qualification_eligible` remains false for every gapped chain.
 
 For each evaluable Underwriting row, Workbench projects the owner-generated selected protective leg,
 complete signed six-predicate margin vector, and all failed predicates. Admission and close rows
@@ -149,9 +179,17 @@ stale business tables and displays UNKNOWN until a complete later snapshot succe
 Before reconnect or clean stop, intake stops, every accepted fact remaining in the sole bounded
 queue is settled, and pending Workbench state is flushed. A completed business summary is returned
 independently of a bounded best-effort transport close; a WebSocket closing handshake cannot consume
-the outer acceptance window. The owner terminalizes pending Cases as censored when the failure/stop
-boundary is available. An uncatchable process loss may leave only `opened.json`; the Case reader
-reports it as `INCOMPLETE_UNCLEAN_EXIT`.
+the outer acceptance window. When the failure/stop boundary is available, the owner closes admitted
+Entry Segments and terminalizes non-recoverable Controls. An uncatchable process loss may leave a
+Segment without `closed.json`; the Case reader reports that Segment as
+`INCOMPLETE_UNCLEAN_EXIT`.
+
+For admitted Entries, clean stop and handled failure write only
+`SHADOW_CASE_SEGMENT_CLOSED` with `CENSORED_AT_STOP | CENSORED_AT_FAILURE`; they do not write a
+mature Entry Outcome. An uncatchable loss leaves Segment close absent. The next externally started
+runtime restores all three states as gapped observation, starts current facts at `UNKNOWN`, and
+does not retry a previously scheduled close attempt. Selected no-trade Controls retain their
+existing bounded censoring behavior and are not restored.
 
 No terminal manifest, inventory, service receipt, host audit, or automatic restart belongs to this
 contract.
@@ -167,3 +205,11 @@ scope-replacement, and completed-Case tests must prove that retained collections
 active-set bound. Public observation requires explicit `CURRENT_STAGE` authority. A bounded gate
 may establish current-state reachability and negative product contamination only; a later natural
 Outcome remains a separate product result.
+
+Recovery tests run at least runtime A → B → C over one repository and prove stable Entry identity,
+all-active scanning, Control/terminal exclusion, recovery-first UNKNOWN, segment-chain ordering,
+gap quality without synthetic CLOSE, one combined first-close/attempt schedule, no retry after
+uncertain loss, one mature gapped Outcome with qualification false, no duplicate funnel admission,
+and immutable records. Migration tests cover all compatible admitted records from a user-supplied
+legacy run, no allowlist/count special case, immutable source, idempotency, conflict rejection, and
+all-or-nothing destination publication.

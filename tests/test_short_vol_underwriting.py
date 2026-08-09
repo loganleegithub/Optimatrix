@@ -40,6 +40,7 @@ from short_vol_underwriting import (
     PostCloseAttemptOwner,
     PostCloseAttemptStatus,
     PredicateTruth,
+    RecoverableShadowEntry,
     RefreshClassification,
     RpcAdmissionRefreshWitness,
     RpcComponentLegRefreshWitness,
@@ -64,10 +65,17 @@ from short_vol_underwriting import (
     select_underwriting_component,
     underwriting_threshold_margins,
 )
+from short_vol_underwriting.case_store import ShadowCaseSegmentStatus
 from short_vol_underwriting.constants import (
     POSITION_POLICY_IDENTITY,
     RADAR_POLICY_IDENTITY,
     UNDERWRITING_POLICY_IDENTITY,
+)
+from short_vol_underwriting.domain import EntryTerms, PositionDecision
+from short_vol_underwriting.model import (
+    CaseFactBoundary,
+    ObservationQuality,
+    PositionDecisionRecoverySeed,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -278,6 +286,334 @@ def _owner(
     _STATE_BY_DIRECTORY[tmp_path.resolve()] = state_store
     _HISTORY_BY_DIRECTORY[tmp_path.resolve()] = history
     return owner, bindings
+
+
+def _recovery_projection(
+    bindings: RuntimeBindings,
+    *,
+    first_close: bool = False,
+    known_entry_baseline: bool = True,
+) -> dict[str, object]:
+    origin_bindings = replace(
+        bindings,
+        code_identity="c" * 40,
+        runtime_identity="sha256:" + "d" * 64,
+    )
+    origin_boundary = replace(
+        _boundary(3, 130),
+        code_identity=origin_bindings.code_identity,
+        runtime_identity=origin_bindings.runtime_identity,
+    )
+    adoption_boundary = _boundary(1, 110)
+    entry_identity = canonical_identity("ShadowEntryIdentity", "recovery")
+    case_id = canonical_identity("ShadowCaseIdentity", "recovery")
+    segment_identity = canonical_identity("ShadowCaseSegmentIdentity", case_id, 1)
+    opened: dict[str, object] = {
+        "schema_version": 3,
+        "case_id": case_id,
+        "code_identity": origin_bindings.code_identity,
+        "runtime_identity": origin_bindings.runtime_identity,
+        "radar_policy_identity": bindings.radar_policy_identity,
+        "underwriting_policy_identity": bindings.underwriting_policy_identity,
+        "position_policy_identity": bindings.position_policy_identity,
+        "shadow_case_contract_identity": origin_bindings.shadow_case_contract_identity,
+        "opened_fact_boundary": origin_boundary.as_object(),
+        "enrollment_kind": "ADMITTED_SHADOW_TRADE",
+        "shadow_entry_identity": entry_identity,
+        "candidate_identity": canonical_identity("CandidateIdentity", "recovery"),
+        "structure": {
+            "execution_model": "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL",
+            "canonical_leg_identities": [
+                canonical_identity("LegIdentity", "recovery-short"),
+                canonical_identity("LegIdentity", "recovery-long"),
+            ],
+            "short_leg_instrument_name": "BTC_USDC-8AUG26-101000-C",
+            "long_leg_instrument_name": "BTC_USDC-8AUG26-102000-C",
+            "expiry_ms": 10_000_000,
+            "option_type": "call",
+            "short_strike_usdc_per_btc": "101000",
+            "long_strike_usdc_per_btc": "102000",
+            "entry_direction": "SELL",
+            "full_quantity_btc": "0.1",
+            "entry_component_pair_identity": canonical_identity(
+                "ComponentPairIdentity", "recovery-entry"
+            ),
+            "entry_component_pair_timing": {},
+            "entry_component_pair_limits": {},
+            "entry_component_legs": [
+                {"canonical_leg_role": "SHORT"},
+                {"canonical_leg_role": "LONG"},
+            ],
+        },
+        "radar": {
+            "active_episode_identity": "origin-episode",
+            "radar_scope_identity": canonical_identity("RadarScopeIdentity", "recovery"),
+        },
+        "entry_economics": {
+            "gross_entry_credit_usdc": "29.8",
+            "entry_fee_reserve_usdc": "4.2625",
+            "net_entry_credit_usdc": "25.5375",
+            "width_usdc_per_btc": "1000",
+            "payoff_cap_usdc": "100",
+            "contractual_payoff_max_loss_ex_fees_usdc": "70.2",
+            "entry_fee_reserved_payoff_loss_usdc": "74.4625",
+            "future_cost_reserve_usdc": "12",
+            "underwriting_reserved_loss_usdc": "86.4625",
+        },
+        "non_claims": ["NOT_AN_ORDER", "NOT_A_FILL"],
+    }
+    index_source = {
+        "source_identity": canonical_identity("IndexSourceIdentity", "recovery-entry"),
+        "receipt_fact_boundary": origin_boundary.as_object(),
+    }
+    ticker_source = {
+        "source_identity": canonical_identity("TickerSourceIdentity", "recovery-entry"),
+        "receipt_fact_boundary": origin_boundary.as_object(),
+    }
+    baseline = {
+        "entry_index_usdc_per_btc": "100000" if known_entry_baseline else None,
+        "entry_index_source_ref": index_source if known_entry_baseline else None,
+        "entry_short_leg_mark_iv_fraction": "0.5" if known_entry_baseline else None,
+        "entry_short_leg_mark_iv_source_ref": ticker_source if known_entry_baseline else None,
+    }
+    close_boundary = replace(origin_boundary, causal_seq=4, ingress_seq=4)
+    first_close_record = (
+        {
+            "segment_sequence": 0,
+            "first_close_fact_boundary": close_boundary.as_object(),
+            "position_action_identity": canonical_identity(
+                "PositionActionIdentity", "recovery-close"
+            ),
+            "primary_close_reason": "ECONOMIC_EXIT_BOUNDARY_REACHED",
+            "ordered_latched_close_reasons": ["ECONOMIC_EXIT_BOUNDARY_REACHED"],
+            "predicate_truth_vector": ["FALSE"] * 8 + ["TRUE"],
+        }
+        if first_close
+        else None
+    )
+    return {
+        "case_id": case_id,
+        "shadow_entry_identity": entry_identity,
+        "opened": opened,
+        "entry_position_baseline": baseline,
+        "latest_segment_sequence": 1,
+        "current_segment_identity": segment_identity,
+        "predecessor_segment_state": "CENSORED_AT_STOP",
+        "observation_quality": "GAPPED",
+        "gap_count": 1,
+        "qualification_eligible": False,
+        "first_close": first_close_record,
+        "first_close_state": "LATCHED" if first_close else "NOT_LATCHED",
+        "attempt_state": (
+            "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS" if first_close else "NOT_SCHEDULED"
+        ),
+        "segments": (
+            {
+                "segment_sequence": 1,
+                "segment_identity": segment_identity,
+                "adoption_fact_boundary": adoption_boundary.as_object(),
+            },
+        ),
+    }
+
+
+def _typed_recovery_entry(
+    bindings: RuntimeBindings,
+    *,
+    first_close: bool = False,
+    known_entry_baseline: bool = True,
+) -> RecoverableShadowEntry:
+    projection = _recovery_projection(
+        bindings,
+        first_close=first_close,
+        known_entry_baseline=known_entry_baseline,
+    )
+    opened = cast(Mapping[str, object], projection["opened"])
+    structure = cast(Mapping[str, object], opened["structure"])
+    economics = cast(Mapping[str, object], opened["entry_economics"])
+    baseline = cast(Mapping[str, object], projection["entry_position_baseline"])
+    index_source_value = baseline["entry_index_source_ref"]
+    ticker_source_value = baseline["entry_short_leg_mark_iv_source_ref"]
+    index_source = (
+        SourceFact(
+            cast(str, cast(Mapping[str, object], index_source_value)["source_identity"]),
+            FactBoundary.from_object(
+                cast(
+                    Mapping[str, object],
+                    cast(Mapping[str, object], index_source_value)["receipt_fact_boundary"],
+                )
+            ),
+        )
+        if index_source_value is not None
+        else None
+    )
+    ticker_source = (
+        SourceFact(
+            cast(str, cast(Mapping[str, object], ticker_source_value)["source_identity"]),
+            FactBoundary.from_object(
+                cast(
+                    Mapping[str, object],
+                    cast(Mapping[str, object], ticker_source_value)["receipt_fact_boundary"],
+                )
+            ),
+        )
+        if ticker_source_value is not None
+        else None
+    )
+    leg_identities = cast(list[str], structure["canonical_leg_identities"])
+    terms = EntryTerms(
+        short_leg_identity=leg_identities[0],
+        long_leg_identity=leg_identities[1],
+        short_leg_instrument_name=cast(str, structure["short_leg_instrument_name"]),
+        long_leg_instrument_name=cast(str, structure["long_leg_instrument_name"]),
+        canonical_combo_identity=None,
+        combo_instrument_name=None,
+        option_type=cast(str, structure["option_type"]),
+        short_strike_usdc_per_btc=Decimal(str(structure["short_strike_usdc_per_btc"])),
+        long_strike_usdc_per_btc=Decimal(str(structure["long_strike_usdc_per_btc"])),
+        expiry_ms=cast(int, structure["expiry_ms"]),
+        target_quantity_btc=Decimal(str(structure["full_quantity_btc"])),
+        entry_direction=cast(str, structure["entry_direction"]),
+        index_usdc_per_btc=(
+            Decimal(str(baseline["entry_index_usdc_per_btc"])) if index_source is not None else None
+        ),
+        index_source=index_source,
+        short_mark_iv_fraction=(
+            Decimal(str(baseline["entry_short_leg_mark_iv_fraction"]))
+            if ticker_source is not None
+            else None
+        ),
+        ticker_source=ticker_source,
+        short_leg_taker_commission_fraction=Decimal("0.0003"),
+        long_leg_taker_commission_fraction=Decimal("0.0003"),
+        execution_model=cast(str, structure["execution_model"]),
+        product_spec_identity=LINEAR_BTC_USDC.identity,
+        product_name=LINEAR_BTC_USDC.name.value,
+        native_premium_currency=LINEAR_BTC_USDC.native_premium_currency,
+        settlement_currency=LINEAR_BTC_USDC.settlement_currency,
+        valuation_currency=LINEAR_BTC_USDC.valuation_currency,
+        price_index=LINEAR_BTC_USDC.price_index,
+        native_gross_entry_credit=Decimal(str(economics["gross_entry_credit_usdc"])),
+        native_entry_fee_reserve=Decimal(str(economics["entry_fee_reserve_usdc"])),
+        native_net_entry_credit=Decimal(str(economics["net_entry_credit_usdc"])),
+        entry_valuation_index_price=Decimal(1),
+        width_usdc_per_btc=Decimal(str(economics["width_usdc_per_btc"])),
+        entry_component_legs=tuple(
+            cast(Mapping[str, object], member)
+            for member in cast(list[object], structure["entry_component_legs"])
+        ),
+    )
+    entry_economics = EntryEconomics(
+        full_quantity_btc=terms.target_quantity_btc,
+        required_side_total_quote_usdc=Decimal(0),
+        gross_entry_credit_usdc=Decimal(str(economics["gross_entry_credit_usdc"])),
+        entry_fee_reserve_usdc=Decimal(str(economics["entry_fee_reserve_usdc"])),
+        net_entry_credit_usdc=Decimal(str(economics["net_entry_credit_usdc"])),
+        width_usdc_per_btc=Decimal(str(economics["width_usdc_per_btc"])),
+        payoff_cap_usdc=Decimal(str(economics["payoff_cap_usdc"])),
+        contractual_payoff_max_loss_ex_fees_usdc=Decimal(
+            str(economics["contractual_payoff_max_loss_ex_fees_usdc"])
+        ),
+        entry_fee_reserved_payoff_loss_usdc=Decimal(
+            str(economics["entry_fee_reserved_payoff_loss_usdc"])
+        ),
+        future_cost_reserve_usdc=Decimal(str(economics["future_cost_reserve_usdc"])),
+        underwriting_reserved_loss_usdc=Decimal(str(economics["underwriting_reserved_loss_usdc"])),
+    )
+    first_close_value = projection["first_close"]
+    first_close_decision = None
+    if first_close_value is not None:
+        first_close_mapping = cast(Mapping[str, object], first_close_value)
+        action_identity = cast(str, first_close_mapping["position_action_identity"])
+        reasons = tuple(cast(list[str], first_close_mapping["ordered_latched_close_reasons"]))
+        first_close_decision = PositionDecision(
+            position_evaluation_identity=action_identity,
+            position_action_identity=action_identity,
+            serialized_action="CLOSE",
+            ordered_predicate_truth_vector=tuple(
+                cast(list[str], first_close_mapping["predicate_truth_vector"])
+            ),
+            ordered_latched_close_reason_vector=reasons,
+            primary_close_reason=reasons[0],
+            secondary_close_reasons=reasons[1:],
+            first_latched_close_action_identity=action_identity,
+            action_case_boundary=CaseFactBoundary(
+                0,
+                FactBoundary.from_object(
+                    cast(
+                        Mapping[str, object],
+                        first_close_mapping["first_close_fact_boundary"],
+                    )
+                ),
+            ),
+        )
+    entry_boundary = FactBoundary.from_object(
+        cast(Mapping[str, object], opened["opened_fact_boundary"])
+    )
+    adoption_boundary = FactBoundary.from_object(
+        cast(
+            Mapping[str, object],
+            cast(tuple[Mapping[str, object], ...], projection["segments"])[0][
+                "adoption_fact_boundary"
+            ],
+        )
+    )
+    entry_payload = {
+        "shadow_entry_identity": projection["shadow_entry_identity"],
+        "candidate_identity": opened["candidate_identity"],
+        "enrollment_kind": "ADMITTED_SHADOW_TRADE",
+        "entry_fact_boundary": entry_boundary.as_object(),
+        "short_leg_instrument_name": terms.short_leg_instrument_name,
+        "long_leg_instrument_name": terms.long_leg_instrument_name,
+        "expiry_ms": terms.expiry_ms,
+        "option_type": terms.option_type,
+        "full_quantity_btc": terms.target_quantity_btc,
+        "entry_component_legs": list(terms.entry_component_legs),
+        "product_spec_identity": terms.product_spec_identity,
+        "product_name": terms.product_name,
+        "native_premium_currency": terms.native_premium_currency,
+        "settlement_currency": terms.settlement_currency,
+        "valuation_currency": terms.valuation_currency,
+        "price_index": terms.price_index,
+        "gross_entry_credit_usdc": entry_economics.gross_entry_credit_usdc,
+        "entry_fee_reserve_usdc": entry_economics.entry_fee_reserve_usdc,
+        "net_entry_credit_usdc": entry_economics.net_entry_credit_usdc,
+        "origin_case_id": projection["case_id"],
+        "origin_runtime_identity": opened["runtime_identity"],
+        "current_segment_identity": projection["current_segment_identity"],
+        "current_segment_sequence": 1,
+        "observation_quality": "GAPPED",
+        "gap_count": 1,
+        "qualification_eligible": False,
+        "tracking_state": "ACTIVE",
+        "post_close_attempt_state": projection["attempt_state"],
+    }
+    return RecoverableShadowEntry(
+        case_id=cast(str, projection["case_id"]),
+        shadow_entry_identity=cast(str, projection["shadow_entry_identity"]),
+        origin_outcome_contract_identity=cast(str, opened["shadow_case_contract_identity"]),
+        origin_runtime_identity=cast(str, opened["runtime_identity"]),
+        product_spec_identity=LINEAR_BTC_USDC.identity,
+        policy_identities=(
+            bindings.radar_policy_identity,
+            bindings.underwriting_policy_identity,
+            bindings.position_policy_identity,
+        ),
+        entry_case_boundary=CaseFactBoundary(0, entry_boundary),
+        adoption_case_boundary=CaseFactBoundary(1, adoption_boundary),
+        latest_segment_sequence=1,
+        current_segment_identity=cast(str, projection["current_segment_identity"]),
+        predecessor_segment_state=ShadowCaseSegmentStatus.CENSORED_AT_STOP,
+        observation_quality=ObservationQuality.GAPPED,
+        gap_count=1,
+        qualification_eligible=False,
+        entry_terms=terms,
+        entry_economics=entry_economics,
+        first_close_decision=first_close_decision,
+        first_close_state="LATCHED" if first_close else "NOT_LATCHED",
+        attempt_state=cast(str, projection["attempt_state"]),
+        entry_payload=entry_payload,
+    )
 
 
 @pytest.mark.parametrize(
@@ -915,6 +1251,8 @@ def test_position_action_unknown_is_not_hold_and_close_latches_once() -> None:
         consumed_position_fact_fingerprint="sha256:" + "3" * 64,
     )
     assert unknown.serialized_action == "UNKNOWN"
+    assert unknown.action_case_boundary == CaseFactBoundary(0, _boundary(2))
+    assert unknown.action_fact_boundary == _boundary(2)
 
     close = state.evaluate(
         {
@@ -951,6 +1289,150 @@ def test_position_action_unknown_is_not_hold_and_close_latches_once() -> None:
     assert later.serialized_action == "CLOSE"
     assert later.first_latched_close_action_identity == first_identity
     assert later.primary_close_reason == "SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED"
+    assert state.recovery_seed() == PositionDecisionRecoverySeed(
+        first_latched_close_action_identity=first_identity,
+        ordered_latched_close_reason_vector=(
+            "PATH_OR_JUMP_RISK_BOUNDARY_REACHED",
+            "ECONOMIC_EXIT_BOUNDARY_REACHED",
+        ),
+    )
+
+
+def test_recovered_position_policy_restores_first_close_in_a_new_segment() -> None:
+    entry = CaseFactBoundary(0, _boundary(1))
+    baseline_fact = FactBoundary(
+        code_identity="c" * 40,
+        runtime_identity="sha256:" + "d" * 64,
+        session_epoch=1,
+        ingress_seq=10,
+        received_monotonic_ms=10,
+        causal_seq=10,
+    )
+    baseline = CaseFactBoundary(1, baseline_fact)
+    seed = PositionDecisionRecoverySeed(
+        first_latched_close_action_identity="sha256:" + "4" * 64,
+        ordered_latched_close_reason_vector=(
+            "PATH_OR_JUMP_RISK_BOUNDARY_REACHED",
+            "ECONOMIC_EXIT_BOUNDARY_REACHED",
+        ),
+    )
+    state = PositionDecisionState.recovered(
+        shadow_entry_identity="sha256:" + "2" * 64,
+        position_policy_identity=POSITION_POLICY_IDENTITY,
+        entry_boundary=entry,
+        segment_baseline_boundary=baseline,
+        recovery_seed=seed,
+    )
+    all_false = {reason: PredicateTruth.FALSE for reason in POSITION_CLOSE_REASONS}
+
+    with pytest.raises(ValueError, match="strictly after the recovery segment baseline"):
+        state.evaluate(
+            all_false,
+            baseline_fact,
+            consumed_position_fact_fingerprint="sha256:" + "5" * 64,
+        )
+
+    current_fact = replace(
+        baseline_fact,
+        ingress_seq=11,
+        received_monotonic_ms=11,
+        causal_seq=11,
+    )
+    decision = state.evaluate(
+        all_false,
+        current_fact,
+        consumed_position_fact_fingerprint="sha256:" + "6" * 64,
+    )
+
+    assert decision.serialized_action == "CLOSE"
+    assert decision.first_latched_close_action_identity == (
+        seed.first_latched_close_action_identity
+    )
+    assert decision.ordered_latched_close_reason_vector == (
+        seed.ordered_latched_close_reason_vector
+    )
+    assert decision.action_case_boundary == CaseFactBoundary(1, current_fact)
+    assert decision.action_fact_boundary == current_fact
+    assert state.recovery_seed() == seed
+
+
+def test_gapped_segment_baseline_cannot_latch_close_or_synthesize_hold() -> None:
+    entry = CaseFactBoundary(0, _boundary(1))
+    baseline_fact = FactBoundary(
+        code_identity="c" * 40,
+        runtime_identity="sha256:" + "d" * 64,
+        session_epoch=1,
+        ingress_seq=1,
+        received_monotonic_ms=1,
+        causal_seq=1,
+    )
+    baseline = CaseFactBoundary(1, baseline_fact)
+    with pytest.raises(ValueError, match="later Case segment"):
+        PositionDecisionState.recovered(
+            shadow_entry_identity="sha256:" + "2" * 64,
+            position_policy_identity=POSITION_POLICY_IDENTITY,
+            entry_boundary=entry,
+            segment_baseline_boundary=CaseFactBoundary(0, _boundary(2)),
+            recovery_seed=PositionDecisionRecoverySeed(),
+        )
+    state = PositionDecisionState.recovered(
+        shadow_entry_identity="sha256:" + "2" * 64,
+        position_policy_identity=POSITION_POLICY_IDENTITY,
+        entry_boundary=entry,
+        segment_baseline_boundary=baseline,
+        recovery_seed=PositionDecisionRecoverySeed(),
+    )
+    baseline_truth = {
+        reason: (
+            PredicateTruth.TRUE
+            if reason == "SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED"
+            else PredicateTruth.FALSE
+        )
+        for reason in POSITION_CLOSE_REASONS
+    }
+
+    with pytest.raises(ValueError, match="strictly after the recovery segment baseline"):
+        state.evaluate(
+            baseline_truth,
+            baseline,
+            consumed_position_fact_fingerprint="sha256:" + "3" * 64,
+        )
+    assert state.recovery_seed() == PositionDecisionRecoverySeed()
+
+    current_fact = replace(
+        baseline_fact,
+        ingress_seq=2,
+        received_monotonic_ms=2,
+        causal_seq=2,
+    )
+    decision = state.evaluate(
+        {reason: PredicateTruth.FALSE for reason in POSITION_CLOSE_REASONS},
+        CaseFactBoundary(1, current_fact),
+        consumed_position_fact_fingerprint="sha256:" + "4" * 64,
+    )
+
+    assert decision.serialized_action == "HOLD"
+    assert decision.first_latched_close_action_identity is None
+
+
+def test_position_recovery_seed_rejects_incomplete_or_noncanonical_close_state() -> None:
+    reason = "PATH_OR_JUMP_RISK_BOUNDARY_REACHED"
+    with pytest.raises(ValueError, match="require the first CLOSE identity"):
+        PositionDecisionRecoverySeed(
+            ordered_latched_close_reason_vector=(reason,),
+        )
+    with pytest.raises(ValueError, match="requires at least one latched reason"):
+        PositionDecisionRecoverySeed(
+            first_latched_close_action_identity="sha256:" + "2" * 64,
+        )
+    with pytest.raises(ValueError, match="canonically ordered"):
+        PositionDecisionRecoverySeed(
+            first_latched_close_action_identity="sha256:" + "2" * 64,
+            ordered_latched_close_reason_vector=(
+                "ECONOMIC_EXIT_BOUNDARY_REACHED",
+                reason,
+            ),
+        )
 
 
 @pytest.mark.parametrize("reason", POSITION_CLOSE_REASONS)
@@ -1094,41 +1576,51 @@ def test_entry_economics_accepts_only_signed_orientation_with_positive_credit() 
         )
 
 
-def test_outcome_terminal_order_is_exit_then_natural_then_stop_or_failure() -> None:
-    reducer = OutcomeReducer(entry_boundary=_boundary(1))
-    reducer.latch_close("sha256:" + "d" * 64, _boundary(2))
+def test_case_fact_boundary_orders_within_and_across_observation_segments() -> None:
+    entry = CaseFactBoundary(0, _boundary(10))
+    same_segment_later = CaseFactBoundary(0, _boundary(11))
+    next_segment = CaseFactBoundary(
+        1,
+        FactBoundary(
+            code_identity="c" * 40,
+            runtime_identity="sha256:" + "d" * 64,
+            session_epoch=1,
+            ingress_seq=0,
+            received_monotonic_ms=1,
+            causal_seq=0,
+        ),
+    )
+
+    assert same_segment_later.is_strictly_after(entry)
+    assert next_segment.is_strictly_after(same_segment_later)
+    assert not entry.is_strictly_after(next_segment)
+    with pytest.raises(ValueError, match="runtime/code identity mismatch"):
+        CaseFactBoundary(0, next_segment.fact_boundary).is_strictly_after(entry)
+    with pytest.raises(ValueError, match="segment_sequence"):
+        CaseFactBoundary(True, _boundary(1))
+
+
+def test_outcome_terminal_order_is_exit_then_natural_without_process_censoring() -> None:
+    reducer = OutcomeReducer(entry_boundary=CaseFactBoundary(0, _boundary(1)))
+    reducer.latch_close("sha256:" + "d" * 64, CaseFactBoundary(0, _boundary(2)))
     result = reducer.settle(
-        boundary=_boundary(3),
+        boundary=CaseFactBoundary(0, _boundary(3)),
         eligible_exit_identity="sha256:" + "e" * 64,
         ordinary_attempt_terminal=True,
         lifecycle_ready=True,
-        terminal_source=TerminalSource.FAILURE,
     )
     assert result is OutcomeState.MATURE_KNOWN
-    assert reducer.settle(boundary=_boundary(4), terminal_source=TerminalSource.STOP) is result
+    assert reducer.settle(boundary=CaseFactBoundary(1, _boundary(1))) is result
 
-    natural = OutcomeReducer(entry_boundary=_boundary(1))
-    natural.latch_close("sha256:" + "f" * 64, _boundary(2))
+    natural = OutcomeReducer(entry_boundary=CaseFactBoundary(0, _boundary(1)))
+    natural.latch_close("sha256:" + "f" * 64, CaseFactBoundary(0, _boundary(2)))
     assert (
         natural.settle(
-            boundary=_boundary(3),
+            boundary=CaseFactBoundary(1, _boundary(1)),
             ordinary_attempt_terminal=True,
             lifecycle_ready=True,
-            terminal_source=TerminalSource.FAILURE,
         )
         is OutcomeState.MATURE_UNKNOWN
-    )
-
-    censored = OutcomeReducer(entry_boundary=_boundary(1))
-    censored.latch_close("sha256:" + "1" * 64, _boundary(2))
-    assert (
-        censored.settle(
-            boundary=_boundary(3),
-            ordinary_attempt_terminal=False,
-            lifecycle_ready=True,
-            terminal_source=TerminalSource.FAILURE,
-        )
-        is OutcomeState.CENSORED_AT_FAILURE
     )
 
 
@@ -3263,7 +3755,7 @@ def test_owner_replaces_candidate_only_after_ordinary_economic_fingerprint_chang
     assert second_candidate != first_candidate
 
 
-def test_owner_failure_censors_pending_trade(tmp_path: Path) -> None:
+def test_owner_failure_does_not_settle_pending_admitted_observation(tmp_path: Path) -> None:
     owner, bindings = _owner(tmp_path, close_enrollment=False)
     _admit_owner(owner)
     failure_boundary = _boundary(6, 150)
@@ -3274,15 +3766,190 @@ def test_owner_failure_censors_pending_trade(tmp_path: Path) -> None:
         failure_boundary.as_object(),
     )
 
-    owner.terminate(
+    transition = owner.terminate(
         boundary=failure_boundary,
         terminal_source_identity=failure_identity,
         terminal_source=TerminalSource.FAILURE,
     )
 
     objects = _written_objects(tmp_path, bindings=bindings)
-    outcome = next(value for value in objects.values() if value["object_kind"] == "SHADOW_OUTCOME")
-    assert _object(outcome["payload"])["terminal_state"] == "CENSORED_AT_FAILURE"
+    assert not any(value["object_kind"] == "SHADOW_OUTCOME" for value in objects.values())
+    assert not any(item.object_kind == "SHADOW_OUTCOME" for item in transition.emitted)
+    assert len(owner.active_trade_identities) == 1
+
+
+@pytest.mark.parametrize(
+    ("terminal_source", "expected_state"),
+    (
+        (TerminalSource.STOP, "CENSORED_AT_STOP"),
+        (TerminalSource.FAILURE, "CENSORED_AT_FAILURE"),
+    ),
+)
+def test_owner_process_end_preserves_control_censor_outcome(
+    tmp_path: Path,
+    terminal_source: TerminalSource,
+    expected_state: str,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry_identity = _admit_owner(owner)
+    owner._trades[entry_identity].enrollment_kind = "SELECTED_UNDERWRITING_DECISION_CONTROL"
+    boundary = _boundary(6, 160)
+    source_identity = canonical_identity(
+        "PublicShadowRuntimeTerminalSourceIdentity",
+        bindings.runtime_identity,
+        terminal_source.value,
+        boundary.as_object(),
+    )
+
+    transition = owner.terminate(
+        boundary=boundary,
+        terminal_source_identity=source_identity,
+        terminal_source=terminal_source,
+    )
+
+    outcome = next(
+        item
+        for item in transition.emitted
+        if item.object_kind == "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME"
+    )
+    record = owner.state_store.get_object(outcome.object_kind, outcome.object_identity)
+    assert record is not None
+    payload = cast(Mapping[str, object], record["payload"])
+    assert payload["terminal_state"] == expected_state
+    assert payload["economic_availability"] == "UNKNOWN"
+
+
+def test_owner_restores_entry_without_replaying_admission_and_skips_adoption_baseline(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    projection = _typed_recovery_entry(bindings, known_entry_baseline=False)
+    raw_projection = _recovery_projection(bindings, known_entry_baseline=False)
+    with pytest.raises(TypeError, match="official CaseStore values"):
+        owner.stage_recovered_entries(
+            (raw_projection,),  # type: ignore[arg-type]
+            recovery_projection_boundary=_boundary(0, 100),
+        )
+
+    staged = owner.stage_recovered_entries(
+        (projection,),
+        recovery_projection_boundary=_boundary(0, 100),
+    )
+
+    assert staged[0].required_option_instrument_names == (
+        "BTC_USDC-8AUG26-101000-C",
+        "BTC_USDC-8AUG26-102000-C",
+    )
+    assert staged[0].expiry_ms == 10_000_000
+    assert owner.active_trade_identities == frozenset()
+    recovering = owner.state_store.get_object(
+        "SHADOW_ENTRY",
+        projection.shadow_entry_identity,
+    )
+    assert recovering is not None
+    recovering_payload = cast(Mapping[str, object], recovering["payload"])
+    assert recovering_payload["tracking_state"] == "RECOVERING"
+    assert recovering_payload["current_segment_identity"] is None
+    owner.activate_recovered_entries(staged)
+    entry_identity = projection.shadow_entry_identity
+    assert owner.active_trade_identities == frozenset({entry_identity})
+    assert owner.state_store.take_pending_records() == ()
+    assert owner.retained_state_counts["active_consumed_slots"] == 0
+    assert owner.retained_state_counts["active_candidates"] == 0
+    restored = owner.state_store.get_object("SHADOW_ENTRY", entry_identity)
+    assert restored is not None
+    assert restored["fact_boundary"] == _boundary(1, 110).as_object()
+    restored_payload = cast(Mapping[str, object], restored["payload"])
+    assert restored_payload["observation_quality"] == "GAPPED"
+    assert restored_payload["qualification_eligible"] is False
+
+    baseline = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=_quiet_position_facts(boundary=_boundary(1, 110)),
+        allocate_request_id=lambda: pytest.fail("adoption baseline scheduled a request"),
+    )
+    assert baseline.emitted == ()
+    continued = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=_quiet_position_facts(boundary=_boundary(2, 120)),
+        allocate_request_id=lambda: pytest.fail("UNKNOWN recovery scheduled a request"),
+    )
+    assert continued.request_intents == ()
+    action = next(item for item in continued.emitted if item.object_kind == "POSITION_ACTION")
+    action_record = owner.state_store.get_object(action.object_kind, action.object_identity)
+    assert action_record is not None
+    action_payload = cast(Mapping[str, object], action_record["payload"])
+    assert action_payload["serialized_action"] == "UNKNOWN"
+    evaluation = next(
+        item for item in continued.emitted if item.object_kind == "POSITION_EVALUATION"
+    )
+    evaluation_record = owner.state_store.get_object(
+        evaluation.object_kind,
+        evaluation.object_identity,
+    )
+    assert evaluation_record is not None
+    evaluation_payload = cast(Mapping[str, object], evaluation_record["payload"])
+    assert evaluation_payload["entry_index_usdc_per_btc"] is None
+    assert evaluation_payload["entry_short_leg_mark_iv_fraction"] is None
+    with pytest.raises(ValueError, match="duplicate recovered shadow_entry_identity"):
+        owner.activate_recovered_entries(staged)
+
+
+def test_recovered_first_close_is_not_retried_and_can_mature_gapped_unknown(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    projection = _typed_recovery_entry(bindings, first_close=True)
+    assert projection.first_close_decision is not None
+    first_close_identity = projection.first_close_decision.position_action_identity
+    entry_identity = projection.shadow_entry_identity
+    owner.activate_recovered_entries((projection,))
+
+    owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=_quiet_position_facts(boundary=_boundary(1, 110)),
+        allocate_request_id=lambda: pytest.fail("adoption baseline retried CLOSE"),
+    )
+    terminal_boundary = _boundary(2, 120)
+    ordinary = _quiet_position_facts(boundary=terminal_boundary)
+    natural = replace(
+        ordinary,
+        short_leg_state="delivered",
+        long_leg_state="delivered",
+        short_leg_active=False,
+        long_leg_active=False,
+        lifecycle_short_source=SourceFact(
+            canonical_identity("LifecycleSourceIdentity", "recovery-short"),
+            terminal_boundary,
+        ),
+        lifecycle_long_source=SourceFact(
+            canonical_identity("LifecycleSourceIdentity", "recovery-long"),
+            terminal_boundary,
+        ),
+    )
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=natural,
+        allocate_request_id=lambda: pytest.fail("recovered CLOSE attempt was retried"),
+    )
+
+    assert transition.request_intents == ()
+    assert not any(
+        item.object_kind == "POST_CLOSE_ATTEMPT_SCHEDULED" for item in transition.emitted
+    )
+    action = next(item for item in transition.emitted if item.object_kind == "POSITION_ACTION")
+    action_record = owner.state_store.get_object(action.object_kind, action.object_identity)
+    assert action_record is not None
+    action_payload = cast(Mapping[str, object], action_record["payload"])
+    assert action_payload["first_latched_close_action_identity"] == first_close_identity
+    outcome = next(item for item in transition.emitted if item.object_kind == "SHADOW_OUTCOME")
+    outcome_record = owner.state_store.get_object(outcome.object_kind, outcome.object_identity)
+    assert outcome_record is not None
+    outcome_payload = cast(Mapping[str, object], outcome_record["payload"])
+    assert outcome_payload["terminal_state"] == "MATURE_UNKNOWN"
+    assert outcome_payload["observation_quality"] == "GAPPED"
+    assert outcome_payload["qualification_eligible"] is False
+    assert outcome_payload["economic_availability"] == "UNKNOWN"
 
 
 def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_path: Path) -> None:
@@ -3705,5 +4372,75 @@ def test_admitted_observation_selects_the_first_exit_without_online_cohort_state
         is None
     )
     assert observation.state is OutcomeState.MATURE_KNOWN
+    assert observation.observation_quality is ObservationQuality.CONTINUOUS
+    assert observation.qualification_eligible
     assert not hasattr(observation, "cohort_enrolled")
     assert not hasattr(observation, "rejected")
+
+
+def test_gapped_observation_can_mature_known_but_is_not_qualification_eligible() -> None:
+    entry = CaseFactBoundary(0, _boundary(1))
+    close = CaseFactBoundary(
+        1,
+        FactBoundary(
+            code_identity="c" * 40,
+            runtime_identity="sha256:" + "d" * 64,
+            session_epoch=1,
+            ingress_seq=1,
+            received_monotonic_ms=10,
+            causal_seq=1,
+        ),
+    )
+    exit_boundary = CaseFactBoundary(
+        2,
+        FactBoundary(
+            code_identity="e" * 40,
+            runtime_identity="sha256:" + "f" * 64,
+            session_epoch=1,
+            ingress_seq=1,
+            received_monotonic_ms=10,
+            causal_seq=1,
+        ),
+    )
+    observation = Observation.admitted(
+        outcome_contract_identity="sha256:" + "1" * 64,
+        shadow_entry_identity="sha256:" + "2" * 64,
+        entry_boundary=entry,
+        observation_quality=ObservationQuality.GAPPED,
+    )
+
+    observation.latch_close("sha256:" + "3" * 64, close)
+    selected = observation.accept_eligible_exit(
+        close_opportunity_evaluation_identity="sha256:" + "4" * 64,
+        boundary=exit_boundary,
+    )
+
+    assert selected is not None
+    assert observation.state is OutcomeState.MATURE_KNOWN
+    assert observation.observation_quality is ObservationQuality.GAPPED
+    assert not observation.qualification_eligible
+    assert observation.reducer.terminal_case_boundary == exit_boundary
+    assert observation.reducer.terminal_boundary == exit_boundary.fact_boundary
+
+
+@pytest.mark.parametrize("terminal_source", (TerminalSource.STOP, TerminalSource.FAILURE))
+def test_process_end_does_not_settle_an_admitted_observation(
+    terminal_source: TerminalSource,
+) -> None:
+    observation = Observation.admitted(
+        outcome_contract_identity="sha256:" + "1" * 64,
+        shadow_entry_identity="sha256:" + "2" * 64,
+        entry_boundary=_boundary(1),
+    )
+    observation.latch_close("sha256:" + "3" * 64, _boundary(2))
+
+    state = observation.settle_without_exit(
+        boundary=_boundary(3),
+        ordinary_attempt_terminal=False,
+        lifecycle_ready=False,
+        terminal_source=terminal_source,
+    )
+
+    assert state is OutcomeState.PENDING
+    assert observation.terminal_outcome_identity is None
+    assert observation.reducer.terminal_case_boundary is None

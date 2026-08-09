@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
+import short_vol_underwriting.case_store as case_store_module
 from short_vol_underwriting import (
     UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
+    FixedContractShadowOwner,
     RuntimeBindings,
     ShadowCaseReadStatus,
     ShadowCaseStore,
@@ -15,6 +18,7 @@ from short_vol_underwriting import (
     ShadowStateStore,
     canonical_identity,
     load_policy_chain,
+    migrate_legacy_admitted_cases,
 )
 from short_vol_underwriting.constants import (
     POSITION_POLICY_IDENTITY as POSITION_POLICY,
@@ -46,6 +50,20 @@ def _boundary(causal_seq: int) -> FactBoundary:
         session_epoch=1,
         ingress_seq=causal_seq,
         received_monotonic_ms=100 + causal_seq,
+        causal_seq=causal_seq,
+    )
+
+
+def _runtime_boundary(
+    bindings: RuntimeBindings,
+    causal_seq: int,
+) -> FactBoundary:
+    return FactBoundary(
+        code_identity=bindings.code_identity,
+        runtime_identity=bindings.runtime_identity,
+        session_epoch=1,
+        ingress_seq=causal_seq,
+        received_monotonic_ms=1_000 + causal_seq,
         causal_seq=causal_seq,
     )
 
@@ -332,6 +350,16 @@ def _open_case(
             },
             "entry_component_quote_source_refs": entry_source_refs,
             "entry_component_legs": _component_legs(),
+            "entry_index_usdc_per_btc": "100000",
+            "entry_index_source_ref": {
+                "source_identity": canonical_identity("IndexSource", suffix),
+                "receipt_fact_boundary": _boundary(causal_seq).as_object(),
+            },
+            "entry_short_leg_mark_iv_fraction": "0.5",
+            "entry_short_leg_mark_iv_source_ref": {
+                "source_identity": canonical_identity("TickerSource", suffix),
+                "receipt_fact_boundary": _boundary(causal_seq).as_object(),
+            },
             "gross_entry_credit_usdc": "29.8",
             "entry_fee_reserve_usdc": "4.2625",
             "net_entry_credit_usdc": "25.5375",
@@ -345,6 +373,141 @@ def _open_case(
         },
     )
     return entry_identity
+
+
+def _record_first_close_and_schedule(
+    state: ShadowStateStore,
+    entry_identity: str,
+    *,
+    suffix: str,
+    causal_seq: int,
+) -> str:
+    close_identity = canonical_identity("PositionActionIdentity", suffix)
+    state.record(
+        object_kind="POSITION_ACTION",
+        object_identity=close_identity,
+        fact_boundary=_boundary(causal_seq),
+        payload={
+            "position_action_identity": close_identity,
+            "shadow_entry_identity": entry_identity,
+            "serialized_action": "CLOSE",
+            "ordered_predicate_truth_vector": ["FALSE"] * 8 + ["TRUE"],
+            "ordered_latched_close_reason_vector": ["ECONOMIC_EXIT_BOUNDARY_REACHED"],
+            "primary_close_reason": "ECONOMIC_EXIT_BOUNDARY_REACHED",
+            "secondary_close_reasons": [],
+            "first_latched_close_action_identity": close_identity,
+            "action_fact_boundary": _boundary(causal_seq).as_object(),
+        },
+    )
+    request_ids = [41, 42]
+    request_params = [
+        {"instrument_name": "BTC_USDC-8AUG26-100000-C", "depth": 10000},
+        {"instrument_name": "BTC_USDC-8AUG26-102000-C", "depth": 10000},
+    ]
+    schedule_identity = canonical_identity(
+        "ScheduledComponentPostCloseAttemptIdentity",
+        entry_identity,
+        close_identity,
+        request_ids,
+        "public/get_order_book",
+        request_params,
+        _boundary(causal_seq).as_object(),
+    )
+    state.record(
+        object_kind="POST_CLOSE_ATTEMPT_SCHEDULED",
+        object_identity=schedule_identity,
+        fact_boundary=_boundary(causal_seq),
+        payload={
+            "scheduled_post_close_attempt_identity": schedule_identity,
+            "shadow_entry_identity": entry_identity,
+            "first_latched_close_action_identity": close_identity,
+            "request_id_or_marker": request_ids,
+            "execution_model": "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL",
+            "request_method": "public/get_order_book",
+            "request_params": request_params,
+            "schedule_fact_boundary": _boundary(causal_seq).as_object(),
+        },
+    )
+    return close_identity
+
+
+def _mature_unknown_case(
+    state: ShadowStateStore,
+    entry_identity: str,
+    *,
+    suffix: str,
+    causal_seq: int,
+) -> None:
+    outcome_identity = canonical_identity("ShadowOutcomeIdentity", suffix)
+    state.record(
+        object_kind="SHADOW_OUTCOME",
+        object_identity=outcome_identity,
+        fact_boundary=_boundary(causal_seq),
+        payload={
+            "shadow_outcome_identity": outcome_identity,
+            "shadow_entry_identity": entry_identity,
+            "terminal_state": "MATURE_UNKNOWN",
+            "selected_exit_identity": None,
+            "first_latched_close_action_identity": None,
+            "gross_close_cashflow_usdc": None,
+            "close_fee_reserve_usdc": None,
+            "net_close_cashflow_usdc": None,
+            "gross_pnl_usdc": None,
+            "total_public_fee_reserve_usdc": None,
+            "net_pnl_after_public_standard_fee_reserve_usdc": None,
+            "net_loss_usdc": None,
+            "economic_availability": "UNKNOWN",
+            "close_component_pair_identity": None,
+            "close_component_quote_source_refs": [],
+            "close_component_legs": [],
+            "censor_mask": [],
+            "non_claims": COMPONENT_NON_CLAIMS,
+        },
+    )
+
+
+def _legacy_unknown_outcome(
+    opened: Mapping[str, object],
+    *,
+    suffix: str,
+    causal_seq: int,
+    terminal_state: str,
+    first_close_identity: str | None = None,
+) -> dict[str, object]:
+    return {
+        "record_kind": "SHADOW_CASE_OUTCOME",
+        "schema_version": opened["schema_version"],
+        "case_id": opened["case_id"],
+        "code_identity": opened["code_identity"],
+        "runtime_identity": opened["runtime_identity"],
+        "radar_policy_identity": opened["radar_policy_identity"],
+        "underwriting_policy_identity": opened["underwriting_policy_identity"],
+        "position_policy_identity": opened["position_policy_identity"],
+        "outcome_fact_boundary": _boundary(causal_seq).as_object(),
+        "shadow_outcome_identity": canonical_identity("ShadowOutcomeIdentity", suffix),
+        "terminal_state": terminal_state,
+        "selected_exit_identity": None,
+        "first_latched_close_action_identity": first_close_identity,
+        "gross_close_cashflow_usdc": None,
+        "close_fee_reserve_usdc": None,
+        "net_close_cashflow_usdc": None,
+        "gross_pnl_usdc": None,
+        "total_public_fee_reserve_usdc": None,
+        "net_pnl_after_public_standard_fee_reserve_usdc": None,
+        "net_loss_usdc": None,
+        "economic_availability": "UNKNOWN",
+        "close_component_pair_identity": None,
+        "close_component_quote_source_refs": [],
+        "close_component_legs": [],
+        "censor_mask": (
+            ["STOP"]
+            if terminal_state == "CENSORED_AT_STOP"
+            else ["FAILURE"]
+            if terminal_state == "CENSORED_AT_FAILURE"
+            else []
+        ),
+        "non_claims": COMPONENT_NON_CLAIMS,
+    }
 
 
 def _censor_case(
@@ -445,7 +608,10 @@ def test_shadow_entry_opens_exactly_one_minimal_case(tmp_path: Path) -> None:
 
     assert case_id is not None
     case_directory = tmp_path / "cases" / case_id.removeprefix("sha256:")
-    assert sorted(path.name for path in case_directory.iterdir()) == ["opened.json"]
+    assert sorted(path.name for path in case_directory.iterdir()) == ["opened.json", "segments"]
+    assert sorted(path.name for path in (case_directory / "segments" / "0").iterdir()) == [
+        "opened.json"
+    ]
     read = case_store.read_case(case_id, runtime_active=True)
     assert read.status is ShadowCaseReadStatus.OPEN
     assert read.opened["shadow_entry_identity"] == entry_identity
@@ -457,6 +623,300 @@ def test_shadow_entry_opens_exactly_one_minimal_case(tmp_path: Path) -> None:
         == UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY
     )
     assert underwriting["candidate_protective_leg_count"] == 1
+    current_entry = state.get_object("SHADOW_ENTRY", entry_identity)
+    assert current_entry is not None
+    current_payload = current_entry["payload"]
+    assert isinstance(current_payload, Mapping)
+    assert current_payload["origin_runtime_identity"] == _bindings.runtime_identity
+    assert (
+        current_payload["current_segment_identity"] == read.segments[0].opened["segment_identity"]
+    )
+    assert current_payload["current_segment_sequence"] == 0
+    assert current_payload["observation_quality"] == "CONTINUOUS"
+    assert current_payload["gap_count"] == 0
+    assert current_payload["qualification_eligible"] is True
+    assert current_payload["tracking_state"] == "ACTIVE"
+    assert current_payload["post_close_attempt_state"] == "NOT_SCHEDULED"
+
+
+def test_active_admitted_entry_scans_and_opens_a_gapped_recovery_segment(
+    tmp_path: Path,
+) -> None:
+    state, case_store, bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    entry_identity = _open_case(state, candidate_identity)
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+
+    restarted_bindings = RuntimeBindings(
+        code_identity=bindings.code_identity,
+        runtime_identity="sha256:" + "c" * 64,
+        radar_policy_identity=bindings.radar_policy_identity,
+        underwriting_policy_identity=bindings.underwriting_policy_identity,
+        position_policy_identity=bindings.position_policy_identity,
+    )
+    restarted = ShadowCaseStore(
+        tmp_path / "cases",
+        bindings=restarted_bindings,
+        policies=case_store.policies,
+    )
+
+    (recoverable,) = restarted.scan_active_admitted()
+    assert recoverable.case_id == case_id
+    assert recoverable.shadow_entry_identity == entry_identity
+    assert recoverable.latest_segment_sequence == 0
+    assert recoverable.predecessor_segment_state.value == "INCOMPLETE_UNCLEAN_EXIT"
+    assert recoverable.entry_terms.index_usdc_per_btc == Decimal("100000")
+    assert recoverable.entry_terms.index_source is not None
+    assert recoverable.entry_terms.index_source.as_ref() == {
+        "source_identity": canonical_identity("IndexSource", "one"),
+        "receipt_fact_boundary": _boundary(4).as_object(),
+    }
+    assert recoverable.entry_terms.short_mark_iv_fraction == Decimal("0.5")
+    assert recoverable.entry_terms.ticker_source is not None
+    assert recoverable.entry_terms.ticker_source.as_ref() == {
+        "source_identity": canonical_identity("TickerSource", "one"),
+        "receipt_fact_boundary": _boundary(4).as_object(),
+    }
+    assert not hasattr(recoverable, "segments")
+    with pytest.raises(TypeError):
+        recoverable.entry_payload["origin_case_id"] = "tampered"  # type: ignore[index]
+    expected_baseline = {
+        "entry_index_usdc_per_btc": "100000",
+        "entry_index_source_ref": {
+            "source_identity": canonical_identity("IndexSource", "one"),
+            "receipt_fact_boundary": _boundary(4).as_object(),
+        },
+        "entry_short_leg_mark_iv_fraction": "0.5",
+        "entry_short_leg_mark_iv_source_ref": {
+            "source_identity": canonical_identity("TickerSource", "one"),
+            "receipt_fact_boundary": _boundary(4).as_object(),
+        },
+    }
+    assert (
+        case_store.read_case(case_id).segments[0].opened["entry_position_baseline"]
+        == expected_baseline
+    )
+
+    current = restarted.open_recovery_segment(
+        case_id,
+        adoption_fact_boundary=_runtime_boundary(restarted_bindings, 1),
+    )
+    assert current.latest_segment_sequence == 1
+    assert current.observation_quality.value == "GAPPED"
+    assert current.gap_count == 1
+    assert current.qualification_eligible is False
+    assert current.predecessor_segment_state.value == "INCOMPLETE_UNCLEAN_EXIT"
+    assert current.first_close_state == "NOT_LATCHED"
+    assert current.attempt_state == "NOT_SCHEDULED"
+    assert current.adoption_case_boundary.segment_sequence == 1
+    assert restarted.read_case(case_id).segments[-1].opened["entry_position_baseline"] is None
+
+    with pytest.raises(ShadowCaseStoreError, match="already owns"):
+        restarted.open_recovery_segment(
+            case_id,
+            adoption_fact_boundary=_runtime_boundary(restarted_bindings, 2),
+        )
+
+
+def test_admitted_stop_closes_only_current_segment_and_bulk_close_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    state, case_store, bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    entry_identity = _open_case(state, candidate_identity)
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+
+    boundary = _boundary(5)
+    first = case_store.close_active_admitted_segments(
+        boundary=boundary,
+        terminal_state="CENSORED_AT_STOP",
+    )
+    second = case_store.close_active_admitted_segments(
+        boundary=boundary,
+        terminal_state="CENSORED_AT_STOP",
+    )
+    assert len(first) == len(second) == 1
+    case_directory = tmp_path / "cases" / case_id.removeprefix("sha256:")
+    assert not (case_directory / "outcome.json").exists()
+    assert (
+        json.loads((case_directory / "segments" / "0" / "closed.json").read_text(encoding="utf-8"))[
+            "terminal_state"
+        ]
+        == "CENSORED_AT_STOP"
+    )
+    assert case_store.case_id_for_entry(entry_identity) == case_id
+    assert case_store.active_case_count == 1
+
+    with pytest.raises(ShadowCaseStoreError, match="conflicting"):
+        case_store.close_active_admitted_segments(
+            boundary=_boundary(6),
+            terminal_state="CENSORED_AT_FAILURE",
+        )
+
+    restarted_bindings = RuntimeBindings(
+        code_identity=bindings.code_identity,
+        runtime_identity="sha256:" + "f" * 64,
+        radar_policy_identity=bindings.radar_policy_identity,
+        underwriting_policy_identity=bindings.underwriting_policy_identity,
+        position_policy_identity=bindings.position_policy_identity,
+    )
+    restarted = ShadowCaseStore(
+        tmp_path / "cases",
+        bindings=restarted_bindings,
+        policies=case_store.policies,
+    )
+    (recoverable,) = restarted.scan_active_admitted()
+    assert recoverable.predecessor_segment_state.value == "CENSORED_AT_STOP"
+    recovered = restarted.open_recovery_segment(
+        case_id,
+        adoption_fact_boundary=_runtime_boundary(restarted_bindings, 1),
+    )
+    assert recovered.predecessor_segment_state.value == "CENSORED_AT_STOP"
+    assert recovered.gap_count == 1
+
+
+def test_stable_admitted_censored_outcome_is_rejected_instead_of_mapped(
+    tmp_path: Path,
+) -> None:
+    state, case_store, _bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    entry_identity = _open_case(state, candidate_identity)
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+
+    with pytest.raises(ShadowCaseStoreError, match="cannot emit a censored aggregate Outcome"):
+        _censor_case(state, entry_identity, suffix="stop", causal_seq=5)
+
+    case_directory = tmp_path / "cases" / case_id.removeprefix("sha256:")
+    assert not (case_directory / "outcome.json").exists()
+    assert not (case_directory / "segments" / "0" / "closed.json").exists()
+    read = case_store.read_case(case_id)
+    assert read.status is ShadowCaseReadStatus.OPEN
+    assert read.segments[-1].status.value == "INCOMPLETE_UNCLEAN_EXIT"
+
+
+def test_new_case_directory_is_never_visible_with_only_opened_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, _case_store, _bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    original_rename = Path.rename
+
+    def fail_case_publish(path: Path, target: Path) -> Path:
+        if path.name.startswith(".case-"):
+            raise OSError("simulated crash before directory publication")
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", fail_case_publish)
+    with pytest.raises(ShadowCaseStoreError, match="atomically publish"):
+        _open_case(state, candidate_identity)
+
+    assert list((tmp_path / "cases").iterdir()) == []
+
+
+def test_recovery_segment_crash_before_publication_leaves_no_numeric_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, case_store, bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    entry_identity = _open_case(state, candidate_identity)
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+    restarted_bindings = RuntimeBindings(
+        code_identity=bindings.code_identity,
+        runtime_identity="sha256:" + "7" * 64,
+        radar_policy_identity=bindings.radar_policy_identity,
+        underwriting_policy_identity=bindings.underwriting_policy_identity,
+        position_policy_identity=bindings.position_policy_identity,
+    )
+    restarted = ShadowCaseStore(
+        tmp_path / "cases",
+        bindings=restarted_bindings,
+        policies=case_store.policies,
+    )
+    restarted.scan_active_admitted()
+    original_rename = Path.rename
+
+    def fail_segment_publish(path: Path, target: Path) -> Path:
+        if path.name.startswith(".segment-"):
+            raise OSError("simulated crash before Segment publication")
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", fail_segment_publish)
+    with pytest.raises(ShadowCaseStoreError, match="atomically publish Observation Segment"):
+        restarted.open_recovery_segment(
+            case_id,
+            adoption_fact_boundary=_runtime_boundary(restarted_bindings, 1),
+        )
+
+    segments = tmp_path / "cases" / case_id.removeprefix("sha256:") / "segments"
+    assert sorted(path.name for path in segments.iterdir()) == ["0"]
+    assert restarted.read_case(case_id).segments[-1].sequence == 0
+
+
+def test_recovery_segment_is_complete_if_parent_fsync_fails_after_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, case_store, bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    entry_identity = _open_case(state, candidate_identity)
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+    restarted_bindings = RuntimeBindings(
+        code_identity=bindings.code_identity,
+        runtime_identity="sha256:" + "8" * 64,
+        radar_policy_identity=bindings.radar_policy_identity,
+        underwriting_policy_identity=bindings.underwriting_policy_identity,
+        position_policy_identity=bindings.position_policy_identity,
+    )
+    restarted = ShadowCaseStore(
+        tmp_path / "cases",
+        bindings=restarted_bindings,
+        policies=case_store.policies,
+    )
+    restarted.scan_active_admitted()
+    segments = tmp_path / "cases" / case_id.removeprefix("sha256:") / "segments"
+    original_fsync = case_store_module._fsync_directory
+
+    def fail_after_segment_rename(path: Path) -> None:
+        if path == segments and (segments / "1" / "opened.json").is_file():
+            raise OSError("simulated crash after Segment publication")
+        original_fsync(path)
+
+    monkeypatch.setattr(case_store_module, "_fsync_directory", fail_after_segment_rename)
+    with pytest.raises(ShadowCaseStoreError, match="atomically publish Observation Segment"):
+        restarted.open_recovery_segment(
+            case_id,
+            adoption_fact_boundary=_runtime_boundary(restarted_bindings, 1),
+        )
+
+    assert sorted(path.name for path in segments.iterdir()) == ["0", "1"]
+    assert (segments / "1" / "opened.json").is_file()
+    assert restarted.read_case(case_id).segments[-1].sequence == 1
+
+
+def test_segment_scanner_ignores_only_plain_exact_staging_directories(tmp_path: Path) -> None:
+    state, case_store, _bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    entry_identity = _open_case(state, candidate_identity)
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+    segments = tmp_path / "cases" / case_id.removeprefix("sha256:") / "segments"
+    residue = segments / f".segment-{'3' * 32}.tmp"
+    residue.mkdir()
+    (residue / "opened.json").write_text("interrupted Segment", encoding="utf-8")
+
+    assert case_store.read_case(case_id).segments[-1].sequence == 0
+
+    invalid = segments / f".segment-{'4' * 32}.tmp"
+    invalid.symlink_to(residue, target_is_directory=True)
+    with pytest.raises(ShadowCaseStoreError, match="staging path"):
+        case_store.read_case(case_id)
 
 
 def test_case_reader_rejects_unexpected_nested_opened_fields(tmp_path: Path) -> None:
@@ -546,22 +1006,11 @@ def test_first_close_and_known_outcome_complete_case_with_recomputable_economics
     case_id = case_store.case_id_for_entry(entry_identity)
     assert case_id is not None
 
-    close_identity = canonical_identity("PositionActionIdentity", "first-close")
-    state.record(
-        object_kind="POSITION_ACTION",
-        object_identity=close_identity,
-        fact_boundary=_boundary(5),
-        payload={
-            "position_action_identity": close_identity,
-            "shadow_entry_identity": entry_identity,
-            "serialized_action": "CLOSE",
-            "ordered_predicate_truth_vector": ["FALSE"] * 8 + ["TRUE"],
-            "ordered_latched_close_reason_vector": ["ECONOMIC_EXIT_BOUNDARY_REACHED"],
-            "primary_close_reason": "ECONOMIC_EXIT_BOUNDARY_REACHED",
-            "secondary_close_reasons": [],
-            "first_latched_close_action_identity": close_identity,
-            "action_fact_boundary": _boundary(5).as_object(),
-        },
+    close_identity = _record_first_close_and_schedule(
+        state,
+        entry_identity,
+        suffix="first-close",
+        causal_seq=5,
     )
     outcome_identity = canonical_identity("ShadowOutcomeIdentity", "known")
     state.record(
@@ -598,6 +1047,7 @@ def test_first_close_and_known_outcome_complete_case_with_recomputable_economics
         "first-close.json",
         "opened.json",
         "outcome.json",
+        "segments",
     ]
     read = case_store.read_case(case_id)
     assert read.status is ShadowCaseReadStatus.COMPLETE
@@ -616,7 +1066,479 @@ def test_first_close_and_known_outcome_complete_case_with_recomputable_economics
         path.write_text(json.dumps(record), encoding="utf-8")
 
 
-def test_opened_only_case_is_explicitly_incomplete_after_unclean_exit(tmp_path: Path) -> None:
+def test_first_close_is_durable_only_with_its_attempt_and_is_never_retried(
+    tmp_path: Path,
+) -> None:
+    state, case_store, bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    entry_identity = _open_case(state, candidate_identity)
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+
+    close_identity = canonical_identity("PositionActionIdentity", "atomic-first-close")
+    state.record(
+        object_kind="POSITION_ACTION",
+        object_identity=close_identity,
+        fact_boundary=_boundary(5),
+        payload={
+            "position_action_identity": close_identity,
+            "shadow_entry_identity": entry_identity,
+            "serialized_action": "CLOSE",
+            "ordered_predicate_truth_vector": ["FALSE"] * 8 + ["TRUE"],
+            "ordered_latched_close_reason_vector": ["ECONOMIC_EXIT_BOUNDARY_REACHED"],
+            "primary_close_reason": "ECONOMIC_EXIT_BOUNDARY_REACHED",
+            "secondary_close_reasons": [],
+            "first_latched_close_action_identity": close_identity,
+            "action_fact_boundary": _boundary(5).as_object(),
+        },
+    )
+    first_close_path = tmp_path / "cases" / case_id.removeprefix("sha256:") / "first-close.json"
+    assert not first_close_path.exists()
+
+    request_ids = [51, 52]
+    request_params = [
+        {"instrument_name": "BTC_USDC-8AUG26-100000-C", "depth": 10000},
+        {"instrument_name": "BTC_USDC-8AUG26-102000-C", "depth": 10000},
+    ]
+    schedule_identity = canonical_identity(
+        "ScheduledComponentPostCloseAttemptIdentity",
+        entry_identity,
+        close_identity,
+        request_ids,
+        "public/get_order_book",
+        request_params,
+        _boundary(5).as_object(),
+    )
+    state.record(
+        object_kind="POST_CLOSE_ATTEMPT_SCHEDULED",
+        object_identity=schedule_identity,
+        fact_boundary=_boundary(5),
+        payload={
+            "scheduled_post_close_attempt_identity": schedule_identity,
+            "shadow_entry_identity": entry_identity,
+            "first_latched_close_action_identity": close_identity,
+            "request_id_or_marker": request_ids,
+            "execution_model": "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL",
+            "request_method": "public/get_order_book",
+            "request_params": request_params,
+            "schedule_fact_boundary": _boundary(5).as_object(),
+        },
+    )
+    durable = json.loads(first_close_path.read_text(encoding="utf-8"))
+    assert durable["transition"] == "FIRST_CLOSE_AND_ATTEMPT_SCHEDULED"
+    assert durable["scheduled_post_close_attempt_identity"] == schedule_identity
+
+    closed = case_store.close_active_admitted_segments(
+        boundary=_boundary(6),
+        terminal_state="CENSORED_AT_STOP",
+    )
+    assert len(closed) == 1
+    assert case_store.read_case(case_id).first_close == durable
+    case_directory = tmp_path / "cases" / case_id.removeprefix("sha256:")
+    case_residue = case_directory / f".case-{'1' * 32}.tmp"
+    segment_residue = case_directory / "segments" / "0" / f".case-{'2' * 32}.tmp"
+    case_residue.write_text("interrupted first CLOSE write", encoding="utf-8")
+    segment_residue.write_text("interrupted Segment close write", encoding="utf-8")
+    linked_case_residue = case_directory / f".case-{'3' * 32}.tmp"
+    linked_segment_residue = case_directory / "segments" / "0" / f".case-{'4' * 32}.tmp"
+    linked_case_residue.hardlink_to(first_close_path)
+    linked_segment_residue.hardlink_to(case_directory / "segments" / "0" / "closed.json")
+    assert linked_case_residue.samefile(first_close_path)
+    assert linked_segment_residue.samefile(case_directory / "segments" / "0" / "closed.json")
+
+    restarted_bindings = RuntimeBindings(
+        code_identity=bindings.code_identity,
+        runtime_identity="sha256:" + "d" * 64,
+        radar_policy_identity=bindings.radar_policy_identity,
+        underwriting_policy_identity=bindings.underwriting_policy_identity,
+        position_policy_identity=bindings.position_policy_identity,
+    )
+    restarted = ShadowCaseStore(
+        tmp_path / "cases",
+        bindings=restarted_bindings,
+        policies=case_store.policies,
+    )
+    (recoverable,) = restarted.scan_active_admitted()
+    assert recoverable.predecessor_segment_state.value == "CENSORED_AT_STOP"
+    assert recoverable.first_close_state == "LATCHED"
+    assert recoverable.attempt_state == "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS"
+    assert recoverable.first_close_decision is not None
+    assert case_residue.exists()
+    assert segment_residue.exists()
+    assert linked_case_residue.exists()
+    assert linked_segment_residue.exists()
+
+    adopted = restarted.open_recovery_segment(
+        case_id,
+        adoption_fact_boundary=_runtime_boundary(restarted_bindings, 1),
+    )
+    assert adopted.first_close_state == "LATCHED"
+    assert adopted.attempt_state == "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS"
+    recovery_owner = FixedContractShadowOwner(
+        policies=case_store.policies,
+        bindings=restarted_bindings,
+        state_store=ShadowStateStore(bindings=restarted_bindings),
+    )
+    recovery_owner.activate_recovered_entries((adopted,))
+    assert recovery_owner.active_trade_identities == frozenset({entry_identity})
+
+
+def test_legacy_reader_validates_without_writing_or_treating_run_case_as_stable(
+    tmp_path: Path,
+) -> None:
+    state, case_store, bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    entry_identity = _open_case(state, candidate_identity)
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+    source_opened = (
+        tmp_path / "cases" / case_id.removeprefix("sha256:") / "opened.json"
+    ).read_bytes()
+
+    legacy_cases = tmp_path / "legacy-cases"
+    legacy_case = legacy_cases / case_id.removeprefix("sha256:")
+    legacy_case.mkdir(parents=True)
+    (legacy_case / "opened.json").write_bytes(source_opened)
+    legacy_reader = ShadowCaseStore(
+        legacy_cases,
+        bindings=bindings,
+        policies=case_store.policies,
+    )
+
+    read = legacy_reader.read_legacy_case(case_id)
+    assert read.status is ShadowCaseReadStatus.INCOMPLETE_UNCLEAN_EXIT
+    assert read.opened["shadow_entry_identity"] == entry_identity
+    assert (legacy_case / "opened.json").read_bytes() == source_opened
+    assert sorted(path.name for path in legacy_case.iterdir()) == ["opened.json"]
+    with pytest.raises(ShadowCaseStoreError, match="origin Observation Segment"):
+        legacy_reader.read_case(case_id)
+
+
+def test_offline_legacy_migration_is_atomic_read_only_idempotent_and_recoverable(
+    tmp_path: Path,
+) -> None:
+    state, case_store, bindings = _system(tmp_path)
+
+    _availability, _action, candidate = _seed_pre_shadow(
+        state,
+        suffix="legacy-close",
+        start_seq=1,
+    )
+    closed_entry = _open_case(
+        state,
+        candidate,
+        suffix="legacy-close",
+        causal_seq=4,
+    )
+    first_close_identity = _record_first_close_and_schedule(
+        state,
+        closed_entry,
+        suffix="legacy-close",
+        causal_seq=5,
+    )
+    closed_case_id = case_store.case_id_for_entry(closed_entry)
+    assert closed_case_id is not None
+
+    _availability, _action, candidate = _seed_pre_shadow(
+        state,
+        suffix="legacy-open",
+        start_seq=6,
+    )
+    open_entry = _open_case(
+        state,
+        candidate,
+        suffix="legacy-open",
+        causal_seq=9,
+    )
+    open_case_id = case_store.case_id_for_entry(open_entry)
+    assert open_case_id is not None
+
+    _availability, _action, candidate = _seed_pre_shadow(
+        state,
+        suffix="legacy-terminal",
+        start_seq=10,
+    )
+    terminal_entry = _open_case(
+        state,
+        candidate,
+        suffix="legacy-terminal",
+        causal_seq=13,
+    )
+    terminal_case_id = case_store.case_id_for_entry(terminal_entry)
+    assert terminal_case_id is not None
+
+    source = tmp_path / "legacy-cases"
+    source.mkdir()
+    opened_by_case: dict[str, dict[str, object]] = {}
+    for case_id in (closed_case_id, open_case_id, terminal_case_id):
+        source_case = source / case_id.removeprefix("sha256:")
+        source_case.mkdir()
+        stable_opened = tmp_path / "cases" / case_id.removeprefix("sha256:") / "opened.json"
+        (source_case / "opened.json").write_bytes(stable_opened.read_bytes())
+        opened_by_case[case_id] = json.loads(stable_opened.read_text(encoding="utf-8"))
+
+    stable_first_close = json.loads(
+        (
+            tmp_path / "cases" / closed_case_id.removeprefix("sha256:") / "first-close.json"
+        ).read_text(encoding="utf-8")
+    )
+    stable_first_close_extension = {
+        "product_spec_identity",
+        "segment_sequence",
+        "segment_identity",
+        "transition",
+        "scheduled_post_close_attempt_identity",
+        "request_id_or_marker",
+        "execution_model",
+        "request_method",
+        "request_params",
+        "canonical_leg_identities",
+        "full_quantity_btc",
+        "schedule_fact_boundary",
+    }
+    legacy_first_close = {
+        key: value
+        for key, value in stable_first_close.items()
+        if key not in stable_first_close_extension
+    }
+    closed_source_case = source / closed_case_id.removeprefix("sha256:")
+    (closed_source_case / "first-close.json").write_text(
+        json.dumps(legacy_first_close),
+        encoding="utf-8",
+    )
+    (closed_source_case / "outcome.json").write_text(
+        json.dumps(
+            _legacy_unknown_outcome(
+                opened_by_case[closed_case_id],
+                suffix="legacy-close",
+                causal_seq=6,
+                terminal_state="CENSORED_AT_STOP",
+                first_close_identity=first_close_identity,
+            )
+        ),
+        encoding="utf-8",
+    )
+    terminal_source_case = source / terminal_case_id.removeprefix("sha256:")
+    (terminal_source_case / "outcome.json").write_text(
+        json.dumps(
+            _legacy_unknown_outcome(
+                opened_by_case[terminal_case_id],
+                suffix="legacy-terminal",
+                causal_seq=14,
+                terminal_state="MATURE_UNKNOWN",
+            )
+        ),
+        encoding="utf-8",
+    )
+    source_snapshot = {
+        path.relative_to(source).as_posix(): path.read_bytes()
+        for path in source.rglob("*")
+        if path.is_file()
+    }
+
+    destination = tmp_path / "stable-cases"
+    first = migrate_legacy_admitted_cases(
+        source,
+        destination,
+        policies=case_store.policies,
+    )
+    destination_snapshot = {
+        path.relative_to(destination).as_posix(): path.read_bytes()
+        for path in destination.rglob("*")
+        if path.is_file()
+    }
+    second = migrate_legacy_admitted_cases(
+        source,
+        destination,
+        policies=case_store.policies,
+    )
+
+    assert {entry.case_id for entry in first} == {closed_case_id, open_case_id}
+    assert {entry.case_id for entry in second} == {closed_case_id, open_case_id}
+    assert not (destination / terminal_case_id.removeprefix("sha256:")).exists()
+    assert source_snapshot == {
+        path.relative_to(source).as_posix(): path.read_bytes()
+        for path in source.rglob("*")
+        if path.is_file()
+    }
+    assert destination_snapshot == {
+        path.relative_to(destination).as_posix(): path.read_bytes()
+        for path in destination.rglob("*")
+        if path.is_file()
+    }
+
+    closed_destination = destination / closed_case_id.removeprefix("sha256:")
+    assert not (closed_destination / "first-close.json").exists()
+    assert not (closed_destination / "outcome.json").exists()
+    migration_record = json.loads(
+        (closed_destination / "legacy-migration.json").read_text(encoding="utf-8")
+    )
+    assert set(migration_record) == {
+        "record_kind",
+        "migration_schema_version",
+        "case_id",
+        "shadow_entry_identity",
+        "source_opened_record_identity",
+        "source_first_close_record_identity",
+        "source_outcome_record_identity",
+        "source_outcome_terminal_state",
+        "legacy_first_close",
+        "mapped_segment_state",
+    }
+    assert migration_record["legacy_first_close"] == legacy_first_close
+    assert (
+        json.loads(
+            (closed_destination / "segments" / "0" / "closed.json").read_text(encoding="utf-8")
+        )["terminal_state"]
+        == "CENSORED_AT_STOP"
+    )
+    migrated_closed = next(entry for entry in first if entry.case_id == closed_case_id)
+    assert migrated_closed.first_close_state == "LATCHED"
+    assert migrated_closed.attempt_state == "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS"
+    assert migrated_closed.first_close_decision is not None
+    assert migrated_closed.first_close_decision.action_case_boundary.segment_sequence == 0
+    assert migrated_closed.first_close_decision.position_action_identity == first_close_identity
+    assert migrated_closed.entry_terms.index_usdc_per_btc is None
+    assert migrated_closed.entry_terms.index_source is None
+    assert migrated_closed.entry_terms.short_mark_iv_fraction is None
+    assert migrated_closed.entry_terms.ticker_source is None
+
+    restarted_bindings = RuntimeBindings(
+        code_identity=bindings.code_identity,
+        runtime_identity="sha256:" + "e" * 64,
+        radar_policy_identity=bindings.radar_policy_identity,
+        underwriting_policy_identity=bindings.underwriting_policy_identity,
+        position_policy_identity=bindings.position_policy_identity,
+    )
+    recovery_state = ShadowStateStore(bindings=restarted_bindings)
+    recovery_owner = FixedContractShadowOwner(
+        policies=case_store.policies,
+        bindings=restarted_bindings,
+        state_store=recovery_state,
+    )
+    staged = recovery_owner.stage_recovered_entries(
+        first,
+        recovery_projection_boundary=_runtime_boundary(restarted_bindings, 0),
+    )
+    staged_closed = next(seed for seed in staged if seed.case_id == closed_case_id)
+    assert staged_closed.first_close_decision is not None
+    assert staged_closed.first_close_decision.position_action_identity == first_close_identity
+    assert staged_closed.first_close_decision.action_case_boundary.segment_sequence == 0
+
+    restarted = ShadowCaseStore(
+        destination,
+        bindings=restarted_bindings,
+        policies=case_store.policies,
+    )
+    restarted.scan_active_admitted()
+    adopted = restarted.open_recovery_segment(
+        closed_case_id,
+        adoption_fact_boundary=_runtime_boundary(restarted_bindings, 1),
+    )
+    assert adopted.latest_segment_sequence == 1
+    assert adopted.observation_quality.value == "GAPPED"
+    assert adopted.first_close_state == "LATCHED"
+    assert adopted.attempt_state == "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS"
+
+
+@pytest.mark.parametrize(
+    ("tamper_field", "expected_error"),
+    (
+        ("quantity", "quantity"),
+        ("runtime", "one origin runtime binding"),
+    ),
+)
+def test_offline_legacy_migration_validates_the_full_set_before_publication(
+    tmp_path: Path,
+    tamper_field: str,
+    expected_error: str,
+) -> None:
+    state, case_store, _bindings = _system(tmp_path)
+    source = tmp_path / "legacy-cases"
+    source.mkdir()
+    for index, suffix in enumerate(("valid", "tampered")):
+        start_seq = 1 + index * 4
+        _availability, _action, candidate = _seed_pre_shadow(
+            state,
+            suffix=suffix,
+            start_seq=start_seq,
+        )
+        entry = _open_case(
+            state,
+            candidate,
+            suffix=suffix,
+            causal_seq=start_seq + 3,
+        )
+        case_id = case_store.case_id_for_entry(entry)
+        assert case_id is not None
+        source_case = source / case_id.removeprefix("sha256:")
+        source_case.mkdir()
+        opened_path = tmp_path / "cases" / source_case.name / "opened.json"
+        (source_case / "opened.json").write_bytes(opened_path.read_bytes())
+        if suffix == "tampered":
+            opened = json.loads((source_case / "opened.json").read_text(encoding="utf-8"))
+            if tamper_field == "runtime":
+                opened["runtime_identity"] = "sha256:" + "9" * 64
+            else:
+                opened["structure"]["full_quantity_btc"] = "0"
+            (source_case / "opened.json").write_text(json.dumps(opened), encoding="utf-8")
+
+    destination = tmp_path / "stable-cases"
+    with pytest.raises(ShadowCaseStoreError, match=expected_error):
+        migrate_legacy_admitted_cases(
+            source,
+            destination,
+            policies=case_store.policies,
+        )
+    assert not destination.exists()
+
+
+def test_offline_legacy_migration_rejects_zero_active_cases_without_destination(
+    tmp_path: Path,
+) -> None:
+    _state, case_store, _bindings = _system(tmp_path)
+    source = tmp_path / "empty-legacy-cases"
+    source.mkdir()
+    destination = tmp_path / "stable-cases"
+
+    with pytest.raises(ShadowCaseStoreError, match="no active compatible"):
+        migrate_legacy_admitted_cases(
+            source,
+            destination,
+            policies=case_store.policies,
+        )
+
+    assert not destination.exists()
+
+
+def test_stable_scanner_rejects_symlink_and_tampered_segment_chain(tmp_path: Path) -> None:
+    state, case_store, bindings = _system(tmp_path)
+    _availability, _action, candidate_identity = _seed_pre_shadow(state)
+    entry_identity = _open_case(state, candidate_identity)
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is not None
+    case_directory = tmp_path / "cases" / case_id.removeprefix("sha256:")
+
+    symlink_name = "e" * 64
+    (tmp_path / "cases" / symlink_name).symlink_to(case_directory, target_is_directory=True)
+    restarted = ShadowCaseStore(
+        tmp_path / "cases",
+        bindings=bindings,
+        policies=case_store.policies,
+    )
+    with pytest.raises(ShadowCaseStoreError, match="non-Case"):
+        restarted.scan_active_admitted()
+    (tmp_path / "cases" / symlink_name).unlink()
+
+    segment_path = case_directory / "segments" / "0" / "opened.json"
+    segment = json.loads(segment_path.read_text(encoding="utf-8"))
+    segment["gap_count"] = 1
+    segment_path.write_text(json.dumps(segment), encoding="utf-8")
+    with pytest.raises(ShadowCaseStoreError, match="origin Segment continuity"):
+        restarted.scan_active_admitted()
+
+
+def test_open_segment_is_explicitly_incomplete_after_unclean_exit(tmp_path: Path) -> None:
     state, case_store, bindings = _system(tmp_path)
     _availability, _action, candidate_identity = _seed_pre_shadow(state)
     entry_identity = _open_case(state, candidate_identity)
@@ -628,9 +1550,9 @@ def test_opened_only_case_is_explicitly_incomplete_after_unclean_exit(tmp_path: 
         bindings=bindings,
         policies=case_store.policies,
     )
-    assert (
-        restarted_reader.read_case(case_id).status is ShadowCaseReadStatus.INCOMPLETE_UNCLEAN_EXIT
-    )
+    read = restarted_reader.read_case(case_id)
+    assert read.status is ShadowCaseReadStatus.OPEN
+    assert read.segments[-1].status.value == "INCOMPLETE_UNCLEAN_EXIT"
 
 
 def test_case_reader_rejects_tampered_known_outcome_arithmetic(tmp_path: Path) -> None:
@@ -640,6 +1562,9 @@ def test_case_reader_rejects_tampered_known_outcome_arithmetic(tmp_path: Path) -
     case_id = case_store.case_id_for_entry(entry_identity)
     assert case_id is not None
     case_directory = tmp_path / "cases" / case_id.removeprefix("sha256:")
+    segment_opened = json.loads(
+        (case_directory / "segments" / "0" / "opened.json").read_text(encoding="utf-8")
+    )
     opened_boundary = _boundary(4)
     tampered = {
         "record_kind": "SHADOW_CASE_OUTCOME",
@@ -650,6 +1575,12 @@ def test_case_reader_rejects_tampered_known_outcome_arithmetic(tmp_path: Path) -
         "radar_policy_identity": RADAR_POLICY,
         "underwriting_policy_identity": UNDERWRITING_POLICY,
         "position_policy_identity": POSITION_POLICY,
+        "product_spec_identity": case_store.product.identity,
+        "segment_sequence": 0,
+        "segment_identity": segment_opened["segment_identity"],
+        "observation_quality": "CONTINUOUS",
+        "gap_count": 0,
+        "qualification_eligible": True,
         "outcome_fact_boundary": _boundary(6).as_object(),
         "shadow_outcome_identity": canonical_identity("ShadowOutcomeIdentity", "tampered"),
         "terminal_state": "MATURE_KNOWN",
@@ -761,7 +1692,7 @@ def test_completed_cases_evict_active_memory_but_remain_durably_readable(tmp_pat
         case_id = case_store.case_id_for_entry(entry)
         assert case_id is not None
         case_ids.append(case_id)
-        _censor_case(
+        _mature_unknown_case(
             state,
             entry,
             suffix=suffix,

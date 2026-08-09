@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections.abc import Mapping
 from decimal import Decimal
 from pathlib import Path
@@ -1213,6 +1214,7 @@ def test_inverse_workbench_identifies_native_and_valuation_units(
             "SHADOW_ENTRY": [
                 {
                     "object_identity": entry_identity,
+                    "runtime_identity": "sha256:" + "b" * 64,
                     "payload": {
                         "candidate_identity": candidate_identity,
                         "radar_scope_identity": "inverse-scope",
@@ -1244,6 +1246,14 @@ def test_inverse_workbench_identifies_native_and_valuation_units(
                             },
                         ],
                         "canonical_leg_identities": [],
+                        "origin_runtime_identity": "sha256:" + "b" * 64,
+                        "current_segment_identity": "sha256:" + "8" * 64,
+                        "current_segment_sequence": 0,
+                        "observation_quality": "CONTINUOUS",
+                        "gap_count": 0,
+                        "qualification_eligible": True,
+                        "tracking_state": "ACTIVE",
+                        "post_close_attempt_state": "NOT_SCHEDULED",
                     },
                 }
             ],
@@ -1310,6 +1320,7 @@ def test_inverse_shadow_case_v4_conserves_native_and_boundary_valued_outcome(
 
     from short_vol_underwriting import (
         UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
+        FixedContractShadowOwner,
         RuntimeBindings,
         ShadowCaseReadStatus,
         ShadowCaseStore,
@@ -1599,6 +1610,16 @@ def test_inverse_shadow_case_v4_conserves_native_and_boundary_valued_outcome(
             "native_gross_entry_credit": "0.00034",
             "native_entry_fee_reserve": "0.00005625",
             "native_net_entry_credit": "0.00028375",
+            "entry_index_usdc_per_btc": "100000",
+            "entry_index_source_ref": {
+                "source_identity": canonical_identity("IndexSource", "inverse-entry"),
+                "receipt_fact_boundary": opened_boundary.as_object(),
+            },
+            "entry_short_leg_mark_iv_fraction": "0.5",
+            "entry_short_leg_mark_iv_source_ref": {
+                "source_identity": canonical_identity("TickerSource", "inverse-entry"),
+                "receipt_fact_boundary": opened_boundary.as_object(),
+            },
             "entry_valuation_index_price": "100000",
             "gross_entry_credit_usdc": "34",
             "entry_fee_reserve_usdc": "5.625",
@@ -1621,6 +1642,98 @@ def test_inverse_shadow_case_v4_conserves_native_and_boundary_valued_outcome(
     case_id = case_store.case_id_for_entry(entry_identity)
     assert case_id is not None
 
+    recovery_cases = tmp_path / "recovery-cases"
+    shutil.copytree(cases, recovery_cases)
+    recovery_bindings = RuntimeBindings(
+        code_identity=code,
+        runtime_identity="sha256:" + "c" * 64,
+        radar_policy_identity=bindings.radar_policy_identity,
+        underwriting_policy_identity=bindings.underwriting_policy_identity,
+        position_policy_identity=bindings.position_policy_identity,
+    )
+    recovery_store = ShadowCaseStore(
+        recovery_cases,
+        bindings=recovery_bindings,
+        policies=policies,
+    )
+    (scanned_entry,) = recovery_store.scan_active_admitted()
+    assert scanned_entry.required_option_instrument_names == (short_name, long_name)
+    assert scanned_entry.entry_terms.target_quantity_btc == Decimal("0.1")
+    assert scanned_entry.entry_payload["entry_fact_boundary"] == opened_boundary.as_object()
+    scanned_sources = cast(
+        tuple[Mapping[str, object], ...],
+        scanned_entry.entry_payload["entry_component_quote_source_refs"],
+    )
+    assert [source["source_timestamp_ms"] for source in scanned_sources] == [1_000, 1_000]
+
+    recovery_state = ShadowStateStore(bindings=recovery_bindings)
+    recovery_owner = FixedContractShadowOwner(
+        policies=policies,
+        bindings=recovery_bindings,
+        state_store=recovery_state,
+    )
+    startup_boundary = FactBoundary(
+        code_identity=code,
+        runtime_identity=recovery_bindings.runtime_identity,
+        session_epoch=0,
+        ingress_seq=0,
+        received_monotonic_ms=90,
+        causal_seq=0,
+    )
+    staged = recovery_owner.stage_recovered_entries(
+        (scanned_entry,),
+        recovery_projection_boundary=startup_boundary,
+    )
+    adoption_boundary = FactBoundary(
+        code_identity=code,
+        runtime_identity=recovery_bindings.runtime_identity,
+        session_epoch=1,
+        ingress_seq=1,
+        received_monotonic_ms=100,
+        causal_seq=1,
+    )
+    adopted = recovery_store.open_recovery_segment(
+        case_id,
+        adoption_fact_boundary=adoption_boundary,
+    )
+    assert staged[0].shadow_entry_identity == adopted.shadow_entry_identity
+    recovery_owner.activate_recovered_entries((adopted,))
+    restored = recovery_state.get_object("SHADOW_ENTRY", entry_identity)
+    assert restored is not None
+    restored_payload = cast(Mapping[str, object], restored["payload"])
+    restored_legs = cast(list[Mapping[str, object]], restored_payload["entry_component_legs"])
+    assert [Decimal(cast(str, leg["stressed_vwap_usdc_per_btc"])) for leg in restored_legs] == [
+        Decimal("550"),
+        Decimal("210"),
+    ]
+    assert [Decimal(cast(str, leg["fee_reserve_usdc"])) for leg in restored_legs] == [
+        Decimal("3"),
+        Decimal("2.625"),
+    ]
+    assert restored_payload["full_quantity_btc"] == "0.1"
+    assert restored_payload["entry_fact_boundary"] == opened_boundary.as_object()
+    restored_sources = cast(
+        list[Mapping[str, object]],
+        restored_payload["entry_component_quote_source_refs"],
+    )
+    assert [source["source_timestamp_ms"] for source in restored_sources] == [1_000, 1_000]
+    from radar_runtime.workbench import _shadow_rows
+
+    recovered_rows = _shadow_rows(
+        {"SHADOW_ENTRY": [restored]},
+        policies,
+    )
+    assert recovered_rows[0]["simulated_entry_price_valuation_per_btc"] == "340"
+    assert recovered_rows[0]["target_quantity_btc"] == "0.1"
+    assert recovered_rows[0]["entry_fact_boundary"] == opened_boundary.as_object()
+    assert [
+        source["source_timestamp_ms"]
+        for source in cast(
+            list[Mapping[str, object]],
+            recovered_rows[0]["entry_component_quote_source_refs"],
+        )
+    ] == [1_000, 1_000]
+
     close_identity = canonical_identity("PositionActionIdentity", "inverse-close")
     state.record(
         object_kind="POSITION_ACTION",
@@ -1636,6 +1749,35 @@ def test_inverse_shadow_case_v4_conserves_native_and_boundary_valued_outcome(
             "secondary_close_reasons": [],
             "first_latched_close_action_identity": close_identity,
             "action_fact_boundary": boundary(5).as_object(),
+        },
+    )
+    close_request_ids = [301, 302]
+    close_request_params = [
+        {"instrument_name": short_name, "depth": 10000},
+        {"instrument_name": long_name, "depth": 10000},
+    ]
+    close_schedule_identity = canonical_identity(
+        "ScheduledComponentPostCloseAttemptIdentity",
+        entry_identity,
+        close_identity,
+        close_request_ids,
+        "public/get_order_book",
+        close_request_params,
+        boundary(5).as_object(),
+    )
+    state.record(
+        object_kind="POST_CLOSE_ATTEMPT_SCHEDULED",
+        object_identity=close_schedule_identity,
+        fact_boundary=boundary(5),
+        payload={
+            "scheduled_post_close_attempt_identity": close_schedule_identity,
+            "shadow_entry_identity": entry_identity,
+            "first_latched_close_action_identity": close_identity,
+            "request_id_or_marker": close_request_ids,
+            "execution_model": "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL",
+            "request_method": "public/get_order_book",
+            "request_params": close_request_params,
+            "schedule_fact_boundary": boundary(5).as_object(),
         },
     )
     outcome_identity = canonical_identity("ShadowOutcomeIdentity", "inverse-known")

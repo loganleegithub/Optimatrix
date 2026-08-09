@@ -113,6 +113,13 @@ const predicateVectorKeys = {
   MINIMUM_NET_CREDIT_TO_PAYOFF_CAP: 'MINIMUM_NET_CREDIT_TO_PAYOFF_CAP'
 };
 
+const postCloseAttemptLabels = {
+  NOT_SCHEDULED: '尚未安排',
+  SCHEDULED: '已安排',
+  TERMINAL: '已终结',
+  ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS: '进程中断后状态未知（不重试）'
+};
+
 const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;',
   '<': '&lt;',
@@ -367,11 +374,32 @@ const roadmapState = channel => {
   return {label: '尚未接入', tone: 'neutral', note: '无产品与策略快照'};
 };
 
+const shadowTrackingPresentation = row => {
+  const shadow = row && row.shadow_entry_projection;
+  if (!shadow) return null;
+  const gapped = shadow.observation_quality === 'GAPPED';
+  const qualificationExcluded = shadow.qualification_eligible === false;
+  if (!gapped && !qualificationExcluded) return null;
+  return {
+    label: gapped ? '跨进程跟踪' : 'Shadow 跟踪',
+    note: gapped && qualificationExcluded
+      ? '观察有间隙 · 不计入连续观察资格'
+      : (gapped ? '观察有间隙' : '不计入连续观察资格')
+  };
+};
+
 const structureState = row => {
   if (Array.isArray(row.shadow_projection_issues) && row.shadow_projection_issues.length) {
     return {key: 'UNKNOWN', label: 'Shadow 投影异常', tone: 'red', priority: 1};
   }
   if (row.candidate_lifecycle === 'ADMITTED') {
+    const tracking = shadowTrackingPresentation(row);
+    if (tracking) {
+      return {
+        key: 'SHADOW_TRACKING', label: tracking.label, tone: 'purple', priority: 0,
+        note: tracking.note
+      };
+    }
     return {key: 'SHADOW_TRACKING', label: 'Shadow 跟踪', tone: 'purple', priority: 0};
   }
   if (row.candidate_lifecycle === 'INVALIDATED') {
@@ -672,6 +700,10 @@ const structureJudgement = row => {
   };
 };
 
+const structureDecisionMarkup = (row, state = structureState(row)) =>
+  badgeMarkup(state.label, state.tone, 'decision-badge') +
+  (state.note ? `<span class="cell-secondary">${safeText(state.note)}</span>` : '');
+
 let lastSuccessfulFetchAtMs = null;
 let lastPublicationRuntimeIdentity = null;
 let lastPublicationSequence = null;
@@ -889,7 +921,7 @@ function structureRowMarkup(row, index) {
     `<span class="cell-secondary">${escapeHtml(ACTIVE_CHANNEL_ID)}</span></span>` +
     `<span role="cell"><span class="cell-primary">${safeText(structureLabel(row))}</span>` +
     `<span class="cell-secondary">${safeText(row.short_leg_instrument_name)} → ${safeText(row.long_leg_instrument_name)}</span></span>` +
-    `<span role="cell">${badgeMarkup(state.label, state.tone, 'decision-badge')}</span>` +
+    `<span role="cell">${structureDecisionMarkup(row, state)}</span>` +
     `<span role="cell"><span class="cell-value">${safeText(formatNative(entryFacts.nativeNetCredit))} ${safeText(nativeUnit)}</span>` +
     `<span class="cell-secondary">${safeText(formatMoney(valuationCredit))} ${safeText(valuationUnit)}${valuationBasis}</span></span>` +
     `<span role="cell"><span class="cell-value ${failure.margin.startsWith('-') ? 'cell-warning' : ''}">${safeText(failure.margin)}</span>` +
@@ -983,6 +1015,47 @@ const predicateListMarkup = row => {
   ).join('')}</div>`;
 };
 
+const postCloseAttemptText = value => isMissing(value)
+  ? '—'
+  : (postCloseAttemptLabels[value] || displayText(value));
+
+const shadowTrackingEvidenceMarkup = shadow => {
+  if (!shadow || typeof shadow !== 'object') return '';
+  const gapped = shadow.observation_quality === 'GAPPED';
+  const qualificationExcluded = shadow.qualification_eligible === false;
+  const parts = [];
+  if (gapped) {
+    parts.push(`<div class="callout info"><strong>跨进程跟踪</strong>` +
+      `观察有间隙；这是服务器声明的观察质量，不是异常或当前交易阻塞。</div>`);
+  }
+  if (qualificationExcluded) {
+    parts.push(`<div class="callout info"><strong>研究资格</strong>` +
+      `不计入连续观察资格；已登记的真实 Shadow Entry 入场经济仍保留。</div>`);
+  }
+  if (gapped) {
+    parts.push(`<div class="fact-grid">` +
+      factMarkup('Origin runtime', shortIdentity(shadow.origin_runtime_identity)) +
+      factMarkup('观察 Segment', isMissing(shadow.current_segment_sequence)
+        ? '—' : `#${displayText(shadow.current_segment_sequence)}`) +
+      factMarkup('平仓尝试', postCloseAttemptText(shadow.post_close_attempt_state)) +
+      `</div>`);
+  }
+  const entryBoundary = shadow.entry_fact_boundary && typeof shadow.entry_fact_boundary === 'object'
+    ? shadow.entry_fact_boundary : null;
+  const sourceRefs = Array.isArray(shadow.entry_component_quote_source_refs)
+    ? shadow.entry_component_quote_source_refs : [];
+  const sourceTimes = sourceRefs
+    .map(value => value && value.source_timestamp_ms)
+    .filter(value => Number.isFinite(Number(value)));
+  if (entryBoundary || sourceTimes.length) {
+    parts.push(`<div class="fact-grid">` +
+      factMarkup('入场 causal seq', entryBoundary ? displayText(entryBoundary.causal_seq) : '—') +
+      factMarkup('双腿源时间', sourceTimes.length ? sourceTimes.map(displayText).join(' / ') : '—') +
+      `</div>`);
+  }
+  return parts.join('');
+};
+
 function canonicalShadowMarkup(row, documentValue) {
   const projectionIssues = Array.isArray(row.shadow_projection_issues)
     ? row.shadow_projection_issues : [];
@@ -1029,6 +1102,8 @@ function canonicalShadowMarkup(row, documentValue) {
     `<div class="callout info"><strong>Shadow 模拟跟踪已建立</strong>` +
       `公共盘口反事实已登记；不是订单、成交或实际持仓。</div>`
   ];
+  const trackingEvidence = shadowTrackingEvidenceMarkup(shadow);
+  if (trackingEvidence) parts.push(trackingEvidence);
   if (position) {
     parts.push(`<div class="callout info"><strong>当前模拟建议</strong>` +
       `${safeText(position.position_action)} · ${safeText(position.primary_exit_rule)} · hard-close ${safeText(formatDurationInterval(position.hard_close_countdown_interval_ms))}</div>`);
