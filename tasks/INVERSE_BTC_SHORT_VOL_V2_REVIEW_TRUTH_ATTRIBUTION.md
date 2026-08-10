@@ -2,16 +2,16 @@
 
 **Status:** ACTIVE
 
-**Task kind:** IMPLEMENTATION
+**Task kind:** VALIDATION_ONLY
 
-**Runtime implementation:** REQUIRED
+**Runtime implementation:** MERGED_IN_PR_44
 
-**Live commands:** FORBIDDEN
+**Live commands:** ONE_CLEAN_STOP_ONE_START_AND_300_SECOND_READ_ONLY_GATE
 
-**Base commit:** `5a32e62069324ac83a389ca899ef0cf878650105`
+**Base commit:** `aee7ba3a3c8d50f3da151607069872d7c2cd5d82`
 
-**Target branch/PR:** `codex/v2-review-truth-attribution` /
-[Draft PR #44](https://github.com/loganleegithub/Optimatrix/pull/44)
+**Target branch/PR:** `codex/v2-review-truth-deployment` /
+[Draft PR #45](https://github.com/loganleegithub/Optimatrix/pull/45)
 
 **Owning authority/contract:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md),
@@ -29,6 +29,11 @@ research projection before `SHADOW_CASE_OPENED`
 HIGH leaders were rendered as `0/3` confirmation despite being ineligible for a clue; the same
 runtime had `21` activation batches, `18` selected decisions, `18` `KNOWN_NO_CONTROL` terminals,
 and zero opened Cases, but exposed no bounded confirmation-reset or known-no-control reason split
+
+The authorized cutover baseline immediately before stop is `RUNNING/CURRENT/ready`, 128 current
+Radar rows, 36 research activation batches, 33 selected decisions, 33 `KNOWN_NO_CONTROL`
+terminals, and zero schema-v5 Case, Control, Shadow Entry, Position, or Outcome records in the
+stable root. These are old-runtime observations and cannot be backfilled with new reason labels.
 
 **Primary blocker:** `REVIEW_ONLY_CONFIRMATION_MISREPRESENTED_AND_TERMINALS_UNATTRIBUTED`; the
 display cannot distinguish an ineligible score row from an eligible confirmation, and collapsed
@@ -75,17 +80,19 @@ and one browser rendering harness.
 pre-activation reset and selected-decision terminal projections; no Outcome arithmetic or Case
 eligibility change
 
-**Stage/authorization change:** authorize offline implementation, tests, and one Draft PR only;
-live probe, restart, deployment, and state-root access remain forbidden
+**Stage/authorization change:** PR #44 is merged. Authorize exactly one clean stop of the accepted
+8675 runtime, one start from synchronized clean `main` in the non-temporary deployment worktree
+using the same stable root, and one 300-second read-only gate; no retry or second start is implied
 
 ## Scope
 
-**In:** Radar bucket transition/projection, runtime-to-Funnel aggregation, Underwriting control
-terminal reason, Workbench renderer, owning contracts, and direct tests
+**In:** clean-stop inventory, merged-main deployment on 8675, the existing stable state root,
+health/readiness/current Workbench reads, exact Policy/product identity, review-only eligibility,
+bounded reset/known-no-control reason conservation, and Case-count inventory
 
 **Out:** Policy artifacts or hashes, score formula/thresholds, T/S construction, ATM interpolation,
-TTE/Delta eligibility, persistence count, Case schema/root, source topology, process lifecycle,
-8675 probe/restart/deployment, and private execution
+TTE/Delta eligibility, persistence count, Case schema/root replacement or migration, source
+topology, a second runtime, retry, long soak, host/PID/log/resource inspection, and private execution
 
 **Owning module:** `short_vol_radar.bucket` for confirmation truth and
 `short_vol_underwriting.owner/control` for known-no-control truth; `radar_runtime.funnel/workbench`
@@ -95,12 +102,13 @@ only project those owner-generated facts
 
 - focused tests: `.venv/bin/pytest -q tests/test_authority_and_architecture.py tests/test_radar_score.py tests/test_fact_boundary_business.py tests/test_selected_decision_control.py tests/test_funnel.py tests/test_trader_workbench.py tests/test_workbench_frontend_v1.py`;
 - repository gate: `make check`;
-- public observation: `NOT_APPLICABLE` and forbidden by this task;
+- public observation: one 300-second gate sampling the existing loopback HTTP surface only;
 - no manifest, receipt, commissioning, or broad evidence package.
 
 ## Definition of done
 
-The declared user-visible truth and bounded attribution exist, direct and repository checks pass,
-the three Policy bytes and durable schema remain unchanged, the diff is bounded, no pre-Shadow
-durable record is introduced, the Draft PR reports that 8675 still runs the prior accepted main,
-and no deployment authority is inferred from tests or Git.
+The merged implementation is running from clean synchronized `main` on 8675; the 300-second gate
+keeps service ready/current, review-only rows never report confirmation progress, every future
+`KNOWN_NO_CONTROL` has one fixed bounded reason, reason sums conserve their terminal totals, the
+three Policy bytes and durable schema remain unchanged, and the service remains running to collect
+prospective evidence. A rare confirmation/reset/Case is not required by the gate.

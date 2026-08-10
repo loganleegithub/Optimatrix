@@ -182,15 +182,15 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_only_offline_review_truth_attribution() -> None:
+def test_current_stage_authorizes_one_review_truth_main_cutover() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION_OFFLINE`" in current
+    assert "**Current task kind:** `VALIDATION_ONLY`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_MAIN_CUTOVER_AUTHORIZED`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_8675_FROM_MAIN_D5D4C88`" in current
-    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "**Persistent service:** `RUNNING_8675_FROM_MAIN_D5D4C88_PENDING_ONE_CUTOVER`" in current
+    assert "**Live commands:** `ONE_CLEAN_STOP_ONE_START_AND_300_SECOND_READ_ONLY_GATE`" in current
     assert (
         "**Sole authorized closure:** `INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION`"
         in current
@@ -216,7 +216,10 @@ def test_current_stage_authorizes_only_offline_review_truth_attribution() -> Non
         "no remaining production implementation or compatibility branch",
         "review-only HIGH score rows rendered as `0/3` confirmation",
         "`18` `KNOWN_NO_CONTROL` terminals",
-        "Public probing, 8675 stop/start/restart",
+        "36 research activation batches",
+        "33 `KNOWN_NO_CONTROL` terminals",
+        "exactly one clean stop, one start from synchronized clean `main`",
+        "one 300-second read-only HTTP gate",
     ):
         assert phrase in normalized
     for identity in (
