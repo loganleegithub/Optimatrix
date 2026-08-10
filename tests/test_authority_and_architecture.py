@@ -220,6 +220,7 @@ def test_current_stage_records_completed_review_truth_main_cutover() -> None:
         "`4,569 ms` maximum",
         "PR #44",
         "PR #45",
+        "PR #46",
     ):
         assert phrase in normalized
     for identity in (

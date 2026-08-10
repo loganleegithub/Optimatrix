@@ -29,8 +29,9 @@ replaced, or deleted during the cutover.
 
 The review-truth implementation was merged by
 [PR #44](https://github.com/loganleegithub/Optimatrix/pull/44); its one-stop/one-start cutover was
-authorized by [PR #45](https://github.com/loganleegithub/Optimatrix/pull/45). Immediately before
-stop, the old runtime had 41 research activation batches, 38 selected decisions, 38
+authorized by [PR #45](https://github.com/loganleegithub/Optimatrix/pull/45), and the consumed
+cutover was recorded by [PR #46](https://github.com/loganleegithub/Optimatrix/pull/46).
+Immediately before stop, the old runtime had 41 research activation batches, 38 selected decisions, 38
 `KNOWN_NO_CONTROL` terminals, and zero schema-v5 Case, Control, Shadow Entry, Position, or Outcome
 records. The accepted cutover used the unchanged stable root and port 8675.
 
