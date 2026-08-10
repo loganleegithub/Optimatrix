@@ -8,7 +8,13 @@ import pytest
 import short_vol_radar.radar as radar_module
 from conftest import PolicyFactory, encode_policy, policy_document
 from market_monitor import ContinuousOrderBook, TimeInterval
-from options_domain import AmountMetadata, OptionInstrument, OptionType, PriceTickMetadata
+from options_domain import (
+    AmountMetadata,
+    OptionInstrument,
+    OptionType,
+    PriceTickMetadata,
+    PriceTickStep,
+)
 from short_vol_radar.black import DecimalInterval, black_price
 from short_vol_radar.detector import (
     DetectorObservation,
@@ -251,6 +257,37 @@ def test_full_baseline_iv_delta_richness_path_can_activate(
     assert result.calculation.baseline.annualized_volatility == Decimal("0.1")
 
 
+def test_target_spread_ticks_integrates_across_the_exchange_tick_ladder(
+    policy_factory: PolicyFactory,
+) -> None:
+    policy, instrument, tracker, price = make_engine_inputs(policy_factory)
+    ladder = PriceTickMetadata(
+        Decimal("0.00000001"),
+        (
+            PriceTickStep(
+                above_price=price + Decimal("0.00000001"),
+                tick_size=Decimal("0.00000002"),
+            ),
+        ),
+    )
+    instrument = replace(instrument, price_tick=ladder)
+
+    result = evaluate_instrument(
+        policy=policy,
+        tracker=tracker,
+        instrument=instrument,
+        trusted_time=TimeInterval(0, 0),
+        causal_seq=1,
+        option_book=make_book("SHORT", price),
+        ticker=TickerState(TEST_FORWARD, "BTC-27SEP24", 1),
+        causal_closes=(Decimal(100),) * 6,
+    )
+
+    assert result.calculation is not None
+    assert result.calculation.native_target_spread == Decimal("0.00000002")
+    assert result.calculation.target_spread_ticks == Decimal("1.5")
+
+
 def test_online_two_stage_path_exposes_no_score_before_feature_finalize(
     policy_factory: PolicyFactory,
 ) -> None:
@@ -273,6 +310,7 @@ def test_online_two_stage_path_exposes_no_score_before_feature_finalize(
         options={instrument.instrument_name: instrument},
         calculations={instrument.instrument_name: core.calculation},
         tickers={instrument.instrument_name: ticker},
+        score_model=policy.score_model,
     )[instrument.instrument_name]
     finalized = finalize_current_evaluation(
         policy=policy,

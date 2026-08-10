@@ -1536,6 +1536,7 @@ class FixedContractShadowRuntimeAdapter:
             index_usdc_per_btc=reducer.current_index_price_usdc_per_btc,
             target_quantity_btc=self.owner.policies.underwriting.target_base_quantity_btc,
             fee_rate_index_fraction=self.owner.policies.underwriting.fee_rate_index_fraction,
+            score_model=self.owner.policies.radar.score_model,
         )
 
     def _underwriting_component(

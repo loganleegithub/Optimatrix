@@ -977,6 +977,7 @@ def test_inverse_radar_converts_native_btc_premium_to_black_model_price() -> Non
         index_usdc_per_btc=forward,
         target_quantity_btc=Decimal("0.1"),
         fee_rate_index_fraction=Decimal("0.0003"),
+        score_model=policy.score_model,
     )
     from radar_runtime.runtime import CausalCommit, RadarReducer
     from radar_runtime.workbench import _radar_rows
@@ -1037,7 +1038,7 @@ def test_inverse_platform_readiness_tracks_only_btc_usd_lock() -> None:
     assert readiness.lock_snapshot is True
 
 
-def test_radar_policy_v8_binds_inverse_product_identity() -> None:
+def test_radar_policy_v9_binds_inverse_product_identity() -> None:
     from conftest import encode_policy, policy_document
     from short_vol_radar.policy import load_policy_bytes
 
@@ -1046,7 +1047,7 @@ def test_radar_policy_v8_binds_inverse_product_identity() -> None:
 
     policy = load_policy_bytes(exact, digest)
 
-    assert policy.schema_version == 8
+    assert policy.schema_version == 9
     assert policy.product_spec_identity == INVERSE_BTC.identity
 
 
@@ -1059,7 +1060,7 @@ def test_radar_policy_rejects_removed_schema_v6() -> None:
     document.pop("product_spec_identity")
     exact, digest = encode_policy(document)
 
-    with pytest.raises(PolicyError, match="policy_schema_version must be exactly 8"):
+    with pytest.raises(PolicyError, match="policy_schema_version must be exactly 9"):
         load_policy_bytes(exact, digest)
 
 
@@ -1619,8 +1620,10 @@ def test_inverse_shadow_case_v5_conserves_native_and_boundary_valued_outcome(
             stressed_richness=stressed_richness,
             stressed_executable_bid_iv=DecimalInterval(Decimal("0.3"), Decimal("0.3")),
             local_same_type_mark_iv=Decimal("0.3"),
+            surface_source_skew_ms=0,
             current_expiry_atm_mark_iv=Decimal("0.3"),
             adjacent_expiry_atm_mark_iv=Decimal("0.3"),
+            term_source_skew_ms=0,
             adverse_semivariance_share=point_zero,
             jump_share=point_zero,
             target_spread_ticks=point_one,

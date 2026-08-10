@@ -43,16 +43,17 @@ offline from Shadow Cases.
 
 ## Current stage
 
-The permission boundary remains `PUBLIC_SHADOW`. The H1 repository task is replacing the V1
-ratio-only Radar with `INVERSE_BTC_SHORT_VOL_V2`, schema-v5 Case score packets, and a Case-only
-Outcome report. The economic product and public source remain `INVERSE_BTC_V1`.
+The permission boundary remains `PUBLIC_SHADOW`. H2 already started the sole V2 process on its
+stable non-temporary root. The active repository-only task repairs V2 causal coherence for delayed
+HIGH enrollment, optional S/T source skew, cross-Call/Put invalidation, ticker countability, tick
+ladder distance, and Case-report strata. It changes the fixed three-Policy repository identity
+chain but is explicitly not deployed.
 
-At the last bounded Authority observation, `127.0.0.1:8765` was the older V1 process using its
-existing temporary root. H1 neither inspects nor changes that process or any external root. Stop,
-archive, stable V2-root creation, restart, and live validation require a later explicit H2
-permission update. A live snapshot does not establish future uptime, fillability, account margin,
-frequency, edge, profitability, or qualification. Exact runtime identity, durable effect, and
-permission details are in `docs/authority/CURRENT_STAGE.md`.
+This task neither inspects nor changes `127.0.0.1:8765`, the running H2 process, or any external
+root. Deployment requires a later explicit task and a fresh Policy-compatible root boundary. A
+historical live snapshot does not establish future uptime, fillability, account margin, frequency,
+edge, profitability, or qualification. Exact runtime identity, durable effect, and permission
+details are in `docs/authority/CURRENT_STAGE.md`.
 
 See:
 

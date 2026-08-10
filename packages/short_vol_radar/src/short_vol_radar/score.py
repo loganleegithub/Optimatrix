@@ -159,8 +159,10 @@ class RadarScoreInputs:
     stressed_richness: DecimalInterval
     stressed_executable_bid_iv: DecimalInterval
     local_same_type_mark_iv: Decimal | None
+    surface_source_skew_ms: int | None
     current_expiry_atm_mark_iv: Decimal | None
     adjacent_expiry_atm_mark_iv: Decimal | None
+    term_source_skew_ms: int | None
     adverse_semivariance_share: DecimalInterval
     jump_share: DecimalInterval
     target_spread_ticks: DecimalInterval
@@ -613,9 +615,14 @@ def compute_radar_score(model: ScoreModel, inputs: RadarScoreInputs) -> RadarSco
         left_value=stressed_iv_midpoint,
         right_name="local_same_type_mark_iv",
         right_value=inputs.local_same_type_mark_iv,
+        source_skew_name="surface_source_skew_ms",
+        source_skew_ms=inputs.surface_source_skew_ms,
+        maximum_source_skew_ms=model.maximum_cross_sectional_ticker_source_skew_ms,
         saturation=model.surface_residual_saturation_iv_fraction,
         weight=model.surface_adjustment_weight,
         missing_reason="SURFACE_RESIDUAL_UNKNOWN",
+        source_time_unknown_reason="SURFACE_SOURCE_TIME_UNKNOWN",
+        source_skew_exceeded_reason="SURFACE_SOURCE_SKEW_EXCEEDED",
     )
     factor_t = _optional_signed_residual_factor(
         name=ScoreFactorName.TERM_RESIDUAL,
@@ -623,9 +630,14 @@ def compute_radar_score(model: ScoreModel, inputs: RadarScoreInputs) -> RadarSco
         left_value=inputs.current_expiry_atm_mark_iv,
         right_name="adjacent_expiry_atm_mark_iv",
         right_value=inputs.adjacent_expiry_atm_mark_iv,
+        source_skew_name="term_source_skew_ms",
+        source_skew_ms=inputs.term_source_skew_ms,
+        maximum_source_skew_ms=model.maximum_cross_sectional_ticker_source_skew_ms,
         saturation=model.term_residual_saturation_iv_fraction,
         weight=model.term_adjustment_weight,
         missing_reason="TERM_RESIDUAL_UNKNOWN",
+        source_time_unknown_reason="TERM_SOURCE_TIME_UNKNOWN",
+        source_skew_exceeded_reason="TERM_SOURCE_SKEW_EXCEEDED",
     )
 
     path_quality = _clamp_interval(
@@ -884,11 +896,19 @@ def _score_inputs_from_frozen_factors(
     _require_raw_input_layout(factor_a, ("stressed_iv_rv_ratio",))
     _require_raw_input_layout(
         factor_s,
-        ("stressed_executable_bid_iv_midpoint", "local_same_type_mark_iv"),
+        (
+            "stressed_executable_bid_iv_midpoint",
+            "local_same_type_mark_iv",
+            "surface_source_skew_ms",
+        ),
     )
     _require_raw_input_layout(
         factor_t,
-        ("current_expiry_atm_mark_iv", "adjacent_expiry_atm_mark_iv"),
+        (
+            "current_expiry_atm_mark_iv",
+            "adjacent_expiry_atm_mark_iv",
+            "term_source_skew_ms",
+        ),
     )
     _require_raw_input_layout(
         factor_d,
@@ -911,8 +931,10 @@ def _score_inputs_from_frozen_factors(
             stressed_iv_midpoint,
         ),
         local_same_type_mark_iv=_optional_raw_point(factor_s.raw_inputs[1]),
+        surface_source_skew_ms=_optional_raw_non_negative_int(factor_s.raw_inputs[2]),
         current_expiry_atm_mark_iv=_optional_raw_point(factor_t.raw_inputs[0]),
         adjacent_expiry_atm_mark_iv=_optional_raw_point(factor_t.raw_inputs[1]),
+        term_source_skew_ms=_optional_raw_non_negative_int(factor_t.raw_inputs[2]),
         adverse_semivariance_share=_required_raw_interval(factor_d.raw_inputs[0]),
         jump_share=_required_raw_interval(factor_d.raw_inputs[1]),
         target_spread_ticks=_required_raw_interval(factor_e.raw_inputs[0]),
@@ -957,6 +979,15 @@ def _required_raw_positive_int(raw: FactorRawInput) -> int:
     return int(value)
 
 
+def _optional_raw_non_negative_int(raw: FactorRawInput) -> int | None:
+    value = _optional_raw_point(raw)
+    if value is None:
+        return None
+    if value != value.to_integral_value() or value < 0:
+        raise ValueError(f"Radar score raw input {raw.name} must be a non-negative integer")
+    return int(value)
+
+
 def _map_richness_interval(interval: DecimalInterval, model: ScoreModel) -> DecimalInterval:
     return DecimalInterval(
         _map_richness_value(interval.lower, model),
@@ -986,13 +1017,22 @@ def _optional_signed_residual_factor(
     left_value: Decimal | None,
     right_name: str,
     right_value: Decimal | None,
+    source_skew_name: str,
+    source_skew_ms: int | None,
+    maximum_source_skew_ms: int,
     saturation: Decimal,
     weight: Decimal,
     missing_reason: str,
+    source_time_unknown_reason: str,
+    source_skew_exceeded_reason: str,
 ) -> ScoreFactor:
     raw_inputs = (
         FactorRawInput(left_name, _optional_point_interval(left_value)),
         FactorRawInput(right_name, _optional_point_interval(right_value)),
+        FactorRawInput(
+            source_skew_name,
+            (_point_interval(Decimal(source_skew_ms)) if source_skew_ms is not None else None),
+        ),
     )
     if left_value is None or right_value is None:
         return ScoreFactor(
@@ -1001,6 +1041,24 @@ def _optional_signed_residual_factor(
             normalized=None,
             weighted_contribution=None,
             unknown_reason=missing_reason,
+        )
+    if source_skew_ms is None:
+        return ScoreFactor(
+            name=name,
+            raw_inputs=raw_inputs,
+            normalized=None,
+            weighted_contribution=None,
+            unknown_reason=source_time_unknown_reason,
+        )
+    if isinstance(source_skew_ms, bool) or source_skew_ms < 0:
+        raise ScoreUnavailable(f"{source_skew_name} must be a non-negative integer")
+    if source_skew_ms > maximum_source_skew_ms:
+        return ScoreFactor(
+            name=name,
+            raw_inputs=raw_inputs,
+            normalized=None,
+            weighted_contribution=None,
+            unknown_reason=source_skew_exceeded_reason,
         )
     for value, field in ((left_value, left_name), (right_value, right_name)):
         if not value.is_finite() or value < 0:

@@ -3486,7 +3486,14 @@ class RadarReducer:
         self.tickers[instrument_name] = ticker
         self._ticker_generations[instrument_name] = generation
         self._ticker_unavailable.pop(instrument_name, None)
-        countable = previous is None or ticker.forward_usdc != previous.forward_usdc
+        countable = previous is None or any(
+            current != prior
+            for current, prior in (
+                (ticker.forward_usdc, previous.forward_usdc),
+                (ticker.signed_delta, previous.signed_delta),
+                (ticker.mark_iv_fraction, previous.mark_iv_fraction),
+            )
+        )
         self._settle_ticker_boundary(
             instrument_name,
             boundary=boundary,
@@ -4340,6 +4347,33 @@ class RadarReducer:
                     "settled workbench snapshot publication failed"
                 ) from exc
 
+    def _cross_sectional_score_dependents(
+        self,
+        affected_instruments: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Return Call/Put score peers on the affected and immediately shorter expiries."""
+
+        surface_expiries = sorted(
+            {candidate.expiration_timestamp_ms for candidate in self.options.values()}
+        )
+        dependent_expiries: set[int] = set()
+        for affected_name in affected_instruments:
+            affected = self.options.get(affected_name)
+            if affected is None:
+                continue
+            try:
+                expiry_index = surface_expiries.index(affected.expiration_timestamp_ms)
+            except ValueError:
+                continue
+            dependent_expiries.update(surface_expiries[max(0, expiry_index - 1) : expiry_index + 1])
+        return tuple(
+            sorted(
+                name
+                for name, candidate in self.options.items()
+                if candidate.expiration_timestamp_ms in dependent_expiries
+            )
+        )
+
     def _settle_fact_transaction(
         self,
         *,
@@ -4435,31 +4469,9 @@ class RadarReducer:
         }
         recalculation_names = set((*directly_affected_names, *time_changed_names))
         if commit.cause in {CausalCause.TICKER_APPLIED, CausalCause.TICKER_SOURCE_STALE}:
-            surface_dependencies: set[str] = set()
-            for affected_name in directly_affected_names:
-                affected = self.options[affected_name]
-                same_type_expiries = sorted(
-                    {
-                        candidate.expiration_timestamp_ms
-                        for candidate in self.options.values()
-                        if candidate.option_type is affected.option_type
-                    }
-                )
-                try:
-                    expiry_index = same_type_expiries.index(affected.expiration_timestamp_ms)
-                except ValueError:
-                    continue
-                dependent_expiries = set(
-                    same_type_expiries[
-                        max(0, expiry_index - 1) : min(len(same_type_expiries), expiry_index + 2)
-                    ]
-                )
-                surface_dependencies.update(
-                    name
-                    for name, candidate in self.options.items()
-                    if candidate.option_type is affected.option_type
-                    and candidate.expiration_timestamp_ms in dependent_expiries
-                )
+            surface_dependencies = set(
+                self._cross_sectional_score_dependents(directly_affected_names)
+            )
             recalculation_names.update(surface_dependencies)
             if countable and commit.cause is CausalCause.TICKER_APPLIED:
                 countable_names.update(surface_dependencies)
@@ -4718,6 +4730,7 @@ class RadarReducer:
             options=self.options,
             calculations=calculations,
             tickers=self.current_diagnostic_tickers,
+            score_model=self.policy.score_model,
         )
         finalized_prepared: list[ScopeCurrent] = []
         for item in prepared:

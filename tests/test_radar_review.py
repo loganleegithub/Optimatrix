@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+from pathlib import Path
 
 from market_monitor import ContinuousOrderBook, PriceLevel
 from options_domain import (
@@ -16,7 +17,12 @@ from options_domain import (
 from short_vol_radar.baseline import BaselineResult, WindowDiagnostics
 from short_vol_radar.black import DecimalInterval, TotalVolatilityInterval
 from short_vol_radar.detector import DetectorState
-from short_vol_radar.policy import OptionRule, TteBand
+from short_vol_radar.policy import (
+    OptionRule,
+    TteBand,
+    digest_policy_bytes,
+    load_policy_bytes,
+)
 from short_vol_radar.radar import DeltaBucket, DetectorCalculation, TickerState
 from short_vol_radar.review import (
     LEGGED_REFERENCE_NON_CLAIMS,
@@ -31,6 +37,12 @@ FEE_RATE = Decimal("0.0003")
 EXPIRY_MS = 86_400_000
 AMOUNT = AmountMetadata(Decimal(1), TARGET_QUANTITY, TARGET_QUANTITY)
 PRICE_TICK = PriceTickMetadata(Decimal("0.000001"))
+ROOT = Path(__file__).resolve().parents[1]
+_POLICY_BYTES = (ROOT / "policies/short-vol-inverse-btc-public-shadow-radar.json").read_bytes()
+SCORE_MODEL = load_policy_bytes(
+    _POLICY_BYTES,
+    digest_policy_bytes(_POLICY_BYTES),
+).score_model
 
 
 def _option(
@@ -176,11 +188,11 @@ def _calculation(
     )
 
 
-def _ticker(delta: str, mark_iv: str) -> TickerState:
+def _ticker(delta: str, mark_iv: str, *, source_timestamp_ms: int = 1) -> TickerState:
     return TickerState(
         forward_usdc=Decimal(100),
         underlying_index="index_price",
-        source_timestamp_ms=1,
+        source_timestamp_ms=source_timestamp_ms,
         signed_delta=Decimal(delta),
         mark_iv_fraction=Decimal(mark_iv),
     )
@@ -251,6 +263,7 @@ def test_review_builds_regime_surface_and_non_atomic_vertical_reference() -> Non
         index_usdc_per_btc=Decimal("100000"),
         target_quantity_btc=TARGET_QUANTITY,
         fee_rate_index_fraction=FEE_RATE,
+        score_model=SCORE_MODEL,
         attention_top_n=1,
     )
 
@@ -305,6 +318,7 @@ def test_put_surface_uses_absolute_delta_and_negative_semivariance_as_adverse() 
         index_usdc_per_btc=Decimal("100000"),
         target_quantity_btc=TARGET_QUANTITY,
         fee_rate_index_fraction=FEE_RATE,
+        score_model=SCORE_MODEL,
     )
 
     review = contexts["P100"]
@@ -352,6 +366,7 @@ def test_term_feature_uses_immediate_next_longer_expiry_not_closer_previous_expi
             "NEXT": _ticker("0.50", "0.57"),
             "LATER": _ticker("0.50", "0.56"),
         },
+        score_model=SCORE_MODEL,
     )
 
     surface = contexts[current.instrument_name].surface
@@ -381,12 +396,105 @@ def test_term_feature_is_unknown_without_a_next_longer_expiry() -> None:
             "CURRENT": _ticker("0.50", "0.60"),
             "PREVIOUS": _ticker("0.50", "0.54"),
         },
+        score_model=SCORE_MODEL,
     )
 
     surface = contexts[current.instrument_name].surface
     assert surface.adjacent_expiry_timestamp_ms is None
     assert surface.adjacent_expiry_atm_mark_iv is None
     assert surface.current_minus_adjacent_expiry_atm_iv is None
+
+
+def test_surface_and_term_use_cross_type_atm_with_bounded_source_skew() -> None:
+    candidate = _option("C100", "100", OptionType.CALL)
+    lower = _option("C110", "110", OptionType.CALL)
+    upper = _option("C95", "95", OptionType.CALL)
+    current_atm_put = _option("P-ATM", "100", OptionType.PUT)
+    next_call_outside_atm = _option(
+        "C-NEXT-40D",
+        "100",
+        OptionType.CALL,
+        expiry_ms=EXPIRY_MS + 7_200_000,
+    )
+    next_atm_put = _option(
+        "P-NEXT-ATM",
+        "100",
+        OptionType.PUT,
+        expiry_ms=EXPIRY_MS + 7_200_000,
+    )
+    contexts = build_score_feature_contexts(
+        options={
+            option.instrument_name: option
+            for option in (
+                candidate,
+                lower,
+                upper,
+                current_atm_put,
+                next_call_outside_atm,
+                next_atm_put,
+            )
+        },
+        calculations={
+            candidate.instrument_name: _calculation(
+                OptionType.CALL,
+                delta_lower="0.24",
+                delta_upper="0.26",
+            )
+        },
+        tickers={
+            "C100": _ticker("0.25", "0.60", source_timestamp_ms=10_000),
+            "C110": _ticker("0.15", "0.65", source_timestamp_ms=12_000),
+            "C95": _ticker("0.35", "0.58", source_timestamp_ms=16_000),
+            "P-ATM": _ticker("-0.50", "0.55", source_timestamp_ms=15_000),
+            "C-NEXT-40D": _ticker("0.40", "0.56", source_timestamp_ms=18_000),
+            "P-NEXT-ATM": _ticker("-0.48", "0.54", source_timestamp_ms=21_000),
+        },
+        score_model=SCORE_MODEL,
+    )
+
+    surface = contexts[candidate.instrument_name].surface
+    assert surface.same_expiry_atm_instrument_name == "P-ATM"
+    assert surface.adjacent_expiry_atm_instrument_name == "P-NEXT-ATM"
+    assert surface.local_source_skew_ms == 6_000
+    assert surface.term_source_skew_ms == 6_000
+
+
+def test_atm_proxy_outside_policy_delta_distance_is_not_fabricated() -> None:
+    candidate = _option("C100", "100", OptionType.CALL)
+    next_expiry = _option(
+        "P-NEXT-44D",
+        "100",
+        OptionType.PUT,
+        expiry_ms=EXPIRY_MS + 7_200_000,
+    )
+    contexts = build_score_feature_contexts(
+        options={candidate.instrument_name: candidate, next_expiry.instrument_name: next_expiry},
+        calculations={
+            candidate.instrument_name: _calculation(
+                OptionType.CALL,
+                delta_lower="0.24",
+                delta_upper="0.26",
+            )
+        },
+        tickers={
+            "C100": _ticker("0.44", "0.60"),
+            "P-NEXT-44D": _ticker("-0.44", "0.56"),
+        },
+        score_model=SCORE_MODEL,
+    )
+
+    surface = contexts[candidate.instrument_name].surface
+    assert surface.same_expiry_atm_instrument_name is None
+    assert surface.adjacent_expiry_atm_instrument_name is None
+    inputs = contexts[candidate.instrument_name].score_inputs(
+        _calculation(
+            OptionType.CALL,
+            delta_lower="0.24",
+            delta_upper="0.26",
+        )
+    )
+    assert inputs.current_expiry_atm_mark_iv is None
+    assert inputs.adjacent_expiry_atm_mark_iv is None
 
 
 def test_review_only_delta_keeps_tte_eligible_and_active_witness_ranks_first() -> None:
@@ -432,6 +540,7 @@ def test_review_only_delta_keeps_tte_eligible_and_active_witness_ranks_first() -
         index_usdc_per_btc=Decimal("100000"),
         target_quantity_btc=TARGET_QUANTITY,
         fee_rate_index_fraction=FEE_RATE,
+        score_model=SCORE_MODEL,
         attention_top_n=1,
     )
 
@@ -462,6 +571,7 @@ def test_rank_is_deterministic_for_identical_economic_inputs() -> None:
         index_usdc_per_btc=Decimal("100000"),
         target_quantity_btc=TARGET_QUANTITY,
         fee_rate_index_fraction=FEE_RATE,
+        score_model=SCORE_MODEL,
     )
 
     assert contexts["A"].attention_rank == 1

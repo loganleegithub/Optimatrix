@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Mapping
 from decimal import Decimal
 from pathlib import Path
@@ -56,7 +57,13 @@ def _case(
         "case_id": "sha256:" + digit * 64,
         "enrollment_kind": enrollment_kind,
         "selection_score_packet": {
-            "result": {"band": selection_band},
+            "bucket_key": {
+                "tte_band_id": "ultra-short-45m-to-6h",
+                "expiry_ms": expiry_ms,
+                "option_type": "call",
+                "delta_bucket": "0.20-0.25",
+            },
+            "result": {"band": selection_band, "coverage": "COMPLETE"},
             "sampling_metadata": sampling_metadata,
         },
         "entry_refresh_score_packet": {"result": {"band": entry_band}},
@@ -69,6 +76,14 @@ def _case(
             ],
         },
         "entry_economics": {"contractual_payoff_cap_usd": "100"},
+        "underwriting": {
+            "action": ("CANDIDATE" if enrollment_kind == "ADMITTED_SHADOW_TRADE" else "WATCH")
+        },
+        "selected_underwriting_decision": (
+            None
+            if enrollment_kind == "ADMITTED_SHADOW_TRADE"
+            else {"selected_economic_action": "WATCH"}
+        ),
     }
     outcome = None
     if outcome_state is not None:
@@ -150,10 +165,13 @@ def test_case_only_report_separates_continuous_and_gapped_denominators() -> None
         "interpretation": "CONDITIONAL_DESCRIPTIVE_RESEARCH_ONLY",
         "primary_view": "CONTINUOUS",
         "secondary_view": "GAPPED",
+        "pending_view": "PENDING_OPEN",
         "incomplete_view": "INCOMPLETE_UNCLEAN_EXIT",
+        "snapshot_mode": "SUPPLIED_CASE_READ_STATES",
         "non_claims": [
             "NOT_UNCONDITIONAL_MARKET_OPPORTUNITY_RATE",
             "NOT_CAUSAL_ALPHA_OR_EXPECTED_PROFIT",
+            "NOT_CROSS_ENROLLMENT_ALPHA_COMPARISON",
             "NOT_ORDER_FILL_TRADE_OR_ACCOUNT_PNL",
         ],
     }
@@ -167,6 +185,7 @@ def test_case_only_report_separates_continuous_and_gapped_denominators() -> None
         "mature_unknown": 0,
         "censored": 0,
         "right_censored_without_outcome": 0,
+        "pending_open": 0,
         "incomplete_unclean_exit": 0,
     }
     assert continuous["expiry_cluster_count"] == 1
@@ -186,20 +205,25 @@ def test_case_only_report_separates_continuous_and_gapped_denominators() -> None
     assert gapped_denominators["opened"] == 1
     assert gapped_denominators["mature_unknown"] == 1
     assert gapped_stressed["known_count"] == 0
-    incomplete = views["incomplete_unclean_exit"]
-    assert isinstance(incomplete, Mapping)
-    assert incomplete["denominators"] == {
+    pending = views["pending_open"]
+    assert isinstance(pending, Mapping)
+    assert pending["denominators"] == {
         "opened": 1,
         "mature_known": 0,
         "mature_unknown": 0,
         "censored": 0,
         "right_censored_without_outcome": 0,
-        "incomplete_unclean_exit": 1,
+        "pending_open": 1,
+        "incomplete_unclean_exit": 0,
     }
     by_band = continuous["by_selection_score_band"]
     assert isinstance(by_band, Mapping)
     assert by_band["MID"]["denominators"]["opened"] == 1
     assert by_band["LOW"]["denominators"]["opened"] == 0
+    by_enrollment = continuous["by_enrollment_kind"]
+    assert isinstance(by_enrollment, Mapping)
+    assert by_enrollment["ADMITTED_SHADOW_TRADE"]["denominators"]["opened"] == 1
+    assert by_enrollment["RADAR_SCORE_BAND_NO_TRADE_CONTROL"]["denominators"]["opened"] == 0
 
 
 def test_raw_vwap_sensitivity_recomputes_each_fee_with_product_native_rule() -> None:
@@ -278,6 +302,12 @@ def test_report_keeps_control_sampling_ratio_and_excludes_unclean_open_from_prim
     assert row["enrollment_kind"] == "RADAR_SCORE_BAND_NO_TRADE_CONTROL"
     assert row["inclusion_numerator"] == 1
     assert row["inclusion_denominator"] == 6
+    assert row["selection_tte_band_id"] == "ultra-short-45m-to-6h"
+    assert row["selection_option_type"] == "call"
+    assert row["selection_delta_bucket"] == "0.20-0.25"
+    assert row["selection_score_coverage"] == "COMPLETE"
+    assert row["selected_economic_action"] == "WATCH"
+    assert row["refreshed_economic_action"] == "WATCH"
     low = incomplete["by_selection_score_band"]["LOW"]
     assert low["denominators"]["opened"] == 1
     assert low["expiry_cluster_count"] == 1
@@ -292,6 +322,25 @@ def test_offline_reader_rejects_relative_or_non_case_members(tmp_path: Path) -> 
     (cases / "not-a-case").write_text("diagnostic", encoding="utf-8")
     with pytest.raises(V2CaseReportError, match="non-Case member"):
         load_v2_case_report(cases, repository=ROOT)
+
+
+def test_case_report_cli_exposes_explicit_runtime_active_assertion() -> None:
+    completed = subprocess.run(
+        [
+            str(ROOT / ".venv/bin/python"),
+            "-m",
+            "radar_runtime",
+            "report-v2-cases",
+            "--help",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "--runtime-active" in completed.stdout
 
 
 def test_offline_reader_ignores_only_official_case_staging_directories(
@@ -311,6 +360,11 @@ def test_offline_reader_ignores_only_official_case_staging_directories(
     assert isinstance(denominators, Mapping)
     assert denominators["opened"] == 0
 
+    active_report = load_v2_case_report(valid_cases, repository=ROOT, runtime_active=True)
+    active_claim = active_report["claim_boundary"]
+    assert isinstance(active_claim, Mapping)
+    assert active_claim["snapshot_mode"] == "CALLER_ASSERTED_ACTIVE_RUNTIME"
+
     fake_cases = tmp_path / "fake-cases"
     fake_cases.mkdir()
     (fake_cases / ".case-not-hex.tmp").mkdir()
@@ -322,3 +376,70 @@ def test_offline_reader_ignores_only_official_case_staging_directories(
     (file_cases / staging_name).write_text("partial", encoding="utf-8")
     with pytest.raises(V2CaseReportError, match="non-Case member"):
         load_v2_case_report(file_cases, repository=ROOT)
+
+
+def test_open_control_is_pending_not_an_unclean_exit() -> None:
+    product, policies = load_persistent_product_policies(ROOT, INVERSE_BTC)
+    report = build_v2_case_report(
+        (
+            _case(
+                "6",
+                expiry_ms=4_000,
+                selection_band="MID",
+                entry_band="MID",
+                outcome_state=None,
+                enrollment_kind="RADAR_SCORE_BAND_NO_TRADE_CONTROL",
+                sampling_inclusion=(1, 3),
+            ),
+        ),
+        product=product,
+        policies=policies,
+    )
+
+    views = report["views"]
+    assert isinstance(views, Mapping)
+    pending = views["pending_open"]
+    incomplete = views["incomplete_unclean_exit"]
+    assert isinstance(pending, Mapping)
+    assert isinstance(incomplete, Mapping)
+    pending_denominators = pending["denominators"]
+    incomplete_denominators = incomplete["denominators"]
+    assert isinstance(pending_denominators, Mapping)
+    assert isinstance(incomplete_denominators, Mapping)
+    assert pending_denominators["pending_open"] == 1
+    assert incomplete_denominators["opened"] == 0
+
+
+def test_open_admitted_case_with_unclean_segment_is_not_mislabeled_pending() -> None:
+    product, policies = load_persistent_product_policies(ROOT, INVERSE_BTC)
+    case = _case(
+        "7",
+        expiry_ms=5_000,
+        selection_band="HIGH",
+        entry_band="HIGH",
+        outcome_state=None,
+    )
+    case = ShadowCaseRead(
+        status=ShadowCaseReadStatus.OPEN,
+        opened=case.opened,
+        first_close=None,
+        outcome=None,
+        segments=(
+            ShadowCaseSegmentRead(
+                sequence=0,
+                status=ShadowCaseSegmentStatus.INCOMPLETE_UNCLEAN_EXIT,
+                opened={"observation_quality": "CONTINUOUS"},
+                closed=None,
+            ),
+        ),
+    )
+
+    report = build_v2_case_report((case,), product=product, policies=policies)
+
+    views = report["views"]
+    assert isinstance(views, Mapping)
+    incomplete = views["incomplete_unclean_exit"]
+    assert isinstance(incomplete, Mapping)
+    denominators = incomplete["denominators"]
+    assert isinstance(denominators, Mapping)
+    assert denominators["incomplete_unclean_exit"] == 1

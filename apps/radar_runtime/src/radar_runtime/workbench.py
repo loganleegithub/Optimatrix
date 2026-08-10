@@ -692,6 +692,7 @@ def _build_business_projection(
         index_usdc_per_btc=reducer.current_index_price_usdc_per_btc,
         target_quantity_btc=policies.radar.target_base_quantity_btc,
         fee_rate_index_fraction=policies.underwriting.fee_rate_index_fraction,
+        score_model=policies.radar.score_model,
         attention_top_n=DEFAULT_ATTENTION_TOP_N,
     )
     radar_rows = _radar_rows(reducer, commit, trusted, review_contexts)

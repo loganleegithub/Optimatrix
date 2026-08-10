@@ -90,6 +90,26 @@ class PriceTickMetadata:
             tick = step.tick_size
         return tick
 
+    def tick_equivalent_distance(self, lower_price: Decimal, upper_price: Decimal) -> Decimal:
+        """Measure a price interval in native ticks across every declared tick regime."""
+
+        for value, field in ((lower_price, "lower_price"), (upper_price, "upper_price")):
+            if not value.is_finite() or value <= 0:
+                raise ValueError(f"{field} must be finite and positive")
+        if upper_price < lower_price:
+            raise ValueError("upper_price must be greater than or equal to lower_price")
+        if upper_price == lower_price:
+            return Decimal(0)
+        boundaries = tuple(
+            step.above_price for step in self.steps if lower_price < step.above_price < upper_price
+        )
+        current = lower_price
+        distance = Decimal(0)
+        for boundary in (*boundaries, upper_price):
+            distance += (boundary - current) / self.tick_size_for_price(current)
+            current = boundary
+        return distance
+
     def previous_legal_price(self, price: Decimal) -> Decimal | None:
         if not price.is_finite() or price <= 0:
             raise ValueError("price must be finite and positive")

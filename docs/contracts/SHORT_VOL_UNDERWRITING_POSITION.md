@@ -161,6 +161,13 @@ rational inclusion probability are frozen. Input order cannot affect the result.
 Episode is `UNKNOWN`, ends, or its refresh fails, there is no fallback. At most one decision is
 selected per batch.
 
+Before the action-blind designation is consumed, the owner freezes the canonical activation packet
+for every eligible HIGH member in the batch, not only the hash-designated member. If a different
+HIGH member becomes a fully evaluable Candidate later, its eventual Case selection packet remains
+that member's HIGH activation packet. Current MID/LOW score under hysteresis may be the strictly
+later entry-refresh packet, but can never replace the activation witness or weaken the schema-v5
+HIGH enrollment binding.
+
 The designated Episode's first fully evaluable `CANDIDATE | WATCH | ABSTAIN` freezes the original
 complete predicate-margin vector and schedules one future-blind paired refresh. WATCH/ABSTAIN use
 exactly two control-owned `public/get_order_book` requests under the same quantity, send/response,
@@ -238,10 +245,12 @@ For an admitted trade, the atomically published origin `SHADOW_CASE_SEGMENT_OPEN
 identities and boundaries. Recovery does not widen the accepted Inverse `opened.json` shape or
 change its product schema identity. Position cannot infer missing entry source values.
 
-A successful selected-decision or LOW/MID Radar-score refresh creates the separately typed no-trade control open and
-immediately requests the same durable `SHADOW_CASE_OPENED` record with
-`enrollment_kind=SELECTED_UNDERWRITING_DECISION_CONTROL`. Its Candidate and `SHADOW_ENTRY` fields
-must be null, and its additional non-claims must state `NOT_A_CANDIDATE_ACTIVATION`,
+A successful selected-decision or LOW/MID Radar-score refresh creates the separately typed no-trade
+Control open and immediately requests the same durable `SHADOW_CASE_OPENED` record. A HIGH
+selected-decision Control uses `enrollment_kind=SELECTED_UNDERWRITING_DECISION_CONTROL`; a LOW/MID
+score Control uses `enrollment_kind=RADAR_SCORE_BAND_NO_TRADE_CONTROL`. Its Candidate and
+`SHADOW_ENTRY` fields must be null, and its additional non-claims must state
+`NOT_A_CANDIDATE_ACTIVATION`,
 `NOT_A_SHADOW_ENTRY`, `NOT_AN_ADMITTED_TRADE`, and `NO_CAPITAL_EXPOSURE`.
 
 ## Position state

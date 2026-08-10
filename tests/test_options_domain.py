@@ -246,6 +246,10 @@ def test_option_tick_ladder_and_one_legal_tick_stress_are_exact() -> None:
     assert metadata.previous_legal_price(Decimal("0.0055")) == Decimal("0.0050")
     assert metadata.next_legal_price(Decimal("0.0049")) == Decimal("0.005")
     assert metadata.next_legal_price(Decimal("0.005")) == Decimal("0.0055")
+    assert metadata.tick_equivalent_distance(
+        Decimal("0.0048"),
+        Decimal("0.006"),
+    ) == Decimal(4)
 
     walk = walk_target_depth(
         (

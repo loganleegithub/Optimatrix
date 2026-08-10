@@ -430,7 +430,7 @@ class FixedContractShadowOwner:
         self._decision_controls: dict[str, _DecisionControlRecord] = {}
         self._decision_control_batch_by_episode: dict[str, str] = {}
         self._decision_control_designated_by_batch: dict[str, str] = {}
-        self._decision_control_activation_packet_by_episode: dict[str, RadarScorePacket] = {}
+        self._activation_score_packet_by_episode: dict[str, RadarScorePacket] = {}
         self._decision_control_selected_batches: set[str] = set()
         self._score_control_designation_by_batch: dict[str, RadarScoreControlDesignation] = {}
         self._trades: dict[str, _TradeRecord] = {}
@@ -2771,6 +2771,34 @@ class FixedContractShadowOwner:
             designation_identity=designation_identity,
         )
 
+    def _activation_score_packet(self, facts: UnderwritingFacts) -> RadarScorePacket:
+        anchor_identity = self._underwriting_anchor_identity(facts)
+        if anchor_identity is None:
+            raise RuntimeError("Radar-owned Underwriting facts lack an activation anchor")
+        activation_score_packet = self._activation_score_packet_by_episode.get(anchor_identity)
+        if activation_score_packet is None:
+            raise RuntimeError("Radar-owned Underwriting facts lack their activation score packet")
+        activation_boundary = FactBoundary.from_object(activation_score_packet.fact_boundary)
+        expected_activation_seq = (
+            facts.anomaly_activation_seq
+            if facts.active_episode_identity is not None
+            else facts.radar_research_activation_seq
+        )
+        if (
+            expected_activation_seq is None
+            or activation_boundary.code_identity != facts.boundary.code_identity
+            or activation_boundary.runtime_identity != facts.boundary.runtime_identity
+            or activation_boundary.causal_seq != expected_activation_seq
+            or activation_boundary.causal_seq > facts.boundary.causal_seq
+            or activation_score_packet.policy_identity != self.bindings.radar_policy_identity
+            or activation_score_packet.leader_instrument_name != facts.short_leg_instrument_name
+            or activation_score_packet.bucket_key.expiry_ms != facts.expiry_ms
+            or activation_score_packet.bucket_key.option_type.value != facts.option_type
+            or activation_score_packet.sampling_metadata is not None
+        ):
+            raise RuntimeError("activation score packet is not bound to its Radar Episode")
+        return activation_score_packet
+
     @staticmethod
     def _score_control_sampling_metadata(
         designation: RadarScoreControlDesignation,
@@ -2945,9 +2973,7 @@ class FixedContractShadowOwner:
                     raise RuntimeError(
                         "decision-control activation packet boundary does not match its batch"
                     )
-                self._decision_control_activation_packet_by_episode[member_identity] = (
-                    activation_packet
-                )
+                self._activation_score_packet_by_episode[member_identity] = activation_packet
                 self._decision_control_batch_by_episode[member_identity] = batch_identity
             self._emit(
                 "UNDERWRITING_DECISION_BATCH_DESIGNATION",
@@ -3021,32 +3047,7 @@ class FixedContractShadowOwner:
                 batch_identity=batch_identity,
             )
         )
-        activation_score_packet = self._decision_control_activation_packet_by_episode.get(
-            anchor_identity
-        )
-        if activation_score_packet is None:
-            raise RuntimeError("designated decision lacks its activation score packet")
-        activation_boundary = FactBoundary.from_object(activation_score_packet.fact_boundary)
-        expected_activation_seq = (
-            facts.anomaly_activation_seq
-            if facts.active_episode_identity is not None
-            else facts.radar_research_activation_seq
-        )
-        if (
-            expected_activation_seq is None
-            or activation_boundary.code_identity != facts.boundary.code_identity
-            or activation_boundary.runtime_identity != facts.boundary.runtime_identity
-            or activation_boundary.causal_seq != expected_activation_seq
-            or activation_boundary.causal_seq > facts.boundary.causal_seq
-            or activation_score_packet.policy_identity != self.bindings.radar_policy_identity
-            or activation_score_packet.leader_instrument_name != facts.short_leg_instrument_name
-            or activation_score_packet.bucket_key.expiry_ms != facts.expiry_ms
-            or activation_score_packet.bucket_key.option_type.value != facts.option_type
-            or activation_score_packet.sampling_metadata is not None
-        ):
-            raise RuntimeError(
-                "designated activation score packet is not bound to the selected decision"
-            )
+        activation_score_packet = self._activation_score_packet(facts)
         selection_score_packet = self._packet_with_sampling_metadata(
             activation_score_packet,
             sampling_metadata,
@@ -3232,7 +3233,7 @@ class FixedContractShadowOwner:
         ] += 1
 
     def _retire_decision_control_episode(self, episode_identity: str) -> None:
-        self._decision_control_activation_packet_by_episode.pop(episode_identity, None)
+        self._activation_score_packet_by_episode.pop(episode_identity, None)
         batch_identity = self._decision_control_batch_by_episode.pop(episode_identity, None)
         if batch_identity is None:
             return
@@ -3401,14 +3402,12 @@ class FixedContractShadowOwner:
             selection_score_packet = candidate.selected_decision.selection_score_packet
             sampling_metadata = candidate.selected_decision.sampling_metadata
         else:
-            if candidate.facts.radar_score_packet is None:
-                raise RuntimeError("admitted Candidate lacks its selection score packet")
             sampling_metadata = self._high_sampling_metadata(
                 facts=candidate.facts,
                 designation_identity=candidate.state.candidate_identity,
             )
             selection_score_packet = self._packet_with_sampling_metadata(
-                candidate.facts.radar_score_packet,
+                self._activation_score_packet(candidate.facts),
                 sampling_metadata,
             )
         score_packets = self._case_score_packets(

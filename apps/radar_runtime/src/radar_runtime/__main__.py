@@ -22,11 +22,15 @@ def main() -> int:
     service_parser.add_argument("--workbench-port", type=int, default=8765)
     report_parser = subparsers.add_parser("report-v2-cases")
     report_parser.add_argument("--cases-directory", type=Path, required=True)
+    report_parser.add_argument("--runtime-active", action="store_true")
     arguments = parser.parse_args()
     if arguments.command == "report-v2-cases":
         print(
             json.dumps(
-                load_v2_case_report(arguments.cases_directory),
+                load_v2_case_report(
+                    arguments.cases_directory,
+                    runtime_active=arguments.runtime_active,
+                ),
                 ensure_ascii=False,
                 separators=(",", ":"),
                 sort_keys=True,
