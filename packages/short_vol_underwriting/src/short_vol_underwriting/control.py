@@ -30,6 +30,21 @@ class DecisionControlAttemptOutcome(StrEnum):
     UNKNOWN_CONSUMED = "UNKNOWN_CONSUMED"
 
 
+class DecisionControlKnownNoControlReason(StrEnum):
+    RADAR_EPISODE_OR_REVIEW_ENDED = "RADAR_EPISODE_OR_REVIEW_ENDED"
+    POSITION_SLOT_CONSUMED = "POSITION_SLOT_CONSUMED"
+    NO_PROTECTIVE_COMPONENT = "NO_PROTECTIVE_COMPONENT"
+    NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE = "NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE"
+    ATOMIC_STRUCTURE_NOT_EVALUATED = "ATOMIC_STRUCTURE_NOT_EVALUATED"
+    NO_ACTIVE_COMBO = "NO_ACTIVE_COMBO"
+    NO_TARGET_SIZE_CREDIT_QUOTE = "NO_TARGET_SIZE_CREDIT_QUOTE"
+    STRUCTURE_OR_LIFECYCLE_INELIGIBLE = "STRUCTURE_OR_LIFECYCLE_INELIGIBLE"
+    LATEST_ADMISSION_BOUNDARY_REACHED = "LATEST_ADMISSION_BOUNDARY_REACHED"
+    REFRESHED_OPPORTUNITY_CHANGED = "REFRESHED_OPPORTUNITY_CHANGED"
+    REQUEST_RETIRED_BEFORE_REFRESH = "REQUEST_RETIRED_BEFORE_REFRESH"
+    RUNTIME_TERMINATED_BEFORE_REFRESH = "RUNTIME_TERMINATED_BEFORE_REFRESH"
+
+
 @dataclass(frozen=True)
 class RadarScoreControlDesignation:
     """One future-blind LOW/MID designation for a causal Radar batch."""
@@ -300,6 +315,7 @@ class DecisionControlAttempt:
     terminal_boundary: FactBoundary | None = None
     terminal_source_identity: str | None = None
     terminal_unknown_reasons: tuple[str, ...] = ()
+    terminal_known_no_control_reason: DecisionControlKnownNoControlReason | None = None
     terminal_pair_timing: dict[str, object] | None = None
     terminal_pair_limits: dict[str, int] | None = None
 
@@ -428,6 +444,7 @@ class DecisionControlAttempt:
         maximum_receive_skew_ms: int,
         classification: DecisionControlRefreshClassification,
         classification_unknown_reasons: tuple[str, ...] = (),
+        known_no_control_reason: DecisionControlKnownNoControlReason | None = None,
     ) -> bool:
         for value, field_name in (
             (response_budget_ms, "response_budget_ms"),
@@ -442,6 +459,10 @@ class DecisionControlAttempt:
                 raise ValueError("classification_unknown_reasons must contain non-empty strings")
         if len(classification_unknown_reasons) != len(set(classification_unknown_reasons)):
             raise ValueError("classification_unknown_reasons must not contain duplicates")
+        if (classification is DecisionControlRefreshClassification.NOT_EVALUATED) != (
+            known_no_control_reason is not None
+        ):
+            raise ValueError("NOT_EVALUATED requires exactly one known-no-control reason")
         invalid_reasons = list(
             witness.attempt_unknown_reasons(
                 origin_boundary=self.origin_boundary,
@@ -479,6 +500,11 @@ class DecisionControlAttempt:
             source_identity=witness.pair_identity,
             boundary=witness.boundary,
             classification=classification,
+            known_no_control_reason=(
+                known_no_control_reason
+                if classification is DecisionControlRefreshClassification.NOT_EVALUATED
+                else None
+            ),
         )
 
     def fail_request(
@@ -508,6 +534,7 @@ class DecisionControlAttempt:
         *,
         source_identity: str,
         boundary: FactBoundary,
+        known_no_control_reason: DecisionControlKnownNoControlReason,
     ) -> bool:
         if self.terminal_outcome is not None:
             return False
@@ -517,6 +544,7 @@ class DecisionControlAttempt:
             source_identity=source_identity,
             boundary=boundary,
             classification=DecisionControlRefreshClassification.NOT_EVALUATED,
+            known_no_control_reason=known_no_control_reason,
         )
 
     def _terminalize(
@@ -525,6 +553,7 @@ class DecisionControlAttempt:
         source_identity: str,
         boundary: FactBoundary,
         classification: DecisionControlRefreshClassification,
+        known_no_control_reason: DecisionControlKnownNoControlReason | None = None,
     ) -> bool:
         require_identity(source_identity, "terminal_source_identity")
         outcome = {
@@ -549,15 +578,29 @@ class DecisionControlAttempt:
             and not self.terminal_unknown_reasons
         ):
             self.terminal_unknown_reasons = ("COMPONENT_DECISION_CONTROL_UNCLASSIFIED_UNKNOWN",)
+        if (outcome is DecisionControlAttemptOutcome.KNOWN_NO_CONTROL) != (
+            known_no_control_reason is not None
+        ):
+            raise ValueError("KNOWN_NO_CONTROL requires exactly one fixed reason")
         self.terminal_outcome = outcome
+        self.terminal_known_no_control_reason = known_no_control_reason
         self.terminal_boundary = boundary
         self.terminal_source_identity = source_identity
-        self.terminal_identity = canonical_identity(
-            "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
-            self.scheduled_identity,
-            outcome.value,
-            boundary.as_object(),
-        )
+        if known_no_control_reason is None:
+            self.terminal_identity = canonical_identity(
+                "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
+                self.scheduled_identity,
+                outcome.value,
+                boundary.as_object(),
+            )
+        else:
+            self.terminal_identity = canonical_identity(
+                "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
+                self.scheduled_identity,
+                outcome.value,
+                known_no_control_reason.value,
+                boundary.as_object(),
+            )
         return True
 
 

@@ -161,6 +161,10 @@ pair-timing `UNKNOWN` into known economics.
 Completed funnel identities are retired. Apart from the per-active-Episode terminal above, only
 cumulative scalar counts and bounded normalized reason categories survive, so diagnostic memory is
 bounded by current market scope rather than completed opportunity count.
+The Workbench additionally renders runtime-local fixed counts for lost nonzero pre-activation Radar
+confirmation and `KNOWN_NO_CONTROL`. Review-only TTE/Delta rows expose their score as review context
+and never display a confirmation counter. Both projections are server-owned diagnostics, reset on
+restart, and cannot be reconstructed from old snapshots or Case files.
 
 ## HTTP surface
 

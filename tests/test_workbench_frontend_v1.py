@@ -291,7 +291,8 @@ def test_opportunity_blotter_maps_server_states_without_recomputing_strategy_tru
     test_js = JS.replace(
         "syncThemeControl();\nupdateResponsiveDetailState();\nrefresh();\nsetInterval(refresh, 2000);",
         "globalThis.__workbenchTest = { channelSnapshotState, latencyState, roadmapState, structureState, "
-        "radarState, orderedStructureRows, orderedRadarRows, predicateMarginForFailure, "
+        "radarState, radarReviewConstraint, radarConfirmationText, reasonCountsText, radarDetailMarkup, "
+        "orderedStructureRows, orderedRadarRows, predicateMarginForFailure, "
         "formatMargin, firstFailureSummary, structureJudgement, canonicalShadowMarkup, "
         "canonicalShadowEntry, structureEntryFacts, structureIdentity, structureDetailMarkup, "
         "shadowStructureRow, structureQueueRows, shadowTrackingPresentation, "
@@ -400,21 +401,52 @@ assert.equal(api.structureState({{availability: 'EVALUABLE', action: 'CANDIDATE'
   'CANDIDATE_UNCONFIRMED');
 assert.equal(api.radarState({{
   instrument_name: 'LEADER', is_bucket_leader: true,
+  clue_eligible_tte: true, clue_eligible_delta: true,
   score_result: {{band: 'HIGH'}}, bucket_episode_state: 'ACTIVE',
   bucket_episode_score_band: 'HIGH', bucket_episode_identity: 'sha256:active',
   bucket_episode_leader_instrument_name: 'LEADER'
 }}).label, 'HIGH · 已确认线索');
 assert.match(api.radarState({{
   instrument_name: 'MEMBER', is_bucket_leader: false,
+  clue_eligible_tte: true, clue_eligible_delta: true,
   score_result: {{band: 'HIGH'}}, bucket_episode_state: 'ACTIVE',
   bucket_episode_score_band: 'HIGH', bucket_episode_identity: 'sha256:active',
   bucket_episode_leader_instrument_name: 'LEADER',
   confirmation_observation_count: 3, required_confirmation_observation_count: 3
 }}).label, /确认中/);
 assert.match(api.radarState({{
+  clue_eligible_tte: true, clue_eligible_delta: true,
   score_result: {{band: 'HIGH'}}, bucket_episode_state: 'CONFIRMING',
   confirmation_observation_count: 1, required_confirmation_observation_count: 3
 }}).label, new RegExp('确认中 1/3'));
+const reviewOnlyHigh = {{
+  instrument_name: 'REVIEW', is_bucket_leader: true,
+  clue_eligible_tte: false, clue_eligible_delta: true,
+  score_result: {{band: 'HIGH'}}, bucket_episode_state: 'IDLE',
+  confirmation_observation_count: 0, required_confirmation_observation_count: 3
+}};
+assert.equal(api.radarReviewConstraint(reviewOnlyHigh), 'TTE');
+assert.equal(api.radarState(reviewOnlyHigh).label, 'HIGH 分数 · TTE 仅供审查');
+assert.equal(api.radarConfirmationText(reviewOnlyHigh), 'TTE 仅供审查 · 不进入确认');
+assert.equal(api.radarState(reviewOnlyHigh).label.includes('确认中'), false);
+assert.equal(api.radarState(reviewOnlyHigh).label.includes('0/3'), false);
+assert.equal(api.radarReviewConstraint({{
+  clue_eligible_tte: false, clue_eligible_delta: false
+}}), 'TTE/Delta');
+assert.equal(api.radarState({{
+  clue_eligible_tte: true, clue_eligible_delta: false, score_result: {{band: 'REVIEW'}}
+}}).label, 'REVIEW 分数 · Delta 仅供审查');
+const resetReasons = api.reasonCountsText({{SCORE_BAND_CHANGE: 3, LEADER_CHANGE: 1}});
+assert.match(resetReasons, /Score band 变化 3/);
+assert.match(resetReasons, /Bucket leader 变化 1/);
+const radarDetail = api.radarDetailMarkup(reviewOnlyHigh, {{funnel: {{
+  radar_confirmation: {{reset_counts: {{CORE_UNKNOWN: 2}}}},
+  decision_control_research: {{known_no_control_reason_counts: {{NO_PROTECTIVE_COMPONENT: 4}}}}
+}}}});
+assert.match(radarDetail, /TTE 仅供审查 · 不进入确认/);
+assert.match(radarDetail, /核心 Radar 事实变为 UNKNOWN 2/);
+assert.match(radarDetail, /没有可冻结的同到期保护腿 4/);
+assert.match(radarDetail, /非本行因果归因/);
 
 const ordered = api.orderedStructureRows([
   {{short_leg_instrument_name: 'A', availability: 'EVALUABLE', action: 'ABSTAIN'}},

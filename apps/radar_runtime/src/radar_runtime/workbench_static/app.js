@@ -111,7 +111,22 @@ const reasonLabels = {
   ENTER_CLUE_ELIGIBLE_TTE_BUCKET: '进入可激活线索的 TTE 风险桶',
   ENTER_CLUE_ELIGIBLE_DELTA_BUCKET: '进入可激活线索的 Delta 风险桶',
   MEET_STRESSED_RICHNESS_AND_TIME_PERSISTENCE: '满足 one-tick richness 与持续时间门槛',
-  SOURCE_LOSS_OR_KNOWN_FORMULA_INELIGIBILITY: '数据丢失或已知公式变为不合格时失效'
+  SOURCE_LOSS_OR_KNOWN_FORMULA_INELIGIBILITY: '数据丢失或已知公式变为不合格时失效',
+  LEADER_CHANGE: 'Bucket leader 变化',
+  SCORE_BAND_CHANGE: 'Score band 变化',
+  CORE_UNKNOWN: '核心 Radar 事实变为 UNKNOWN',
+  SCOPE_LOSS: '合约离开适用市场范围',
+  CLUE_INELIGIBLE: 'TTE 或 Delta 变为仅供审查',
+  STOP: 'Runtime 停止',
+  RADAR_EPISODE_OR_REVIEW_ENDED: 'Radar Episode 或研究审查已结束',
+  POSITION_SLOT_CONSUMED: '同一 Position slot 已被占用',
+  ATOMIC_STRUCTURE_NOT_EVALUATED: '原子结构未进入评估',
+  STRUCTURE_OR_LIFECYCLE_INELIGIBLE: '结构或合约生命周期已不合格',
+  LATEST_ADMISSION_BOUNDARY_REACHED: '已到达最晚 admission 边界',
+  REFRESHED_OPPORTUNITY_CHANGED: '严格后续刷新已不再是同一机会',
+  REQUEST_RETIRED_BEFORE_REFRESH: '刷新请求在返回前退役',
+  RUNTIME_TERMINATED_BEFORE_REFRESH: 'Runtime 在刷新返回前终止',
+  OTHER_KNOWN_NO_CONTROL: '其他有界的 KNOWN_NO_CONTROL 原因'
 };
 
 const predicateVectorKeys = {
@@ -544,9 +559,33 @@ const scorePacketState = packet => {
   return {key: 'UNKNOWN', label: '暂不可判断', tone: 'amber', priority: 4};
 };
 
+const radarReviewConstraint = row => {
+  const tteReviewOnly = row.clue_eligible_tte === false;
+  const deltaReviewOnly = row.clue_eligible_delta === false;
+  if (tteReviewOnly && deltaReviewOnly) return 'TTE/Delta';
+  if (tteReviewOnly) return 'TTE';
+  if (deltaReviewOnly) return 'Delta';
+  return null;
+};
+
+const radarConfirmationText = row => {
+  const reviewConstraint = radarReviewConstraint(row);
+  if (reviewConstraint) return `${reviewConstraint} 仅供审查 · 不进入确认`;
+  const count = isMissing(row.confirmation_observation_count)
+    ? '—' : row.confirmation_observation_count;
+  const required = isMissing(row.required_confirmation_observation_count)
+    ? '—' : row.required_confirmation_observation_count;
+  return `${displayText(row.bucket_episode_state)} · ${count}/${required} 次确认`;
+};
+
 const radarState = row => {
   const raw = scorePacketState(radarScoreView(row));
+  const reviewConstraint = radarReviewConstraint(row);
+  if (reviewConstraint && raw.key !== 'UNKNOWN') {
+    return {...raw, label: `${raw.key} 分数 · ${reviewConstraint} 仅供审查`, tone: 'neutral'};
+  }
   const active = row.is_bucket_leader === true &&
+    row.clue_eligible_tte === true && row.clue_eligible_delta === true &&
     row.bucket_episode_leader_instrument_name === row.instrument_name &&
     row.bucket_episode_state === 'ACTIVE' &&
     row.bucket_episode_score_band === raw.key && Boolean(row.bucket_episode_identity);
@@ -565,6 +604,16 @@ const radarState = row => {
       : {...raw, label: `${raw.key} · 确认中 ${count}/${required}`};
   }
   return raw;
+};
+
+const reasonCountsText = values => {
+  if (!values || typeof values !== 'object') return '本运行尚未记录';
+  const entries = Object.entries(values)
+    .filter(([, count]) => Number.isInteger(count) && count > 0)
+    .sort(([leftReason, leftCount], [rightReason, rightCount]) =>
+      rightCount - leftCount || leftReason.localeCompare(rightReason));
+  if (!entries.length) return '本运行尚未记录';
+  return entries.map(([reason, count]) => `${reasonText(reason)} ${count}`).join('；');
 };
 
 const structureIdentity = (row, index = 0) => {
@@ -1348,13 +1397,19 @@ function structureDetailMarkup(row, documentValue) {
     rawEvidenceMarkup(row.shadow_entry_projection || row);
 }
 
-function radarDetailMarkup(row) {
+function radarDetailMarkup(row, documentValue) {
   const state = radarState(row);
   const packet = radarScoreView(row);
   const result = scorePacketResult(packet);
   const oi = packet && packet.oi_diagnostic && typeof packet.oi_diagnostic === 'object'
     ? packet.oi_diagnostic : null;
   const delta = formatInterval(row.delta_interval, value => formatCompactNumber(value, 3));
+  const funnel = documentValue && documentValue.funnel && typeof documentValue.funnel === 'object'
+    ? documentValue.funnel : {};
+  const confirmation = funnel.radar_confirmation && typeof funnel.radar_confirmation === 'object'
+    ? funnel.radar_confirmation : {};
+  const controlResearch = funnel.decision_control_research &&
+    typeof funnel.decision_control_research === 'object' ? funnel.decision_control_research : {};
   return `<div class="detail-title-line"><h3>INVERSE BTC × SHORT VOL</h3>` +
     `${badgeMarkup(state.label, state.tone, 'decision-badge')}</div>` +
     `<p class="detail-subtitle">${safeText(row.instrument_name)} · ${safeText(formatDate(row.expiration_timestamp_ms))}</p>` +
@@ -1381,8 +1436,7 @@ function radarDetailMarkup(row) {
       `<div class="callout-list">` +
         `<div class="callout info"><strong>Bucket</strong>${safeText(scoreBucketText(packet))}</div>` +
         `<div class="callout info"><strong>Leader</strong>${safeText(packet && packet.leader_instrument_name)}</div>` +
-        `<div class="callout info"><strong>Episode 状态</strong>${safeText(row.bucket_episode_state)} · ` +
-          `${safeText(row.confirmation_observation_count)}/${safeText(row.required_confirmation_observation_count)} 次确认</div>` +
+        `<div class="callout info"><strong>Episode 状态</strong>${safeText(radarConfirmationText(row))}</div>` +
         `<div class="callout blocker"><strong>当前阻塞</strong>${safeText(reasonText(row.primary_blocker || row.detector_reason))}</div>` +
         `<div class="callout upgrade"><strong>升级条件</strong>${safeText(reasonText(row.upgrade_condition))}</div>` +
         `<div class="callout invalidation"><strong>失效条件</strong>${safeText(reasonText(row.invalidation_condition))}</div>` +
@@ -1394,6 +1448,12 @@ function radarDetailMarkup(row) {
         factMarkup('Dealer gamma sign', oi && oi.dealer_gamma_sign) +
         factMarkup('Legacy V1 1.20 threshold', `${legacyDiagnosticText(packet)} · diagnostic only`) +
       `</div><div class="data-gap-panel">Legacy threshold 与 unsigned OI/gamma 只作诊断；不驱动第二个 V1 detector，不声明 dealer 仓位方向。</div></section>` +
+    `<section class="detail-section"><div class="detail-section-title"><h4>本 Runtime 有界归因</h4>` +
+      `<span class="detail-section-note">累计诊断 · 非本行因果归因</span></div>` +
+      `<div class="callout-list">` +
+        `<div class="callout info"><strong>非零确认归零</strong>${safeText(reasonCountsText(confirmation.reset_counts))}</div>` +
+        `<div class="callout info"><strong>KNOWN_NO_CONTROL</strong>${safeText(reasonCountsText(controlResearch.known_no_control_reason_counts))}</div>` +
+      `</div><div class="data-gap-panel">只统计本 Runtime 内已经实际发生的固定原因；不补写重启前历史，不是 Episode、交易频率或收益结论。</div></section>` +
     `<section class="detail-section"><div class="data-gap-panel"><strong>关联边界：</strong>` +
       `本行只信任 packet 内的 bucket、leader 与 fact boundary；不会按合约名拼接 Candidate 或 Shadow 状态。</div></section>` +
     rawEvidenceMarkup(row);
@@ -1426,7 +1486,7 @@ function renderDetail(documentValue) {
     content.innerHTML = structureDetailMarkup(row, documentValue);
   } else {
     title.textContent = 'Radar 线索详情';
-    content.innerHTML = radarDetailMarkup(row);
+    content.innerHTML = radarDetailMarkup(row, documentValue);
   }
   if (shadowJump) shadowJump.hidden = !row || queueMode !== 'structures';
   if (evidenceToggle) {

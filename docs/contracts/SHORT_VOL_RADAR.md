@@ -240,6 +240,10 @@ raw-richness lower bound, tighter target spread, fewer total consumed levels, st
 instrument name. An unknown competitor degrades bucket coverage but does not erase a known leader.
 Leader change resets pre-activation confirmation; after HIGH or research-review confirmation the
 leader is frozen until that Episode ends. Only the leader advances persistence or enrollment.
+Rows whose TTE band or Delta bucket is review-only never enter `CONFIRMING`, never accumulate a
+confirmation observation, and never form a HIGH or LOW/MID Episode. Workbench may display their
+server-settled score band, but must label the exact TTE/Delta review constraint instead of rendering
+`0/N` as confirmation progress.
 
 The default Workbench view is bounded Top-N with `ALL` available. It displays the server-owned V2
 score and leader truth and never recomputes either in the browser.
@@ -287,6 +291,10 @@ Canonical `APPLICABLE_MARKET_SCOPE` and `RADAR_KNOWN` counts use post-warmup eva
 and recovery remain separately visible, so `INDEX_WARMUP` remains visible without becoming a
 steady-state blocker. After first availability, history stale/gap/revision and live-index continuity
 loss remain post-warmup UNKNOWN. Every Radar UNKNOWN contributes exactly one bounded aggregate reason; counters are current diagnostics, not research evidence or qualification denominators.
+When a bucket loses a nonzero but not-yet-confirmed observation count, the reducer increments one
+fixed reset reason: leader change, score-band change, core UNKNOWN, scope loss, clue ineligibility,
+or run stop. The counter is runtime-local, non-durable, and is neither an Episode count nor a market
+frequency estimate; zero-observation state alignment does not increment it.
 
 ## Trader handoff and persistence
 

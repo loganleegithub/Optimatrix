@@ -52,7 +52,11 @@ from radar_runtime.runtime import (
 from short_vol_radar.atomic import PublicAtomicQuoteState
 from short_vol_radar.baseline import BaselineStatistics
 from short_vol_radar.black import DecimalInterval, black_price
-from short_vol_radar.bucket import RadarBucketEpisodeTracker
+from short_vol_radar.bucket import (
+    BucketConfirmationResetReason,
+    RadarBucketEpisodeTracker,
+    RadarBucketTrackerTransition,
+)
 from short_vol_radar.detector import (
     DetectorCoverage,
     DetectorObservation,
@@ -908,6 +912,30 @@ def test_countable_history_tuple_is_observed_once_without_live_index_backfill(
     )
     assert reducer.results[name].observation_eligible
     assert bucket_tracker.confirmation_observation_count == 3
+
+
+def test_reducer_projects_bounded_confirmation_reset_counts_into_funnel(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    reducer._record_bucket_tracker_transition(
+        RadarBucketTrackerTransition(
+            confirmation_reset_reason=BucketConfirmationResetReason.LEADER_CHANGE
+        ),
+        1_000,
+    )
+    reducer._record_bucket_tracker_transition(RadarBucketTrackerTransition(), 1_001)
+    reducer._latest_funnel_causal_seq = 1
+    reducer._latest_funnel_evaluations = ()
+    commit = fact_commit(FactBoundary(1, 1, 1_001, 1), CausalCause.TIME_BOUNDARY)
+    funnel = FunnelTracker()
+
+    funnel.observe(reducer=reducer, commit=commit, new_shadow_records=())
+
+    assert reducer.confirmation_reset_counts == {"LEADER_CHANGE": 1}
+    assert funnel.snapshot().radar_confirmation.reset_counts == {"LEADER_CHANGE": 1}
 
 
 def shifted_publication_tail(

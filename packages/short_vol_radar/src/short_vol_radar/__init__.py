@@ -2,6 +2,7 @@
 
 from short_vol_radar.atomic import PublicAtomicQuoteState
 from short_vol_radar.bucket import (
+    BucketConfirmationResetReason,
     BucketLeaderCandidate,
     RadarBucketEpisode,
     RadarBucketEpisodeTracker,
@@ -34,6 +35,7 @@ from short_vol_radar.score import (
 
 __all__ = [
     "AggregateApplicability",
+    "BucketConfirmationResetReason",
     "BucketLeaderCandidate",
     "DetectorCoverage",
     "DetectorState",

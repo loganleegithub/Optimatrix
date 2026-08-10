@@ -186,6 +186,10 @@ computed from the same settled reducer/owner state, never by rereading files.
 Instrument-specific source labels are normalized into bounded blocker categories before entering
 cumulative counters. Exact current instrument/scope detail remains available in the ordinary
 Workbench rows; it cannot create an unbounded aggregate reason-key set.
+The same bounded diagnostic surface owns two additional runtime-local reason counters: loss of a
+nonzero pre-activation Radar confirmation count, and selected-decision `KNOWN_NO_CONTROL`. Their
+fixed enums are emitted by the bucket tracker and Underwriting owner respectively; Funnel only
+aggregates them. Neither counter creates a durable record or reconstructs pre-restart history.
 
 For Radar knownness, the funnel uses the canonical `IndexHistoryReducer` tail state already owned
 by the settled reducer; it does not recalculate the Radar formula. The history reducer is the sole
@@ -325,6 +329,9 @@ separate selected-decision panel with original/refreshed score packets, actions,
 enrollment/Outcome state, and diagnostic non-claims. Browser code only renders server-owned typed
 truth; it does not infer a unit from an internal field suffix or recalculate score, leader, IV, RV, surface,
 structure economics, or decision-control membership.
+For review-only TTE/Delta rows it renders score context plus the server-owned review constraint,
+never confirmation progress. Runtime-wide reason counts are explicitly labeled cumulative and not
+as causal attribution for the selected row.
 
 ## Failure domains
 
