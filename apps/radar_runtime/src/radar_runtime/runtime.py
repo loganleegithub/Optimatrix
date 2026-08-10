@@ -4470,23 +4470,30 @@ class RadarReducer:
             for name, token in current_time_tokens.items()
             if self._last_time_currentness_by_instrument.get(name) != token
         }
-        recalculation_names = set((*directly_affected_names, *time_changed_names))
+        core_recalculation_names = set((*directly_affected_names, *time_changed_names))
+        recalculation_names = set(core_recalculation_names)
+        score_only_names: set[str] = set()
         if commit.cause in {CausalCause.TICKER_APPLIED, CausalCause.TICKER_SOURCE_STALE}:
             surface_dependencies = set(
                 self._cross_sectional_score_dependents(directly_affected_names)
             )
+            score_only_names.update(surface_dependencies - core_recalculation_names)
             recalculation_names.update(surface_dependencies)
             if countable and commit.cause is CausalCause.TICKER_APPLIED:
                 countable_names.update(surface_dependencies)
         if force_full_currentness:
+            core_recalculation_names.update(self.options)
             recalculation_names.update(self.options)
         elif affected_scope_keys:
-            recalculation_names.update(
+            scoped_names = {
                 name
                 for name, instrument in self.options.items()
                 if (instrument.expiration_timestamp_ms, instrument.option_type)
                 in affected_scope_keys
-            )
+            }
+            core_recalculation_names.update(scoped_names)
+            recalculation_names.update(scoped_names)
+        score_only_names.difference_update(core_recalculation_names)
         frozen_scope_keys = set(affected_scope_keys)
         frozen_scope_keys.update(
             (
@@ -4561,6 +4568,7 @@ class RadarReducer:
                 )
                 publication_epoch_restarted = self._global_continuity_epoch != epoch_before_restart
             names = tuple(sorted(self.options))
+            score_only_names.clear()
             prepared.clear()
             if publication_epoch_restarted:
                 self._publish_index_baseline(
@@ -4653,40 +4661,57 @@ class RadarReducer:
                     },
                 )
             else:
-                current_ticker, ticker_reason, ticker_continuity_gap = self._current_ticker(name)
-                baseline_reason = (
-                    tail.reason
-                    if tail is not None
-                    and tail.availability is not IndexAvailabilityState.AVAILABLE
-                    and tail.reason is not None
-                    else "INDEX_WARMUP"
-                )
-                baseline_statistics: BaselineStatistics | None = None
-                if (
-                    applicability.band is not None
-                    and tail is not None
-                    and tail.availability is IndexAvailabilityState.AVAILABLE
-                ):
-                    try:
-                        baseline_statistics = self._baseline_statistics_for(
-                            band=applicability.band,
-                            tail=tail,
+                prior = self.results.get(name)
+                prior_current = prior.current_evaluation if prior is not None else None
+                if name in score_only_names and prior_current is not None:
+                    if prior_current.calculation is None:
+                        current = prior_current
+                    else:
+                        current = CurrentEvaluation(
+                            disposition=CurrentDisposition.SCORE_PENDING,
+                            reason="V2_SCORE_FEATURES_PENDING",
+                            known_evaluation=False,
+                            full_formula_evaluation=False,
+                            band_id=prior_current.band_id,
+                            calculation=prior_current.calculation,
                         )
-                    except BaselineUnavailable as exc:
-                        baseline_reason = str(exc) or type(exc).__name__
-                current = calculate_current_evaluation(
-                    policy=self.policy,
-                    instrument=instrument,
-                    trusted_time=trusted,
-                    causal_seq=self._causal_seq,
-                    option_book=self.option_books.get(name),
-                    ticker=current_ticker,
-                    causal_closes=None,
-                    baseline_statistics=baseline_statistics,
-                    baseline_unavailable_reason=baseline_reason,
-                    ticker_unavailable_reason=ticker_reason,
-                    ticker_continuity_gap=ticker_continuity_gap,
-                )
+                else:
+                    current_ticker, ticker_reason, ticker_continuity_gap = self._current_ticker(
+                        name
+                    )
+                    baseline_reason = (
+                        tail.reason
+                        if tail is not None
+                        and tail.availability is not IndexAvailabilityState.AVAILABLE
+                        and tail.reason is not None
+                        else "INDEX_WARMUP"
+                    )
+                    baseline_statistics: BaselineStatistics | None = None
+                    if (
+                        applicability.band is not None
+                        and tail is not None
+                        and tail.availability is IndexAvailabilityState.AVAILABLE
+                    ):
+                        try:
+                            baseline_statistics = self._baseline_statistics_for(
+                                band=applicability.band,
+                                tail=tail,
+                            )
+                        except BaselineUnavailable as exc:
+                            baseline_reason = str(exc) or type(exc).__name__
+                    current = calculate_current_evaluation(
+                        policy=self.policy,
+                        instrument=instrument,
+                        trusted_time=trusted,
+                        causal_seq=self._causal_seq,
+                        option_book=self.option_books.get(name),
+                        ticker=current_ticker,
+                        causal_closes=None,
+                        baseline_statistics=baseline_statistics,
+                        baseline_unavailable_reason=baseline_reason,
+                        ticker_unavailable_reason=ticker_reason,
+                        ticker_continuity_gap=ticker_continuity_gap,
+                    )
             baseline_identity = (
                 tail.economic_identity
                 if tail is not None and tail.economic_identity is not None

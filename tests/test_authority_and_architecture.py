@@ -182,16 +182,16 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_closed_queue_throughput_repair() -> None:
+def test_current_stage_records_active_queue_lag_root_cause() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
+    assert "**Current task kind:** `IMPLEMENTATION`" in current
     assert "`INVERSE_BTC_SHORT_VOL_V2_SCHEMA7_8675_LIVE_CURRENT`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert "**Persistent service:** `RUNNING_8675_FROM_MAIN_6236F14`" in current
-    assert "**Live commands:** `NONE_CONSUMED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "**Live commands:** `MERGE_PRESTOP_CLEAN_RESTART_SMOKE_AUTHORIZED`" in current
+    assert "INVERSE_BTC_SHORT_VOL_V2_QUEUE_LAG_ROOT_CAUSE" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
@@ -210,6 +210,16 @@ def test_current_stage_records_closed_queue_throughput_repair() -> None:
         "Focused verification passed `246` tests",
         "`731` tests",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
+        "`TICKER_CROSS_SECTIONAL_CORE_RECOMPUTATION`",
+        "approximately `134.6 frames/s`",
+        "`3,907` times",
+        "`0.675 s` per modeled second",
+        "the exact required `67 ticker + 67 book + 128 global` calculations",
+        "including `732` tests",
+        "one official schema-v5 report",
+        "reuse that same stable repository",
+        "One bounded post-start smoke of at most `120 s`",
+        "local/remote topic branch must be removed",
     ):
         assert phrase in normalized
     for identity in (
@@ -219,7 +229,10 @@ def test_current_stage_records_closed_queue_throughput_repair() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "INVERSE_BTC_SHORT_VOL_V2_QUEUE_LAG_ROOT_CAUSE.md",
+        "TEMPLATE.md",
+    }
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
 

@@ -82,6 +82,7 @@ from short_vol_radar.score import (
     RadarBucketKey,
     RadarScoreInputs,
     ScoreBand,
+    ScoreFactorName,
     build_radar_score_packet,
     compute_radar_score,
     compute_unsigned_oi_concentration,
@@ -1516,6 +1517,104 @@ def test_cross_sectional_ticker_dependency_includes_call_put_and_immediately_sho
         "CURRENT-P",
         "PREVIOUS-P",
     )
+
+
+def test_cross_sectional_ticker_change_reuses_peer_core_and_refreshes_term_score(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact, digest = policy_factory(ticker_source_stale_deadline_ms=300_000)
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    seed_flat_available_index(reducer)
+    previous_expiry = 1_000_000 + 60 * 60_000
+    current_expiry = 1_000_000 + 120 * 60_000
+    instruments = (
+        make_option("PREVIOUS-ATM", previous_expiry),
+        replace(make_option("PREVIOUS-WING", previous_expiry), strike=Decimal("100.02")),
+        make_option("CURRENT-ATM", current_expiry),
+        replace(make_option("CURRENT-WING", current_expiry), strike=Decimal("100.02")),
+    )
+    reducer.options = {instrument.instrument_name: instrument for instrument in instruments}
+    reducer.catalog_options = dict(reducer.options)
+    for instrument in instruments:
+        time_minutes = (instrument.expiration_timestamp_ms - 1_000_000) / 60_000
+        total_volatility = 0.5 * math.sqrt(time_minutes / (365 * 24 * 60))
+        bid = black_price(
+            100,
+            float(instrument.strike),
+            total_volatility,
+            instrument.option_type,
+        )
+        reducer.option_books[instrument.instrument_name] = make_book(
+            instrument.instrument_name,
+            str(bid),
+        )
+        reducer.tickers[instrument.instrument_name] = TickerState(
+            Decimal(100),
+            "index_price",
+            1_000_000,
+            signed_delta=(
+                Decimal("0.50") if instrument.instrument_name.endswith("ATM") else Decimal("0.40")
+            ),
+            mark_iv_fraction=Decimal("0.50"),
+        )
+        reducer.trackers[instrument.instrument_name] = EpisodeTracker(
+            runtime_identity=reducer.runtime_identity,
+            policy_identity=reducer.policy.identity,
+            instrument_name=instrument.instrument_name,
+        )
+    reducer._causal_seq = 1
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 1, 1_001, 1),
+            CausalCause.TIME_BOUNDARY,
+        ),
+        affected_instruments=tuple(reducer.options),
+        countable=False,
+    )
+    assert all(result.full_formula_evaluation for result in reducer.results.values())
+    previous_score = reducer.results["PREVIOUS-ATM"].score_result
+    assert previous_score is not None
+    previous_term = next(
+        factor for factor in previous_score.factors if factor.name is ScoreFactorName.TERM_RESIDUAL
+    )
+
+    evaluated_names: list[str] = []
+    calculate = runtime_module.calculate_current_evaluation
+
+    def capture_calculation(**kwargs: object) -> CurrentEvaluation:
+        instrument = cast(OptionInstrument, kwargs["instrument"])
+        evaluated_names.append(instrument.instrument_name)
+        return calculate(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runtime_module, "calculate_current_evaluation", capture_calculation)
+    current_atm = reducer.tickers["CURRENT-ATM"]
+    reducer.tickers["CURRENT-ATM"] = replace(
+        current_atm,
+        source_timestamp_ms=1_000_001,
+        mark_iv_fraction=Decimal("0.70"),
+    )
+    reducer._causal_seq = 2
+    reducer.settle_fact(
+        commit=fact_commit(
+            FactBoundary(1, 2, 1_002, 2),
+            CausalCause.TICKER_APPLIED,
+            failure_domain=FailureScope.OPTION,
+            affected_scopes=("OPTION:CURRENT-ATM",),
+        ),
+        affected_instruments=("CURRENT-ATM",),
+        countable=True,
+    )
+
+    assert evaluated_names == ["CURRENT-ATM"]
+    refreshed_score = reducer.results["PREVIOUS-ATM"].score_result
+    assert refreshed_score is not None
+    refreshed_term = next(
+        factor for factor in refreshed_score.factors if factor.name is ScoreFactorName.TERM_RESIDUAL
+    )
+    assert refreshed_term.raw_inputs != previous_term.raw_inputs
+    assert refreshed_term.normalized != previous_term.normalized
 
 
 def test_latched_stale_generation_candidate_is_not_counted_as_timestamp_regression(
