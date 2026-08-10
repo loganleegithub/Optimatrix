@@ -34,10 +34,10 @@ def test_opportunity_blotter_exposes_the_roadmap_without_fabricating_future_trut
     combined = f"{HTML}\n{JS}"
 
     for identity in (
-        "INVERSE_BTC_SHORT_VOL_V1",
-        "INVERSE_BTC_LONG_GAMMA_V1",
-        "INVERSE_ETH_SHORT_VOL_V1",
-        "INVERSE_ETH_LONG_GAMMA_V1",
+        "INVERSE_BTC_SHORT_VOL_V2",
+        "INVERSE_BTC_LONG_GAMMA",
+        "INVERSE_ETH_SHORT_VOL",
+        "INVERSE_ETH_LONG_GAMMA",
     ):
         assert identity in JS
 
@@ -51,7 +51,8 @@ def test_opportunity_blotter_exposes_the_roadmap_without_fabricating_future_trut
     assert "拒绝展示" in JS
     assert "Radar 线索与已结算结构分成两类队列" not in combined
     assert "避免浏览器误拼不同 Episode" in JS
-    assert "当前 API 未提供 Radar 与 Underwriting 共用的 Episode identity" in JS
+    assert "服务器未提供 V2 score packet" in JS
+    assert "浏览器不补算" in JS
 
 
 def test_opportunity_blotter_preserves_public_only_read_only_boundaries() -> None:
@@ -301,6 +302,7 @@ eval({json.dumps(test_js)});
 const api = globalThis.__workbenchTest;
 
 const connected = {{
+  channel_id: 'INVERSE_BTC_SHORT_VOL_V2',
   product: {{name: 'inverse-btc', product_spec_identity: {json.dumps(INVERSE_BTC.identity)}}},
   policy_identities: {{
     radar: {json.dumps(INVERSE_BTC_RADAR_POLICY_IDENTITY)},
@@ -355,9 +357,9 @@ assert.equal(api.channelSnapshotState({{
 }}).code, 'IDENTITY_MISMATCH');
 assert.equal(api.channelSnapshotState({{...connected, service: {{ready: false, reason: 'CLOCK_GAP'}}}}).code,
   'DATA_BLOCKED');
-assert.equal(api.roadmapState({{id: 'INVERSE_BTC_LONG_GAMMA_V1'}}).label, '尚未接入');
+assert.equal(api.roadmapState({{id: 'INVERSE_BTC_LONG_GAMMA'}}).label, '尚未接入');
 const validProjection = {{
-  ...connected, schema_version: 5,
+  ...connected, schema_version: 6,
   product: {{
     ...connected.product, native_premium_currency: 'BTC', valuation_currency: 'USD_EQUIVALENT',
     actual_account_margin_availability: 'UNKNOWN', actual_account_margin_reason: 'ACCOUNT_MARGIN_UNKNOWN'
@@ -381,7 +383,23 @@ assert.equal(api.structureState({{availability: 'UNKNOWN'}}).key, 'UNKNOWN');
 assert.equal(api.structureState({{availability: 'EVALUABLE', action: 'WATCH'}}).key, 'WATCH');
 assert.equal(api.structureState({{availability: 'EVALUABLE', action: 'CANDIDATE'}}).key,
   'CANDIDATE_UNCONFIRMED');
-assert.equal(api.radarState({{detector_state: 'ANOMALY_ACTIVE'}}).label, '机会线索');
+assert.equal(api.radarState({{
+  instrument_name: 'LEADER', is_bucket_leader: true,
+  score_result: {{band: 'HIGH'}}, bucket_episode_state: 'ACTIVE',
+  bucket_episode_score_band: 'HIGH', bucket_episode_identity: 'sha256:active',
+  bucket_episode_leader_instrument_name: 'LEADER'
+}}).label, 'HIGH · 已确认线索');
+assert.match(api.radarState({{
+  instrument_name: 'MEMBER', is_bucket_leader: false,
+  score_result: {{band: 'HIGH'}}, bucket_episode_state: 'ACTIVE',
+  bucket_episode_score_band: 'HIGH', bucket_episode_identity: 'sha256:active',
+  bucket_episode_leader_instrument_name: 'LEADER',
+  confirmation_observation_count: 3, required_confirmation_observation_count: 3
+}}).label, /确认中/);
+assert.match(api.radarState({{
+  score_result: {{band: 'HIGH'}}, bucket_episode_state: 'CONFIRMING',
+  confirmation_observation_count: 1, required_confirmation_observation_count: 3
+}}).label, new RegExp('确认中 1/3'));
 
 const ordered = api.orderedStructureRows([
   {{short_leg_instrument_name: 'A', availability: 'EVALUABLE', action: 'ABSTAIN'}},

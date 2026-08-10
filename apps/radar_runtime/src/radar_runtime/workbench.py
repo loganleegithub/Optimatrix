@@ -34,7 +34,8 @@ from radar_runtime.workbench_frontend import CSS as CSS
 from radar_runtime.workbench_frontend import HTML as HTML
 from radar_runtime.workbench_frontend import JS as JS
 
-WORKBENCH_SCHEMA_VERSION = 5
+WORKBENCH_SCHEMA_VERSION = 6
+WORKBENCH_CHANNEL_ID = "INVERSE_BTC_SHORT_VOL_V2"
 WORKBENCH_PUBLICATION_INTERVAL_MS = 500
 SIMULATION_LABEL = "模拟入场, 不是订单或成交"
 EMPTY_PANEL_LABEL = "无已结算对象; 这不是业务零值"
@@ -452,6 +453,7 @@ class WorkbenchPublisher:
             key: _json_value_bytes(initial_document[key])
             for key in (
                 "schema_version",
+                "channel_id",
                 "runtime_identity",
                 "code_identity",
                 "policy_identities",
@@ -616,6 +618,7 @@ class WorkbenchPublisher:
     ) -> dict[str, object]:
         return {
             "schema_version": WORKBENCH_SCHEMA_VERSION,
+            "channel_id": WORKBENCH_CHANNEL_ID,
             "runtime_identity": self.bindings.runtime_identity,
             "code_identity": self.bindings.code_identity,
             "policy_identities": {
@@ -647,6 +650,7 @@ def initial_workbench_document(
     )
     return {
         "schema_version": WORKBENCH_SCHEMA_VERSION,
+        "channel_id": WORKBENCH_CHANNEL_ID,
         "runtime_identity": bindings.runtime_identity,
         "code_identity": bindings.code_identity,
         "policy_identities": {
@@ -768,7 +772,7 @@ def _build_business_projection(
             "disconnect_records": _disconnect_records(reducer),
             "index_history": {
                 "source": (
-                    f"DERIBIT_PUBLIC_GET_INDEX_CHART_DATA_{reducer.product.price_index.upper()}_1D"
+                    f"DERIBIT_PUBLIC_GET_INDEX_CHART_DATA_{reducer.product.price_index.upper()}_2D"
                 ),
                 "value_semantics": "AVERAGE_INDEX_PRICE",
                 "availability": (
@@ -942,6 +946,19 @@ def _radar_rows(
         result = reducer.results.get(name)
         tracker = reducer.trackers.get(name)
         calculation = result.calculation if result is not None else None
+        typed_score_packet = getattr(result, "score_packet", None) if result is not None else None
+        score_packet = _score_packet_object(typed_score_packet)
+        typed_score_result = getattr(result, "score_result", None) if result is not None else None
+        score_result = typed_score_result.as_object() if typed_score_result is not None else None
+        bucket_key = reducer.score_bucket_keys.get(name)
+        bucket_leader = (
+            reducer.bucket_leader_by_key.get(bucket_key) if bucket_key is not None else None
+        )
+        bucket_projection = None
+        if bucket_key is not None and calculation is not None:
+            bucket_tracker = reducer.bucket_trackers.get(bucket_key)
+            if bucket_tracker is not None:
+                bucket_projection = bucket_tracker.projection(calculation.rule)
         option_book = reducer.option_books.get(name)
         review = contexts.get(name)
         episode = tracker.episode_id if tracker is not None else None
@@ -969,6 +986,52 @@ def _radar_rows(
                     result.detector_state.value if result is not None else "UNKNOWN"
                 ),
                 "detector_reason": result.reason if result is not None else "NOT_SETTLED",
+                "score_packet": score_packet,
+                "score_result": score_result,
+                "score_bucket_key": (bucket_key.as_object() if bucket_key is not None else None),
+                "bucket_leader_instrument_name": bucket_leader,
+                "is_bucket_leader": bucket_leader == name,
+                "bucket_leader_coverage": (
+                    reducer.bucket_leader_coverage[bucket_key].value
+                    if bucket_key is not None and bucket_key in reducer.bucket_leader_coverage
+                    else "UNKNOWN"
+                ),
+                "bucket_episode_state": (
+                    bucket_projection.state.value if bucket_projection is not None else "IDLE"
+                ),
+                "bucket_episode_identity": (
+                    bucket_projection.episode_identity if bucket_projection is not None else None
+                ),
+                "bucket_episode_leader_instrument_name": (
+                    bucket_projection.leader_instrument_name
+                    if bucket_projection is not None
+                    else None
+                ),
+                "bucket_episode_score_band": (
+                    bucket_projection.score_band.value
+                    if bucket_projection is not None and bucket_projection.score_band is not None
+                    else None
+                ),
+                "confirmation_observation_count": (
+                    bucket_projection.confirmation_observation_count
+                    if bucket_projection is not None
+                    else 0
+                ),
+                "required_confirmation_observation_count": (
+                    bucket_projection.required_confirmation_observation_count
+                    if bucket_projection is not None
+                    else None
+                ),
+                "end_confirmation_observation_count": (
+                    bucket_projection.end_confirmation_observation_count
+                    if bucket_projection is not None
+                    else 0
+                ),
+                "required_end_confirmation_observation_count": (
+                    bucket_projection.required_end_confirmation_observation_count
+                    if bucket_projection is not None
+                    else None
+                ),
                 "option_book_state": (
                     option_book.state.value if option_book is not None else "UNKNOWN"
                 ),
@@ -1149,9 +1212,9 @@ def _radar_rows(
                 ),
                 "surface_context": review.surface.as_object() if review is not None else None,
                 "surface_residual": (
-                    str(review.surface.executable_bid_iv_minus_local_mark_iv)
+                    str(review.surface.stressed_executable_bid_iv_minus_local_mark_iv)
                     if review is not None
-                    and review.surface.executable_bid_iv_minus_local_mark_iv is not None
+                    and review.surface.stressed_executable_bid_iv_minus_local_mark_iv is not None
                     else None
                 ),
                 "legged_structure_context": (
@@ -1297,6 +1360,8 @@ def _underwriting_rows(
                     "atomic_state_diagnostic", "NOT_EVALUATED"
                 ),
                 "action": payload.get("economic_action"),
+                "radar_score_packet": payload.get("radar_score_packet")
+                or availability_payload.get("radar_score_packet"),
                 "product_spec_identity": payload.get("product_spec_identity"),
                 "product_name": payload.get("product_name"),
                 "native_premium_currency": payload.get("native_premium_currency"),
@@ -1559,6 +1624,9 @@ def _decision_control_rows(
                 else enrollment_payload.get("entry_underwriting_candidate_protective_leg_count"),
                 "selection_fact_boundary": selected_observation.get("selection_fact_boundary")
                 or selection_payload.get("selection_fact_boundary"),
+                "selection_score_packet": enrollment_payload.get("selection_score_packet")
+                or selected_observation.get("selection_score_packet")
+                or selection_payload.get("radar_score_packet"),
                 "refresh_terminal_outcome": refresh_terminal_outcome,
                 "refresh_unknown_reasons": refresh_unknown_reasons,
                 "refresh_component_pair_timing": enrollment_payload.get(
@@ -1581,6 +1649,9 @@ def _decision_control_rows(
                     [],
                 ),
                 "refreshed_fact_boundary": refreshed_observation.get("refreshed_fact_boundary"),
+                "entry_refresh_score_packet": enrollment_payload.get("entry_refresh_score_packet")
+                or refreshed_observation.get("entry_refresh_score_packet")
+                or terminal_payload.get("entry_refresh_score_packet"),
                 "enrollment_kind": enrollment_payload.get("enrollment_kind"),
                 "enrollment_identity": enrollment_identity,
                 "case_state": (
@@ -1665,6 +1736,8 @@ def _shadow_rows(
                     else terminal_outcome or "PENDING_REFRESH"
                 ),
                 "simulation_label": SIMULATION_LABEL,
+                "selection_score_packet": None,
+                "entry_refresh_score_packet": None,
             }
         )
     candidate_ids = {
@@ -1714,6 +1787,8 @@ def _shadow_rows(
                     else terminal_outcome or "PENDING_REFRESH"
                 ),
                 "simulation_label": SIMULATION_LABEL,
+                "selection_score_packet": None,
+                "entry_refresh_score_packet": None,
             }
         )
     for entry in kinds.get("SHADOW_ENTRY", ()):
@@ -1770,6 +1845,8 @@ def _shadow_rows(
                 "target_quantity_btc": target_quantity,
                 "no_entry_reason": None,
                 "simulation_label": SIMULATION_LABEL,
+                "selection_score_packet": entry_payload.get("selection_score_packet"),
+                "entry_refresh_score_packet": entry_payload.get("entry_refresh_score_packet"),
                 **tracking,
             }
         )
@@ -2165,7 +2242,7 @@ def _empty_business_projection(product: OptionProductSpec) -> dict[str, object]:
             "global_continuity_epoch": 1,
             "disconnect_records": [],
             "index_history": {
-                "source": (f"DERIBIT_PUBLIC_GET_INDEX_CHART_DATA_{product.price_index.upper()}_1D"),
+                "source": (f"DERIBIT_PUBLIC_GET_INDEX_CHART_DATA_{product.price_index.upper()}_2D"),
                 "value_semantics": "AVERAGE_INDEX_PRICE",
                 "availability": "UNKNOWN",
                 "reason": "NOT_STARTED",
@@ -2297,6 +2374,20 @@ def _ratio_percent(numerator: int, denominator: int) -> str | None:
 
 def _decimal_interval(value: DecimalInterval) -> dict[str, str]:
     return {"lower": str(value.lower), "upper": str(value.upper)}
+
+
+def _score_packet_object(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return dict(value)
+    projector = getattr(value, "as_object", None)
+    if not callable(projector):
+        raise TypeError("Radar score packet must expose as_object()")
+    projected = projector()
+    if not isinstance(projected, Mapping):
+        raise TypeError("Radar score packet projection must be an object")
+    return dict(projected)
 
 
 def _decimal_or_none(value: object) -> Decimal | None:

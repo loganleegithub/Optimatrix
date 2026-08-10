@@ -172,15 +172,20 @@ def test_interval_boundaries_fail_closed_instead_of_selecting_a_point(
     policy_factory: PolicyFactory,
 ) -> None:
     exact, digest = policy_factory()
-    rule = load_policy_bytes(exact, digest).tte_bands[0].option_rules[OptionType.CALL]
-    assert classify_observation(DecimalInterval(Decimal("1.2"), Decimal("1.2")), rule).value == (
-        "ACTIVATE"
+    policy = load_policy_bytes(exact, digest)
+    rule = policy.tte_bands[0].option_rules[OptionType.CALL]
+    assert classify_observation(
+        DecimalInterval(Decimal("65"), Decimal("65")), policy.score_model
+    ).value == ("ACTIVATE")
+    assert classify_observation(
+        DecimalInterval(Decimal("45"), Decimal("50")), policy.score_model
+    ).value == ("CLEAR")
+    assert (
+        classify_observation(
+            DecimalInterval(Decimal("49"), Decimal("66")), policy.score_model
+        ).value
+        == "NEUTRAL"
     )
-    assert classify_observation(DecimalInterval(Decimal("0.9"), Decimal("0.9")), rule).value == (
-        "CLEAR"
-    )
-    with pytest.raises(NumericalBoundaryUnresolved):
-        classify_observation(DecimalInterval(Decimal("1.19"), Decimal("1.21")), rule)
     assert delta_is_eligible(DecimalInterval(Decimal("0.1"), Decimal("0.2")), rule)
     with pytest.raises(NumericalBoundaryUnresolved):
         delta_is_eligible(DecimalInterval(Decimal("0.04"), Decimal("0.06")), rule)

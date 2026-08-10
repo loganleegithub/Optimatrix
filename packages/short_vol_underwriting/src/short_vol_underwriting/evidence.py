@@ -301,7 +301,11 @@ class ShadowStateStore:
         }:
             return "control", _required_text(payload, "activation_batch_identity")
 
-        if kind in {"SHADOW_ENTRY", "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN"}:
+        if kind in {
+            "SHADOW_ENTRY",
+            "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN",
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN",
+        }:
             return "entry", identity
         if kind == "SHADOW_OUTCOME_OBSERVATION":
             entry = _required_text(payload, "shadow_entry_identity")
@@ -324,6 +328,7 @@ class ShadowStateStore:
             "SHADOW_CLOSE_OPPORTUNITY",
             "SHADOW_OUTCOME",
             "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME",
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OUTCOME",
         }:
             return "entry", _required_text(payload, "shadow_entry_identity")
         if kind == "SHADOW_COUNTERFACTUAL_EXIT":

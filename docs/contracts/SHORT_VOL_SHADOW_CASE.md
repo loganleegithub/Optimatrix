@@ -9,7 +9,8 @@
 Define the only durable business boundary in the current public-only product. An admitted Shadow
 Case begins
 when one counterfactual is explicitly enrolled before its future path is known: either an admitted
-Candidate trade or the one action-blind selected no-trade decision for its causal activation batch.
+HIGH Candidate trade, one action-blind HIGH selected decision, or one future-blind LOW/MID
+Radar-score Control for its causal batch.
 For an admitted trade it is a process-independent Entry aggregate. It preserves minimum enrollment
 context, a chain of runtime Observation Segments, one combined first-CLOSE/attempt-schedule
 transition, and one mature terminal result for online recovery, trader review, AI research, and
@@ -21,15 +22,14 @@ counterfactuals.
 
 ## Record set
 
-Exactly six record kinds are authorized:
+Exactly five record kinds are authorized:
 
 ```text
 SHADOW_CASE_OPENED               exactly one per Case
 SHADOW_CASE_SEGMENT_OPENED       one per runtime Observation Segment
 SHADOW_CASE_SEGMENT_CLOSED       zero or one per Segment
 SHADOW_CASE_FIRST_CLOSE          zero or one per admitted Entry; also schedules its one attempt
-SHADOW_CASE_OUTCOME              zero or one mature Outcome per admitted Entry
-SHADOW_CASE_LEGACY_MIGRATION     zero or one per migrated legacy Entry
+SHADOW_CASE_OUTCOME              zero or one mature Outcome per Case
 ```
 
 Each Case directory is:
@@ -38,7 +38,6 @@ Each Case directory is:
 cases/<case-id>/opened.json
 cases/<case-id>/first-close.json    # optional
 cases/<case-id>/outcome.json        # optional
-cases/<case-id>/legacy-migration.json   # optional, migration only
 cases/<case-id>/segments/<segment-sequence>/opened.json
 cases/<case-id>/segments/<segment-sequence>/closed.json   # optional
 ```
@@ -47,7 +46,7 @@ No other durable file belongs to the product runtime.
 
 ## Case identity
 
-The accepted Inverse schema-v4 `case_id` is the canonical SHA-256 identity derived from:
+The accepted Inverse schema-v5 `case_id` is the canonical SHA-256 identity derived from:
 
 ```text
 "ShadowCaseIdentity"
@@ -56,7 +55,7 @@ runtime_identity
 Radar Policy identity
 Underwriting Policy identity
 Position Policy identity
-"schema-v4"
+"schema-v5"
 INVERSE_BTC_V1 product identity
 enrollment identity
 opened FactBoundary
@@ -85,8 +84,11 @@ The opened record contains:
 - paired component-book source identity, session/continuity epochs, measured source/receive skew,
   consumed Policy skew limits, and exact raw/stressed full-quantity levels for both legs;
 - gross credit, entry fee reserve, net credit, payoff cap, future-cost reserve, and reserved loss;
-- the minimal consumed Radar state: active episode identity, band, richness interval, component
-  state, and official atomic diagnostic;
+- the canonical V2 `selection_score_packet` and same-shape
+  `entry_refresh_score_packet`, including Policy/fact boundary, bucket/leader, score interval/band,
+  coverage/missing mask, five decision factors with raw inputs and normalized contributions,
+  unsigned OI/gamma diagnostic, and any bounded sampling metadata;
+- the consumed Radar component state and official atomic diagnostic;
 - the Underwriting action, complete failed-predicate/margin vector, and thresholds actually consumed;
 - the protective-leg selector-rule identity and Candidate protective-leg count frozen with the
   selected structure;
@@ -97,7 +99,7 @@ The opened record contains:
   states `NOT_A_CANDIDATE_ACTIVATION`, `NOT_A_SHADOW_ENTRY`, `NOT_AN_ADMITTED_TRADE`, and
   `NO_CAPITAL_EXPOSURE`.
 
-The exact economic shape is the accepted Inverse schema-v4 record. It contains one exact product
+The exact economic shape is the accepted Inverse schema-v5 record. It contains one exact product
 object with native premium/settlement currency, price index, strike and valuation currencies,
 economic-semantics identity, and the declared valuation basis. Entry legs retain BTC-native
 consumed levels, VWAPs, and fees. Entry economics retain BTC-native gross/fee/net values and
@@ -124,12 +126,9 @@ A crash before that publication leaves no visible Case, never an `opened.json` w
 Segment. For an ordinary online enrollment, both records use the origin runtime and Entry boundary;
 the origin Segment has sequence zero, no predecessor, and `observation_quality=CONTINUOUS`. For a
 new admitted Entry its `entry_position_baseline` is `KNOWN` and freezes the causal entry index and
-short-leg mark IV with their exact source identities and FactBoundaries. A migrated legacy Case is
-also staged as a complete pair. Its origin Segment remains `CONTINUOUS` for the source runtime's
-observed interval and records any unknown baseline directly; `legacy-migration.json` binds the
-legacy first-CLOSE and censored Outcome mapping. Only the later Segment opened by a new runtime,
-not the migrated origin Segment, records the intervening `HANDOFF_GAP`, becomes `GAPPED`,
-increments `gap_count`, and makes qualification ineligible.
+short-leg mark IV with their exact source identities and FactBoundaries. Only a later Segment opened
+by a new runtime records an intervening `HANDOFF_GAP`, becomes `GAPPED`, increments `gap_count`, and
+makes qualification ineligible.
 
 ## Observation Segment records
 
@@ -143,10 +142,8 @@ increments `gap_count`, and makes qualification ineligible.
 - `qualification_eligible`, which is permanently false after the first gap;
 
 The origin Segment alone contains `entry_position_baseline`. A new admitted Entry requires its
-`KNOWN` entry index and short-leg mark-IV values, source identities, and source FactBoundaries. An
-origin Segment produced by legacy migration may instead record the baseline as `UNKNOWN` when the
-accepted legacy records lack those exact source references. No migration or recovery process may
-infer them, widen `opened.json`, or copy the baseline into later Segments.
+`KNOWN` entry index and short-leg mark-IV values, source identities, and source FactBoundaries.
+Recovery may not infer, widen, rewrite, or copy the baseline into later Segments.
 
 An origin Segment is `CONTINUOUS`. Every process-recovery Segment is `GAPPED`, including a clean
 handoff, because the service did not observe the interval between segment boundaries. Its current
@@ -213,38 +210,9 @@ eligibility remain distinct.
 
 A handled clean stop or failure ends only the admitted Entry's current Segment. Selected no-trade
 Controls are not recoverable aggregates and may retain `CENSORED_AT_STOP | CENSORED_AT_FAILURE`
-with null economics under their existing bounded lifecycle. Historical admitted Inverse censoring
-is interpreted differently only through an explicit legacy migration record. A stable
+with null economics under their bounded lifecycle. A stable
 owner that emits a censored admitted aggregate Outcome is rejected; stop/failure must use the
 Segment-close boundary directly.
-
-## `SHADOW_CASE_LEGACY_MIGRATION`
-
-Migration is one offline, user-invoked conversion from an explicitly supplied stopped legacy run
-into a fresh stable Case repository. It is not part of `serve-shadow` startup. The migration reader
-scans the supplied run and selects every compatible `ADMITTED_SHADOW_TRADE`; it never uses a
-hard-coded runtime, count, Case ID, or Entry allowlist. Selected no-trade Controls are excluded.
-
-For each Entry, the migration record binds:
-
-- migration version, Case identity, and immutable `shadow_entry_identity`;
-- exact source opened, optional first-close, and optional Outcome record identities;
-- the raw validated optional legacy first-close needed to restore the one consumed attempt;
-- source Outcome terminal state and its mapping to the legacy origin Segment state.
-
-Schema, product, Policies, runtime, and destination Case identity remain authoritative in the
-validated `opened.json` and Segment records and are not copied into the migration record. The
-legacy origin Segment alone stores `entry_position_baseline`, which is `UNKNOWN` when exact
-accepted entry index or short-leg mark-IV source references are absent. Migration version 1 maps
-the optional legacy first-close to Segment sequence zero in memory; neither Segment records nor the
-migration record duplicate derived latch/attempt state. Source immutability and the prohibition on
-reconstructing missed market facts are migration-operation requirements verified against source
-bytes, not durable boolean claims.
-
-Legacy `MATURE_KNOWN | MATURE_UNKNOWN` Entries remain terminal. Eligible censored/incomplete
-Entries enter the stable repository as non-terminal aggregates. Migration stages and validates the
-complete compatible set before atomically publishing the destination repository; an identical
-rerun is idempotent and any conflict fails. The source run remains immutable research history.
 
 ## Unclean process loss
 
@@ -270,7 +238,7 @@ The Case writer:
   and `fsync`s both files and their staging directories, then validates the complete initial pair;
 - publishes that initial admitted Entry Case exactly once by a no-replace atomic directory
   operation and `fsync`s the `cases/` parent; neither initial record is individually visible first;
-- publishes later Segment-close, recovery-Segment, first-close, Outcome, and migration records by
+- publishes later Segment-close, recovery-Segment, first-close, and Outcome records by
   the existing same-directory no-overwrite atomic file operation and parent `fsync`;
 - accepts an identical duplicate as idempotent and rejects a conflicting duplicate;
 - never scans or validates another Case as part of the write.
@@ -296,7 +264,6 @@ Inverse product reader then validates each requested Case independently:
   `opened.json` shape or product schema identity change;
 - zero/one combined first-close/attempt schedule across the aggregate;
 - mature Outcome producing-Segment binding, observation quality, gap count, and qualification truth;
-- optional legacy-migration source binding and censor-to-segment mapping;
 - state-specific null/economic requirements;
 - recomputable paired component-book PnL arithmetic in the schema's declared native and valuation
   units;
@@ -304,21 +271,22 @@ Inverse product reader then validates each requested Case independently:
 
 It returns active/terminal Entry status, current Segment status, `CONTINUOUS | GAPPED`, and Control
 status separately. The runtime restores every compatible active admitted Inverse Entry and no
-Control. The reader does not validate Git trees, inspect host state, run migration, reconstruct
-market state, or form a qualification Cohort. It reads only the exact Inverse schema-v4 family and
+Control. The reader does not validate Git trees, inspect host state, migrate, reconstruct market
+state, or form a qualification Cohort. It reads only the exact Inverse schema-v5 family and
 its process-independent aggregate/segment extension; unsupported product or schema input fails.
 
 ## No-trade controls and Cohorts
 
-The current implementation may enroll one no-trade control only when the causal activation batch
-designated its Episode before action/future facts, that Episode later produced its first evaluable
-decision, and exactly one strictly later paired refresh remained evaluable as WATCH or ABSTAIN.
-`UNKNOWN` and invalid pairs write no Case, and the designation has no fallback. The system never
-persists every WATCH or ABSTAIN automatically. The no-trade Case reuses Position/Outcome arithmetic
-but is not a Candidate, `SHADOW_ENTRY`, admitted trade, order, fill, or causal-effect estimate.
-A selected WATCH/ABSTAIN that refreshes to Candidate writes no control Case and reports
-`REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`; any later admission requires the ordinary
-Candidate lifecycle and another strictly later paired witness.
+The current implementation may enroll one HIGH selected-decision Control under the existing
+activation-batch rule, or one `RADAR_SCORE_BAND_NO_TRADE_CONTROL` when a no-HIGH causal batch
+future-blindly designates one confirmed LOW/MID research-review Episode. If both strata exist, one
+hash chooses the stratum and one chooses the member; if one exists, only the member hash applies.
+The Case freezes exact eligible counts and rational inclusion probability. A LOW/MID selected
+review uses the same formal Underwriting protective-leg selector and one strictly later paired
+refresh. Any evaluable refreshed action opens the non-admitted Control, including Candidate;
+`UNKNOWN` and invalid pairs write no Case, and there is no fallback. A Control never creates a
+Candidate, `SHADOW_ENTRY`, admitted trade, order, fill, capital exposure, or causal-effect estimate.
+An ordinary HIGH Candidate is never duplicated as a Control.
 
 Qualification Cohorts are later offline views over completed Cases under a pre-registered
 evaluator. A `GAPPED` admitted Outcome is valid research data but is never eligible for a
@@ -328,13 +296,13 @@ continuous-observation Cohort. The Online Runtime never writes Cohort or aligned
 
 Direct tests prove zero pre-enrollment files, exact one-open/one-first-close/one-outcome cardinality,
 atomic initial admitted Entry `opened.json + segments/0/opened.json` directory publication with no
-visible half-Case across a crash boundary, explicit Inverse schema-v4 product binding and
+visible half-Case across a crash boundary, explicit Inverse schema-v5 product binding and
 native/boundary/exit valuation conservation, rejection of schema/product/Policy mixing,
 original/refreshed selection boundary ordering, zero Candidate/`SHADOW_ENTRY` for controls,
 atomic file publication, duplicate handling, pair/source identity and boundary binding, both-leg
 arithmetic, repeated process recovery, Segment close/incomplete/gap truth, recovery-first UNKNOWN,
 combined first-close/attempt durability, no retry after uncertain loss, and gapped mature Outcome
-classification. Migration tests prove all-compatible admitted scanning, Control exclusion,
-immutable source bytes, idempotency, conflict rejection, and all-or-nothing destination publication.
+classification. Tests also prove one shared selection/entry score-packet schema, deterministic
+LOW/MID inclusion probability, HIGH precedence, and no pre-Case score persistence.
 No database, manifest, receipt, generic graph, per-tick checkpoint, or replay is required. Live
 commands remain governed only by `CURRENT_STAGE`.

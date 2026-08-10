@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +12,7 @@ from conftest import PolicyFactory
 from market_monitor import TimeInterval
 from options_domain import INVERSE_BTC, OptionType
 from short_vol_radar.baseline import (
+    DECIMAL_CONTEXT,
     BaselineResult,
     BaselineUnavailable,
     compute_baseline,
@@ -58,7 +59,7 @@ def test_policy_requires_and_binds_ticker_source_stale_deadline(
 
     policy = load_policy_bytes(exact, digest)
 
-    assert policy.schema_version == 7
+    assert policy.schema_version == 8
     assert policy.product_spec_identity == INVERSE_BTC.identity
     assert policy.runtime_limits.ticker_source_stale_deadline_ms == 5_000
     assert policy.runtime_limits.as_object()["ticker_source_stale_deadline_ms"] == 5_000
@@ -94,7 +95,7 @@ def test_policy_loads_exact_bytes_once_and_binds_digest(
     path.write_bytes(exact)
     policy = load_policy(path, digest)
     assert policy.identity == digest
-    assert policy.schema_version == 7
+    assert policy.schema_version == 8
     assert policy.product_spec_identity == INVERSE_BTC.identity
     assert policy.target_base_quantity_btc == Decimal("0.1")
     assert policy.runtime_limits.index_history_refresh_interval_ms == 300_000
@@ -107,7 +108,7 @@ def test_policy_loads_exact_bytes_once_and_binds_digest(
 
     path.write_text("{}", encoding="utf-8")
     assert policy.target_base_quantity_btc == Decimal("0.1")
-    assert policy.tte_bands[0].option_rules[OptionType.CALL].activation_ratio == Decimal("1.2")
+    assert policy.score_model.richness_knots[1].ratio == Decimal("1.2")
 
 
 def test_production_radar_policy_is_the_exact_credible_clue_screen() -> None:
@@ -115,9 +116,9 @@ def test_production_radar_policy_is_the_exact_credible_clue_screen() -> None:
     exact = path.read_bytes()
     policy = load_policy_bytes(exact, digest_policy_bytes(exact))
 
-    assert policy.schema_version == 7
+    assert policy.schema_version == 8
     assert policy.product_spec_identity == INVERSE_BTC.identity
-    assert policy.family == "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS"
+    assert policy.family == "INVERSE_BTC_SHORT_VOL_ORDINAL_MARKET_STRUCTURE_V2"
     assert policy.target_base_quantity_btc == Decimal("0.1")
     assert policy.runtime_limits.index_history_refresh_interval_ms == 300_000
     assert policy.runtime_limits.index_history_source_stale_deadline_ms == 900_000
@@ -130,9 +131,16 @@ def test_production_radar_policy_is_the_exact_credible_clue_screen() -> None:
         ("intraday-6h-to-24h", 360, 1_440, True),
         ("multiday-24h-to-72h", 1_440, 4_320, True),
     ]
+    expected_lookbacks_and_separation = {
+        "review-only-30-to-45m": ((30, 120, 360), 60_000),
+        "ultra-short-45m-to-6h": ((30, 120, 360), 60_000),
+        "intraday-6h-to-24h": ((120, 360, 720), 150_000),
+        "multiday-24h-to-72h": ((360, 720, 1_440), 300_000),
+    }
     for band in policy.tte_bands:
         assert band.return_interval_minutes == 5
-        assert band.lookbacks_minutes == (30, 120, 360)
+        expected_lookbacks, expected_separation = expected_lookbacks_and_separation[band.band_id]
+        assert band.lookbacks_minutes == expected_lookbacks
         assert band.annualized_variance_floor == Decimal("0.01")
         for option_type in (OptionType.CALL, OptionType.PUT):
             rule = band.option_rules[option_type]
@@ -140,13 +148,18 @@ def test_production_radar_policy_is_the_exact_credible_clue_screen() -> None:
                 Decimal("0.05"),
                 Decimal("0.4"),
             )
-            assert (rule.activation_ratio, rule.clear_ratio) == (
-                Decimal("1.2"),
-                Decimal("1.05"),
-            )
             assert rule.activation_observation_count == 3
             assert rule.clear_observation_count == 2
-            assert rule.minimum_separation_ms == 300_000
+            assert rule.minimum_separation_ms == expected_separation
+    assert tuple(
+        (knot.ratio, knot.normalized_value) for knot in policy.score_model.richness_knots
+    ) == (
+        (Decimal("1"), Decimal("0")),
+        (Decimal("1.2"), Decimal("0.8")),
+        (Decimal("1.3"), Decimal("1")),
+    )
+    assert policy.score_model.activation_score_lower == Decimal(65)
+    assert policy.score_model.clear_score_upper == Decimal(50)
 
 
 def test_two_materially_different_policy_fixtures_change_runtime_values(
@@ -158,10 +171,7 @@ def test_two_materially_different_policy_fixtures_change_runtime_values(
     second = load_policy_bytes(second_bytes, second_digest)
     assert first.identity != second.identity
     assert first.target_base_quantity_btc != second.target_base_quantity_btc
-    assert (
-        first.tte_bands[0].option_rules[OptionType.CALL].activation_ratio
-        != second.tte_bands[0].option_rules[OptionType.CALL].activation_ratio
-    )
+    assert first.score_model.richness_knots[1].ratio != second.score_model.richness_knots[1].ratio
 
 
 @pytest.mark.parametrize(
@@ -170,7 +180,7 @@ def test_two_materially_different_policy_fixtures_change_runtime_values(
         (b"\xef\xbb\xbf{}", "BOM"),
         (b'{"a":1,"a":2}', "duplicate"),
         (
-            b'{"policy_family":"CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS",'
+            b'{"policy_family":"INVERSE_BTC_SHORT_VOL_ORDINAL_MARKET_STRUCTURE_V2",'
             b'"target_base_quantity_btc":NaN,"tte_bands":[]}',
             "non-finite",
         ),
@@ -196,9 +206,9 @@ def test_policy_rejects_digest_mismatch_unknown_keys_and_relationships(
         load_policy_bytes(changed, digest_policy_bytes(changed))
 
     document = json.loads(exact)
-    document["tte_bands"][0]["option_rules"]["call"]["activation_ratio"] = 1
+    document["score_model"]["richness_knots"][1]["normalized_value"] = 0
     changed = json.dumps(document).encode()
-    with pytest.raises(PolicyError, match="activation > 1"):
+    with pytest.raises(PolicyError, match="strictly increasing"):
         load_policy_bytes(changed, digest_policy_bytes(changed))
 
     document = json.loads(exact)
@@ -393,7 +403,7 @@ def test_time_applicability_classifies_every_business_boundary(
     assert gap.classification.value == "POLICY_GAP"
 
 
-def test_baseline_uses_non_overlapping_five_minute_returns_and_conservative_max() -> None:
+def test_baseline_uses_non_overlapping_five_minute_returns_and_q_reference() -> None:
     closes = tuple(
         Decimal(item)
         for item in ("100", "100", "100", "100", "100", "101", "101", "101", "101", "101", "110")
@@ -409,9 +419,12 @@ def test_baseline_uses_non_overlapping_five_minute_returns_and_conservative_max(
     assert tuple(item[0] for item in result.window_variances) == (5, 10)
     assert result.return_interval_minutes == 5
     assert result.selected_lookback_minutes == 5
-    assert result.variance_rate_per_minute == max(
-        variance for _lookback, variance in result.window_variances
-    )
+    window_rates = tuple(variance for _lookback, variance in result.window_variances)
+    with localcontext(DECIMAL_CONTEXT):
+        expected_reference = +(
+            max(window_rates) + sum(window_rates, Decimal(0)) / Decimal(len(window_rates))
+        ) / Decimal(2)
+    assert result.variance_rate_per_minute == expected_reference
     assert result.total_variance_high > result.total_variance_low
     assert result.annualized_volatility > 0
 

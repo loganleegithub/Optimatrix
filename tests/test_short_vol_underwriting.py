@@ -8,7 +8,20 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from options_domain import INVERSE_BTC
+from options_domain import INVERSE_BTC, OptionType
+from short_vol_radar.black import DecimalInterval
+from short_vol_radar.bucket import radar_bucket_episode_identity
+from short_vol_radar.score import (
+    FactorRawInput,
+    RadarBucketKey,
+    RadarScorePacket,
+    RadarScoreResult,
+    ScoreBand,
+    ScoreCoverage,
+    ScoreFactor,
+    ScoreFactorName,
+    compute_unsigned_oi_concentration,
+)
 from short_vol_underwriting import (
     CANDIDATE_INVALIDATION_REASONS,
     DECISION_CONTROL_OBJECT_KINDS,
@@ -136,7 +149,70 @@ def _radar_episode_identity(
     instrument_name: str = "BTC-SHORT",
     activation_causal_seq: int = 1,
 ) -> str:
-    return f"{runtime_identity}:{policy_identity}:{instrument_name}:{activation_causal_seq}"
+    return radar_bucket_episode_identity(
+        runtime_identity=runtime_identity,
+        policy_identity=policy_identity,
+        bucket_key=RadarBucketKey(
+            tte_band_id="six-to-twenty-four-hours",
+            expiry_ms=10_000_000,
+            option_type=OptionType.CALL,
+            delta_bucket="0.15-0.25",
+        ),
+        leader_instrument_name=instrument_name,
+        score_band=ScoreBand.HIGH,
+        activation_causal_seq=activation_causal_seq,
+    )
+
+
+def _radar_score_packet(
+    boundary: FactBoundary,
+    *,
+    band: ScoreBand = ScoreBand.HIGH,
+    leader_instrument_name: str = "BTC-SHORT",
+) -> RadarScorePacket:
+    point = DecimalInterval(Decimal("0.8"), Decimal("0.8"))
+    factors = tuple(
+        ScoreFactor(
+            name=name,
+            raw_inputs=(FactorRawInput(f"test_{name.value.lower()}", point),),
+            normalized=point,
+            weighted_contribution=DecimalInterval(Decimal("0.1"), Decimal("0.1")),
+        )
+        for name in ScoreFactorName
+    )
+    score_value = {
+        ScoreBand.LOW: Decimal("40"),
+        ScoreBand.MID: Decimal("55"),
+        ScoreBand.HIGH: Decimal("70"),
+        ScoreBand.REVIEW: Decimal("60"),
+    }[band]
+    return RadarScorePacket(
+        policy_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+        fact_boundary=boundary.as_object(),
+        bucket_key=RadarBucketKey(
+            tte_band_id="six-to-twenty-four-hours",
+            expiry_ms=10_000_000,
+            option_type=OptionType.CALL,
+            delta_bucket="0.15-0.25",
+        ),
+        leader_instrument_name=leader_instrument_name,
+        result=RadarScoreResult(
+            premium_evidence=point,
+            risk_quality=point,
+            score=DecimalInterval(score_value, score_value),
+            band=band,
+            coverage=ScoreCoverage.COMPLETE,
+            missing_factors=(),
+            factors=factors,
+        ),
+        oi_diagnostic=compute_unsigned_oi_concentration(
+            open_interest=None,
+            option_gamma=None,
+            bucket_total_unsigned_gamma_weight=None,
+        ),
+        sampling_metadata=None,
+        legacy_v1_threshold_pass=True,
+    )
 
 
 @pytest.mark.parametrize(
@@ -247,9 +323,7 @@ def _underwriting_facts(
         ticker_source=SourceFact("sha256:" + "b" * 64, boundary),
         short_leg_instrument_name="BTC-SHORT",
         long_leg_instrument_name="BTC-LONG",
-        radar_band_id="six-to-twenty-four-hours",
-        radar_richness_lower=Decimal("1.3"),
-        radar_richness_upper=Decimal("1.31"),
+        radar_score_packet=_radar_score_packet(boundary),
     )
 
 
@@ -307,7 +381,7 @@ def _recovery_projection(
     case_id = canonical_identity("ShadowCaseIdentity", "recovery")
     segment_identity = canonical_identity("ShadowCaseSegmentIdentity", case_id, 1)
     opened: dict[str, object] = {
-        "schema_version": 4,
+        "schema_version": 5,
         "case_id": case_id,
         "code_identity": origin_bindings.code_identity,
         "runtime_identity": origin_bindings.runtime_identity,
@@ -633,13 +707,10 @@ def _typed_recovery_entry(
     "episode_identity",
     (
         "",
-        "sha256:" + "5" * 64,
-        _radar_episode_identity()[:-1],
-        _radar_episode_identity(runtime_identity="SHA256:" + "b" * 64),
-        _radar_episode_identity(instrument_name=""),
-        _radar_episode_identity()[:-1] + "x",
-        _radar_episode_identity()[:-1] + "-1",
-        _radar_episode_identity()[:-1] + "01",
+        "sha256:" + "5" * 63,
+        "SHA256:" + "5" * 64,
+        "sha256:" + "x" * 64,
+        "sha256:" + "5" * 65,
     ),
 )
 def test_underwriting_facts_reject_malformed_radar_episode_identity(
@@ -663,13 +734,7 @@ def test_underwriting_facts_reject_malformed_radar_episode_identity(
     )
 
 
-@pytest.mark.parametrize(
-    "field",
-    ("short_leg_identity", "long_leg_identity", "canonical_combo_identity"),
-)
-def test_radar_episode_identity_does_not_weaken_downstream_owned_identities(
-    field: str,
-) -> None:
+def test_opaque_radar_episode_identity_uses_the_canonical_identity_domain() -> None:
     facts = _underwriting_facts(
         boundary=_boundary(2, 120),
         change_id=10,
@@ -677,27 +742,24 @@ def test_radar_episode_identity_does_not_weaken_downstream_owned_identities(
         snapshot_kind="snapshot",
     )
 
-    with pytest.raises(ValueError, match="must be sha256"):
-        if field == "short_leg_identity":
-            replace(facts, short_leg_identity=_radar_episode_identity())
-        elif field == "long_leg_identity":
-            replace(facts, long_leg_identity=_radar_episode_identity())
-        else:
-            replace(facts, canonical_combo_identity=_radar_episode_identity())
+    assert facts.active_episode_identity is not None
+    assert facts.active_episode_identity.startswith("sha256:")
+    assert len(facts.active_episode_identity) == len("sha256:") + 64
 
 
 @pytest.mark.parametrize(
-    "episode_identity",
+    ("episode_identity", "activation_causal_seq"),
     (
-        _radar_episode_identity(runtime_identity="sha256:" + "c" * 64),
-        _radar_episode_identity(policy_identity="sha256:" + "d" * 64),
-        _radar_episode_identity(instrument_name="BTC-OTHER"),
-        _radar_episode_identity(activation_causal_seq=3),
+        (_radar_episode_identity(runtime_identity="sha256:" + "c" * 64), 1),
+        (_radar_episode_identity(policy_identity="sha256:" + "d" * 64), 1),
+        (_radar_episode_identity(instrument_name="BTC-OTHER"), 1),
+        (_radar_episode_identity(activation_causal_seq=2), 1),
     ),
 )
 def test_owner_rejects_unbound_radar_episode_before_emission(
     tmp_path: Path,
     episode_identity: str,
+    activation_causal_seq: int,
 ) -> None:
     owner, _bindings = _owner(tmp_path)
     facts = replace(
@@ -708,7 +770,7 @@ def test_owner_rejects_unbound_radar_episode_before_emission(
             snapshot_kind="snapshot",
         ),
         active_episode_identity=episode_identity,
-        anomaly_activation_seq=int(episode_identity.rsplit(":", 1)[1]),
+        anomaly_activation_seq=activation_causal_seq,
     )
 
     with pytest.raises(ValueError, match="not bound"):
@@ -1206,6 +1268,8 @@ def test_kind_registries_are_exact_and_disjoint() -> None:
         "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
         "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN",
         "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME",
+        "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN",
+        "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OUTCOME",
     )
     assert not set(UNDERWRITING_OBJECT_KINDS) & set(OUTCOME_OBJECT_KINDS)
     assert not set(UNDERWRITING_OBJECT_KINDS) & set(DECISION_CONTROL_OBJECT_KINDS)

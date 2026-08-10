@@ -6,7 +6,8 @@ from enum import StrEnum
 from market_monitor import TimeInterval
 
 from short_vol_radar.black import DecimalInterval
-from short_vol_radar.policy import OptionRule
+from short_vol_radar.policy import OptionRule, ScoreModel
+from short_vol_radar.score import ScoreObservationSignal, classify_score_observation
 
 
 class DetectorState(StrEnum):
@@ -88,6 +89,12 @@ class NumericalBoundaryUnresolved(ValueError):
 
 
 class EpisodeTracker:
+    """Legacy per-instrument state machine retained only for pure compatibility tests.
+
+    V2 production confirmation is bucket-scoped and owned by
+    :class:`short_vol_radar.bucket.RadarBucketEpisodeTracker`.
+    """
+
     def __init__(
         self, *, runtime_identity: str, policy_identity: str, instrument_name: str
     ) -> None:
@@ -310,14 +317,13 @@ class EpisodeTracker:
         self._reset_clear()
 
 
-def classify_observation(interval: DecimalInterval, rule: OptionRule) -> ObservationSignal:
-    if interval.lower >= rule.activation_ratio:
-        return ObservationSignal.ACTIVATE
-    if interval.upper <= rule.clear_ratio:
-        return ObservationSignal.CLEAR
-    if interval.lower > rule.clear_ratio and interval.upper < rule.activation_ratio:
-        return ObservationSignal.NEUTRAL
-    raise NumericalBoundaryUnresolved("richness interval spans activation or clear boundary")
+def classify_observation(interval: DecimalInterval, model: ScoreModel) -> ObservationSignal:
+    signal = classify_score_observation(interval, model)
+    return {
+        ScoreObservationSignal.ACTIVATE: ObservationSignal.ACTIVATE,
+        ScoreObservationSignal.CLEAR: ObservationSignal.CLEAR,
+        ScoreObservationSignal.NEUTRAL: ObservationSignal.NEUTRAL,
+    }[signal]
 
 
 def delta_is_eligible(interval: DecimalInterval, rule: OptionRule) -> bool:

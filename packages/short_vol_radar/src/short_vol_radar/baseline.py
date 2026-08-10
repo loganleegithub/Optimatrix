@@ -121,9 +121,18 @@ def compute_baseline_statistics(
                     (square for value, square in zip(returns, squared, strict=True) if value < 0),
                     Decimal(0),
                 )
-                bipower_sum = PI_OVER_TWO * sum(
+                adjacent_absolute_product_sum = sum(
                     (abs(later) * abs(earlier) for earlier, later in pairwise(returns)),
                     Decimal(0),
+                )
+                return_count = len(returns)
+                bipower_sum = (
+                    PI_OVER_TWO
+                    * Decimal(return_count)
+                    / Decimal(return_count - 1)
+                    * adjacent_absolute_product_sum
+                    if return_count >= 2
+                    else Decimal(0)
                 )
                 jump_sum = max(Decimal(0), realized_sum - bipower_sum)
                 denominator = Decimal(lookback)
@@ -155,14 +164,18 @@ def compute_baseline_statistics(
                 (member.lookback_minutes, member.variance_rate_per_minute) for member in diagnostics
             )
             floor_per_minute = annualized_variance_floor / MINUTES_PER_YEAR
-            selected = max(windows, key=lambda item: (item[1], item[0]))
-            selected_lookback: int | None = selected[0]
-            selected_rate = selected[1]
-            if floor_per_minute >= selected_rate:
+            maximum_window = max(windows, key=lambda item: (item[1], item[0]))
+            mean_window_rate = sum(
+                (variance_rate for _lookback, variance_rate in windows),
+                Decimal(0),
+            ) / Decimal(len(windows))
+            reference_rate = (maximum_window[1] + mean_window_rate) / Decimal(2)
+            selected_lookback: int | None = maximum_window[0]
+            if floor_per_minute >= reference_rate:
                 variance_rate = floor_per_minute
                 selected_lookback = None
             else:
-                variance_rate = selected_rate
+                variance_rate = reference_rate
             annualized = context.sqrt(variance_rate * MINUTES_PER_YEAR)
             statistics = BaselineStatistics(
                 return_interval_minutes=return_interval_minutes,

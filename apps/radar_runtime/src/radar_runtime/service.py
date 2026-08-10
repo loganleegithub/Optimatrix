@@ -5,6 +5,7 @@ import fcntl
 import os
 import signal
 import stat
+import tempfile
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
@@ -249,7 +250,7 @@ def load_persistent_product_policies(
     repository: Path,
     product: OptionProductName | str | OptionProductSpec,
 ) -> tuple[OptionProductSpec, PolicyChain]:
-    """Load the frozen product/Policy configuration shared by service and migration."""
+    """Load the frozen product/Policy configuration consumed by the online service."""
 
     profile = persistent_product_profile(product)
     selected_product = profile.product
@@ -686,7 +687,7 @@ def _finalize_failure(
 
 
 def prepare_persistent_state_root(state_root: Path, repository: Path) -> Path:
-    """Validate or create the stable state root used by service and offline migration."""
+    """Validate or create one non-temporary stable state root for the online service."""
 
     if not state_root.is_absolute():
         raise PersistentServiceStartupError("persistent state root must be absolute")
@@ -698,10 +699,27 @@ def prepare_persistent_state_root(state_root: Path, repository: Path) -> Path:
         raise PersistentServiceStartupError(
             "persistent state root must stay outside the Git worktree"
         )
+    temporary_root = next(
+        (root for root in _temporary_state_roots() if resolved == root or root in resolved.parents),
+        None,
+    )
+    if temporary_root is not None:
+        raise PersistentServiceStartupError(
+            "persistent state root must stay outside temporary storage"
+        )
     resolved.mkdir(parents=True, exist_ok=True)
     if not resolved.is_dir():
         raise PersistentServiceStartupError("persistent state root is not a directory")
     return resolved
+
+
+def _temporary_state_roots() -> tuple[Path, ...]:
+    roots = {
+        Path("/tmp").resolve(),
+        Path("/private/tmp").resolve(),
+        Path(tempfile.gettempdir()).resolve(),
+    }
+    return tuple(sorted(roots, key=lambda value: value.as_posix()))
 
 
 async def _sleep_or_stop(

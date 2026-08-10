@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+import radar_runtime.runtime as runtime_module
 import radar_runtime.workbench as workbench_module
 from conftest import PolicyFactory
 from market_monitor import (
@@ -27,6 +28,7 @@ from options_domain import (
     PriceTickMetadata,
 )
 from radar_runtime.deribit_public import (
+    InboundEnvelope,
     SendControlEvent,
     SendControlKind,
 )
@@ -47,19 +49,33 @@ from radar_runtime.runtime import (
     FailureScope,
     PendingRpc,
     RadarReducer,
+    RpcPurpose,
     RpcState,
     ShadowRpcIntent,
 )
+from short_vol_radar.black import DecimalInterval
+from short_vol_radar.bucket import RadarBucketEpisodeTracker
 from short_vol_radar.detector import (
-    DetectorObservation,
-    DetectorState,
     EpisodeTracker,
-    ObservationSignal,
     TrackerState,
 )
 from short_vol_radar.evidence import RadarEventSink
 from short_vol_radar.policy import load_policy_bytes
-from short_vol_radar.radar import TickerState
+from short_vol_radar.radar import (
+    CurrentDisposition,
+    CurrentEvaluation,
+    DeltaBucket,
+    TickerState,
+)
+from short_vol_radar.score import (
+    LeaderCoverage,
+    RadarBucketKey,
+    RadarScoreInputs,
+    ScoreBand,
+    build_radar_score_packet,
+    compute_radar_score,
+    compute_unsigned_oi_concentration,
+)
 from short_vol_underwriting import (
     CloseAtomicAvailability,
     CloseOptionAvailability,
@@ -85,6 +101,28 @@ from short_vol_underwriting.constants import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@dataclass(frozen=True)
+class _ResponseScoreCalculation:
+    """Minimum immutable core calculation used by the reducer response-path test."""
+
+    band: Any
+    rule: Any
+    target_bid: Any
+    target_ask: Any
+    stressed_executable_bid_iv: DecimalInterval
+    delta: DecimalInterval
+    delta_bucket: DeltaBucket
+    delta_clue_eligible: bool
+    target_spread_ticks: Decimal
+    richness: DecimalInterval
+    baseline: Any
+    score_result: Any = None
+
+    @property
+    def clue_eligible(self) -> bool:
+        return bool(self.band.clue_eligible and self.delta_clue_eligible)
 
 
 class _HistoryObserver:
@@ -273,6 +311,68 @@ def _commit(*, causal_seq: int, monotonic_ms: int, cause: CausalCause) -> Causal
     )
 
 
+def _settled_transaction(
+    adapter: FixedContractShadowRuntimeAdapter,
+    *,
+    reducer: RadarReducer,
+    commit: CausalCommit,
+) -> tuple[ShadowRpcIntent, ...]:
+    """Project a unit-test score recomputation at the supplied settled boundary."""
+    _recompute_test_score_boundary(reducer, commit.boundary)
+    return adapter.on_settled_transaction(reducer=reducer, commit=commit)
+
+
+def _recompute_test_score_boundary(
+    reducer: RadarReducer,
+    boundary: FactBoundary,
+) -> None:
+    for bucket_tracker in reducer.bucket_trackers.values():
+        episode = bucket_tracker.episode
+        if episode is None:
+            continue
+        name = episode.leader_instrument_name
+        prior = reducer.score_packets.get(name)
+        result = reducer.score_results.get(name)
+        calculation = getattr(reducer.results.get(name), "calculation", None)
+        if prior is None or result is None or calculation is None:
+            continue
+        reducer.score_packets[name] = build_radar_score_packet(
+            policy_identity=reducer.policy.identity,
+            fact_boundary={
+                "code_identity": reducer.code_identity,
+                "runtime_identity": reducer.runtime_identity,
+                "session_epoch": boundary.session_epoch,
+                "ingress_seq": boundary.ingress_seq,
+                "received_monotonic_ms": boundary.received_monotonic_ms,
+                "causal_seq": boundary.causal_seq,
+            },
+            bucket_key=episode.bucket_key,
+            leader_instrument_name=name,
+            result=result,
+            oi_diagnostic=prior.oi_diagnostic,
+            stressed_richness=calculation.richness,
+            leader_coverage=prior.leader_coverage,
+        )
+
+
+def _rpc_response(
+    adapter: FixedContractShadowRuntimeAdapter,
+    *,
+    reducer: RadarReducer,
+    request_id: int,
+    result: object,
+    sent_boundary: FactBoundary,
+    boundary: FactBoundary,
+) -> tuple[ShadowRpcIntent, ...]:
+    _recompute_test_score_boundary(reducer, boundary)
+    return adapter.on_rpc_response(
+        request_id=request_id,
+        result=result,
+        sent_boundary=sent_boundary,
+        boundary=boundary,
+    )
+
+
 def _apply_combo_change(
     reducer: RadarReducer,
     *,
@@ -302,6 +402,133 @@ def _apply_combo_change(
         subscription_generation=1,
         boundary=boundary,
     )
+
+
+def _install_v2_episode(
+    reducer: RadarReducer,
+    *,
+    instrument_name: str = "BTC-1JAN00-101000-C",
+    activation_causal_seq: int = 1,
+    received_monotonic_ms: int = 110,
+    score_band: ScoreBand = ScoreBand.HIGH,
+    delta_bucket: DeltaBucket = DeltaBucket.WING_15_30,
+) -> str:
+    instrument = reducer.options[instrument_name]
+    tte_band = reducer.policy.tte_bands[0]
+    rule = tte_band.option_rules[instrument.option_type]
+    score_result = compute_radar_score(
+        reducer.policy.score_model,
+        RadarScoreInputs(
+            stressed_richness=DecimalInterval(Decimal("1.30"), Decimal("1.31")),
+            stressed_executable_bid_iv=DecimalInterval(Decimal("0.49"), Decimal("0.51")),
+            local_same_type_mark_iv=Decimal("0.40"),
+            current_expiry_atm_mark_iv=Decimal("0.50"),
+            adjacent_expiry_atm_mark_iv=Decimal("0.40"),
+            adverse_semivariance_share=DecimalInterval(Decimal(0), Decimal(0)),
+            jump_share=DecimalInterval(Decimal(0), Decimal(0)),
+            target_spread_ticks=DecimalInterval(Decimal(1), Decimal(1)),
+            bid_consumed_level_count=2,
+            ask_consumed_level_count=2,
+        ),
+    )
+    score_result = replace(score_result, band=score_band)
+    bucket_key = RadarBucketKey(
+        tte_band_id=tte_band.band_id,
+        expiry_ms=instrument.expiration_timestamp_ms,
+        option_type=instrument.option_type,
+        delta_bucket=delta_bucket.value,
+    )
+    packet = build_radar_score_packet(
+        policy_identity=reducer.policy.identity,
+        fact_boundary={
+            "code_identity": reducer.code_identity,
+            "runtime_identity": reducer.runtime_identity,
+            "session_epoch": 1,
+            "ingress_seq": activation_causal_seq,
+            "received_monotonic_ms": received_monotonic_ms,
+            "causal_seq": activation_causal_seq,
+        },
+        bucket_key=bucket_key,
+        leader_instrument_name=instrument_name,
+        result=score_result,
+        oi_diagnostic=compute_unsigned_oi_concentration(
+            open_interest=Decimal(1),
+            option_gamma=Decimal("0.01"),
+            bucket_total_unsigned_gamma_weight=Decimal("0.01"),
+        ),
+        stressed_richness=DecimalInterval(Decimal("1.30"), Decimal("1.31")),
+        leader_coverage=LeaderCoverage.COMPLETE,
+    )
+    bucket_tracker = RadarBucketEpisodeTracker(
+        runtime_identity=reducer.runtime_identity,
+        policy_identity=reducer.policy.identity,
+        bucket_key=bucket_key,
+        score_model=reducer.policy.score_model,
+        clue_eligible=True,
+    )
+    separation = max(rule.minimum_separation_ms, 1)
+    for index in range(rule.activation_observation_count):
+        trusted_ms = 1_000_000 + index * separation
+        bucket_tracker.observe(
+            packet=packet,
+            observation_identity=("test-v2-score", instrument_name, index),
+            causal_seq=activation_causal_seq,
+            trusted_time=TimeInterval(trusted_ms, trusted_ms),
+            rule=rule,
+        )
+    assert bucket_tracker.episode is not None
+    reducer.bucket_trackers[bucket_key] = bucket_tracker
+    reducer.score_bucket_keys[instrument_name] = bucket_key
+    reducer.score_results[instrument_name] = score_result
+    reducer.score_packets[instrument_name] = packet
+    reducer.bucket_leader_by_key[bucket_key] = instrument_name
+    reducer.bucket_leader_coverage[bucket_key] = LeaderCoverage.COMPLETE
+    compatibility = EpisodeTracker(
+        runtime_identity=reducer.runtime_identity,
+        policy_identity=reducer.policy.identity,
+        instrument_name=instrument_name,
+    )
+    compatibility.state = (
+        TrackerState.ACTIVE if score_band is ScoreBand.HIGH else TrackerState.ARMED
+    )
+    compatibility.episode_id = (
+        bucket_tracker.episode.episode_identity if score_band is ScoreBand.HIGH else None
+    )
+    compatibility.activation_band_id = tte_band.band_id if score_band is ScoreBand.HIGH else None
+    compatibility.activation_causal_seq = (
+        activation_causal_seq if score_band is ScoreBand.HIGH else None
+    )
+    reducer.trackers[instrument_name] = compatibility
+    calculation = SimpleNamespace(
+        baseline=SimpleNamespace(window_diagnostics=()),
+        delta=SimpleNamespace(lower=Decimal("0.19"), upper=Decimal("0.21")),
+        delta_bucket=delta_bucket,
+        executable_bid_iv=SimpleNamespace(lower=Decimal("0.49"), upper=Decimal("0.51")),
+        stressed_executable_bid_iv=SimpleNamespace(lower=Decimal("0.49"), upper=Decimal("0.51")),
+        richness=SimpleNamespace(lower=Decimal("1.30"), upper=Decimal("1.31")),
+        band=tte_band,
+        rule=rule,
+        delta_clue_eligible=True,
+        target_spread_ticks=Decimal("2"),
+        target_bid=SimpleNamespace(consumed=()),
+        target_ask=SimpleNamespace(consumed=()),
+        score_result=score_result,
+    )
+    reducer.results[instrument_name] = cast(
+        Any,
+        SimpleNamespace(
+            calculation=calculation,
+            current_evaluation=SimpleNamespace(calculation=calculation),
+            detector_state=compatibility.detector_state,
+            reason=None,
+            band_id=tte_band.band_id,
+            known_evaluation=True,
+            full_formula_evaluation=True,
+            score_result=score_result,
+            score_packet=packet,
+        ),
+    )
+    return bucket_tracker.episode.episode_identity
 
 
 def _shadow_system(
@@ -433,39 +660,7 @@ def _shadow_system(
         signed_delta=Decimal("0.2"),
         mark_iv_fraction=Decimal("0.5"),
     )
-    tracker = EpisodeTracker(
-        runtime_identity=runtime_identity,
-        policy_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
-        instrument_name="BTC-1JAN00-101000-C",
-    )
-    tracker.state = TrackerState.ACTIVE
-    tracker.episode_id = (
-        f"{runtime_identity}:{INVERSE_BTC_RADAR_POLICY_IDENTITY}:BTC-1JAN00-101000-C:1"
-    )
-    tracker.activation_band_id = policies.radar.tte_bands[0].band_id
-    tracker.activation_causal_seq = 1
-    reducer.trackers["BTC-1JAN00-101000-C"] = tracker
-    calculation = SimpleNamespace(
-        baseline=SimpleNamespace(window_diagnostics=()),
-        delta=SimpleNamespace(lower=Decimal("0.19"), upper=Decimal("0.21")),
-        executable_bid_iv=SimpleNamespace(lower=Decimal("0.49"), upper=Decimal("0.51")),
-        richness=SimpleNamespace(lower=Decimal("1.30"), upper=Decimal("1.31")),
-        band=SimpleNamespace(clue_eligible=True),
-        delta_clue_eligible=True,
-        target_spread_ticks=Decimal("2"),
-        target_bid=SimpleNamespace(consumed=()),
-        target_ask=SimpleNamespace(consumed=()),
-    )
-    reducer.results["BTC-1JAN00-101000-C"] = cast(
-        Any,
-        SimpleNamespace(
-            calculation=calculation,
-            current_evaluation=SimpleNamespace(calculation=calculation),
-            detector_state=DetectorState.ANOMALY_ACTIVE,
-            reason=None,
-            band_id=policies.radar.tte_bands[0].band_id,
-        ),
-    )
+    _install_v2_episode(reducer)
     reducer.option_books = {}
     for instrument_name, bid, ask in (
         ("BTC-1JAN00-101000-C", "0.00300", "0.00301"),
@@ -498,35 +693,18 @@ def _shadow_system(
 
 
 def _activate_real_episode(reducer: RadarReducer) -> str:
-    instrument_name = "BTC-1JAN00-101000-C"
     rule = reducer.policy.tte_bands[0].option_rules[OptionType.CALL]
-    tracker = EpisodeTracker(
-        runtime_identity=reducer.runtime_identity,
-        policy_identity=reducer.policy.identity,
-        instrument_name=instrument_name,
+    reducer.bucket_trackers.clear()
+    reducer.score_bucket_keys.clear()
+    reducer.score_results.clear()
+    reducer.score_packets.clear()
+    reducer.bucket_leader_by_key.clear()
+    reducer.bucket_leader_coverage.clear()
+    return _install_v2_episode(
+        reducer,
+        activation_causal_seq=rule.activation_observation_count,
+        received_monotonic_ms=120,
     )
-    separation_ms = max(rule.minimum_separation_ms, 1)
-    activated: str | None = None
-    for index in range(rule.activation_observation_count):
-        causal_seq = index + 1
-        trusted_ms = 1_000_000 + index * separation_ms
-        transition = tracker.observe(
-            DetectorObservation(
-                causal_seq=causal_seq,
-                trusted_time=TimeInterval(trusted_ms, trusted_ms),
-                band_id=reducer.policy.tte_bands[0].band_id,
-                signal=ObservationSignal.ACTIVATE,
-            ),
-            rule,
-        )
-        activated = transition.activated_episode_id or activated
-    assert activated is not None
-    assert tracker.episode_id == (
-        f"{reducer.runtime_identity}:{reducer.policy.identity}:"
-        f"{instrument_name}:{rule.activation_observation_count}"
-    )
-    reducer.trackers[instrument_name] = tracker
-    return activated
 
 
 @pytest.mark.parametrize(
@@ -543,6 +721,12 @@ def test_real_episode_identity_round_trips_without_economic_action(
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
     reducer.trackers.clear()
+    reducer.bucket_trackers.clear()
+    reducer.score_packets.clear()
+    reducer.score_results.clear()
+    reducer.score_bucket_keys.clear()
+    reducer.bucket_leader_by_key.clear()
+    reducer.bucket_leader_coverage.clear()
     episode_identity = _activate_real_episode(reducer)
     if projection == "no_combo":
         reducer.combos.clear()
@@ -554,7 +738,8 @@ def test_real_episode_identity_round_trips_without_economic_action(
     activation_seq = (
         reducer.policy.tte_bands[0].option_rules[OptionType.CALL].activation_observation_count
     )
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=activation_seq,
@@ -611,24 +796,16 @@ def test_same_activation_batch_designates_before_action_and_unknown_has_no_fallb
         subscription_generation=1,
         boundary=FactBoundary(1, 1, 110, 1),
     )
-    second_tracker = EpisodeTracker(
-        runtime_identity=owner.bindings.runtime_identity,
-        policy_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+    _install_v2_episode(
+        reducer,
         instrument_name=second_name,
+        delta_bucket=DeltaBucket.NEAR_ATM_30_40,
     )
-    second_tracker.state = TrackerState.ACTIVE
-    second_tracker.episode_id = (
-        f"{owner.bindings.runtime_identity}:{INVERSE_BTC_RADAR_POLICY_IDENTITY}:{second_name}:1"
-    )
-    second_tracker.activation_band_id = reducer.policy.tte_bands[0].band_id
-    second_tracker.activation_causal_seq = 1
-    reducer.trackers[second_name] = second_tracker
-    reducer.results[second_name] = reducer.results["BTC-1JAN00-101000-C"]
     episodes = tuple(
         sorted(
-            tracker.episode_id
-            for tracker in reducer.trackers.values()
-            if tracker.episode_id is not None
+            tracker.episode.episode_identity
+            for tracker in reducer.bucket_trackers.values()
+            if tracker.episode is not None
         )
     )
     batch_identity = selected_decision_batch_identity(
@@ -640,10 +817,15 @@ def test_same_activation_batch_designates_before_action_and_unknown_has_no_fallb
         batch_identity=batch_identity,
         episode_identities=episodes,
     )
-    designated_instrument = designated.rsplit(":", 2)[-2]
+    designated_instrument = next(
+        tracker.episode.leader_instrument_name
+        for tracker in reducer.bucket_trackers.values()
+        if tracker.episode is not None and tracker.episode.episode_identity == designated
+    )
     reducer.tickers.pop(designated_instrument)
 
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -669,7 +851,8 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
         monotonic_ms=110,
         cause=CausalCause.COMBO_BOOK_CHANGED,
     )
-    admission_intents = adapter.on_settled_transaction(
+    admission_intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=active_commit,
     )
@@ -682,13 +865,20 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
     assert active.active_episode_identity is not None
 
     reducer.trackers.clear()
+    reducer.bucket_trackers.clear()
+    reducer.score_packets.clear()
+    reducer.score_results.clear()
+    reducer.score_bucket_keys.clear()
+    reducer.bucket_leader_by_key.clear()
+    reducer.bucket_leader_coverage.clear()
     inactive_commit = _commit(
         causal_seq=2,
         monotonic_ms=120,
         cause=CausalCause.TICKER_APPLIED,
     )
     assert (
-        adapter.on_settled_transaction(
+        _settled_transaction(
+            adapter,
             reducer=reducer,
             commit=inactive_commit,
         )
@@ -711,24 +901,18 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
         monotonic_ms=130,
         cause=CausalCause.TICKER_APPLIED,
     )
-    assert adapter.on_settled_transaction(reducer=reducer, commit=unrelated_commit) == ()
+    assert _settled_transaction(adapter, reducer=reducer, commit=unrelated_commit) == ()
     assert adapter._underwriting_by_scope == {}
     assert owner.state_store.revision == inactive_revision
     assert tuple(owner.state_store.objects) == inactive_objects
 
-    next_tracker = EpisodeTracker(
-        runtime_identity=reducer.runtime_identity,
-        policy_identity=reducer.policy.identity,
-        instrument_name="BTC-1JAN00-101000-C",
+    next_episode = _install_v2_episode(
+        reducer,
+        activation_causal_seq=4,
+        received_monotonic_ms=140,
     )
-    next_tracker.state = TrackerState.ACTIVE
-    next_tracker.episode_id = (
-        f"{reducer.runtime_identity}:{reducer.policy.identity}:BTC-1JAN00-101000-C:4"
-    )
-    next_tracker.activation_band_id = reducer.policy.tte_bands[0].band_id
-    next_tracker.activation_causal_seq = 4
-    reducer.trackers["BTC-1JAN00-101000-C"] = next_tracker
-    adapter.on_settled_transaction(
+    _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=4,
@@ -738,7 +922,7 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
     )
     assert owner.state_store.revision > inactive_revision
     assert any(
-        facts.active_episode_identity == next_tracker.episode_id
+        facts.active_episode_identity == next_episode
         for facts in adapter._underwriting_by_scope.values()
     )
 
@@ -749,6 +933,8 @@ def test_no_active_radar_episode_skips_review_context_projection(
 ) -> None:
     reducer, adapter, _owner = _shadow_system(tmp_path)
     reducer.trackers.clear()
+    reducer.bucket_trackers.clear()
+    reducer.score_packets.clear()
 
     def unexpected_review_projection(_reducer: RadarReducer) -> dict[str, object]:
         raise AssertionError("review contexts have no consumer without an active Radar Episode")
@@ -756,7 +942,8 @@ def test_no_active_radar_episode_skips_review_context_projection(
     monkeypatch.setattr(adapter, "_review_contexts", unexpected_review_projection)
 
     assert (
-        adapter.on_settled_transaction(
+        _settled_transaction(
+            adapter,
             reducer=reducer,
             commit=_commit(
                 causal_seq=1,
@@ -773,7 +960,8 @@ def test_frozen_component_selection_skips_unused_review_context_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reducer, adapter, _owner = _shadow_system(tmp_path)
-    first = adapter.on_settled_transaction(
+    first = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -790,7 +978,8 @@ def test_frozen_component_selection_skips_unused_review_context_projection(
     monkeypatch.setattr(adapter, "_review_contexts", unexpected_review_projection)
 
     assert (
-        adapter.on_settled_transaction(
+        _settled_transaction(
+            adapter,
             reducer=reducer,
             commit=_commit(
                 causal_seq=2,
@@ -806,7 +995,8 @@ def test_frozen_component_structure_does_not_switch_to_a_later_protective_leg(
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    first_intents = adapter.on_settled_transaction(
+    first_intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -851,7 +1041,8 @@ def test_frozen_component_structure_does_not_switch_to_a_later_protective_leg(
     )
 
     assert (
-        adapter.on_settled_transaction(
+        _settled_transaction(
+            adapter,
             reducer=reducer,
             commit=_commit(
                 causal_seq=2,
@@ -876,7 +1067,8 @@ def test_underwriting_selector_waits_for_complete_catalog_before_freezing(
     reducer.option_catalog.complete = False
 
     assert (
-        adapter.on_settled_transaction(
+        _settled_transaction(
+            adapter,
             reducer=reducer,
             commit=_commit(
                 causal_seq=1,
@@ -923,7 +1115,8 @@ def test_underwriting_selector_waits_for_complete_catalog_before_freezing(
     )
     reducer.option_catalog.complete = True
 
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=2,
@@ -991,7 +1184,8 @@ def test_underwriting_selector_can_choose_candidate_outside_radar_display_top_th
     assert len(top_three) == 3
     assert "BTC-1JAN00-102000-C" not in top_three
 
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -1035,7 +1229,8 @@ def test_known_illegal_protective_leg_without_book_does_not_poison_selection(
     reducer.options[illegal.instrument_name] = illegal
     reducer.catalog_options[illegal.instrument_name] = illegal
 
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -1071,7 +1266,8 @@ def test_potentially_legal_leg_metadata_unknown_blocks_selection_exactly(
     reducer.catalog_options[unknown.instrument_name] = unknown
 
     assert (
-        adapter.on_settled_transaction(
+        _settled_transaction(
+            adapter,
             reducer=reducer,
             commit=_commit(
                 causal_seq=1,
@@ -1101,7 +1297,8 @@ def test_underwriting_selector_keeps_missing_legal_leg_input_unknown(
     reducer.options[missing.instrument_name] = missing
     reducer.catalog_options[missing.instrument_name] = missing
 
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -1132,7 +1329,7 @@ def test_workbench_underwriting_metadata_reuses_unchanged_snapshot(
         monotonic_ms=120,
         cause=CausalCause.COMBO_BOOK_CHANGED,
     )
-    adapter.on_settled_transaction(reducer=reducer, commit=commit)
+    _settled_transaction(adapter, reducer=reducer, commit=commit)
 
     first = adapter.workbench_underwriting_metadata()
     second = adapter.workbench_underwriting_metadata()
@@ -1163,7 +1360,8 @@ def test_atomic_scope_rejects_unbound_radar_episode_before_economic_action(
     tracker.episode_id = replacements[variant]
 
     with pytest.raises(ValueError):
-        adapter.on_settled_transaction(
+        _settled_transaction(
+            adapter,
             reducer=reducer,
             commit=_commit(
                 causal_seq=2,
@@ -1616,6 +1814,7 @@ def _rest_option_book(
 def _settle_component_pair(
     *,
     adapter: FixedContractShadowRuntimeAdapter,
+    reducer: RadarReducer,
     intents: tuple[ShadowRpcIntent, ...],
     first_causal_seq: int,
     change_id: int,
@@ -1642,7 +1841,9 @@ def _settle_component_pair(
         is_short = instrument_name == "BTC-1JAN00-101000-C"
         amount = "0.1" if is_short else long_amount
         accepted_seq = first_causal_seq + 2 + offset
-        adapter.on_rpc_response(
+        _rpc_response(
+            adapter,
+            reducer=reducer,
             request_id=intent.request_id,
             result=_rest_option_book(
                 instrument_name,
@@ -1665,7 +1866,8 @@ def _admit_component_shadow(
     reducer: RadarReducer,
     adapter: FixedContractShadowRuntimeAdapter,
 ) -> tuple[ShadowRpcIntent, ...]:
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -1675,6 +1877,7 @@ def _admit_component_shadow(
     )
     _settle_component_pair(
         adapter=adapter,
+        reducer=reducer,
         intents=intents,
         first_causal_seq=2,
         change_id=11,
@@ -1690,7 +1893,8 @@ def test_component_candidate_requires_both_strictly_later_option_book_responses(
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -1714,7 +1918,9 @@ def test_component_candidate_requires_both_strictly_later_option_book_responses(
     )
     adapter.on_request_sent(request_id=first.request_id, boundary=sent)
     assert (
-        adapter.on_rpc_response(
+        _rpc_response(
+            adapter,
+            reducer=reducer,
             request_id=first.request_id,
             result=_rest_option_book(
                 "BTC-1JAN00-101000-C",
@@ -1735,7 +1941,9 @@ def test_component_candidate_requires_both_strictly_later_option_book_responses(
     )
     second_sent = FactBoundary(1, 4, 140, 4)
     adapter.on_request_sent(request_id=second.request_id, boundary=second_sent)
-    adapter.on_rpc_response(
+    _rpc_response(
+        adapter,
+        reducer=reducer,
         request_id=second.request_id,
         result=_rest_option_book(
             "BTC-1JAN00-102000-C",
@@ -1783,6 +1991,320 @@ def test_component_candidate_requires_both_strictly_later_option_book_responses(
     assert owner.state_store.retained_state_counts["active_or_latest_terminal_cases"] == 1
 
 
+def test_reducer_rpc_response_recomputes_exact_score_boundary_before_pair_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    short_name = "BTC-1JAN00-101000-C"
+    long_name = "BTC-1JAN00-102000-C"
+    band = reducer.policy.tte_bands[0]
+    rule = band.option_rules[OptionType.CALL]
+    diagnostic = SimpleNamespace(
+        lookback_minutes=60,
+        variance_rate_per_minute=Decimal("0.0001"),
+        positive_semivariance_share=Decimal("0.2"),
+        negative_semivariance_share=Decimal("0.8"),
+        jump_share=Decimal("0.1"),
+        maximum_absolute_return=Decimal("0.01"),
+        net_return=Decimal("0"),
+    )
+    calculation = _ResponseScoreCalculation(
+        band=band,
+        rule=rule,
+        target_bid=SimpleNamespace(consumed=(object(), object())),
+        target_ask=SimpleNamespace(consumed=(object(), object())),
+        stressed_executable_bid_iv=DecimalInterval(Decimal("0.49"), Decimal("0.51")),
+        delta=DecimalInterval(Decimal("0.19"), Decimal("0.21")),
+        delta_bucket=DeltaBucket.WING_15_30,
+        delta_clue_eligible=True,
+        target_spread_ticks=Decimal("2"),
+        richness=DecimalInterval(Decimal("1.30"), Decimal("1.31")),
+        baseline=SimpleNamespace(
+            window_diagnostics=(diagnostic,),
+            selected_lookback_minutes=None,
+        ),
+    )
+
+    def response_current_evaluation(**kwargs: object) -> CurrentEvaluation:
+        instrument = cast(OptionInstrument, kwargs["instrument"])
+        if instrument.instrument_name != short_name:
+            return CurrentEvaluation(
+                disposition=CurrentDisposition.UNKNOWN,
+                reason="TEST_NON_LEADER_UNKNOWN",
+                known_evaluation=False,
+                full_formula_evaluation=False,
+                band_id=None,
+            )
+        return CurrentEvaluation(
+            disposition=CurrentDisposition.SCORE_PENDING,
+            reason="V2_SCORE_FEATURES_PENDING",
+            known_evaluation=False,
+            full_formula_evaluation=False,
+            band_id=band.band_id,
+            calculation=cast(Any, calculation),
+        )
+
+    monkeypatch.setattr(
+        runtime_module,
+        "calculate_current_evaluation",
+        response_current_evaluation,
+    )
+    intents = _settled_transaction(
+        adapter,
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    assert len(intents) == 2
+    response_settle_causes: list[CausalCause] = []
+    original_settled_transaction = adapter.on_settled_transaction
+
+    def record_response_settle(
+        *,
+        reducer: RadarReducer,
+        commit: CausalCommit,
+    ) -> tuple[ShadowRpcIntent, ...]:
+        response_settle_causes.append(commit.cause)
+        return original_settled_transaction(reducer=reducer, commit=commit)
+
+    monkeypatch.setattr(adapter, "on_settled_transaction", record_response_settle)
+    reducer._causal_seq = 1
+    reducer._schedule_shadow_intents(intents)
+    requests = reducer._take_commands()
+    assert len(requests) == 2
+    requests_by_name = {str(request.params["instrument_name"]): request for request in requests}
+
+    short_request = requests_by_name[short_name]
+    assert (
+        reducer.reduce(
+            InboundEnvelope(
+                {},
+                session_epoch=1,
+                ingress_seq=1,
+                received_monotonic_ms=120,
+                control_event=SendControlEvent(
+                    kind=SendControlKind.SEND_COMPLETED,
+                    request_id=short_request.request_id,
+                    boundary_monotonic_ms=120,
+                ),
+            ),
+            processed_monotonic_ms=120,
+        )
+        == ()
+    )
+    first_commands = reducer.reduce(
+        InboundEnvelope(
+            {
+                "jsonrpc": "2.0",
+                "id": short_request.request_id,
+                "result": _rest_option_book(
+                    short_name,
+                    bid_price="0.00300",
+                    ask_price="0.00301",
+                    change_id=11,
+                ),
+            },
+            session_epoch=1,
+            ingress_seq=2,
+            received_monotonic_ms=130,
+        ),
+        processed_monotonic_ms=130,
+    )
+    first_packet = reducer.score_packets[short_name]
+    assert first_packet.fact_boundary["ingress_seq"] == 2
+    assert first_packet.fact_boundary["causal_seq"] == 3
+    premium_factor = next(
+        factor for factor in first_packet.result.factors if factor.name.value == "A"
+    )
+    assert premium_factor.normalized is not None
+    assert not _object_payloads(owner, "SHADOW_ENTRY")
+    assert not any(command.purpose is RpcPurpose.ADMISSION_REFRESH for command in first_commands)
+
+    long_request = requests_by_name[long_name]
+    assert (
+        reducer.reduce(
+            InboundEnvelope(
+                {},
+                session_epoch=1,
+                ingress_seq=3,
+                received_monotonic_ms=140,
+                control_event=SendControlEvent(
+                    kind=SendControlKind.SEND_COMPLETED,
+                    request_id=long_request.request_id,
+                    boundary_monotonic_ms=140,
+                ),
+            ),
+            processed_monotonic_ms=140,
+        )
+        == ()
+    )
+    second_commands = reducer.reduce(
+        InboundEnvelope(
+            {
+                "jsonrpc": "2.0",
+                "id": long_request.request_id,
+                "result": _rest_option_book(
+                    long_name,
+                    bid_price="0.00100",
+                    ask_price="0.00101",
+                    change_id=11,
+                ),
+            },
+            session_epoch=1,
+            ingress_seq=4,
+            received_monotonic_ms=150,
+        ),
+        processed_monotonic_ms=150,
+    )
+    assert not any(command.purpose is RpcPurpose.ADMISSION_REFRESH for command in second_commands)
+    second_packet = reducer.score_packets[short_name]
+    assert second_packet.fact_boundary["ingress_seq"] == 4
+    assert second_packet.fact_boundary["causal_seq"] == 5
+    assert second_packet.fact_boundary != first_packet.fact_boundary
+
+    (entry,) = _object_payloads(owner, "SHADOW_ENTRY")
+    assert entry["selection_score_packet"]["fact_boundary"]["causal_seq"] == 1
+    refresh_packet = entry["entry_refresh_score_packet"]
+    assert refresh_packet["fact_boundary"] == second_packet.as_object()["fact_boundary"]
+    assert refresh_packet["result"] == second_packet.as_object()["result"]
+    assert refresh_packet["sampling_metadata"]["kind"] == "CANONICAL_HIGH"
+    assert (
+        entry["selection_score_packet"]["sampling_metadata"] == refresh_packet["sampling_metadata"]
+    )
+    assert len(_object_payloads(owner, "SELECTED_UNDERWRITING_DECISION")) == 1
+    assert response_settle_causes == [
+        CausalCause.SHADOW_RPC_RESPONSE,
+        CausalCause.SHADOW_RPC_RESPONSE,
+    ]
+
+
+def test_mid_bucket_confirmation_reaches_paired_refresh_and_opens_only_control(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    reducer.trackers.clear()
+    reducer.bucket_trackers.clear()
+    reducer.score_packets.clear()
+    reducer.score_results.clear()
+    reducer.score_bucket_keys.clear()
+    reducer.bucket_leader_by_key.clear()
+    reducer.bucket_leader_coverage.clear()
+    review_identity = _install_v2_episode(reducer, score_band=ScoreBand.MID)
+
+    intents = _settled_transaction(
+        adapter,
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+
+    assert len(intents) == 2
+    (facts,) = adapter._underwriting_by_scope.values()
+    assert facts.active_episode_identity is None
+    assert facts.radar_research_review_identity == review_identity
+    assert facts.radar_research_activation_seq == 1
+    assert facts.radar_score_packet is not None
+    assert facts.radar_score_packet.result.band is ScoreBand.MID
+    (selected,) = _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION")
+    assert selected["selection_kind"] == "RADAR_SCORE_BAND_NO_TRADE_CONTROL"
+    assert selected["active_episode_identity"] is None
+    assert selected["radar_research_review_identity"] == review_identity
+    assert not _object_payloads(owner, "CANDIDATE_ACTIVATION")
+
+    _settle_component_pair(
+        adapter=adapter,
+        reducer=reducer,
+        intents=intents,
+        first_causal_seq=2,
+        change_id=11,
+        short_bid="0.00300",
+        short_ask="0.00301",
+        long_bid="0.00100",
+        long_ask="0.00101",
+    )
+
+    assert not _object_payloads(owner, "SHADOW_ENTRY")
+    (control,) = _object_payloads(owner, "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN")
+    assert control["enrollment_kind"] == "RADAR_SCORE_BAND_NO_TRADE_CONTROL"
+    assert control["selection_score_packet"]["result"]["band"] == "MID"
+    assert control["entry_refresh_score_packet"]["fact_boundary"]["causal_seq"] == 5
+
+
+def test_same_causal_batch_high_suppresses_mid_control_designation(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    mid_name = "BTC-1JAN00-100500-C"
+    mid_option = replace(
+        reducer.options["BTC-1JAN00-101000-C"],
+        instrument_name=mid_name,
+        strike=Decimal("100500"),
+    )
+    reducer.options[mid_name] = mid_option
+    reducer.catalog_options[mid_name] = mid_option
+    reducer.tickers[mid_name] = replace(reducer.tickers["BTC-1JAN00-101000-C"])
+    mid_book = ContinuousOrderBook(mid_name)
+    mid_book.apply(
+        {
+            "type": "snapshot",
+            "instrument_name": mid_name,
+            "change_id": 10,
+            "timestamp": 1_000_010,
+            "bids": [["new", "0.00300", "0.1"]],
+            "asks": [["new", "0.00301", "0.1"]],
+        },
+        110,
+    )
+    reducer.option_books[mid_name] = mid_book
+    reducer.accepted_book_receipts[mid_name] = AcceptedBookReceipt(
+        instrument_name=mid_name,
+        snapshot_kind="snapshot",
+        prev_change_id=None,
+        change_id=10,
+        source_timestamp_ms=1_000_010,
+        session_epoch=1,
+        subscription_generation=1,
+        boundary=FactBoundary(1, 1, 110, 1),
+    )
+    mid_identity = _install_v2_episode(
+        reducer,
+        instrument_name=mid_name,
+        score_band=ScoreBand.MID,
+        delta_bucket=DeltaBucket.NEAR_ATM_30_40,
+    )
+
+    intents = _settled_transaction(
+        adapter,
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+
+    assert len(adapter._underwriting_by_scope) == 2
+    assert any(
+        facts.radar_research_review_identity == mid_identity
+        for facts in adapter._underwriting_by_scope.values()
+    )
+    (selected,) = _object_payloads(owner, "SELECTED_UNDERWRITING_DECISION")
+    assert selected["selection_kind"] == "HIGH_ACTION_BLIND"
+    assert selected["active_episode_identity"] is not None
+    assert selected["radar_research_review_identity"] is None
+    assert len(intents) == 2
+    assert owner.active_candidate_identities
+    assert owner.active_decision_control_identities == frozenset()
+    assert not _object_payloads(owner, "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN")
+
+
 def test_selected_abstain_uses_one_future_pair_without_candidate_or_shadow_entry(
     tmp_path: Path,
 ) -> None:
@@ -1812,7 +2334,8 @@ def test_selected_abstain_uses_one_future_pair_without_candidate_or_shadow_entry
         boundary=boundary,
     )
 
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -1829,6 +2352,7 @@ def test_selected_abstain_uses_one_future_pair_without_candidate_or_shadow_entry
 
     _settle_component_pair(
         adapter=adapter,
+        reducer=reducer,
         intents=intents,
         first_causal_seq=2,
         change_id=11,
@@ -1854,7 +2378,8 @@ def test_selected_candidate_that_fails_refresh_uses_that_same_pair_for_no_trade_
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -1866,6 +2391,7 @@ def test_selected_candidate_that_fails_refresh_uses_that_same_pair_for_no_trade_
 
     _settle_component_pair(
         adapter=adapter,
+        reducer=reducer,
         intents=intents,
         first_causal_seq=2,
         change_id=11,
@@ -1907,7 +2433,8 @@ def test_selected_control_full_quantity_failure_is_exact_workbench_unknown(
         110,
     )
     reducer.option_books["BTC-1JAN00-101000-C"] = short_book
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -1918,6 +2445,7 @@ def test_selected_control_full_quantity_failure_is_exact_workbench_unknown(
 
     _settle_component_pair(
         adapter=adapter,
+        reducer=reducer,
         intents=intents,
         first_causal_seq=2,
         change_id=11,
@@ -1959,7 +2487,8 @@ def test_selected_abstain_that_refreshes_to_candidate_requires_canonical_admissi
         110,
     )
     reducer.option_books["BTC-1JAN00-101000-C"] = short_book
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -1970,6 +2499,7 @@ def test_selected_abstain_that_refreshes_to_candidate_requires_canonical_admissi
 
     _settle_component_pair(
         adapter=adapter,
+        reducer=reducer,
         intents=intents,
         first_causal_seq=2,
         change_id=11,
@@ -2025,7 +2555,8 @@ def test_selected_abstain_opens_one_durable_control_case(tmp_path: Path) -> None
         110,
     )
     reducer.option_books["BTC-1JAN00-101000-C"] = short_book
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -2044,6 +2575,7 @@ def test_selected_abstain_opens_one_durable_control_case(tmp_path: Path) -> None
 
     _settle_component_pair(
         adapter=adapter,
+        reducer=reducer,
         intents=intents,
         first_causal_seq=2,
         change_id=11,
@@ -2108,7 +2640,8 @@ def test_component_admission_pair_over_skew_budget_is_exact_unknown_without_case
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -2126,7 +2659,9 @@ def test_component_admission_pair_over_skew_budget_is_exact_unknown_without_case
     long_sent = FactBoundary(1, 3, 121, 3)
     adapter.on_request_sent(request_id=short_intent.request_id, boundary=short_sent)
     adapter.on_request_sent(request_id=long_intent.request_id, boundary=long_sent)
-    adapter.on_rpc_response(
+    _rpc_response(
+        adapter,
+        reducer=reducer,
         request_id=short_intent.request_id,
         result=_rest_option_book(
             "BTC-1JAN00-101000-C",
@@ -2138,7 +2673,9 @@ def test_component_admission_pair_over_skew_budget_is_exact_unknown_without_case
         sent_boundary=short_sent,
         boundary=FactBoundary(1, 4, 130, 4),
     )
-    adapter.on_rpc_response(
+    _rpc_response(
+        adapter,
+        reducer=reducer,
         request_id=long_intent.request_id,
         result=_rest_option_book(
             "BTC-1JAN00-102000-C",
@@ -2189,7 +2726,8 @@ def test_component_admission_pair_epoch_mismatch_is_exact_unknown_without_case(
     expected_reasons: tuple[str, ...],
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -2207,7 +2745,9 @@ def test_component_admission_pair_epoch_mismatch_is_exact_unknown_without_case(
     long_sent = FactBoundary(1, 3, 121, 3)
     adapter.on_request_sent(request_id=short_intent.request_id, boundary=short_sent)
     adapter.on_request_sent(request_id=long_intent.request_id, boundary=long_sent)
-    adapter.on_rpc_response(
+    _rpc_response(
+        adapter,
+        reducer=reducer,
         request_id=short_intent.request_id,
         result=_rest_option_book(
             "BTC-1JAN00-101000-C",
@@ -2220,7 +2760,9 @@ def test_component_admission_pair_epoch_mismatch_is_exact_unknown_without_case(
     )
     if variant == "continuity":
         reducer._global_continuity_epoch += 1
-    adapter.on_rpc_response(
+    _rpc_response(
+        adapter,
+        reducer=reducer,
         request_id=long_intent.request_id,
         result=_rest_option_book(
             "BTC-1JAN00-102000-C",
@@ -2249,7 +2791,8 @@ def test_component_shadow_entry_opens_its_durable_case(tmp_path: Path) -> None:
     )
     owner.state_store.observer = case_store
 
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -2259,6 +2802,7 @@ def test_component_shadow_entry_opens_its_durable_case(tmp_path: Path) -> None:
     )
     _settle_component_pair(
         adapter=adapter,
+        reducer=reducer,
         intents=intents,
         first_causal_seq=2,
         change_id=11,
@@ -2307,7 +2851,8 @@ def test_no_active_combo_is_only_a_diagnostic_and_does_not_block_shadow_entry(
     reducer.combo_catalog.complete = True
     reducer.combo_catalog.source_complete = True
 
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -2322,6 +2867,7 @@ def test_no_active_combo_is_only_a_diagnostic_and_does_not_block_shadow_entry(
 
     _settle_component_pair(
         adapter=adapter,
+        reducer=reducer,
         intents=intents,
         first_causal_seq=2,
         change_id=11,
@@ -2339,7 +2885,8 @@ def test_selected_candidate_insufficient_long_depth_is_exact_current_unknown(
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -2350,6 +2897,7 @@ def test_selected_candidate_insufficient_long_depth_is_exact_current_unknown(
 
     _settle_component_pair(
         adapter=adapter,
+        reducer=reducer,
         intents=intents,
         first_causal_seq=2,
         change_id=11,
@@ -2383,7 +2931,8 @@ def test_one_component_admission_rpc_failure_retires_the_pair_without_case(
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
-    intents = adapter.on_settled_transaction(
+    intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -2416,7 +2965,8 @@ def test_component_shadow_entry_closes_from_a_new_paired_snapshot_and_writes_kno
     _admit_component_shadow(reducer, adapter)
 
     _set_platform_usable(reducer, False)
-    close_intents = adapter.on_settled_transaction(
+    close_intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=6,
@@ -2432,6 +2982,7 @@ def test_component_shadow_entry_closes_from_a_new_paired_snapshot_and_writes_kno
 
     _settle_component_pair(
         adapter=adapter,
+        reducer=reducer,
         intents=close_intents,
         first_causal_seq=7,
         change_id=12,
@@ -2486,7 +3037,8 @@ def test_selected_abstain_case_reuses_strictly_future_position_outcome_without_c
     )
     owner.state_store.observer = case_store
 
-    enrollment_intents = adapter.on_settled_transaction(
+    enrollment_intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=1,
@@ -2496,6 +3048,7 @@ def test_selected_abstain_case_reuses_strictly_future_position_outcome_without_c
     )
     _settle_component_pair(
         adapter=adapter,
+        reducer=reducer,
         intents=enrollment_intents,
         first_causal_seq=2,
         change_id=11,
@@ -2514,7 +3067,8 @@ def test_selected_abstain_case_reuses_strictly_future_position_outcome_without_c
     assert case_id is not None
 
     _set_platform_usable(reducer, False)
-    close_intents = adapter.on_settled_transaction(
+    close_intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=6,
@@ -2524,6 +3078,7 @@ def test_selected_abstain_case_reuses_strictly_future_position_outcome_without_c
     )
     _settle_component_pair(
         adapter=adapter,
+        reducer=reducer,
         intents=close_intents,
         first_causal_seq=7,
         change_id=12,
@@ -2565,7 +3120,8 @@ def test_component_close_pair_over_skew_is_workbench_visible_business_unknown(
     )
     _admit_component_shadow(reducer, adapter)
     _set_platform_usable(reducer, False)
-    close_intents = adapter.on_settled_transaction(
+    close_intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=6,
@@ -2583,7 +3139,9 @@ def test_component_close_pair_over_skew_is_workbench_visible_business_unknown(
     long_sent = FactBoundary(1, 8, 171, 8)
     adapter.on_request_sent(request_id=short_intent.request_id, boundary=short_sent)
     adapter.on_request_sent(request_id=long_intent.request_id, boundary=long_sent)
-    adapter.on_rpc_response(
+    _rpc_response(
+        adapter,
+        reducer=reducer,
         request_id=short_intent.request_id,
         result=_rest_option_book(
             "BTC-1JAN00-101000-C",
@@ -2595,7 +3153,9 @@ def test_component_close_pair_over_skew_is_workbench_visible_business_unknown(
         sent_boundary=short_sent,
         boundary=FactBoundary(1, 9, 180, 9),
     )
-    adapter.on_rpc_response(
+    _rpc_response(
+        adapter,
+        reducer=reducer,
         request_id=long_intent.request_id,
         result=_rest_option_book(
             "BTC-1JAN00-102000-C",
@@ -2639,7 +3199,8 @@ def test_partial_component_close_then_rpc_failure_matures_unknown_without_fake_c
     _admit_component_shadow(reducer, adapter)
 
     _set_platform_usable(reducer, False)
-    close_intents = adapter.on_settled_transaction(
+    close_intents = _settled_transaction(
+        adapter,
         reducer=reducer,
         commit=_commit(
             causal_seq=6,
@@ -2655,7 +3216,9 @@ def test_partial_component_close_then_rpc_failure_matures_unknown_without_fake_c
 
     first = close_intents[0]
     first_name = str(first.params["instrument_name"])
-    adapter.on_rpc_response(
+    _rpc_response(
+        adapter,
+        reducer=reducer,
         request_id=first.request_id,
         result=_rest_option_book(
             first_name,
@@ -2695,7 +3258,8 @@ def test_component_quote_fingerprint_is_stable_scalar_identity_input(
 
     before = tuple(owner.state_store.objects)
     assert (
-        adapter.on_settled_transaction(
+        _settled_transaction(
+            adapter,
             reducer=reducer,
             commit=_commit(
                 causal_seq=6,
@@ -2744,7 +3308,8 @@ def test_position_projection_only_consumes_relevant_high_frequency_market_facts(
             ("OPTION:BTC-1JAN00-101000-C", "OPTION:BTC-1JAN00-102000-C"),
         ),
     ):
-        adapter.on_settled_transaction(
+        _settled_transaction(
+            adapter,
             reducer=reducer,
             commit=CausalCommit(
                 boundary=FactBoundary(1, causal_seq, 100 + causal_seq * 10, causal_seq),
@@ -2760,7 +3325,8 @@ def test_position_projection_only_consumes_relevant_high_frequency_market_facts(
         (10, CausalCause.OPTION_BOOK_CHANGED, "BTC-1JAN00-102000-C"),
         (11, CausalCause.TICKER_APPLIED, "BTC-1JAN00-101000-C"),
     ):
-        adapter.on_settled_transaction(
+        _settled_transaction(
+            adapter,
             reducer=reducer,
             commit=CausalCommit(
                 boundary=FactBoundary(1, causal_seq, 100 + causal_seq * 10, causal_seq),

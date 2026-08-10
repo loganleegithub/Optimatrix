@@ -7,7 +7,20 @@ from pathlib import Path
 
 import pytest
 import short_vol_underwriting.case_store as case_store_module
-from options_domain import INVERSE_BTC
+from options_domain import INVERSE_BTC, OptionType
+from short_vol_radar import RadarScorePacket, ScoreBand, radar_bucket_episode_identity
+from short_vol_radar.black import DecimalInterval
+from short_vol_radar.policy import digest_policy_bytes, load_policy_bytes
+from short_vol_radar.score import (
+    LeaderCoverage,
+    RadarBucketKey,
+    RadarSamplingMetadata,
+    RadarScoreInputs,
+    SamplingKind,
+    build_radar_score_packet,
+    compute_radar_score,
+    compute_unsigned_oi_concentration,
+)
 from short_vol_underwriting import (
     UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
     FixedContractShadowOwner,
@@ -19,7 +32,6 @@ from short_vol_underwriting import (
     ShadowStateStore,
     canonical_identity,
     load_policy_chain,
-    migrate_legacy_admitted_cases,
 )
 from short_vol_underwriting.constants import (
     INVERSE_BTC_POSITION_POLICY_IDENTITY as POSITION_POLICY,
@@ -30,6 +42,7 @@ from short_vol_underwriting.constants import (
 from short_vol_underwriting.constants import (
     INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY as UNDERWRITING_POLICY,
 )
+from short_vol_underwriting.control import selected_decision_batch_identity
 from short_vol_underwriting.model import FactBoundary
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +79,66 @@ def _runtime_boundary(
         ingress_seq=causal_seq,
         received_monotonic_ms=1_000 + causal_seq,
         causal_seq=causal_seq,
+    )
+
+
+def _high_score_packet(
+    *,
+    boundary: FactBoundary,
+    candidate_identity: str,
+    activation_causal_seq: int,
+) -> RadarScorePacket:
+    bindings = RuntimeBindings(
+        code_identity=CODE,
+        runtime_identity=RUNTIME,
+        radar_policy_identity=RADAR_POLICY,
+        underwriting_policy_identity=UNDERWRITING_POLICY,
+        position_policy_identity=POSITION_POLICY,
+    )
+    exact_policy = (ROOT / "policies/short-vol-inverse-btc-public-shadow-radar.json").read_bytes()
+    policy = load_policy_bytes(exact_policy, digest_policy_bytes(exact_policy))
+
+    def point(value: str) -> DecimalInterval:
+        return DecimalInterval(Decimal(value), Decimal(value))
+
+    score_inputs = RadarScoreInputs(
+        stressed_richness=point("1.3"),
+        stressed_executable_bid_iv=point("0.3"),
+        local_same_type_mark_iv=Decimal("0.3"),
+        current_expiry_atm_mark_iv=Decimal("0.3"),
+        adjacent_expiry_atm_mark_iv=Decimal("0.3"),
+        adverse_semivariance_share=point("0"),
+        jump_share=point("0"),
+        target_spread_ticks=point("1"),
+        bid_consumed_level_count=1,
+        ask_consumed_level_count=1,
+    )
+    return build_radar_score_packet(
+        policy_identity=policy.identity,
+        fact_boundary=boundary.as_object(),
+        bucket_key=RadarBucketKey(
+            tte_band_id="six-to-twenty-four-hours",
+            expiry_ms=1_786_150_800_000,
+            option_type=OptionType.CALL,
+            delta_bucket="0.15-0.25",
+        ),
+        leader_instrument_name="BTC-8AUG26-100000-C",
+        result=compute_radar_score(policy.score_model, score_inputs),
+        oi_diagnostic=compute_unsigned_oi_concentration(
+            open_interest=None,
+            option_gamma=None,
+            bucket_total_unsigned_gamma_weight=None,
+        ),
+        stressed_richness=score_inputs.stressed_richness,
+        leader_coverage=LeaderCoverage.COMPLETE,
+        sampling_metadata=RadarSamplingMetadata(
+            kind=SamplingKind.CANONICAL_HIGH,
+            causal_batch_identity=selected_decision_batch_identity(
+                bindings=bindings,
+                activation_causal_seq=activation_causal_seq,
+            ),
+            designation_identity=candidate_identity,
+        ),
     )
 
 
@@ -317,6 +390,25 @@ def _open_case(
         entry_source_refs[1]["source_identity"],
         _boundary(causal_seq).as_object(),
     )
+    activation_causal_seq = causal_seq - 1
+    selection_packet = _high_score_packet(
+        boundary=_boundary(activation_causal_seq),
+        candidate_identity=candidate_identity,
+        activation_causal_seq=activation_causal_seq,
+    )
+    refresh_packet = _high_score_packet(
+        boundary=_boundary(causal_seq),
+        candidate_identity=candidate_identity,
+        activation_causal_seq=activation_causal_seq,
+    )
+    active_episode_identity = radar_bucket_episode_identity(
+        runtime_identity=RUNTIME,
+        policy_identity=RADAR_POLICY,
+        bucket_key=selection_packet.bucket_key,
+        leader_instrument_name=selection_packet.leader_instrument_name,
+        score_band=ScoreBand.HIGH,
+        activation_causal_seq=activation_causal_seq,
+    )
     state.record(
         object_kind="SHADOW_ENTRY",
         object_identity=entry_identity,
@@ -335,9 +427,11 @@ def _open_case(
             ),
             "entry_underwriting_candidate_protective_leg_count": 1,
             "entry_underwriting_decision_fact_boundary": _boundary(causal_seq).as_object(),
-            "active_episode_identity": (
-                f"{RUNTIME}:{RADAR_POLICY}:BTC-8AUG26-100000-C:{causal_seq}"
-            ),
+            "selection_score_packet": selection_packet.as_object(),
+            "entry_refresh_score_packet": refresh_packet.as_object(),
+            "active_episode_identity": active_episode_identity,
+            "radar_research_review_identity": None,
+            "radar_activation_causal_seq": activation_causal_seq,
             "radar_scope_identity": _scope_identity(suffix),
             "execution_model": "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL",
             "product_spec_identity": INVERSE_BTC.identity,
@@ -348,8 +442,6 @@ def _open_case(
             "price_index": INVERSE_BTC.price_index,
             "component_state": "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE",
             "atomic_state_diagnostic": "NO_ACTIVE_COMBO",
-            "radar_band_id": "six-to-twenty-four-hours",
-            "radar_richness_interval": {"lower": "1.3", "upper": "1.31"},
             "canonical_leg_identities": [
                 *leg_identities,
             ],
@@ -1006,6 +1098,13 @@ def test_case_reader_rejects_unexpected_nested_opened_fields(tmp_path: Path) -> 
         ("signed_margin", "do not match entry economics"),
         ("selector_rule", "selection rule identity mismatch"),
         ("candidate_leg_count", "action identity mismatch"),
+        ("selection_packet_extra_key", "exact keys"),
+        ("selection_packet_boundary", "boundary/order"),
+        ("selection_packet_score", "disagrees"),
+        ("selection_packet_band", "disagrees"),
+        ("selection_packet_aggregates", "disagrees"),
+        ("selection_packet_contribution", "disagrees"),
+        ("sampling_metadata_drift", "identical sampling metadata"),
     ),
 )
 def test_case_reader_rejects_tampered_entry_pair_and_underwriting_truth(
@@ -1046,6 +1145,35 @@ def test_case_reader_rejects_tampered_entry_pair_and_underwriting_truth(
         opened["underwriting"]["protective_leg_selection_rule_identity"] = "sha256:" + "e" * 64
     elif tamper == "candidate_leg_count":
         opened["underwriting"]["candidate_protective_leg_count"] = 2
+    elif tamper == "selection_packet_extra_key":
+        opened["selection_score_packet"]["unexpected"] = True
+    elif tamper == "selection_packet_boundary":
+        opened["selection_score_packet"]["fact_boundary"] = opened["opened_fact_boundary"]
+    elif tamper == "selection_packet_score":
+        opened["selection_score_packet"]["result"]["score"] = {
+            "lower": "1",
+            "upper": "1",
+        }
+    elif tamper == "selection_packet_band":
+        opened["selection_score_packet"]["result"]["band"] = "LOW"
+    elif tamper == "selection_packet_aggregates":
+        opened["selection_score_packet"]["result"]["premium_evidence"] = {
+            "lower": "0.1",
+            "upper": "0.1",
+        }
+        opened["selection_score_packet"]["result"]["risk_quality"] = {
+            "lower": "0.1",
+            "upper": "0.1",
+        }
+    elif tamper == "selection_packet_contribution":
+        opened["selection_score_packet"]["result"]["factors"][0]["weighted_contribution"] = {
+            "lower": "0.1",
+            "upper": "0.1",
+        }
+    elif tamper == "sampling_metadata_drift":
+        opened["entry_refresh_score_packet"]["sampling_metadata"]["designation_identity"] = (
+            canonical_identity("SamplingDesignation", "tampered")
+        )
     else:  # pragma: no cover - parametrization is closed above
         raise AssertionError(tamper)
     opened_path.write_text(json.dumps(opened), encoding="utf-8")
@@ -1247,334 +1375,6 @@ def test_first_close_is_durable_only_with_its_attempt_and_is_never_retried(
     )
     recovery_owner.activate_recovered_entries((adopted,))
     assert recovery_owner.active_trade_identities == frozenset({entry_identity})
-
-
-def test_legacy_reader_validates_without_writing_or_treating_run_case_as_stable(
-    tmp_path: Path,
-) -> None:
-    state, case_store, bindings = _system(tmp_path)
-    _availability, _action, candidate_identity = _seed_pre_shadow(state)
-    entry_identity = _open_case(state, candidate_identity)
-    case_id = case_store.case_id_for_entry(entry_identity)
-    assert case_id is not None
-    source_opened = (
-        tmp_path / "cases" / case_id.removeprefix("sha256:") / "opened.json"
-    ).read_bytes()
-
-    legacy_cases = tmp_path / "legacy-cases"
-    legacy_case = legacy_cases / case_id.removeprefix("sha256:")
-    legacy_case.mkdir(parents=True)
-    (legacy_case / "opened.json").write_bytes(source_opened)
-    legacy_reader = ShadowCaseStore(
-        legacy_cases,
-        bindings=bindings,
-        policies=case_store.policies,
-    )
-
-    read = legacy_reader.read_legacy_case(case_id)
-    assert read.status is ShadowCaseReadStatus.INCOMPLETE_UNCLEAN_EXIT
-    assert read.opened["shadow_entry_identity"] == entry_identity
-    assert (legacy_case / "opened.json").read_bytes() == source_opened
-    assert sorted(path.name for path in legacy_case.iterdir()) == ["opened.json"]
-    with pytest.raises(ShadowCaseStoreError, match="origin Observation Segment"):
-        legacy_reader.read_case(case_id)
-
-
-def test_offline_legacy_migration_is_atomic_read_only_idempotent_and_recoverable(
-    tmp_path: Path,
-) -> None:
-    state, case_store, bindings = _system(tmp_path)
-
-    _availability, _action, candidate = _seed_pre_shadow(
-        state,
-        suffix="legacy-close",
-        start_seq=1,
-    )
-    closed_entry = _open_case(
-        state,
-        candidate,
-        suffix="legacy-close",
-        causal_seq=4,
-    )
-    first_close_identity = _record_first_close_and_schedule(
-        state,
-        closed_entry,
-        suffix="legacy-close",
-        causal_seq=5,
-    )
-    closed_case_id = case_store.case_id_for_entry(closed_entry)
-    assert closed_case_id is not None
-
-    _availability, _action, candidate = _seed_pre_shadow(
-        state,
-        suffix="legacy-open",
-        start_seq=6,
-    )
-    open_entry = _open_case(
-        state,
-        candidate,
-        suffix="legacy-open",
-        causal_seq=9,
-    )
-    open_case_id = case_store.case_id_for_entry(open_entry)
-    assert open_case_id is not None
-
-    _availability, _action, candidate = _seed_pre_shadow(
-        state,
-        suffix="legacy-terminal",
-        start_seq=10,
-    )
-    terminal_entry = _open_case(
-        state,
-        candidate,
-        suffix="legacy-terminal",
-        causal_seq=13,
-    )
-    terminal_case_id = case_store.case_id_for_entry(terminal_entry)
-    assert terminal_case_id is not None
-
-    source = tmp_path / "legacy-cases"
-    source.mkdir()
-    opened_by_case: dict[str, dict[str, object]] = {}
-    for case_id in (closed_case_id, open_case_id, terminal_case_id):
-        source_case = source / case_id.removeprefix("sha256:")
-        source_case.mkdir()
-        stable_opened = tmp_path / "cases" / case_id.removeprefix("sha256:") / "opened.json"
-        (source_case / "opened.json").write_bytes(stable_opened.read_bytes())
-        opened_by_case[case_id] = json.loads(stable_opened.read_text(encoding="utf-8"))
-
-    stable_first_close = json.loads(
-        (
-            tmp_path / "cases" / closed_case_id.removeprefix("sha256:") / "first-close.json"
-        ).read_text(encoding="utf-8")
-    )
-    stable_first_close_extension = {
-        "product_spec_identity",
-        "segment_sequence",
-        "segment_identity",
-        "transition",
-        "scheduled_post_close_attempt_identity",
-        "request_id_or_marker",
-        "execution_model",
-        "request_method",
-        "request_params",
-        "canonical_leg_identities",
-        "full_quantity_btc",
-        "schedule_fact_boundary",
-    }
-    legacy_first_close = {
-        key: value
-        for key, value in stable_first_close.items()
-        if key not in stable_first_close_extension
-    }
-    closed_source_case = source / closed_case_id.removeprefix("sha256:")
-    (closed_source_case / "first-close.json").write_text(
-        json.dumps(legacy_first_close),
-        encoding="utf-8",
-    )
-    (closed_source_case / "outcome.json").write_text(
-        json.dumps(
-            _legacy_unknown_outcome(
-                opened_by_case[closed_case_id],
-                suffix="legacy-close",
-                causal_seq=6,
-                terminal_state="CENSORED_AT_STOP",
-                first_close_identity=first_close_identity,
-            )
-        ),
-        encoding="utf-8",
-    )
-    terminal_source_case = source / terminal_case_id.removeprefix("sha256:")
-    (terminal_source_case / "outcome.json").write_text(
-        json.dumps(
-            _legacy_unknown_outcome(
-                opened_by_case[terminal_case_id],
-                suffix="legacy-terminal",
-                causal_seq=14,
-                terminal_state="MATURE_UNKNOWN",
-            )
-        ),
-        encoding="utf-8",
-    )
-    source_snapshot = {
-        path.relative_to(source).as_posix(): path.read_bytes()
-        for path in source.rglob("*")
-        if path.is_file()
-    }
-
-    destination = tmp_path / "stable-cases"
-    first = migrate_legacy_admitted_cases(
-        source,
-        destination,
-        policies=case_store.policies,
-    )
-    destination_snapshot = {
-        path.relative_to(destination).as_posix(): path.read_bytes()
-        for path in destination.rglob("*")
-        if path.is_file()
-    }
-    second = migrate_legacy_admitted_cases(
-        source,
-        destination,
-        policies=case_store.policies,
-    )
-
-    assert {entry.case_id for entry in first} == {closed_case_id, open_case_id}
-    assert {entry.case_id for entry in second} == {closed_case_id, open_case_id}
-    assert not (destination / terminal_case_id.removeprefix("sha256:")).exists()
-    assert source_snapshot == {
-        path.relative_to(source).as_posix(): path.read_bytes()
-        for path in source.rglob("*")
-        if path.is_file()
-    }
-    assert destination_snapshot == {
-        path.relative_to(destination).as_posix(): path.read_bytes()
-        for path in destination.rglob("*")
-        if path.is_file()
-    }
-
-    closed_destination = destination / closed_case_id.removeprefix("sha256:")
-    assert not (closed_destination / "first-close.json").exists()
-    assert not (closed_destination / "outcome.json").exists()
-    migration_record = json.loads(
-        (closed_destination / "legacy-migration.json").read_text(encoding="utf-8")
-    )
-    assert set(migration_record) == {
-        "record_kind",
-        "migration_schema_version",
-        "case_id",
-        "shadow_entry_identity",
-        "source_opened_record_identity",
-        "source_first_close_record_identity",
-        "source_outcome_record_identity",
-        "source_outcome_terminal_state",
-        "legacy_first_close",
-        "mapped_segment_state",
-    }
-    assert migration_record["legacy_first_close"] == legacy_first_close
-    assert (
-        json.loads(
-            (closed_destination / "segments" / "0" / "closed.json").read_text(encoding="utf-8")
-        )["terminal_state"]
-        == "CENSORED_AT_STOP"
-    )
-    migrated_closed = next(entry for entry in first if entry.case_id == closed_case_id)
-    assert migrated_closed.first_close_state == "LATCHED"
-    assert migrated_closed.attempt_state == "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS"
-    assert migrated_closed.first_close_decision is not None
-    assert migrated_closed.first_close_decision.action_case_boundary.segment_sequence == 0
-    assert migrated_closed.first_close_decision.position_action_identity == first_close_identity
-    assert migrated_closed.entry_terms.index_usdc_per_btc is None
-    assert migrated_closed.entry_terms.index_source is None
-    assert migrated_closed.entry_terms.short_mark_iv_fraction is None
-    assert migrated_closed.entry_terms.ticker_source is None
-
-    restarted_bindings = RuntimeBindings(
-        code_identity=bindings.code_identity,
-        runtime_identity="sha256:" + "e" * 64,
-        radar_policy_identity=bindings.radar_policy_identity,
-        underwriting_policy_identity=bindings.underwriting_policy_identity,
-        position_policy_identity=bindings.position_policy_identity,
-    )
-    recovery_state = ShadowStateStore(bindings=restarted_bindings)
-    recovery_owner = FixedContractShadowOwner(
-        policies=case_store.policies,
-        bindings=restarted_bindings,
-        state_store=recovery_state,
-    )
-    staged = recovery_owner.stage_recovered_entries(
-        first,
-        recovery_projection_boundary=_runtime_boundary(restarted_bindings, 0),
-    )
-    staged_closed = next(seed for seed in staged if seed.case_id == closed_case_id)
-    assert staged_closed.first_close_decision is not None
-    assert staged_closed.first_close_decision.position_action_identity == first_close_identity
-    assert staged_closed.first_close_decision.action_case_boundary.segment_sequence == 0
-
-    restarted = ShadowCaseStore(
-        destination,
-        bindings=restarted_bindings,
-        policies=case_store.policies,
-    )
-    restarted.scan_active_admitted()
-    adopted = restarted.open_recovery_segment(
-        closed_case_id,
-        adoption_fact_boundary=_runtime_boundary(restarted_bindings, 1),
-    )
-    assert adopted.latest_segment_sequence == 1
-    assert adopted.observation_quality.value == "GAPPED"
-    assert adopted.first_close_state == "LATCHED"
-    assert adopted.attempt_state == "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS"
-
-
-@pytest.mark.parametrize(
-    ("tamper_field", "expected_error"),
-    (
-        ("quantity", "quantity"),
-        ("runtime", "one origin runtime binding"),
-    ),
-)
-def test_offline_legacy_migration_validates_the_full_set_before_publication(
-    tmp_path: Path,
-    tamper_field: str,
-    expected_error: str,
-) -> None:
-    state, case_store, _bindings = _system(tmp_path)
-    source = tmp_path / "legacy-cases"
-    source.mkdir()
-    for index, suffix in enumerate(("valid", "tampered")):
-        start_seq = 1 + index * 4
-        _availability, _action, candidate = _seed_pre_shadow(
-            state,
-            suffix=suffix,
-            start_seq=start_seq,
-        )
-        entry = _open_case(
-            state,
-            candidate,
-            suffix=suffix,
-            causal_seq=start_seq + 3,
-        )
-        case_id = case_store.case_id_for_entry(entry)
-        assert case_id is not None
-        source_case = source / case_id.removeprefix("sha256:")
-        source_case.mkdir()
-        opened_path = tmp_path / "cases" / source_case.name / "opened.json"
-        (source_case / "opened.json").write_bytes(opened_path.read_bytes())
-        if suffix == "tampered":
-            opened = json.loads((source_case / "opened.json").read_text(encoding="utf-8"))
-            if tamper_field == "runtime":
-                opened["runtime_identity"] = "sha256:" + "9" * 64
-            else:
-                opened["structure"]["full_quantity_btc"] = "0"
-            (source_case / "opened.json").write_text(json.dumps(opened), encoding="utf-8")
-
-    destination = tmp_path / "stable-cases"
-    with pytest.raises(ShadowCaseStoreError, match=expected_error):
-        migrate_legacy_admitted_cases(
-            source,
-            destination,
-            policies=case_store.policies,
-        )
-    assert not destination.exists()
-
-
-def test_offline_legacy_migration_rejects_zero_active_cases_without_destination(
-    tmp_path: Path,
-) -> None:
-    _state, case_store, _bindings = _system(tmp_path)
-    source = tmp_path / "empty-legacy-cases"
-    source.mkdir()
-    destination = tmp_path / "stable-cases"
-
-    with pytest.raises(ShadowCaseStoreError, match="no active compatible"):
-        migrate_legacy_admitted_cases(
-            source,
-            destination,
-            policies=case_store.policies,
-        )
-
-    assert not destination.exists()
 
 
 def test_stable_scanner_rejects_symlink_and_tampered_segment_chain(tmp_path: Path) -> None:

@@ -9,21 +9,29 @@ import short_vol_radar.radar as radar_module
 from conftest import PolicyFactory, encode_policy, policy_document
 from market_monitor import ContinuousOrderBook, TimeInterval
 from options_domain import AmountMetadata, OptionInstrument, OptionType, PriceTickMetadata
-from short_vol_radar.black import black_price
+from short_vol_radar.black import DecimalInterval, black_price
 from short_vol_radar.detector import (
+    DetectorObservation,
     DetectorState,
     EpisodeEndReason,
     EpisodeTracker,
+    ObservationSignal,
     TrackerState,
+    classify_observation,
 )
 from short_vol_radar.policy import RadarPolicy, load_policy_bytes
 from short_vol_radar.radar import (
     CurrentDisposition,
     TickerState,
     calculate_current_evaluation,
-    evaluate_instrument,
+    finalize_current_evaluation,
     parse_ticker,
 )
+from short_vol_radar.radar import (
+    evaluate_instrument_with_missing_optional_features_for_test as evaluate_instrument,
+)
+from short_vol_radar.review import build_score_feature_contexts
+from short_vol_radar.score import ScoreCoverage
 
 TEST_PRICE_TICK = PriceTickMetadata(Decimal("0.0000000001"))
 TEST_FORWARD = Decimal(100)
@@ -139,6 +147,37 @@ def test_ticker_preserves_official_signed_delta_and_normalizes_mark_iv() -> None
     assert missing.mark_iv_fraction is None
 
 
+def test_ticker_preserves_optional_public_oi_and_gamma_without_inferring_sign() -> None:
+    instrument_name = "BTC-27SEP24-110000-C"
+    ticker = parse_ticker(
+        {
+            "instrument_name": instrument_name,
+            "timestamp": 1,
+            "underlying_price": 100,
+            "underlying_index": "index_price",
+            "open_interest": "123.5",
+            "greeks": {"gamma": "-0.002"},
+        },
+        instrument_name,
+    )
+    assert ticker.open_interest == Decimal("123.5")
+    assert ticker.option_gamma == Decimal("-0.002")
+
+    invalid = parse_ticker(
+        {
+            "instrument_name": instrument_name,
+            "timestamp": 1,
+            "underlying_price": 100,
+            "underlying_index": "index_price",
+            "open_interest": "-1",
+            "greeks": {"gamma": "NaN"},
+        },
+        instrument_name,
+    )
+    assert invalid.open_interest is None
+    assert invalid.option_gamma is None
+
+
 @pytest.mark.parametrize(
     "delta",
     [True, "malformed", "NaN", "Infinity", "-Infinity", "1.0000001", "-1.0000001"],
@@ -212,127 +251,88 @@ def test_full_baseline_iv_delta_richness_path_can_activate(
     assert result.calculation.baseline.annualized_volatility == Decimal("0.1")
 
 
-def test_activation_boundary_span_is_one_unknown_and_next_fact_can_activate(
+def test_online_two_stage_path_exposes_no_score_before_feature_finalize(
     policy_factory: PolicyFactory,
 ) -> None:
-    policy, instrument, tracker, _price = make_engine_inputs(policy_factory)
-    trusted_midpoint_ms = 1_000_000
-    instrument = replace(
-        instrument,
-        expiration_timestamp_ms=trusted_midpoint_ms + 60 * 60 * 1_000,
-    )
-    total_volatility = 0.1199999 * math.sqrt(60 / (365 * 24 * 60))
-    boundary_price = inverse_native_price(
-        black_price(100, float(instrument.strike), total_volatility, OptionType.CALL)
-    )
-
-    boundary = evaluate_instrument(
+    policy, instrument, _tracker, price = make_engine_inputs(policy_factory)
+    ticker = TickerState(TEST_FORWARD, "BTC-27SEP24", 1)
+    core = calculate_current_evaluation(
         policy=policy,
-        tracker=tracker,
         instrument=instrument,
-        trusted_time=TimeInterval(trusted_midpoint_ms - 10, trusted_midpoint_ms + 10),
+        trusted_time=TimeInterval(0, 0),
         causal_seq=1,
-        option_book=make_book("SHORT", boundary_price),
-        ticker=TickerState(Decimal(100), "index_price", 1),
+        option_book=make_book("SHORT", price),
+        ticker=ticker,
         causal_closes=(Decimal(100),) * 6,
     )
+    assert core.disposition is CurrentDisposition.SCORE_PENDING
+    assert core.score_result is None and core.observation is None
+    assert core.calculation is not None
 
-    assert boundary.reason == "NUMERICAL_BOUNDARY_UNRESOLVED"
-    assert boundary.detector_state is DetectorState.UNKNOWN
-    assert not boundary.known_evaluation
-    assert not boundary.full_formula_evaluation
-    assert boundary.transition.activated_episode_id is None
-    assert boundary.transition.ended_episode is None
-    assert tracker.episode_id is None
-
-    activation_total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
-    activation_price = inverse_native_price(
-        black_price(
-            100,
-            float(instrument.strike),
-            activation_total_volatility,
-            OptionType.CALL,
-        )
-    )
-    recovered = evaluate_instrument(
+    context = build_score_feature_contexts(
+        options={instrument.instrument_name: instrument},
+        calculations={instrument.instrument_name: core.calculation},
+        tickers={instrument.instrument_name: ticker},
+    )[instrument.instrument_name]
+    finalized = finalize_current_evaluation(
         policy=policy,
-        tracker=tracker,
-        instrument=instrument,
-        trusted_time=TimeInterval(trusted_midpoint_ms, trusted_midpoint_ms),
-        causal_seq=2,
-        option_book=make_book("SHORT", activation_price),
-        ticker=TickerState(Decimal(100), "index_price", 2),
-        causal_closes=(Decimal(100),) * 6,
+        core=core,
+        score_inputs=context.score_inputs(core.calculation),
+        causal_seq=1,
+        trusted_time=TimeInterval(0, 0),
     )
+    assert finalized.score_result is not None
+    assert finalized.score_result.coverage is ScoreCoverage.PARTIAL
+    assert finalized.observation is not None
 
-    assert recovered.detector_state is DetectorState.ANOMALY_ACTIVE
-    assert recovered.transition.activated_episode_id is not None
+
+def test_score_threshold_overlap_is_neutral_and_does_not_create_partial_truth(
+    policy_factory: PolicyFactory,
+) -> None:
+    policy, _instrument, tracker, _price = make_engine_inputs(policy_factory)
+    rule = policy.tte_bands[0].option_rules[OptionType.CALL]
+    overlap = classify_observation(
+        DecimalInterval(Decimal(49), Decimal(66)),
+        policy.score_model,
+    )
+    assert overlap is ObservationSignal.NEUTRAL
+    transition = tracker.observe(
+        DetectorObservation(1, TimeInterval(0, 0), policy.tte_bands[0].band_id, overlap),
+        rule,
+    )
+    assert transition.activated_episode_id is None
+    assert tracker.detector_state is DetectorState.NO_ANOMALY
 
 
-def test_clear_boundary_span_ends_active_episode_as_unknown_not_clear() -> None:
+def test_score_clear_upper_boundary_uses_policy_score_not_removed_ratio() -> None:
     document = policy_document(activation_count=1, clear_count=1, separation_ms=0)
-    bands = document["tte_bands"]
-    assert isinstance(bands, list)
-    for band in bands:
-        assert isinstance(band, dict)
-        rules = band["option_rules"]
-        assert isinstance(rules, dict)
-        for rule in rules.values():
-            assert isinstance(rule, dict)
-            rule["clear_ratio"] = 1.05
     exact, digest = encode_policy(document)
     policy = load_policy_bytes(exact, digest)
-    trusted_midpoint_ms = 1_000_000
-    strike = Decimal("100.01")
-    instrument = OptionInstrument(
-        "SHORT",
-        trusted_midpoint_ms + 60 * 60 * 1_000,
-        strike,
-        OptionType.CALL,
-        AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
-        TEST_PRICE_TICK,
-    )
     tracker = EpisodeTracker(
         runtime_identity="run",
         policy_identity=policy.identity,
-        instrument_name=instrument.instrument_name,
+        instrument_name="SHORT",
     )
-    activation_total_volatility = 0.5 * math.sqrt(60 / (365 * 24 * 60))
-    activation_price = inverse_native_price(
-        black_price(100, float(strike), activation_total_volatility, OptionType.CALL)
+    rule = policy.tte_bands[0].option_rules[OptionType.CALL]
+    activate = classify_observation(
+        DecimalInterval(Decimal(65), Decimal(70)),
+        policy.score_model,
     )
-    activated = evaluate_instrument(
-        policy=policy,
-        tracker=tracker,
-        instrument=instrument,
-        trusted_time=TimeInterval(trusted_midpoint_ms, trusted_midpoint_ms),
-        causal_seq=1,
-        option_book=make_book("SHORT", activation_price),
-        ticker=TickerState(Decimal(100), "index_price", 1),
-        causal_closes=(Decimal(100),) * 6,
+    tracker.observe(
+        DetectorObservation(1, TimeInterval(0, 0), policy.tte_bands[0].band_id, activate),
+        rule,
     )
-    assert activated.detector_state is DetectorState.ANOMALY_ACTIVE
-
-    clear_boundary_total_volatility = 0.1049999 * math.sqrt(60 / (365 * 24 * 60))
-    clear_boundary_price = inverse_native_price(
-        black_price(100, float(strike), clear_boundary_total_volatility, OptionType.CALL)
+    assert tracker.detector_state is DetectorState.ANOMALY_ACTIVE
+    clear = classify_observation(
+        DecimalInterval(Decimal(45), Decimal(50)),
+        policy.score_model,
     )
-    unresolved = evaluate_instrument(
-        policy=policy,
-        tracker=tracker,
-        instrument=instrument,
-        trusted_time=TimeInterval(trusted_midpoint_ms - 10, trusted_midpoint_ms + 10),
-        causal_seq=2,
-        option_book=make_book("SHORT", clear_boundary_price),
-        ticker=TickerState(Decimal(100), "index_price", 2),
-        causal_closes=(Decimal(100),) * 6,
+    ended = tracker.observe(
+        DetectorObservation(2, TimeInterval(1, 1), policy.tte_bands[0].band_id, clear),
+        rule,
     )
-
-    assert unresolved.reason == "NUMERICAL_BOUNDARY_UNRESOLVED"
-    assert unresolved.detector_state is DetectorState.UNKNOWN
-    assert unresolved.transition.ended_episode is not None
-    assert unresolved.transition.ended_episode.reason is EpisodeEndReason.UNKNOWN_DETECTOR
-    assert unresolved.transition.ended_episode.detail == "NUMERICAL_BOUNDARY_UNRESOLVED"
+    assert ended.ended_episode is not None
+    assert ended.ended_episode.reason is EpisodeEndReason.CLEAR
     assert tracker.episode_id is None
 
 

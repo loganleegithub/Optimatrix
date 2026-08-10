@@ -1,6 +1,6 @@
 {
-  "policy_schema_version": 7,
-  "policy_family": "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS",
+  "policy_schema_version": 8,
+  "policy_family": "INVERSE_BTC_SHORT_VOL_ORDINAL_MARKET_STRUCTURE_V2",
   "target_base_quantity_btc": 0.1,
   "runtime_limits": {
     "heartbeat_interval_seconds": 30,
@@ -14,6 +14,40 @@
     "ticker_source_stale_deadline_ms": 300000,
     "notification_queue_lag_deadline_ms": 5000,
     "time_boundary_poll_interval_ms": 1000
+  },
+  "score_model": {
+    "richness_knots": [
+      {
+        "ratio": 1,
+        "normalized_value": 0
+      },
+      {
+        "ratio": 1.2,
+        "normalized_value": 0.8
+      },
+      {
+        "ratio": 1.3,
+        "normalized_value": 1
+      }
+    ],
+    "surface_residual_saturation_iv_fraction": 0.1,
+    "term_residual_saturation_iv_fraction": 0.1,
+    "surface_adjustment_weight": 0.1,
+    "term_adjustment_weight": 0.05,
+    "path_adverse_semivariance_weight": 0.5,
+    "path_jump_weight": 0.5,
+    "liquidity_spread_weight": 0.7,
+    "liquidity_depth_weight": 0.3,
+    "liquidity_spread_full_quality_ticks": 1,
+    "liquidity_spread_zero_quality_ticks": 10,
+    "liquidity_depth_full_quality_levels": 2,
+    "liquidity_depth_zero_quality_levels": 10,
+    "path_quality_weight": 0.6,
+    "liquidity_quality_weight": 0.4,
+    "risk_floor": 0.4,
+    "risk_multiplier": 0.6,
+    "activation_score_lower": 65,
+    "clear_score_upper": 50
   },
   "tte_bands": [
     {
@@ -32,20 +66,16 @@
         "call": {
           "abs_delta_min": 0.05,
           "abs_delta_max": 0.4,
-          "activation_ratio": 1.2,
-          "clear_ratio": 1.05,
           "activation_observation_count": 3,
           "clear_observation_count": 2,
-          "minimum_separation_ms": 300000
+          "minimum_separation_ms": 60000
         },
         "put": {
           "abs_delta_min": 0.05,
           "abs_delta_max": 0.4,
-          "activation_ratio": 1.2,
-          "clear_ratio": 1.05,
           "activation_observation_count": 3,
           "clear_observation_count": 2,
-          "minimum_separation_ms": 300000
+          "minimum_separation_ms": 60000
         }
       }
     },
@@ -65,20 +95,16 @@
         "call": {
           "abs_delta_min": 0.05,
           "abs_delta_max": 0.4,
-          "activation_ratio": 1.2,
-          "clear_ratio": 1.05,
           "activation_observation_count": 3,
           "clear_observation_count": 2,
-          "minimum_separation_ms": 300000
+          "minimum_separation_ms": 60000
         },
         "put": {
           "abs_delta_min": 0.05,
           "abs_delta_max": 0.4,
-          "activation_ratio": 1.2,
-          "clear_ratio": 1.05,
           "activation_observation_count": 3,
           "clear_observation_count": 2,
-          "minimum_separation_ms": 300000
+          "minimum_separation_ms": 60000
         }
       }
     },
@@ -89,29 +115,25 @@
       "clue_eligible": true,
       "return_interval_minutes": 5,
       "lookbacks_minutes": [
-        30,
         120,
-        360
+        360,
+        720
       ],
       "annualized_variance_floor": 0.01,
       "option_rules": {
         "call": {
           "abs_delta_min": 0.05,
           "abs_delta_max": 0.4,
-          "activation_ratio": 1.2,
-          "clear_ratio": 1.05,
           "activation_observation_count": 3,
           "clear_observation_count": 2,
-          "minimum_separation_ms": 300000
+          "minimum_separation_ms": 150000
         },
         "put": {
           "abs_delta_min": 0.05,
           "abs_delta_max": 0.4,
-          "activation_ratio": 1.2,
-          "clear_ratio": 1.05,
           "activation_observation_count": 3,
           "clear_observation_count": 2,
-          "minimum_separation_ms": 300000
+          "minimum_separation_ms": 150000
         }
       }
     },
@@ -122,17 +144,15 @@
       "clue_eligible": true,
       "return_interval_minutes": 5,
       "lookbacks_minutes": [
-        30,
-        120,
-        360
+        360,
+        720,
+        1440
       ],
       "annualized_variance_floor": 0.01,
       "option_rules": {
         "call": {
           "abs_delta_min": 0.05,
           "abs_delta_max": 0.4,
-          "activation_ratio": 1.2,
-          "clear_ratio": 1.05,
           "activation_observation_count": 3,
           "clear_observation_count": 2,
           "minimum_separation_ms": 300000
@@ -140,8 +160,6 @@
         "put": {
           "abs_delta_min": 0.05,
           "abs_delta_max": 0.4,
-          "activation_ratio": 1.2,
-          "clear_ratio": 1.05,
           "activation_observation_count": 3,
           "clear_observation_count": 2,
           "minimum_separation_ms": 300000
@@ -149,5 +167,5 @@
       }
     }
   ],
-  "product_spec_identity": "sha256:ff90da92cefe8e530339df38505fe7726b92b45b1855b751f2633ffd4fdb2172"
+  "product_spec_identity": "sha256:a7880d3a0b3da12f74438b292ed49d7c034e683d2e1654037229c62474127131"
 }

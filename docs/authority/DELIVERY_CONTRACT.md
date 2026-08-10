@@ -78,7 +78,6 @@ SHADOW_CASE_SEGMENT_OPENED
 SHADOW_CASE_SEGMENT_CLOSED
 SHADOW_CASE_FIRST_CLOSE / FIRST_CLOSE_AND_ATTEMPT_SCHEDULED
 SHADOW_CASE_OUTCOME
-SHADOW_CASE_LEGACY_MIGRATION
 ```
 
 The Observation Segment pair is owned by an already-open admitted Entry. The Online Runtime,
@@ -86,12 +85,6 @@ trader Workbench, and AI Researcher consume its runtime provenance, adoption/end
 predecessor, and `CONTINUOUS | GAPPED` quality. Those facts cannot be derived from
 `SHADOW_CASE_OPENED` or Outcome because process start, stop, failure, and unobserved intervals occur
 later. Segment records are not service receipts or per-tick checkpoints.
-
-`SHADOW_CASE_LEGACY_MIGRATION` is allowed only for the one offline conversion from an explicitly
-supplied legacy run into the stable Case repository. The migrated Entry, official reader, and AI
-Researcher consume its exact source Case/record identities and old-censoring interpretation. That
-mapping cannot be derived from legacy bytes alone because their accepted schema treated process
-censoring as terminal. It is one Case-owned semantic bridge, not a root manifest or inventory.
 
 Qualification Cohorts, aligned pairs, comparison tables, Challenger features, and denominators are
 offline derived views, not Online Runtime records.
@@ -122,8 +115,6 @@ Use the cheapest path that can falsify the exact claim:
 - Shadow Case persistence: direct write/read/crash-incomplete tests;
 - cross-process Entry recovery: two successive restart fixtures over one stable Case repository,
   segment ordering/gap truth, single first-close attempt, and mature gapped Outcome tests;
-- legacy migration: all-compatible admitted selection, immutable source, idempotency, conflict,
-  Control exclusion, and all-or-nothing publication tests;
 - Challenger qualification or Policy promotion: later pre-registered independent evaluation;
 - private execution: later account/order/fill reconciliation and capital controls.
 

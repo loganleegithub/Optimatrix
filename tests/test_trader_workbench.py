@@ -162,6 +162,10 @@ def test_radar_projection_binds_atomic_state_to_active_episode_identity() -> Non
                 )
             },
             trackers={"BTC-TEST": tracker},
+            score_bucket_keys={},
+            bucket_leader_by_key={},
+            bucket_leader_coverage={},
+            bucket_trackers={},
             option_books={
                 "BTC-TEST": SimpleNamespace(
                     state=SimpleNamespace(value="UNKNOWN"),
@@ -238,6 +242,10 @@ def test_radar_projection_explains_candidate_baseline_sampling_and_selection() -
                 )
             },
             trackers={},
+            score_bucket_keys={},
+            bucket_leader_by_key={},
+            bucket_leader_coverage={},
+            bucket_trackers={},
             option_books={},
             atomic_states={},
             episode_started_monotonic_ms=lambda _episode: None,
@@ -288,6 +296,10 @@ def test_radar_projection_uses_not_evaluated_without_active_detector_truth() -> 
                     detector_state=DetectorState.UNKNOWN,
                 )
             },
+            score_bucket_keys={},
+            bucket_leader_by_key={},
+            bucket_leader_coverage={},
+            bucket_trackers={},
             option_books={},
             atomic_states={episode_identity: PublicAtomicQuoteState.PUBLIC_ATOMIC_QUOTE_AVAILABLE},
             episode_started_monotonic_ms=lambda _episode: 100,
@@ -327,7 +339,8 @@ def test_initial_snapshot_keeps_empty_panels_separate_from_unknown_zero_claims()
         "observed_count": 0,
     }
     assert value["service"]["data_state"] == "UNKNOWN"
-    assert value["schema_version"] == 5
+    assert value["schema_version"] == 6
+    assert value["channel_id"] == "INVERSE_BTC_SHORT_VOL_V2"
     assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in value["non_claims"]
     assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in value["non_claims"]
 
@@ -1293,11 +1306,12 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "documentValue.publication_sequence" in JS
     assert "if (!response.ok) throw" in JS
     assert "renderUnavailable();" in JS
-    assert "SUPPORTED_SCHEMA_VERSION = 5" in JS
+    assert "SUPPORTED_SCHEMA_VERSION = 6" in JS
     assert "runtimeStatusState" in JS
     assert ".queue-table" in CSS
     assert "overflow: auto" in CSS
-    assert "当前 API 未提供 Radar 与 Underwriting 共用的 Episode identity" in JS
+    assert "服务器未提供 V2 score packet" in JS
+    assert "浏览器不补算" in JS
 
 
 def test_browser_formats_business_states_and_orders_rows_without_recomputing() -> None:
@@ -1322,12 +1336,16 @@ assert.equal(api.reasonText('QUEUE_LAG_CURRENTNESS'), '处理队列延迟\uff0c�
 assert.equal(api.reasonText('NO_ACTIVE_COMBO'), '无现成官方组合\uff1b不阻塞双腿 Shadow 模拟');
 
 const radar = api.orderedRadarRows([
-  {{instrument_name:'N', detector_state:'NO_ANOMALY', attention_rank:3}},
-  {{instrument_name:'U', detector_state:'UNKNOWN', attention_rank:2}},
-  {{instrument_name:'A', detector_state:'ANOMALY_ACTIVE', attention_rank:1}}
+  {{instrument_name:'N', score_result:{{band:'LOW'}}, attention_rank:3}},
+  {{instrument_name:'U', attention_rank:2}},
+  {{instrument_name:'A', score_result:{{band:'HIGH'}}, attention_rank:1,
+    is_bucket_leader:true, bucket_episode_leader_instrument_name:'A',
+    bucket_episode_state:'ACTIVE', bucket_episode_score_band:'HIGH',
+    bucket_episode_identity:'sha256:active'}}
 ]);
 assert.deepEqual(radar.map(row => row.instrument_name), ['A', 'U', 'N']);
-assert.equal(api.radarState(radar[0]).key, 'ANOMALY_ACTIVE');
+assert.equal(api.radarState(radar[0]).key, 'HIGH');
+assert.equal(api.radarState(radar[0]).label, 'HIGH · 已确认线索');
 
 const underwriting = api.orderedStructureRows([
   {{short_leg_instrument_name:'n', availability:'NOT_EVALUATED'}},
@@ -1351,6 +1369,7 @@ const margin = api.predicateMarginForFailure({{
 assert.equal(api.formatMargin(margin), '-2.5 USD 等值');
 
 const snapshot = {{
+  channel_id:'INVERSE_BTC_SHORT_VOL_V2',
   product: {{name:'inverse-btc', product_spec_identity:{json.dumps(INVERSE_BTC.identity)}}},
   policy_identities: {{
     radar:{json.dumps(INVERSE_BTC_RADAR_POLICY_IDENTITY)},
@@ -1382,7 +1401,6 @@ def test_browser_keeps_formatted_exact_facts_in_collapsed_details() -> None:
         "underwriting_reserved_loss_valuation",
         "entry_boundary_valued_payoff_loss_ex_fees_valuation",
         "predicate_margin_vector",
-        "positive_witness",
         "primary_blocker",
         "upgrade_condition",
         "invalidation_condition",
@@ -1567,8 +1585,8 @@ const markStalePanels = () => {{
   assert.equal(elements['runtime-status'].dataset.state, 'healthy');
   assert.equal(elements['runtime-state-label'].textContent, 'Runtime 正常运行');
   assert.match(elements['runtime-blocker'].textContent, /系统阻塞/);
-  assert.match(elements['channel-list'].innerHTML, /INVERSE_BTC_SHORT_VOL_V1/);
-  assert.match(elements['channel-list'].innerHTML, /INVERSE_ETH_LONG_GAMMA_V1/);
+  assert.match(elements['channel-list'].innerHTML, /INVERSE_BTC_SHORT_VOL_V2/);
+  assert.match(elements['channel-list'].innerHTML, /INVERSE_ETH_LONG_GAMMA/);
   assert.match(elements['queue-body'].innerHTML, /BTC-TEST-65000-P/);
   assert.match(elements['queue-body'].innerHTML, /继续观察/);
   assert.match(elements['detail-content'].innerHTML, /64\\.8/);

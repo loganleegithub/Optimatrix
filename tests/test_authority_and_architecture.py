@@ -132,18 +132,19 @@ def test_product_data_boundary_is_unambiguous() -> None:
     assert "The Online Runtime does not own Cohort" in " ".join(product.split())
     assert "No pre-Shadow component may open a file" in architecture
     assert "Pre-Shadow persistence is forbidden by default" in " ".join(delivery.split())
-    assert "No market fact, clue, diagnostic, rank, atomic quote" in radar
-    assert "Exactly six record kinds are authorized" in shadow_case
+    assert "No market fact, score, clue, diagnostic, rank, atomic quote" in radar
+    assert "Exactly five record kinds are authorized" in shadow_case
     for kind in (
         "SHADOW_CASE_OPENED",
         "SHADOW_CASE_SEGMENT_OPENED",
         "SHADOW_CASE_SEGMENT_CLOSED",
         "SHADOW_CASE_FIRST_CLOSE",
         "SHADOW_CASE_OUTCOME",
-        "SHADOW_CASE_LEGACY_MIGRATION",
     ):
         assert kind in delivery
         assert kind in shadow_case
+    assert "SHADOW_CASE_LEGACY_MIGRATION" not in delivery
+    assert "SHADOW_CASE_LEGACY_MIGRATION" not in shadow_case
     assert "SHADOW_CASE_OBSERVATION_SEGMENT" not in delivery
     assert "SHADOW_CASE_TRANSITION" not in delivery
 
@@ -181,37 +182,41 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_restored_inverse_runtime() -> None:
+def test_current_stage_records_consumed_v2_cutover_and_no_live_command() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `NONE`" in current
-    assert "`INVERSE_ONLY_REPOSITORY_ACCEPTED`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_H2_LIVE_CURRENT`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_CURRENT_GAPPED_ENTRY_RECOVERY`" in current
-    assert "**Live commands:** `NO_ADDITIONAL_START_STOP_OR_RESTART_AUTHORIZED`" in current
+    assert "**Persistent service:** `RUNNING_CURRENT_FRESH_SCHEMA_V5`" in current
+    assert "**Live commands:** `NONE_AUTHORIZED_H2_CONSUMED`" in current
     assert "**Sole authorized closure:** `NONE`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
-        "The repository contains only those three Inverse Policy artifacts",
-        "code identity: c5cc2e605de7df028be18b6ff00ca3b76dd86f27",
-        "runtime identity: sha256:888729c63e0deec4aea2bb1a3787a205501910351ae66c4d07e66e5017048676",
+        "The repository contains only the three fixed V2 Inverse Policy artifacts",
+        "channel: INVERSE_BTC_SHORT_VOL_V2",
+        "code identity: cd9243ff9f92ca6e1b6c142dc9d61cbc5a21a359",
+        "runtime identity: sha256:8c34f476bc91928678eb36b0e3528b2a7bc4f0b9d47157b018b805fb7d065260",
         "6 / 6 HTTP 200",
-        "14 / 14, latest Segment OPEN / GAPPED",
-        "The one authorized start has been consumed",
-        "The accepted repository result is `1 / 1`",
-        "The obsolete product specification",
-        "The stable repository contains `51` Case directories",
-        "did not restore the `37` historical selected no-trade Controls",
-        "The `14` Outcome rows are pending Entry projections",
+        "Shadow Entry rows: 0",
+        "Position rows: 0",
+        "Outcome rows: 0",
+        "Decision Control rows: 0",
+        "`0` Case directories and `0` recoverable admitted Entries",
+        "`51 / 51` Case directories",
+        "`14` admitted trades, `37` selected no-trade Controls, and `0` mature Outcomes",
+        "all `14` latest Segments were `CENSORED_AT_STOP`",
+        "copied, migrated, deleted, rewrote, or recovered none of its Cases into V2",
+        "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2",
     ):
         assert phrase in normalized
     for identity in (
-        "sha256:ff90da92cefe8e530339df38505fe7726b92b45b1855b751f2633ffd4fdb2172",
-        "sha256:283c2a8cc5e14cbed94b0f2a41ddd18ff2410772ae45d07abfea80d04446b1af",
-        "sha256:76a93725bb4923a70a2865b1e06add3b5a23ae80a831029c558ce188be6e7834",
-        "sha256:cb3866b8efd45d5c05ed23ab56658c2cdbf0359132e39f52ce329761ad933b8e",
+        "sha256:a7880d3a0b3da12f74438b292ed49d7c034e683d2e1654037229c62474127131",
+        "sha256:79b5ec7c886964ee4c886fb272f287f0645cc69a0b585cf53711c7b5ad0fef57",
+        "sha256:5cea5bc8153071359597526e0f1bd665bbf55215b5368ed6135f96ca3b607c31",
+        "sha256:f05646f7c1ed1a55bd8747879f1153c2633afde83aa3652549e01140552a6c67",
     ):
         assert identity in current
     assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
@@ -266,9 +271,9 @@ def test_product_roadmap_does_not_grant_policy_or_runtime_authority() -> None:
     for document in (product, readme):
         normalized = " ".join(document.split())
         assert "Only the upper-left channel is implemented" in normalized
-        assert "INVERSE_BTC_SHORT_VOL_V1" in document
+        assert "INVERSE_BTC_SHORT_VOL_V2" in document
         assert (
-            "| `INVERSE_BTC_SHORT_VOL` (`INVERSE_BTC_SHORT_VOL_V1`) | `IMPLEMENTED` |" in document
+            "| `INVERSE_BTC_SHORT_VOL` (`INVERSE_BTC_SHORT_VOL_V2`) | `IMPLEMENTED` |" in document
         )
         for channel in (
             "INVERSE_BTC_LONG_GAMMA",
@@ -278,7 +283,7 @@ def test_product_roadmap_does_not_grant_policy_or_runtime_authority() -> None:
             assert f"| `{channel}` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |" in document
 
 
-def test_entry_aggregate_segment_and_migration_contracts_are_consistent() -> None:
+def test_entry_aggregate_and_segment_contracts_are_consistent() -> None:
     product = (ROOT / "docs/authority/PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
     delivery = (ROOT / "docs/authority/DELIVERY_CONTRACT.md").read_text(encoding="utf-8")
     architecture = (ROOT / "docs/authority/SYSTEM_ARCHITECTURE.md").read_text(encoding="utf-8")
@@ -306,12 +311,7 @@ def test_entry_aggregate_segment_and_migration_contracts_are_consistent() -> Non
         "observation_quality=GAPPED",
         "qualification_eligible=false",
         "Selected no-trade Controls are not restored",
-        "one offline",
-        "never uses a hard-coded runtime, count, Case ID, or Entry allowlist",
-        "not part of `serve-shadow`",
         "entry_position_baseline",
-        "accepted Inverse `SHADOW_CASE_OPENED` shape and product schema identity remain unchanged",
-        "entry_position_baseline=UNKNOWN",
         "opened.json + segments/0/opened.json",
         "one no-replace atomic directory publication",
         "not a manifest or fencing protocol",
@@ -319,10 +319,10 @@ def test_entry_aggregate_segment_and_migration_contracts_are_consistent() -> Non
     ):
         assert phrase.lower() in combined.lower()
     normalized_shadow = " ".join(shadow.split())
-    assert "origin Segment remains `CONTINUOUS`" in normalized_shadow
-    assert "Only the later Segment opened by a new runtime" in normalized_shadow
-    assert "not the migrated origin Segment" in normalized_shadow
-    assert "origin Segment retains the separately declared `GAPPED`" not in shadow
+    assert "An origin Segment is `CONTINUOUS`" in normalized_shadow
+    assert "Every process-recovery Segment is `GAPPED`" in normalized_shadow
+    assert "schema-v5" in normalized_shadow
+    assert "migration branch" not in normalized_shadow
     assert "runs/<runtime-id>/cases/<case-id>" not in combined
     assert "A new runtime never resumes another runtime's Case" not in combined
     assert "immutable entry baselines from `opened.json`" not in combined
@@ -348,7 +348,7 @@ def test_architecture_restores_applicable_scope_and_freezes_warmup_partition() -
     assert "configured completed-interval cutoff" in architecture
     assert "one-tick-stressed executable bid IV" in contract
     assert "LEGGED_REFERENCE_NOT_ATOMIC" in contract
-    assert "deterministic lexicographic rank" in contract
+    assert "ordering is score lower bound" in contract
 
 
 def test_task_template_measures_product_progress_not_proof_volume() -> None:
@@ -393,13 +393,13 @@ def test_internal_package_dependency_direction() -> None:
 def test_inverse_policy_files_remain_byte_exact_and_content_identified() -> None:
     expected = {
         "policies/short-vol-inverse-btc-public-shadow-radar.json": (
-            "283c2a8cc5e14cbed94b0f2a41ddd18ff2410772ae45d07abfea80d04446b1af"
+            "79b5ec7c886964ee4c886fb272f287f0645cc69a0b585cf53711c7b5ad0fef57"
         ),
         "policies/short-vol-inverse-btc-public-shadow-underwriting.json": (
-            "76a93725bb4923a70a2865b1e06add3b5a23ae80a831029c558ce188be6e7834"
+            "5cea5bc8153071359597526e0f1bd665bbf55215b5368ed6135f96ca3b607c31"
         ),
         "policies/short-vol-inverse-btc-public-shadow-position.json": (
-            "cb3866b8efd45d5c05ed23ab56658c2cdbf0359132e39f52ce329761ad933b8e"
+            "f05646f7c1ed1a55bd8747879f1153c2633afde83aa3652549e01140552a6c67"
         ),
     }
     for relative, digest in expected.items():
@@ -413,8 +413,10 @@ def test_inverse_policy_files_remain_byte_exact_and_content_identified() -> None
         (ROOT / "policies/short-vol-inverse-btc-public-shadow-radar.json").read_bytes()
     )
     assert radar["product_spec_identity"] == (
-        "sha256:ff90da92cefe8e530339df38505fe7726b92b45b1855b751f2633ffd4fdb2172"
+        "sha256:a7880d3a0b3da12f74438b292ed49d7c034e683d2e1654037229c62474127131"
     )
+    assert radar["policy_schema_version"] == 8
+    assert radar["policy_family"] == "INVERSE_BTC_SHORT_VOL_ORDINAL_MARKET_STRUCTURE_V2"
     limits = radar["runtime_limits"]
     assert (
         limits["clock_refresh_interval_ms"]

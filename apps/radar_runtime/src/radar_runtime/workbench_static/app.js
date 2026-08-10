@@ -1,19 +1,19 @@
-const SUPPORTED_SCHEMA_VERSION = 5;
-const ACTIVE_CHANNEL_ID = 'INVERSE_BTC_SHORT_VOL_V1';
+const SUPPORTED_SCHEMA_VERSION = 6;
+const ACTIVE_CHANNEL_ID = 'INVERSE_BTC_SHORT_VOL_V2';
 const DRAWER_MEDIA_QUERY = '(max-width: 1471px)';
 const THEME_STORAGE_KEY = 'optimatrix-workbench-theme';
-const ACTIVE_PRODUCT_SPEC_IDENTITY = 'sha256:ff90da92cefe8e530339df38505fe7726b92b45b1855b751f2633ffd4fdb2172';
+const ACTIVE_PRODUCT_SPEC_IDENTITY = 'sha256:a7880d3a0b3da12f74438b292ed49d7c034e683d2e1654037229c62474127131';
 const ACTIVE_POLICY_IDENTITIES = Object.freeze({
-  radar: 'sha256:283c2a8cc5e14cbed94b0f2a41ddd18ff2410772ae45d07abfea80d04446b1af',
-  underwriting: 'sha256:76a93725bb4923a70a2865b1e06add3b5a23ae80a831029c558ce188be6e7834',
-  position: 'sha256:cb3866b8efd45d5c05ed23ab56658c2cdbf0359132e39f52ce329761ad933b8e'
+  radar: 'sha256:79b5ec7c886964ee4c886fb272f287f0645cc69a0b585cf53711c7b5ad0fef57',
+  underwriting: 'sha256:5cea5bc8153071359597526e0f1bd665bbf55215b5368ed6135f96ca3b607c31',
+  position: 'sha256:f05646f7c1ed1a55bd8747879f1153c2633afde83aa3652549e01140552a6c67'
 });
 
 const CHANNELS = [
   {id: ACTIVE_CHANNEL_ID, label: 'BTC Short Vol', product: 'inverse-btc', strategy: 'SHORT_VOL'},
-  {id: 'INVERSE_BTC_LONG_GAMMA_V1', label: 'BTC Long Gamma', product: 'inverse-btc', strategy: 'LONG_GAMMA'},
-  {id: 'INVERSE_ETH_SHORT_VOL_V1', label: 'ETH Short Vol', product: 'inverse-eth', strategy: 'SHORT_VOL'},
-  {id: 'INVERSE_ETH_LONG_GAMMA_V1', label: 'ETH Long Gamma', product: 'inverse-eth', strategy: 'LONG_GAMMA'}
+  {id: 'INVERSE_BTC_LONG_GAMMA', label: 'BTC Long Gamma', product: 'inverse-btc', strategy: 'LONG_GAMMA'},
+  {id: 'INVERSE_ETH_SHORT_VOL', label: 'ETH Short Vol', product: 'inverse-eth', strategy: 'SHORT_VOL'},
+  {id: 'INVERSE_ETH_LONG_GAMMA', label: 'ETH Long Gamma', product: 'inverse-eth', strategy: 'LONG_GAMMA'}
 ];
 
 const STRUCTURE_FILTERS = [
@@ -27,9 +27,11 @@ const STRUCTURE_FILTERS = [
 
 const RADAR_FILTERS = [
   ['ALL', '全部'],
-  ['ANOMALY_ACTIVE', '机会线索'],
-  ['UNKNOWN', '暂不可判断'],
-  ['NO_ANOMALY', '当前无异常']
+  ['HIGH', 'HIGH'],
+  ['MID', 'MID'],
+  ['LOW', 'LOW'],
+  ['REVIEW', '边界复核'],
+  ['UNKNOWN', '暂不可判断']
 ];
 
 const reasonLabels = {
@@ -198,6 +200,66 @@ const formatInterval = (value, formatter) => {
   return lower === upper ? lower : `${lower} – ${upper}`;
 };
 
+const scoreIntervalText = packet => {
+  const result = scorePacketResult(packet);
+  return result ? formatInterval(result.score, value => formatCompactNumber(value, 1)) : '—';
+};
+
+const scoreComponentText = (packet, member) => {
+  const result = scorePacketResult(packet);
+  return result ? formatInterval(result[member], formatPercent) : '—';
+};
+
+const scoreCoverageText = packet => {
+  const result = scorePacketResult(packet);
+  if (!result) return 'UNKNOWN';
+  const missing = Array.isArray(result.missing_factors) ? result.missing_factors : [];
+  return `${displayText(result.coverage)}${missing.length ? ` · 缺失 ${missing.join('/')}` : ' · 无缺失因子'}`;
+};
+
+const scoreBucketText = packet => {
+  const bucket = packet && packet.bucket_key;
+  if (!bucket || typeof bucket !== 'object') return '—';
+  return `${displayText(bucket.tte_band_id)} · ${formatDate(bucket.expiry_ms)} · ` +
+    `${optionTypeText(bucket.option_type)} · ${displayText(bucket.delta_bucket)}`;
+};
+
+const legacyDiagnosticText = packet => {
+  if (!packet || packet.legacy_v1_threshold_pass === null ||
+      packet.legacy_v1_threshold_pass === undefined) return '跨界/不可判定';
+  return packet.legacy_v1_threshold_pass ? '通过' : '未通过';
+};
+
+const scorePacketCardMarkup = (label, packet) => {
+  const result = scorePacketResult(packet);
+  if (!result) {
+    return `<div class="data-gap-panel"><strong>${escapeHtml(label)}：</strong>` +
+      `服务器未提供 V2 score packet；浏览器不补算。</div>`;
+  }
+  const boundary = packet.fact_boundary && packet.fact_boundary.causal_seq;
+  return `<div class="economics-card">` +
+    `<span class="economics-label">${escapeHtml(label)}</span>` +
+    `<span class="economics-value">${safeText(scoreIntervalText(packet))} · ${safeText(result.band)}</span>` +
+    `<span class="economics-meta">coverage ${safeText(scoreCoverageText(packet))} · causal #${safeText(boundary)}</span>` +
+    `<span class="economics-meta">leader ${safeText(packet.leader_instrument_name)}</span></div>`;
+};
+
+const scoreFactorMarkup = packet => {
+  const result = scorePacketResult(packet);
+  const factors = result && Array.isArray(result.factors) ? result.factors : [];
+  if (!factors.length) return '<div class="data-gap-panel">服务器未提供 A/S/T/D/E 因子投影。</div>';
+  return `<div class="predicate-list">${factors.map(factor => {
+    const normalized = formatInterval(factor.normalized, value => formatCompactNumber(value, 3));
+    const contribution = formatInterval(
+      factor.weighted_contribution,
+      value => formatCompactNumber(value, 3)
+    );
+    const detail = factor.unknown_reason || `标准化 ${normalized} · 加权 ${contribution}`;
+    return `<div class="predicate-row"><span>因子 ${safeText(factor.name)}</span>` +
+      `<span class="predicate-margin">${safeText(detail)}</span></div>`;
+  }).join('')}</div>`;
+};
+
 const formatDurationMs = value => {
   if (isMissing(value) || !Number.isFinite(Number(value))) return '—';
   const milliseconds = Math.max(0, Number(value));
@@ -281,7 +343,8 @@ const channelSnapshotState = documentValue => {
   }
   const product = documentValue.product || {};
   const policies = documentValue.policy_identities || {};
-  if (product.name !== 'inverse-btc' ||
+  if (documentValue.channel_id !== ACTIVE_CHANNEL_ID ||
+      product.name !== 'inverse-btc' ||
       product.product_spec_identity !== ACTIVE_PRODUCT_SPEC_IDENTITY ||
       policies.radar !== ACTIVE_POLICY_IDENTITIES.radar ||
       policies.underwriting !== ACTIVE_POLICY_IDENTITIES.underwriting ||
@@ -365,10 +428,10 @@ const runtimeStatusState = documentValue => {
 };
 
 const roadmapState = channel => {
-  if (channel.id === 'INVERSE_BTC_LONG_GAMMA_V1') {
+  if (channel.id === 'INVERSE_BTC_LONG_GAMMA') {
     return {label: '尚未接入', tone: 'neutral', note: '无 Long Gamma 决策契约'};
   }
-  if (channel.id === 'INVERSE_ETH_SHORT_VOL_V1') {
+  if (channel.id === 'INVERSE_ETH_SHORT_VOL') {
     return {label: '尚未接入', tone: 'neutral', note: '无 ETH 产品快照'};
   }
   return {label: '尚未接入', tone: 'neutral', note: '无产品与策略快照'};
@@ -426,14 +489,51 @@ const structureState = row => {
   return {key: 'UNKNOWN', label: '暂不可判断', tone: 'amber', priority: 5};
 };
 
+const scorePacketResult = packet => packet && typeof packet === 'object' &&
+  packet.result && typeof packet.result === 'object' ? packet.result : null;
+
+const radarScoreView = row => row.score_packet || (
+  row.score_result && typeof row.score_result === 'object'
+    ? {
+        result: row.score_result,
+        bucket_key: row.score_bucket_key,
+        leader_instrument_name: row.bucket_leader_instrument_name,
+        leader_coverage: row.bucket_leader_coverage,
+      }
+    : null
+);
+
+const scorePacketState = packet => {
+  const result = scorePacketResult(packet);
+  if (!result) return {key: 'UNKNOWN', label: '暂不可判断', tone: 'amber', priority: 4};
+  if (result.band === 'HIGH') return {key: 'HIGH', label: 'HIGH 机会线索', tone: 'blue', priority: 0};
+  if (result.band === 'MID') return {key: 'MID', label: 'MID 待观察', tone: 'purple', priority: 1};
+  if (result.band === 'LOW') return {key: 'LOW', label: 'LOW 低优先级', tone: 'neutral', priority: 3};
+  if (result.band === 'REVIEW') return {key: 'REVIEW', label: '分数边界复核', tone: 'amber', priority: 2};
+  return {key: 'UNKNOWN', label: '暂不可判断', tone: 'amber', priority: 4};
+};
+
 const radarState = row => {
-  if (row.detector_state === 'ANOMALY_ACTIVE') {
-    return {key: 'ANOMALY_ACTIVE', label: '机会线索', tone: 'blue', priority: 0};
+  const raw = scorePacketState(radarScoreView(row));
+  const active = row.is_bucket_leader === true &&
+    row.bucket_episode_leader_instrument_name === row.instrument_name &&
+    row.bucket_episode_state === 'ACTIVE' &&
+    row.bucket_episode_score_band === raw.key && Boolean(row.bucket_episode_identity);
+  const count = isMissing(row.confirmation_observation_count)
+    ? '—' : row.confirmation_observation_count;
+  const required = isMissing(row.required_confirmation_observation_count)
+    ? '—' : row.required_confirmation_observation_count;
+  if (raw.key === 'HIGH') {
+    return active
+      ? {...raw, label: 'HIGH · 已确认线索'}
+      : {...raw, label: `HIGH · 确认中 ${count}/${required}`, tone: 'amber'};
   }
-  if (row.detector_state === 'UNKNOWN') {
-    return {key: 'UNKNOWN', label: '暂不可判断', tone: 'amber', priority: 1};
+  if (raw.key === 'MID' || raw.key === 'LOW') {
+    return active
+      ? {...raw, label: `${raw.key} · 研究 Control 已确认`}
+      : {...raw, label: `${raw.key} · 确认中 ${count}/${required}`};
   }
-  return {key: 'NO_ANOMALY', label: '当前无异常', tone: 'neutral', priority: 2};
+  return raw;
 };
 
 const structureIdentity = (row, index = 0) => {
@@ -897,7 +997,7 @@ function renderFilters() {
 function renderQueueHead() {
   const labels = queueMode === 'structures'
     ? ['优先级', '策略通道', '结构', '决策', '入场经济', '首项门槛差']
-    : ['优先级', '策略通道', '合约', '线索状态', 'IV / RV', '当前阻塞'];
+    : ['优先级', '策略通道', '合约', 'Score band', 'V2 分数', '覆盖 / 阻塞'];
   document.getElementById('queue-head').innerHTML = labels.map(value =>
     `<span role="columnheader">${escapeHtml(value)}</span>`
   ).join('');
@@ -931,9 +1031,8 @@ function structureRowMarkup(row, index) {
 function radarRowMarkup(row, index) {
   const id = radarIdentity(row, index);
   const state = radarState(row);
-  const richness = formatInterval(row.richness_ratio_interval, value => `${formatCompactNumber(value, 2)}×`);
-  const iv = formatInterval(row.one_tick_stressed_iv_interval || row.executable_iv_interval, formatPercent);
-  const rv = formatPercent(row.baseline_annualized_volatility);
+  const packet = radarScoreView(row);
+  const result = scorePacketResult(packet);
   const rank = isMissing(row.attention_rank) ? index + 1 : row.attention_rank;
   return `<button type="button" class="queue-row radar-row" role="row" ` +
     `data-row-id="${escapeHtml(id)}" aria-pressed="${selectedRadarId === id}">` +
@@ -943,10 +1042,10 @@ function radarRowMarkup(row, index) {
     `<span role="cell"><span class="cell-primary">${safeText(row.instrument_name)}</span>` +
     `<span class="cell-secondary">${safeText(formatDate(row.expiration_timestamp_ms))} · ${safeText(formatStrike(row.strike_price))} ${safeText(optionTypeText(row.option_type))}</span></span>` +
     `<span role="cell">${badgeMarkup(state.label, state.tone, 'decision-badge')}</span>` +
-    `<span role="cell"><span class="cell-value">${safeText(richness)}</span>` +
-    `<span class="cell-secondary">IV ${safeText(iv)} · RV ${safeText(rv)}</span></span>` +
-    `<span role="cell"><span class="cell-primary">${safeText(reasonText(row.primary_blocker || row.detector_reason))}</span>` +
-    `<span class="cell-secondary">持续 ${safeText(formatDurationMs(row.anomaly_active_duration_ms))}</span></span></button>`;
+    `<span role="cell"><span class="cell-value">${safeText(scoreIntervalText(packet))}</span>` +
+    `<span class="cell-secondary">Premium ${safeText(scoreComponentText(packet, 'premium_evidence'))} · Risk ${safeText(scoreComponentText(packet, 'risk_quality'))}</span></span>` +
+    `<span role="cell"><span class="cell-primary">${safeText(scoreCoverageText(packet))}</span>` +
+    `<span class="cell-secondary">${safeText(result ? `leader ${packet.leader_instrument_name}` : reasonText(row.primary_blocker || row.detector_reason))}</span></span></button>`;
 }
 
 function emptyQueueMarkup(documentValue) {
@@ -1004,6 +1103,20 @@ function renderQueue(documentValue) {
 
 const rawEvidenceMarkup = row => `<details class="evidence-details" data-evidence-details${evidenceExpanded ? ' open' : ''}>` +
   `<summary>展开服务器原始证据</summary><pre class="evidence-raw">${escapeHtml(JSON.stringify(row, null, 2))}</pre></details>`;
+
+const scorePacketComparisonMarkup = row => {
+  const shadow = row && row.shadow_entry_projection;
+  const selection = shadow && shadow.selection_score_packet;
+  const refresh = shadow && shadow.entry_refresh_score_packet;
+  if (!selection && !refresh) {
+    return '<div class="data-gap-panel">当前结构尚未形成同时冻结 selection 与 entry-refresh packet 的 schema-v5 Case。</div>';
+  }
+  return `<div class="economics-grid">` +
+    scorePacketCardMarkup('Selection score', selection) +
+    scorePacketCardMarkup('Entry-refresh score', refresh) +
+    `</div><div class="data-gap-panel"><strong>Drift 读取规则：</strong>` +
+    `并列展示两个服务器冻结 packet 的 score、band、coverage、boundary 与 leader；浏览器不相减、不重算、不归因。</div>`;
+};
 
 const predicateListMarkup = row => {
   const vector = Array.isArray(row.predicate_margin_vector) ? row.predicate_margin_vector : [];
@@ -1189,18 +1302,22 @@ function structureDetailMarkup(row, documentValue) {
       `</div></section>` +
     `<section class="detail-section"><div class="detail-section-title"><h4>精确谓词 margin</h4>` +
       `<span class="detail-section-note">正值通过，负值未过门槛</span></div>${predicateMarkup}</section>` +
+    `<section class="detail-section"><div class="detail-section-title"><h4>Selection → Entry drift</h4>` +
+      `<span class="detail-section-note">同一 schema-v5 packet · 只读并列</span></div>` +
+      `${scorePacketComparisonMarkup(row)}</section>` +
     `<section class="detail-section" data-detail-section="shadow"><div class="detail-section-title"><h4>Shadow 条件</h4></div>` +
       `<div class="callout-list">${canonicalShadowMarkup(row, documentValue)}</div></section>` +
     `<section class="detail-section"><div class="data-gap-panel"><strong>未绘制盈亏曲线：</strong>` +
-      `当前 API 没有服务器结算的 payoff 序列，也没有与 Radar 线索共享的 Episode key。为避免浏览器重算 Inverse payoff 或串接不同 Episode，本页不伪造图表、IV/RV 或保护腿 Greeks。</div></section>` +
+      `当前 API 没有服务器结算的 payoff 序列。为避免浏览器重算 Inverse payoff，本页不伪造图表或保护腿 Greeks。</div></section>` +
     rawEvidenceMarkup(row.shadow_entry_projection || row);
 }
 
 function radarDetailMarkup(row) {
   const state = radarState(row);
-  const stressedIv = formatInterval(row.one_tick_stressed_iv_interval || row.executable_iv_interval, formatPercent);
-  const executableIv = formatInterval(row.executable_iv_interval, formatPercent);
-  const richness = formatInterval(row.richness_ratio_interval, value => `${formatCompactNumber(value, 2)}×`);
+  const packet = radarScoreView(row);
+  const result = scorePacketResult(packet);
+  const oi = packet && packet.oi_diagnostic && typeof packet.oi_diagnostic === 'object'
+    ? packet.oi_diagnostic : null;
   const delta = formatInterval(row.delta_interval, value => formatCompactNumber(value, 3));
   return `<div class="detail-title-line"><h3>INVERSE BTC × SHORT VOL</h3>` +
     `${badgeMarkup(state.label, state.tone, 'decision-badge')}</div>` +
@@ -1209,25 +1326,40 @@ function radarDetailMarkup(row) {
       factMarkup('TTE', formatDurationInterval(row.tte_interval_ms)) +
       factMarkup('执行价', formatDecimal(row.strike_price)) +
       factMarkup('Delta', delta) +
-      factMarkup('可执行 IV', executableIv) +
-      factMarkup('One-tick IV', stressedIv) +
-      factMarkup('RV 基线', formatPercent(row.baseline_annualized_volatility)) +
+      factMarkup('Score', scoreIntervalText(packet)) +
+      factMarkup('Band', result && result.band) +
+      factMarkup('Coverage', scoreCoverageText(packet)) +
     `</div>` +
-    `<section class="detail-section"><div class="detail-section-title"><h4>当前线索证据</h4>` +
-      `<span class="detail-section-note">单腿 Radar · 非 Candidate</span></div>` +
+    `<section class="detail-section"><div class="detail-section-title"><h4>V2 score decomposition</h4>` +
+      `<span class="detail-section-note">服务器结算 · 非概率、非 Edge</span></div>` +
       `<div class="economics-grid">` +
-        economicsCard('One-tick IV / RV', richness, '服务器 hard-screen richness', state.key === 'ANOMALY_ACTIVE' ? 'positive' : '') +
-        economicsCard('目标规模价差', isMissing(row.target_spread_ticks) ? '—' : `${formatDecimal(row.target_spread_ticks)} ticks`, '当前 Radar 合约') +
+        economicsCard('Score', scoreIntervalText(packet), `Band ${displayText(result && result.band)}`, state.key === 'HIGH' ? 'positive' : '') +
+        economicsCard('Premium evidence', scoreComponentText(packet, 'premium_evidence'), 'A + optional S/T') +
+        economicsCard('Risk quality', scoreComponentText(packet, 'risk_quality'), 'D + E') +
+        economicsCard('Coverage', scoreCoverageText(packet), '缺失不填中性值') +
       `</div></section>` +
-    `<section class="detail-section"><div class="detail-section-title"><h4>为什么值得看</h4></div>` +
+    `<section class="detail-section"><div class="detail-section-title"><h4>A / S / T / D / E</h4>` +
+      `<span class="detail-section-note">原始输入保留在 packet 证据中</span></div>` +
+      `${scoreFactorMarkup(packet)}</section>` +
+    `<section class="detail-section"><div class="detail-section-title"><h4>Bucket 与 leader</h4></div>` +
       `<div class="callout-list">` +
-        `<div class="callout info"><strong>正向证据</strong>${safeText(reasonText(row.positive_witness))}</div>` +
+        `<div class="callout info"><strong>Bucket</strong>${safeText(scoreBucketText(packet))}</div>` +
+        `<div class="callout info"><strong>Leader</strong>${safeText(packet && packet.leader_instrument_name)}</div>` +
+        `<div class="callout info"><strong>Episode 状态</strong>${safeText(row.bucket_episode_state)} · ` +
+          `${safeText(row.confirmation_observation_count)}/${safeText(row.required_confirmation_observation_count)} 次确认</div>` +
         `<div class="callout blocker"><strong>当前阻塞</strong>${safeText(reasonText(row.primary_blocker || row.detector_reason))}</div>` +
         `<div class="callout upgrade"><strong>升级条件</strong>${safeText(reasonText(row.upgrade_condition))}</div>` +
         `<div class="callout invalidation"><strong>失效条件</strong>${safeText(reasonText(row.invalidation_condition))}</div>` +
       `</div></section>` +
+    `<section class="detail-section"><div class="detail-section-title"><h4>只读诊断</h4></div>` +
+      `<div class="fact-grid">` +
+        factMarkup('Unsigned OI / gamma', oi && oi.state) +
+        factMarkup('OI concentration', oi && formatPercent(oi.concentration_share)) +
+        factMarkup('Dealer gamma sign', oi && oi.dealer_gamma_sign) +
+        factMarkup('Legacy V1 1.20 threshold', `${legacyDiagnosticText(packet)} · diagnostic only`) +
+      `</div><div class="data-gap-panel">Legacy threshold 与 unsigned OI/gamma 只作诊断；不驱动第二个 V1 detector，不声明 dealer 仓位方向。</div></section>` +
     `<section class="detail-section"><div class="data-gap-panel"><strong>关联边界：</strong>` +
-      `当前 API 未提供 Radar 与 Underwriting 共用的 Episode identity。本线索不会按合约名拼接双腿结构、Candidate 或 Shadow 状态。</div></section>` +
+      `本行只信任 packet 内的 bucket、leader 与 fact boundary；不会按合约名拼接 Candidate 或 Shadow 状态。</div></section>` +
     rawEvidenceMarkup(row);
 }
 
@@ -1294,7 +1426,8 @@ function validateDocument(documentValue) {
   if (!documentValue || documentValue.schema_version !== SUPPORTED_SCHEMA_VERSION) {
     throw new Error('unsupported workbench projection schema');
   }
-  if (!documentValue.product || !documentValue.product.name ||
+  if (documentValue.channel_id !== ACTIVE_CHANNEL_ID ||
+      !documentValue.product || !documentValue.product.name ||
       !documentValue.product.product_spec_identity || !documentValue.product.native_premium_currency ||
       !documentValue.product.valuation_currency || !documentValue.service || !documentValue.system ||
       !documentValue.radar || !Array.isArray(documentValue.radar.rows) ||
