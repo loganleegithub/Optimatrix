@@ -190,7 +190,7 @@ def test_current_stage_records_v2_latency_attribution_authority() -> None:
     assert "`INVERSE_BTC_SHORT_VOL_V2_8675_LIVE_CURRENT`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert "**Persistent service:** `RUNNING_CURRENT_8675_FRESH_SCHEMA_V5`" in current
-    assert "**Live commands:** `NONE_AUTHORIZED_8675_LATENCY_SAMPLE_CONSUMED`" in current
+    assert "**Live commands:** `ONE_PRESTOP_8675_CASE_INVENTORY_AUTHORIZED`" in current
     assert "INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
@@ -212,6 +212,8 @@ def test_current_stage_records_v2_latency_attribution_authority() -> None:
         "45 / 45",
         "no `QUEUE_LAG_CURRENTNESS`",
         "Maximum generic source-event age was `4,616 ms`",
+        "Authorized pre-stop inventory",
+        "one official schema-v5 Case report",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
     ):

@@ -14,7 +14,7 @@
 
 **Persistent service:** `RUNNING_CURRENT_8675_FRESH_SCHEMA_V5`
 
-**Live commands:** `NONE_AUTHORIZED_8675_LATENCY_SAMPLE_CONSUMED`
+**Live commands:** `ONE_PRESTOP_8675_CASE_INVENTORY_AUTHORIZED`
 
 **Sole authorized closure:**
 [`INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION.md)
@@ -37,6 +37,18 @@ performance architecture or Decision Policy change is authorized.
 This authority permits no further live command, stop, restart, second process, state-root operation,
 external public-source probe, PID/log/resource inspection, Policy change, Case write, or deployment.
 Any later live validation or deployment requires a subsequent explicit authority update.
+
+## Authorized pre-stop inventory
+
+The human has authorized merge, branch deletion, and restart of the schema-v7 Workbench change.
+Before any stop, the active task may perform exactly one same-frame read-only GET of the current
+8675 Workbench plus one official schema-v5 Case report against the already-bound stable root
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. This gate fixes the exact durable
+effect of the requested restart.
+
+This inventory authority permits no stop, merge, branch deletion, restart, second process, Case
+mutation, root migration, or deployment yet. After the inventory, `CURRENT_STAGE` must name the
+observed active admitted-Entry count and explicitly authorize the one clean cutover before it occurs.
 
 ## Current online boundary
 

@@ -34,7 +34,9 @@ silence, and the Policy-owned application queue-lag state; a value above five se
 misstates which boundary is delayed. The bounded observation found no actual queue-lag incident, so
 the task adds no speculative synchronous hot-path optimization.
 
-**Durable-data effect:** `NONE`; no Case record, state root, or pre-Shadow business fact is written.
+**Durable-data effect:** the pre-stop read-only inventory writes nothing. Before the authorized
+cutover, this task must replace this statement with the exact active admitted-Entry count and the
+corresponding Segment-close/recovery effect; no Case is migrated, copied, deleted, or rewritten.
 
 **Complexity added:** one bounded current queue-lag scalar in the existing reducer/Workbench
 snapshot; no new module, protocol, background task, queue, cache, retry, or dependency.
@@ -68,18 +70,19 @@ runtime tests for any measured hot-path change.
 
 **Outcome/evaluation contract change:** `NONE`
 
-**Stage/authorization change:** the one loopback-only, read-only, maximum 45-second sample of
-`/api/workbench/current` on `127.0.0.1:8675` is consumed; no further live command, stop, restart,
-root access, external source probe, or second runtime.
+**Stage/authorization change:** authorize exactly one same-frame read-only 8675 Workbench inventory
+and one official schema-v5 report of the already-bound stable root. Stop/restart remains forbidden
+until the observed durable effect is fixed in `CURRENT_STAGE`.
 
 ## Scope
 
 **In:** current latency ownership in `radar_runtime`, Workbench projection/rendering, direct tests,
-owning contract wording, and the bounded 8675 sample.
+owning contract wording, bounded live inventory, PR #39 merge, branch deletion, and one clean 8675
+schema-v7 cutover after its durable effect is fixed.
 
 **Out:** Radar score or threshold changes, Policy artifacts, Underwriting, Candidate, Case/Control,
-Position/Outcome, durable schema, state roots, transport reconnect policy, process supervision,
-host PID/log/resource inspection, stop/restart/deployment, and unrelated UI redesign.
+Position/Outcome, durable schema, state-root migration/copy/delete, transport reconnect policy,
+process supervision, host PID/log/resource inspection, and unrelated UI redesign.
 
 **Owning module:** `apps/radar_runtime/src/radar_runtime/workbench.py`; `runtime.py` owns only the
 already-calculated current queue-processing-lag scalar.
@@ -88,9 +91,9 @@ already-calculated current queue-processing-lag scalar.
 
 - focused tests: exact Workbench/frontend/runtime tests selected after attribution;
 - repository gate: `make check`;
-- public observation: maximum 45 seconds of loopback GET sampling from
-  `http://127.0.0.1:8675/api/workbench/current`, retaining no runtime dependency or durable product
-  record;
+- public observation: the consumed maximum 45-second latency sample; one pre-stop same-frame
+  inventory; then, only after exact cutover authority, six GET/HEAD routes plus schema-v7 identity,
+  latency-field, readiness, coverage, and official Case-reader checks;
 - no manifest, receipt, commissioning, host audit, or broad evidence package.
 
 ## Definition of done
