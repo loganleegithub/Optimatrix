@@ -76,6 +76,7 @@ from short_vol_radar.radar import (
     EvaluationResult,
     TickerState,
 )
+from short_vol_radar.review import build_score_feature_contexts
 from short_vol_radar.score import (
     LeaderCoverage,
     RadarBucketKey,
@@ -3157,8 +3158,10 @@ def test_high_fanout_local_fact_shares_one_history_tail_and_one_formula_call(
 
     tail_calls = 0
     calculation_calls = 0
+    score_context_members: list[tuple[str, ...]] = []
     current_tail = reducer.index_history.current_tail
     calculate = runtime_module.calculate_current_evaluation
+    build_score_contexts = cast(Any, build_score_feature_contexts)
 
     def count_tail(*args: object, **kwargs: object) -> IndexHistoryState:
         nonlocal tail_calls
@@ -3170,8 +3173,22 @@ def test_high_fanout_local_fact_shares_one_history_tail_and_one_formula_call(
         calculation_calls += 1
         return calculate(**kwargs)  # type: ignore[arg-type]
 
+    def capture_score_context_members(**kwargs: object) -> object:
+        selected = kwargs.get("instrument_names")
+        score_context_members.append(
+            tuple(selected)  # type: ignore[arg-type]
+            if selected is not None
+            else tuple(cast(dict[str, object], kwargs["options"]))
+        )
+        return build_score_contexts(**kwargs)
+
     monkeypatch.setattr(reducer.index_history, "current_tail", count_tail)
     monkeypatch.setattr(runtime_module, "calculate_current_evaluation", count_calculation)
+    monkeypatch.setattr(
+        runtime_module,
+        "build_score_feature_contexts",
+        capture_score_context_members,
+    )
     known_before = sum(
         scope.known_per_instrument_detector_evaluation_count
         for scope in reducer._scope_counts.values()
@@ -3190,6 +3207,7 @@ def test_high_fanout_local_fact_shares_one_history_tail_and_one_formula_call(
 
     assert calculation_calls == 1
     assert tail_calls == 1
+    assert score_context_members == [(changed.instrument_name,)]
     assert (
         sum(
             scope.known_per_instrument_detector_evaluation_count

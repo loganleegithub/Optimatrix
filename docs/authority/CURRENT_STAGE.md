@@ -4,7 +4,7 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
 **Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_SCHEMA7_8675_LIVE_CURRENT`
 
@@ -16,7 +16,34 @@
 
 **Live commands:** `NONE_CONSUMED`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:**
+[`INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR.md)
+
+## Active queue-throughput repair authority
+
+The trader reports that schema v7 currently shows both market-event age and queue-processing lag
+elevated. The accepted pre-task facts already prove that `QUEUE_LAG_CURRENTNESS` can intermittently
+drop `RADAR_KNOWN` from `128 / 128` to `0 / 128` without a reconnect or session gap. The largest
+current blocker is therefore `QUEUE_PROCESSING_THROUGHPUT_INTERMITTENT`, not the removed schema-v6
+label ambiguity.
+
+The one at-most-60-second loopback sample is consumed. Its client collected the frames but failed
+while serializing tuple-keyed state counts, so no sample aggregate survived and no retry is
+authorized. Static inspection plus a deterministic 128-instrument profile independently isolated
+the hot path: 200 single-book transactions averaged `10.698 ms` each, while rebuilding all score
+feature contexts consumed `1.798 s` of their `2.137 s` cumulative transaction time. The local
+repair keeps all cross-sectional ticker points but builds contexts only for the transaction's
+existing `recalculation_names`; the identical profile then averaged `1.724 ms` per transaction, a
+bounded `83.9%` reduction with unchanged Decision inputs and formulas.
+
+Static code inspection, focused tests, and the repository gate remain permitted. The task may
+repair only this measured synchronous reducer hot path; it may not change a Policy, threshold,
+market universe, score, Case schema, or public/private boundary.
+
+This authority permits no live sample retry, stop, restart, second process, state-root mutation, or
+Case write outside ordinary operation, external source probe, PID/log/resource inspection, or
+deployment. Any later cutover requires a pre-stop official Case inventory and a subsequent explicit
+authority update.
 
 ## Completed latency-attribution result
 
@@ -104,6 +131,6 @@ or Policy-quality estimate.
 
 The permission remains `PUBLIC_SHADOW`: no credential, account, balance, margin, order, fill,
 capital, settlement action, actual exposure, or private execution. Current health and coverage do
-not establish future uptime, fillability, qualification, Edge, or profitability. A future service
-operation, Policy change, or new roadmap channel requires a new active task and explicit permission
-update under the Delivery Contract.
+not establish future uptime, fillability, qualification, Edge, or profitability. Beyond the exact
+active-task sample, a future service operation, Policy change, or new roadmap channel requires an
+explicit permission update under the Delivery Contract.

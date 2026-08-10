@@ -182,16 +182,16 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_completed_schema7_cutover() -> None:
+def test_current_stage_records_active_queue_throughput_repair() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
+    assert "**Current task kind:** `IMPLEMENTATION`" in current
     assert "`INVERSE_BTC_SHORT_VOL_V2_SCHEMA7_8675_LIVE_CURRENT`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert "**Persistent service:** `RUNNING_CURRENT_8675_STABLE_SCHEMA_V5`" in current
     assert "**Live commands:** `NONE_CONSUMED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
@@ -217,6 +217,14 @@ def test_current_stage_records_completed_schema7_cutover() -> None:
         "PR #39 merged",
         "topic branch was deleted locally and remotely",
         "The one stop, one start, and bounded post-start smoke are consumed",
+        "Active queue-throughput repair authority",
+        "`QUEUE_PROCESSING_THROUGHPUT_INTERMITTENT`",
+        "one at-most-60-second loopback sample is consumed",
+        "no sample aggregate survived and no retry is authorized",
+        "`10.698 ms` each",
+        "`1.724 ms` per transaction",
+        "bounded `83.9%` reduction",
+        "no live sample retry, stop, restart, second process, state-root mutation",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
     ):
@@ -228,7 +236,10 @@ def test_current_stage_records_completed_schema7_cutover() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR.md",
+        "TEMPLATE.md",
+    }
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
 
