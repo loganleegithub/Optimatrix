@@ -12,9 +12,9 @@
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_ONE_8675_CUTOVER`
 
-**Persistent service:** `H2_8765_RUNNING_PENDING_8675_HANDOFF`
+**Persistent service:** `NO_CURRENT_SERVICE_8765_UNAVAILABLE_PENDING_8675_START`
 
-**Live commands:** `ONE_NEW_ROOT_8675_START_ONE_BOUNDED_SMOKE_ONE_LATER_8765_CLEAN_STOP`
+**Live commands:** `ONE_NEW_ROOT_8675_START_ONE_BOUNDED_SMOKE`
 
 **Sole authorized closure:**
 [`INVERSE_BTC_SHORT_VOL_V2_8675_CUTOVER`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_8675_CUTOVER.md)
@@ -30,21 +30,21 @@ Runtime instances binding that chain on the user-requested port `8675`; the bloc
 
 The sole authorized topology is:
 
-1. read the current `127.0.0.1:8765` immutable snapshot and inventory its stable H2 root
-   `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2` through the official schema-v5 reader;
+1. retain the observed six-route connection refusal at `127.0.0.1:8765` and the official
+   schema-v5 reader result of `0` Case directories in its stable H2 root
+   `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2`;
 2. verify the exact new root `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9` is absent;
 3. from one clean commit on the declared task branch, invoke canonical `serve-shadow` exactly once
    on `127.0.0.1:8675` with that fresh root;
 4. consume one bounded read-only smoke over the six declared GET/HEAD routes, immutable current API,
    exact product/Policy identities, and official schema-v5 reader;
-5. only after every new-service gate passes, clean-stop the superseded `8765` process once and
-   confirm its loopback surface is down; and
-6. preserve both old historical roots and the superseded H2 root in place without copy, migration,
+5. preserve both old historical roots and the superseded H2 root in place without copy, migration,
    deletion, rewrite, or recovery into the new root.
 
 No retry, second new root, old-root repoint, Case compatibility mode, source-contract probe,
 threshold tuning, process supervisor, PID/log/`lsof`/launchd inspection, or private action is
-authorized. A failed new start or smoke leaves `8765` running and is reported as the blocker.
+authorized. A failed new start or smoke leaves the product unavailable and is reported as the
+blocker.
 
 ## Target identity chain
 
@@ -84,7 +84,10 @@ observed service state:       RUNNING / CURRENT / ready
 ```
 
 That service uses `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2`. Its health and Case
-inventory must be read again before cutover; the historical snapshot is not a present-state claim.
+inventory were read again before cutover. At `2026-08-10T17:56:38+08:00`, all six declared routes
+refused connection and the official schema-v5 report found `0` Case directories. The superseded
+service is therefore already unavailable; there is no clean-stop or old-root Segment write to
+perform.
 
 ## Durable-data boundary and non-claims
 

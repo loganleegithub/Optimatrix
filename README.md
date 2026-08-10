@@ -44,15 +44,16 @@ offline from Shadow Cases.
 ## Current stage
 
 The permission boundary remains `PUBLIC_SHADOW`. The causal-coherence repair is merged, and the
-active validation task authorizes one bounded handoff from the superseded H2 process on `8765` to
-the fixed V2 chain on `8675`. The new service must use the fresh stable root
+active validation task authorizes one bounded recovery onto the fixed V2 chain on `8675`; the
+superseded H2 surface on `8765` was already unavailable at the pre-cutover probe. The new service
+must use the fresh stable root
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; the prior H2 root is inventoried and
 preserved without migration or recovery into the new epoch.
 
 The new service is started exactly once and must pass the declared route, identity, current-state,
-and official-reader smoke before the old service is clean-stopped. No retry, process supervisor,
-private action, or Edge/frequency gate is authorized. Exact runtime identity, durable effect, and
-permission details are in `docs/authority/CURRENT_STAGE.md`.
+and official-reader smoke. No retry, process supervisor, private action, or Edge/frequency gate is
+authorized. Exact runtime identity, durable effect, and permission details are in
+`docs/authority/CURRENT_STAGE.md`.
 
 See:
 

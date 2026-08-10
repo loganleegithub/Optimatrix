@@ -189,8 +189,11 @@ def test_current_stage_authorizes_one_v2_8675_cutover() -> None:
     assert "**Current task kind:** `VALIDATION_ONLY`" in current
     assert "`INVERSE_BTC_SHORT_VOL_V2_8675_CUTOVER`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `H2_8765_RUNNING_PENDING_8675_HANDOFF`" in current
-    assert "ONE_NEW_ROOT_8675_START_ONE_BOUNDED_SMOKE_ONE_LATER_8765_CLEAN_STOP" in current
+    assert (
+        "**Persistent service:** `NO_CURRENT_SERVICE_8765_UNAVAILABLE_PENDING_8675_START`"
+        in current
+    )
+    assert "ONE_NEW_ROOT_8675_START_ONE_BOUNDED_SMOKE" in current
     assert "**Sole authorized closure:**" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
@@ -201,8 +204,9 @@ def test_current_stage_authorizes_one_v2_8675_cutover() -> None:
         "runtime identity: sha256:8c34f476bc91928678eb36b0e3528b2a7bc4f0b9d47157b018b805fb7d065260",
         "deployment state: AUTHORIZED_NOT_YET_RUNNING",
         "invoke canonical `serve-shadow` exactly once",
-        "only after every new-service gate passes, clean-stop the superseded `8765` process once",
-        "A failed new start or smoke leaves `8765` running",
+        "all six declared routes refused connection",
+        "official schema-v5 report found `0` Case directories",
+        "A failed new start or smoke leaves the product unavailable",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
     ):
