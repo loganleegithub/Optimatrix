@@ -182,15 +182,15 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_v2_coherence_repair_without_live_permission() -> None:
+def test_current_stage_authorizes_one_v2_8675_cutover() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_CAUSAL_COHERENCE_REPAIR`" in current
+    assert "**Current task kind:** `VALIDATION_ONLY`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_8675_CUTOVER`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_CURRENT_H2_UNCHANGED`" in current
-    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "**Persistent service:** `H2_8765_RUNNING_PENDING_8675_HANDOFF`" in current
+    assert "ONE_NEW_ROOT_8675_START_ONE_BOUNDED_SMOKE_ONE_LATER_8765_CLEAN_STOP" in current
     assert "**Sole authorized closure:**" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
@@ -199,18 +199,12 @@ def test_current_stage_records_v2_coherence_repair_without_live_permission() -> 
         "channel: INVERSE_BTC_SHORT_VOL_V2",
         "code identity: cd9243ff9f92ca6e1b6c142dc9d61cbc5a21a359",
         "runtime identity: sha256:8c34f476bc91928678eb36b0e3528b2a7bc4f0b9d47157b018b805fb7d065260",
-        "deployment state: REPOSITORY_ONLY_NOT_RUNNING",
-        "6 / 6 HTTP 200",
-        "Shadow Entry rows: 0",
-        "Position rows: 0",
-        "Outcome rows: 0",
-        "Decision Control rows: 0",
-        "`0` Case directories and `0` recoverable admitted Entries",
-        "`51 / 51` Case directories",
-        "`14` admitted trades, `37` selected no-trade Controls, and `0` mature Outcomes",
-        "all `14` latest Segments were `CENSORED_AT_STOP`",
-        "copied, migrated, deleted, rewrote, or recovered none of its Cases into V2",
+        "deployment state: AUTHORIZED_NOT_YET_RUNNING",
+        "invoke canonical `serve-shadow` exactly once",
+        "only after every new-service gate passes, clean-stop the superseded `8765` process once",
+        "A failed new start or smoke leaves `8765` running",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2",
+        "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
     ):
         assert phrase in normalized
     for identity in (
@@ -224,7 +218,7 @@ def test_current_stage_records_v2_coherence_repair_without_live_permission() -> 
     ):
         assert identity in current
     assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
-        "INVERSE_BTC_SHORT_VOL_V2_CAUSAL_COHERENCE_REPAIR.md",
+        "INVERSE_BTC_SHORT_VOL_V2_8675_CUTOVER.md",
         "TEMPLATE.md",
     }
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
