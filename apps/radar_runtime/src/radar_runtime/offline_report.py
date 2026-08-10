@@ -15,6 +15,7 @@ from short_vol_underwriting import (
     canonical_decimal,
     canonical_identity,
     is_shadow_case_staging_name,
+    shadow_case_id_from_directory_name,
 )
 from short_vol_underwriting.identity import require_identity
 
@@ -105,7 +106,7 @@ def load_v2_case_report(
         if is_shadow_case_staging_name(member.name):
             continue
         try:
-            case_ids.append(require_identity(member.name, "case_id"))
+            case_ids.append(shadow_case_id_from_directory_name(member.name))
         except ValueError as exc:
             raise V2CaseReportError("cases directory contains an invalid Case identity") from exc
     cases = tuple(store.read_case(case_id, runtime_active=runtime_active) for case_id in case_ids)

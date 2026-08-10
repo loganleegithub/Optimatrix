@@ -65,6 +65,11 @@ Policy identities are exact content digests. The code identity is the exact Git 
 contract bytes, file paths, host identity, PID, manifest, receipt, directory inventory, and
 Workbench publication sequence do not enter the Case identity.
 
+The stable filesystem directory uses only the 64-hex digest suffix of `case_id`; the record and all
+public APIs retain the canonical `sha256:<64 lowercase hex>` identity. Every repository scanner
+uses the CaseStore-owned directory-name conversion and must not reinterpret the directory name as
+an already-prefixed business identity.
+
 Every record binds the same Case, `INVERSE_BTC_V1` product, and frozen Policy semantics.
 `SHADOW_CASE_OPENED` binds the origin code/runtime. Each Segment and any later first-close or
 Outcome record binds the exact code/runtime that emitted it plus its Segment identity.

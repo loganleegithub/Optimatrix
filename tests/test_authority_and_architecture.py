@@ -182,34 +182,37 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_the_confirmation_continuity_repair() -> None:
+def test_current_stage_authorizes_the_case_reader_closure_and_monitoring() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_CONFIRMATION_CONTINUITY_REPAIR_ACTIVE`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_CASE_READER_CLOSURE_ACTIVE`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_17D94DA`" in current
+    assert "**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_6FBCF9F`" in current
     assert "`ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`" in current
-    assert "one clean stop and one clean start" in normalized
-    assert "**Live commands:** `REQUIRED_BOUNDED_REPAIR_CUTOVER`" in current
+    assert "`OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`" in current
+    assert "**Live commands:** `CONTINUED_BOUNDED_MONITORING`" in current
     assert "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
-        "17d94dafb8eb6fb0044df100de3f10b4f8fca24b",
-        "sha256:d9741461cbe0ff3d59aa3cc864521f5d70efeb6ceb465d06b28ebcccdb5e4775",
+        "6fbcf9fbf4237d6685cbf7ae986dc4dfa4dfee76",
+        "sha256:5f1f5989c6475e1608af90e9d4b15dde553e71b270ccbaf0eaa80798957aa2f8",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
-        "no schema-v5 Case row",
         "`128/128` current Radar coverage",
-        "zero reconnects, zero protocol gaps",
+        "zero reconnects, and zero protocol gaps",
         "`3,045 ms`, `4,032 ms`, and `5,003 ms`",
         "confirmation changed `2 → 0`",
         "`CORE_UNKNOWN` reset count increased by `13`",
         "counts no observation",
         "already-active Episode remains fail-closed",
-        "one clean stop and one clean start",
+        "One separately selected LOW research Control",
+        "bare 64-hex digest",
+        "CaseStore's directory-name-to-Case-identity conversion",
+        "requires no runtime restart",
+        "zero Candidate, admitted Shadow Entry, or Position",
     ):
         assert phrase in normalized
     for identity in (

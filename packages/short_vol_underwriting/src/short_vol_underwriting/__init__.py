@@ -23,6 +23,7 @@ from short_vol_underwriting.case_store import (
     ShadowCaseStore,
     ShadowCaseStoreError,
     is_shadow_case_staging_name,
+    shadow_case_id_from_directory_name,
 )
 from short_vol_underwriting.close import (
     CloseAtomicAvailability,
@@ -225,5 +226,6 @@ __all__ = [
     "selected_decision_batch_identity",
     "selected_decision_designation_key",
     "selected_decision_rule_identity",
+    "shadow_case_id_from_directory_name",
     "underwriting_threshold_margins",
 ]

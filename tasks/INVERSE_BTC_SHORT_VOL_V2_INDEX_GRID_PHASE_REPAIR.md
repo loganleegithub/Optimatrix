@@ -20,13 +20,14 @@
 
 ## Product movement
 
-**Current funnel node:** `RADAR_KNOWN → ANOMALY_ACTIVE`
+**Current funnel node:** `ANOMALY_ACTIVE → UNDERWRITING → SHADOW_CASE_OPENED`
 
-**Baseline:** after the source-grid fixes, the clean Draft PR #48 runtime remained healthy, ready,
-`CURRENT`, `KNOWN_COMPLETE`, and `128/128`, with zero schema-v5 Case. Eligible HIGH leaders in the
-6-to-24-hour and 24-to-72-hour bands each reached confirmation `2/3` under their frozen 150-second
-and 300-second separations. Three consecutive scheduled history-refresh cycles produced queue-lag
-peaks of `3,045 ms`, `4,032 ms`, and `5,003 ms`.
+**Baseline:** after the source-grid and confirmation-continuity fixes, clean code identity
+`6fbcf9fbf4237d6685cbf7ae986dc4dfa4dfee76` remained healthy, ready, `CURRENT`,
+`KNOWN_COMPLETE`, and `128/128`. Three HIGH Episodes reached fully evaluable Underwriting; each was
+a known non-Candidate because credit did not exceed the fixed future-cost reserve. One bounded LOW
+research Control opened in the stable schema-v5 repository, while admitted Shadow count remained
+zero.
 
 **Primary blocker:** `ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`. On the
 threshold-crossing refresh, the queue-lag currentness gate correctly changed every current Radar
@@ -36,6 +37,14 @@ increased by `13`. About half a second later the same session, bucket leader, HI
 source-confirmed baseline recovered, yet confirmation restarted at `0 → 1`. Reconnect, protocol
 gap, and continuity-epoch counts did not change.
 
+That runtime blocker is repaired. The next observed verification blocker is
+`OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`: the CaseStore writes a canonical `sha256:<digest>` Case
+under a bare `<digest>` directory, but `report-v2-cases` duplicated the scanner and required the
+directory name itself to match `sha256:<digest>`. The official report therefore rejected the first
+valid Control Case before reading it. This is not Case corruption and is not the current business
+funnel blocker; the measured business blocker remains
+`CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE` for all three observed HIGH Episodes.
+
 **Expected user-visible delta:** while ordered queue lag is above the fixed currentness deadline,
 Radar remains `UNKNOWN`, bucket coverage is `UNKNOWN`, no observation is counted, and no Episode or
 downstream admission can occur. An inactive tracker retains only confirmations already accepted
@@ -43,16 +52,21 @@ before the lag. On catch-up the current facts are recomputed: the same leader an
 from the retained count, while a changed leader, band, scope, or persistent core loss resets under
 the existing rules.
 
-**Durable-data effect:** `NONE` before a normal V2 admission. The repair neither creates nor
-migrates a Case and retains the existing stable schema-v5 repository.
+The offline report additionally reads the exact directories produced by `ShadowCaseStore`, keeps
+Control and admitted enrollment strata separate, and can independently verify the first future
+admitted Shadow without changing the running service.
+
+**Durable-data effect:** `NONE`. The repair neither creates, rewrites, migrates, nor deletes a Case
+and retains the existing stable schema-v5 repository.
 
 **Complexity added:** one bounded currentness-pause branch in the existing runtime bucket owner, in
-addition to the already-landed aligned-source timestamp tuple; no new state owner, timer, schema,
-history, or baseline path.
+addition to the already-landed aligned-source timestamp tuple; one public CaseStore-owned
+directory-name conversion function; no new state owner, timer, schema, history, or baseline path.
 
 **Complexity deleted:** the rotating five-phase sampling behavior, the wall-clock-ahead-of-source
-anchor race, the misleading baseline source label, and the destructive interpretation of a
-transient ordered backlog as lost pre-confirmation evidence.
+anchor race, the misleading baseline source label, the destructive interpretation of a transient
+ordered backlog as lost pre-confirmation evidence, and the offline report's duplicate Case identity
+parser.
 
 ## Business closure
 
@@ -77,6 +91,10 @@ Candidate; a reset caused only by a transient ordered queue backlog is not valid
 lagged but ordered envelope, catch up without counting a new observation, and observe any change in
 the prior count or any Candidate/Case created during the `UNKNOWN` interval.
 
+For the reader boundary, create or observe one store-written bare 64-hex Case directory and run the
+official report. Rejecting that directory, changing its Case identity, or mixing its Control row
+into admitted Shadow is a direct falsification.
+
 ## Change declarations
 
 **Market/Decision input contract change:** five-minute index-chart samples remain fixed to the
@@ -88,23 +106,26 @@ remain `UNKNOWN` until catch-up.
 
 **Outcome/evaluation contract change:** `NONE`.
 
-**Stage/authorization change:** authorize this bounded repair in the existing Draft PR and one
-clean stop/start on `127.0.0.1:8675` from the clean checked commit, using the unchanged stable Case
-root. Continued public-only observation runs until the first admitted active Shadow or a newly
-measured fixed blocker is established. No private or execution permission is added.
+**Stage/authorization change:** authorize the bounded offline reader closure in the existing Draft
+PR without restarting `127.0.0.1:8675` or changing its stable Case root. Continued public-only
+observation runs until the first admitted active Shadow or a newly measured fixed blocker is
+established. No private or execution permission is added.
 
 ## Scope
 
 **In:** the sole runtime bucket-settlement owner and its queue-lag currentness transition; the
-already-landed `IndexHistoryReducer` source-grid repair; focused market/runtime/Workbench tests;
-owning contract, task, and Current Stage authority; the bounded public-only cutover and observation.
+already-landed `IndexHistoryReducer` source-grid repair; the CaseStore-owned directory identity
+conversion and read-only V2 report; focused market/runtime/Workbench/Case/report tests; owning
+contracts, task, and Current Stage authority; continued bounded public-only observation.
 
 **Out:** score weights, thresholds, TTE/Delta rules, confirmation counts or separations, preservation
 of an already-active Episode, any Policy artifact, Underwriting or Position economics, Case schema,
 state-root migration, private data, orders, fills, capital, process supervision, or a second
 baseline path.
 
-**Owning module:** `apps/radar_runtime/src/radar_runtime/runtime.py`
+**Owning modules:** `apps/radar_runtime/src/radar_runtime/runtime.py`,
+`apps/radar_runtime/src/radar_runtime/offline_report.py`, and
+`packages/short_vol_underwriting/src/short_vol_underwriting/case_store.py`
 
 ## Validation
 
@@ -115,13 +136,16 @@ baseline path.
   `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`, verify exact runtime identity,
   health/readiness/currentness, fixed-grid baseline behavior across canonical boundaries, and
   continue the already-authorized public-only monitor;
+- run `report-v2-cases --runtime-active` against the unchanged stable root and prove the first
+  store-written Control Case is readable under its canonical prefixed identity;
 - no manifest, receipt, commissioning subsystem, runtime self-acceptance, or host inspection.
 
 ## Definition of done
 
 The rotating phase, source-ahead race, and queue-lag destructive pre-confirmation reset are
-impossible by direct tests; the full repository gate passes; the live clean repair commit remains
-current; threshold-crossing lag contributes zero observations while a same-truth recovery retains
-the prior count; any first active admitted Shadow is verified through the API and official Case
-reader, or the next truthful fixed funnel blocker is reported without changing Policy to
-manufacture admission; the diff is bounded and remote state is exact.
+impossible by direct tests; the official reader accepts store-owned bare digest directories and
+preserves their canonical prefixed Case identities; the full repository gate passes; the live
+clean repair commit remains current; threshold-crossing lag contributes zero observations while a
+same-truth recovery retains the prior count; any first active admitted Shadow is verified through
+the API and official Case reader, or the next truthful fixed funnel blocker is reported without
+changing Policy to manufacture admission; the diff is bounded and remote state is exact.

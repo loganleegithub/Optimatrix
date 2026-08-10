@@ -6,15 +6,15 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_CONFIRMATION_CONTINUITY_REPAIR_ACTIVE`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_CASE_READER_CLOSURE_ACTIVE`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_17D94DA`
+**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_6FBCF9F`
 
-**Live commands:** `REQUIRED_BOUNDED_REPAIR_CUTOVER`
+**Live commands:** `CONTINUED_BOUNDED_MONITORING`
 
 **Sole authorized closure:**
 [`INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md)
@@ -44,27 +44,36 @@ loss still resets normally, and an already-active Episode remains fail-closed. N
 confirmation count, separation, TTE/Delta rule, Underwriting economics, Position rule, Case schema,
 or Policy identity changes.
 
-This authority permits one clean stop and one clean start on `127.0.0.1:8675` from the clean repair
-commit after direct and repository checks pass, reusing the unchanged stable Case repository
-`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. Continued observation remains
-production-public Shadow only and cannot claim Edge, profitability, an order, a fill, or actual
-exposure. The bounded implementation remains [Draft PR
+Clean code identity `6fbcf9fbf4237d6685cbf7ae986dc4dfa4dfee76` is now running that repair.
+Three observed HIGH Episodes reached Underwriting and were known non-Candidates because entry credit
+did not exceed the fixed future-cost reserve. One separately selected LOW research Control then
+opened normally and exposed `OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`: its store-owned directory
+is the bare 64-hex digest, while `report-v2-cases` duplicated the directory scan and incorrectly
+required the directory name itself to be a prefixed `sha256:` identity. The durable Case is valid;
+the reader boundary was wrong.
+
+The bounded closure makes the CaseStore's directory-name-to-Case-identity conversion public and
+reuses it in the offline report. It changes no online decision, Policy, Case bytes, or stable root
+and requires no runtime restart. Continued observation remains production-public Shadow only and
+cannot claim Edge, profitability, an order, a fill, or actual exposure. The bounded implementation
+remains [Draft PR
 #48](https://github.com/loganleegithub/Optimatrix/pull/48).
 
 ## Current online boundary
 
 The sole Online Runtime is serving `127.0.0.1:8675` from clean Draft PR #48 code identity
-`17d94dafb8eb6fb0044df100de3f10b4f8fca24b`. Its runtime identity is
-`sha256:d9741461cbe0ff3d59aa3cc864521f5d70efeb6ceb465d06b28ebcccdb5e4775`.
+`6fbcf9fbf4237d6685cbf7ae986dc4dfa4dfee76`. Its runtime identity is
+`sha256:5f1f5989c6475e1608af90e9d4b15dde553e71b270ccbaf0eaa80798957aa2f8`.
 It holds the single-instance lease for the stable Case repository
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; no Case root was copied, migrated,
 replaced, or deleted during the cutover.
 
-The latest pre-repair inventory reported health, readiness, `RUNNING`, `CURRENT`,
-`KNOWN_COMPLETE`, `128/128` current Radar coverage, zero reconnects, zero protocol gaps, and no
-schema-v5 Case row. The API's Shadow Entry, Position, Outcome, and Decision Control `rows` were all
-empty, and the official Case reader reported zero opened Case. Those are current inventory facts,
-not Policy-quality or future-frequency claims.
+The latest verified boundary reported health, readiness, `RUNNING`, `CURRENT`, `KNOWN_COMPLETE`,
+`128/128` current Radar coverage, zero reconnects, and zero protocol gaps. It had three distinct
+HIGH Episodes and zero Candidate, admitted Shadow Entry, or Position. The single durable Case was a
+non-admitted LOW research Control; the repaired official report read it as `PENDING_OPEN` only
+under the caller's explicit active-runtime assertion. These are bounded observations, not
+Policy-quality or future-frequency claims.
 
 ## Current product truth
 
@@ -95,6 +104,6 @@ settlement action, actual exposure, or private execution. The accepted smoke and
 checks do not establish future uptime, source freshness, fillability, qualification, Edge, or
 profitability.
 
-Only the bounded repair cutover and continued public-only monitoring declared above are authorized.
-Any extra restart, state-root operation, Policy change, or roadmap-channel implementation requires a
-new explicit task and permission update under the Delivery Contract.
+Only the bounded offline reader closure and continued public-only monitoring declared above are
+authorized. Any extra restart, state-root operation, Policy change, or roadmap-channel
+implementation requires a new explicit task and permission update under the Delivery Contract.
