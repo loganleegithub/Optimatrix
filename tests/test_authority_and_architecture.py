@@ -182,57 +182,33 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_active_queue_throughput_repair() -> None:
+def test_current_stage_records_closed_queue_throughput_repair() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `IMPLEMENTATION`" in current
+    assert "**Current task kind:** `NONE`" in current
     assert "`INVERSE_BTC_SHORT_VOL_V2_SCHEMA7_8675_LIVE_CURRENT`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_CURRENT_8675_STABLE_SCHEMA_V5`" in current
-    assert "**Live commands:** `ONE_QUEUE_REPAIR_8675_CLEAN_CUTOVER_AUTHORIZED`" in current
-    assert "INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR" in current
+    assert "**Persistent service:** `RUNNING_8675_FROM_MAIN_6236F14`" in current
+    assert "**Live commands:** `NONE_CONSUMED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
-        "channel: INVERSE_BTC_SHORT_VOL_V2",
-        "Workbench schema: 7",
-        "code identity: 982c5be3db1bdc077cd398e6ea572c0855ccd09b",
-        "runtime identity: sha256:0ddf1b13e1039c98588b8457dd44277c698628f1238ae16c965563dc43e3cec3",
-        "6 / 6 HTTP 200",
-        "KNOWN_COMPLETE, 128 / 128 instruments",
-        "latest market-event age: 4,331 ms",
-        "last wire-message age: 3,926 ms",
-        "last queue-processing lag: 3,925 ms",
-        "queue-lag deadline/active: 5,000 ms / false",
-        "Shadow Entry rows: 0",
-        "Position rows: 0",
-        "Outcome rows: 0",
-        "Decision Control rows: 0",
-        "all six declared routes at `127.0.0.1:8765` refused connection",
-        "official schema-v5 report found `0` Case directories",
-        "Schema v6 mislabeled newest accepted exchange-event age",
-        "It does not claim that the measured reducer backlog is fixed",
-        "PR #39 merged",
-        "topic branch was deleted locally and remotely",
-        "The one stop, one start, and bounded post-start smoke are consumed",
-        "Active queue-throughput repair authority",
-        "`QUEUE_PROCESSING_THROUGHPUT_INTERMITTENT`",
-        "one at-most-60-second loopback sample is consumed",
-        "no sample aggregate survived and no retry is authorized",
-        "`10.698 ms` each",
-        "`1.724 ms` per transaction",
+        "PR [#41]",
+        "6236f143a5a62cba30b95bcb723c50287725aba2",
+        "the tool response containing its schema-v7 latency distribution",
+        "No retry is authorized",
+        "zero opened, pending, mature, censored, or incomplete Case rows",
+        "no Case migration, copy, deletion, rewrite, Segment close, or recovery",
+        "`10.698 ms`",
+        "`1.724 ms`",
         "bounded `83.9%` reduction",
-        "The pre-stop inventory is consumed",
-        "market-event age `5,147 ms`",
-        "wire age `3,784 ms`",
-        "queue-processing lag `4,129 ms`",
-        "zero Case rows in every view",
-        "Durable cutover effect is exactly `NONE`",
-        "mark PR #41 ready",
-        "at most 60 seconds of the three schema-v7 latency values",
-        "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2",
+        "approximately `6.2x` throughput improvement",
+        "retains the complete cross-sectional ticker point set",
+        "Focused verification passed `246` tests",
+        "`731` tests",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
     ):
         assert phrase in normalized
@@ -243,10 +219,7 @@ def test_current_stage_records_active_queue_throughput_repair() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
-        "INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR.md",
-        "TEMPLATE.md",
-    }
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
 
