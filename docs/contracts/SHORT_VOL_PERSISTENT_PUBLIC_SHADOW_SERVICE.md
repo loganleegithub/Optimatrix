@@ -114,11 +114,19 @@ publishes one complete immutable schema snapshot:
 - at most once per 500 monotonic milliseconds for ordinary status-stable updates;
 - once for pending state before reconnect or stop.
 
-The schema-v6 snapshot identifies `INVERSE_BTC_SHORT_VOL_V2`, `INVERSE_BTC_V1`, their exact
+The schema-v7 snapshot identifies `INVERSE_BTC_SHORT_VOL_V2`, `INVERSE_BTC_V1`, their exact
 product/Policy identities, V2 score/leader/coverage state, public/index/native
 premium/settlement/strike/valuation units, and Policy chain. Every monetary value is labeled with
 its server-owned native or valuation unit. Browser code may not infer a unit from an internal key
 suffix or convert between native, model, and valuation values.
+
+The Workbench keeps three latency meanings separate. `latest_market_event_age_ms` is trusted
+exchange time minus the newest accepted index, ticker, or book source timestamp; it may grow when
+an aggregated market channel emits no changed event. `last_wire_message_age_ms` is local monotonic
+time since any public wire message. `last_queue_processing_lag_ms` is the most recently processed
+envelope's local receive-to-reducer delay. Only the third value is compared with the fixed Policy
+`queue_lag_deadline_ms` and may activate `QUEUE_LAG_CURRENTNESS`. A source-event age above that
+queue deadline is not, by itself, a slow reducer, stale ticker, or reconnect condition.
 
 Every active admitted Entry appears once by its original `shadow_entry_identity`, whether opened in
 this runtime or restored. The snapshot distinguishes origin runtime from current Segment runtime

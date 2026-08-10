@@ -1603,6 +1603,8 @@ def test_ordered_receive_lag_enters_currentness_without_retiring_session(
     assert reducer._global_continuity_epoch == 1
     assert reducer._session_epoch not in reducer._retired_epochs
     assert reducer._queue_lag_currentness_active
+    assert reducer.queue_lag_currentness_active
+    assert reducer.diagnostics.last_queue_processing_lag_ms == 1_001
     assert reducer._coverage._current_state is CoverageState.UNKNOWN
     assert reducer._coverage._current_blocking_reason == "QUEUE_LAG_CURRENTNESS"
 
@@ -1617,6 +1619,8 @@ def test_ordered_receive_lag_enters_currentness_without_retiring_session(
     )
 
     assert not reducer._queue_lag_currentness_active
+    assert not reducer.queue_lag_currentness_active
+    assert reducer.diagnostics.last_queue_processing_lag_ms == 0
     assert reducer._coverage._current_blocking_reason != "QUEUE_LAG_CURRENTNESS"
     assert reducer.diagnostics.session_gap_count == 0
 

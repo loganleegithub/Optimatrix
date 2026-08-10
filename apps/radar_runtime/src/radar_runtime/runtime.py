@@ -637,6 +637,7 @@ class _RpcLifecycle:
 class RuntimeDiagnostics:
     reconnect_count: int = 0
     session_gap_count: int = 0
+    last_queue_processing_lag_ms: int | None = None
     global_continuity_restart_edges: deque[dict[str, object]] = field(
         default_factory=lambda: deque(maxlen=20)
     )
@@ -875,6 +876,7 @@ class RadarReducer:
         self._application_frontier_by_epoch[session_epoch] = 0
         self._last_boundary_monotonic_ms = monotonic_ms
         self._last_wire_received_ms = monotonic_ms
+        self.diagnostics.last_queue_processing_lag_ms = None
         self._bootstrap_queries_issued = False
         self._platform_status_ingress_seq = None
         self._post_status_bootstrap_successes.clear()
@@ -1081,6 +1083,7 @@ class RadarReducer:
         lag_ms = processed_monotonic_ms - envelope.received_monotonic_ms
         if lag_ms < 0:
             raise PublicProtocolError("inbound frame receive time is in the future")
+        self.diagnostics.last_queue_processing_lag_ms = lag_ms
         lagged = lag_ms > self.policy.runtime_limits.notification_queue_lag_deadline_ms
         if lagged != self._queue_lag_currentness_active:
             self._queue_lag_currentness_active = lagged
@@ -6322,6 +6325,10 @@ class RadarReducer:
     @property
     def last_wire_received_monotonic_ms(self) -> int:
         return self._last_wire_received_ms
+
+    @property
+    def queue_lag_currentness_active(self) -> bool:
+        return self._queue_lag_currentness_active
 
     @property
     def current_coverage_state(self) -> CoverageState:

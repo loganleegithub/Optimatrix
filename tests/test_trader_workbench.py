@@ -12,6 +12,7 @@ from typing import cast
 
 import pytest
 import radar_runtime.workbench as workbench_module
+from market_monitor import TimeInterval
 from options_domain import INVERSE_BTC
 from radar_runtime.runtime import (
     CausalCause,
@@ -339,10 +340,48 @@ def test_initial_snapshot_keeps_empty_panels_separate_from_unknown_zero_claims()
         "observed_count": 0,
     }
     assert value["service"]["data_state"] == "UNKNOWN"
-    assert value["schema_version"] == 6
+    assert value["schema_version"] == 7
     assert value["channel_id"] == "INVERSE_BTC_SHORT_VOL_V2"
     assert "THIS_ARTIFACT_DOES_NOT_GRANT_LIVE_OR_DEPLOYMENT_AUTHORITY" in value["non_claims"]
     assert "NO_LIVE_OR_DEPLOYMENT_AUTHORITY" not in value["non_claims"]
+
+
+def test_latency_projection_separates_source_event_age_from_queue_processing_lag() -> None:
+    reducer = cast(
+        RadarReducer,
+        SimpleNamespace(
+            accepted_index_receipt=SimpleNamespace(source_timestamp_ms=1_000),
+            tickers={},
+            accepted_book_receipts={},
+            last_wire_received_monotonic_ms=9_900,
+            diagnostics=SimpleNamespace(last_queue_processing_lag_ms=12),
+            policy=SimpleNamespace(
+                runtime_limits=SimpleNamespace(notification_queue_lag_deadline_ms=5_000)
+            ),
+            queue_lag_currentness_active=False,
+        ),
+    )
+    commit = CausalCommit(
+        boundary=FactBoundary(1, 1, 10_000, 1),
+        cause=CausalCause.TIME_BOUNDARY,
+        failure_domain=FailureScope.CLOCK_INDEX,
+        affected_scopes=("GLOBAL",),
+    )
+
+    latency = workbench_module._latency_projection(
+        reducer,
+        commit,
+        TimeInterval(7_999, 8_000),
+    )
+
+    assert latency == {
+        "latest_market_event_timestamp_ms": 1_000,
+        "latest_market_event_age_ms": 7_000,
+        "last_wire_message_age_ms": 100,
+        "last_queue_processing_lag_ms": 12,
+        "queue_lag_deadline_ms": 5_000,
+        "queue_lag_currentness_active": False,
+    }
 
 
 def test_shadow_projection_derives_vertical_credit_only_from_persisted_component_legs() -> None:
@@ -1306,7 +1345,7 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "documentValue.publication_sequence" in JS
     assert "if (!response.ok) throw" in JS
     assert "renderUnavailable();" in JS
-    assert "SUPPORTED_SCHEMA_VERSION = 6" in JS
+    assert "SUPPORTED_SCHEMA_VERSION = 7" in JS
     assert "runtimeStatusState" in JS
     assert ".queue-table" in CSS
     assert "overflow: auto" in CSS
@@ -1377,9 +1416,15 @@ const snapshot = {{
     position:{json.dumps(INVERSE_BTC_POSITION_POLICY_IDENTITY)}
   }},
   service: {{ready:true, reason:'NONE'}},
-  system: {{data_delay_ms:1}}
+  system: {{
+    latest_market_event_age_ms:7000, last_wire_message_age_ms:100,
+    last_queue_processing_lag_ms:12, queue_lag_deadline_ms:5000,
+    queue_lag_currentness_active:false
+  }}
 }};
 assert.equal(api.channelSnapshotState(snapshot).code, 'CONNECTED');
+assert.match(api.channelSnapshotState(snapshot).note, /处理 12 ms/);
+assert.match(api.channelSnapshotState(snapshot).note, /行情事件 7.0 秒/);
 assert.equal(api.channelSnapshotState({{...snapshot, product:{{...snapshot.product, name:'linear-btc-usdc'}}}}).code,
   'IDENTITY_MISMATCH');
 """
@@ -1433,8 +1478,12 @@ def test_browser_executes_fail_closed_and_recovery_paths() -> None:
     }
     system = document["system"]
     assert isinstance(system, dict)
-    system["latest_market_timestamp_ms"] = 1_700_000_000_000
-    system["data_delay_ms"] = 18
+    system["latest_market_event_timestamp_ms"] = 1_700_000_000_000
+    system["latest_market_event_age_ms"] = 18
+    system["last_wire_message_age_ms"] = 8
+    system["last_queue_processing_lag_ms"] = 2
+    system["queue_lag_deadline_ms"] = 5_000
+    system["queue_lag_currentness_active"] = False
     underwriting = document["underwriting"]
     assert isinstance(underwriting, dict)
     underwriting["rows"] = [
@@ -1523,7 +1572,7 @@ const elementIds = [
   'queue-status', 'queue-head', 'queue-body', 'detail-title', 'detail-content',
   'detail-panel', 'detail-scrim', 'shadow-jump', 'evidence-toggle', 'footer-summary',
   'runtime-status', 'runtime-state-label', 'runtime-state-detail', 'service-phase',
-  'data-currentness', 'data-delay', 'runtime-blocker'
+  'data-currentness', 'data-delay', 'wire-age', 'queue-lag', 'runtime-blocker'
 ];
 const elements = Object.fromEntries(elementIds.map(id => [id, {{
   hidden: id === 'connection', textContent: '', innerHTML: '', scrollTop: 0,

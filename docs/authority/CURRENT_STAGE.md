@@ -4,7 +4,7 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
 **Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_8675_LIVE_CURRENT`
 
@@ -14,9 +14,53 @@
 
 **Persistent service:** `RUNNING_CURRENT_8675_FRESH_SCHEMA_V5`
 
-**Live commands:** `NONE_AUTHORIZED_8675_CUTOVER_CONSUMED`
+**Live commands:** `ONE_SCHEMA7_8675_CLEAN_CUTOVER_AUTHORIZED`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:**
+[`INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION.md)
+
+## Active latency-attribution result
+
+The trader reports that the generic Workbench market-delay value repeatedly exceeds `5,000 ms`.
+The one authorized loopback-only, read-only sample of `/api/workbench/current` ran for at most 45
+seconds and is consumed. All `45 / 45` observations were `RUNNING / CURRENT / ready` with
+`KNOWN_COMPLETE 128 / 128`, `0` reconnects, `0` session gaps, and no
+`QUEUE_LAG_CURRENTNESS` anywhere in the snapshot. Maximum generic source-event age was `4,616 ms`;
+maximum last-wire age was `4,068 ms`.
+
+Code inspection establishes that schema-v6 `data_delay_ms` subtracts the newest accepted exchange
+source timestamp from trusted time. It is source-event age, not receive-to-reducer processing lag.
+The active task may correct that non-durable Workbench schema and expose the already-owned queue
+lag separately. The bounded observation does not prove a synchronous runtime hot path, so no
+performance architecture or Decision Policy change is authorized.
+
+The original latency-sampling authority is consumed. Except for the clean cutover explicitly
+authorized in the next section, no further live command, second process, state-root operation,
+external public-source probe, PID/log/resource inspection, Policy change, or Case write is
+authorized.
+
+## Pre-stop inventory and authorized clean cutover
+
+The human has authorized merge, branch deletion, and restart of the schema-v7 Workbench change.
+The one pre-stop inventory is consumed. The same-frame schema-v6 snapshot reported `0` Shadow
+Entries, `0` Positions, `0` Outcomes, and `0` Decision Controls. The official schema-v5 reader
+reported `0` Case rows in every enrollment/quality view for the already-bound stable root
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. Durable cutover effect is therefore
+`NONE`: there is no admitted Entry Segment to close or recover, and no Case will be migrated,
+copied, deleted, or rewritten.
+
+That same frame was `RUNNING / STALE / ready=false`, with `QUEUE_LAG_CURRENTNESS`, `0 / 128` known
+instruments, `0` reconnects, and `0` session gaps. This proves an intermittent real reducer backlog
+in addition to the already-proven schema-v6 source-event-age naming defect. The schema-v7 change
+attributes the two facts separately; this cutover does not claim to eliminate the runtime backlog.
+
+The active task may now mark PR #39 ready, merge it to `main`, delete its local and remote topic
+branch, clean-stop only the currently owned 8675 runtime session, confirm the six loopback routes
+refuse connection, and start exactly one replacement from clean synchronized `main` using the same
+stable root and port. One bounded post-start smoke may inspect the six declared GET/HEAD routes,
+schema-v7 identity and latency fields, service/readiness/coverage state, and one official Case
+report. No second root/process, Policy change, root mutation outside normal empty-root startup,
+host PID/log/resource inspection, or additional restart is authorized.
 
 ## Current online boundary
 

@@ -34,7 +34,7 @@ from radar_runtime.workbench_frontend import CSS as CSS
 from radar_runtime.workbench_frontend import HTML as HTML
 from radar_runtime.workbench_frontend import JS as JS
 
-WORKBENCH_SCHEMA_VERSION = 6
+WORKBENCH_SCHEMA_VERSION = 7
 WORKBENCH_CHANNEL_ID = "INVERSE_BTC_SHORT_VOL_V2"
 WORKBENCH_PUBLICATION_INTERVAL_MS = 500
 SIMULATION_LABEL = "模拟入场, 不是订单或成交"
@@ -725,20 +725,7 @@ def _build_business_projection(
             downstream.underwriting_counts["underwriting_availability_evaluable_count"] or None
         ),
     )
-    latest_source_ms = _latest_market_timestamp(reducer)
-    data_delay_ms = (
-        None
-        if trusted is None or latest_source_ms is None
-        else max(0, trusted.upper_ms - latest_source_ms)
-    )
-    last_wire_age_ms = (
-        None
-        if reducer.last_wire_received_monotonic_ms <= 0
-        else max(
-            0,
-            commit.boundary.received_monotonic_ms - reducer.last_wire_received_monotonic_ms,
-        )
-    )
+    latency = _latency_projection(reducer, commit, trusted)
     history_state = (
         reducer.index_history.current_tail(
             reducer.policy.largest_lookback_minutes,
@@ -758,9 +745,7 @@ def _build_business_projection(
             "session_epoch": reducer.current_session_epoch,
             "platform_usable": reducer.platform.usable,
             "platform_reason": reducer.platform.reason,
-            "latest_market_timestamp_ms": latest_source_ms,
-            "data_delay_ms": data_delay_ms,
-            "last_wire_age_ms": last_wire_age_ms,
+            **latency,
             "coverage_state": reducer.current_coverage_state.value,
             "coverage_blocking_reason": reducer.current_coverage_blocking_reason,
             "coverage_affected_scopes": list(reducer.current_coverage_affected_scopes),
@@ -2229,9 +2214,12 @@ def _empty_business_projection(product: OptionProductSpec) -> dict[str, object]:
             "session_epoch": None,
             "platform_usable": False,
             "platform_reason": "NOT_STARTED",
-            "latest_market_timestamp_ms": None,
-            "data_delay_ms": None,
-            "last_wire_age_ms": None,
+            "latest_market_event_timestamp_ms": None,
+            "latest_market_event_age_ms": None,
+            "last_wire_message_age_ms": None,
+            "last_queue_processing_lag_ms": None,
+            "queue_lag_deadline_ms": None,
+            "queue_lag_currentness_active": False,
             "coverage_state": CoverageState.UNKNOWN.value,
             "coverage_blocking_reason": "NOT_STARTED",
             "coverage_affected_scopes": ["GLOBAL"],
@@ -2349,7 +2337,34 @@ def _trusted_interval(reducer: RadarReducer, monotonic_ms: int) -> TimeInterval 
         return None
 
 
-def _latest_market_timestamp(reducer: RadarReducer) -> int | None:
+def _latency_projection(
+    reducer: RadarReducer,
+    commit: CausalCommit,
+    trusted: TimeInterval | None,
+) -> dict[str, object]:
+    latest_source_ms = _latest_market_event_timestamp(reducer)
+    return {
+        "latest_market_event_timestamp_ms": latest_source_ms,
+        "latest_market_event_age_ms": (
+            None
+            if trusted is None or latest_source_ms is None
+            else max(0, trusted.upper_ms - latest_source_ms)
+        ),
+        "last_wire_message_age_ms": (
+            None
+            if reducer.last_wire_received_monotonic_ms <= 0
+            else max(
+                0,
+                commit.boundary.received_monotonic_ms - reducer.last_wire_received_monotonic_ms,
+            )
+        ),
+        "last_queue_processing_lag_ms": reducer.diagnostics.last_queue_processing_lag_ms,
+        "queue_lag_deadline_ms": (reducer.policy.runtime_limits.notification_queue_lag_deadline_ms),
+        "queue_lag_currentness_active": reducer.queue_lag_currentness_active,
+    }
+
+
+def _latest_market_event_timestamp(reducer: RadarReducer) -> int | None:
     values: list[int] = []
     if reducer.accepted_index_receipt is not None:
         values.append(reducer.accepted_index_receipt.source_timestamp_ms)
