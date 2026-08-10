@@ -4,7 +4,7 @@
 
 ```text
 Deribit public Inverse BTC WebSocket
-  → fixed `INVERSE_BTC_V1` product specification and three-Policy chain
+  → fixed `INVERSE_BTC_V1` product and `INVERSE_BTC_SHORT_VOL_V2` three-Policy chain
   → one bounded application queue
   → one RadarReducer
   → one in-memory Underwriting/Shadow/Position owner
@@ -17,8 +17,9 @@ There is no online product selector, fallback profile, or product switch. The fi
 the `btc_usd` public source, BTC-native premium/fees/settlement/PnL, explicit `USD_EQUIVALENT`
 valuation, Inverse Case schema, funnel, and Workbench unit projection.
 
-The Workbench renders server-owned current state. It never reads durable Case files and never
-performs strategy calculations. Ordinary status-stable updates publish at most 2 Hz;
+The Workbench renders server-owned V2 score/leader/coverage truth and selection-to-entry score
+drift. It never reads durable Case files and never performs strategy calculations. Ordinary
+status-stable updates publish at most 2 Hz;
 readiness/currentness changes publish immediately; pending state flushes before reconnect or stop.
 Every active admitted Entry appears once by `shadow_entry_identity`, with origin runtime, current
 Observation Segment, gap/currentness, first-CLOSE attempt, Outcome quality, and qualification
@@ -26,7 +27,7 @@ eligibility kept distinct from runtime health.
 
 ## Persistence
 
-The external stable state root may contain only the bounded Case family:
+The external stable non-temporary state root may contain only the bounded schema-v5 Case family:
 
 ```text
 service.lock
@@ -35,7 +36,6 @@ cases/<case-id>/segments/<segment-sequence>/opened.json
 cases/<case-id>/segments/<segment-sequence>/closed.json   # optional
 cases/<case-id>/first-close.json                          # optional
 cases/<case-id>/outcome.json                              # optional
-cases/<case-id>/legacy-migration.json                     # optional
 ```
 
 The first durable product boundary is `SHADOW_CASE_OPENED`; for an admitted Entry its origin
@@ -54,8 +54,7 @@ The application exposes `/healthz`, `/readyz`, and `/api/workbench/current` on l
 supervision, restart policy, CPU, memory, and host logs are external operational concerns. The
 application does not inspect or manage them.
 
-The accepted repository state authorizes no live command. The existing `127.0.0.1:8765` process
-was observed from the older code identity `270920fb1fcb255c648e95361f31c1e5075ec294`; repository
-acceptance did not hot-swap, stop, restart, or repoint it and does not prove the accepted source is
-deployed. A later restart requires a separate explicit task and permission boundary. External
-state roots were not opened, migrated, rewritten, or deleted for the repository closure.
+The H1 repository state authorizes no live command. The last observed `127.0.0.1:8765` process is
+the older V1 chain on a temporary root; H1 does not hot-swap, stop, restart, repoint, inspect, or
+prove it deployed. H2 must receive explicit authority, preserve the V1 root separately, and start
+V2 on a fresh stable non-temporary root. No V1 Case is copied or migrated into V2.

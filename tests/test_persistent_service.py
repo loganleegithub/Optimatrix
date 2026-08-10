@@ -3,12 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from argparse import Namespace
+import uuid
 from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import FrozenInstanceError, dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
 from typing import NoReturn
 
 import pytest
@@ -16,7 +15,6 @@ import radar_runtime.__main__ as runtime_cli
 import radar_runtime.service as service_module
 import radar_runtime.workbench as workbench_module
 from conftest import PolicyFactory
-from options_domain import INVERSE_BTC
 from radar_runtime.deribit_public import (
     InboundEnvelope,
     PublicProtocolIncompatibility,
@@ -52,16 +50,18 @@ CODE = "a" * 40
 
 
 def _startup(tmp_path: Path, *, nonce: str = "nonce-a") -> PersistentServiceStartup:
-    return prepare_persistent_service_startup(
-        state_root=(tmp_path / "state").resolve(),
-        process_cwd=ROOT,
-        workbench_host="127.0.0.1",
-        workbench_port=0,
-        code_identity=CODE,
-        startup_monotonic_ms=100,
-        process_id=123,
-        nonce_factory=lambda: nonce,
-    )
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(service_module, "_temporary_state_roots", lambda: ())
+        return prepare_persistent_service_startup(
+            state_root=(tmp_path / "state").resolve(),
+            process_cwd=ROOT,
+            workbench_host="127.0.0.1",
+            workbench_port=0,
+            code_identity=CODE,
+            startup_monotonic_ms=100,
+            process_id=123,
+            nonce_factory=lambda: nonce,
+        )
 
 
 def test_single_instance_lease_rejects_duplicate_and_releases(tmp_path: Path) -> None:
@@ -79,88 +79,11 @@ def test_single_instance_lease_rejects_duplicate_and_releases(tmp_path: Path) ->
     second.release()
 
 
-def test_offline_migration_uses_a_stopped_source_and_stable_destination(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    source_root = (tmp_path / "legacy-state").resolve()
-    source_cases = source_root / "runs" / "legacy-runtime" / "cases"
-    source_cases.mkdir(parents=True)
-    source_lock = source_root / "service.lock"
-    source_lock.write_bytes(b"legacy-service-lock\n")
-    destination_root = (tmp_path / "stable-state").resolve()
-    seen: dict[str, object] = {}
-    product = SimpleNamespace(name=SimpleNamespace(value="inverse-btc"))
-    policies = object()
-
-    monkeypatch.setattr(runtime_cli, "git_repository_root", lambda _cwd: ROOT)
-    monkeypatch.setattr(runtime_cli, "clean_code_identity", lambda _repository: CODE)
-    monkeypatch.setattr(
-        runtime_cli,
-        "load_persistent_product_policies",
-        lambda _repository, selected_product: (
-            (product, policies)
-            if selected_product is INVERSE_BTC
-            else pytest.fail("migration selected a non-Inverse product")
-        ),
-    )
-
-    def migrate(source: Path, destination: Path, *, policies: object) -> tuple[object, ...]:
-        seen.update(source=source, destination=destination, policies=policies)
-        return (object(), object())
-
-    monkeypatch.setattr(runtime_cli, "migrate_legacy_admitted_cases", migrate)
-    arguments = Namespace(
-        source_state_root=source_root,
-        source_cases=source_cases,
-        destination_state_root=destination_root,
-    )
-
-    with SingleInstanceLease(source_root):
-        with pytest.raises(PersistentServiceStartupError, match="another persistent service"):
-            runtime_cli._run_legacy_migration(arguments)
-
-    source_lock.write_bytes(b"legacy-service-lock\n")
-    source_lock_bytes = source_lock.read_bytes()
-    source_lock_mtime_ns = source_lock.stat().st_mtime_ns
-
-    for overlapping_destination in (source_root / "child", source_root.parent):
-        arguments.destination_state_root = overlapping_destination
-        with pytest.raises(PersistentServiceStartupError, match="cannot overlap"):
-            runtime_cli._run_legacy_migration(arguments)
-    assert not (source_root / "child").exists()
-
-    arguments.destination_state_root = destination_root
-    assert runtime_cli._run_legacy_migration(arguments) == 0
-    assert seen == {
-        "source": source_cases,
-        "destination": destination_root / "cases",
-        "policies": policies,
-    }
-    assert source_lock.read_bytes() == source_lock_bytes
-    assert source_lock.stat().st_mtime_ns == source_lock_mtime_ns
-    assert "migrated_entries=2" in capsys.readouterr().out
-
-    missing_root = (tmp_path / "missing-legacy-lock").resolve()
-    missing_cases = missing_root / "runs" / "legacy-runtime" / "cases"
-    missing_cases.mkdir(parents=True)
-    arguments.source_state_root = missing_root
-    arguments.source_cases = missing_cases
-    arguments.destination_state_root = (tmp_path / "unused-destination").resolve()
-    with pytest.raises(PersistentServiceStartupError, match="regular non-symlink file"):
-        runtime_cli._run_legacy_migration(arguments)
-    assert not (missing_root / "service.lock").exists()
-    assert not arguments.destination_state_root.exists()
-
-
-@pytest.mark.parametrize("command", ("serve-shadow", "migrate-shadow-cases"))
 def test_online_cli_exposes_no_product_switch(
-    command: str,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(sys, "argv", ["radar_runtime", command, "--help"])
+    monkeypatch.setattr(sys, "argv", ["radar_runtime", "serve-shadow", "--help"])
 
     with pytest.raises(SystemExit) as exit_info:
         runtime_cli.main()
@@ -170,18 +93,51 @@ def test_online_cli_exposes_no_product_switch(
 
 
 def test_persistent_startup_rejects_removed_linear_product(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="unsupported option product: linear-btc-usdc"):
-        prepare_persistent_service_startup(
-            state_root=(tmp_path / "linear-state").resolve(),
-            process_cwd=ROOT,
-            workbench_host="127.0.0.1",
-            workbench_port=0,
-            product="linear-btc-usdc",
-            code_identity=CODE,
-            startup_monotonic_ms=100,
-            process_id=123,
-            nonce_factory=lambda: "removed-linear",
-        )
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(service_module, "_temporary_state_roots", lambda: ())
+        with pytest.raises(ValueError, match="unsupported option product: linear-btc-usdc"):
+            prepare_persistent_service_startup(
+                state_root=(tmp_path / "linear-state").resolve(),
+                process_cwd=ROOT,
+                workbench_host="127.0.0.1",
+                workbench_port=0,
+                product="linear-btc-usdc",
+                code_identity=CODE,
+                startup_monotonic_ms=100,
+                process_id=123,
+                nonce_factory=lambda: "removed-linear",
+            )
+
+
+@pytest.mark.parametrize("temporary_root", (Path("/tmp"), Path("/private/tmp")))
+def test_persistent_state_root_rejects_explicit_temporary_storage_before_mkdir(
+    temporary_root: Path,
+) -> None:
+    candidate = temporary_root / f"optimatrix-v2-forbidden-{uuid.uuid4().hex}"
+    assert not candidate.exists()
+
+    with pytest.raises(PersistentServiceStartupError, match="temporary storage"):
+        service_module.prepare_persistent_state_root(candidate, ROOT)
+
+    assert not candidate.exists()
+
+
+def test_persistent_state_root_rejects_system_temp_directory_before_mkdir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system_temp = Path("/opt/optimatrix-synthetic-system-temp")
+    candidate = system_temp / f"v2-forbidden-{uuid.uuid4().hex}"
+    monkeypatch.setattr(
+        service_module,
+        "_temporary_state_roots",
+        lambda: (Path("/tmp"), Path("/private/tmp"), system_temp),
+    )
+    assert not candidate.exists()
+
+    with pytest.raises(PersistentServiceStartupError, match="temporary storage"):
+        service_module.prepare_persistent_state_root(candidate, ROOT)
+
+    assert not candidate.exists()
 
 
 def test_startup_builds_one_business_owner_graph_without_service_ledger(tmp_path: Path) -> None:

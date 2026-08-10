@@ -67,13 +67,11 @@ from short_vol_radar.policy import OptionRule, load_policy_bytes
 
 def anomaly_evidence() -> AnomalyEvidence:
     rule = OptionRule(
-        Decimal("0.05"),
-        Decimal("0.6"),
-        Decimal("1.2"),
-        Decimal("0.9"),
-        1,
-        1,
-        0,
+        abs_delta_min=Decimal("0.05"),
+        abs_delta_max=Decimal("0.6"),
+        activation_observation_count=1,
+        clear_observation_count=1,
+        minimum_separation_ms=0,
     )
     return AnomalyEvidence(
         code_identity="a" * 40,

@@ -16,7 +16,7 @@ from market_monitor.types import SourceDataError, TimeInterval
 from options_domain import INVERSE_BTC, OptionType
 from options_domain.instruments import MAX_TTE_MS, SETTLEMENT_WINDOW_MS
 
-POLICY_FAMILY = "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS"
+POLICY_FAMILY = "INVERSE_BTC_SHORT_VOL_ORDINAL_MARKET_STRUCTURE_V2"
 MINIMUM_TTE_MINUTES = 30
 MAXIMUM_TTE_MINUTES = 72 * 60
 EXPECTED_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
@@ -30,11 +30,38 @@ class PolicyError(ValueError):
 class OptionRule:
     abs_delta_min: Decimal
     abs_delta_max: Decimal
-    activation_ratio: Decimal
-    clear_ratio: Decimal
     activation_observation_count: int
     clear_observation_count: int
     minimum_separation_ms: int
+
+
+@dataclass(frozen=True)
+class RichnessKnot:
+    ratio: Decimal
+    normalized_value: Decimal
+
+
+@dataclass(frozen=True)
+class ScoreModel:
+    richness_knots: tuple[RichnessKnot, ...]
+    surface_residual_saturation_iv_fraction: Decimal
+    term_residual_saturation_iv_fraction: Decimal
+    surface_adjustment_weight: Decimal
+    term_adjustment_weight: Decimal
+    path_adverse_semivariance_weight: Decimal
+    path_jump_weight: Decimal
+    liquidity_spread_weight: Decimal
+    liquidity_depth_weight: Decimal
+    liquidity_spread_full_quality_ticks: Decimal
+    liquidity_spread_zero_quality_ticks: Decimal
+    liquidity_depth_full_quality_levels: int
+    liquidity_depth_zero_quality_levels: int
+    path_quality_weight: Decimal
+    liquidity_quality_weight: Decimal
+    risk_floor: Decimal
+    risk_multiplier: Decimal
+    activation_score_lower: Decimal
+    clear_score_upper: Decimal
 
 
 @dataclass(frozen=True)
@@ -95,6 +122,7 @@ class RadarPolicy:
     target_base_quantity_btc: Decimal
     product_spec_identity: str
     runtime_limits: RuntimeLimits
+    score_model: ScoreModel
     tte_bands: tuple[TteBand, ...]
 
     @property
@@ -239,25 +267,29 @@ def _bands_are_adjacent(touched: tuple[TteBand, ...]) -> bool:
 
 def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:
     schema_version = _positive_int(raw.get("policy_schema_version"), "policy_schema_version")
-    if schema_version != 7:
-        raise PolicyError("policy_schema_version must be exactly 7")
+    if schema_version != 8:
+        raise PolicyError("policy_schema_version must be exactly 8")
     expected_keys = {
         "policy_schema_version",
         "policy_family",
         "product_spec_identity",
         "target_base_quantity_btc",
         "runtime_limits",
+        "score_model",
         "tte_bands",
     }
     product_spec_identity = raw.get("product_spec_identity")
     if product_spec_identity != INVERSE_BTC.identity:
         raise PolicyError("product_spec_identity must be the authorized Inverse BTC product")
+    if not isinstance(product_spec_identity, str):
+        raise PolicyError("product_spec_identity must be a string")
     _require_exact_keys(raw, expected_keys, "Policy")
     family = raw["policy_family"]
     if family != POLICY_FAMILY:
         raise PolicyError(f"policy_family must be {POLICY_FAMILY}")
     target = _positive_decimal(raw["target_base_quantity_btc"], "target_base_quantity_btc")
     runtime_limits = _parse_runtime_limits(raw["runtime_limits"])
+    score_model = _parse_score_model(raw["score_model"])
     bands_raw = raw["tte_bands"]
     if not isinstance(bands_raw, list) or not bands_raw:
         raise PolicyError("tte_bands must be a non-empty array")
@@ -278,7 +310,156 @@ def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:
         target_base_quantity_btc=target,
         product_spec_identity=product_spec_identity,
         runtime_limits=runtime_limits,
+        score_model=score_model,
         tte_bands=ordered,
+    )
+
+
+def _parse_score_model(value: object) -> ScoreModel:
+    if not isinstance(value, dict):
+        raise PolicyError("score_model must be an object")
+    fields = {
+        "richness_knots",
+        "surface_residual_saturation_iv_fraction",
+        "term_residual_saturation_iv_fraction",
+        "surface_adjustment_weight",
+        "term_adjustment_weight",
+        "path_adverse_semivariance_weight",
+        "path_jump_weight",
+        "liquidity_spread_weight",
+        "liquidity_depth_weight",
+        "liquidity_spread_full_quality_ticks",
+        "liquidity_spread_zero_quality_ticks",
+        "liquidity_depth_full_quality_levels",
+        "liquidity_depth_zero_quality_levels",
+        "path_quality_weight",
+        "liquidity_quality_weight",
+        "risk_floor",
+        "risk_multiplier",
+        "activation_score_lower",
+        "clear_score_upper",
+    }
+    _require_exact_keys(value, fields, "score_model")
+    raw_knots = value["richness_knots"]
+    if not isinstance(raw_knots, list) or len(raw_knots) < 2:
+        raise PolicyError("score_model.richness_knots must contain at least two knots")
+    knots: list[RichnessKnot] = []
+    for index, raw_knot in enumerate(raw_knots):
+        if not isinstance(raw_knot, dict):
+            raise PolicyError(f"score_model.richness_knots[{index}] must be an object")
+        _require_exact_keys(
+            raw_knot,
+            {"ratio", "normalized_value"},
+            f"score_model.richness_knots[{index}]",
+        )
+        knots.append(
+            RichnessKnot(
+                ratio=_positive_decimal(
+                    raw_knot["ratio"], f"score_model.richness_knots[{index}].ratio"
+                ),
+                normalized_value=_closed_unit_decimal(
+                    raw_knot["normalized_value"],
+                    f"score_model.richness_knots[{index}].normalized_value",
+                ),
+            )
+        )
+    if any(
+        later.ratio <= earlier.ratio or later.normalized_value <= earlier.normalized_value
+        for earlier, later in pairwise(knots)
+    ):
+        raise PolicyError("score_model.richness_knots must be strictly increasing")
+    if knots[0].normalized_value != 0 or knots[-1].normalized_value != 1:
+        raise PolicyError("score_model.richness_knots must start at 0 and end at 1")
+
+    surface_weight = _closed_unit_decimal(
+        value["surface_adjustment_weight"], "score_model.surface_adjustment_weight"
+    )
+    term_weight = _closed_unit_decimal(
+        value["term_adjustment_weight"], "score_model.term_adjustment_weight"
+    )
+    path_adverse_weight = _closed_unit_decimal(
+        value["path_adverse_semivariance_weight"],
+        "score_model.path_adverse_semivariance_weight",
+    )
+    path_jump_weight = _closed_unit_decimal(
+        value["path_jump_weight"], "score_model.path_jump_weight"
+    )
+    liquidity_spread_weight = _closed_unit_decimal(
+        value["liquidity_spread_weight"], "score_model.liquidity_spread_weight"
+    )
+    liquidity_depth_weight = _closed_unit_decimal(
+        value["liquidity_depth_weight"], "score_model.liquidity_depth_weight"
+    )
+    path_quality_weight = _closed_unit_decimal(
+        value["path_quality_weight"], "score_model.path_quality_weight"
+    )
+    liquidity_quality_weight = _closed_unit_decimal(
+        value["liquidity_quality_weight"], "score_model.liquidity_quality_weight"
+    )
+    risk_floor = _closed_unit_decimal(value["risk_floor"], "score_model.risk_floor")
+    risk_multiplier = _closed_unit_decimal(value["risk_multiplier"], "score_model.risk_multiplier")
+    for label, first, second in (
+        ("path factor weights", path_adverse_weight, path_jump_weight),
+        ("liquidity factor weights", liquidity_spread_weight, liquidity_depth_weight),
+        ("risk quality weights", path_quality_weight, liquidity_quality_weight),
+        ("risk floor and multiplier", risk_floor, risk_multiplier),
+    ):
+        if first + second != 1:
+            raise PolicyError(f"score_model {label} must sum to 1")
+
+    spread_full = _non_negative_decimal(
+        value["liquidity_spread_full_quality_ticks"],
+        "score_model.liquidity_spread_full_quality_ticks",
+    )
+    spread_zero = _positive_decimal(
+        value["liquidity_spread_zero_quality_ticks"],
+        "score_model.liquidity_spread_zero_quality_ticks",
+    )
+    depth_full = _positive_int(
+        value["liquidity_depth_full_quality_levels"],
+        "score_model.liquidity_depth_full_quality_levels",
+    )
+    depth_zero = _positive_int(
+        value["liquidity_depth_zero_quality_levels"],
+        "score_model.liquidity_depth_zero_quality_levels",
+    )
+    if spread_full >= spread_zero:
+        raise PolicyError("score_model liquidity spread quality bounds are invalid")
+    if depth_full >= depth_zero:
+        raise PolicyError("score_model liquidity depth quality bounds are invalid")
+
+    clear_score = _closed_score(value["clear_score_upper"], "score_model.clear_score_upper")
+    activation_score = _closed_score(
+        value["activation_score_lower"], "score_model.activation_score_lower"
+    )
+    if clear_score >= activation_score:
+        raise PolicyError("score_model requires clear_score_upper < activation_score_lower")
+    return ScoreModel(
+        richness_knots=tuple(knots),
+        surface_residual_saturation_iv_fraction=_positive_decimal(
+            value["surface_residual_saturation_iv_fraction"],
+            "score_model.surface_residual_saturation_iv_fraction",
+        ),
+        term_residual_saturation_iv_fraction=_positive_decimal(
+            value["term_residual_saturation_iv_fraction"],
+            "score_model.term_residual_saturation_iv_fraction",
+        ),
+        surface_adjustment_weight=surface_weight,
+        term_adjustment_weight=term_weight,
+        path_adverse_semivariance_weight=path_adverse_weight,
+        path_jump_weight=path_jump_weight,
+        liquidity_spread_weight=liquidity_spread_weight,
+        liquidity_depth_weight=liquidity_depth_weight,
+        liquidity_spread_full_quality_ticks=spread_full,
+        liquidity_spread_zero_quality_ticks=spread_zero,
+        liquidity_depth_full_quality_levels=depth_full,
+        liquidity_depth_zero_quality_levels=depth_zero,
+        path_quality_weight=path_quality_weight,
+        liquidity_quality_weight=liquidity_quality_weight,
+        risk_floor=risk_floor,
+        risk_multiplier=risk_multiplier,
+        activation_score_lower=activation_score,
+        clear_score_upper=clear_score,
     )
 
 
@@ -403,8 +584,6 @@ def _parse_rule(value: object, field: str) -> OptionRule:
         {
             "abs_delta_min",
             "abs_delta_max",
-            "activation_ratio",
-            "clear_ratio",
             "activation_observation_count",
             "clear_observation_count",
             "minimum_separation_ms",
@@ -415,15 +594,9 @@ def _parse_rule(value: object, field: str) -> OptionRule:
     delta_max = _positive_decimal(value["abs_delta_max"], f"{field}.abs_delta_max")
     if not (Decimal(0) <= delta_min < delta_max <= Decimal(1)):
         raise PolicyError(f"{field} Delta bounds are invalid")
-    activation = _positive_decimal(value["activation_ratio"], f"{field}.activation_ratio")
-    clear = _positive_decimal(value["clear_ratio"], f"{field}.clear_ratio")
-    if not (activation > 1 and clear < activation):
-        raise PolicyError(f"{field} requires activation > 1 and 0 < clear < activation")
     return OptionRule(
         abs_delta_min=delta_min,
         abs_delta_max=delta_max,
-        activation_ratio=activation,
-        clear_ratio=clear,
         activation_observation_count=_positive_int(
             value["activation_observation_count"],
             f"{field}.activation_observation_count",
@@ -471,6 +644,20 @@ def _non_negative_decimal(value: object, field: str) -> Decimal:
     number = _decimal(value, field)
     if number < 0:
         raise PolicyError(f"{field} must be non-negative")
+    return number
+
+
+def _closed_unit_decimal(value: object, field: str) -> Decimal:
+    number = _decimal(value, field)
+    if not Decimal(0) <= number <= Decimal(1):
+        raise PolicyError(f"{field} must be within [0, 1]")
+    return number
+
+
+def _closed_score(value: object, field: str) -> Decimal:
+    number = _decimal(value, field)
+    if not Decimal(0) <= number <= Decimal(100):
+        raise PolicyError(f"{field} must be within [0, 100]")
     return number
 
 

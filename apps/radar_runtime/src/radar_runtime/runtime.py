@@ -67,6 +67,14 @@ from short_vol_radar.baseline import (
     BaselineUnavailable,
     compute_baseline_statistics,
 )
+from short_vol_radar.bucket import (
+    BucketEpisodeEndReason,
+    BucketLeaderCandidate,
+    RadarBucketEpisodeEnd,
+    RadarBucketEpisodeTracker,
+    RadarBucketTrackerTransition,
+    select_bucket_leader,
+)
 from short_vol_radar.detector import (
     AggregateDetectorResult,
     DetectorCoverage,
@@ -75,6 +83,7 @@ from short_vol_radar.detector import (
     EpisodeEndReason,
     EpisodeTracker,
     TrackerState,
+    TrackerTransition,
     aggregate_detector,
 )
 from short_vol_radar.evidence import (
@@ -107,12 +116,24 @@ from short_vol_radar.radar import (
     CurrentEvaluation,
     EvaluationResult,
     TickerState,
-    apply_current_evaluation,
     detector_observation_identity,
+    finalize_current_evaluation,
     parse_ticker,
 )
 from short_vol_radar.radar import (
     calculate_current_evaluation as calculate_current_evaluation,
+)
+from short_vol_radar.review import build_score_feature_contexts
+from short_vol_radar.score import (
+    LeaderCoverage,
+    RadarBucketKey,
+    RadarScorePacket,
+    RadarScoreResult,
+    ScoreBand,
+    ScoreUnavailable,
+    build_radar_score_packet,
+    compute_unsigned_oi_concentration,
+    radar_score_observation_identity,
 )
 
 from radar_runtime.deribit_public import (
@@ -331,6 +352,8 @@ class AtomicScopeSnapshot:
     episode_identity: str
     anomaly_activation_seq: int
     activation_band_id: str
+    score_band: ScoreBand
+    radar_score_packet: RadarScorePacket
     detector_state: DetectorState
     detector_causal_seq: int
     short_leg: OptionInstrument
@@ -698,6 +721,12 @@ class RadarReducer:
         self._settled_ticker_currentness: dict[str, _SettledTickerCurrentness] = {}
         self.trackers: dict[str, EpisodeTracker] = {}
         self.results: dict[str, EvaluationResult] = {}
+        self.score_results: dict[str, RadarScoreResult] = {}
+        self.score_packets: dict[str, RadarScorePacket] = {}
+        self.score_bucket_keys: dict[str, RadarBucketKey] = {}
+        self.bucket_trackers: dict[RadarBucketKey, RadarBucketEpisodeTracker] = {}
+        self.bucket_leader_by_key: dict[RadarBucketKey, str] = {}
+        self.bucket_leader_coverage: dict[RadarBucketKey, LeaderCoverage] = {}
         self.atomic_states: dict[str, PublicAtomicQuoteState] = {}
         self.aggregate_results: dict[
             tuple[int, OptionType, str],
@@ -1736,6 +1765,17 @@ class RadarReducer:
             adapter = self.shadow_adapter
             if adapter is None:
                 raise RuntimeError("Shadow RPC lifecycle lost its adapter")
+            self._settle_fact(
+                commit=CausalCommit(
+                    boundary=boundary,
+                    cause=CausalCause.SHADOW_RPC_RESPONSE,
+                    failure_domain=FailureScope.OPTION,
+                    affected_scopes=("GLOBAL",),
+                ),
+                affected_instruments=tuple(self.options),
+                countable=False,
+                acceptance_eligible=False,
+            )
             sent_boundary = lifecycle.sent_boundary
             if sent_boundary is None:
                 raise RuntimeError("Shadow RPC lacks its immutable SENT boundary")
@@ -2376,7 +2416,7 @@ class RadarReducer:
         return self._schedule(
             purpose=RpcPurpose.INDEX_HISTORY,
             method="public/get_index_chart_data",
-            params={"index_name": self.product.price_index, "range": "1d"},
+            params={"index_name": self.product.price_index, "range": "2d"},
             scope="INDEX_HISTORY",
             generation=None,
             origin_boundary=boundary,
@@ -2979,8 +3019,22 @@ class RadarReducer:
         for name in removals:
             tracker = self.trackers.get(name)
             if tracker is not None:
-                transition = tracker.membership_loss(causal_seq=self._causal_seq)
-                self._record_episode_end(transition.ended_episode, boundary.received_monotonic_ms)
+                tracker.state = TrackerState.UNKNOWN
+                tracker.episode_id = None
+                tracker.activation_band_id = None
+                tracker.activation_causal_seq = None
+            bucket_key = self.score_bucket_keys.pop(name, None)
+            self.score_results.pop(name, None)
+            self.score_packets.pop(name, None)
+            bucket_tracker = (
+                self.bucket_trackers.get(bucket_key) if bucket_key is not None else None
+            )
+            if bucket_tracker is not None and bucket_tracker.frozen_instrument_name == name:
+                transition = bucket_tracker.scope_loss(causal_seq=self._causal_seq)
+                self._record_bucket_episode_end(
+                    transition.ended,
+                    boundary.received_monotonic_ms,
+                )
             self._ticker_accepted_currentness.pop(name, None)
             self.options.pop(name, None)
             self.results.pop(name, None)
@@ -4380,6 +4434,35 @@ class RadarReducer:
             if self._last_time_currentness_by_instrument.get(name) != token
         }
         recalculation_names = set((*directly_affected_names, *time_changed_names))
+        if commit.cause in {CausalCause.TICKER_APPLIED, CausalCause.TICKER_SOURCE_STALE}:
+            surface_dependencies: set[str] = set()
+            for affected_name in directly_affected_names:
+                affected = self.options[affected_name]
+                same_type_expiries = sorted(
+                    {
+                        candidate.expiration_timestamp_ms
+                        for candidate in self.options.values()
+                        if candidate.option_type is affected.option_type
+                    }
+                )
+                try:
+                    expiry_index = same_type_expiries.index(affected.expiration_timestamp_ms)
+                except ValueError:
+                    continue
+                dependent_expiries = set(
+                    same_type_expiries[
+                        max(0, expiry_index - 1) : min(len(same_type_expiries), expiry_index + 2)
+                    ]
+                )
+                surface_dependencies.update(
+                    name
+                    for name, candidate in self.options.items()
+                    if candidate.option_type is affected.option_type
+                    and candidate.expiration_timestamp_ms in dependent_expiries
+                )
+            recalculation_names.update(surface_dependencies)
+            if countable and commit.cause is CausalCause.TICKER_APPLIED:
+                countable_names.update(surface_dependencies)
         if force_full_currentness:
             recalculation_names.update(self.options)
         elif affected_scope_keys:
@@ -4607,22 +4690,83 @@ class RadarReducer:
                 ticker=self.tickers.get(name),
                 baseline_identity=baseline_identity,
             )
-            observation_eligible = (
-                name in countable_names
-                and current.disposition is CurrentDisposition.RICHNESS
-                and self._last_observation_identity.get(name) != identity
-            )
             prepared.append(
                 ScopeCurrent(
                     instrument=instrument,
                     current=current,
                     observation_identity=identity,
                     index_tail_identity=(baseline_identity if tail is not None else None),
-                    observation_eligible=observation_eligible,
+                    observation_eligible=False,
                     previous_tracker_state=tracker.state,
                     previous_episode_id=tracker.episode_id,
                 )
             )
+
+        calculations = {
+            name: result.calculation
+            for name, result in self.results.items()
+            if result.calculation is not None
+        }
+        calculations.update(
+            {
+                item.instrument.instrument_name: item.current.calculation
+                for item in prepared
+                if item.current.calculation is not None
+            }
+        )
+        score_contexts = build_score_feature_contexts(
+            options=self.options,
+            calculations=calculations,
+            tickers=self.current_diagnostic_tickers,
+        )
+        finalized_prepared: list[ScopeCurrent] = []
+        for item in prepared:
+            name = item.instrument.instrument_name
+            current = item.current
+            if current.disposition is CurrentDisposition.SCORE_PENDING:
+                if current.calculation is None:
+                    raise RuntimeError("pending V2 score lacks its core calculation")
+                try:
+                    score_inputs = score_contexts[name].score_inputs(current.calculation)
+                    current = finalize_current_evaluation(
+                        policy=self.policy,
+                        core=current,
+                        score_inputs=score_inputs,
+                        causal_seq=transaction_commit.boundary.causal_seq,
+                        trusted_time=trusted,
+                    )
+                except ScoreUnavailable as exc:
+                    current = CurrentEvaluation(
+                        disposition=CurrentDisposition.UNKNOWN,
+                        reason=str(exc) or "V2_SCORE_CORE_UNKNOWN",
+                        known_evaluation=False,
+                        full_formula_evaluation=False,
+                        band_id=current.band_id,
+                        calculation=current.calculation,
+                    )
+            score_known = current.score_result is not None
+            observation_identity = item.observation_identity
+            if current.score_result is not None:
+                observation_identity = radar_score_observation_identity(
+                    core_identity=observation_identity,
+                    result=current.score_result,
+                )
+            observation_eligible = (
+                name in countable_names
+                and score_known
+                and current.disposition
+                in {CurrentDisposition.V2_SCORE, CurrentDisposition.REVIEW_ONLY}
+                and self._last_observation_identity.get(name) != observation_identity
+            )
+            finalized_prepared.append(
+                replace(
+                    item,
+                    current=current,
+                    observation_identity=observation_identity,
+                    observation_eligible=observation_eligible,
+                )
+            )
+        prepared = finalized_prepared
 
         current_by_scope: dict[
             tuple[int, OptionType, str | None],
@@ -4649,100 +4793,14 @@ class RadarReducer:
             for current in current_by_scope.values()
         )
 
-        evaluated: list[tuple[OptionInstrument, EvaluationResult, TrackerState, str | None]] = []
-        evaluated_by_name: dict[
-            str,
-            tuple[OptionInstrument, EvaluationResult, TrackerState, str | None],
-        ] = {}
-        for snapshot in snapshots:
-            for item in snapshot.current:
-                instrument = item.instrument
-                current = item.current
-                eligible = item.observation_eligible
-                tracker = self.trackers[instrument.instrument_name]
-                previous_result = self.results.get(instrument.instrument_name)
-                current_tail = item.index_tail_identity
-                if (
-                    previous_result is not None
-                    and previous_result.band_id is not None
-                    and current.band_id is not None
-                    and previous_result.band_id != current.band_id
-                    and tracker.state is not TrackerState.BAND_SUSPENDED
-                ):
-                    tracker.suspend_for_band_boundary()
-                transition = apply_current_evaluation(
-                    tracker=tracker,
-                    current=current,
-                    causal_seq=snapshot.commit.boundary.causal_seq,
-                    observation_eligible=eligible,
-                )
-                if current.disposition is CurrentDisposition.RICHNESS:
-                    self._last_observation_identity[instrument.instrument_name] = (
-                        item.observation_identity
-                    )
-                elif (
-                    instrument.instrument_name not in self._ticker_currentness_latches
-                    and current.reason not in {"TICKER_SOURCE_STALE", "TICKER_TIMESTAMP_AHEAD"}
-                ):
-                    self._last_observation_identity.pop(instrument.instrument_name, None)
-                if current_tail is None:
-                    self._last_index_tail_identity.pop(
-                        instrument.instrument_name,
-                        None,
-                    )
-                else:
-                    self._last_index_tail_identity[instrument.instrument_name] = current_tail
-                result = EvaluationResult(
-                    detector_state=tracker.detector_state,
-                    reason=current.reason,
-                    known_evaluation=current.known_evaluation,
-                    full_formula_evaluation=current.full_formula_evaluation,
-                    band_id=current.band_id,
-                    transition=transition,
-                    observation_eligible=eligible,
-                    observation_reason=(None if eligible else snapshot.commit.cause.value),
-                    calculation=current.calculation,
-                    current_evaluation=current,
-                )
-                self.results[instrument.instrument_name] = result
-                if current.reason is not None and not current.known_evaluation:
-                    self._record_unknown(instrument.instrument_name, current.reason)
-                else:
-                    self._last_unknown_reason[instrument.instrument_name] = None
-                self._record_episode_end(
-                    transition.ended_episode,
-                    boundary.received_monotonic_ms,
-                )
-                if tracker.episode_id is not None:
-                    episode_id = tracker.episode_id
-                    if tracker.state is TrackerState.BAND_SUSPENDED:
-                        self._episode_pause_started_ms.setdefault(
-                            episode_id,
-                            boundary.received_monotonic_ms,
-                        )
-                        self._episode_last_trusted_ms[episode_id] = boundary.received_monotonic_ms
-                    elif (
-                        current.known_evaluation
-                        and tracker.detector_state is DetectorState.ANOMALY_ACTIVE
-                    ):
-                        paused_at = self._episode_pause_started_ms.pop(
-                            episode_id,
-                            None,
-                        )
-                        if paused_at is not None:
-                            self._episode_paused_duration_ms[episode_id] += max(
-                                0,
-                                boundary.received_monotonic_ms - paused_at,
-                            )
-                        self._episode_last_trusted_ms[episode_id] = boundary.received_monotonic_ms
-                value = (
-                    instrument,
-                    result,
-                    item.previous_tracker_state,
-                    item.previous_episode_id,
-                )
-                evaluated.append(value)
-                evaluated_by_name[instrument.instrument_name] = value
+        evaluated = self._settle_v2_bucket_evaluations(
+            prepared=tuple(prepared),
+            commit=transaction_commit,
+            trusted=trusted,
+        )
+        evaluated_by_name = {
+            instrument.instrument_name: value for value in evaluated for instrument in (value[0],)
+        }
 
         settled_snapshots = tuple(
             replace(
@@ -4838,13 +4896,8 @@ class RadarReducer:
             )
         )
 
-        for instrument, _result, _state, _episode in evaluated:
-            tracker = self.trackers[instrument.instrument_name]
-            atomic_snapshot = self._freeze_atomic_scope_snapshot(
-                tracker,
-                commit=transaction_commit,
-            )
-            if atomic_snapshot is not None:
+        for atomic_snapshot in self.active_radar_scope_snapshots(commit=transaction_commit):
+            if atomic_snapshot.score_band is ScoreBand.HIGH:
                 self._evaluate_atomic(atomic_snapshot)
 
         self._sync_combo_subscriptions(boundary)
@@ -4853,6 +4906,366 @@ class RadarReducer:
         )
         self._last_time_currentness_by_instrument = current_time_tokens
         self._last_time_currentness_token = tuple(current_time_tokens.items())
+
+    def _settle_v2_bucket_evaluations(
+        self,
+        *,
+        prepared: tuple[ScopeCurrent, ...],
+        commit: CausalCommit,
+        trusted: TimeInterval,
+    ) -> list[tuple[OptionInstrument, EvaluationResult, TrackerState, str | None]]:
+        """Settle one causal batch through the sole V2 bucket episode owner."""
+        prepared_by_name = {item.instrument.instrument_name: item for item in prepared}
+        calculations = {
+            name: result.calculation
+            for name, result in self.results.items()
+            if result.calculation is not None
+        }
+        calculations.update(
+            {
+                name: item.current.calculation
+                for name, item in prepared_by_name.items()
+                if item.current.calculation is not None
+            }
+        )
+
+        for name, item in prepared_by_name.items():
+            calculation = item.current.calculation
+            if calculation is not None and item.current.band_id is not None:
+                self.score_bucket_keys[name] = RadarBucketKey(
+                    tte_band_id=item.current.band_id,
+                    expiry_ms=item.instrument.expiration_timestamp_ms,
+                    option_type=item.instrument.option_type,
+                    delta_bucket=calculation.delta_bucket.value,
+                )
+            elif item.current.band_id is None:
+                self.score_bucket_keys.pop(name, None)
+            if item.current.score_result is None:
+                self.score_results.pop(name, None)
+            else:
+                self.score_results[name] = item.current.score_result
+
+        live_names = set(self.options)
+        for mapping in (self.score_bucket_keys, self.score_results, self.score_packets):
+            for name in set(mapping) - live_names:
+                mapping.pop(name, None)
+
+        grouped_names: dict[RadarBucketKey, list[str]] = {}
+        for name, bucket_key in self.score_bucket_keys.items():
+            if name in self.options:
+                grouped_names.setdefault(bucket_key, []).append(name)
+
+        for bucket_key, existing_bucket_tracker in tuple(self.bucket_trackers.items()):
+            if bucket_key in grouped_names:
+                continue
+            transition = existing_bucket_tracker.scope_loss(causal_seq=commit.boundary.causal_seq)
+            self._record_bucket_episode_end(
+                transition.ended,
+                commit.boundary.received_monotonic_ms,
+            )
+            self.bucket_trackers.pop(bucket_key, None)
+
+        current_tickers = self.current_diagnostic_tickers
+        new_packets: dict[str, RadarScorePacket] = {}
+        new_bucket_leaders: dict[RadarBucketKey, str] = {}
+        new_bucket_coverages: dict[RadarBucketKey, LeaderCoverage] = {}
+        activated_high_by_name: dict[str, str] = {}
+        for bucket_key in sorted(
+            grouped_names,
+            key=lambda key: (
+                key.expiry_ms,
+                key.option_type.value,
+                key.tte_band_id,
+                key.delta_bucket,
+            ),
+        ):
+            names = tuple(sorted(grouped_names[bucket_key]))
+            candidates: list[BucketLeaderCandidate] = []
+            for name in names:
+                instrument = self.options[name]
+                candidate_score = self.score_results.get(name)
+                calculation = calculations.get(name)
+                if candidate_score is None or calculation is None:
+                    prepared_member = prepared_by_name.get(name)
+                    prior = self.results.get(name)
+                    candidates.append(
+                        BucketLeaderCandidate(
+                            bucket_key=bucket_key,
+                            instrument_name=name,
+                            strike=instrument.strike,
+                            score_result=None,
+                            stressed_richness=None,
+                            target_spread_ticks=None,
+                            total_consumed_level_count=None,
+                            unknown_reason=(
+                                prepared_member.current.reason
+                                if prepared_member is not None
+                                and prepared_member.current.reason is not None
+                                else prior.reason
+                                if prior is not None and prior.reason is not None
+                                else "V2_SCORE_CURRENT_UNKNOWN"
+                            ),
+                        )
+                    )
+                    continue
+                candidates.append(
+                    BucketLeaderCandidate(
+                        bucket_key=bucket_key,
+                        instrument_name=name,
+                        strike=instrument.strike,
+                        score_result=candidate_score,
+                        stressed_richness=calculation.richness,
+                        target_spread_ticks=calculation.target_spread_ticks,
+                        total_consumed_level_count=(
+                            len(calculation.target_bid.consumed)
+                            + len(calculation.target_ask.consumed)
+                        ),
+                    )
+                )
+
+            bucket_tracker = self.bucket_trackers.get(bucket_key)
+            selection = select_bucket_leader(
+                tuple(candidates),
+                frozen_instrument_name=(
+                    bucket_tracker.frozen_instrument_name if bucket_tracker is not None else None
+                ),
+            )
+            if selection.leader is None and bucket_tracker is not None:
+                transition = (
+                    bucket_tracker.scope_loss(causal_seq=commit.boundary.causal_seq)
+                    if selection.reason == "FROZEN_LEADER_SCOPE_LOSS"
+                    else bucket_tracker.core_unknown(
+                        causal_seq=commit.boundary.causal_seq,
+                        reason=selection.reason or "BUCKET_CORE_UNKNOWN",
+                    )
+                )
+                self._record_bucket_episode_end(
+                    transition.ended,
+                    commit.boundary.received_monotonic_ms,
+                )
+                selection = select_bucket_leader(tuple(candidates))
+            if selection.leader is None:
+                continue
+
+            leader_name = selection.leader.instrument_name
+            new_bucket_leaders[bucket_key] = leader_name
+            new_bucket_coverages[bucket_key] = selection.coverage
+            leader_calculation = calculations.get(leader_name)
+            if leader_calculation is None:
+                raise RuntimeError("known V2 bucket leader lacks its calculation")
+            if bucket_tracker is None:
+                bucket_tracker = RadarBucketEpisodeTracker(
+                    runtime_identity=self.runtime_identity,
+                    policy_identity=self.policy.identity,
+                    bucket_key=bucket_key,
+                    score_model=self.policy.score_model,
+                    clue_eligible=leader_calculation.clue_eligible,
+                )
+                self.bucket_trackers[bucket_key] = bucket_tracker
+
+            bucket_oi_known = all(
+                (ticker := current_tickers.get(name)) is not None
+                and ticker.open_interest is not None
+                and ticker.option_gamma is not None
+                for name in names
+            )
+            bucket_total_unsigned_gamma_weight: Decimal | None = None
+            if bucket_oi_known:
+                bucket_total_unsigned_gamma_weight = Decimal(0)
+                for name in names:
+                    ticker = current_tickers[name]
+                    if ticker.open_interest is None or ticker.option_gamma is None:
+                        raise RuntimeError("known bucket OI completeness lost during settlement")
+                    bucket_total_unsigned_gamma_weight += ticker.open_interest * abs(
+                        ticker.option_gamma
+                    )
+            leader_result = self.score_results.get(leader_name)
+            if leader_result is None:
+                raise RuntimeError("known V2 bucket leader lacks its score result")
+            leader_ticker = current_tickers.get(leader_name)
+            prior_packet = self.score_packets.get(leader_name)
+            if (
+                leader_name not in prepared_by_name
+                and prior_packet is not None
+                and prior_packet.bucket_key == bucket_key
+                and prior_packet.leader_instrument_name == leader_name
+                and prior_packet.result == leader_result
+                and prior_packet.leader_coverage is selection.coverage
+            ):
+                new_packets[leader_name] = prior_packet
+            else:
+                new_packets[leader_name] = build_radar_score_packet(
+                    policy_identity=self.policy.identity,
+                    fact_boundary=self._radar_packet_fact_boundary(commit.boundary),
+                    bucket_key=bucket_key,
+                    leader_instrument_name=leader_name,
+                    result=leader_result,
+                    oi_diagnostic=compute_unsigned_oi_concentration(
+                        open_interest=(
+                            leader_ticker.open_interest if leader_ticker is not None else None
+                        ),
+                        option_gamma=(
+                            leader_ticker.option_gamma if leader_ticker is not None else None
+                        ),
+                        bucket_total_unsigned_gamma_weight=bucket_total_unsigned_gamma_weight,
+                    ),
+                    stressed_richness=leader_calculation.richness,
+                    leader_coverage=selection.coverage,
+                )
+
+            leader_packet = new_packets[leader_name]
+            if bucket_tracker.episode is None:
+                bucket_tracker.align_leader(
+                    instrument_name=leader_name,
+                    score_band=leader_packet.result.band,
+                )
+            leader_item = prepared_by_name.get(leader_name)
+            bucket_transition = RadarBucketTrackerTransition()
+            if leader_item is not None and leader_item.observation_eligible:
+                bucket_transition = bucket_tracker.observe(
+                    packet=leader_packet,
+                    observation_identity=leader_item.observation_identity,
+                    causal_seq=commit.boundary.causal_seq,
+                    trusted_time=trusted,
+                    rule=leader_calculation.rule,
+                )
+            self._record_bucket_episode_end(
+                bucket_transition.ended,
+                commit.boundary.received_monotonic_ms,
+            )
+            if (
+                bucket_transition.newly_confirmed is not None
+                and bucket_transition.newly_confirmed.score_band is ScoreBand.HIGH
+            ):
+                activated_high_by_name[leader_name] = (
+                    bucket_transition.newly_confirmed.episode_identity
+                )
+
+        self.score_packets = new_packets
+        self.bucket_leader_by_key = new_bucket_leaders
+        self.bucket_leader_coverage = new_bucket_coverages
+        active_high_by_name = {
+            candidate.episode.leader_instrument_name: candidate.episode
+            for candidate in self.bucket_trackers.values()
+            if candidate.episode is not None and candidate.episode.score_band is ScoreBand.HIGH
+        }
+        for name, compatibility in self.trackers.items():
+            active = active_high_by_name.get(name)
+            prepared_member = prepared_by_name.get(name)
+            prior = self.results.get(name)
+            known_current = (
+                prepared_member.current.known_evaluation
+                if prepared_member is not None
+                else prior.known_evaluation
+                if prior is not None
+                else name in self.score_results
+            )
+            if active is not None:
+                compatibility.state = TrackerState.ACTIVE
+                compatibility.episode_id = active.episode_identity
+                compatibility.activation_band_id = active.bucket_key.tte_band_id
+                compatibility.activation_causal_seq = active.activation_causal_seq
+                self._episode_last_trusted_ms[active.episode_identity] = (
+                    commit.boundary.received_monotonic_ms
+                )
+            else:
+                compatibility.episode_id = None
+                compatibility.activation_band_id = None
+                compatibility.activation_causal_seq = None
+                compatibility.state = TrackerState.ARMED if known_current else TrackerState.UNKNOWN
+            if prior is not None and name not in prepared_by_name:
+                score_result = self.score_results.get(name)
+                score_packet = self.score_packets.get(name)
+                if (
+                    prior.detector_state is not compatibility.detector_state
+                    or prior.score_result != score_result
+                    or prior.score_packet != score_packet
+                ):
+                    self.results[name] = replace(
+                        prior,
+                        detector_state=compatibility.detector_state,
+                        transition=TrackerTransition(),
+                        score_result=score_result,
+                        score_packet=score_packet,
+                    )
+
+        evaluated: list[tuple[OptionInstrument, EvaluationResult, TrackerState, str | None]] = []
+        for item in prepared:
+            instrument = item.instrument
+            name = instrument.instrument_name
+            item_current = item.current
+            compatibility = self.trackers[name]
+            compatibility_transition = TrackerTransition(
+                activated_episode_id=activated_high_by_name.get(name),
+                state_changed=(
+                    item.previous_tracker_state is not compatibility.state
+                    or item.previous_episode_id != compatibility.episode_id
+                ),
+            )
+            if item_current.score_result is not None:
+                self._last_observation_identity[name] = item.observation_identity
+            elif name not in self._ticker_currentness_latches and item_current.reason not in {
+                "TICKER_SOURCE_STALE",
+                "TICKER_TIMESTAMP_AHEAD",
+            }:
+                self._last_observation_identity.pop(name, None)
+            if item.index_tail_identity is None:
+                self._last_index_tail_identity.pop(name, None)
+            else:
+                self._last_index_tail_identity[name] = item.index_tail_identity
+            evaluation_result = EvaluationResult(
+                detector_state=compatibility.detector_state,
+                reason=item_current.reason,
+                known_evaluation=item_current.known_evaluation,
+                full_formula_evaluation=item_current.full_formula_evaluation,
+                band_id=item_current.band_id,
+                transition=compatibility_transition,
+                observation_eligible=item.observation_eligible,
+                observation_reason=(None if item.observation_eligible else commit.cause.value),
+                calculation=item_current.calculation,
+                current_evaluation=item_current,
+                score_result=item_current.score_result,
+                score_packet=self.score_packets.get(name),
+            )
+            self.results[name] = evaluation_result
+            if item_current.reason is not None and not item_current.known_evaluation:
+                self._record_unknown(name, item_current.reason)
+            else:
+                self._last_unknown_reason[name] = None
+            evaluated.append(
+                (
+                    instrument,
+                    evaluation_result,
+                    item.previous_tracker_state,
+                    item.previous_episode_id,
+                )
+            )
+        return evaluated
+
+    def _record_bucket_episode_end(
+        self,
+        ended: RadarBucketEpisodeEnd | None,
+        monotonic_ms: int,
+    ) -> None:
+        if ended is None or ended.episode.score_band is not ScoreBand.HIGH:
+            return
+        reason = {
+            BucketEpisodeEndReason.SCORE_BAND_CHANGE: EpisodeEndReason.CLEAR,
+            BucketEpisodeEndReason.CORE_UNKNOWN: EpisodeEndReason.UNKNOWN_DETECTOR,
+            BucketEpisodeEndReason.SCOPE_LOSS: EpisodeEndReason.MEMBERSHIP_LOSS,
+            BucketEpisodeEndReason.STOP: EpisodeEndReason.CENSORED_AT_STOP,
+            BucketEpisodeEndReason.LEADER_CHANGE: EpisodeEndReason.KNOWN_INELIGIBLE,
+        }[ended.reason]
+        self._record_episode_end(
+            EpisodeEnd(
+                episode_id=ended.episode.episode_identity,
+                reason=reason,
+                detail=ended.detail,
+                end_causal_seq=ended.end_causal_seq,
+                activation_band_id=ended.episode.bucket_key.tte_band_id,
+            ),
+            monotonic_ms,
+        )
 
     def _current_scope_truth(
         self,
@@ -5050,12 +5463,31 @@ class RadarReducer:
             band_id=(previous.band_id if previous is not None else tracker.activation_band_id),
             continuity_gap=continuity_gap,
         )
-        transition = apply_current_evaluation(
-            tracker=tracker,
-            current=current,
-            causal_seq=boundary.causal_seq,
-            observation_eligible=False,
-        )
+        bucket_key = self.score_bucket_keys.get(instrument_name)
+        bucket_tracker = self.bucket_trackers.get(bucket_key) if bucket_key is not None else None
+        if (
+            bucket_key is not None
+            and bucket_tracker is not None
+            and (
+                bucket_tracker.frozen_instrument_name == instrument_name
+                or self.bucket_leader_by_key.get(bucket_key) == instrument_name
+            )
+        ):
+            bucket_transition = bucket_tracker.core_unknown(
+                causal_seq=boundary.causal_seq,
+                reason=reason,
+            )
+            self._record_bucket_episode_end(
+                bucket_transition.ended,
+                boundary.received_monotonic_ms,
+            )
+        tracker.state = TrackerState.UNKNOWN
+        tracker.episode_id = None
+        tracker.activation_band_id = None
+        tracker.activation_causal_seq = None
+        transition = TrackerTransition(state_changed=True)
+        self.score_results.pop(instrument_name, None)
+        self.score_packets.pop(instrument_name, None)
         self.results[instrument_name] = EvaluationResult(
             detector_state=tracker.detector_state,
             reason=reason,
@@ -5067,15 +5499,13 @@ class RadarReducer:
             observation_reason=reason,
             calculation=None,
             current_evaluation=current,
+            score_result=None,
+            score_packet=None,
         )
         if instrument_name not in self._ticker_currentness_latches:
             self._last_observation_identity.pop(instrument_name, None)
         self._last_index_tail_identity.pop(instrument_name, None)
         self._record_unknown(instrument_name, reason)
-        self._record_episode_end(
-            transition.ended_episode,
-            boundary.received_monotonic_ms,
-        )
 
     def _transition_coverage(
         self,
@@ -5153,15 +5583,82 @@ class RadarReducer:
         *,
         commit: CausalCommit,
     ) -> AtomicScopeSnapshot | None:
-        episode_identity = tracker.episode_id
-        anomaly_activation_seq = tracker.activation_causal_seq
-        activation_band_id = tracker.activation_band_id
-        short_leg = self.options.get(tracker.instrument_name)
+        bucket_tracker = next(
+            (
+                candidate
+                for candidate in self.bucket_trackers.values()
+                if candidate.episode is not None
+                and candidate.episode.episode_identity == tracker.episode_id
+            ),
+            None,
+        )
+        if bucket_tracker is None:
+            return None
+        return self._freeze_bucket_scope_snapshot(bucket_tracker, commit=commit)
+
+    def active_radar_scope_snapshots(
+        self,
+        *,
+        commit: CausalCommit,
+    ) -> tuple[AtomicScopeSnapshot, ...]:
+        return tuple(
+            snapshot
+            for tracker in self.bucket_trackers.values()
+            if (snapshot := self._freeze_bucket_scope_snapshot(tracker, commit=commit)) is not None
+        )
+
+    def active_radar_score_packet(
+        self,
+        *,
+        episode_identity: str,
+        boundary: FactBoundary,
+    ) -> RadarScorePacket | None:
+        tracker = next(
+            (
+                candidate
+                for candidate in self.bucket_trackers.values()
+                if candidate.episode is not None
+                and candidate.episode.episode_identity == episode_identity
+            ),
+            None,
+        )
+        if tracker is None or tracker.episode is None:
+            return None
+        packet = self.score_packets.get(tracker.episode.leader_instrument_name)
+        if packet is None:
+            return None
+        if dict(packet.fact_boundary) != self._radar_packet_fact_boundary(boundary):
+            return None
+        return packet
+
+    def _radar_packet_fact_boundary(
+        self,
+        boundary: FactBoundary,
+    ) -> dict[str, object]:
+        return {
+            "code_identity": self.code_identity,
+            "runtime_identity": self.runtime_identity,
+            **_fact_boundary_object(boundary),
+        }
+
+    def _freeze_bucket_scope_snapshot(
+        self,
+        tracker: RadarBucketEpisodeTracker,
+        *,
+        commit: CausalCommit,
+    ) -> AtomicScopeSnapshot | None:
+        episode = tracker.episode
+        if episode is None:
+            return None
+        episode_identity = episode.episode_identity
+        anomaly_activation_seq = episode.activation_causal_seq
+        activation_band_id = episode.bucket_key.tte_band_id
+        short_leg = self.options.get(episode.leader_instrument_name)
+        score_packet = self.score_packets.get(episode.leader_instrument_name)
         if (
-            episode_identity is None
-            or anomaly_activation_seq is None
-            or activation_band_id is None
-            or short_leg is None
+            short_leg is None
+            or score_packet is None
+            or dict(score_packet.fact_boundary) != self._radar_packet_fact_boundary(commit.boundary)
         ):
             return None
         current_options = (
@@ -5219,7 +5716,7 @@ class RadarReducer:
         )
         frozen_combos = tuple(sorted(self.combos.values(), key=lambda value: value.instrument_name))
         result = classify_atomic_quotes(
-            anomaly_active=tracker.detector_state is DetectorState.ANOMALY_ACTIVE,
+            anomaly_active=episode.score_band is ScoreBand.HIGH,
             combo_catalog_complete=self.combo_catalog.complete,
             option_catalog_complete=(
                 self.option_catalog.complete
@@ -5232,13 +5729,19 @@ class RadarReducer:
             combo_books=frozen_book_values,
             target_btc=self.policy.target_base_quantity_btc,
         )
-        current_result = self.results.get(tracker.instrument_name)
+        current_result = self.results.get(episode.leader_instrument_name)
         return AtomicScopeSnapshot(
             commit=commit,
             episode_identity=episode_identity,
             anomaly_activation_seq=anomaly_activation_seq,
             activation_band_id=activation_band_id,
-            detector_state=tracker.detector_state,
+            score_band=episode.score_band,
+            radar_score_packet=score_packet,
+            detector_state=(
+                DetectorState.ANOMALY_ACTIVE
+                if episode.score_band is ScoreBand.HIGH
+                else DetectorState.NO_ANOMALY
+            ),
             detector_causal_seq=commit.boundary.causal_seq,
             short_leg=short_leg,
             short_current=(
@@ -6067,9 +6570,14 @@ class RadarReducer:
             countable=False,
             acceptance_eligible=False,
         )
-        for tracker in self.trackers.values():
-            transition = tracker.stop(causal_seq=self._causal_seq)
-            self._record_episode_end(transition.ended_episode, monotonic_ms)
+        for bucket_tracker in self.bucket_trackers.values():
+            transition = bucket_tracker.stop(causal_seq=self._causal_seq)
+            self._record_bucket_episode_end(transition.ended, monotonic_ms)
+        for compatibility in self.trackers.values():
+            compatibility.state = TrackerState.UNKNOWN
+            compatibility.episode_id = None
+            compatibility.activation_band_id = None
+            compatibility.activation_causal_seq = None
         if self._early_rpc_responses:
             self._early_rpc_responses.clear()
         for request in tuple(self.pending_rpcs.values()):

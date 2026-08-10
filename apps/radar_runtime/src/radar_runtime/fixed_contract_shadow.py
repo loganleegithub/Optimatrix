@@ -23,6 +23,7 @@ from short_vol_radar.atomic import (
 )
 from short_vol_radar.radar import TickerState
 from short_vol_radar.review import LeggedReferenceState, ReviewContext, build_review_contexts
+from short_vol_radar.score import ScoreBand
 from short_vol_underwriting import (
     CloseAtomicAvailability,
     CloseBookAvailability,
@@ -291,7 +292,7 @@ class FixedContractShadowRuntimeAdapter:
             is not None
         ]
         for facts in self._underwriting_by_scope.values():
-            if facts.active_episode_identity is None or facts.expiry_ms is None:
+            if _radar_anchor_identity(facts) is None or facts.expiry_ms is None:
                 continue
             crossing = _first_trusted_time_crossing(
                 clock=clock,
@@ -307,7 +308,7 @@ class FixedContractShadowRuntimeAdapter:
         active_underwriting = tuple(
             facts
             for facts in self._underwriting_by_scope.values()
-            if facts.active_episode_identity is not None
+            if _radar_anchor_identity(facts) is not None
         )
         if active_underwriting:
             crossings.extend(
@@ -891,11 +892,23 @@ class FixedContractShadowRuntimeAdapter:
         long_name = origin.long_leg_instrument_name
         short = self._option_sources.get(short_name) if short_name is not None else None
         long = self._option_sources.get(long_name) if long_name is not None else None
-        tracker = reducer.trackers.get(short_name) if short_name is not None else None
-        active_episode = (
-            tracker.episode_id
-            if tracker is not None and tracker.episode_id == origin.active_episode_identity
+        origin_anchor = _radar_anchor_identity(origin)
+        refresh_packet = (
+            reducer.active_radar_score_packet(
+                episode_identity=origin_anchor,
+                boundary=FactBoundary(
+                    session_epoch=pair.boundary.session_epoch,
+                    ingress_seq=pair.boundary.ingress_seq,
+                    received_monotonic_ms=pair.boundary.received_monotonic_ms,
+                    causal_seq=pair.boundary.causal_seq,
+                ),
+            )
+            if origin_anchor is not None
             else None
+        )
+        active_episode = origin.active_episode_identity if refresh_packet is not None else None
+        active_research_review = (
+            origin.radar_research_review_identity if refresh_packet is not None else None
         )
         trusted = self._trusted_interval(
             reducer,
@@ -943,7 +956,7 @@ class FixedContractShadowRuntimeAdapter:
         )
         unknown: list[str] = list(pair_unknown_reasons)
         for condition, reason in (
-            (active_episode is None, "RADAR_EPISODE_NOT_ACTIVE"),
+            (refresh_packet is None, "RADAR_EPISODE_NOT_ACTIVE"),
             (not catalog_complete, "OPTION_CATALOG_INCOMPLETE"),
             (short is None, "SHORT_OPTION_METADATA_UNKNOWN"),
             (long is None, "LONG_OPTION_METADATA_UNKNOWN"),
@@ -971,6 +984,14 @@ class FixedContractShadowRuntimeAdapter:
             origin,
             boundary=pair.boundary,
             active_episode_identity=active_episode,
+            anomaly_activation_seq=(
+                origin.anomaly_activation_seq if active_episode is not None else None
+            ),
+            radar_research_review_identity=active_research_review,
+            radar_research_activation_seq=(
+                origin.radar_research_activation_seq if active_research_review is not None else None
+            ),
+            radar_score_packet=refresh_packet,
             short_leg_identity=(
                 short.semantic_identity if short is not None else origin.short_leg_identity
             ),
@@ -1099,11 +1120,23 @@ class FixedContractShadowRuntimeAdapter:
         short = self._option_sources.get(short_name) if short_name is not None else None
         long = self._option_sources.get(long_name) if long_name is not None else None
         combo = self._combo_sources.get(combo_name) if combo_name is not None else None
-        tracker = reducer.trackers.get(short_name) if short_name is not None else None
-        active_episode = (
-            tracker.episode_id
-            if tracker is not None and tracker.episode_id == origin.active_episode_identity
+        origin_anchor = _radar_anchor_identity(origin)
+        refresh_packet = (
+            reducer.active_radar_score_packet(
+                episode_identity=origin_anchor,
+                boundary=FactBoundary(
+                    session_epoch=boundary.session_epoch,
+                    ingress_seq=boundary.ingress_seq,
+                    received_monotonic_ms=boundary.received_monotonic_ms,
+                    causal_seq=boundary.causal_seq,
+                ),
+            )
+            if origin_anchor is not None
             else None
+        )
+        active_episode = origin.active_episode_identity if refresh_packet is not None else None
+        active_research_review = (
+            origin.radar_research_review_identity if refresh_packet is not None else None
         )
         trusted = self._trusted_interval(
             reducer,
@@ -1144,7 +1177,7 @@ class FixedContractShadowRuntimeAdapter:
         unknown: list[str] = []
         for condition, reason in (
             (not quote_known, "RPC_REFRESH_UNKNOWN"),
-            (active_episode is None, "RADAR_EPISODE_NOT_ACTIVE"),
+            (refresh_packet is None, "RADAR_EPISODE_NOT_ACTIVE"),
             (not catalog_complete, "OPTION_CATALOG_INCOMPLETE"),
             (not combo_catalog_complete, "COMBO_CATALOG_INCOMPLETE"),
             (short is None, "SHORT_OPTION_METADATA_UNKNOWN"),
@@ -1161,6 +1194,14 @@ class FixedContractShadowRuntimeAdapter:
             origin,
             boundary=boundary,
             active_episode_identity=active_episode,
+            anomaly_activation_seq=(
+                origin.anomaly_activation_seq if active_episode is not None else None
+            ),
+            radar_research_review_identity=active_research_review,
+            radar_research_activation_seq=(
+                origin.radar_research_activation_seq if active_research_review is not None else None
+            ),
+            radar_score_packet=refresh_packet,
             short_leg_identity=(
                 short.semantic_identity if short is not None else origin.short_leg_identity
             ),
@@ -1394,12 +1435,9 @@ class FixedContractShadowRuntimeAdapter:
         current: dict[str, UnderwritingFacts] = {}
         scope_retirements: list[str] = []
         episode_retirements: set[str] = set()
-        snapshots: list[AtomicScopeSnapshot] = []
-        for tracker in reducer.trackers.values():
-            snapshot = reducer._freeze_atomic_scope_snapshot(tracker, commit=commit)
-            if snapshot is not None:
-                self._require_episode_snapshot_binding(reducer, snapshot)
-                snapshots.append(snapshot)
+        snapshots = list(reducer.active_radar_scope_snapshots(commit=commit))
+        for snapshot in snapshots:
+            self._require_episode_snapshot_binding(reducer, snapshot)
         by_episode = {snapshot.episode_identity: snapshot for snapshot in snapshots}
         unresolved_component_selection = any(
             snapshot.episode_identity not in self._frozen_component_by_episode
@@ -1418,9 +1456,10 @@ class FixedContractShadowRuntimeAdapter:
         for scope, prior in self._underwriting_by_scope.items():
             if scope in current:
                 continue
-            if prior.active_episode_identity is None:
+            prior_anchor = _radar_anchor_identity(prior)
+            if prior_anchor is None:
                 continue
-            episode_still_active = prior.active_episode_identity in by_episode
+            episode_still_active = prior_anchor in by_episode
             trusted = self._trusted_interval(
                 reducer,
                 boundary,
@@ -1431,6 +1470,9 @@ class FixedContractShadowRuntimeAdapter:
                 boundary=boundary,
                 active_episode_identity=None,
                 anomaly_activation_seq=None,
+                radar_research_review_identity=None,
+                radar_research_activation_seq=None,
+                radar_score_packet=None,
                 atomic_state=PublicAtomicQuoteState.NOT_EVALUATED.value,
                 entry_consumed_levels=(),
                 trusted_time_lower_ms=(trusted.lower_ms if trusted is not None else None),
@@ -1455,8 +1497,8 @@ class FixedContractShadowRuntimeAdapter:
             )
             scope_retirements.append(scope)
             if not episode_still_active:
-                episode_retirements.add(prior.active_episode_identity)
-                self._frozen_component_by_episode.pop(prior.active_episode_identity, None)
+                episode_retirements.add(prior_anchor)
+                self._frozen_component_by_episode.pop(prior_anchor, None)
         metadata_changed = False
         for scope, facts in current.items():
             self._underwriting_by_scope[scope] = facts
@@ -1671,11 +1713,12 @@ class FixedContractShadowRuntimeAdapter:
             unknown.extend(component_blockers)
         short_instrument = short.instrument if short is not None else None
         long_instrument = long.instrument if long is not None else None
+        is_high_episode = snapshot.score_band is ScoreBand.HIGH
         return UnderwritingFacts(
             boundary=boundary,
             radar_scope_identity=scope_identity,
-            active_episode_identity=snapshot.episode_identity,
-            anomaly_activation_seq=snapshot.anomaly_activation_seq,
+            active_episode_identity=(snapshot.episode_identity if is_high_episode else None),
+            anomaly_activation_seq=(snapshot.anomaly_activation_seq if is_high_episode else None),
             short_leg_identity=short_identity,
             long_leg_identity=long_identity,
             canonical_combo_identity=None,
@@ -1734,18 +1777,10 @@ class FixedContractShadowRuntimeAdapter:
             ticker_source=ticker_source,
             short_leg_instrument_name=short_name,
             long_leg_instrument_name=frozen_long_name,
-            radar_band_id=snapshot.activation_band_id,
-            radar_richness_lower=(
-                snapshot.short_current.calculation.richness.lower
-                if snapshot.short_current is not None
-                and snapshot.short_current.calculation is not None
-                else None
-            ),
-            radar_richness_upper=(
-                snapshot.short_current.calculation.richness.upper
-                if snapshot.short_current is not None
-                and snapshot.short_current.calculation is not None
-                else None
+            radar_score_packet=snapshot.radar_score_packet,
+            radar_research_review_identity=(None if is_high_episode else snapshot.episode_identity),
+            radar_research_activation_seq=(
+                None if is_high_episode else snapshot.anomaly_activation_seq
             ),
             unknown_reasons=tuple(sorted(set(unknown))),
             component_state=component_state,
@@ -1992,11 +2027,12 @@ class FixedContractShadowRuntimeAdapter:
         short_instrument = short.instrument if short is not None else None
         long_instrument = long.instrument if long is not None else None
         combo_instrument = combo.instrument if combo is not None else None
+        is_high_episode = snapshot.score_band is ScoreBand.HIGH
         return UnderwritingFacts(
             boundary=boundary,
             radar_scope_identity=scope_identity,
-            active_episode_identity=snapshot.episode_identity,
-            anomaly_activation_seq=snapshot.anomaly_activation_seq,
+            active_episode_identity=(snapshot.episode_identity if is_high_episode else None),
+            anomaly_activation_seq=(snapshot.anomaly_activation_seq if is_high_episode else None),
             short_leg_identity=short_identity,
             long_leg_identity=long_identity,
             canonical_combo_identity=combo_identity,
@@ -2066,18 +2102,10 @@ class FixedContractShadowRuntimeAdapter:
             long_leg_instrument_name=(
                 long_instrument.instrument_name if long_instrument is not None else None
             ),
-            radar_band_id=snapshot.activation_band_id,
-            radar_richness_lower=(
-                snapshot.short_current.calculation.richness.lower
-                if snapshot.short_current is not None
-                and snapshot.short_current.calculation is not None
-                else None
-            ),
-            radar_richness_upper=(
-                snapshot.short_current.calculation.richness.upper
-                if snapshot.short_current is not None
-                and snapshot.short_current.calculation is not None
-                else None
+            radar_score_packet=snapshot.radar_score_packet,
+            radar_research_review_identity=(None if is_high_episode else snapshot.episode_identity),
+            radar_research_activation_seq=(
+                None if is_high_episode else snapshot.anomaly_activation_seq
             ),
             unknown_reasons=tuple(sorted(unknown)),
         )
@@ -2095,6 +2123,7 @@ class FixedContractShadowRuntimeAdapter:
             boundary,
             budget_ms=self.owner.policies.underwriting.platform_currentness_budget_ms,
         )
+        is_high_episode = snapshot.score_band is ScoreBand.HIGH
         return UnderwritingFacts(
             boundary=boundary,
             radar_scope_identity=canonical_identity(
@@ -2105,8 +2134,8 @@ class FixedContractShadowRuntimeAdapter:
                 short_identity,
                 "NO_COMBO",
             ),
-            active_episode_identity=snapshot.episode_identity,
-            anomaly_activation_seq=snapshot.anomaly_activation_seq,
+            active_episode_identity=(snapshot.episode_identity if is_high_episode else None),
+            anomaly_activation_seq=(snapshot.anomaly_activation_seq if is_high_episode else None),
             short_leg_identity=short_identity,
             long_leg_identity=None,
             canonical_combo_identity=None,
@@ -2147,18 +2176,10 @@ class FixedContractShadowRuntimeAdapter:
             ticker_source=None,
             short_leg_instrument_name=(snapshot.short_leg.instrument_name),
             long_leg_instrument_name=None,
-            radar_band_id=snapshot.activation_band_id,
-            radar_richness_lower=(
-                snapshot.short_current.calculation.richness.lower
-                if snapshot.short_current is not None
-                and snapshot.short_current.calculation is not None
-                else None
-            ),
-            radar_richness_upper=(
-                snapshot.short_current.calculation.richness.upper
-                if snapshot.short_current is not None
-                and snapshot.short_current.calculation is not None
-                else None
+            radar_score_packet=snapshot.radar_score_packet,
+            radar_research_review_identity=(None if is_high_episode else snapshot.episode_identity),
+            radar_research_activation_seq=(
+                None if is_high_episode else snapshot.anomaly_activation_seq
             ),
             unknown_reasons=tuple(snapshot.result.unknown_reasons)
             or ("ATOMIC_SCOPE_NOT_EVALUABLE",),
@@ -2169,12 +2190,25 @@ class FixedContractShadowRuntimeAdapter:
         reducer: RadarReducer,
         snapshot: AtomicScopeSnapshot,
     ) -> None:
-        expected = (
-            f"{reducer.runtime_identity}:{reducer.policy.identity}:"
-            f"{snapshot.short_leg.instrument_name}:{snapshot.anomaly_activation_seq}"
+        episode = next(
+            (
+                tracker.episode
+                for tracker in reducer.bucket_trackers.values()
+                if tracker.episode is not None
+                and tracker.episode.episode_identity == snapshot.episode_identity
+            ),
+            None,
         )
-        if snapshot.episode_identity != expected:
-            raise ValueError("Radar episode identity is not bound to its atomic scope snapshot")
+        if (
+            episode is None
+            or episode.leader_instrument_name != snapshot.short_leg.instrument_name
+            or episode.activation_causal_seq != snapshot.anomaly_activation_seq
+            or episode.score_band is not snapshot.score_band
+            or snapshot.radar_score_packet.policy_identity != reducer.policy.identity
+            or snapshot.radar_score_packet.leader_instrument_name
+            != snapshot.short_leg.instrument_name
+        ):
+            raise ValueError("Radar bucket episode is not bound to its atomic scope snapshot")
 
     def _replace_unknown_underwriting(
         self,
@@ -2471,12 +2505,12 @@ class FixedContractShadowRuntimeAdapter:
                 "UnderwritingPositionSlotKeyIdentity",
                 self.owner.bindings.runtime_identity,
                 self.owner.bindings.radar_policy_identity,
-                fact.active_episode_identity,
+                _radar_anchor_identity(fact),
                 fact.short_leg_identity,
                 fact.target_quantity_btc,
             ): fact
             for fact in facts
-            if fact.active_episode_identity is not None and fact.short_leg_identity is not None
+            if _radar_anchor_identity(fact) is not None and fact.short_leg_identity is not None
         }
         for emitted in transition.emitted:
             value = self.owner.state_store.get_object(
@@ -3331,3 +3365,7 @@ def _decimal(value: object) -> Decimal:
     if not parsed.is_finite():
         raise ValueError("Decimal must be finite")
     return parsed
+
+
+def _radar_anchor_identity(facts: UnderwritingFacts) -> str | None:
+    return facts.active_episode_identity or facts.radar_research_review_identity

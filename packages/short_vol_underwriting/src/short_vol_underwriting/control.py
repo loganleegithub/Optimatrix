@@ -16,6 +16,7 @@ from short_vol_underwriting.model import FactBoundary
 class DecisionControlRefreshClassification(StrEnum):
     REFRESHED_WATCH_OR_ABSTAIN = "REFRESHED_WATCH_OR_ABSTAIN"
     REFRESHED_CANDIDATE = "REFRESHED_CANDIDATE"
+    REFRESHED_EVALUABLE_SCORE_BAND_CONTROL = "REFRESHED_EVALUABLE_SCORE_BAND_CONTROL"
     NOT_EVALUATED = "NOT_EVALUATED"
     UNKNOWN = "UNKNOWN"
 
@@ -27,6 +28,186 @@ class DecisionControlAttemptOutcome(StrEnum):
     )
     KNOWN_NO_CONTROL = "KNOWN_NO_CONTROL"
     UNKNOWN_CONSUMED = "UNKNOWN_CONSUMED"
+
+
+@dataclass(frozen=True)
+class RadarScoreControlDesignation:
+    """One future-blind LOW/MID designation for a causal Radar batch."""
+
+    rule_identity: str
+    batch_identity: str
+    designation_identity: str
+    selected_review_identity: str
+    selected_band: str
+    selected_ordinal: int
+    low_eligible_count: int
+    mid_eligible_count: int
+    present_stratum_count: int
+    selected_stratum_eligible_count: int
+    inclusion_numerator: int
+    inclusion_denominator: int
+
+    def __post_init__(self) -> None:
+        for identity_value, field_name in (
+            (self.rule_identity, "rule_identity"),
+            (self.batch_identity, "batch_identity"),
+            (self.designation_identity, "designation_identity"),
+            (self.selected_review_identity, "selected_review_identity"),
+        ):
+            require_identity(identity_value, field_name)
+        if self.selected_band not in {"LOW", "MID"}:
+            raise ValueError("selected control band must be LOW or MID")
+        _require_non_negative_integer(self.selected_ordinal, "selected_ordinal")
+        for positive_value, field_name in (
+            (self.present_stratum_count, "present_stratum_count"),
+            (self.selected_stratum_eligible_count, "selected_stratum_eligible_count"),
+            (self.inclusion_numerator, "inclusion_numerator"),
+            (self.inclusion_denominator, "inclusion_denominator"),
+        ):
+            _require_positive_integer(positive_value, field_name)
+        for count_value, field_name in (
+            (self.low_eligible_count, "low_eligible_count"),
+            (self.mid_eligible_count, "mid_eligible_count"),
+        ):
+            _require_non_negative_integer(count_value, field_name)
+        expected_strata = int(self.low_eligible_count > 0) + int(self.mid_eligible_count > 0)
+        if self.present_stratum_count != expected_strata:
+            raise ValueError("present_stratum_count contradicts eligible counts")
+        expected_selected_count = (
+            self.low_eligible_count if self.selected_band == "LOW" else self.mid_eligible_count
+        )
+        if self.selected_stratum_eligible_count != expected_selected_count:
+            raise ValueError("selected stratum count contradicts selected band")
+        if self.selected_ordinal >= self.selected_stratum_eligible_count:
+            raise ValueError("selected_ordinal exceeds its stratum")
+        if self.inclusion_numerator != 1 or self.inclusion_denominator != (
+            self.present_stratum_count * self.selected_stratum_eligible_count
+        ):
+            raise ValueError("control inclusion probability is not the declared rational sample")
+
+
+def radar_score_control_rule_identity(*, bindings: RuntimeBindings) -> str:
+    return canonical_identity(
+        "RadarScoreBandNoTradeControlRuleIdentity",
+        bindings.code_identity,
+        bindings.radar_policy_identity,
+        bindings.underwriting_policy_identity,
+        bindings.position_policy_identity,
+        "HIGH_BATCH_PRECEDENCE",
+        "EQUAL_PRESENT_LOW_MID_STRATUM_HASH",
+        "MINIMUM_HASH_WITHIN_SELECTED_STRATUM",
+        "NO_FALLBACK",
+        1,
+    )
+
+
+def radar_score_control_batch_identity(
+    *,
+    bindings: RuntimeBindings,
+    activation_causal_seq: int,
+) -> str:
+    _require_non_negative_integer(activation_causal_seq, "activation_causal_seq")
+    return canonical_identity(
+        "RadarScoreControlCausalBatchIdentity",
+        bindings.runtime_identity,
+        bindings.radar_policy_identity,
+        activation_causal_seq,
+    )
+
+
+def radar_score_control_designation_key(
+    *,
+    bindings: RuntimeBindings,
+    batch_identity: str,
+    review_identity: str,
+    band: str,
+) -> str:
+    require_identity(batch_identity, "batch_identity")
+    require_identity(review_identity, "review_identity")
+    if band not in {"LOW", "MID"}:
+        raise ValueError("score-band control eligibility is LOW or MID only")
+    return canonical_identity(
+        "RadarScoreControlDesignationKey",
+        radar_score_control_rule_identity(bindings=bindings),
+        batch_identity,
+        band,
+        review_identity,
+    )
+
+
+def designate_radar_score_control_review(
+    *,
+    bindings: RuntimeBindings,
+    batch_identity: str,
+    eligible_reviews: tuple[tuple[str, str], ...],
+) -> RadarScoreControlDesignation:
+    """Select one LOW/MID review without consulting Underwriting or later facts."""
+
+    require_identity(batch_identity, "batch_identity")
+    if not eligible_reviews:
+        raise ValueError("score-band control batch must contain an eligible review")
+    review_identities = tuple(review_identity for review_identity, _band in eligible_reviews)
+    if len(set(review_identities)) != len(review_identities):
+        raise ValueError("score-band control review identities must be unique")
+    strata: dict[str, list[str]] = {"LOW": [], "MID": []}
+    for review_identity, band in eligible_reviews:
+        require_identity(review_identity, "review_identity")
+        if band not in strata:
+            raise ValueError("score-band control eligibility is LOW or MID only")
+        strata[band].append(review_identity)
+    present_bands = tuple(band for band in ("LOW", "MID") if strata[band])
+    selected_band = min(
+        present_bands,
+        key=lambda band: canonical_identity(
+            "RadarScoreControlStratumDesignationKey",
+            radar_score_control_rule_identity(bindings=bindings),
+            batch_identity,
+            band,
+        ),
+    )
+    ordered_stratum = tuple(
+        sorted(
+            strata[selected_band],
+            key=lambda review_identity: radar_score_control_designation_key(
+                bindings=bindings,
+                batch_identity=batch_identity,
+                review_identity=review_identity,
+                band=selected_band,
+            ),
+        )
+    )
+    selected_review = ordered_stratum[0]
+    selected_ordinal = 0
+    low_count = len(strata["LOW"])
+    mid_count = len(strata["MID"])
+    stratum_count = len(present_bands)
+    selected_count = len(ordered_stratum)
+    denominator = stratum_count * selected_count
+    rule_identity = radar_score_control_rule_identity(bindings=bindings)
+    designation_identity = canonical_identity(
+        "RadarScoreControlDesignationIdentity",
+        rule_identity,
+        batch_identity,
+        {"LOW": low_count, "MID": mid_count},
+        selected_band,
+        selected_review,
+        selected_ordinal,
+        {"numerator": 1, "denominator": denominator},
+    )
+    return RadarScoreControlDesignation(
+        rule_identity=rule_identity,
+        batch_identity=batch_identity,
+        designation_identity=designation_identity,
+        selected_review_identity=selected_review,
+        selected_band=selected_band,
+        selected_ordinal=selected_ordinal,
+        low_eligible_count=low_count,
+        mid_eligible_count=mid_count,
+        present_stratum_count=stratum_count,
+        selected_stratum_eligible_count=selected_count,
+        inclusion_numerator=1,
+        inclusion_denominator=denominator,
+    )
 
 
 def selected_decision_rule_identity(
@@ -348,6 +529,9 @@ class DecisionControlAttempt:
         require_identity(source_identity, "terminal_source_identity")
         outcome = {
             DecisionControlRefreshClassification.REFRESHED_WATCH_OR_ABSTAIN: (
+                DecisionControlAttemptOutcome.CONTROL_OPENED
+            ),
+            DecisionControlRefreshClassification.REFRESHED_EVALUABLE_SCORE_BAND_CONTROL: (
                 DecisionControlAttemptOutcome.CONTROL_OPENED
             ),
             DecisionControlRefreshClassification.REFRESHED_CANDIDATE: (

@@ -91,6 +91,7 @@ class CausalCause(StrEnum):
     CLOCK_FACT = "CLOCK_FACT"
     CLOCK_GAP = "CLOCK_GAP"
     TIME_BOUNDARY = "TIME_BOUNDARY"
+    SHADOW_RPC_RESPONSE = "SHADOW_RPC_RESPONSE"
     CLEAN_STOP = "CLEAN_STOP"
     INDEX_TICK = "INDEX_TICK"
     INDEX_HISTORY = "INDEX_HISTORY"
@@ -501,8 +502,6 @@ def _rule_object(rule: OptionRule) -> dict[str, object]:
     return {
         "abs_delta_min": decimal_text(rule.abs_delta_min),
         "abs_delta_max": decimal_text(rule.abs_delta_max),
-        "activation_ratio": decimal_text(rule.activation_ratio),
-        "clear_ratio": decimal_text(rule.clear_ratio),
         "activation_observation_count": rule.activation_observation_count,
         "clear_observation_count": rule.clear_observation_count,
         "minimum_separation_ms": rule.minimum_separation_ms,

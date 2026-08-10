@@ -1,10 +1,12 @@
 # Optimatrix
 
 Optimatrix is a trader-facing BTC 0–3DTE options opportunity-discovery and Shadow-learning system.
-The Online Runtime has one product: Deribit `INVERSE_BTC_V1` defined-risk Short Vol. One process
-binds the canonical Inverse product specification and its exact three-Policy chain for the full
-run; there is no product selector, fallback, or runtime product switch. The system has no private
-account, order, fill, capital, actual-margin, or actual-position capability.
+The Online Runtime has one economic product, Deribit `INVERSE_BTC_V1`, and one repository strategy
+channel, `INVERSE_BTC_SHORT_VOL_V2`. V2 is an ordinal opportunity-ranking hypothesis, not an
+oracle, calibrated probability, or Edge claim. One process binds the canonical Inverse product specification and
+its exact three-Policy chain for the full run; there is no product selector, fallback, or runtime
+product switch. The system has no private account, order, fill, capital, actual-margin, or
+actual-position capability.
 
 ## Product flow
 
@@ -12,12 +14,12 @@ account, order, fill, capital, actual-margin, or actual-position capability.
 Deribit public facts
 → fixed `INVERSE_BTC_V1` product specification and Policy chain
 → bounded current market state
-→ Short Vol Radar
+→ Short Vol V2 score: premium evidence × path/liquidity quality
+→ one leader per TTE/expiry/type/Delta bucket
 → Underwriting-selected frozen protective vertical
 → conservative full-quantity component-book counterfactual
 → Underwriting: CANDIDATE | WATCH | ABSTAIN when evaluable
-→ at most one action-blind selected decision per causal activation batch
-→ ordinary Candidate admission, or selected WATCH/ABSTAIN no-trade enrollment
+→ ordinary HIGH Candidate admission, or at most one future-blind LOW/MID no-trade Control
 → Position: HOLD | CLOSE | UNKNOWN
 → strictly future Shadow Case Outcome
 ```
@@ -29,7 +31,7 @@ no Policy, runtime, module, or placeholder in this repository.
 
 | Channel | Implementation | Policy | Runtime |
 | --- | --- | --- | --- |
-| `INVERSE_BTC_SHORT_VOL` (`INVERSE_BTC_SHORT_VOL_V1`) | `IMPLEMENTED` | fixed Inverse three-Policy chain | `PUBLIC_SHADOW` |
+| `INVERSE_BTC_SHORT_VOL` (`INVERSE_BTC_SHORT_VOL_V2`) | `IMPLEMENTED` | fixed V2 Inverse three-Policy chain | `PUBLIC_SHADOW` |
 | `INVERSE_BTC_LONG_GAMMA` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
 | `INVERSE_ETH_SHORT_VOL` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
 | `INVERSE_ETH_LONG_GAMMA` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
@@ -41,15 +43,14 @@ offline from Shadow Cases.
 
 ## Current stage
 
-The permission boundary remains `PUBLIC_SHADOW`. The repository's accepted online surface is
-Inverse BTC only: the canonical startup, product specification, public source, Policy chain, and
-schema family all resolve to `INVERSE_BTC_V1`.
+The permission boundary remains `PUBLIC_SHADOW`. The H1 repository task is replacing the V1
+ratio-only Radar with `INVERSE_BTC_SHORT_VOL_V2`, schema-v5 Case score packets, and a Case-only
+Outcome report. The economic product and public source remain `INVERSE_BTC_V1`.
 
-At the current Authority observation, `127.0.0.1:8765` is served by clean Inverse-only code and is
-`RUNNING / CURRENT / ready`. The process restored every compatible non-terminal admitted Entry from
-the stable Case repository as a new `GAPPED` Observation Segment; no historical selected no-trade
-Control was restored. There is no active task and no additional start, stop, restart, or live smoke
-is authorized. A live snapshot does not establish future uptime, fillability, account margin,
+At the last bounded Authority observation, `127.0.0.1:8765` was the older V1 process using its
+existing temporary root. H1 neither inspects nor changes that process or any external root. Stop,
+archive, stable V2-root creation, restart, and live validation require a later explicit H2
+permission update. A live snapshot does not establish future uptime, fillability, account margin,
 frequency, edge, profitability, or qualification. Exact runtime identity, durable effect, and
 permission details are in `docs/authority/CURRENT_STAGE.md`.
 
@@ -70,7 +71,8 @@ See:
   state;
 - `options_domain`: one immutable product specification, instruments, native target-size depth and
   tick stress, product fee arithmetic, model normalization, and valuation conversion;
-- `short_vol_radar`: detector, episode, protective-structure review, and atomic diagnostics;
+- `short_vol_radar`: V2 score/features, bucket/episode state, protective-structure review, and
+  atomic diagnostics;
 - `short_vol_underwriting`: Underwriting, admission, Position, Outcome, in-memory owner state, and
   the minimal Shadow Case store;
 - `radar_runtime`: one process, one bounded queue, one reducer, Shadow adapter, funnel diagnostics,

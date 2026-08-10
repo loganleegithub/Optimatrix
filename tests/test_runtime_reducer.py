@@ -1871,7 +1871,7 @@ def test_post_status_schedules_the_official_btc_usd_index_history_boundary(
     history = only(commands, RpcPurpose.INDEX_HISTORY)
 
     assert history.method == "public/get_index_chart_data"
-    assert history.params == {"index_name": "btc_usd", "range": "1d"}
+    assert history.params == {"index_name": "btc_usd", "range": "2d"}
     assert history.scope == "INDEX_HISTORY"
     assert history.failure_scope is FailureScope.CLOCK_INDEX
     assert RpcPurpose.INDEX_HISTORY not in runtime_module.POST_STATUS_BOOTSTRAP_PURPOSES
@@ -1941,7 +1941,7 @@ def test_index_history_rpc_failure_preserves_clock_and_last_valid_history(
     ]
     retry_commands = reducer.advance_time(1_001 + reducer.policy.runtime_limits.rpc_deadline_ms)
     retry = only(retry_commands, RpcPurpose.INDEX_HISTORY)
-    assert retry.params == {"index_name": "btc_usd", "range": "1d"}
+    assert retry.params == {"index_name": "btc_usd", "range": "2d"}
 
 
 @pytest.mark.parametrize(

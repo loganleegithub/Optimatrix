@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 
@@ -48,6 +48,13 @@ from short_vol_radar.policy import (
     TteBand,
     classify_time_applicability,
 )
+from short_vol_radar.score import (
+    RadarScoreInputs,
+    RadarScorePacket,
+    RadarScoreResult,
+    ScoreUnavailable,
+    compute_radar_score,
+)
 
 MILLISECONDS_PER_365_DAY_YEAR = Decimal(365 * 24 * 60 * 60 * 1_000)
 MILLISECONDS_PER_MINUTE = Decimal(60_000)
@@ -60,6 +67,8 @@ class TickerState:
     source_timestamp_ms: int
     signed_delta: Decimal | None = None
     mark_iv_fraction: Decimal | None = None
+    open_interest: Decimal | None = None
+    option_gamma: Decimal | None = None
 
 
 class DeltaBucket(StrEnum):
@@ -108,6 +117,7 @@ class DetectorCalculation:
     native_executable_buy_price: Decimal | None = None
     native_stressed_executable_sell_price: Decimal | None = None
     model_conversion_forward: Decimal | None = None
+    score_result: RadarScoreResult | None = None
 
     @property
     def clue_eligible(self) -> bool:
@@ -115,7 +125,8 @@ class DetectorCalculation:
 
 
 class CurrentDisposition(StrEnum):
-    RICHNESS = "RICHNESS"
+    SCORE_PENDING = "SCORE_PENDING"
+    V2_SCORE = "V2_SCORE"
     REVIEW_ONLY = "REVIEW_ONLY"
     KNOWN_INELIGIBLE = "KNOWN_INELIGIBLE"
     UNKNOWN = "UNKNOWN"
@@ -133,6 +144,7 @@ class CurrentEvaluation:
     calculation: DetectorCalculation | None = None
     observation: DetectorObservation | None = None
     continuity_gap: bool = False
+    score_result: RadarScoreResult | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +159,8 @@ class EvaluationResult:
     observation_reason: str | None = None
     calculation: DetectorCalculation | None = None
     current_evaluation: CurrentEvaluation | None = None
+    score_result: RadarScoreResult | None = None
+    score_packet: RadarScorePacket | None = None
 
 
 def detector_observation_identity(
@@ -186,7 +200,7 @@ def detector_observation_identity(
     )
 
 
-def evaluate_instrument(
+def evaluate_instrument_with_missing_optional_features_for_test(
     *,
     policy: RadarPolicy,
     tracker: EpisodeTracker,
@@ -200,6 +214,12 @@ def evaluate_instrument(
     observation_eligible: bool = True,
     observation_reason: str | None = None,
 ) -> EvaluationResult:
+    """Test-only pure helper that finalizes with explicitly missing optional S/T inputs.
+
+    Production callers must use ``calculate_current_evaluation`` followed by
+    ``finalize_current_evaluation`` with Radar-owned score feature contexts.  This helper keeps
+    legacy detector math tests compact without exposing a second production scoring path.
+    """
     current = calculate_current_evaluation(
         policy=policy,
         instrument=instrument,
@@ -210,7 +230,17 @@ def evaluate_instrument(
         causal_closes=causal_closes,
         baseline_unavailable_reason=baseline_unavailable_reason,
     )
-    transition = apply_current_evaluation(
+    if current.disposition is CurrentDisposition.SCORE_PENDING:
+        if current.calculation is None:
+            raise RuntimeError("pending V2 score lacks one core calculation")
+        current = finalize_current_evaluation(
+            policy=policy,
+            core=current,
+            score_inputs=radar_score_inputs(instrument.option_type, current.calculation),
+            causal_seq=causal_seq,
+            trusted_time=trusted_time,
+        )
+    transition = _apply_test_current_evaluation(
         tracker=tracker,
         current=current,
         causal_seq=causal_seq,
@@ -227,6 +257,7 @@ def evaluate_instrument(
         observation_reason=observation_reason,
         calculation=current.calculation,
         current_evaluation=current,
+        score_result=current.score_result,
     )
 
 
@@ -253,6 +284,7 @@ def calculate_current_evaluation(
         band_id: str | None,
         calculation: DetectorCalculation | None = None,
         continuity_gap: bool = False,
+        score_result: RadarScoreResult | None = None,
     ) -> CurrentEvaluation:
         return CurrentEvaluation(
             disposition=disposition,
@@ -262,6 +294,7 @@ def calculate_current_evaluation(
             band_id=band_id,
             calculation=calculation,
             continuity_gap=continuity_gap,
+            score_result=score_result,
         )
 
     if policy.product_spec_identity != instrument.product.identity:
@@ -565,45 +598,115 @@ def calculate_current_evaluation(
         native_stressed_executable_sell_price=stressed_target_bid.vwap,
         model_conversion_forward=ticker.forward_usdc,
     )
+    return CurrentEvaluation(
+        disposition=CurrentDisposition.SCORE_PENDING,
+        reason="V2_SCORE_FEATURES_PENDING",
+        known_evaluation=False,
+        full_formula_evaluation=False,
+        band_id=band.band_id,
+        calculation=calculation,
+    )
+
+
+def finalize_current_evaluation(
+    *,
+    policy: RadarPolicy,
+    core: CurrentEvaluation,
+    score_inputs: RadarScoreInputs,
+    causal_seq: int,
+    trusted_time: TimeInterval,
+) -> CurrentEvaluation:
+    if core.disposition is not CurrentDisposition.SCORE_PENDING or core.calculation is None:
+        raise ValueError("V2 score finalization requires one pending core calculation")
+    calculation = core.calculation
+    try:
+        score_result = compute_radar_score(policy.score_model, score_inputs)
+    except ScoreUnavailable as exc:
+        return CurrentEvaluation(
+            disposition=CurrentDisposition.UNKNOWN,
+            reason=str(exc) or "V2_SCORE_CORE_UNKNOWN",
+            known_evaluation=False,
+            full_formula_evaluation=False,
+            band_id=core.band_id,
+            calculation=calculation,
+        )
+    calculation = replace(calculation, score_result=score_result)
     if not calculation.clue_eligible:
-        if not band.clue_eligible and not delta_clue_eligible:
+        if not calculation.band.clue_eligible and not calculation.delta_clue_eligible:
             reason = "REVIEW_ONLY_TTE_AND_DELTA"
-        elif not band.clue_eligible:
+        elif not calculation.band.clue_eligible:
             reason = "REVIEW_ONLY_TTE_BAND"
         else:
             reason = "REVIEW_ONLY_DELTA_BUCKET"
-        return current(
-            CurrentDisposition.REVIEW_ONLY,
-            reason,
-            known=True,
-            full_formula=True,
-            band_id=band.band_id,
+        return CurrentEvaluation(
+            disposition=CurrentDisposition.REVIEW_ONLY,
+            reason=reason,
+            known_evaluation=True,
+            full_formula_evaluation=True,
+            band_id=core.band_id,
             calculation=calculation,
+            score_result=score_result,
         )
-    try:
-        signal = classify_observation(stressed_richness, rule)
-    except NumericalBoundaryUnresolved:
-        return current(
-            CurrentDisposition.UNKNOWN,
-            "NUMERICAL_BOUNDARY_UNRESOLVED",
-            known=False,
-            full_formula=False,
-            band_id=band.band_id,
-        )
+    signal = classify_observation(score_result.score, policy.score_model)
     observation = DetectorObservation(
         causal_seq=causal_seq,
         trusted_time=trusted_time,
-        band_id=band.band_id,
+        band_id=calculation.band.band_id,
         signal=signal,
     )
     return CurrentEvaluation(
-        disposition=CurrentDisposition.RICHNESS,
+        disposition=CurrentDisposition.V2_SCORE,
         reason=None,
         known_evaluation=True,
         full_formula_evaluation=True,
-        band_id=band.band_id,
+        band_id=calculation.band.band_id,
         calculation=calculation,
         observation=observation,
+        score_result=score_result,
+    )
+
+
+def radar_score_inputs(
+    option_type: OptionType,
+    calculation: DetectorCalculation,
+    *,
+    local_same_type_mark_iv: Decimal | None = None,
+    current_expiry_atm_mark_iv: Decimal | None = None,
+    adjacent_expiry_atm_mark_iv: Decimal | None = None,
+) -> RadarScoreInputs:
+    diagnostics = calculation.baseline.window_diagnostics
+    if not diagnostics:
+        raise ScoreUnavailable("PATH_QUALITY_CONTEXT_UNKNOWN")
+    selected_lookback = calculation.baseline.selected_lookback_minutes
+    if selected_lookback is None:
+        selected = max(
+            diagnostics,
+            key=lambda member: (
+                member.variance_rate_per_minute,
+                member.lookback_minutes,
+            ),
+        )
+    else:
+        selected = calculation.baseline.diagnostics_for(selected_lookback)
+    adverse = (
+        selected.positive_semivariance_share
+        if option_type is OptionType.CALL
+        else selected.negative_semivariance_share
+    )
+    return RadarScoreInputs(
+        stressed_richness=calculation.richness,
+        stressed_executable_bid_iv=calculation.stressed_executable_bid_iv,
+        local_same_type_mark_iv=local_same_type_mark_iv,
+        current_expiry_atm_mark_iv=current_expiry_atm_mark_iv,
+        adjacent_expiry_atm_mark_iv=adjacent_expiry_atm_mark_iv,
+        adverse_semivariance_share=DecimalInterval(adverse, adverse),
+        jump_share=DecimalInterval(selected.jump_share, selected.jump_share),
+        target_spread_ticks=DecimalInterval(
+            calculation.target_spread_ticks,
+            calculation.target_spread_ticks,
+        ),
+        bid_consumed_level_count=len(calculation.target_bid.consumed),
+        ask_consumed_level_count=len(calculation.target_ask.consumed),
     )
 
 
@@ -623,7 +726,7 @@ def classify_delta_bucket(interval: DecimalInterval, rule: OptionRule) -> DeltaB
     return DeltaBucket.NEAR_ATM_30_40
 
 
-def apply_current_evaluation(
+def _apply_test_current_evaluation(
     *,
     tracker: EpisodeTracker,
     current: CurrentEvaluation,
@@ -653,7 +756,7 @@ def apply_current_evaluation(
             continuity_gap=current.continuity_gap,
         )
     if current.observation is None or current.calculation is None:
-        raise RuntimeError("richness evaluation lacks calculation or observation")
+        raise RuntimeError("V2 score evaluation lacks calculation or observation")
     if not observation_eligible:
         known_current = tracker.establish_known_current()
         return TrackerTransition(state_changed=resumed or known_current.state_changed)
@@ -705,12 +808,20 @@ def parse_ticker(payload: object, expected_instrument_name: str) -> TickerState:
         if mark_iv_percent is not None and mark_iv_percent >= 0
         else None
     )
+    open_interest = _parse_optional_finite_decimal(payload.get("open_interest"))
+    if open_interest is not None and open_interest < 0:
+        open_interest = None
+    option_gamma = _parse_optional_finite_decimal(
+        greeks.get("gamma") if isinstance(greeks, dict) else None
+    )
     return TickerState(
         forward,
         underlying_index,
         timestamp,
         signed_delta=signed_delta,
         mark_iv_fraction=mark_iv_fraction,
+        open_interest=open_interest,
+        option_gamma=option_gamma,
     )
 
 

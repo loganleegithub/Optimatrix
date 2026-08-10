@@ -6,10 +6,10 @@
 
 ## Purpose
 
-Run one public Deribit → Radar → Underwriting → process-independent Shadow Entry → Position →
-Outcome path for the fixed `INVERSE_BTC_V1` product in one long-lived process and expose current
-settled state through a loopback read-only Workbench. There is no product selector, fallback, or
-runtime product switch.
+Run one public Deribit → `INVERSE_BTC_SHORT_VOL_V2` Radar → Underwriting → process-independent
+Shadow Entry/Control → Position → Outcome path for the fixed `INVERSE_BTC_V1` product in one
+long-lived process and expose current settled state through a loopback read-only Workbench. There
+is no product selector, fallback, or runtime product switch.
 
 The service adds no account, order, fill, capital, replay, database, qualification, or deployment
 authority. Live invocation comes only from `CURRENT_STAGE`.
@@ -47,7 +47,9 @@ Every retained source, current-state identity, funnel denominator, and Case belo
 
 ## State root
 
-One external absolute state root is the stable business repository across process starts:
+One external absolute, non-temporary state root is the stable business repository across process
+starts. Startup rejects a root under the platform temporary directory, `/tmp`, or `/private/tmp`
+before creating it:
 
 ```text
 service.lock
@@ -56,7 +58,6 @@ cases/<case-id>/segments/<segment-sequence>/opened.json
 cases/<case-id>/segments/<segment-sequence>/closed.json     # optional
 cases/<case-id>/first-close.json                      # optional
 cases/<case-id>/outcome.json                          # optional
-cases/<case-id>/legacy-migration.json                 # optional
 ```
 
 There is no `radar/` or `downstream/` evidence directory. The lock prevents two processes from
@@ -69,7 +70,8 @@ commissioning, or host-identity proof.
 `serve-shadow` performs only:
 
 1. resolve one product specification, clean code identity, and exact matching three-Policy chain;
-2. acquire the stable state-root lease and validate every Case in `state-root/cases`;
+2. reject any temporary state root, acquire the stable state-root lease, and validate every Case in
+   `state-root/cases`;
 3. restore all compatible non-terminal admitted Entries and no Controls;
 4. start loopback Workbench and connect/reconnect one public Deribit session;
 5. on the first settled boundary, open one new `GAPPED` Observation Segment per restored Entry;
@@ -87,11 +89,6 @@ The application does not inspect or control them.
 Live invocation is governed only by `CURRENT_STAGE`. Reusing the stable Case repository is required
 business recovery, not authority for automatic process restart: an external operator still decides
 when to launch a process. Exactly one Inverse runtime may hold the repository lease.
-
-Legacy conversion is a separate offline command over one explicitly supplied stopped source run.
-It scans all compatible admitted records, never accepts a Case allowlist, and is not a
-`serve-shadow` option. The destination repository is published only after the full compatible set
-validates; source bytes are never modified.
 
 ## Current state and Workbench
 
@@ -117,9 +114,10 @@ publishes one complete immutable schema snapshot:
 - at most once per 500 monotonic milliseconds for ordinary status-stable updates;
 - once for pending state before reconnect or stop.
 
-The snapshot identifies `INVERSE_BTC_V1`, its exact product-spec identity, public/index/native
+The schema-v6 snapshot identifies `INVERSE_BTC_SHORT_VOL_V2`, `INVERSE_BTC_V1`, their exact
+product/Policy identities, V2 score/leader/coverage state, public/index/native
 premium/settlement/strike/valuation units, and Policy chain. Every monetary value is labeled with
-its server-owned native or valuation unit. Browser code may not infer a unit from a legacy key
+its server-owned native or valuation unit. Browser code may not infer a unit from an internal key
 suffix or convert between native, model, and valuation values.
 
 Every active admitted Entry appears once by its original `shadow_entry_identity`, whether opened in
@@ -196,7 +194,8 @@ contract.
 
 Offline tests cover exactly one fixed Inverse owner graph, product/Policy compatibility and
 foreign-product rejection, fixed Policies, reconnect without owner replacement, pre-Shadow file
-count zero, paired component admission/close, exact Inverse schema-v4 reader states,
+count zero, paired component admission/close, exact Inverse schema-v5 reader states and V2 score
+packets,
 Workbench product/unit projection, coalescing/status bypass/flush, loopback HTTP, truthful
 zero/UNKNOWN, and Inverse public-method allowlisting. Repeated Episode, Candidate,
 scope-replacement, and completed-Case tests must prove that retained collections return to the
@@ -208,6 +207,5 @@ Recovery tests run at least runtime A → B → C over one repository and prove 
 all-active scanning, Control/terminal exclusion, recovery-first UNKNOWN, segment-chain ordering,
 gap quality without synthetic CLOSE, one combined first-close/attempt schedule, no retry after
 uncertain loss, one mature gapped Outcome with qualification false, no duplicate funnel admission,
-and immutable records. Migration tests cover all compatible admitted records from a user-supplied
-legacy run, no allowlist/count special case, immutable source, idempotency, conflict rejection, and
-all-or-nothing destination publication.
+and immutable records. The schema-v5 runtime has no V1 migration or compatibility command; V2
+starts only from a separately authorized fresh stable root.

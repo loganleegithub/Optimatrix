@@ -15,7 +15,8 @@ from options_domain import (
 )
 
 from short_vol_radar.detector import DetectorState
-from short_vol_radar.radar import DetectorCalculation, TickerState
+from short_vol_radar.radar import DetectorCalculation, TickerState, radar_score_inputs
+from short_vol_radar.score import RadarScoreInputs
 
 DEFAULT_ATTENTION_TOP_N = 20
 FIVE_DELTA_POINTS = Decimal("0.05")
@@ -94,8 +95,8 @@ class SurfaceContext:
     local_upper_abs_delta: Decimal | None = None
     local_upper_mark_iv: Decimal | None = None
     local_interpolated_mark_iv: Decimal | None = None
-    executable_bid_iv_midpoint: Decimal | None = None
-    executable_bid_iv_minus_local_mark_iv: Decimal | None = None
+    stressed_executable_bid_iv_midpoint: Decimal | None = None
+    stressed_executable_bid_iv_minus_local_mark_iv: Decimal | None = None
     adjacent_expiry_timestamp_ms: int | None = None
     adjacent_expiry_atm_instrument_name: str | None = None
     adjacent_expiry_atm_mark_iv: Decimal | None = None
@@ -129,9 +130,11 @@ class SurfaceContext:
                 "upper_mark_iv": _decimal_text(self.local_upper_mark_iv),
                 "interpolated_mark_iv": _decimal_text(self.local_interpolated_mark_iv),
             },
-            "executable_bid_iv_midpoint": _decimal_text(self.executable_bid_iv_midpoint),
-            "executable_bid_iv_minus_local_mark_iv": _decimal_text(
-                self.executable_bid_iv_minus_local_mark_iv
+            "stressed_executable_bid_iv_midpoint": _decimal_text(
+                self.stressed_executable_bid_iv_midpoint
+            ),
+            "stressed_executable_bid_iv_minus_local_mark_iv": _decimal_text(
+                self.stressed_executable_bid_iv_minus_local_mark_iv
             ),
             "adjacent_expiry_atm": {
                 "expiration_timestamp_ms": self.adjacent_expiry_timestamp_ms,
@@ -299,6 +302,22 @@ class ReviewContext:
 
 
 @dataclass(frozen=True)
+class ScoreFeatureContext:
+    option_type: OptionType
+    regime: RegimeContext
+    surface: SurfaceContext
+
+    def score_inputs(self, calculation: DetectorCalculation) -> RadarScoreInputs:
+        return radar_score_inputs(
+            self.option_type,
+            calculation,
+            local_same_type_mark_iv=self.surface.local_interpolated_mark_iv,
+            current_expiry_atm_mark_iv=self.surface.same_expiry_atm_mark_iv,
+            adjacent_expiry_atm_mark_iv=self.surface.adjacent_expiry_atm_mark_iv,
+        )
+
+
+@dataclass(frozen=True)
 class _SurfacePoint:
     instrument_name: str
     expiration_timestamp_ms: int
@@ -335,17 +354,18 @@ def build_review_contexts(
     if not target_quantity_btc.is_finite() or target_quantity_btc <= 0:
         raise ValueError("target_quantity_btc must be finite and positive")
     reasons = detector_reasons or {}
-    surface_points = _surface_points(options, tickers)
+    score_contexts = build_score_feature_contexts(
+        options=options,
+        calculations=calculations,
+        tickers=tickers,
+    )
     unranked: dict[str, ReviewContext] = {}
     for instrument_name, instrument in options.items():
         calculation = calculations.get(instrument_name)
         detector_state = detector_states.get(instrument_name, DetectorState.UNKNOWN)
-        regime = _regime_context(instrument.option_type, calculation)
-        surface = _surface_context(
-            instrument=instrument,
-            calculation=calculation,
-            points=surface_points,
-        )
+        score_context = score_contexts[instrument_name]
+        regime = score_context.regime
+        surface = score_context.surface
         legged = _legged_structure_context(
             short_instrument=instrument,
             calculation=calculation,
@@ -393,6 +413,27 @@ def build_review_contexts(
             within_attention_top_n=rank <= attention_top_n,
         )
         for rank, name in enumerate(ordered_names, start=1)
+    }
+
+
+def build_score_feature_contexts(
+    *,
+    options: Mapping[str, OptionInstrument],
+    calculations: Mapping[str, DetectorCalculation],
+    tickers: Mapping[str, TickerState],
+) -> dict[str, ScoreFeatureContext]:
+    points = _surface_points(options, tickers)
+    return {
+        instrument_name: ScoreFeatureContext(
+            option_type=instrument.option_type,
+            regime=_regime_context(instrument.option_type, calculations.get(instrument_name)),
+            surface=_surface_context(
+                instrument=instrument,
+                calculation=calculations.get(instrument_name),
+                points=points,
+            ),
+        )
+        for instrument_name, instrument in options.items()
     }
 
 
@@ -515,8 +556,8 @@ def _surface_context(
     )
     local_iv = _interpolate_mark_iv(lower, upper, target_delta)
     executable_midpoint = _interval_midpoint(
-        calculation.executable_bid_iv.lower,
-        calculation.executable_bid_iv.upper,
+        calculation.stressed_executable_bid_iv.lower,
+        calculation.stressed_executable_bid_iv.upper,
     )
     residual = executable_midpoint - local_iv if local_iv is not None else None
 
@@ -551,8 +592,8 @@ def _surface_context(
         local_upper_abs_delta=upper.abs_delta if upper is not None else None,
         local_upper_mark_iv=upper.mark_iv if upper is not None else None,
         local_interpolated_mark_iv=local_iv,
-        executable_bid_iv_midpoint=executable_midpoint,
-        executable_bid_iv_minus_local_mark_iv=residual,
+        stressed_executable_bid_iv_midpoint=executable_midpoint,
+        stressed_executable_bid_iv_minus_local_mark_iv=residual,
         adjacent_expiry_timestamp_ms=(
             adjacent.expiration_timestamp_ms if adjacent is not None else None
         ),
@@ -597,11 +638,11 @@ def _adjacent_expiry_atm(
 ) -> _SurfacePoint | None:
     by_expiry: dict[int, list[_SurfacePoint]] = {}
     for point in points:
-        if point.expiration_timestamp_ms != current_expiry_ms:
+        if point.expiration_timestamp_ms > current_expiry_ms:
             by_expiry.setdefault(point.expiration_timestamp_ms, []).append(point)
     if not by_expiry:
         return None
-    expiry = min(by_expiry, key=lambda value: (abs(value - current_expiry_ms), value))
+    expiry = min(by_expiry)
     return min(
         by_expiry[expiry],
         key=lambda point: (
@@ -783,17 +824,20 @@ def _hard_screen_explanation(
             invalidation_condition="NOT_APPLICABLE_WITHOUT_A_KNOWN_FORMULA",
         )
     if detector_state is DetectorState.ANOMALY_ACTIVE:
+        score_result = calculation.score_result
+        score_witness = (
+            f"V2_SCORE_LOWER={score_result.score.lower};"
+            f"PREMIUM_EVIDENCE_LOWER={score_result.premium_evidence.lower};"
+            f"RISK_QUALITY_LOWER={score_result.risk_quality.lower}"
+            if score_result is not None
+            else "V2_SCORE_RESULT_NOT_ATTACHED"
+        )
         return _HardScreenExplanation(
-            label="RICHNESS_CLUE_ACTIVE",
-            positive_witness=(
-                "TARGET_SIZE_TWO_SIDED_ONE_TICK_ROBUST_STRESSED_RICHNESS_LOWER="
-                f"{calculation.richness.lower}"
-            ),
+            label="V2_SCORE_EPISODE_ACTIVE",
+            positive_witness=score_witness,
             blocker="NONE_AT_RADAR_HARD_SCREEN",
             upgrade_condition="OFFICIAL_ATOMIC_QUOTE_THEN_UNDERWRITING",
-            invalidation_condition=(
-                "SOURCE_LOSS_OR_REVIEW_BUCKET_OR_STRESSED_RICHNESS_CLEAR_PERSISTENCE"
-            ),
+            invalidation_condition=("SOURCE_LOSS_OR_SCORE_CLEAR_THRESHOLD_CONFIRMED"),
         )
     if not calculation.band.clue_eligible and not calculation.delta_clue_eligible:
         label = "REVIEW_ONLY_TTE_AND_DELTA"
@@ -805,12 +849,12 @@ def _hard_screen_explanation(
         label = "REVIEW_ONLY_DELTA"
         upgrade = "ENTER_CLUE_ELIGIBLE_DELTA_BUCKET"
     else:
-        label = "HARD_SCREEN_KNOWN_NOT_ACTIVE"
-        upgrade = "MEET_STRESSED_RICHNESS_AND_TIME_PERSISTENCE"
+        label = "V2_SCORE_KNOWN_NOT_ACTIVE"
+        upgrade = "MEET_SCORE_65_AND_TIME_PERSISTENCE"
     return _HardScreenExplanation(
         label=label,
-        positive_witness="TARGET_SIZE_TWO_SIDED_ONE_TICK_FORMULA_KNOWN",
-        blocker=detector_reason or "RICHNESS_OR_PERSISTENCE_NOT_ACTIVE",
+        positive_witness="V2_CORE_FORMULA_KNOWN",
+        blocker=detector_reason or "V2_SCORE_OR_PERSISTENCE_NOT_ACTIVE",
         upgrade_condition=upgrade,
         invalidation_condition="SOURCE_LOSS_OR_KNOWN_FORMULA_INELIGIBILITY",
     )
@@ -831,7 +875,7 @@ def _rank_inputs(
         clue_eligible_tte=(calculation.band.clue_eligible if calculation is not None else False),
         clue_eligible_delta=(calculation.delta_clue_eligible if calculation is not None else False),
         stressed_richness_lower=(calculation.richness.lower if calculation is not None else None),
-        surface_residual=surface.executable_bid_iv_minus_local_mark_iv,
+        surface_residual=surface.stressed_executable_bid_iv_minus_local_mark_iv,
         best_legged_credit_to_payoff_cap_fraction=(legged.best_credit_to_payoff_cap_fraction),
         adverse_semivariance_share=regime.adverse_semivariance_share,
         jump_share=regime.jump_share,
@@ -934,6 +978,8 @@ __all__ = [
     "RankInputs",
     "RegimeContext",
     "ReviewContext",
+    "ScoreFeatureContext",
     "SurfaceContext",
     "build_review_contexts",
+    "build_score_feature_contexts",
 ]

@@ -88,8 +88,9 @@ Until required fresh facts arrive, current observation and Position availability
 The following remain bounded in memory:
 
 - platform, clock, catalog, ticker, book, index, RPC, and continuity state;
-- Radar calculations, detector episodes, component-book counterfactuals, atomic diagnostics,
-  Underwriting, causal activation-batch designation, selected-decision refresh, Candidate,
+- Radar calculations, V2 score/bucket leadership, HIGH and LOW/MID research-review episodes,
+  component-book counterfactuals, atomic diagnostics, Underwriting, causal batch designation,
+  selected-decision refresh, Candidate,
   admission, and current Position state;
 - internal typed transitions used by the owner and Workbench;
 - service status and funnel diagnostics.
@@ -109,8 +110,9 @@ not make a snapshot a durable business record.
 ## Shadow Case persistence boundary
 
 The first durable record is `SHADOW_CASE_OPENED`, emitted only after a pre-outcome enrollment and
-its strictly later accepted paired entry witness. Enrollment is either an admitted Candidate trade
-or the one action-blind selected no-trade decision for a causal Radar activation batch. The stable
+its strictly later accepted paired entry witness. Enrollment is either an admitted Candidate trade,
+one action-blind HIGH selected decision, or one future-blind LOW/MID score-band Control for a
+causal Radar batch. The stable
 repository is reused across runtime identities:
 
 ```text
@@ -120,7 +122,6 @@ state-root/
     opened.json
     first-close.json                       optional, at most one
     outcome.json                           optional, at most one mature Entry Outcome
-    legacy-migration.json                  optional, migration only
     segments/<segment-sequence>/opened.json
     segments/<segment-sequence>/closed.json      optional
 ```
@@ -138,14 +139,12 @@ publication. A crash before publication leaves no visible Entry Case; after publ
 records are visible. This protects the Entry boundary using the existing single-instance lease and
 is not a manifest or fencing protocol.
 
-The one store/reader owns the accepted Inverse schema-v4 Case family. It binds `INVERSE_BTC_V1`
-explicitly and conserves BTC-native entry/close/fee/PnL facts plus separately named USD valuation
-facts at their declared causal index boundaries. There is no online legacy-product or alternate
-schema branch. The accepted `opened.json` key set and product schema identity are not widened for
-recovery. A new admitted Entry's origin Segment instead persists `entry_position_baseline`: the exact entry index and
-short-leg mark-IV source references required by a future Position owner. A migrated legacy Entry
-without those accepted source references records the baseline as `UNKNOWN`; source bytes remain
-unchanged and no value is inferred.
+The one store/reader owns the accepted Inverse schema-v5 Case family. It binds `INVERSE_BTC_V1`
+explicitly, conserves BTC-native entry/close/fee/PnL facts plus separately named USD valuation facts,
+and freezes one canonical V2 score packet at selection plus the same shape at entry refresh. There
+is no online legacy-product, alternate-schema, or migration branch. A new admitted Entry's origin
+Segment persists `entry_position_baseline`: the exact entry index and short-leg mark-IV source
+references required by a future Position owner.
 
 Each admitted Entry has one or more Observation Segments. Segment-open freezes current
 code/runtime, product/Policy binding, adoption FactBoundary, predecessor segment, and observation
@@ -175,10 +174,9 @@ inputs to offline research. Recovery uses only validated bounded Case records; i
 per-tick Position state, replay facts, content manifests, or whole-history relationship graphs.
 
 The durable Case store consumes only Case opening, segment open/close, combined first-CLOSE/attempt
-schedule, mature Outcome, and the one legacy-migration mapping. Runtime owner, trader Workbench, and
-AI Researcher directly consume segment provenance and quality; the migration mapping is consumed by
-the restored Entry reader and AI Researcher. Neither can be derived from the original opened record
-because later processes and the user-authorized legacy reinterpretation did not yet exist.
+schedule, and mature Outcome. Runtime owner, trader Workbench, and AI Researcher directly consume
+segment provenance and quality because later process boundaries cannot be derived from the original
+opened record.
 
 ## Funnel diagnostics
 
@@ -212,15 +210,17 @@ never interpolates or fills a gap. The warmup gate is per Policy TTE band:
   restored.
 
 
-The hard-screen calculator in `short_vol_radar` is the sole owner of target-size bid/ask use,
-official native tick stress, Inverse product-owned Black-model normalization, Black inversion,
-TTE/Delta clue eligibility, and stressed IV/RV detector truth. Depth walking and adverse tick stress
+The V2 calculator in `short_vol_radar` is the sole owner of target-size bid/ask use, official native
+tick stress, Inverse product-owned Black-model normalization, Black inversion, TTE/Delta
+eligibility, mixed reference RV, score normalization, bucket leadership, and persistence truth.
+Depth walking and adverse tick stress
 happen in the exchange-native BTC premium unit before conversion. Native BTC premium is converted
 with the declared forward for model use. The forward used for model normalization is not the causal
-index used to value BTC cashflows. The separate review calculator may derive semivariance/jump context, surface-lite context,
-protective vertical references, and transparent attention rank from already settled current state.
-Its bounded Top 3 is display-only and cannot select an Underwriting structure or feed detector
-truth. For each active Episode, composition waits for a complete positive option scope, excludes
+index used to value BTC cashflows. The same Radar owner derives path quality and bounded optional
+surface/term adjustments. It also projects unsigned OI/gamma concentration, protective vertical
+references, and transparent attention order; those diagnostics cannot imply dealer sign or select
+an Underwriting structure. For each active HIGH or designated LOW/MID research Episode, composition
+waits for a complete positive option scope, excludes
 known inactive or quantity-ineligible legs, and keeps potentially legal metadata/book/source gaps
 `UNKNOWN`. It then uses the sole component-book calculator on every legal target-size protective
 quote and passes those economics to the Underwriting-owned selector. The selector orders action
@@ -284,9 +284,9 @@ UNKNOWN contributes exactly one finite aggregate reason. The primary-blocker fun
 the earliest material post-warmup conversion loss and its largest reason. Official Combo outcomes
 are counted in a separate diagnostic projection and never enter the canonical Shadow funnel.
 
-Selected-decision research has a second, explicitly non-canonical projection: activation batches,
-pre-outcome selected decisions, Decision Cases, and strictly future Outcomes. It may include
-Candidate, WATCH, or ABSTAIN decisions, but a WATCH/ABSTAIN Case never increments the canonical
+Selected-decision research has a second, explicitly non-canonical projection: HIGH activation or
+LOW/MID research-review batches, pre-outcome selected decisions, Decision Cases, and strictly
+future Outcomes. It may include any Underwriting action, but a no-trade Case never increments the canonical
 Candidate, `SHADOW_CASE_OPENED`, or `SHADOW_CASE_OUTCOME` stages. The projection retains cumulative
 scalars and only current/latest bounded identities.
 
@@ -308,10 +308,10 @@ HTTP handlers read one immutable complete byte snapshot. They never traverse mut
 state, read Shadow Case files, compute strategy truth, modify Policy, contact Deribit, or expose a
 write route. The server binds only to loopback and supports the declared GET/HEAD surface. The
 snapshot contains the fixed `INVERSE_BTC_V1` identity, public/index/native/settlement/valuation units,
-a bounded Top-N attention view plus `ALL`, exact rank inputs, source-contract facts, hard-screen
-fields, a separate selected-decision panel with original/refreshed actions and margin vectors,
+a bounded Top-N attention view plus `ALL`, exact V2 score/leader inputs, source-contract facts, a
+separate selected-decision panel with original/refreshed score packets, actions, and margin vectors,
 enrollment/Outcome state, and diagnostic non-claims. Browser code only renders server-owned typed
-truth; it does not infer a unit from a legacy field suffix or recalculate rank, IV, RV, surface,
+truth; it does not infer a unit from an internal field suffix or recalculate score, leader, IV, RV, surface,
 structure economics, or decision-control membership.
 
 ## Failure domains
@@ -340,10 +340,10 @@ Every external trust boundary has one validator:
 - public JSON and source shapes: market/transport owner;
 - Policy JSON and chain compatibility: Policy loader;
 - business decisions: Radar/Underwriting/Position owner;
-- durable aggregate, segment, transition, Outcome, and migration records: Shadow Case store/reader.
+- durable aggregate, segment, transition, and Outcome records: Shadow Case store/reader.
 
 No emitted result is re-run through a second business schema, relationship graph, provenance graph,
-or validator-of-validator. The one Case store/reader accepts exactly the Inverse schema-v4 record
+or validator-of-validator. The one Case store/reader accepts exactly the Inverse schema-v5 record
 family bound to the fixed Policy chain. Unit tests may independently exercise pure formulas; they
 do not create a second runtime truth path.
 

@@ -26,7 +26,7 @@ def test_product_profile_is_inverse_only() -> None:
     assert INVERSE_BTC.option_lifecycle_channel == "instrument.state.option.BTC"
     assert INVERSE_BTC.index_channel == "deribit_price_index.btc_usd"
     assert INVERSE_BTC.economic_semantics_version == "INVERSE_BTC_V1"
-    assert INVERSE_BTC.case_schema_version == 4
+    assert INVERSE_BTC.case_schema_version == 5
     assert INVERSE_BTC.native_settlement_liability_profile == (
         "SETTLEMENT_PRICE_DEPENDENT_RECIPROCAL_BTC_LIABILITY"
     )
@@ -351,11 +351,72 @@ def test_inverse_owner_fails_closed_on_tampered_component_quote(repository_root:
         state_store=state_store,
     )
     source = SourceFact("sha256:" + "c" * 64, boundary)
+    from short_vol_radar import RadarScorePacket, ScoreBand
+    from short_vol_radar.bucket import radar_bucket_episode_identity
+
+    score_packet = RadarScorePacket.from_object(
+        {
+            "packet_schema_version": 1,
+            "policy_identity": INVERSE_BTC_RADAR_POLICY_IDENTITY,
+            "fact_boundary": boundary.as_object(),
+            "bucket_key": {
+                "tte_band_id": "six-to-twenty-four-hours",
+                "expiry_ms": short.expiration_timestamp_ms,
+                "option_type": "call",
+                "delta_bucket": "0.15-0.25",
+            },
+            "leader_instrument_name": short.instrument_name,
+            "leader_coverage": "COMPLETE",
+            "result": {
+                "premium_evidence": {"lower": "0.8", "upper": "0.8"},
+                "risk_quality": {"lower": "0.8", "upper": "0.8"},
+                "score": {"lower": "70", "upper": "70"},
+                "band": "HIGH",
+                "coverage": "COMPLETE",
+                "missing_factors": [],
+                "factors": [
+                    {
+                        "name": name,
+                        "raw_inputs": [
+                            {
+                                "name": f"test_{name.lower()}",
+                                "interval": {"lower": "0.8", "upper": "0.8"},
+                            }
+                        ],
+                        "normalized": {"lower": "0.8", "upper": "0.8"},
+                        "weighted_contribution": {
+                            "lower": "0.1",
+                            "upper": "0.1",
+                        },
+                        "unknown_reason": None,
+                    }
+                    for name in ("A", "S", "T", "D", "E")
+                ],
+            },
+            "oi_diagnostic": {
+                "state": "UNKNOWN",
+                "open_interest": None,
+                "option_gamma": None,
+                "unsigned_gamma_weight": None,
+                "bucket_total_unsigned_gamma_weight": None,
+                "concentration_share": None,
+                "missing_reason": "TEST_UNKNOWN",
+                "dealer_gamma_sign": "UNKNOWN",
+            },
+            "sampling_metadata": None,
+            "legacy_v1_threshold_pass": True,
+        }
+    )
     facts = UnderwritingFacts(
         boundary=boundary,
         radar_scope_identity="sha256:" + "d" * 64,
-        active_episode_identity=(
-            f"{runtime}:{INVERSE_BTC_RADAR_POLICY_IDENTITY}:{short.instrument_name}:1"
+        active_episode_identity=radar_bucket_episode_identity(
+            runtime_identity=runtime,
+            policy_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+            bucket_key=score_packet.bucket_key,
+            leader_instrument_name=score_packet.leader_instrument_name,
+            score_band=ScoreBand.HIGH,
+            activation_causal_seq=1,
         ),
         anomaly_activation_seq=1,
         short_leg_identity="sha256:" + "e" * 64,
@@ -400,6 +461,7 @@ def test_inverse_owner_fails_closed_on_tampered_component_quote(repository_root:
         component_quote=quote,
         component_short_quote_source=source,
         component_long_quote_source=source,
+        radar_score_packet=score_packet,
     )
 
     owner.settle_underwriting((facts,), allocate_request_id=lambda: 1)
@@ -462,15 +524,26 @@ def test_inverse_owner_fails_closed_on_tampered_component_quote(repository_root:
         valid_quote,
         native_gross_cashflow=valid_quote.native_gross_cashflow + Decimal("0.000001"),
     )
+    forged_boundary = FactBoundary(code, runtime, 1, 3, 103, 3)
+    forged_packet = replace(
+        score_packet,
+        fact_boundary=forged_boundary.as_object(),
+    )
     forged_facts = replace(
         facts,
-        boundary=FactBoundary(code, runtime, 1, 3, 103, 3),
+        boundary=forged_boundary,
         radar_scope_identity="sha256:" + "8" * 64,
-        active_episode_identity=(
-            f"{runtime}:{INVERSE_BTC_RADAR_POLICY_IDENTITY}:{short.instrument_name}:2"
+        active_episode_identity=radar_bucket_episode_identity(
+            runtime_identity=runtime,
+            policy_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+            bucket_key=forged_packet.bucket_key,
+            leader_instrument_name=forged_packet.leader_instrument_name,
+            score_band=ScoreBand.HIGH,
+            activation_causal_seq=2,
         ),
         anomaly_activation_seq=2,
         component_quote=forged_inverse_economics_quote,
+        radar_score_packet=forged_packet,
     )
     owner.settle_underwriting((forged_facts,), allocate_request_id=lambda: 2)
     forged_availability = [
@@ -621,16 +694,27 @@ def test_inverse_owner_fails_closed_on_tampered_component_quote(repository_root:
         fee_rate_index_fraction=Decimal("0.0003"),
     )
     assert inverse_quote is not None and inverse_reasons == ()
+    valid_inverse_boundary = FactBoundary(code, runtime, 1, 5, 105, 5)
+    valid_inverse_packet = replace(
+        score_packet,
+        fact_boundary=valid_inverse_boundary.as_object(),
+    )
     valid_inverse_facts = replace(
         facts,
-        boundary=FactBoundary(code, runtime, 1, 5, 105, 5),
+        boundary=valid_inverse_boundary,
         radar_scope_identity="sha256:" + "1" * 64,
-        active_episode_identity=(
-            f"{runtime}:{INVERSE_BTC_RADAR_POLICY_IDENTITY}:{inverse_short.instrument_name}:1"
+        active_episode_identity=radar_bucket_episode_identity(
+            runtime_identity=runtime,
+            policy_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+            bucket_key=valid_inverse_packet.bucket_key,
+            leader_instrument_name=valid_inverse_packet.leader_instrument_name,
+            score_band=ScoreBand.HIGH,
+            activation_causal_seq=1,
         ),
         short_leg_instrument_name=inverse_short.instrument_name,
         long_leg_instrument_name=inverse_long.instrument_name,
         component_quote=inverse_quote,
+        radar_score_packet=valid_inverse_packet,
     )
     assert owner._evaluate_component_underwriting(valid_inverse_facts).availability.value == (
         "EVALUABLE"
@@ -648,15 +732,32 @@ def test_inverse_owner_fails_closed_on_tampered_component_quote(repository_root:
         ),
     )
     for offset, mismatched_facts in enumerate(projection_mismatches, start=6):
+        mismatched_boundary = FactBoundary(
+            code,
+            runtime,
+            1,
+            offset,
+            100 + offset,
+            offset,
+        )
+        mismatched_packet = replace(
+            score_packet,
+            fact_boundary=mismatched_boundary.as_object(),
+        )
         mismatched_facts = replace(
             mismatched_facts,
-            boundary=FactBoundary(code, runtime, 1, offset, 100 + offset, offset),
+            boundary=mismatched_boundary,
             radar_scope_identity="sha256:" + str(offset) * 64,
-            active_episode_identity=(
-                f"{runtime}:{INVERSE_BTC_RADAR_POLICY_IDENTITY}:"
-                f"{inverse_short.instrument_name}:{offset}"
+            active_episode_identity=radar_bucket_episode_identity(
+                runtime_identity=runtime,
+                policy_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+                bucket_key=mismatched_packet.bucket_key,
+                leader_instrument_name=mismatched_packet.leader_instrument_name,
+                score_band=ScoreBand.HIGH,
+                activation_causal_seq=offset,
             ),
             anomaly_activation_seq=offset,
+            radar_score_packet=mismatched_packet,
         )
         mismatch_store = ShadowStateStore(bindings=bindings)
         mismatch_owner = FixedContractShadowOwner(
@@ -681,15 +782,29 @@ def test_inverse_owner_fails_closed_on_tampered_component_quote(repository_root:
             for value in mismatch_store.objects
         )
 
+    inverse_atomic_boundary = FactBoundary(code, runtime, 1, 4, 104, 4)
+    inverse_atomic_packet = replace(
+        score_packet,
+        fact_boundary=inverse_atomic_boundary.as_object(),
+    )
     inverse_atomic_facts = replace(
         facts,
-        boundary=FactBoundary(code, runtime, 1, 4, 104, 4),
+        boundary=inverse_atomic_boundary,
         radar_scope_identity="sha256:" + "9" * 64,
+        active_episode_identity=radar_bucket_episode_identity(
+            runtime_identity=runtime,
+            policy_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+            bucket_key=inverse_atomic_packet.bucket_key,
+            leader_instrument_name=inverse_atomic_packet.leader_instrument_name,
+            score_band=ScoreBand.HIGH,
+            activation_causal_seq=1,
+        ),
         component_state="NOT_EVALUATED",
         component_quote=None,
         component_short_quote_source=None,
         component_long_quote_source=None,
         atomic_state="PUBLIC_ATOMIC_QUOTE_AVAILABLE",
+        radar_score_packet=inverse_atomic_packet,
     )
     atomic_store = ShadowStateStore(bindings=bindings)
     atomic_owner = FixedContractShadowOwner(
@@ -881,6 +996,10 @@ def test_inverse_radar_converts_native_btc_premium_to_black_model_price() -> Non
             )
         },
         trackers={},
+        score_bucket_keys={},
+        bucket_leader_by_key={},
+        bucket_trackers={},
+        bucket_leader_coverage={},
         option_books={
             instrument.instrument_name: book,
             long_instrument.instrument_name: long_book,
@@ -918,7 +1037,7 @@ def test_inverse_platform_readiness_tracks_only_btc_usd_lock() -> None:
     assert readiness.lock_snapshot is True
 
 
-def test_radar_policy_v7_binds_inverse_product_identity() -> None:
+def test_radar_policy_v8_binds_inverse_product_identity() -> None:
     from conftest import encode_policy, policy_document
     from short_vol_radar.policy import load_policy_bytes
 
@@ -927,7 +1046,7 @@ def test_radar_policy_v7_binds_inverse_product_identity() -> None:
 
     policy = load_policy_bytes(exact, digest)
 
-    assert policy.schema_version == 7
+    assert policy.schema_version == 8
     assert policy.product_spec_identity == INVERSE_BTC.identity
 
 
@@ -940,7 +1059,7 @@ def test_radar_policy_rejects_removed_schema_v6() -> None:
     document.pop("product_spec_identity")
     exact, digest = encode_policy(document)
 
-    with pytest.raises(PolicyError, match="policy_schema_version must be exactly 7"):
+    with pytest.raises(PolicyError, match="policy_schema_version must be exactly 8"):
         load_policy_bytes(exact, digest)
 
 
@@ -967,13 +1086,17 @@ def test_inverse_policy_chain_is_exact_and_product_bound(repository_root: Path) 
 
 
 def test_inverse_persistent_startup_builds_one_product_graph(
-    tmp_path: Path, repository_root: Path
+    tmp_path: Path,
+    repository_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import radar_runtime.service as service_module
     from radar_runtime.service import (
         build_persistent_service_composition,
         prepare_persistent_service_startup,
     )
 
+    monkeypatch.setattr(service_module, "_temporary_state_roots", lambda: ())
     startup = prepare_persistent_service_startup(
         state_root=(tmp_path / "inverse-state").resolve(),
         process_cwd=repository_root,
@@ -1025,8 +1148,11 @@ def test_inverse_reducer_keeps_selected_index_across_session_bootstrap() -> None
 
 
 def test_inverse_workbench_identifies_native_and_valuation_units(
-    tmp_path: Path, repository_root: Path
+    tmp_path: Path,
+    repository_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import radar_runtime.service as service_module
     from radar_runtime.service import (
         build_persistent_service_composition,
         prepare_persistent_service_startup,
@@ -1038,6 +1164,7 @@ def test_inverse_workbench_identifies_native_and_valuation_units(
         _underwriting_rows,
     )
 
+    monkeypatch.setattr(service_module, "_temporary_state_roots", lambda: ())
     startup = prepare_persistent_service_startup(
         state_root=(tmp_path / "inverse-workbench-state").resolve(),
         process_cwd=repository_root,
@@ -1052,13 +1179,14 @@ def test_inverse_workbench_identifies_native_and_valuation_units(
     composition = build_persistent_service_composition(startup)
     try:
         document = json.loads(composition.snapshot_store.read().workbench_body)
-        assert document["schema_version"] == 5
+        assert document["schema_version"] == 6
+        assert document["channel_id"] == "INVERSE_BTC_SHORT_VOL_V2"
         assert document["product"] == {
             "product_spec_identity": INVERSE_BTC.identity,
             "name": "inverse-btc",
             "market_family": "DERIBIT_BTC_OPTIONS",
             "economic_semantics_version": "INVERSE_BTC_V1",
-            "case_schema_version": 4,
+            "case_schema_version": 5,
             "public_currency": "BTC",
             "base_currency": "BTC",
             "quote_currency": "BTC",
@@ -1080,7 +1208,7 @@ def test_inverse_workbench_identifies_native_and_valuation_units(
             "actual_account_margin_availability": "UNKNOWN",
             "actual_account_margin_reason": "ACCOUNT_MARGIN_UNKNOWN",
         }
-        assert document["system"]["index_history"]["source"].endswith("BTC_USD_1D")
+        assert document["system"]["index_history"]["source"].endswith("BTC_USD_2D")
         assert "_usdc" not in json.dumps(document, sort_keys=True).lower()
 
         availability_identity = "sha256:" + "1" * 64
@@ -1238,7 +1366,7 @@ def test_inverse_workbench_identifies_native_and_valuation_units(
         composition.workbench.close()
 
 
-def test_inverse_shadow_case_v4_conserves_native_and_boundary_valued_outcome(
+def test_inverse_shadow_case_v5_conserves_native_and_boundary_valued_outcome(
     tmp_path: Path,
     repository_root: Path,
 ) -> None:
@@ -1458,6 +1586,78 @@ def test_inverse_shadow_case_v4_conserves_native_and_boundary_valued_outcome(
         1,
         opened_boundary.as_object(),
     )
+    from options_domain import OptionType
+    from short_vol_radar import RadarScorePacket, ScoreBand, radar_bucket_episode_identity
+    from short_vol_radar.black import DecimalInterval
+    from short_vol_radar.score import (
+        LeaderCoverage,
+        RadarBucketKey,
+        RadarSamplingMetadata,
+        RadarScoreInputs,
+        SamplingKind,
+        build_radar_score_packet,
+        compute_radar_score,
+        compute_unsigned_oi_concentration,
+    )
+    from short_vol_underwriting.control import selected_decision_batch_identity
+
+    activation_causal_seq = 3
+    sampling_metadata = RadarSamplingMetadata(
+        kind=SamplingKind.CANONICAL_HIGH,
+        causal_batch_identity=selected_decision_batch_identity(
+            bindings=bindings,
+            activation_causal_seq=activation_causal_seq,
+        ),
+        designation_identity=candidate_identity,
+    )
+
+    def score_packet(packet_boundary: FactBoundary) -> RadarScorePacket:
+        point_zero = DecimalInterval(Decimal(0), Decimal(0))
+        point_one = DecimalInterval(Decimal(1), Decimal(1))
+        stressed_richness = DecimalInterval(Decimal("1.3"), Decimal("1.3"))
+        inputs = RadarScoreInputs(
+            stressed_richness=stressed_richness,
+            stressed_executable_bid_iv=DecimalInterval(Decimal("0.3"), Decimal("0.3")),
+            local_same_type_mark_iv=Decimal("0.3"),
+            current_expiry_atm_mark_iv=Decimal("0.3"),
+            adjacent_expiry_atm_mark_iv=Decimal("0.3"),
+            adverse_semivariance_share=point_zero,
+            jump_share=point_zero,
+            target_spread_ticks=point_one,
+            bid_consumed_level_count=1,
+            ask_consumed_level_count=1,
+        )
+        return build_radar_score_packet(
+            policy_identity=policies.radar.identity,
+            fact_boundary=packet_boundary.as_object(),
+            bucket_key=RadarBucketKey(
+                tte_band_id="six-to-twenty-four-hours",
+                expiry_ms=1_786_150_800_000,
+                option_type=OptionType.CALL,
+                delta_bucket="0.15-0.25",
+            ),
+            leader_instrument_name=short_name,
+            result=compute_radar_score(policies.radar.score_model, inputs),
+            oi_diagnostic=compute_unsigned_oi_concentration(
+                open_interest=None,
+                option_gamma=None,
+                bucket_total_unsigned_gamma_weight=None,
+            ),
+            stressed_richness=stressed_richness,
+            leader_coverage=LeaderCoverage.COMPLETE,
+            sampling_metadata=sampling_metadata,
+        )
+
+    selection_packet = score_packet(boundary(activation_causal_seq))
+    refresh_packet = score_packet(opened_boundary)
+    active_episode_identity = radar_bucket_episode_identity(
+        runtime_identity=runtime,
+        policy_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+        bucket_key=selection_packet.bucket_key,
+        leader_instrument_name=selection_packet.leader_instrument_name,
+        score_band=ScoreBand.HIGH,
+        activation_causal_seq=activation_causal_seq,
+    )
     state.record(
         object_kind="SHADOW_ENTRY",
         object_identity=entry_identity,
@@ -1476,9 +1676,11 @@ def test_inverse_shadow_case_v4_conserves_native_and_boundary_valued_outcome(
             ),
             "entry_underwriting_candidate_protective_leg_count": 1,
             "entry_underwriting_decision_fact_boundary": opened_boundary.as_object(),
-            "active_episode_identity": (
-                f"{runtime}:{INVERSE_BTC_RADAR_POLICY_IDENTITY}:{short_name}:4"
-            ),
+            "selection_score_packet": selection_packet.as_object(),
+            "entry_refresh_score_packet": refresh_packet.as_object(),
+            "active_episode_identity": active_episode_identity,
+            "radar_research_review_identity": None,
+            "radar_activation_causal_seq": activation_causal_seq,
             "radar_scope_identity": canonical_identity("RadarScope", "inverse"),
             "execution_model": "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL",
             "product_spec_identity": INVERSE_BTC.identity,
@@ -1489,8 +1691,6 @@ def test_inverse_shadow_case_v4_conserves_native_and_boundary_valued_outcome(
             "price_index": "btc_usd",
             "component_state": "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE",
             "atomic_state_diagnostic": "NO_ACTIVE_COMBO",
-            "radar_band_id": "six-to-twenty-four-hours",
-            "radar_richness_interval": {"lower": "1.3", "upper": "1.31"},
             "canonical_leg_identities": list(leg_identities),
             "short_leg_instrument_name": short_name,
             "long_leg_instrument_name": long_name,
@@ -1775,14 +1975,14 @@ def test_inverse_shadow_case_v4_conserves_native_and_boundary_valued_outcome(
 
     read = case_store.read_case(case_id)
     assert read.status is ShadowCaseReadStatus.COMPLETE
-    assert read.opened["schema_version"] == 4
+    assert read.opened["schema_version"] == 5
     assert "_usdc" not in json.dumps(read.opened, sort_keys=True).lower()
     assert read.opened["product"] == {
         "product_spec_identity": INVERSE_BTC.identity,
         "product_name": "inverse-btc",
         "market_family": "DERIBIT_BTC_OPTIONS",
         "economic_semantics_version": "INVERSE_BTC_V1",
-        "case_schema_version": 4,
+        "case_schema_version": 5,
         "native_premium_currency": "BTC",
         "settlement_currency": "BTC",
         "valuation_currency": "USD_EQUIVALENT",

@@ -23,6 +23,7 @@ from short_vol_radar.review import (
     DiagnosticState,
     LeggedReferenceState,
     build_review_contexts,
+    build_score_feature_contexts,
 )
 
 TARGET_QUANTITY = Decimal("0.1")
@@ -116,8 +117,6 @@ def _calculation(
     rule = OptionRule(
         abs_delta_min=Decimal("0.05"),
         abs_delta_max=Decimal("0.40"),
-        activation_ratio=Decimal("1.20"),
-        clear_ratio=Decimal("1.05"),
         activation_observation_count=3,
         clear_observation_count=2,
         minimum_separation_ms=300_000,
@@ -256,13 +255,13 @@ def test_review_builds_regime_surface_and_non_atomic_vertical_reference() -> Non
     )
 
     review = contexts["C100"]
-    assert review.hard_screen_label == "RICHNESS_CLUE_ACTIVE"
+    assert review.hard_screen_label == "V2_SCORE_EPISODE_ACTIVE"
     assert review.regime.state is DiagnosticState.AVAILABLE
     assert review.regime.adverse_semivariance_share == Decimal("0.7")
     assert review.surface.state is DiagnosticState.AVAILABLE
     assert review.surface.twenty_five_delta_risk_reversal == Decimal("-0.08")
     assert review.surface.local_interpolated_mark_iv == Decimal("0.615")
-    assert review.surface.executable_bid_iv_minus_local_mark_iv == Decimal("0.095")
+    assert review.surface.stressed_executable_bid_iv_minus_local_mark_iv == Decimal("0.085")
     assert review.surface.current_minus_adjacent_expiry_atm_iv == Decimal("-0.01")
     assert review.legged_structure.state is LeggedReferenceState.LEGGED_REFERENCE_NOT_ATOMIC
     assert review.legged_structure.as_object()["non_claims"] == list(LEGGED_REFERENCE_NON_CLAIMS)
@@ -314,6 +313,80 @@ def test_put_surface_uses_absolute_delta_and_negative_semivariance_as_adverse() 
     assert review.surface.local_upper_instrument_name == "P105"
     assert review.surface.local_interpolated_mark_iv == Decimal("0.65")
     assert review.rank_inputs.abs_delta_midpoint == Decimal("0.25")
+
+
+def test_term_feature_uses_immediate_next_longer_expiry_not_closer_previous_expiry() -> None:
+    current = _option("CURRENT", "100", OptionType.CALL)
+    previous = _option(
+        "PREVIOUS",
+        "100",
+        OptionType.CALL,
+        expiry_ms=EXPIRY_MS - 3_600_000,
+    )
+    next_longer = _option(
+        "NEXT",
+        "100",
+        OptionType.CALL,
+        expiry_ms=EXPIRY_MS + 7_200_000,
+    )
+    later = _option(
+        "LATER",
+        "100",
+        OptionType.CALL,
+        expiry_ms=EXPIRY_MS + 10_800_000,
+    )
+    contexts = build_score_feature_contexts(
+        options={
+            option.instrument_name: option for option in (current, previous, next_longer, later)
+        },
+        calculations={
+            current.instrument_name: _calculation(
+                OptionType.CALL,
+                delta_lower="0.24",
+                delta_upper="0.26",
+            )
+        },
+        tickers={
+            "CURRENT": _ticker("0.50", "0.60"),
+            "PREVIOUS": _ticker("0.50", "0.54"),
+            "NEXT": _ticker("0.50", "0.57"),
+            "LATER": _ticker("0.50", "0.56"),
+        },
+    )
+
+    surface = contexts[current.instrument_name].surface
+    assert surface.adjacent_expiry_timestamp_ms == next_longer.expiration_timestamp_ms
+    assert surface.adjacent_expiry_atm_instrument_name == next_longer.instrument_name
+    assert surface.current_minus_adjacent_expiry_atm_iv == Decimal("0.03")
+
+
+def test_term_feature_is_unknown_without_a_next_longer_expiry() -> None:
+    current = _option("CURRENT", "100", OptionType.CALL)
+    previous = _option(
+        "PREVIOUS",
+        "100",
+        OptionType.CALL,
+        expiry_ms=EXPIRY_MS - 3_600_000,
+    )
+    contexts = build_score_feature_contexts(
+        options={current.instrument_name: current, previous.instrument_name: previous},
+        calculations={
+            current.instrument_name: _calculation(
+                OptionType.CALL,
+                delta_lower="0.24",
+                delta_upper="0.26",
+            )
+        },
+        tickers={
+            "CURRENT": _ticker("0.50", "0.60"),
+            "PREVIOUS": _ticker("0.50", "0.54"),
+        },
+    )
+
+    surface = contexts[current.instrument_name].surface
+    assert surface.adjacent_expiry_timestamp_ms is None
+    assert surface.adjacent_expiry_atm_mark_iv is None
+    assert surface.current_minus_adjacent_expiry_atm_iv is None
 
 
 def test_review_only_delta_keeps_tte_eligible_and_active_witness_ranks_first() -> None:

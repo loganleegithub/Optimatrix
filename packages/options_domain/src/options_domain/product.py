@@ -106,7 +106,7 @@ class OptionProductSpec:
 
     @property
     def case_schema_version(self) -> int:
-        return 4
+        return 5
 
     @property
     def model_premium_rule(self) -> str:

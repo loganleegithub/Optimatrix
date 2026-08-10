@@ -36,15 +36,13 @@ def policy_document(
     rule = {
         "abs_delta_min": 0.05,
         "abs_delta_max": 0.6,
-        "activation_ratio": activation,
-        "clear_ratio": 0.9,
         "activation_observation_count": activation_count,
         "clear_observation_count": clear_count,
         "minimum_separation_ms": separation_ms,
     }
     return {
-        "policy_schema_version": 7,
-        "policy_family": "CONSERVATIVE_MULTI_HORIZON_EXECUTABLE_IV_RICHNESS",
+        "policy_schema_version": 8,
+        "policy_family": "INVERSE_BTC_SHORT_VOL_ORDINAL_MARKET_STRUCTURE_V2",
         "product_spec_identity": INVERSE_BTC.identity,
         "target_base_quantity_btc": target,
         "runtime_limits": {
@@ -59,6 +57,31 @@ def policy_document(
             "ticker_source_stale_deadline_ms": ticker_source_stale_deadline_ms,
             "notification_queue_lag_deadline_ms": 1_000,
             "time_boundary_poll_interval_ms": 1_000,
+        },
+        "score_model": {
+            "richness_knots": [
+                {"ratio": 1, "normalized_value": 0},
+                {"ratio": activation, "normalized_value": 0.8},
+                {"ratio": max(activation + 0.1, 1.3), "normalized_value": 1},
+            ],
+            "surface_residual_saturation_iv_fraction": 0.1,
+            "term_residual_saturation_iv_fraction": 0.1,
+            "surface_adjustment_weight": 0.1,
+            "term_adjustment_weight": 0.05,
+            "path_adverse_semivariance_weight": 0.5,
+            "path_jump_weight": 0.5,
+            "liquidity_spread_weight": 0.7,
+            "liquidity_depth_weight": 0.3,
+            "liquidity_spread_full_quality_ticks": 1,
+            "liquidity_spread_zero_quality_ticks": 10,
+            "liquidity_depth_full_quality_levels": 2,
+            "liquidity_depth_zero_quality_levels": 10,
+            "path_quality_weight": 0.6,
+            "liquidity_quality_weight": 0.4,
+            "risk_floor": 0.4,
+            "risk_multiplier": 0.6,
+            "activation_score_lower": 65,
+            "clear_score_upper": 50,
         },
         "tte_bands": [
             {

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import stat
 import uuid
 from collections.abc import Mapping, Sequence
@@ -17,9 +16,20 @@ from options_domain import (
     OptionProductSpec,
     product_for_identity,
 )
+from short_vol_radar.bucket import radar_bucket_episode_identity
+from short_vol_radar.policy import RadarPolicy
+from short_vol_radar.score import (
+    RadarSamplingMetadata,
+    RadarScorePacket,
+    SamplingKind,
+    ScoreBand,
+    validate_radar_score_packet,
+)
 
 from short_vol_underwriting.constants import POSITION_CLOSE_REASONS
 from short_vol_underwriting.control import (
+    radar_score_control_batch_identity,
+    radar_score_control_rule_identity,
     selected_decision_batch_identity,
     selected_decision_rule_identity,
 )
@@ -46,23 +56,22 @@ from short_vol_underwriting.model import (
 )
 from short_vol_underwriting.policy import PolicyChain
 
-SHADOW_CASE_SCHEMA_VERSION = 4
+SHADOW_CASE_SCHEMA_VERSION = 5
 OPENED_KIND = "SHADOW_CASE_OPENED"
 FIRST_CLOSE_KIND = "SHADOW_CASE_FIRST_CLOSE"
 OUTCOME_KIND = "SHADOW_CASE_OUTCOME"
 SEGMENT_OPENED_KIND = "SHADOW_CASE_SEGMENT_OPENED"
 SEGMENT_CLOSED_KIND = "SHADOW_CASE_SEGMENT_CLOSED"
-LEGACY_MIGRATION_KIND = "SHADOW_CASE_LEGACY_MIGRATION"
 
-_V4_STRUCTURE_FIELDS = {
+_V5_STRUCTURE_FIELDS = {
     "short_strike_usdc_per_btc": "short_strike_usd_per_btc",
     "long_strike_usdc_per_btc": "long_strike_usd_per_btc",
 }
-_V4_UNDERWRITING_FIELDS = {
+_V5_UNDERWRITING_FIELDS = {
     "minimum_net_entry_credit_usdc": "minimum_net_entry_credit_usd",
     "maximum_underwriting_reserved_loss_usdc": "maximum_underwriting_reserved_loss_usd",
 }
-_V4_ENTRY_ECONOMICS_FIELDS = {
+_V5_ENTRY_ECONOMICS_FIELDS = {
     "gross_entry_credit_usdc": "gross_entry_credit_usd",
     "entry_fee_reserve_usdc": "entry_fee_reserve_usd",
     "net_entry_credit_usdc": "net_entry_credit_usd",
@@ -75,7 +84,7 @@ _V4_ENTRY_ECONOMICS_FIELDS = {
     "future_cost_reserve_usdc": "future_cost_reserve_usd",
     "underwriting_reserved_loss_usdc": "underwriting_reserved_loss_usd",
 }
-_V4_OUTCOME_ECONOMICS_FIELDS = {
+_V5_OUTCOME_ECONOMICS_FIELDS = {
     "gross_close_cashflow_usdc": "gross_close_cashflow_usd",
     "close_fee_reserve_usdc": "close_fee_reserve_usd",
     "net_close_cashflow_usdc": "net_close_cashflow_usd",
@@ -86,7 +95,7 @@ _V4_OUTCOME_ECONOMICS_FIELDS = {
     ),
     "net_loss_usdc": "net_loss_usd",
 }
-_V4_COMPONENT_LEG_FIELDS = {
+_V5_COMPONENT_LEG_FIELDS = {
     "raw_consumed_levels": "raw_consumed_levels_usd",
     "raw_vwap_usdc_per_btc": "raw_vwap_usd_per_btc",
     "stressed_consumed_levels": "stressed_consumed_levels_usd",
@@ -127,7 +136,6 @@ class ShadowCaseRead:
     first_close: Mapping[str, object] | None
     outcome: Mapping[str, object] | None
     segments: tuple[ShadowCaseSegmentRead, ...] = ()
-    legacy_migration: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -189,15 +197,6 @@ class _ValidatedComponentEconomics:
     valuation_index_price: Decimal | None
 
 
-@dataclass(frozen=True)
-class _LegacyMigrationPlan:
-    case_id: str
-    case: ShadowCaseRead
-    migration: Mapping[str, object]
-    entry_position_baseline: Mapping[str, object]
-    mapped_segment_state: str
-
-
 class ShadowCaseStore:
     """Persist admitted trades and explicitly selected no-trade decision Cases."""
 
@@ -240,17 +239,25 @@ class ShadowCaseStore:
         state: ShadowStateStore,
     ) -> None:
         kind = value.get("object_kind")
-        if kind in {"SHADOW_ENTRY", "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN"}:
+        if kind in {
+            "SHADOW_ENTRY",
+            "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN",
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN",
+        }:
             self._open_case(value, state)
         elif kind == "POSITION_ACTION":
             self._remember_first_close(value)
         elif kind == "POST_CLOSE_ATTEMPT_SCHEDULED":
             self._record_first_close_and_attempt(value)
-        elif kind in {"SHADOW_OUTCOME", "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME"}:
+        elif kind in {
+            "SHADOW_OUTCOME",
+            "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME",
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OUTCOME",
+        }:
             self._record_outcome(value)
 
     def read_case(self, case_id: str, *, runtime_active: bool = False) -> ShadowCaseRead:
-        """Read a stable Case; legacy run directories use :meth:`read_legacy_case`."""
+        """Read one schema-v5 Case from the stable repository."""
 
         require_identity(case_id, "case_id")
         case_directory = self._case_directory(case_id)
@@ -264,8 +271,11 @@ class ShadowCaseStore:
             policies=self.policies,
         )
         self._validate_compatible_opened(opened)
-        if opened.get("enrollment_kind") == "SELECTED_UNDERWRITING_DECISION_CONTROL":
-            return self.read_legacy_case(case_id, runtime_active=runtime_active)
+        if opened.get("enrollment_kind") in {
+            "SELECTED_UNDERWRITING_DECISION_CONTROL",
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
+        }:
+            return self._read_control_case(case_id, opened=opened, runtime_active=runtime_active)
         segments = self._read_segments(
             case_id,
             opened,
@@ -279,16 +289,6 @@ class ShadowCaseStore:
         outcome_path = case_directory / "outcome.json"
         first_close = _read_optional_json(first_close_path)
         outcome = _read_optional_json(outcome_path)
-        legacy_migration_path = case_directory / "legacy-migration.json"
-        legacy_migration = _read_optional_json(legacy_migration_path)
-        if legacy_migration is not None:
-            _validate_legacy_migration(
-                legacy_migration,
-                opened=opened,
-                segments=segments,
-                expected_case_id=case_id,
-                policies=self.policies,
-            )
         if first_close is not None:
             self._validate_stable_first_close(
                 opened=opened,
@@ -302,13 +302,9 @@ class ShadowCaseStore:
                 value=outcome,
             )
             if outcome.get("terminal_state") == "MATURE_KNOWN":
-                effective_first_close = _effective_first_close(
-                    first_close,
-                    legacy_migration,
-                )
-                if effective_first_close is None:
+                if first_close is None:
                     raise ShadowCaseStoreError("known Outcome lacks its first CLOSE")
-                if outcome.get("first_latched_close_action_identity") != effective_first_close.get(
+                if outcome.get("first_latched_close_action_identity") != first_close.get(
                     "position_action_identity"
                 ):
                     raise ShadowCaseStoreError("known Outcome first CLOSE identity mismatch")
@@ -325,38 +321,23 @@ class ShadowCaseStore:
             first_close,
             outcome,
             segments,
-            legacy_migration,
         )
 
-    def read_legacy_case(
+    def _read_control_case(
         self,
         case_id: str,
         *,
+        opened: Mapping[str, object],
         runtime_active: bool = False,
     ) -> ShadowCaseRead:
-        """Safely read one immutable schema-v4 run-layout Case for offline migration."""
+        """Read one bounded, non-recoverable schema-v5 no-trade Control."""
 
         require_identity(case_id, "case_id")
         case_directory = self._case_directory(case_id)
         segments_path = case_directory / "segments"
-        migration_path = case_directory / "legacy-migration.json"
-        if (
-            segments_path.exists()
-            or segments_path.is_symlink()
-            or migration_path.exists()
-            or migration_path.is_symlink()
-        ):
-            raise ShadowCaseStoreError("legacy Case reader received a stable aggregate")
+        if segments_path.exists() or segments_path.is_symlink():
+            raise ShadowCaseStoreError("no-trade Control cannot carry Observation Segments")
         _validate_case_directory_members(case_directory, stable=False)
-        opened = _read_json(case_directory / "opened.json")
-        origin_bindings = _bindings_from_opened(opened)
-        _validate_opened(
-            opened,
-            expected_case_id=case_id,
-            bindings=origin_bindings,
-            policies=self.policies,
-        )
-        self._validate_compatible_opened(opened)
         first_close_path = case_directory / "first-close.json"
         outcome_path = case_directory / "outcome.json"
         first_close = _read_optional_json(first_close_path)
@@ -399,7 +380,7 @@ class ShadowCaseStore:
         validated_opened: dict[str, Mapping[str, object]] = {}
         seen_entries: set[str] = set()
         for case_directory in sorted(self.directory.iterdir(), key=lambda path: path.name):
-            if _is_staging_case_name(case_directory.name):
+            if is_shadow_case_staging_name(case_directory.name):
                 if case_directory.is_symlink() or not case_directory.is_dir():
                     raise ShadowCaseStoreError("invalid Shadow Case staging path")
                 continue
@@ -584,8 +565,15 @@ class ShadowCaseStore:
             if action is None:
                 raise ShadowCaseStoreError("Shadow Entry lacks its Underwriting action")
             selected_decision = payload.get("selected_underwriting_decision")
-        elif object_kind == "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN":
-            enrollment_kind = "SELECTED_UNDERWRITING_DECISION_CONTROL"
+        elif object_kind in {
+            "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN",
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN",
+        }:
+            enrollment_kind = (
+                "RADAR_SCORE_BAND_NO_TRADE_CONTROL"
+                if object_kind == "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN"
+                else "SELECTED_UNDERWRITING_DECISION_CONTROL"
+            )
             if payload.get("enrollment_kind") != enrollment_kind:
                 raise ShadowCaseStoreError("decision-control enrollment kind is invalid")
             shadow_entry_identity = None
@@ -639,6 +627,8 @@ class ShadowCaseStore:
             "underwriting_action_identity": action_identity,
             "decision_fact_boundary": decision_boundary,
             "selected_underwriting_decision": selected_decision,
+            "selection_score_packet": payload.get("selection_score_packet"),
+            "entry_refresh_score_packet": payload.get("entry_refresh_score_packet"),
             "structure": {
                 "execution_model": payload.get("execution_model"),
                 "canonical_leg_identities": payload.get("canonical_leg_identities"),
@@ -660,11 +650,11 @@ class ShadowCaseStore:
             },
             "radar": {
                 "active_episode_identity": payload.get("active_episode_identity"),
+                "radar_research_review_identity": payload.get("radar_research_review_identity"),
+                "radar_activation_causal_seq": payload.get("radar_activation_causal_seq"),
                 "radar_scope_identity": payload.get("radar_scope_identity"),
                 "component_state": payload.get("component_state"),
                 "atomic_state_diagnostic": payload.get("atomic_state_diagnostic"),
-                "band_id": payload.get("radar_band_id"),
-                "richness_interval": payload.get("radar_richness_interval"),
             },
             "underwriting": {
                 "action_identity": entry_underwriting_action_identity,
@@ -747,15 +737,15 @@ class ShadowCaseStore:
         )
         opened["structure"] = _renamed_fields(
             _mapping(opened.get("structure"), "structure"),
-            _V4_STRUCTURE_FIELDS,
+            _V5_STRUCTURE_FIELDS,
         )
         opened["underwriting"] = _renamed_fields(
             _mapping(opened.get("underwriting"), "underwriting"),
-            _V4_UNDERWRITING_FIELDS,
+            _V5_UNDERWRITING_FIELDS,
         )
         opened["entry_economics"] = _renamed_fields(
             _mapping(opened.get("entry_economics"), "entry_economics"),
-            _V4_ENTRY_ECONOMICS_FIELDS,
+            _V5_ENTRY_ECONOMICS_FIELDS,
         )
         normalized = _normalized_mapping(opened)
         _validate_opened(
@@ -823,7 +813,10 @@ class ShadowCaseStore:
         if case_id is None:
             raise ShadowCaseStoreError("first CLOSE belongs to an unopened Shadow Case")
         opened = self._opened_by_case[case_id]
-        if opened.get("enrollment_kind") == "SELECTED_UNDERWRITING_DECISION_CONTROL":
+        if opened.get("enrollment_kind") in {
+            "SELECTED_UNDERWRITING_DECISION_CONTROL",
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
+        }:
             record = _normalized_mapping(
                 {
                     "record_kind": FIRST_CLOSE_KIND,
@@ -861,7 +854,10 @@ class ShadowCaseStore:
         if case_id is None:
             raise ShadowCaseStoreError("post-CLOSE attempt belongs to an unopened Shadow Case")
         opened = self._opened_by_case[case_id]
-        if opened.get("enrollment_kind") == "SELECTED_UNDERWRITING_DECISION_CONTROL":
+        if opened.get("enrollment_kind") in {
+            "SELECTED_UNDERWRITING_DECISION_CONTROL",
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
+        }:
             return
         pending = self._pending_first_close_by_entry.get(entry_identity)
         if pending is None:
@@ -969,7 +965,7 @@ class ShadowCaseStore:
         }
         outcome_record = _renamed_fields(
             outcome_record,
-            _V4_OUTCOME_ECONOMICS_FIELDS,
+            _V5_OUTCOME_ECONOMICS_FIELDS,
         )
         producing_case: ShadowCaseRead | None = None
         if admitted:
@@ -1026,9 +1022,12 @@ class ShadowCaseStore:
         case_id: str,
         opened: Mapping[str, object],
     ) -> None:
-        if opened.get("enrollment_kind") != "SELECTED_UNDERWRITING_DECISION_CONTROL":
+        if opened.get("enrollment_kind") not in {
+            "SELECTED_UNDERWRITING_DECISION_CONTROL",
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
+        }:
             raise ShadowCaseStoreError("Case enrollment kind is not recoverable")
-        self.read_legacy_case(case_id)
+        self.read_case(case_id)
 
     def _read_segments(
         self,
@@ -1504,267 +1503,6 @@ class ShadowCaseStore:
             os.close(directory_fd)
 
 
-def migrate_legacy_admitted_cases(
-    source_directory: Path,
-    destination_directory: Path,
-    *,
-    policies: PolicyChain,
-) -> tuple[RecoverableShadowEntry, ...]:
-    """Offline, all-compatible migration into one fresh stable Case repository."""
-
-    source_bindings, plans = _plan_legacy_migration(source_directory, policies=policies)
-    if not plans:
-        raise ShadowCaseStoreError("legacy source has no active compatible admitted Cases")
-    if destination_directory.exists() or destination_directory.is_symlink():
-        return _read_idempotent_migration_destination(
-            destination_directory,
-            plans=plans,
-            bindings=source_bindings,
-            policies=policies,
-        )
-    parent = destination_directory.parent
-    if parent.is_symlink() or not parent.is_dir():
-        raise ShadowCaseStoreError("migration destination parent is invalid")
-    staging = parent / f".cases-migration-{uuid.uuid4().hex}.tmp"
-    try:
-        staging.mkdir()
-        for plan in plans:
-            origin_bindings = _bindings_from_opened(plan.case.opened)
-            writer = ShadowCaseStore(
-                staging,
-                bindings=origin_bindings,
-                policies=policies,
-            )
-            segment_opened = writer._segment_opened_record(
-                case_id=plan.case_id,
-                opened=plan.case.opened,
-                sequence=0,
-                adoption_boundary=FactBoundary.from_object(
-                    plan.case.opened.get("opened_fact_boundary")
-                ),
-                predecessor=None,
-                entry_position_baseline=plan.entry_position_baseline,
-            )
-            writer._publish_new_case(
-                plan.case_id,
-                opened=plan.case.opened,
-                origin_segment=segment_opened,
-            )
-            writer._publish(plan.case_id, "legacy-migration.json", plan.migration)
-            if plan.mapped_segment_state in {
-                "CENSORED_AT_STOP",
-                "CENSORED_AT_FAILURE",
-            }:
-                if plan.case.outcome is None:
-                    raise ShadowCaseStoreError("legacy censor mapping lacks its source Outcome")
-                segment_closed = writer._segment_closed_record(
-                    plan.case.opened,
-                    segment_opened,
-                    closed_fact_boundary=_boundary(
-                        plan.case.outcome.get("outcome_fact_boundary"),
-                        "legacy outcome_fact_boundary",
-                    ),
-                    terminal_state=plan.mapped_segment_state,
-                )
-                writer._publish_segment(
-                    plan.case_id,
-                    0,
-                    "closed.json",
-                    segment_closed,
-                )
-        _read_idempotent_migration_destination(
-            staging,
-            plans=plans,
-            bindings=source_bindings,
-            policies=policies,
-        )
-        _fsync_directory(staging)
-        try:
-            staging.rename(destination_directory)
-        except FileExistsError as exc:
-            raise ShadowCaseStoreError("migration destination appeared during publication") from exc
-        _fsync_directory(parent)
-    except ShadowCaseStoreError:
-        raise
-    except OSError as exc:
-        raise ShadowCaseStoreError("cannot atomically publish migrated Case repository") from exc
-    finally:
-        if staging.exists() and not staging.is_symlink():
-            shutil.rmtree(staging)
-    if source_bindings is None:
-        return ()
-    destination = ShadowCaseStore(
-        destination_directory, bindings=source_bindings, policies=policies
-    )
-    return destination.scan_active_admitted()
-
-
-def _plan_legacy_migration(
-    source_directory: Path,
-    *,
-    policies: PolicyChain,
-) -> tuple[RuntimeBindings | None, tuple[_LegacyMigrationPlan, ...]]:
-    if source_directory.is_symlink() or not source_directory.is_dir():
-        raise ShadowCaseStoreError("legacy source must be one existing non-symlink directory")
-    product = product_for_identity(policies.radar.product_spec_identity)
-    expected_policies = {
-        "radar_policy_identity": policies.radar.identity,
-        "underwriting_policy_identity": policies.underwriting.identity,
-        "position_policy_identity": policies.position.identity,
-    }
-    compatible_opened: list[tuple[str, Mapping[str, object]]] = []
-    origin_bindings: RuntimeBindings | None = None
-    for case_directory in sorted(source_directory.iterdir(), key=lambda path: path.name):
-        if case_directory.is_symlink() or not case_directory.is_dir():
-            raise ShadowCaseStoreError("legacy source contains a non-Case entry")
-        case_id = _case_id_from_directory(case_directory)
-        opened = _read_json(case_directory / "opened.json")
-        if (
-            opened.get("enrollment_kind") != "ADMITTED_SHADOW_TRADE"
-            or opened.get("schema_version") != product.case_schema_version
-            or any(opened.get(field) != expected for field, expected in expected_policies.items())
-        ):
-            continue
-        if _product_from_opened(opened).identity != product.identity:
-            continue
-        case_bindings = _bindings_from_opened(opened)
-        if origin_bindings is None:
-            origin_bindings = case_bindings
-        elif case_bindings != origin_bindings:
-            raise ShadowCaseStoreError(
-                "compatible legacy admitted Cases do not share one origin runtime binding"
-            )
-        compatible_opened.append((case_id, opened))
-    if origin_bindings is None:
-        return None, ()
-    source = ShadowCaseStore(source_directory, bindings=origin_bindings, policies=policies)
-    plans: list[_LegacyMigrationPlan] = []
-    seen_entries: set[str] = set()
-    for case_id, _opened in compatible_opened:
-        case = source.read_legacy_case(case_id)
-        terminal_state = case.outcome.get("terminal_state") if case.outcome is not None else None
-        if terminal_state in {"MATURE_KNOWN", "MATURE_UNKNOWN"}:
-            continue
-        if terminal_state not in {None, "CENSORED_AT_STOP", "CENSORED_AT_FAILURE"}:
-            raise ShadowCaseStoreError("legacy admitted Case has an unmappable terminal state")
-        entry_identity = _identity(
-            case.opened.get("shadow_entry_identity"),
-            "shadow_entry_identity",
-        )
-        if entry_identity in seen_entries:
-            raise ShadowCaseStoreError("legacy source has duplicate shadow_entry_identity")
-        seen_entries.add(entry_identity)
-        mapped_state = terminal_state or "INCOMPLETE_UNCLEAN_EXIT"
-        migration = _legacy_migration_record(
-            case_id=case_id,
-            case=case,
-            mapped_segment_state=mapped_state,
-        )
-        plans.append(
-            _LegacyMigrationPlan(
-                case_id=case_id,
-                case=case,
-                migration=migration,
-                entry_position_baseline=_legacy_entry_position_baseline(case.opened),
-                mapped_segment_state=mapped_state,
-            )
-        )
-    return origin_bindings, tuple(plans)
-
-
-def _legacy_entry_position_baseline(opened: Mapping[str, object]) -> dict[str, object]:
-    _record_schema_version(opened)
-    native = _mapping(opened.get("native_entry_economics"), "native_entry_economics")
-    return _normalized_mapping(
-        {
-            "entry_index_usd_per_btc": native.get("entry_valuation_index_price"),
-            "entry_index_source_ref": None,
-            "entry_short_leg_mark_iv_fraction": None,
-            "entry_short_leg_mark_iv_source_ref": None,
-        }
-    )
-
-
-def _legacy_record_identity(label: str, value: Mapping[str, object] | None) -> str | None:
-    return canonical_identity(label, value) if value is not None else None
-
-
-def _legacy_migration_record(
-    *,
-    case_id: str,
-    case: ShadowCaseRead,
-    mapped_segment_state: str,
-) -> dict[str, object]:
-    opened = case.opened
-    return _normalized_mapping(
-        {
-            "record_kind": LEGACY_MIGRATION_KIND,
-            "migration_schema_version": 1,
-            "case_id": case_id,
-            "shadow_entry_identity": opened.get("shadow_entry_identity"),
-            "source_opened_record_identity": _legacy_record_identity(
-                "LegacyShadowCaseOpenedRecordIdentity",
-                opened,
-            ),
-            "source_first_close_record_identity": _legacy_record_identity(
-                "LegacyShadowCaseFirstCloseRecordIdentity",
-                case.first_close,
-            ),
-            "source_outcome_record_identity": _legacy_record_identity(
-                "LegacyShadowCaseOutcomeRecordIdentity",
-                case.outcome,
-            ),
-            "source_outcome_terminal_state": (
-                case.outcome.get("terminal_state") if case.outcome is not None else None
-            ),
-            "legacy_first_close": case.first_close,
-            "mapped_segment_state": mapped_segment_state,
-        }
-    )
-
-
-def _read_idempotent_migration_destination(
-    destination_directory: Path,
-    *,
-    plans: tuple[_LegacyMigrationPlan, ...],
-    bindings: RuntimeBindings | None,
-    policies: PolicyChain,
-) -> tuple[RecoverableShadowEntry, ...]:
-    if destination_directory.is_symlink() or not destination_directory.is_dir():
-        raise ShadowCaseStoreError("migration destination is not a plain directory")
-    expected_case_ids = {plan.case_id for plan in plans}
-    actual_case_ids: set[str] = set()
-    for path in destination_directory.iterdir():
-        if _is_staging_case_name(path.name):
-            continue
-        if path.is_symlink() or not path.is_dir():
-            raise ShadowCaseStoreError("migration destination contains a non-Case entry")
-        actual_case_ids.add(_case_id_from_directory(path))
-    if actual_case_ids != expected_case_ids:
-        raise ShadowCaseStoreError("migration destination conflicts with the compatible source set")
-    if bindings is None:
-        return ()
-    destination = ShadowCaseStore(
-        destination_directory,
-        bindings=bindings,
-        policies=policies,
-    )
-    for plan in plans:
-        case = destination.read_case(plan.case_id)
-        if (
-            case.opened != plan.case.opened
-            or case.first_close is not None
-            or case.outcome is not None
-            or case.legacy_migration != plan.migration
-            or len(case.segments) != 1
-            or case.segments[0].opened.get("entry_position_baseline")
-            != plan.entry_position_baseline
-            or case.segments[0].status.value != plan.mapped_segment_state
-        ):
-            raise ShadowCaseStoreError("migration destination conflicts with its source mapping")
-    return destination.scan_active_admitted()
-
-
 def _bindings_from_opened(opened: Mapping[str, object]) -> RuntimeBindings:
     try:
         return RuntimeBindings(
@@ -1860,7 +1598,9 @@ def _fsync_directory(path: Path) -> None:
         os.close(directory_fd)
 
 
-def _is_staging_case_name(name: str) -> bool:
+def is_shadow_case_staging_name(name: str) -> bool:
+    """Return whether ``name`` is the store-owned atomic Case staging shape."""
+
     prefix = ".case-"
     suffix = ".tmp"
     middle = name[len(prefix) : -len(suffix)] if name.startswith(prefix) else ""
@@ -1887,7 +1627,7 @@ def _is_ignorable_writer_residue(
     *,
     allowed_records: set[str],
 ) -> bool:
-    if not _is_staging_case_name(path.name) or path.is_symlink():
+    if not is_shadow_case_staging_name(path.name) or path.is_symlink():
         return False
     try:
         status = path.stat()
@@ -1954,7 +1694,7 @@ def _validate_case_directory_members(case_directory: Path, *, stable: bool) -> N
         raise ShadowCaseStoreError("Shadow Case directory is missing or invalid")
     allowed = {"opened.json", "first-close.json", "outcome.json"}
     if stable:
-        allowed.update({"segments", "legacy-migration.json"})
+        allowed.add("segments")
     try:
         members = tuple(case_directory.iterdir())
     except OSError as exc:
@@ -2399,7 +2139,7 @@ def _recoverable_projection(
         "entry_position_baseline",
     )
     entry_identity = _identity(opened.get("shadow_entry_identity"), "shadow_entry_identity")
-    effective_first_close = _effective_first_close(case.first_close, case.legacy_migration)
+    effective_first_close = case.first_close
     first_close_decision = (
         _recoverable_first_close(effective_first_close)
         if effective_first_close is not None
@@ -2641,7 +2381,7 @@ def _runtime_component_legs(
 ) -> tuple[Mapping[str, object], ...]:
     legs = _sequence(value, "entry_component_legs")
     inverse_fields = {
-        product_key: legacy for legacy, product_key in _V4_COMPONENT_LEG_FIELDS.items()
+        product_key: legacy for legacy, product_key in _V5_COMPONENT_LEG_FIELDS.items()
     }
     projected: list[Mapping[str, object]] = []
     for raw in legs:
@@ -2713,12 +2453,14 @@ def _recoverable_entry_payload(
         "candidate_identity": opened.get("candidate_identity"),
         "enrollment_kind": "ADMITTED_SHADOW_TRADE",
         "entry_fact_boundary": opened.get("opened_fact_boundary"),
+        "selection_score_packet": opened.get("selection_score_packet"),
+        "entry_refresh_score_packet": opened.get("entry_refresh_score_packet"),
         "active_episode_identity": radar.get("active_episode_identity"),
+        "radar_research_review_identity": radar.get("radar_research_review_identity"),
+        "radar_activation_causal_seq": radar.get("radar_activation_causal_seq"),
         "radar_scope_identity": radar.get("radar_scope_identity"),
         "component_state": radar.get("component_state"),
         "atomic_state_diagnostic": radar.get("atomic_state_diagnostic"),
-        "radar_band_id": radar.get("band_id"),
-        "radar_richness_interval": radar.get("richness_interval"),
         "execution_model": structure.get("execution_model"),
         "canonical_leg_identities": structure.get("canonical_leg_identities"),
         "short_leg_instrument_name": entry_terms.short_leg_instrument_name,
@@ -2783,100 +2525,6 @@ def _freeze_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
     return frozen
 
 
-def _effective_first_close(
-    first_close: Mapping[str, object] | None,
-    legacy_migration: Mapping[str, object] | None,
-) -> Mapping[str, object] | None:
-    legacy_first_close: Mapping[str, object] | None = None
-    if legacy_migration is not None:
-        raw = legacy_migration.get("legacy_first_close")
-        if raw is not None:
-            legacy_first_close = _normalized_mapping(
-                {
-                    **_mapping(raw, "legacy_first_close"),
-                    "segment_sequence": 0,
-                }
-            )
-    if first_close is not None and legacy_first_close is not None:
-        raise ShadowCaseStoreError("Case has both legacy and stable first CLOSE records")
-    return first_close or legacy_first_close
-
-
-def _validate_legacy_migration(
-    value: Mapping[str, object],
-    *,
-    opened: Mapping[str, object],
-    segments: tuple[ShadowCaseSegmentRead, ...],
-    expected_case_id: str,
-    policies: PolicyChain,
-) -> None:
-    _exact_keys(
-        value,
-        {
-            "record_kind",
-            "migration_schema_version",
-            "case_id",
-            "shadow_entry_identity",
-            "source_opened_record_identity",
-            "source_first_close_record_identity",
-            "source_outcome_record_identity",
-            "source_outcome_terminal_state",
-            "legacy_first_close",
-            "mapped_segment_state",
-        },
-        "legacy migration",
-    )
-    if value.get("record_kind") != LEGACY_MIGRATION_KIND:
-        raise ShadowCaseStoreError("legacy migration record kind is invalid")
-    if value.get("migration_schema_version") != 1:
-        raise ShadowCaseStoreError("legacy migration schema is invalid")
-    if value.get("case_id") != expected_case_id:
-        raise ShadowCaseStoreError("legacy migration Case identity mismatch")
-    if value.get("shadow_entry_identity") != opened.get("shadow_entry_identity"):
-        raise ShadowCaseStoreError("legacy migration Entry identity mismatch")
-    if value.get("source_opened_record_identity") != _legacy_record_identity(
-        "LegacyShadowCaseOpenedRecordIdentity",
-        opened,
-    ):
-        raise ShadowCaseStoreError("legacy migration opened record identity mismatch")
-    legacy_first = value.get("legacy_first_close")
-    if legacy_first is not None:
-        legacy_first_mapping = _mapping(legacy_first, "legacy_first_close")
-        _validate_followup(
-            opened,
-            legacy_first_mapping,
-            expected_kind=FIRST_CLOSE_KIND,
-            policies=policies,
-        )
-    else:
-        legacy_first_mapping = None
-    if value.get("source_first_close_record_identity") != _legacy_record_identity(
-        "LegacyShadowCaseFirstCloseRecordIdentity",
-        legacy_first_mapping,
-    ):
-        raise ShadowCaseStoreError("legacy migration first CLOSE identity mismatch")
-    source_terminal_state = value.get("source_outcome_terminal_state")
-    mapped_state = value.get("mapped_segment_state")
-    if source_terminal_state is None:
-        if value.get("source_outcome_record_identity") is not None:
-            raise ShadowCaseStoreError("legacy migration has an orphan Outcome identity")
-        if mapped_state != "INCOMPLETE_UNCLEAN_EXIT":
-            raise ShadowCaseStoreError("legacy unclean source mapping is invalid")
-    elif source_terminal_state in {"CENSORED_AT_STOP", "CENSORED_AT_FAILURE"}:
-        _identity(
-            value.get("source_outcome_record_identity"),
-            "source_outcome_record_identity",
-        )
-        if mapped_state != source_terminal_state:
-            raise ShadowCaseStoreError("legacy censor mapping is invalid")
-    else:
-        raise ShadowCaseStoreError("legacy migration source Outcome is not recoverable")
-    if not segments or segments[0].sequence != 0:
-        raise ShadowCaseStoreError("legacy migration Segment mapping is invalid")
-    if segments[0].status.value != mapped_state:
-        raise ShadowCaseStoreError("legacy migration mapped Segment state mismatch")
-
-
 def _validate_opened(
     value: Mapping[str, object],
     *,
@@ -2906,6 +2554,8 @@ def _validate_opened(
         "underwriting_action_identity",
         "decision_fact_boundary",
         "selected_underwriting_decision",
+        "selection_score_packet",
+        "entry_refresh_score_packet",
         "structure",
         "radar",
         "underwriting",
@@ -2947,6 +2597,7 @@ def _validate_opened(
     if enrollment_kind not in {
         "ADMITTED_SHADOW_TRADE",
         "SELECTED_UNDERWRITING_DECISION_CONTROL",
+        "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
     }:
         raise ShadowCaseStoreError("opened enrollment_kind is invalid")
     enrollment_identity = _identity(
@@ -3006,7 +2657,7 @@ def _validate_opened(
                 "entry_component_legs",
             },
             schema_version=schema_version,
-            mapping=_V4_STRUCTURE_FIELDS,
+            mapping=_V5_STRUCTURE_FIELDS,
         ),
         "opened structure",
     )
@@ -3046,7 +2697,7 @@ def _validate_opened(
             structure,
             schema_version=schema_version,
             legacy_key="short_strike_usdc_per_btc",
-            mapping=_V4_STRUCTURE_FIELDS,
+            mapping=_V5_STRUCTURE_FIELDS,
         ),
         "short_strike_usdc_per_btc",
     )
@@ -3055,7 +2706,7 @@ def _validate_opened(
             structure,
             schema_version=schema_version,
             legacy_key="long_strike_usdc_per_btc",
-            mapping=_V4_STRUCTURE_FIELDS,
+            mapping=_V5_STRUCTURE_FIELDS,
         ),
         "long_strike_usdc_per_btc",
     )
@@ -3116,26 +2767,53 @@ def _validate_opened(
         radar,
         {
             "active_episode_identity",
+            "radar_research_review_identity",
+            "radar_activation_causal_seq",
             "radar_scope_identity",
             "component_state",
             "atomic_state_diagnostic",
-            "band_id",
-            "richness_interval",
         },
         "opened radar",
     )
-    _text(radar.get("active_episode_identity"), "active_episode_identity")
+    active_episode_identity = radar.get("active_episode_identity")
+    research_review_identity = radar.get("radar_research_review_identity")
+    if (active_episode_identity is None) == (research_review_identity is None):
+        raise ShadowCaseStoreError("opened Radar enrollment requires exactly one anchor")
+    if active_episode_identity is not None:
+        _identity(active_episode_identity, "active_episode_identity")
+    if research_review_identity is not None:
+        _identity(research_review_identity, "radar_research_review_identity")
+    activation_causal_seq = radar.get("radar_activation_causal_seq")
+    if (
+        isinstance(activation_causal_seq, bool)
+        or not isinstance(activation_causal_seq, int)
+        or activation_causal_seq < 0
+        or activation_causal_seq > opened_boundary.causal_seq
+    ):
+        raise ShadowCaseStoreError("opened Radar activation causal sequence is invalid")
+    if enrollment_kind == "RADAR_SCORE_BAND_NO_TRADE_CONTROL":
+        if active_episode_identity is not None:
+            raise ShadowCaseStoreError("score-band Control cannot claim a HIGH Episode")
+    elif active_episode_identity is None:
+        raise ShadowCaseStoreError("canonical enrollment lacks its HIGH Episode")
     _identity(radar.get("radar_scope_identity"), "radar_scope_identity")
     if radar.get("component_state") != "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE":
         raise ShadowCaseStoreError("opened component_state is invalid")
     _text(radar.get("atomic_state_diagnostic"), "atomic_state_diagnostic")
-    _text(radar.get("band_id"), "band_id")
-    richness = _mapping(radar.get("richness_interval"), "richness_interval")
-    _exact_keys(richness, {"lower", "upper"}, "richness_interval")
-    if _decimal(richness.get("lower"), "richness lower") > _decimal(
-        richness.get("upper"), "richness upper"
-    ):
-        raise ShadowCaseStoreError("richness interval is inverted")
+    selection_score_packet, _entry_refresh_score_packet = _validate_case_score_packets(
+        selection_value=value.get("selection_score_packet"),
+        refresh_value=value.get("entry_refresh_score_packet"),
+        opened_boundary=opened_boundary,
+        enrollment_kind=enrollment_kind,
+        active_episode_identity=active_episode_identity,
+        research_review_identity=research_review_identity,
+        activation_causal_seq=activation_causal_seq,
+        short_instrument_name=short_instrument_name,
+        expiry_ms=expiry_ms,
+        option_type=option_type,
+        bindings=bindings,
+        radar_policy=policies.radar,
+    )
 
     underwriting = _mapping(value.get("underwriting"), "underwriting")
     _exact_keys(
@@ -3155,7 +2833,7 @@ def _validate_opened(
                 "maximum_entry_consumed_level_count",
             },
             schema_version=schema_version,
-            mapping=_V4_UNDERWRITING_FIELDS,
+            mapping=_V5_UNDERWRITING_FIELDS,
         ),
         "opened underwriting",
     )
@@ -3213,7 +2891,7 @@ def _validate_opened(
             underwriting,
             schema_version=schema_version,
             legacy_key=field,
-            mapping=_V4_UNDERWRITING_FIELDS,
+            mapping=_V5_UNDERWRITING_FIELDS,
         )
         if _decimal(raw_threshold, field) != expected_threshold:
             raise ShadowCaseStoreError(f"opened underwriting Policy threshold mismatch: {field}")
@@ -3243,7 +2921,7 @@ def _validate_opened(
                 "underwriting_reserved_loss_usdc",
             },
             schema_version=schema_version,
-            mapping=_V4_ENTRY_ECONOMICS_FIELDS,
+            mapping=_V5_ENTRY_ECONOMICS_FIELDS,
         ),
         "entry_economics",
     )
@@ -3253,7 +2931,7 @@ def _validate_opened(
             economics,
             schema_version=schema_version,
             legacy_key=key,
-            mapping=_V4_ENTRY_ECONOMICS_FIELDS,
+            mapping=_V5_ENTRY_ECONOMICS_FIELDS,
         )
 
     gross_entry = _decimal(entry_field("gross_entry_credit_usdc"), "gross entry credit")
@@ -3349,7 +3027,10 @@ def _validate_opened(
     selected_decision = value.get("selected_underwriting_decision")
     selected_decision_identity: str | None = None
     if selected_decision is None:
-        if enrollment_kind == "SELECTED_UNDERWRITING_DECISION_CONTROL":
+        if enrollment_kind in {
+            "SELECTED_UNDERWRITING_DECISION_CONTROL",
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
+        }:
             raise ShadowCaseStoreError("decision control lacks its selected-decision witness")
     else:
         selected_decision_mapping = _mapping(
@@ -3360,10 +3041,10 @@ def _validate_opened(
             selected_decision_mapping,
             opened_boundary=opened_boundary,
             enrollment_kind=enrollment_kind,
-            active_episode_identity=_text(
-                radar.get("active_episode_identity"),
-                "active_episode_identity",
-            ),
+            active_episode_identity=active_episode_identity,
+            research_review_identity=research_review_identity,
+            activation_causal_seq=activation_causal_seq,
+            sampling_metadata=selection_score_packet.sampling_metadata,
             bindings=bindings,
             product=product,
             protective_leg_selection_rule_identity=_identity(
@@ -3392,6 +3073,17 @@ def _validate_opened(
             raise ShadowCaseStoreError(
                 "selected decision refreshed Underwriting projection is inconsistent"
             )
+    if selection_score_packet.sampling_metadata is None:
+        raise ShadowCaseStoreError("Case selection packet lacks sampling metadata")
+    if selected_decision_identity is None:
+        if enrollment_kind != "ADMITTED_SHADOW_TRADE":
+            raise ShadowCaseStoreError("Control Case lacks its selected decision")
+        if (
+            selection_score_packet.sampling_metadata.kind is not SamplingKind.CANONICAL_HIGH
+            or selection_score_packet.sampling_metadata.designation_identity
+            != value.get("candidate_identity")
+        ):
+            raise ShadowCaseStoreError("ordinary Candidate sampling designation mismatch")
 
     decision_boundary = FactBoundary.from_object(
         _boundary(value.get("decision_fact_boundary"), "decision_fact_boundary")
@@ -3478,7 +3170,7 @@ def _validate_followup(
         expected_keys = _versioned_keys(
             expected_keys,
             schema_version=schema_version,
-            mapping=_V4_OUTCOME_ECONOMICS_FIELDS,
+            mapping=_V5_OUTCOME_ECONOMICS_FIELDS,
         )
     if expected_kind == OUTCOME_KIND:
         expected_keys.add("native_outcome_economics")
@@ -3582,7 +3274,7 @@ def _validate_followup(
                         value,
                         schema_version=schema_version,
                         legacy_key="gross_close_cashflow_usdc",
-                        mapping=_V4_OUTCOME_ECONOMICS_FIELDS,
+                        mapping=_V5_OUTCOME_ECONOMICS_FIELDS,
                     ),
                     "gross close cashflow",
                 )
@@ -3592,7 +3284,7 @@ def _validate_followup(
                         value,
                         schema_version=schema_version,
                         legacy_key="close_fee_reserve_usdc",
-                        mapping=_V4_OUTCOME_ECONOMICS_FIELDS,
+                        mapping=_V5_OUTCOME_ECONOMICS_FIELDS,
                     ),
                     "close fee reserve",
                 )
@@ -3646,7 +3338,7 @@ def _validate_outcome_economics(
         raise ShadowCaseStoreError("Outcome terminal state is invalid")
     schema_version = _record_schema_version(opened)
     economic_fields = tuple(
-        _versioned_key(schema_version, field, _V4_OUTCOME_ECONOMICS_FIELDS)
+        _versioned_key(schema_version, field, _V5_OUTCOME_ECONOMICS_FIELDS)
         for field in (
             "gross_close_cashflow_usdc",
             "close_fee_reserve_usdc",
@@ -3672,7 +3364,7 @@ def _validate_outcome_economics(
             entry,
             schema_version=schema_version,
             legacy_key="gross_entry_credit_usdc",
-            mapping=_V4_ENTRY_ECONOMICS_FIELDS,
+            mapping=_V5_ENTRY_ECONOMICS_FIELDS,
         ),
         "gross entry",
     )
@@ -3681,7 +3373,7 @@ def _validate_outcome_economics(
             entry,
             schema_version=schema_version,
             legacy_key="entry_fee_reserve_usdc",
-            mapping=_V4_ENTRY_ECONOMICS_FIELDS,
+            mapping=_V5_ENTRY_ECONOMICS_FIELDS,
         ),
         "entry fee",
     )
@@ -3690,7 +3382,7 @@ def _validate_outcome_economics(
             outcome,
             schema_version=schema_version,
             legacy_key="gross_close_cashflow_usdc",
-            mapping=_V4_OUTCOME_ECONOMICS_FIELDS,
+            mapping=_V5_OUTCOME_ECONOMICS_FIELDS,
         ),
         "gross close",
     )
@@ -3699,7 +3391,7 @@ def _validate_outcome_economics(
             outcome,
             schema_version=schema_version,
             legacy_key="close_fee_reserve_usdc",
-            mapping=_V4_OUTCOME_ECONOMICS_FIELDS,
+            mapping=_V5_OUTCOME_ECONOMICS_FIELDS,
         ),
         "close fee",
     )
@@ -3718,7 +3410,7 @@ def _validate_outcome_economics(
             outcome,
             schema_version=schema_version,
             legacy_key=field,
-            mapping=_V4_OUTCOME_ECONOMICS_FIELDS,
+            mapping=_V5_OUTCOME_ECONOMICS_FIELDS,
         )
         if _decimal(raw_value, field) != expected_value:
             raise ShadowCaseStoreError(f"Outcome arithmetic mismatch: {field}")
@@ -3755,7 +3447,7 @@ def _shadow_case_identity(
         bindings.underwriting_policy_identity,
         bindings.position_policy_identity,
     ]
-    members.extend(("schema-v4", product.identity))
+    members.extend((f"schema-v{schema_version}", product.identity))
     members.extend((enrollment_identity, opened_boundary))
     return canonical_identity("ShadowCaseIdentity", *members)
 
@@ -3856,7 +3548,7 @@ def _component_legs_for_schema(value: object, *, schema_version: int) -> object:
     projected: list[dict[str, object]] = []
     for index, raw in enumerate(_sequence(value, "component legs")):
         leg = _mapping(raw, f"component leg[{index}]")
-        projected_leg = _renamed_fields(leg, _V4_COMPONENT_LEG_FIELDS)
+        projected_leg = _renamed_fields(leg, _V5_COMPONENT_LEG_FIELDS)
         for field in ("raw_consumed_levels_usd", "stressed_consumed_levels_usd"):
             projected_leg[field] = [
                 _renamed_fields(
@@ -4540,12 +4232,110 @@ def _validate_margin_decision(
         raise ShadowCaseStoreError(f"{field} action contradicts its margin vector")
 
 
+def _validate_case_score_packets(
+    *,
+    selection_value: object,
+    refresh_value: object,
+    opened_boundary: FactBoundary,
+    enrollment_kind: str,
+    active_episode_identity: object,
+    research_review_identity: object,
+    activation_causal_seq: int,
+    short_instrument_name: str,
+    expiry_ms: int,
+    option_type: object,
+    bindings: RuntimeBindings,
+    radar_policy: RadarPolicy,
+) -> tuple[RadarScorePacket, RadarScorePacket]:
+    try:
+        selection = validate_radar_score_packet(selection_value, policy=radar_policy)
+        refresh = validate_radar_score_packet(refresh_value, policy=radar_policy)
+        selection_boundary = FactBoundary.from_object(selection.fact_boundary)
+        refresh_boundary = FactBoundary.from_object(refresh.fact_boundary)
+    except (TypeError, ValueError) as exc:
+        raise ShadowCaseStoreError(f"opened Radar score packet is invalid: {exc}") from exc
+    for packet, boundary, field in (
+        (selection, selection_boundary, "selection_score_packet"),
+        (refresh, refresh_boundary, "entry_refresh_score_packet"),
+    ):
+        if (
+            packet.policy_identity != bindings.radar_policy_identity
+            or boundary.code_identity != bindings.code_identity
+            or boundary.runtime_identity != bindings.runtime_identity
+            or packet.leader_instrument_name != short_instrument_name
+            or packet.bucket_key.expiry_ms != expiry_ms
+            or packet.bucket_key.option_type.value != option_type
+        ):
+            raise ShadowCaseStoreError(f"{field} does not bind to its Case structure")
+    if (
+        not opened_boundary.is_strictly_after(selection_boundary)
+        or refresh_boundary != opened_boundary
+        or activation_causal_seq > selection_boundary.causal_seq
+    ):
+        raise ShadowCaseStoreError("Case score packet boundary/order mismatch")
+    metadata = selection.sampling_metadata
+    if metadata is None or refresh.sampling_metadata != metadata:
+        raise ShadowCaseStoreError("Case score packets must freeze identical sampling metadata")
+    if enrollment_kind == "RADAR_SCORE_BAND_NO_TRADE_CONTROL":
+        expected_batch = radar_score_control_batch_identity(
+            bindings=bindings,
+            activation_causal_seq=activation_causal_seq,
+        )
+        if (
+            active_episode_identity is not None
+            or research_review_identity is None
+            or selection_boundary.causal_seq != activation_causal_seq
+            or metadata.kind is not SamplingKind.DETERMINISTIC_BAND_CONTROL
+            or metadata.causal_batch_identity != expected_batch
+            or selection.result.band not in {ScoreBand.LOW, ScoreBand.MID}
+            or selection.result.band is not metadata.control_band
+        ):
+            raise ShadowCaseStoreError("score-band Control packet sampling binding mismatch")
+        expected_review_identity = radar_bucket_episode_identity(
+            runtime_identity=bindings.runtime_identity,
+            policy_identity=bindings.radar_policy_identity,
+            bucket_key=selection.bucket_key,
+            leader_instrument_name=selection.leader_instrument_name,
+            score_band=selection.result.band,
+            activation_causal_seq=activation_causal_seq,
+        )
+        if research_review_identity != expected_review_identity:
+            raise ShadowCaseStoreError("score-band Control review identity mismatch")
+    else:
+        expected_batch = selected_decision_batch_identity(
+            bindings=bindings,
+            activation_causal_seq=activation_causal_seq,
+        )
+        if (
+            active_episode_identity is None
+            or research_review_identity is not None
+            or metadata.kind is not SamplingKind.CANONICAL_HIGH
+            or metadata.causal_batch_identity != expected_batch
+            or selection.result.band is not ScoreBand.HIGH
+        ):
+            raise ShadowCaseStoreError("canonical HIGH packet sampling binding mismatch")
+        expected_episode_identity = radar_bucket_episode_identity(
+            runtime_identity=bindings.runtime_identity,
+            policy_identity=bindings.radar_policy_identity,
+            bucket_key=selection.bucket_key,
+            leader_instrument_name=selection.leader_instrument_name,
+            score_band=ScoreBand.HIGH,
+            activation_causal_seq=activation_causal_seq,
+        )
+        if active_episode_identity != expected_episode_identity:
+            raise ShadowCaseStoreError("canonical HIGH Episode identity mismatch")
+    return selection, refresh
+
+
 def _validate_selected_decision(
     value: Mapping[str, object],
     *,
     opened_boundary: FactBoundary,
     enrollment_kind: object,
-    active_episode_identity: str,
+    active_episode_identity: object,
+    research_review_identity: object,
+    activation_causal_seq: int,
+    sampling_metadata: object,
     bindings: RuntimeBindings,
     product: OptionProductSpec,
     protective_leg_selection_rule_identity: str,
@@ -4555,8 +4345,11 @@ def _validate_selected_decision(
         value,
         {
             "selected_underwriting_decision_identity",
+            "selection_kind",
             "decision_control_rule_identity",
             "activation_batch_identity",
+            "active_episode_identity",
+            "radar_research_review_identity",
             "selected_underwriting_action_identity",
             "selected_economic_action",
             "selected_consumed_economic_fact_fingerprint",
@@ -4582,9 +4375,50 @@ def _validate_selected_decision(
         "refreshed_consumed_economic_fact_fingerprint",
     ):
         _identity(value.get(field), field)
-    expected_rule = selected_decision_rule_identity(bindings=bindings)
+    selection_kind = value.get("selection_kind")
+    if selection_kind == "HIGH_ACTION_BLIND":
+        if active_episode_identity is None or research_review_identity is not None:
+            raise ShadowCaseStoreError("HIGH selected decision lacks its active Episode")
+        expected_rule = selected_decision_rule_identity(bindings=bindings)
+        expected_batch = selected_decision_batch_identity(
+            bindings=bindings,
+            activation_causal_seq=activation_causal_seq,
+        )
+        expected_anchor = _identity(active_episode_identity, "active_episode_identity")
+        expected_sampling_kind = SamplingKind.CANONICAL_HIGH
+    elif selection_kind == "RADAR_SCORE_BAND_NO_TRADE_CONTROL":
+        if enrollment_kind != "RADAR_SCORE_BAND_NO_TRADE_CONTROL":
+            raise ShadowCaseStoreError("score-band selection opened the wrong Case lane")
+        if research_review_identity is None or active_episode_identity is not None:
+            raise ShadowCaseStoreError("score-band selected decision lacks its review anchor")
+        expected_rule = radar_score_control_rule_identity(bindings=bindings)
+        expected_batch = radar_score_control_batch_identity(
+            bindings=bindings,
+            activation_causal_seq=activation_causal_seq,
+        )
+        expected_anchor = _identity(
+            research_review_identity,
+            "radar_research_review_identity",
+        )
+        expected_sampling_kind = SamplingKind.DETERMINISTIC_BAND_CONTROL
+    else:
+        raise ShadowCaseStoreError("selected decision kind is invalid")
     if value.get("decision_control_rule_identity") != expected_rule:
         raise ShadowCaseStoreError("selected decision rule binding mismatch")
+    if value.get("activation_batch_identity") != expected_batch:
+        raise ShadowCaseStoreError("selected decision batch binding mismatch")
+    if (
+        value.get("active_episode_identity") != active_episode_identity
+        or value.get("radar_research_review_identity") != research_review_identity
+    ):
+        raise ShadowCaseStoreError("selected decision Radar anchor projection mismatch")
+    if not isinstance(sampling_metadata, RadarSamplingMetadata):
+        raise ShadowCaseStoreError("selected decision lacks typed sampling metadata")
+    if (
+        sampling_metadata.kind is not expected_sampling_kind
+        or sampling_metadata.causal_batch_identity != expected_batch
+    ):
+        raise ShadowCaseStoreError("selected decision sampling metadata binding mismatch")
     for field in ("selected_economic_action", "refreshed_economic_action"):
         if value.get(field) not in {"CANDIDATE", "WATCH", "ABSTAIN"}:
             raise ShadowCaseStoreError(f"{field} is invalid")
@@ -4631,24 +4465,11 @@ def _validate_selected_decision(
         or refreshed_boundary != opened_boundary
     ):
         raise ShadowCaseStoreError("selected decision boundary/order mismatch")
-    _episode_prefix, separator, activation_seq_text = active_episode_identity.rpartition(":")
-    if (
-        not separator
-        or not activation_seq_text.isdigit()
-        or str(int(activation_seq_text)) != activation_seq_text
-    ):
-        raise ShadowCaseStoreError("selected decision Episode identity is invalid")
-    expected_batch = selected_decision_batch_identity(
-        bindings=bindings,
-        activation_causal_seq=int(activation_seq_text),
-    )
-    if value.get("activation_batch_identity") != expected_batch:
-        raise ShadowCaseStoreError("selected decision batch binding mismatch")
     expected_selection = canonical_identity(
         "SelectedUnderwritingDecisionIdentity",
         expected_rule,
         expected_batch,
-        active_episode_identity,
+        expected_anchor,
         value.get("selected_underwriting_action_identity"),
         value.get("selected_economic_action"),
         selected_margins.as_vector(product.valuation_currency),
@@ -4657,6 +4478,30 @@ def _validate_selected_decision(
     )
     if value.get("selected_underwriting_decision_identity") != expected_selection:
         raise ShadowCaseStoreError("selected decision identity mismatch")
+    if selection_kind == "HIGH_ACTION_BLIND":
+        if sampling_metadata.designation_identity != expected_selection:
+            raise ShadowCaseStoreError("HIGH selected decision sampling designation mismatch")
+    else:
+        if sampling_metadata.control_band is None:
+            raise ShadowCaseStoreError("score-band sampling lacks its control band")
+        expected_designation = canonical_identity(
+            "RadarScoreControlDesignationIdentity",
+            expected_rule,
+            expected_batch,
+            {
+                "LOW": sampling_metadata.low_eligible_count,
+                "MID": sampling_metadata.mid_eligible_count,
+            },
+            sampling_metadata.control_band.value,
+            expected_anchor,
+            sampling_metadata.selected_ordinal,
+            {
+                "numerator": sampling_metadata.inclusion_numerator,
+                "denominator": sampling_metadata.inclusion_denominator,
+            },
+        )
+        if sampling_metadata.designation_identity != expected_designation:
+            raise ShadowCaseStoreError("score-band sampling designation identity mismatch")
     expected_refreshed_action = canonical_identity(
         "CaseOpenRefreshedUnderwritingActionIdentity",
         expected_selection,
@@ -4688,7 +4533,7 @@ def _validate_component_legs(
     fee_rate_index_fraction: Decimal,
 ) -> _ValidatedComponentEconomics:
     if schema_version != SHADOW_CASE_SCHEMA_VERSION:
-        raise ShadowCaseStoreError("component legs require Shadow Case schema v4")
+        raise ShadowCaseStoreError("component legs require Shadow Case schema v5")
     legs = _sequence(value, field)
     if len(legs) != 2:
         raise ShadowCaseStoreError("component entry requires exactly two leg quotes")
@@ -4726,7 +4571,7 @@ def _validate_component_legs(
         valuation_keys = _versioned_keys(
             legacy_keys,
             schema_version=schema_version,
-            mapping=_V4_COMPONENT_LEG_FIELDS,
+            mapping=_V5_COMPONENT_LEG_FIELDS,
         )
         expected_keys = valuation_keys | product_keys
         _exact_keys(leg, expected_keys, f"{role} component leg")
@@ -4741,7 +4586,7 @@ def _validate_component_legs(
                 leg,
                 schema_version=schema_version,
                 legacy_key="raw_consumed_levels",
-                mapping=_V4_COMPONENT_LEG_FIELDS,
+                mapping=_V5_COMPONENT_LEG_FIELDS,
             ),
             "raw_consumed_levels",
         )
@@ -4750,7 +4595,7 @@ def _validate_component_legs(
                 leg,
                 schema_version=schema_version,
                 legacy_key="stressed_consumed_levels",
-                mapping=_V4_COMPONENT_LEG_FIELDS,
+                mapping=_V5_COMPONENT_LEG_FIELDS,
             ),
             "stressed_consumed_levels",
         )
@@ -4774,7 +4619,7 @@ def _validate_component_legs(
                 leg,
                 schema_version=schema_version,
                 legacy_key="raw_vwap_usdc_per_btc",
-                mapping=_V4_COMPONENT_LEG_FIELDS,
+                mapping=_V5_COMPONENT_LEG_FIELDS,
             ),
             "raw component VWAP",
         )
@@ -4783,7 +4628,7 @@ def _validate_component_legs(
                 leg,
                 schema_version=schema_version,
                 legacy_key="stressed_vwap_usdc_per_btc",
-                mapping=_V4_COMPONENT_LEG_FIELDS,
+                mapping=_V5_COMPONENT_LEG_FIELDS,
             ),
             "stressed component VWAP",
         )
@@ -4792,7 +4637,7 @@ def _validate_component_legs(
                 leg,
                 schema_version=schema_version,
                 legacy_key="fee_reserve_usdc",
-                mapping=_V4_COMPONENT_LEG_FIELDS,
+                mapping=_V5_COMPONENT_LEG_FIELDS,
             ),
             "component fee reserve",
         )

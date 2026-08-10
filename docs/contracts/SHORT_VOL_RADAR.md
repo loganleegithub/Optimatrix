@@ -6,11 +6,11 @@
 
 ## Purpose
 
-Maintain the current 0–72 hour Deribit `INVERSE_BTC_V1` option market in memory and tell the trader
-whether a target-size executable sell-side implied-volatility witness is unusually rich relative to
-one exact causal, conservative multi-horizon BTC realized-volatility baseline. The product is fixed
-at startup; there is no product selector or fallback. A positive detector state is a selective
-`RICHNESS_CLUE`, not a downstream Underwriting `CANDIDATE`, forecast, trade, or profitability claim.
+Maintain the current 0–72 hour Deribit `INVERSE_BTC_V1` option market in memory and rank
+target-size executable sell-side volatility opportunities with the sole
+`INVERSE_BTC_SHORT_VOL_V2` ordinal score. The score combines premium evidence with observable
+path/liquidity quality. It is a conditional-quality-lift hypothesis, not an oracle, calibrated probability,
+expected return, downstream Underwriting `CANDIDATE`, trade, or profitability claim.
 
 The Radar separately supplies a ranked protective-vertical review and reports official
 atomic-combo availability as a diagnostic. Review context cannot create detector truth. One frozen
@@ -36,7 +36,7 @@ but may create the explicitly non-atomic Shadow counterfactual defined by the Un
 ## Source contract
 
 `IndexHistoryReducer` is the sole validator and bounded in-memory owner of
-`public/get_index_chart_data(index_name=btc_usd, range=1d)`. It accepts only a bounded
+`public/get_index_chart_data(index_name=btc_usd, range=2d)`. It accepts only a bounded
 chronological array of positive finite `[timestamp, average_index_price]` pairs for that one index.
 It exposes:
 
@@ -98,11 +98,14 @@ For one short-leg option at one causal boundary:
 5. convert raw bid, stressed bid, and ask native VWAPs through the fixed product's model rule,
    then invert Black total volatility from those model-domain prices;
 6. derive the short-leg Delta interval and classify its explicit review bucket;
-7. consume the exact confirmed five-minute average-index suffix and compute 30/120/360-minute
+7. consume the exact confirmed five-minute `average_price` suffix and compute the Policy band's
    realized-variance rates;
-8. select the highest variance rate or the fixed annualized variance floor;
-9. compare **one-tick-stressed executable bid IV** with that baseline;
-10. apply the content-identified activation/clear hysteresis.
+8. form the reference rate as the larger of the variance floor and
+   `0.5 × maximum window rate + 0.5 × mean window rate`;
+9. map **one-tick-stressed executable bid IV / reference RV** into premium anchor `A`;
+10. derive required path quality `D` and target-book liquidity quality `E`, plus optional signed
+    surface `S` and adjacent-term `T` adjustments when their exact causal neighbours exist;
+11. compute the V2 score interval and apply content-identified activation/clear hysteresis.
 
 The clue-eligible Policy buckets are:
 
@@ -116,10 +119,40 @@ insufficient conversion slack. Delta `<0.05` and `>0.40` remain visible review-o
 being mislabeled as comparable wing clues. A numerical Delta interval crossing an eligibility
 boundary remains `UNKNOWN`.
 
-Activation retains the existing `1.20` stressed IV/RV ratio, three qualifying observations, and at
-least five minutes between observations; the first-to-third span is at least ten minutes. Clear
-retains `1.05`, two observations, and five-minute separation. These are frozen screen parameters,
-not qualified Edge estimates.
+The five-minute horizons and persistence are:
+
+| TTE band | horizons (minutes) | activation observations / separation | clear |
+| --- | --- | --- | --- |
+| 30m–45m review only | 30 / 120 / 360 | no clue | no clue |
+| 45m–6h | 30 / 120 / 360 | 3 / 60 s | 2 / 60 s |
+| 6h–24h | 120 / 360 / 720 | 3 / 150 s | 2 / 150 s |
+| 24h–72h | 360 / 720 / 1440 | 3 / 300 s | 2 / 300 s |
+
+Activation requires `score.lower >= 65`; clear requires `score.upper <= 50`. A numerical interval
+that overlaps either threshold is known `REVIEW/HOLD`, not source `UNKNOWN`. These are frozen expert
+priors, not qualified Edge estimates.
+
+## V2 score contract
+
+All weights, knots, saturation points, and thresholds below are exact Radar Policy members:
+
+```text
+A = piecewise richness: ratio <= 1 -> 0; 1.20 -> 0.80; ratio >= 1.30 -> 1
+S = clip((stressed bid-IV midpoint - local mark IV) / 0.10, -1, 1)
+T = clip((current ATM mark IV - immediate next-longer-expiry ATM mark IV) / 0.10, -1, 1)
+D = clip(1 - 0.5 * adverse semivariance share - 0.5 * jump share, 0, 1)
+E = 0.7 * spread_quality + 0.3 * depth_quality
+PremiumEvidence = clip(A + 0.10*S + 0.05*T, 0, 1)
+RiskQuality = 0.60*D + 0.40*E
+Score = 100 * PremiumEvidence * (0.40 + 0.60*RiskQuality)
+```
+
+`spread_quality` declines linearly from one at one target-spread tick to zero at ten ticks.
+`depth_quality` declines linearly from one at two total consumed bid-plus-ask levels to zero at ten.
+S/T missingness contributes zero adjustment but remains an explicit `UNKNOWN` feature with a reason;
+it is never stored as an observed zero or neutral 50%. D/E are required for a known score. The
+server exposes the numerical score interval, LOW `[0,50)`, MID `[50,65)`, or HIGH `[65,100]`,
+premium/risk decomposition, coverage, missing mask, raw inputs, and normalized contributions.
 
 ## Regime diagnostics
 
@@ -131,10 +164,10 @@ The baseline calculator also derives, for every declared horizon:
 - maximum absolute five-minute return;
 - net log return.
 
-The selected/highest-RV horizon supplies the row's regime context. Call clues label positive
+The maximum-RV horizon supplies the row's regime context. Call clues label positive
 semivariance as adverse; Put clues label negative semivariance as adverse. These finite-sample
-statistics are descriptive and non-gating. They do not forecast delivery-period variance or turn
-historical VRP into an Edge claim.
+statistics supply the bounded path-quality input but do not forecast delivery-period variance or
+turn historical VRP into an Edge claim.
 
 ## Surface-lite diagnostics
 
@@ -146,11 +179,21 @@ may show:
 - 25-Delta risk reversal when both proxies are usable;
 - local same-type mark-IV interpolation around the clue's Delta;
 - executable bid-IV midpoint minus that local mark-IV context;
-- nearest adjacent-expiry ATM mark-IV difference.
+- immediate next-longer-expiry ATM mark-IV difference; if no longer expiry is current, `T` is
+  explicitly `UNKNOWN` rather than reversing the comparison against a shorter expiry.
 
-Mark IV is diagnostic, not executable. Missing neighbours produce `PARTIAL/UNKNOWN`; they never
-erase a known executable-bid witness. No fitted SVI, SABR, Heston, calendar forecast, or surface
-mispricing claim is part of this slice.
+Mark IV is not executable. The local and next-longer-expiry residuals may provide only their bounded
+optional score adjustments. Missing neighbours remain explicit and contribute no adjustment; they
+never erase a known executable-bid witness. No fitted SVI, SABR, Heston, calendar forecast, or
+surface-mispricing claim is part of this slice.
+
+## Unsigned OI/gamma diagnostic
+
+When current public ticker `open_interest` and absolute option gamma are both usable, the Radar may
+show `open_interest × abs(gamma)` and that instrument's share of the matching expiry/bucket total.
+It preserves raw inputs, source currentness, and missing reason. It never converts the value into a
+signed dealer inventory, dollar GEX, support/resistance, pin target, or score contribution;
+`dealer_gamma_sign` is always `UNKNOWN` under public-only data.
 
 ## Protective-vertical structure review
 
@@ -178,31 +221,30 @@ NO_LIQUIDITY_RESERVATION
 CANDIDATE_REQUIRES_STRICTLY_LATER_PAIRED_REFRESH
 ```
 
-## Transparent attention rank
+## Bucket leader and attention order
 
-The Workbench assigns a deterministic lexicographic rank, not an ML score. Ordering is by:
+The decision bucket is `(TTE band, expiry, option type, Delta bucket)`. Each bucket has at most one
+leader. An already-active frozen leader remains first; otherwise ordering is score lower bound,
+raw-richness lower bound, tighter target spread, fewer total consumed levels, strike, then
+instrument name. An unknown competitor degrades bucket coverage but does not erase a known leader.
+Leader change resets pre-activation confirmation; after HIGH or research-review confirmation the
+leader is frozen until that Episode ends. Only the leader advances persistence or enrollment.
 
-1. active detector witness;
-2. clue-eligible TTE/Delta bucket;
-3. stressed richness lower bound;
-4. availability and value of surface residual;
-5. availability and value of the best stressed legged credit/payoff-cap ratio;
-6. lower adverse semivariance share and jump share;
-7. tighter target spread and fewer consumed levels;
-8. deterministic expiry/type/Delta/strike/name tie-breakers.
-
-The default view is bounded Top-N; `ALL` remains available. Every row exposes the ordered rank inputs.
-Rank changes attention only and cannot change any business truth.
+The default Workbench view is bounded Top-N with `ALL` available. It displays the server-owned V2
+score and leader truth and never recomputes either in the browser.
 
 ## Episode semantics
 
-One Episode identity is namespaced by runtime, fixed product, Radar Policy, instrument, and
-activation causal sequence. Repeated bytes, heartbeat, polling, display publication, unchanged recomputation, and
-multiple changes inside one separation interval do not advance persistence.
+One HIGH Episode or LOW/MID research-review Episode identity is namespaced by runtime, fixed
+product, Radar Policy, bucket, leader, score band, and confirmation causal sequence. Repeated bytes,
+heartbeat, polling, display publication, unchanged recomputation, and multiple changes inside one
+separation interval do not advance persistence.
 
-An Episode ends on clear, known ineligibility, transition into a review-only bucket, membership or
-scope loss, hard-screen fact loss, history revision/gap/staleness, continuity loss, or run stop.
-After any source loss, fresh activation observations are required.
+An Episode ends on clear/band exit, known ineligibility, transition into a review-only TTE bucket,
+leader change before freeze, membership or scope loss, required core-score fact loss, history
+revision/gap/staleness, continuity loss, or run stop. After any source loss, fresh observations are
+required. A confirmed LOW/MID research-review Episode can be designated at most once and cannot
+repeat until it has ended and a later Episode completes fresh persistence.
 
 ## Official atomic diagnostic
 
@@ -232,21 +274,23 @@ loss remain post-warmup UNKNOWN. Every Radar UNKNOWN contributes exactly one bou
 
 After each settled transaction the Radar exposes typed current state to the in-process Underwriting
 adapter, read-only Workbench, and bounded funnel diagnostics. A row states source contract,
-TTE/Delta bucket, target bid/ask, tick stress, raw and stressed IV/richness, selected baseline,
-regime, surface, protective structure, official atomic diagnostic, rank, blocker, and invalidation
+TTE/Delta bucket, target bid/ask, tick stress, raw and stressed IV/richness, mixed reference
+baseline, five score inputs and interval, coverage/missing reasons, bucket leader, optional unsigned
+OI/gamma diagnostic, protective structure, official atomic diagnostic, blocker, and invalidation
 condition.
 
-No market fact, clue, diagnostic, rank, atomic quote, funnel counter, probe result, or Workbench
-snapshot is a durable product record. Only a later admitted `SHADOW_CASE_OPENED` may freeze consumed
-Radar, frozen structure, component-book, and atomic-diagnostic facts.
+No market fact, score, clue, diagnostic, rank, atomic quote, funnel counter, probe result, or
+Workbench snapshot is a durable product record. Only a later `SHADOW_CASE_OPENED` may freeze the
+same minimal V2 score-packet shape at selection and strictly later entry refresh together with the
+consumed structure, component-book, and atomic-diagnostic facts.
 
 ## Required verification
 
-Direct tests own source shape/cadence/revision state, tick regimes, two-sided target depth, one-tick
-stress, Black inversion, TTE/Delta review buckets, five-minute multi-horizon baseline, regime
-statistics, surface-lite limitations, fee-cap arithmetic, protective-leg display ranking,
-Underwriting-selector separation, ranking
-determinism, episode persistence/end reasons, official combo semantics, reducer ordering, and
+Direct tests own source shape/cadence/revision state, `2d` request shape, tick regimes, two-sided
+target depth, one-tick stress, Black inversion, TTE/Delta review buckets, band-specific five-minute
+mixed baseline, every score normalization/interval/missing rule, leader determinism, HIGH and
+LOW/MID persistence/end reasons, unsigned OI limitations, fee-cap arithmetic, protective-leg
+display ranking, Underwriting-selector separation, official combo semantics, reducer ordering, and
 bounded UNKNOWN reasons.
 
 Only an explicit `CURRENT_STAGE` may authorize production-public read-only observation. A bounded

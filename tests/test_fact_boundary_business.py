@@ -4,7 +4,8 @@ import math
 from dataclasses import FrozenInstanceError, replace
 from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 import radar_runtime.runtime as runtime_module
@@ -50,7 +51,8 @@ from radar_runtime.runtime import (
 )
 from short_vol_radar.atomic import PublicAtomicQuoteState
 from short_vol_radar.baseline import BaselineStatistics
-from short_vol_radar.black import black_price
+from short_vol_radar.black import DecimalInterval, black_price
+from short_vol_radar.bucket import RadarBucketEpisodeTracker
 from short_vol_radar.detector import (
     DetectorCoverage,
     DetectorObservation,
@@ -59,6 +61,7 @@ from short_vol_radar.detector import (
     EpisodeTracker,
     ObservationSignal,
     TrackerState,
+    TrackerTransition,
 )
 from short_vol_radar.evidence import (
     CoverageState,
@@ -66,7 +69,24 @@ from short_vol_radar.evidence import (
     RadarEventSink,
 )
 from short_vol_radar.policy import RadarPolicy, load_policy_bytes
-from short_vol_radar.radar import CurrentEvaluation, TickerState
+from short_vol_radar.radar import (
+    CurrentDisposition,
+    CurrentEvaluation,
+    DeltaBucket,
+    EvaluationResult,
+    TickerState,
+)
+from short_vol_radar.score import (
+    LeaderCoverage,
+    RadarBucketKey,
+    RadarScoreInputs,
+    ScoreBand,
+    build_radar_score_packet,
+    compute_radar_score,
+    compute_unsigned_oi_concentration,
+)
+
+TEST_RUNTIME_IDENTITY = "sha256:" + "b" * 64
 
 
 def make_reducer(tmp_path: Path, policy: RadarPolicy) -> RadarReducer:
@@ -75,10 +95,10 @@ def make_reducer(tmp_path: Path, policy: RadarPolicy) -> RadarReducer:
         code_identity="a" * 40,
         event_sink=RadarEventSink(
             code_identity="a" * 40,
-            runtime_identity="runtime",
+            runtime_identity=TEST_RUNTIME_IDENTITY,
             policy_identity=policy.identity,
         ),
-        runtime_identity="runtime",
+        runtime_identity=TEST_RUNTIME_IDENTITY,
     )
     reducer.begin_session(session_epoch=1, monotonic_ms=1_000)
     reducer.clock = TrustedClock.from_response(
@@ -304,24 +324,139 @@ def activate_directly(
     *,
     band_index: int = 0,
 ) -> str:
+    band = reducer.policy.tte_bands[band_index]
+    rule = band.option_rules[instrument.option_type]
+    used_delta_buckets = {
+        key.delta_bucket
+        for key in reducer.bucket_trackers
+        if key.expiry_ms == instrument.expiration_timestamp_ms
+        and key.option_type is instrument.option_type
+    }
+    delta_bucket = next(
+        candidate
+        for candidate in (
+            DeltaBucket.NEAR_ATM_30_40,
+            DeltaBucket.ATM_GT_40,
+            DeltaBucket.WING_15_30,
+            DeltaBucket.TAIL_05_15,
+            DeltaBucket.EXTREME_TAIL_LT_05,
+        )
+        if candidate.value not in used_delta_buckets
+    )
+    bucket_key = RadarBucketKey(
+        tte_band_id=band.band_id,
+        expiry_ms=instrument.expiration_timestamp_ms,
+        option_type=instrument.option_type,
+        delta_bucket=delta_bucket.value,
+    )
+    score_result = compute_radar_score(
+        reducer.policy.score_model,
+        RadarScoreInputs(
+            stressed_richness=DecimalInterval(Decimal("1.30"), Decimal("1.31")),
+            stressed_executable_bid_iv=DecimalInterval(Decimal("0.49"), Decimal("0.51")),
+            local_same_type_mark_iv=Decimal("0.40"),
+            current_expiry_atm_mark_iv=Decimal("0.50"),
+            adjacent_expiry_atm_mark_iv=Decimal("0.40"),
+            adverse_semivariance_share=DecimalInterval(Decimal(0), Decimal(0)),
+            jump_share=DecimalInterval(Decimal(0), Decimal(0)),
+            target_spread_ticks=DecimalInterval(Decimal(1), Decimal(1)),
+            bid_consumed_level_count=2,
+            ask_consumed_level_count=2,
+        ),
+    )
+    score_result = replace(score_result, band=ScoreBand.HIGH)
+    packet = build_radar_score_packet(
+        policy_identity=reducer.policy.identity,
+        fact_boundary={
+            "code_identity": reducer.code_identity,
+            "runtime_identity": reducer.runtime_identity,
+            "session_epoch": 1,
+            "ingress_seq": 0,
+            "received_monotonic_ms": 1_000,
+            "causal_seq": 1,
+        },
+        bucket_key=bucket_key,
+        leader_instrument_name=instrument.instrument_name,
+        result=score_result,
+        oi_diagnostic=compute_unsigned_oi_concentration(
+            open_interest=Decimal(1),
+            option_gamma=Decimal("0.01"),
+            bucket_total_unsigned_gamma_weight=Decimal("0.01"),
+        ),
+        stressed_richness=DecimalInterval(Decimal("1.30"), Decimal("1.31")),
+        leader_coverage=LeaderCoverage.COMPLETE,
+    )
+    bucket_tracker = RadarBucketEpisodeTracker(
+        runtime_identity=reducer.runtime_identity,
+        policy_identity=reducer.policy.identity,
+        bucket_key=bucket_key,
+        score_model=reducer.policy.score_model,
+        clue_eligible=True,
+    )
+    separation = max(rule.minimum_separation_ms, 1)
+    for index in range(rule.activation_observation_count):
+        bucket_tracker.observe(
+            packet=packet,
+            observation_identity=("test-bucket-score", instrument.instrument_name, index),
+            causal_seq=1,
+            trusted_time=TimeInterval(
+                1_000_000 + index * separation,
+                1_000_000 + index * separation,
+            ),
+            rule=rule,
+        )
+    assert bucket_tracker.episode is not None
+    reducer.bucket_trackers[bucket_key] = bucket_tracker
+    reducer.score_bucket_keys[instrument.instrument_name] = bucket_key
+    reducer.score_results[instrument.instrument_name] = score_result
+    reducer.score_packets[instrument.instrument_name] = packet
+    reducer.bucket_leader_by_key[bucket_key] = instrument.instrument_name
+    reducer.bucket_leader_coverage[bucket_key] = LeaderCoverage.COMPLETE
     tracker = EpisodeTracker(
-        runtime_identity="runtime",
+        runtime_identity=reducer.runtime_identity,
         policy_identity=reducer.policy.identity,
         instrument_name=instrument.instrument_name,
     )
-    rule = reducer.policy.tte_bands[band_index].option_rules[OptionType.CALL]
-    transition = tracker.observe(
-        DetectorObservation(
-            causal_seq=1,
-            trusted_time=TimeInterval(1_000_000, 1_000_000),
-            band_id=reducer.policy.tte_bands[band_index].band_id,
-            signal=ObservationSignal.ACTIVATE,
-        ),
-        rule,
-    )
-    assert transition.activated_episode_id is not None
+    tracker.state = TrackerState.ACTIVE
+    tracker.episode_id = bucket_tracker.episode.episode_identity
+    tracker.activation_band_id = band.band_id
+    tracker.activation_causal_seq = 1
     reducer.trackers[instrument.instrument_name] = tracker
-    return transition.activated_episode_id
+    calculation = SimpleNamespace(
+        baseline=SimpleNamespace(window_diagnostics=()),
+        delta=DecimalInterval(Decimal("0.19"), Decimal("0.21")),
+        delta_bucket=delta_bucket,
+        delta_clue_eligible=True,
+        richness=DecimalInterval(Decimal("1.30"), Decimal("1.31")),
+        target_spread_ticks=Decimal(1),
+        target_bid=SimpleNamespace(consumed=(object(),)),
+        target_ask=SimpleNamespace(consumed=(object(),)),
+        rule=rule,
+        clue_eligible=True,
+        score_result=score_result,
+    )
+    current = CurrentEvaluation(
+        disposition=CurrentDisposition.V2_SCORE,
+        reason=None,
+        known_evaluation=True,
+        full_formula_evaluation=True,
+        band_id=band.band_id,
+        calculation=cast(Any, calculation),
+        score_result=score_result,
+    )
+    reducer.results[instrument.instrument_name] = EvaluationResult(
+        detector_state=DetectorState.ANOMALY_ACTIVE,
+        reason=None,
+        known_evaluation=True,
+        full_formula_evaluation=True,
+        band_id=band.band_id,
+        transition=TrackerTransition(),
+        calculation=cast(Any, calculation),
+        current_evaluation=current,
+        score_result=score_result,
+        score_packet=packet,
+    )
+    return bucket_tracker.episode.episode_identity
 
 
 def test_band_boundary_suspension_resets_partial_detector_persistence(
@@ -697,7 +832,6 @@ def test_countable_history_tuple_is_observed_once_without_live_index_backfill(
     )
     configure_full_formula_scope(reducer, instrument)
     name = instrument.instrument_name
-    tracker = reducer.trackers[name]
 
     reducer._causal_seq = 1
     reducer.settle_fact(
@@ -706,7 +840,9 @@ def test_countable_history_tuple_is_observed_once_without_live_index_backfill(
         countable=True,
     )
     assert reducer.results[name].observation_eligible
-    assert tracker._activation_count == 1
+    bucket_key = reducer.score_bucket_keys[name]
+    bucket_tracker = reducer.bucket_trackers[bucket_key]
+    assert bucket_tracker.confirmation_observation_count == 1
 
     reducer.index.accept_tick(source_timestamp_ms=1_020_000, price=100, causal_seq=2)
     reducer.clock = TrustedClock.from_response(
@@ -722,7 +858,7 @@ def test_countable_history_tuple_is_observed_once_without_live_index_backfill(
         countable=False,
     )
     assert not reducer.results[name].observation_eligible
-    assert tracker._activation_count == 1
+    assert bucket_tracker.confirmation_observation_count == 1
     noncountable_identity = reducer._last_observation_identity[name]
 
     reducer._causal_seq = 3
@@ -731,9 +867,9 @@ def test_countable_history_tuple_is_observed_once_without_live_index_backfill(
         affected_instruments=(name,),
         countable=True,
     )
-    assert not reducer.results[name].observation_eligible
-    assert reducer._last_observation_identity[name] == noncountable_identity
-    assert tracker._activation_count == 1
+    assert reducer.results[name].observation_eligible
+    assert reducer._last_observation_identity[name] != noncountable_identity
+    assert bucket_tracker.confirmation_observation_count == 2
 
     for causal_seq, timestamp in enumerate(
         (1_080_000, 1_140_000, 1_200_000),
@@ -758,7 +894,7 @@ def test_countable_history_tuple_is_observed_once_without_live_index_backfill(
         countable=True,
     )
     assert reducer.results[name].observation_eligible
-    assert tracker._activation_count == 2
+    assert bucket_tracker.confirmation_observation_count == 3
 
     reducer._causal_seq = 8
     reducer.settle_fact(
@@ -766,8 +902,8 @@ def test_countable_history_tuple_is_observed_once_without_live_index_backfill(
         affected_instruments=(name,),
         countable=True,
     )
-    assert not reducer.results[name].observation_eligible
-    assert tracker._activation_count == 2
+    assert reducer.results[name].observation_eligible
+    assert bucket_tracker.confirmation_observation_count == 3
 
 
 def shifted_publication_tail(
@@ -887,7 +1023,7 @@ def test_clock_refresh_response_settles_final_window_in_same_fact_boundary(
     )
 
     assert reducer.trackers[instrument.instrument_name].episode_id is None
-    assert reducer._episode_end_counts[EpisodeEndReason.OUT_OF_BASELINE_SCOPE.value] == 1
+    assert reducer._episode_end_counts[EpisodeEndReason.MEMBERSHIP_LOSS.value] == 1
 
 
 def test_negative_platform_guard_ends_episode_once_as_session_gap(
@@ -923,8 +1059,8 @@ def test_negative_platform_guard_ends_episode_once_as_session_gap(
 
     assert reducer.platform.reason == "PLATFORM_MAINTENANCE"
     assert reducer.results[instrument.instrument_name].reason == "SESSION_GAP"
-    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
-    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_DETECTOR.value] == 0
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_DETECTOR.value] == 1
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 0
 
 
 def test_subscription_evidence_failure_is_not_reclassified_as_public_payload(
@@ -1006,7 +1142,7 @@ def test_final_window_time_poll_ends_whole_scope_without_market_update(
 
     assert reducer.trackers[first.instrument_name].episode_id is None
     assert reducer.trackers[second.instrument_name].episode_id is None
-    assert reducer._episode_end_counts[EpisodeEndReason.OUT_OF_BASELINE_SCOPE.value] == 2
+    assert reducer._episode_end_counts[EpisodeEndReason.MEMBERSHIP_LOSS.value] == 2
     assert first_episode != second_episode
 
 
@@ -1032,7 +1168,7 @@ def test_policy_gap_time_poll_ends_whole_scope_without_market_update(
 
     assert reducer.trackers[first.instrument_name].episode_id is None
     assert reducer.trackers[second.instrument_name].episode_id is None
-    assert reducer._episode_end_counts[EpisodeEndReason.OUT_OF_BASELINE_SCOPE.value] == 2
+    assert reducer._episode_end_counts[EpisodeEndReason.MEMBERSHIP_LOSS.value] == 2
 
 
 def test_amount_unknown_to_valid_establishes_known_current_without_activation_count(
@@ -1375,7 +1511,7 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
     assert reducer.trackers[name].detector_state is DetectorState.UNKNOWN
     assert reducer._coverage._current_state is CoverageState.UNKNOWN
     assert reducer._global_continuity_epoch == 1
-    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_DETECTOR.value] == 1
     assert episode_id not in reducer.atomic_states
     assert reducer._atomic_transition_counts[PublicAtomicQuoteState.NOT_EVALUATED.value] == 1
     assert reducer.tickers[name].source_timestamp_ms == 1_000_001
@@ -1461,7 +1597,7 @@ def test_ticker_staleness_is_fail_closed_latched_and_same_forward_recovery_is_no
     assert reducer.trackers[name].state.name == "ARMED"
     assert reducer.trackers[name].episode_id is None
     assert not reducer.event_sink.anomalies
-    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_DETECTOR.value] == 1
     assert reducer._global_continuity_epoch == 1
 
     summary = reducer.clean_stop(2_100)
@@ -1599,7 +1735,7 @@ def test_same_forward_ticker_recovery_cannot_count_book_change_during_staleness(
     assert reducer.trackers[name].state.name == "ARMED"
     assert reducer.trackers[name].episode_id is None
     assert not reducer.event_sink.anomalies
-    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_DETECTOR.value] == 1
 
 
 def test_ticker_resubscribe_error_preserves_book_raw_fact_and_noncountable_recovery(
@@ -2365,7 +2501,7 @@ def test_one_option_subscribe_failure_is_local_to_that_instrument(
     assert reducer.trackers["FIRST"].detector_state is DetectorState.UNKNOWN
     assert reducer.trackers["SECOND"].episode_id == second_episode
     assert reducer.trackers["SECOND"].detector_state is DetectorState.ANOMALY_ACTIVE
-    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_DETECTOR.value] == 1
     assert first_episode != second_episode
 
 
@@ -2444,7 +2580,7 @@ def test_noncountable_known_current_advances_active_duration_without_persistence
         FactBoundary(1, 2, 2_000, 3),
     )
 
-    assert reducer._known_active_duration_ms[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 500
+    assert reducer._known_active_duration_ms[EpisodeEndReason.UNKNOWN_DETECTOR.value] == 500
 
 
 def test_index_publication_pending_remains_known_active_duration(
@@ -3342,7 +3478,7 @@ def test_late_ticker_after_ttl_settles_the_accepted_ticker_to_unknown(
     assert reducer.results[name].reason == "TICKER_SOURCE_STALE"
     assert reducer.trackers[name].detector_state is DetectorState.UNKNOWN
     assert reducer.trackers[name].episode_id is None
-    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_AT_GAP.value] == 1
+    assert reducer._episode_end_counts[EpisodeEndReason.UNKNOWN_DETECTOR.value] == 1
 
 
 def test_combo_book_after_short_ticker_ttl_cannot_emit_atomic_evidence(

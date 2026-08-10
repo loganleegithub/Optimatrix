@@ -8,8 +8,9 @@
 
 Consume settled current Radar state, decide whether one conservative frozen two-leg public-book
 counterfactual merits review or admission under one fixed Underwriting Policy, admit only a paired
-refreshed valid Candidate, select at most one future-blind decision observation per causal
-activation batch, and manage either enrolled Case variant under one fixed Position Policy.
+refreshed valid HIGH Candidate, select at most one future-blind decision observation per causal HIGH
+or LOW/MID research-review batch, and manage either enrolled Case variant under one fixed Position
+Policy.
 
 Before Shadow enrollment, every evaluation, action, Candidate, request attempt, and display row is
 in-memory current state. None is a durable business record. `SHADOW_ENTRY` hands one admitted unit
@@ -54,13 +55,15 @@ Missing or invalid required input is `UNKNOWN`. Known structural/lifecycle unava
 `NOT_EVALUATED` or known ineligible as defined by the owning classifier. Neither creates an
 economic action.
 
-## Radar diagnostic separation
+## Radar score separation
 
-Surface-lite context, semivariance/jump context, and transparent attention rank are trader
-diagnostics. They cannot create `EVALUABLE`, `WATCH`, `ABSTAIN`, `CANDIDATE`, an admission attempt,
-or a Shadow Case. Radar's ranked protective-vertical Top 3 is display-only. Composition uses the
-formal component-book calculator on every legal target-size protective leg and supplies those
-economics to the Underwriting-owned selector.
+The V2 Radar owns premium, bounded surface/term adjustment, path/liquidity quality, score interval,
+band, and bucket leader. Those facts decide only Radar HIGH or bounded LOW/MID research review; they
+cannot replace the Underwriting component-book predicates or turn a score into a Candidate.
+Unsigned OI/gamma remains diagnostic and cannot affect either owner. Radar's ranked
+protective-vertical Top 3 is display-only. Composition uses the formal component-book calculator on
+every legal target-size protective leg and supplies those economics to the Underwriting-owned
+selector.
 
 Official Combo state is a parallel diagnostic. `NO_ACTIVE_COMBO`,
 `NO_TARGET_SIZE_CREDIT_QUOTE`, and `PUBLIC_ATOMIC_QUOTE_AVAILABLE` neither create nor veto a
@@ -99,7 +102,7 @@ For `INVERSE_BTC_V1`, native premium, fees, settlement cashflow, and PnL are BTC
 Underwriting comparison unit is explicitly `USD_EQUIVALENT`. Strike width caps contractual USD
 payoff; the corresponding BTC settlement liability depends on settlement price. This public
 counterfactual does not establish actual account margin, which remains `UNKNOWN`. Policy,
-product-value, Workbench, and schema-v4 fields use explicit native or valuation names.
+product-value, Workbench, and schema-v5 fields use explicit native or valuation names.
 
 Each leg's consumed amounts must sum exactly to `q`. No rounding, mark, mid, theoretical price,
 imagined maker price, cross-product conversion, or official-Combo assumption may enter admission
@@ -148,12 +151,15 @@ pre-outcome selected-decision rule may enroll one.
 
 ## Selected-decision research enrollment
 
-Every Episode newly activated in the same settled reducer transaction belongs to one batch
-identified by runtime, product, Radar Policy, and its shared activation causal sequence. Before any member's
-Underwriting action or future facts are consulted, the batch designates the unique Episode with the
-minimum canonical hash over batch identity, Episode identity, and the frozen Underwriting/Position
-Policy identities. Input order cannot affect the result. If the designated Episode is `UNKNOWN` or
-ends, there is no fallback to another member. At most one decision is selected per batch.
+Every newly confirmed HIGH Episode in one settled reducer transaction belongs to the existing
+action-blind batch. If any HIGH exists, LOW/MID Control enrollment is suppressed for that causal
+batch. Otherwise, confirmed LOW/MID research-review Episodes form one batch identified by runtime,
+product, Radar Policy, and shared causal sequence. Before Underwriting or future facts are consulted,
+a canonical hash chooses LOW or MID with equal probability when both exist and a second hash chooses
+one member; with one present stratum only the member hash applies. Exact eligible counts and reduced
+rational inclusion probability are frozen. Input order cannot affect the result. If the designated
+Episode is `UNKNOWN`, ends, or its refresh fails, there is no fallback. At most one decision is
+selected per batch.
 
 The designated Episode's first fully evaluable `CANDIDATE | WATCH | ABSTAIN` freezes the original
 complete predicate-margin vector and schedules one future-blind paired refresh. WATCH/ABSTAIN use
@@ -162,13 +168,13 @@ session, continuity, and skew rules as Candidate admission. A Candidate reuses i
 admission pair; scheduling a duplicate control pair is forbidden.
 
 At the refresh boundary, `UNKNOWN`, invalid pair timing, missing full quantity, or a no-longer
-evaluable structure opens no Case. A decision selected as Candidate and still Candidate opens the
-ordinary admitted `SHADOW_ENTRY` Case. Any refreshed WATCH or ABSTAIN may open one
-`SELECTED_UNDERWRITING_DECISION_CONTROL` Case without a Candidate, `SHADOW_ENTRY`, slot consumption,
-order, fill, or capital exposure. A selected WATCH/ABSTAIN that refreshes to Candidate instead opens
-no Case and terminalizes as `REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`; the same refresh
-cannot retroactively become the strictly later admission pair for a newly activated Candidate.
-Both Case variants freeze original and refreshed actions/margins, then
+evaluable structure opens no Case. A HIGH decision selected as Candidate and still Candidate opens
+the ordinary admitted `SHADOW_ENTRY` Case. Existing HIGH selected WATCH/ABSTAIN control semantics
+remain separate. A LOW/MID designation opens one `RADAR_SCORE_BAND_NO_TRADE_CONTROL` for any
+evaluable refreshed Underwriting action, including Candidate, without Candidate activation,
+`SHADOW_ENTRY`, slot consumption, order, fill, or capital exposure; it cannot retroactively become
+admission. Both Case variants freeze selection and entry-refresh score packets plus original and
+refreshed actions/margins, then
 use the same strictly future Position, paired-close, and Outcome calculators. The no-trade variant
 is projected in a separate research funnel and never increments the canonical Candidate or
 admitted-Case funnel. Because a settled Candidate and its admission terminal leave bounded current
@@ -217,7 +223,7 @@ minimal facts required to reconstruct the admitted counterfactual:
 - frozen canonical legs, directions, expiry, strikes, and full quantity;
 - paired source identity and both raw/stressed consumed leg levels;
 - BTC-native entry levels/fees/economics and explicitly named causal USD valuation facts for the
-  accepted Inverse schema-v4 record;
+  accepted Inverse schema-v5 record;
 - USD-defined payoff facts and fixed valuation reserve components;
 - the consumed Radar/Underwriting state required to explain the admission;
 - the frozen protective-leg selector-rule identity and Candidate protective-leg count;
@@ -230,10 +236,9 @@ never only `opened.json`.
 For an admitted trade, the atomically published origin `SHADOW_CASE_SEGMENT_OPENED` freezes
 `entry_position_baseline`: the causal entry index and short-leg mark IV with their exact source
 identities and boundaries. Recovery does not widen the accepted Inverse `opened.json` shape or
-change its product schema identity. A migrated legacy Entry whose accepted records lack those source
-references carries `entry_position_baseline=UNKNOWN`; Position cannot infer the missing values.
+change its product schema identity. Position cannot infer missing entry source values.
 
-A successful selected WATCH/ABSTAIN refresh creates the separately typed no-trade control open and
+A successful selected-decision or LOW/MID Radar-score refresh creates the separately typed no-trade control open and
 immediately requests the same durable `SHADOW_CASE_OPENED` record with
 `enrollment_kind=SELECTED_UNDERWRITING_DECISION_CONTROL`. Its Candidate and `SHADOW_ENTRY` fields
 must be null, and its additional non-claims must state `NOT_A_CANDIDATE_ACTIVATION`,
@@ -275,8 +280,7 @@ Entry bound to its exact product and frozen Policy chain. It reconstructs the fr
 entry economics from `opened.json` and the immutable entry baseline from the origin Segment,
 restores any durable first-CLOSE latch, and opens a new runtime Observation Segment. It does not
 recreate Underwriting, Candidate, admission, slot consumption, or source Radar state. An
-`UNKNOWN` legacy baseline remains `UNKNOWN` until fresh segment facts establish only the current
-inputs; they do not rewrite the missing entry baseline.
+An unknown entry baseline remains `UNKNOWN`; later facts do not rewrite it.
 
 Segment data availability starts `UNKNOWN`. `HANDOFF_GAP` permanently marks observation quality but
 is not a Position predicate and cannot create `HOLD` or `CLOSE`. The first fresh complete facts are

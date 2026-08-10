@@ -4,18 +4,19 @@
 
 **Long-term product:** autonomous 0–3DTE options decision and trading system
 
-**Current product slice:** Deribit `INVERSE_BTC_V1` options defined-risk Short Vol, with
-process-independent admitted Shadow Entry recovery under production-public Shadow permission
+**Current product slice:** Deribit `INVERSE_BTC_V1` options defined-risk
+`INVERSE_BTC_SHORT_VOL_V2`, with process-independent Shadow Case Outcomes under
+production-public Shadow permission
 
 ## Product roadmap (non-authorizing)
 
 The roadmap is a 2×2 product direction, not an accepted runtime surface. Only the upper-left
-channel is implemented or authorized. `INVERSE_BTC_SHORT_VOL_V1` remains the current implementation
-identifier for that channel; the roadmap name does not rename records in the accepted repository.
+channel is implemented or authorized. `INVERSE_BTC_SHORT_VOL_V2` is the sole repository
+implementation identifier for that channel; the economic product remains `INVERSE_BTC_V1`.
 
 | Channel | Implementation | Policy | Runtime authority |
 | --- | --- | --- | --- |
-| `INVERSE_BTC_SHORT_VOL` (`INVERSE_BTC_SHORT_VOL_V1`) | `IMPLEMENTED` | fixed Inverse three-Policy chain | `PUBLIC_SHADOW` |
+| `INVERSE_BTC_SHORT_VOL` (`INVERSE_BTC_SHORT_VOL_V2`) | `IMPLEMENTED` | fixed V2 Inverse three-Policy chain | `PUBLIC_SHADOW` |
 | `INVERSE_BTC_LONG_GAMMA` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
 | `INVERSE_ETH_SHORT_VOL` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
 | `INVERSE_ETH_LONG_GAMMA` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
@@ -155,18 +156,19 @@ snapshots are immutable bytes for readers but are not durable records.
 
 ### Shadow Case data
 
-An enrolled `SHADOW_CASE_OPENED` freezes the origin code/runtime and exact three Policy identities, decision
-boundary, frozen two-leg structure, target quantity, one strictly later paired public option-book
-snapshot, conservative stressed leg prices, standard public fees, and the minimum consumed decision
-facts, including the protective-leg selector-rule identity and Candidate protective-leg count that
-cannot be reconstructed after option scope is released. `enrollment_kind` discriminates an admitted
-Candidate trade from one pre-outcome selected no-trade decision control; a control has no Candidate
-or `SHADOW_ENTRY` identity. Strictly future bounded transitions and one terminal Outcome may then be
-stored. The accepted Inverse `SHADOW_CASE_OPENED` shape and product schema identity remain
-unchanged. For a new admitted Entry, its origin `SHADOW_CASE_SEGMENT_OPENED` instead freezes the
+An enrolled `SHADOW_CASE_OPENED` freezes the origin code/runtime and exact three Policy identities,
+decision boundary, frozen two-leg structure, target quantity, one strictly later paired public
+option-book snapshot, conservative stressed leg prices, standard public fees, and the minimum
+consumed decision facts. In schema v5 those facts include the same canonical V2 score-packet shape
+at selection and entry refresh, plus the protective-leg selector-rule identity and Candidate
+protective-leg count that cannot be reconstructed after option scope is released.
+`enrollment_kind` discriminates an admitted Candidate trade, one selected HIGH Underwriting
+decision control, and one sampled LOW/MID Radar-score control; either control has no Candidate or
+`SHADOW_ENTRY` identity. Strictly future bounded transitions and one terminal Outcome may then be
+stored. For a new admitted Entry, its origin `SHADOW_CASE_SEGMENT_OPENED` freezes the
 `entry_position_baseline` needed after restart: the entry index and short-leg mark IV with their
-exact source identities and boundaries. A migrated legacy Entry that lacks those accepted source
-references records that baseline as `UNKNOWN`; it is never inferred or added to `opened.json`.
+exact source identities and boundaries. Missing accepted source references prevent a schema-v5
+Case from opening; they are never inferred or added later.
 
 An opened Case without a terminal record after an unclean process loss is
 not silently completed. Its open Observation Segment is `INCOMPLETE_UNCLEAN_EXIT`, while the
@@ -184,9 +186,14 @@ particular qualification denominator.
 
 The first Radar asks:
 
-> Is target-size executable sell-side implied volatility unusually rich relative to the exact
-> deployed conservative multi-horizon BTC realized-volatility baseline, and has that richness
-> persisted long enough to merit structure review?
+> Given one causal, target-size executable option snapshot, does a frozen combination of premium
+> richness and observable path/liquidity quality rank this opportunity above the V2 review
+> threshold, and has that state persisted long enough to merit formal structure review?
+
+The answer is an ordinal opportunity-filter score, never an oracle, probability, expected return,
+or sufficient condition for profit. It aims to raise the conditional quality of what reaches
+Underwriting while retaining bounded LOW/MID no-trade Controls so future Shadow Outcomes can
+falsify the ranking. A numeric `65` score does not mean `65%`.
 
 It separately reports whether an existing official Deribit combo happens to expose the required
 target-size 1:1 protective credit vertical. Detector truth and the atomic diagnostic remain
@@ -202,13 +209,15 @@ atomic = NOT_EVALUATED | UNKNOWN | NO_ACTIVE_COMBO |
 not mean the two option legs lack public depth, the defined-risk structure cannot be priced, or the
 Shadow counterfactual is unavailable.
 
-The Radar must show the trader what was found, which causal sampling interval and conservative
-horizon produced the benchmark, why it matters, what is missing, and what would upgrade or
-invalidate it. A hard-screen clue must be target-size, two-sided, uncrossed, official-tick-aware,
-one-tick robust, time-persistent, and inside an explicit TTE/Delta risk bucket. Regime, surface,
-legged-reference, and rank context are diagnostic only. It does not persist clue or atomic-quote
-events and does not claim calendar forecasting, surface-relative edge, Policy edge, or
-profitability.
+The Radar must show the trader the score interval, LOW/MID/HIGH band, premium/risk decomposition,
+causal five-minute `average_price` baseline horizons, coverage/missing mask, bucket leader, and
+upgrade/invalidation condition. A clue must be target-size, two-sided, uncrossed,
+official-tick-aware, one-tick robust, time-persistent, and inside an explicit TTE/Delta risk bucket.
+Local surface and adjacent-term residuals are bounded optional adjustments; adverse semivariance,
+jump share, and target-book liquidity are required quality inputs. Public OI times absolute gamma
+is an unsigned concentration diagnostic only: dealer sign remains `UNKNOWN` and it cannot enter the
+score. The runtime persists no clue, score, quote, or review before Case opening and claims no
+calendar forecast, signed dealer GEX, pin target, Policy Edge, or profitability.
 
 ## Underwriting and admission
 
@@ -227,17 +236,16 @@ selection `UNKNOWN`; known inactive or quantity-ineligible legs are excluded.
 option-book responses for the frozen short and protective long. Both legs must cover the full target
 quantity under the same conservative pricing rule and satisfy the pair session, continuity, and
 skew budgets frozen in the Policy chain. That transition opens the admitted Shadow Case.
-Ordinary WATCH and ABSTAIN results remain current state and do not automatically create
-rejected-counterfactual trades or durable controls. The authorized selected-decision rule freezes
-one action-blind designation per Radar activation causal batch before Underwriting action or future
-facts are known, with no fallback if that Episode remains `UNKNOWN` or ends. Its first evaluable
-decision receives one strictly later paired refresh. A decision selected as Candidate and still
-Candidate reuses ordinary admission. A refresh classified as WATCH or ABSTAIN may open one
-explicitly tagged no-trade Case. A selected WATCH/ABSTAIN that refreshes to Candidate opens no
-control and terminalizes as `REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`; only a later
-ordinary Candidate activation followed by its own strictly later pair may admit it. This research
-branch is projected separately and never increments canonical Candidate, `SHADOW_ENTRY`, or
-admitted-trade counts.
+Ordinary WATCH and ABSTAIN results remain current state and do not automatically create rejected
+counterfactual trades. HIGH activation batches retain the one action-blind selected Underwriting
+decision and ordinary Candidate admission semantics. When a causal batch contains no HIGH
+activation, the Radar may designate at most one already-confirmed LOW/MID research-review Episode
+using the frozen future-blind stratum and member hashes. It then uses the same formal protective-leg
+selector and one strictly later paired refresh as ordinary admission. Any evaluable refresh opens
+one explicitly tagged non-admitted Radar-score Control, even if refreshed Underwriting happens to
+be Candidate; it never retroactively admits, consumes a slot, creates a `SHADOW_ENTRY`, or exposes
+capital. Failed/unknown refresh opens no Case and has no fallback. The Case-derived research
+denominator is therefore explicitly conditional on successful paired refresh and Case opening.
 
 ## Position and Outcome
 

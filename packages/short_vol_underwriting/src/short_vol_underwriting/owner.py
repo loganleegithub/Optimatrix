@@ -12,6 +12,13 @@ from options_domain import (
     component_quote_matches_product_contract,
     product_for_identity,
 )
+from short_vol_radar.bucket import radar_bucket_episode_identity
+from short_vol_radar.score import (
+    RadarSamplingMetadata,
+    RadarScorePacket,
+    SamplingKind,
+    ScoreBand,
+)
 
 from short_vol_underwriting.admission import (
     AdmissionAttempt,
@@ -49,7 +56,10 @@ from short_vol_underwriting.control import (
     DecisionControlAttempt,
     DecisionControlAttemptOutcome,
     DecisionControlRefreshClassification,
+    RadarScoreControlDesignation,
+    designate_radar_score_control_review,
     designate_selected_decision_episode,
+    radar_score_control_batch_identity,
     selected_decision_batch_identity,
     selected_decision_rule_identity,
 )
@@ -91,34 +101,6 @@ COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE = "COMPONENT_BOOK_COUNTERFACTUAL_EVALUAB
 COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN = "COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN"
 NO_PROTECTIVE_COMPONENT = "NO_PROTECTIVE_COMPONENT"
 NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE = "NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE"
-
-
-def _radar_episode_identity_components(value: object) -> tuple[str, str, str, int]:
-    if not isinstance(value, str):
-        raise IdentityError("active_episode_identity must be a Radar episode identity")
-    digest_length = len("sha256:") + 64
-    if len(value) <= digest_length * 2 + 3:
-        raise IdentityError("active_episode_identity must be a Radar episode identity")
-    runtime_identity = value[:digest_length]
-    first_separator = digest_length
-    policy_start = first_separator + 1
-    policy_end = policy_start + digest_length
-    if value[first_separator : first_separator + 1] != ":":
-        raise IdentityError("active_episode_identity must be a Radar episode identity")
-    policy_identity = value[policy_start:policy_end]
-    if value[policy_end : policy_end + 1] != ":":
-        raise IdentityError("active_episode_identity must be a Radar episode identity")
-    instrument_name, separator, causal_seq_text = value[policy_end + 1 :].rpartition(":")
-    require_identity(runtime_identity, "Radar episode runtime identity")
-    require_identity(policy_identity, "Radar episode Policy identity")
-    if (
-        not separator
-        or not instrument_name
-        or not causal_seq_text.isdigit()
-        or str(int(causal_seq_text)) != causal_seq_text
-    ):
-        raise IdentityError("active_episode_identity must be a Radar episode identity")
-    return runtime_identity, policy_identity, instrument_name, int(causal_seq_text)
 
 
 @dataclass(frozen=True)
@@ -165,9 +147,6 @@ class UnderwritingFacts:
     ticker_source: SourceFact | None
     short_leg_instrument_name: str | None = None
     long_leg_instrument_name: str | None = None
-    radar_band_id: str | None = None
-    radar_richness_lower: Decimal | None = None
-    radar_richness_upper: Decimal | None = None
     unknown_reasons: tuple[str, ...] = ()
     component_state: str = "NOT_EVALUATED"
     component_blockers: tuple[str, ...] = ()
@@ -177,13 +156,21 @@ class UnderwritingFacts:
     component_pair_witness: ComponentBookPairWitness | None = None
     protective_leg_selection_rule_identity: str | None = None
     candidate_protective_leg_count: int | None = None
+    radar_score_packet: RadarScorePacket | None = None
+    radar_research_review_identity: str | None = None
+    radar_research_activation_seq: int | None = None
 
     def __post_init__(self) -> None:
         require_identity(self.radar_scope_identity, "radar_scope_identity")
         if self.active_episode_identity is not None:
-            episode = _radar_episode_identity_components(self.active_episode_identity)
-            if self.anomaly_activation_seq != episode[3]:
-                raise ValueError("Underwriting activation sequence is not bound to its Episode")
+            require_identity(self.active_episode_identity, "active_episode_identity")
+            if (
+                isinstance(self.anomaly_activation_seq, bool)
+                or not isinstance(self.anomaly_activation_seq, int)
+                or self.anomaly_activation_seq < 0
+                or self.anomaly_activation_seq > self.boundary.causal_seq
+            ):
+                raise ValueError("Underwriting activation sequence is invalid")
         elif self.anomaly_activation_seq is not None:
             raise ValueError("inactive Underwriting facts cannot carry an activation sequence")
         for identity in (
@@ -224,6 +211,28 @@ class UnderwritingFacts:
                 or self.candidate_protective_leg_count < 0
             ):
                 raise ValueError("candidate protective-leg count must be non-negative")
+        research = (
+            self.radar_research_review_identity,
+            self.radar_research_activation_seq,
+        )
+        if any(value is None for value in research) and not all(
+            value is None for value in research
+        ):
+            raise ValueError("Radar research-review identity and activation sequence are atomic")
+        if self.radar_research_review_identity is not None:
+            require_identity(
+                self.radar_research_review_identity,
+                "radar_research_review_identity",
+            )
+            if self.active_episode_identity is not None:
+                raise ValueError("one Underwriting fact cannot be HIGH and LOW/MID review")
+            if (
+                isinstance(self.radar_research_activation_seq, bool)
+                or not isinstance(self.radar_research_activation_seq, int)
+                or self.radar_research_activation_seq < 0
+                or self.radar_research_activation_seq > self.boundary.causal_seq
+            ):
+                raise ValueError("Radar research-review activation sequence is invalid")
 
 
 @dataclass(frozen=True)
@@ -323,6 +332,10 @@ class _SelectedDecisionRecord:
     selected_economic_fingerprint: str
     selected_facts: UnderwritingFacts
     selected_economics: EntryEconomics
+    selection_kind: str
+    selection_score_packet: RadarScorePacket
+    sampling_metadata: RadarSamplingMetadata
+    score_control_designation: RadarScoreControlDesignation | None = None
 
 
 @dataclass
@@ -417,7 +430,9 @@ class FixedContractShadowOwner:
         self._decision_controls: dict[str, _DecisionControlRecord] = {}
         self._decision_control_batch_by_episode: dict[str, str] = {}
         self._decision_control_designated_by_batch: dict[str, str] = {}
+        self._decision_control_activation_packet_by_episode: dict[str, RadarScorePacket] = {}
         self._decision_control_selected_batches: set[str] = set()
+        self._score_control_designation_by_batch: dict[str, RadarScoreControlDesignation] = {}
         self._trades: dict[str, _TradeRecord] = {}
         self._emitted: list[EmittedObject] = []
         self._intents: list[RpcRequestIntent] = []
@@ -889,7 +904,11 @@ class FixedContractShadowOwner:
                 evaluation,
                 availability_identity=availability_identity,
             )
-            if action_changed and evaluation.action is UnderwritingAction.CANDIDATE:
+            if (
+                action_changed
+                and evaluation.action is UnderwritingAction.CANDIDATE
+                and evaluation.facts.radar_research_review_identity is None
+            ):
                 self._activate_candidate(
                     evaluation,
                     action_identity=action_identity,
@@ -1096,11 +1115,15 @@ class FixedContractShadowOwner:
         selection = record.selection
         same_opportunity = (
             evaluation.slot_identity == self._slot_identity(selection.selected_facts)
-            and refreshed_facts.active_episode_identity
-            == selection.selected_facts.active_episode_identity
+            and self._underwriting_anchor_identity(refreshed_facts)
+            == self._underwriting_anchor_identity(selection.selected_facts)
             and refreshed_facts.short_leg_identity == selection.selected_facts.short_leg_identity
             and refreshed_facts.long_leg_identity == selection.selected_facts.long_leg_identity
             and refreshed_facts.target_quantity_btc == selection.selected_facts.target_quantity_btc
+            and refreshed_facts.protective_leg_selection_rule_identity
+            == selection.selected_facts.protective_leg_selection_rule_identity
+            and refreshed_facts.candidate_protective_leg_count
+            == selection.selected_facts.candidate_protective_leg_count
         )
         if (
             same_opportunity
@@ -1108,7 +1131,9 @@ class FixedContractShadowOwner:
             and evaluation.action is not None
         ):
             classification = (
-                DecisionControlRefreshClassification.REFRESHED_CANDIDATE
+                DecisionControlRefreshClassification.REFRESHED_EVALUABLE_SCORE_BAND_CONTROL
+                if selection.selection_kind == "RADAR_SCORE_BAND_NO_TRADE_CONTROL"
+                else DecisionControlRefreshClassification.REFRESHED_CANDIDATE
                 if evaluation.action is UnderwritingAction.CANDIDATE
                 else DecisionControlRefreshClassification.REFRESHED_WATCH_OR_ABSTAIN
             )
@@ -1830,7 +1855,10 @@ class FixedContractShadowOwner:
                 continue
             if trade.enrollment_kind == "ADMITTED_SHADOW_TRADE":
                 continue
-            if trade.enrollment_kind != "SELECTED_UNDERWRITING_DECISION_CONTROL":
+            if trade.enrollment_kind not in {
+                "SELECTED_UNDERWRITING_DECISION_CONTROL",
+                "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
+            }:
                 raise RuntimeError("unsupported terminal Shadow enrollment kind")
             if trade.post_close_attempt is not None:
                 trade.post_close_attempt.censor(boundary=boundary, owner=owner)
@@ -1848,20 +1876,88 @@ class FixedContractShadowOwner:
         return self._finish_transition()
 
     def _require_radar_episode_binding(self, facts: UnderwritingFacts) -> None:
+        packet = facts.radar_score_packet
+        anchor_identity = self._underwriting_anchor_identity(facts)
+        if anchor_identity is not None and packet is None:
+            raise ValueError("active Radar Underwriting facts require one score packet")
+        if packet is not None:
+            try:
+                packet_boundary = FactBoundary.from_object(packet.fact_boundary)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Radar score packet FactBoundary is invalid") from exc
+            if (
+                packet.policy_identity != self.bindings.radar_policy_identity
+                or packet_boundary != facts.boundary
+                or packet.leader_instrument_name != facts.short_leg_instrument_name
+                or packet.bucket_key.expiry_ms != facts.expiry_ms
+                or packet.bucket_key.option_type.value != facts.option_type
+                or packet.sampling_metadata is not None
+            ):
+                raise ValueError("Radar score packet is not bound to its Underwriting facts")
         episode_identity = facts.active_episode_identity
         if episode_identity is None:
+            if (
+                facts.radar_research_review_identity is not None
+                and facts.radar_research_activation_seq == facts.boundary.causal_seq
+                and (packet is None or packet.result.band not in {ScoreBand.LOW, ScoreBand.MID})
+            ):
+                raise ValueError("Radar research review must select a LOW or MID packet")
+            if facts.radar_research_review_identity is not None:
+                if packet is None or facts.radar_research_activation_seq is None:
+                    raise ValueError("Radar research review binding is incomplete")
+                expected_review_identities = {
+                    band: radar_bucket_episode_identity(
+                        runtime_identity=self.bindings.runtime_identity,
+                        policy_identity=self.bindings.radar_policy_identity,
+                        bucket_key=packet.bucket_key,
+                        leader_instrument_name=packet.leader_instrument_name,
+                        score_band=band,
+                        activation_causal_seq=facts.radar_research_activation_seq,
+                    )
+                    for band in (ScoreBand.LOW, ScoreBand.MID)
+                }
+                if facts.radar_research_review_identity not in set(
+                    expected_review_identities.values()
+                ):
+                    raise IdentityError(
+                        "Radar research-review identity is not bound to its score packet"
+                    )
+                if (
+                    facts.radar_research_activation_seq == facts.boundary.causal_seq
+                    and facts.radar_research_review_identity
+                    != expected_review_identities[packet.result.band]
+                ):
+                    raise IdentityError(
+                        "Radar research-review identity is not bound to its selection band"
+                    )
             return
-        runtime_identity, policy_identity, instrument_name, activation_causal_seq = (
-            _radar_episode_identity_components(episode_identity)
-        )
         if (
             facts.boundary.runtime_identity != self.bindings.runtime_identity
-            or runtime_identity != self.bindings.runtime_identity
-            or policy_identity != self.bindings.radar_policy_identity
-            or instrument_name != facts.short_leg_instrument_name
-            or activation_causal_seq > facts.boundary.causal_seq
+            or facts.anomaly_activation_seq is None
+            or facts.anomaly_activation_seq > facts.boundary.causal_seq
         ):
             raise IdentityError("Radar episode identity is not bound to its Underwriting facts")
+        if packet is None:
+            raise ValueError("active Radar Episode lacks its score packet")
+        expected_episode_identity = radar_bucket_episode_identity(
+            runtime_identity=self.bindings.runtime_identity,
+            policy_identity=self.bindings.radar_policy_identity,
+            bucket_key=packet.bucket_key,
+            leader_instrument_name=packet.leader_instrument_name,
+            score_band=ScoreBand.HIGH,
+            activation_causal_seq=facts.anomaly_activation_seq,
+        )
+        if episode_identity != expected_episode_identity:
+            raise IdentityError("Radar Episode identity is not bound to its score packet")
+        if (
+            facts.anomaly_activation_seq == facts.boundary.causal_seq
+            and packet.result.band is not ScoreBand.HIGH
+        ):
+            raise ValueError("active Radar Episode must select a HIGH score packet")
+
+    @staticmethod
+    def _underwriting_anchor_identity(facts: UnderwritingFacts) -> str | None:
+        return facts.active_episode_identity or facts.radar_research_review_identity
 
     def _evaluate_underwriting(self, facts: UnderwritingFacts) -> _UnderwritingEvaluation:
         self._require_target_quantity_integrity(facts)
@@ -1871,7 +1967,7 @@ class FixedContractShadowOwner:
         slot_identity = self._slot_identity(facts)
         slot_consumed = slot_identity is not None and slot_identity in self._slot_consumed
         known_negative = (
-            facts.active_episode_identity is None
+            self._underwriting_anchor_identity(facts) is None
             or slot_consumed
             or facts.atomic_state
             in {
@@ -1898,7 +1994,7 @@ class FixedContractShadowOwner:
             availability = UnderwritingAvailability.EVALUABLE
         availability_fingerprint = canonical_identity(
             "ConsumedAvailabilityFactFingerprint",
-            facts.active_episode_identity,
+            self._underwriting_anchor_identity(facts),
             slot_identity,
             "CONSUMED_BY_SHADOW_ENTRY" if slot_consumed else "AVAILABLE",
             facts.atomic_state,
@@ -2031,7 +2127,7 @@ class FixedContractShadowOwner:
         product_mismatch = self._component_product_mismatch_reason(facts.component_quote)
         projection_mismatch = self._component_fact_projection_mismatch_reason(facts)
         known_negative = (
-            facts.active_episode_identity is None
+            self._underwriting_anchor_identity(facts) is None
             or slot_consumed
             or facts.component_state
             in {NO_PROTECTIVE_COMPONENT, NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE}
@@ -2053,7 +2149,7 @@ class FixedContractShadowOwner:
             availability = UnderwritingAvailability.EVALUABLE
         availability_fingerprint = canonical_identity(
             "ConsumedComponentAvailabilityFactFingerprint",
-            facts.active_episode_identity,
+            self._underwriting_anchor_identity(facts),
             slot_identity,
             "CONSUMED_BY_SHADOW_ENTRY" if slot_consumed else "AVAILABLE",
             facts.component_state,
@@ -2196,7 +2292,7 @@ class FixedContractShadowOwner:
         if self._uses_component_books(facts):
             quote = facts.component_quote
             return (
-                facts.active_episode_identity is not None
+                self._underwriting_anchor_identity(facts) is not None
                 and facts.short_leg_identity is not None
                 and facts.long_leg_identity is not None
                 and facts.short_leg_instrument_name is not None
@@ -2244,7 +2340,7 @@ class FixedContractShadowOwner:
                 and short_iv >= 0
             )
         return (
-            facts.active_episode_identity is not None
+            self._underwriting_anchor_identity(facts) is not None
             and facts.short_leg_identity is not None
             and facts.long_leg_identity is not None
             and facts.canonical_combo_identity is not None
@@ -2372,13 +2468,14 @@ class FixedContractShadowOwner:
         )
 
     def _slot_identity(self, facts: UnderwritingFacts) -> str | None:
-        if facts.active_episode_identity is None or facts.short_leg_identity is None:
+        anchor_identity = self._underwriting_anchor_identity(facts)
+        if anchor_identity is None or facts.short_leg_identity is None:
             return None
         return canonical_identity(
             "UnderwritingPositionSlotKeyIdentity",
             self.bindings.runtime_identity,
             self.bindings.radar_policy_identity,
-            facts.active_episode_identity,
+            anchor_identity,
             facts.short_leg_identity,
             facts.target_quantity_btc,
         )
@@ -2637,43 +2734,192 @@ class FixedContractShadowOwner:
             return facts.component_quote.consumed_level_count
         return len(facts.entry_consumed_levels)
 
+    @staticmethod
+    def _radar_score_band(facts: UnderwritingFacts) -> str | None:
+        packet = facts.radar_score_packet
+        if packet is None:
+            return None
+        band = packet.result.band
+        value = getattr(band, "value", band)
+        return value if isinstance(value, str) else None
+
+    @staticmethod
+    def _packet_with_sampling_metadata(
+        packet: RadarScorePacket,
+        metadata: RadarSamplingMetadata,
+    ) -> RadarScorePacket:
+        if packet.sampling_metadata not in {None, metadata}:
+            raise ValueError("Radar score packet carries conflicting sampling metadata")
+        return replace(packet, sampling_metadata=metadata)
+
+    def _high_sampling_metadata(
+        self,
+        *,
+        facts: UnderwritingFacts,
+        designation_identity: str,
+        batch_identity: str | None = None,
+    ) -> RadarSamplingMetadata:
+        if facts.active_episode_identity is None or facts.anomaly_activation_seq is None:
+            raise RuntimeError("canonical HIGH sampling requires an active Radar Episode")
+        causal_batch_identity = batch_identity or selected_decision_batch_identity(
+            bindings=self.bindings,
+            activation_causal_seq=facts.anomaly_activation_seq,
+        )
+        return RadarSamplingMetadata(
+            kind=SamplingKind.CANONICAL_HIGH,
+            causal_batch_identity=causal_batch_identity,
+            designation_identity=designation_identity,
+        )
+
+    @staticmethod
+    def _score_control_sampling_metadata(
+        designation: RadarScoreControlDesignation,
+    ) -> RadarSamplingMetadata:
+        return RadarSamplingMetadata(
+            kind=SamplingKind.DETERMINISTIC_BAND_CONTROL,
+            causal_batch_identity=designation.batch_identity,
+            designation_identity=designation.designation_identity,
+            control_band=ScoreBand(designation.selected_band),
+            eligible_count=designation.selected_stratum_eligible_count,
+            stratum_count=designation.present_stratum_count,
+            selected_ordinal=designation.selected_ordinal,
+            inclusion_numerator=designation.inclusion_numerator,
+            inclusion_denominator=designation.inclusion_denominator,
+            low_eligible_count=designation.low_eligible_count,
+            mid_eligible_count=designation.mid_eligible_count,
+        )
+
+    def _case_score_packets(
+        self,
+        *,
+        selection_packet: RadarScorePacket,
+        refresh_packet: RadarScorePacket | None,
+        metadata: RadarSamplingMetadata,
+    ) -> dict[str, object]:
+        if refresh_packet is None:
+            raise RuntimeError("Case open requires one strictly-later refresh score packet")
+        selection = self._packet_with_sampling_metadata(selection_packet, metadata)
+        refresh = self._packet_with_sampling_metadata(refresh_packet, metadata)
+        selection_boundary = FactBoundary.from_object(selection.fact_boundary)
+        refresh_boundary = FactBoundary.from_object(refresh.fact_boundary)
+        if not refresh_boundary.is_strictly_after(selection_boundary):
+            raise RuntimeError("Case score packet refresh is not strictly later than selection")
+        return {
+            "selection_score_packet": selection.as_object(),
+            "entry_refresh_score_packet": refresh.as_object(),
+        }
+
     def _register_decision_control_batches(
         self,
         facts: Sequence[UnderwritingFacts],
     ) -> None:
-        newly_activated: dict[int, list[UnderwritingFacts]] = {}
+        newly_activated_high: dict[int, list[UnderwritingFacts]] = {}
+        newly_activated_reviews: dict[int, list[UnderwritingFacts]] = {}
         for member in facts:
-            activation_seq = member.anomaly_activation_seq
             if (
-                member.active_episode_identity is None
-                or activation_seq is None
-                or activation_seq != member.boundary.causal_seq
-                or member.canonical_combo_identity is not None
+                member.active_episode_identity is not None
+                and member.anomaly_activation_seq == member.boundary.causal_seq
             ):
-                continue
-            newly_activated.setdefault(activation_seq, []).append(member)
-        rule_identity = selected_decision_rule_identity(bindings=self.bindings)
-        for activation_seq, members in sorted(newly_activated.items()):
-            batch_identity = selected_decision_batch_identity(
-                bindings=self.bindings,
-                activation_causal_seq=activation_seq,
-            )
-            episode_identities = tuple(
-                sorted(
-                    {
-                        member.active_episode_identity
-                        for member in members
-                        if member.active_episode_identity is not None
-                    }
+                newly_activated_high.setdefault(member.boundary.causal_seq, []).append(member)
+            elif (
+                member.radar_research_review_identity is not None
+                and member.radar_research_activation_seq == member.boundary.causal_seq
+                and self._radar_score_band(member) in {"LOW", "MID"}
+            ):
+                newly_activated_reviews.setdefault(member.boundary.causal_seq, []).append(member)
+        for activation_seq in sorted(set(newly_activated_high) | set(newly_activated_reviews)):
+            high_members = newly_activated_high.get(activation_seq, [])
+            review_members = newly_activated_reviews.get(activation_seq, [])
+            if high_members:
+                rule_identity = selected_decision_rule_identity(bindings=self.bindings)
+                batch_identity = selected_decision_batch_identity(
+                    bindings=self.bindings,
+                    activation_causal_seq=activation_seq,
                 )
-            )
-            if not episode_identities:
-                continue
-            designated = designate_selected_decision_episode(
-                bindings=self.bindings,
-                batch_identity=batch_identity,
-                episode_identities=episode_identities,
-            )
+                member_identities = tuple(
+                    sorted(
+                        member.active_episode_identity
+                        for member in high_members
+                        if member.active_episode_identity is not None
+                    )
+                )
+                designated = designate_selected_decision_episode(
+                    bindings=self.bindings,
+                    batch_identity=batch_identity,
+                    episode_identities=member_identities,
+                )
+                designation_identity = canonical_identity(
+                    "UnderwritingDecisionBatchDesignationIdentity",
+                    rule_identity,
+                    batch_identity,
+                    designated,
+                    member_identities,
+                    activation_seq,
+                )
+                designation_payload: dict[str, object] = {
+                    "decision_control_rule_identity": rule_identity,
+                    "activation_batch_identity": batch_identity,
+                    "activation_causal_seq": activation_seq,
+                    "batch_member_episode_identities": list(member_identities),
+                    "designated_episode_identity": designated,
+                    "designation_method": (
+                        "HIGH_MINIMUM_PRE_OUTCOME_EPISODE_HASH_NO_UNKNOWN_FALLBACK"
+                    ),
+                    "score_band_eligible_counts": None,
+                    "inclusion_probability": None,
+                    "designation_fact_boundary": high_members[0].boundary.as_object(),
+                }
+                boundary = high_members[0].boundary
+            else:
+                batch_identity = radar_score_control_batch_identity(
+                    bindings=self.bindings,
+                    activation_causal_seq=activation_seq,
+                )
+                eligible_review_members: list[tuple[str, str]] = []
+                for member in review_members:
+                    review_identity = member.radar_research_review_identity
+                    band = self._radar_score_band(member)
+                    if review_identity is not None and band is not None:
+                        eligible_review_members.append((review_identity, band))
+                eligible_reviews = tuple(eligible_review_members)
+                designation = designate_radar_score_control_review(
+                    bindings=self.bindings,
+                    batch_identity=batch_identity,
+                    eligible_reviews=eligible_reviews,
+                )
+                self._score_control_designation_by_batch[batch_identity] = designation
+                rule_identity = designation.rule_identity
+                designated = designation.selected_review_identity
+                member_identities = tuple(
+                    sorted(review_identity for review_identity, _band in eligible_reviews)
+                )
+                designation_identity = designation.designation_identity
+                designation_payload = {
+                    "decision_control_rule_identity": rule_identity,
+                    "activation_batch_identity": batch_identity,
+                    "activation_causal_seq": activation_seq,
+                    "batch_member_episode_identities": list(member_identities),
+                    "designated_episode_identity": designated,
+                    "designation_method": (
+                        "LOW_MID_EQUAL_STRATUM_HASH_THEN_MINIMUM_MEMBER_HASH_NO_FALLBACK"
+                    ),
+                    "score_band_eligible_counts": {
+                        "LOW": designation.low_eligible_count,
+                        "MID": designation.mid_eligible_count,
+                    },
+                    "selected_score_band": designation.selected_band,
+                    "selected_stratum_eligible_count": (
+                        designation.selected_stratum_eligible_count
+                    ),
+                    "present_stratum_count": designation.present_stratum_count,
+                    "selected_ordinal": designation.selected_ordinal,
+                    "inclusion_probability": {
+                        "numerator": designation.inclusion_numerator,
+                        "denominator": designation.inclusion_denominator,
+                    },
+                    "designation_fact_boundary": review_members[0].boundary.as_object(),
+                }
+                boundary = review_members[0].boundary
             previous = self._decision_control_designated_by_batch.get(batch_identity)
             if previous is not None:
                 if previous != designated:
@@ -2682,29 +2928,32 @@ class FixedContractShadowOwner:
                     )
                 continue
             self._decision_control_designated_by_batch[batch_identity] = designated
-            for episode_identity in episode_identities:
-                self._decision_control_batch_by_episode[episode_identity] = batch_identity
-            designation_identity = canonical_identity(
-                "UnderwritingDecisionBatchDesignationIdentity",
-                rule_identity,
-                batch_identity,
-                designated,
-                episode_identities,
-                activation_seq,
-            )
+            activation_members = high_members if high_members else review_members
+            activation_packets = {
+                anchor_identity: member.radar_score_packet
+                for member in activation_members
+                if (anchor_identity := self._underwriting_anchor_identity(member)) is not None
+            }
+            for member_identity in member_identities:
+                activation_packet = activation_packets.get(member_identity)
+                if activation_packet is None:
+                    raise RuntimeError(
+                        "decision-control batch member lacks its activation score packet"
+                    )
+                activation_boundary = FactBoundary.from_object(activation_packet.fact_boundary)
+                if activation_boundary.causal_seq != activation_seq:
+                    raise RuntimeError(
+                        "decision-control activation packet boundary does not match its batch"
+                    )
+                self._decision_control_activation_packet_by_episode[member_identity] = (
+                    activation_packet
+                )
+                self._decision_control_batch_by_episode[member_identity] = batch_identity
             self._emit(
                 "UNDERWRITING_DECISION_BATCH_DESIGNATION",
                 designation_identity,
-                members[0].boundary,
-                {
-                    "decision_control_rule_identity": rule_identity,
-                    "activation_batch_identity": batch_identity,
-                    "activation_causal_seq": activation_seq,
-                    "batch_member_episode_identities": list(episode_identities),
-                    "designated_episode_identity": designated,
-                    "designation_method": ("MINIMUM_PRE_OUTCOME_EPISODE_HASH_NO_UNKNOWN_FALLBACK"),
-                    "designation_fact_boundary": members[0].boundary.as_object(),
-                },
+                boundary,
+                designation_payload,
             )
             self._counts["decision_control_activation_batch_count"] += 1
 
@@ -2716,13 +2965,13 @@ class FixedContractShadowOwner:
         allocate_request_id: Callable[[], int],
     ) -> None:
         facts = evaluation.facts
-        episode_identity = facts.active_episode_identity
-        if episode_identity is None:
+        anchor_identity = self._underwriting_anchor_identity(facts)
+        if anchor_identity is None:
             return
-        batch_identity = self._decision_control_batch_by_episode.get(episode_identity)
+        batch_identity = self._decision_control_batch_by_episode.get(anchor_identity)
         if (
             batch_identity is None
-            or self._decision_control_designated_by_batch.get(batch_identity) != episode_identity
+            or self._decision_control_designated_by_batch.get(batch_identity) != anchor_identity
             or batch_identity in self._decision_control_selected_batches
             or evaluation.availability is not UnderwritingAvailability.EVALUABLE
             or evaluation.action is None
@@ -2730,25 +2979,77 @@ class FixedContractShadowOwner:
             or evaluation.economic_fingerprint is None
             or evaluation.slot_identity is None
             or facts.component_quote is None
+            or facts.radar_score_packet is None
+            or facts.protective_leg_selection_rule_identity is None
+            or facts.candidate_protective_leg_count is None
             or facts.short_leg_identity is None
             or facts.long_leg_identity is None
             or facts.short_leg_instrument_name is None
             or facts.long_leg_instrument_name is None
         ):
             return
-        rule_identity = selected_decision_rule_identity(bindings=self.bindings)
+        score_control_designation = self._score_control_designation_by_batch.get(batch_identity)
+        selection_kind = (
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL"
+            if score_control_designation is not None
+            else "HIGH_ACTION_BLIND"
+        )
+        rule_identity = (
+            score_control_designation.rule_identity
+            if score_control_designation is not None
+            else selected_decision_rule_identity(bindings=self.bindings)
+        )
         margins = self._underwriting_threshold_margins(evaluation)
         valuation_unit = self._underwriting_valuation_unit(facts)
         selection_identity = canonical_identity(
             "SelectedUnderwritingDecisionIdentity",
             rule_identity,
             batch_identity,
-            episode_identity,
+            anchor_identity,
             action_identity,
             evaluation.action.value,
             margins.as_vector(valuation_unit),
             evaluation.economic_fingerprint,
             facts.boundary.as_object(),
+        )
+        sampling_metadata = (
+            self._score_control_sampling_metadata(score_control_designation)
+            if score_control_designation is not None
+            else self._high_sampling_metadata(
+                facts=facts,
+                designation_identity=selection_identity,
+                batch_identity=batch_identity,
+            )
+        )
+        activation_score_packet = self._decision_control_activation_packet_by_episode.get(
+            anchor_identity
+        )
+        if activation_score_packet is None:
+            raise RuntimeError("designated decision lacks its activation score packet")
+        activation_boundary = FactBoundary.from_object(activation_score_packet.fact_boundary)
+        expected_activation_seq = (
+            facts.anomaly_activation_seq
+            if facts.active_episode_identity is not None
+            else facts.radar_research_activation_seq
+        )
+        if (
+            expected_activation_seq is None
+            or activation_boundary.code_identity != facts.boundary.code_identity
+            or activation_boundary.runtime_identity != facts.boundary.runtime_identity
+            or activation_boundary.causal_seq != expected_activation_seq
+            or activation_boundary.causal_seq > facts.boundary.causal_seq
+            or activation_score_packet.policy_identity != self.bindings.radar_policy_identity
+            or activation_score_packet.leader_instrument_name != facts.short_leg_instrument_name
+            or activation_score_packet.bucket_key.expiry_ms != facts.expiry_ms
+            or activation_score_packet.bucket_key.option_type.value != facts.option_type
+            or activation_score_packet.sampling_metadata is not None
+        ):
+            raise RuntimeError(
+                "designated activation score packet is not bound to the selected decision"
+            )
+        selection_score_packet = self._packet_with_sampling_metadata(
+            activation_score_packet,
+            sampling_metadata,
         )
         selection = _SelectedDecisionRecord(
             batch_identity=batch_identity,
@@ -2760,9 +3061,15 @@ class FixedContractShadowOwner:
             selected_economic_fingerprint=evaluation.economic_fingerprint,
             selected_facts=facts,
             selected_economics=evaluation.economics,
+            selection_kind=selection_kind,
+            selection_score_packet=selection_score_packet,
+            sampling_metadata=sampling_metadata,
+            score_control_designation=score_control_designation,
         )
         enrollment_route = (
-            "ADMITTED_SHADOW_TRADE"
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL"
+            if score_control_designation is not None
+            else "ADMITTED_SHADOW_TRADE"
             if evaluation.action is UnderwritingAction.CANDIDATE
             else "SELECTED_UNDERWRITING_DECISION_CONTROL"
         )
@@ -2777,18 +3084,27 @@ class FixedContractShadowOwner:
                 None,
             )
             if evaluation.action is UnderwritingAction.CANDIDATE
+            and score_control_designation is None
             else None
         )
-        if evaluation.action is UnderwritingAction.CANDIDATE and candidate is None:
+        if (
+            evaluation.action is UnderwritingAction.CANDIDATE
+            and score_control_designation is None
+            and candidate is None
+        ):
             raise RuntimeError("selected Candidate lacks its admission record")
         entry_refresh_attempt_kind = (
-            "CANDIDATE_ADMISSION" if candidate is not None else "DECISION_CONTROL"
+            "CANDIDATE_ADMISSION"
+            if candidate is not None
+            else "RADAR_SCORE_CONTROL"
+            if score_control_designation is not None
+            else "DECISION_CONTROL"
         )
         entry_refresh_owner_identity = (
             candidate.state.candidate_identity if candidate is not None else selection_identity
         )
         non_claims = ["NOT_AN_ORDER", "NOT_A_FILL"]
-        if evaluation.action is not UnderwritingAction.CANDIDATE:
+        if candidate is None:
             non_claims.extend(
                 [
                     "NOT_A_CANDIDATE_ACTIVATION",
@@ -2803,7 +3119,9 @@ class FixedContractShadowOwner:
                 "selected_underwriting_decision_identity": selection_identity,
                 "decision_control_rule_identity": rule_identity,
                 "activation_batch_identity": batch_identity,
-                "active_episode_identity": episode_identity,
+                "active_episode_identity": facts.active_episode_identity,
+                "radar_research_review_identity": facts.radar_research_review_identity,
+                "selection_kind": selection_kind,
                 "underwriting_action_identity": action_identity,
                 "underwriting_position_slot_key_identity": evaluation.slot_identity,
                 "economic_action": evaluation.action.value,
@@ -2825,7 +3143,7 @@ class FixedContractShadowOwner:
         )
         self._decision_control_selected_batches.add(batch_identity)
         self._counts["selected_underwriting_decision_count"] += 1
-        if evaluation.action is UnderwritingAction.CANDIDATE:
+        if candidate is not None:
             assert candidate is not None
             candidate.selected_decision = selection
             return
@@ -2914,6 +3232,7 @@ class FixedContractShadowOwner:
         ] += 1
 
     def _retire_decision_control_episode(self, episode_identity: str) -> None:
+        self._decision_control_activation_packet_by_episode.pop(episode_identity, None)
         batch_identity = self._decision_control_batch_by_episode.pop(episode_identity, None)
         if batch_identity is None:
             return
@@ -2924,6 +3243,7 @@ class FixedContractShadowOwner:
         ):
             return
         self._decision_control_designated_by_batch.pop(batch_identity, None)
+        self._score_control_designation_by_batch.pop(batch_identity, None)
         self._decision_control_selected_batches.discard(batch_identity)
         self.state_store.retire_control_batch(batch_identity)
 
@@ -3077,6 +3397,25 @@ class FixedContractShadowOwner:
                 else candidate.state.candidate_identity
             ),
         )
+        if candidate.selected_decision is not None:
+            selection_score_packet = candidate.selected_decision.selection_score_packet
+            sampling_metadata = candidate.selected_decision.sampling_metadata
+        else:
+            if candidate.facts.radar_score_packet is None:
+                raise RuntimeError("admitted Candidate lacks its selection score packet")
+            sampling_metadata = self._high_sampling_metadata(
+                facts=candidate.facts,
+                designation_identity=candidate.state.candidate_identity,
+            )
+            selection_score_packet = self._packet_with_sampling_metadata(
+                candidate.facts.radar_score_packet,
+                sampling_metadata,
+            )
+        score_packets = self._case_score_packets(
+            selection_packet=selection_score_packet,
+            refresh_packet=facts.radar_score_packet,
+            metadata=sampling_metadata,
+        )
         payload = {
             "shadow_entry_identity": entry_identity,
             "candidate_identity": candidate.state.candidate_identity,
@@ -3101,6 +3440,7 @@ class FixedContractShadowOwner:
             "underwriting_position_slot_key_identity": candidate.slot_identity,
             **entry_underwriting,
             "enrollment_kind": "ADMITTED_SHADOW_TRADE",
+            **score_packets,
             **self._counterfactual_entry_payload(facts, economics),
         }
         if selected_observation is not None:
@@ -3174,6 +3514,12 @@ class FixedContractShadowOwner:
             "price_index": component_quote.price_index if component_quote is not None else None,
             "entry_fact_boundary": facts.boundary.as_object(),
             "active_episode_identity": facts.active_episode_identity,
+            "radar_research_review_identity": facts.radar_research_review_identity,
+            "radar_activation_causal_seq": (
+                facts.anomaly_activation_seq
+                if facts.active_episode_identity is not None
+                else facts.radar_research_activation_seq
+            ),
             "radar_scope_identity": facts.radar_scope_identity,
             "execution_model": (
                 component_quote.execution_model
@@ -3182,15 +3528,6 @@ class FixedContractShadowOwner:
             ),
             "component_state": facts.component_state,
             "atomic_state_diagnostic": facts.atomic_state,
-            "radar_band_id": facts.radar_band_id,
-            "radar_richness_interval": (
-                {
-                    "lower": facts.radar_richness_lower,
-                    "upper": facts.radar_richness_upper,
-                }
-                if facts.radar_richness_lower is not None and facts.radar_richness_upper is not None
-                else None
-            ),
             "canonical_combo_identity": facts.canonical_combo_identity,
             "combo_instrument_name": facts.combo_instrument_name,
             "short_leg_instrument_name": facts.short_leg_instrument_name,
@@ -3319,8 +3656,13 @@ class FixedContractShadowOwner:
         )
         return {
             "selected_underwriting_decision_identity": selection.selection_identity,
+            "selection_kind": selection.selection_kind,
             "decision_control_rule_identity": selection.rule_identity,
             "activation_batch_identity": selection.batch_identity,
+            "active_episode_identity": selection.selected_facts.active_episode_identity,
+            "radar_research_review_identity": (
+                selection.selected_facts.radar_research_review_identity
+            ),
             "selected_underwriting_action_identity": selection.selected_action_identity,
             "selected_economic_action": selection.selected_action.value,
             "selected_consumed_economic_fact_fingerprint": (
@@ -3442,8 +3784,21 @@ class FixedContractShadowOwner:
         action = refreshed.action
         terminal_identity = attempt.terminal_identity
         terminal_outcome = attempt.terminal_outcome
+        score_band_control = selection.selection_kind == "RADAR_SCORE_BAND_NO_TRADE_CONTROL"
+        enrollment_kind = (
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL"
+            if score_band_control
+            else "SELECTED_UNDERWRITING_DECISION_CONTROL"
+        )
+        object_kind = (
+            "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN"
+            if score_band_control
+            else "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN"
+        )
         refresh_attempt_kind = (
-            "DECISION_CONTROL"
+            "RADAR_SCORE_CONTROL"
+            if score_band_control
+            else "DECISION_CONTROL"
             if isinstance(attempt, DecisionControlAttempt)
             else "CANDIDATE_ADMISSION"
         )
@@ -3459,10 +3814,17 @@ class FixedContractShadowOwner:
             selection,
             refreshed,
         )
+        score_packets = self._case_score_packets(
+            selection_packet=selection.selection_score_packet,
+            refresh_packet=facts.radar_score_packet,
+            metadata=selection.sampling_metadata,
+        )
         refreshed_action_identity = observation_payload["refreshed_underwriting_action_identity"]
         assert isinstance(refreshed_action_identity, str)
         open_identity = canonical_identity(
-            "SelectedUnderwritingDecisionControlOpenIdentity",
+            "RadarScoreBandNoTradeControlOpenIdentity"
+            if score_band_control
+            else "SelectedUnderwritingDecisionControlOpenIdentity",
             selection.selection_identity,
             terminal_identity,
             refreshed_action_identity,
@@ -3470,7 +3832,7 @@ class FixedContractShadowOwner:
         )
         payload = {
             "selected_decision_control_open_identity": open_identity,
-            "enrollment_kind": "SELECTED_UNDERWRITING_DECISION_CONTROL",
+            "enrollment_kind": enrollment_kind,
             "selected_underwriting_decision_identity": selection.selection_identity,
             "selected_underwriting_decision": observation_payload,
             "entry_refresh_attempt_kind": refresh_attempt_kind,
@@ -3491,6 +3853,7 @@ class FixedContractShadowOwner:
                 None,
             ),
             "underwriting_position_slot_key_identity": refreshed.slot_identity,
+            **score_packets,
             **self._case_open_underwriting_payload(
                 refreshed,
                 owner_identity=selection.selection_identity,
@@ -3509,18 +3872,22 @@ class FixedContractShadowOwner:
             ]
         )
         self._emit(
-            "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN",
+            object_kind,
             open_identity,
             facts.boundary,
             payload,
         )
-        self._counts["selected_underwriting_decision_control_open_count"] += 1
+        self._counts[
+            "radar_score_band_no_trade_control_open_count"
+            if score_band_control
+            else "selected_underwriting_decision_control_open_count"
+        ] += 1
         self._create_trade_record(
             anchor_identity=open_identity,
             slot_identity=refreshed.slot_identity,
             facts=facts,
             economics=economics,
-            enrollment_kind="SELECTED_UNDERWRITING_DECISION_CONTROL",
+            enrollment_kind=enrollment_kind,
         )
 
     def _create_trade_record(
@@ -4705,6 +5072,8 @@ class FixedContractShadowOwner:
         outcome_kind = (
             "SHADOW_OUTCOME"
             if trade.enrollment_kind == "ADMITTED_SHADOW_TRADE"
+            else "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OUTCOME"
+            if trade.enrollment_kind == "RADAR_SCORE_BAND_NO_TRADE_CONTROL"
             else "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME"
         )
         self._emit(

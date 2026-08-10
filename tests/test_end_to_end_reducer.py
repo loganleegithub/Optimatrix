@@ -124,16 +124,17 @@ def run_nonempty_scenario(
     limits["clock_stale_deadline_ms"] = 600_000
     exact, digest = encode_policy(document)
     policy = load_policy_bytes(exact, digest)
+    runtime_identity = "sha256:" + "b" * 64
     sink = RadarEventSink(
         code_identity="a" * 40,
-        runtime_identity="runtime",
+        runtime_identity=runtime_identity,
         policy_identity=digest,
     )
     reducer = RadarReducer(
         policy=policy,
         code_identity="a" * 40,
         event_sink=sink,
-        runtime_identity="runtime",
+        runtime_identity=runtime_identity,
     )
     short_name = "BTC-TEST-10001-C"
     long_name = "BTC-TEST-110-C"
