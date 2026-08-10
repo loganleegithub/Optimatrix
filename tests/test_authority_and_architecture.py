@@ -182,16 +182,18 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_consumed_v2_8675_cutover() -> None:
+def test_current_stage_records_v2_latency_attribution_authority() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
+    assert "**Current task kind:** `IMPLEMENTATION`" in current
     assert "`INVERSE_BTC_SHORT_VOL_V2_8675_LIVE_CURRENT`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert "**Persistent service:** `RUNNING_CURRENT_8675_FRESH_SCHEMA_V5`" in current
-    assert "**Live commands:** `NONE_AUTHORIZED_8675_CUTOVER_CONSUMED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert (
+        "**Live commands:** `ONE_BOUNDED_READ_ONLY_8675_LATENCY_SAMPLE_AUTHORIZED`" in current
+    )
+    assert "INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
@@ -208,6 +210,8 @@ def test_current_stage_records_consumed_v2_8675_cutover() -> None:
         "all six declared routes at `127.0.0.1:8765` refused connection",
         "official schema-v5 report found `0` Case directories",
         "The start and bounded smoke are consumed",
+        "at most 45 seconds",
+        "exchange-event age, local wire silence",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
     ):
@@ -220,6 +224,7 @@ def test_current_stage_records_consumed_v2_8675_cutover() -> None:
     ):
         assert identity in current
     assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION.md",
         "TEMPLATE.md",
     }
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()

@@ -4,7 +4,7 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
 **Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_8675_LIVE_CURRENT`
 
@@ -14,9 +14,23 @@
 
 **Persistent service:** `RUNNING_CURRENT_8675_FRESH_SCHEMA_V5`
 
-**Live commands:** `NONE_AUTHORIZED_8675_CUTOVER_CONSUMED`
+**Live commands:** `ONE_BOUNDED_READ_ONLY_8675_LATENCY_SAMPLE_AUTHORIZED`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:**
+[`INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION.md)
+
+## Active latency-attribution boundary
+
+The trader reports that the generic Workbench market-delay value repeatedly exceeds `5,000 ms`.
+The active implementation task may perform exactly one loopback-only, read-only sample of
+`/api/workbench/current` on the already-running 8675 service for at most 45 seconds. Its purpose is
+to distinguish exchange-event age, local wire silence, and the existing Policy-owned application
+queue-lag currentness state before changing code.
+
+This authority permits no stop, restart, second process, state-root operation, external public-source
+probe, PID/log/resource inspection, Policy change, Case write, or deployment. The observation is
+consumed after its one invocation; any later live validation or deployment requires a subsequent
+explicit authority update.
 
 ## Current online boundary
 
