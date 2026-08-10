@@ -290,7 +290,7 @@ assert.equal(document.activeElement, trigger);
 def test_opportunity_blotter_maps_server_states_without_recomputing_strategy_truth() -> None:
     test_js = JS.replace(
         "syncThemeControl();\nupdateResponsiveDetailState();\nrefresh();\nsetInterval(refresh, 2000);",
-        "globalThis.__workbenchTest = { channelSnapshotState, roadmapState, structureState, "
+        "globalThis.__workbenchTest = { channelSnapshotState, latencyState, roadmapState, structureState, "
         "radarState, orderedStructureRows, orderedRadarRows, predicateMarginForFailure, "
         "formatMargin, firstFailureSummary, structureJudgement, canonicalShadowMarkup, "
         "canonicalShadowEntry, structureEntryFacts, structureIdentity, structureDetailMarkup, "
@@ -318,9 +318,19 @@ const connected = {{
     phase: 'RUNNING', data_state: 'CURRENT', health: true,
     ready: true, stale: false, reason: 'NONE'
   }},
-  system: {{data_delay_ms: 18}}
+  system: {{
+    latest_market_event_timestamp_ms:1700000000000,
+    latest_market_event_age_ms:7000, last_wire_message_age_ms:100,
+    last_queue_processing_lag_ms:12, queue_lag_deadline_ms:5000,
+    queue_lag_currentness_active:false
+  }}
 }};
 assert.equal(api.channelSnapshotState(connected).code, 'CONNECTED');
+assert.deepEqual(api.latencyState(connected.system), {{
+  event:'行情事件年龄 7.0 秒', wire:'收包静默 100 ms',
+  queue:'处理队列 12 ms / 阈值 5.0 秒',
+  note:'处理 12 ms · 行情事件 7.0 秒'
+}});
 assert.equal(api.runtimeStatusState(connected).key, 'healthy');
 assert.equal(api.runtimeStatusState(connected).label, 'Runtime 正常运行');
 assert.match(api.runtimeStatusState(connected).blocker, /系统阻塞/);
@@ -364,7 +374,7 @@ assert.equal(api.channelSnapshotState({{...connected, service: {{ready: false, r
   'DATA_BLOCKED');
 assert.equal(api.roadmapState({{id: 'INVERSE_BTC_LONG_GAMMA'}}).label, '尚未接入');
 const validProjection = {{
-  ...connected, schema_version: 6,
+  ...connected, schema_version: 7,
   product: {{
     ...connected.product, native_premium_currency: 'BTC', valuation_currency: 'USD_EQUIVALENT',
     actual_account_margin_availability: 'UNKNOWN', actual_account_margin_reason: 'ACCOUNT_MARGIN_UNKNOWN'

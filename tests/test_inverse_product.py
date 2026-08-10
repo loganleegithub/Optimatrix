@@ -1180,7 +1180,7 @@ def test_inverse_workbench_identifies_native_and_valuation_units(
     composition = build_persistent_service_composition(startup)
     try:
         document = json.loads(composition.snapshot_store.read().workbench_body)
-        assert document["schema_version"] == 6
+        assert document["schema_version"] == 7
         assert document["channel_id"] == "INVERSE_BTC_SHORT_VOL_V2"
         assert document["product"] == {
             "product_spec_identity": INVERSE_BTC.identity,

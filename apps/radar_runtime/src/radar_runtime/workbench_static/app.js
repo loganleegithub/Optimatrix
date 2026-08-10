@@ -1,4 +1,4 @@
-const SUPPORTED_SCHEMA_VERSION = 6;
+const SUPPORTED_SCHEMA_VERSION = 7;
 const ACTIVE_CHANNEL_ID = 'INVERSE_BTC_SHORT_VOL_V2';
 const DRAWER_MEDIA_QUERY = '(max-width: 1471px)';
 const THEME_STORAGE_KEY = 'optimatrix-workbench-theme';
@@ -286,6 +286,21 @@ const formatDurationMs = value => {
   return `${Math.floor(milliseconds / 86400000)}d ${Math.floor((milliseconds % 86400000) / 3600000)}h`;
 };
 
+const latencyState = system => {
+  const value = system || {};
+  const eventAge = formatDurationMs(value.latest_market_event_age_ms);
+  const wireAge = formatDurationMs(value.last_wire_message_age_ms);
+  const queueLag = formatDurationMs(value.last_queue_processing_lag_ms);
+  const queueDeadline = formatDurationMs(value.queue_lag_deadline_ms);
+  const queueActive = value.queue_lag_currentness_active === true;
+  return {
+    event: `行情事件年龄 ${eventAge}`,
+    wire: `收包静默 ${wireAge}`,
+    queue: `${queueActive ? '处理队列超时' : '处理队列'} ${queueLag} / 阈值 ${queueDeadline}`,
+    note: `处理 ${queueLag} · 行情事件 ${eventAge}`
+  };
+};
+
 const formatDurationInterval = value => {
   if (!value || !Number.isFinite(Number(value.lower_ms)) || !Number.isFinite(Number(value.upper_ms))) {
     return '—';
@@ -372,7 +387,7 @@ const channelSnapshotState = documentValue => {
       note: reasonText(documentValue.service && documentValue.service.reason)};
   }
   return {code: 'CONNECTED', label: '当前可用', tone: 'green',
-    note: `${formatCompactNumber(documentValue.system && documentValue.system.data_delay_ms, 0)} ms`};
+    note: latencyState(documentValue.system).note};
 };
 
 const runtimeStatusState = documentValue => {
@@ -958,19 +973,24 @@ function renderHeader(documentValue) {
   const servicePhase = document.getElementById('service-phase');
   const dataCurrentness = document.getElementById('data-currentness');
   const dataDelay = document.getElementById('data-delay');
+  const wireAge = document.getElementById('wire-age');
+  const queueLag = document.getElementById('queue-lag');
   const blocker = document.getElementById('runtime-blocker');
   if (!asOf || !runtime || !status || !stateLabel || !stateDetail || !servicePhase ||
-      !dataCurrentness || !dataDelay || !blocker) return;
+      !dataCurrentness || !dataDelay || !wireAge || !queueLag || !blocker) return;
   const state = runtimeStatusState(documentValue);
   const service = documentValue && documentValue.service;
   const system = documentValue && documentValue.system;
+  const latency = latencyState(system);
   status.dataset.state = state.key;
   stateLabel.textContent = state.label;
   stateDetail.textContent = state.detail;
   servicePhase.textContent = `服务 ${service ? displayText(service.phase) : '—'}`;
   dataCurrentness.textContent = `行情 ${service ? displayText(service.data_state) : '—'}`;
-  dataDelay.textContent = `延迟 ${system ? formatDurationMs(system.data_delay_ms) : '—'}`;
-  asOf.textContent = `行情时间 ${system ? formatTimestamp(system.latest_market_timestamp_ms) : '—'}`;
+  dataDelay.textContent = latency.event;
+  wireAge.textContent = latency.wire;
+  queueLag.textContent = latency.queue;
+  asOf.textContent = `行情事件时间 ${system ? formatTimestamp(system.latest_market_event_timestamp_ms) : '—'}`;
   runtime.textContent = `runtime ${documentValue ? shortIdentity(documentValue.runtime_identity) : '—'}`;
   blocker.textContent = state.blocker;
 }
@@ -1453,6 +1473,15 @@ function validateDocument(documentValue) {
       !documentValue.outcomes || !Array.isArray(documentValue.outcomes.rows) ||
       !documentValue.funnel) {
     throw new Error('invalid workbench projection');
+  }
+  const latencyFields = [
+    'latest_market_event_timestamp_ms', 'latest_market_event_age_ms',
+    'last_wire_message_age_ms', 'last_queue_processing_lag_ms',
+    'queue_lag_deadline_ms', 'queue_lag_currentness_active'
+  ];
+  if (latencyFields.some(field => !(field in documentValue.system)) ||
+      typeof documentValue.system.queue_lag_currentness_active !== 'boolean') {
+    throw new Error('invalid workbench latency projection');
   }
   if (documentValue.product.actual_account_margin_availability !== 'UNKNOWN' ||
       documentValue.product.actual_account_margin_reason !== 'ACCOUNT_MARGIN_UNKNOWN') {

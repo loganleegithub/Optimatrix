@@ -22,23 +22,23 @@
 **Current funnel node:** `RADAR_KNOWN`
 
 **Baseline:** the accepted cutover snapshot was `107,371 / 113,251` post-warmup known Radar
-evaluations; the trader now observes the Workbench's generic market-delay display repeatedly above
-`5,000 ms`, but its event-age, wire-age, and queue-lag denominator is `NOT_YET_MEASURED`.
+evaluations. In the authorized 45-observation sample, `45 / 45` were `KNOWN_COMPLETE 128 / 128`,
+ready and current; queue-lag mentions, reconnects, and session gaps were all zero. Maximum generic
+source-event age was `4,616 ms` and maximum last-wire age was `4,068 ms`.
 
-**Primary blocker:** `GENERIC_MARKET_DELAY_NOT_ATTRIBUTED`
+**Primary blocker:** `GENERIC_MARKET_DELAY_SEMANTICS_CONFLATED`
 
 **Expected user-visible delta:** Workbench distinguishes latest exchange-event age, local wire
 silence, and the Policy-owned application queue-lag state; a value above five seconds no longer
-misstates which boundary is delayed. If the bounded observation proves actual queue lag, the direct
-owning synchronous function is optimized without weakening currentness.
+misstates which boundary is delayed. The bounded observation found no actual queue-lag incident, so
+the task adds no speculative synchronous hot-path optimization.
 
 **Durable-data effect:** `NONE`; no Case record, state root, or pre-Shadow business fact is written.
 
-**Complexity added:** at most bounded current latency scalars in the existing reducer/Workbench
+**Complexity added:** one bounded current queue-lag scalar in the existing reducer/Workbench
 snapshot; no new module, protocol, background task, queue, cache, retry, or dependency.
 
-**Complexity deleted:** the ambiguous generic `data_delay_ms` product presentation and any proven
-redundant hot-path work found by the direct measurement.
+**Complexity deleted:** the ambiguous generic `data_delay_ms` product presentation.
 
 ## Business closure
 
@@ -49,10 +49,9 @@ queue-currentness truth from one causal reducer.
 is corrected or optimized.
 
 **Then:** the trader can tell exchange-event silence from transport silence and reducer backlog;
-actual queue lag, if observed, no longer repeatedly exceeds the fixed `5,000 ms` deadline under the
-same public input workload.
+the fixed `5,000 ms` queue deadline is applied and displayed only against receive-to-reducer lag.
 
-**Valid zero/UNKNOWN:** no queue-lag incident during the bounded sample is valid evidence that the
+**Valid zero/UNKNOWN:** the observed zero queue-lag incident count is valid evidence that the
 reported symptom is not proven reducer backlog; it requires the semantic Workbench correction but
 does not authorize speculative runtime optimization.
 
@@ -68,9 +67,9 @@ runtime tests for any measured hot-path change.
 
 **Outcome/evaluation contract change:** `NONE`
 
-**Stage/authorization change:** authorize exactly one loopback-only, read-only, maximum 45-second
-sample of `/api/workbench/current` on `127.0.0.1:8675`; no stop, restart, root access, external
-source probe, or second runtime.
+**Stage/authorization change:** the one loopback-only, read-only, maximum 45-second sample of
+`/api/workbench/current` on `127.0.0.1:8675` is consumed; no further live command, stop, restart,
+root access, external source probe, or second runtime.
 
 ## Scope
 
@@ -81,8 +80,8 @@ owning contract wording, and the bounded 8675 sample.
 Position/Outcome, durable schema, state roots, transport reconnect policy, process supervision,
 host PID/log/resource inspection, stop/restart/deployment, and unrelated UI redesign.
 
-**Owning module:** `apps/radar_runtime/src/radar_runtime/workbench.py`; `runtime.py` only if the
-bounded sample proves real queue-processing lag.
+**Owning module:** `apps/radar_runtime/src/radar_runtime/workbench.py`; `runtime.py` owns only the
+already-calculated current queue-processing-lag scalar.
 
 ## Validation
 
@@ -96,6 +95,6 @@ bounded sample proves real queue-processing lag.
 ## Definition of done
 
 The apparent-delay root cause is quantitatively attributed; Workbench exposes the correct latency
-meaning; any measured direct hot path is minimally optimized; currentness remains fail-closed;
+meaning; currentness remains fail-closed;
 focused and repository checks pass; no Policy or durable-data change exists; and the Draft PR plus
 remote state are reported accurately.

@@ -14,23 +14,29 @@
 
 **Persistent service:** `RUNNING_CURRENT_8675_FRESH_SCHEMA_V5`
 
-**Live commands:** `ONE_BOUNDED_READ_ONLY_8675_LATENCY_SAMPLE_AUTHORIZED`
+**Live commands:** `NONE_AUTHORIZED_8675_LATENCY_SAMPLE_CONSUMED`
 
 **Sole authorized closure:**
 [`INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION.md)
 
-## Active latency-attribution boundary
+## Active latency-attribution result
 
 The trader reports that the generic Workbench market-delay value repeatedly exceeds `5,000 ms`.
-The active implementation task may perform exactly one loopback-only, read-only sample of
-`/api/workbench/current` on the already-running 8675 service for at most 45 seconds. Its purpose is
-to distinguish exchange-event age, local wire silence, and the existing Policy-owned application
-queue-lag currentness state before changing code.
+The one authorized loopback-only, read-only sample of `/api/workbench/current` ran for at most 45
+seconds and is consumed. All `45 / 45` observations were `RUNNING / CURRENT / ready` with
+`KNOWN_COMPLETE 128 / 128`, `0` reconnects, `0` session gaps, and no
+`QUEUE_LAG_CURRENTNESS` anywhere in the snapshot. Maximum generic source-event age was `4,616 ms`;
+maximum last-wire age was `4,068 ms`.
 
-This authority permits no stop, restart, second process, state-root operation, external public-source
-probe, PID/log/resource inspection, Policy change, Case write, or deployment. The observation is
-consumed after its one invocation; any later live validation or deployment requires a subsequent
-explicit authority update.
+Code inspection establishes that schema-v6 `data_delay_ms` subtracts the newest accepted exchange
+source timestamp from trusted time. It is source-event age, not receive-to-reducer processing lag.
+The active task may correct that non-durable Workbench schema and expose the already-owned queue
+lag separately. The bounded observation does not prove a synchronous runtime hot path, so no
+performance architecture or Decision Policy change is authorized.
+
+This authority permits no further live command, stop, restart, second process, state-root operation,
+external public-source probe, PID/log/resource inspection, Policy change, Case write, or deployment.
+Any later live validation or deployment requires a subsequent explicit authority update.
 
 ## Current online boundary
 
