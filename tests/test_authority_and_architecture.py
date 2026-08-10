@@ -182,44 +182,44 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_one_review_truth_main_cutover() -> None:
+def test_current_stage_records_completed_review_truth_main_cutover() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `VALIDATION_ONLY`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_MAIN_CUTOVER_AUTHORIZED`" in current
+    assert "**Current task kind:** `NONE`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_LIVE_CURRENT`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_8675_FROM_MAIN_D5D4C88_PENDING_ONE_CUTOVER`" in current
-    assert "**Live commands:** `ONE_CLEAN_STOP_ONE_START_AND_300_SECOND_READ_ONLY_GATE`" in current
-    assert (
-        "**Sole authorized closure:** `INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION`"
-        in current
-    )
+    assert "**Persistent service:** `RUNNING_8675_FROM_MAIN_9A4CC23`" in current
+    assert "**Live commands:** `NONE_CONSUMED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
-        "d5d4c880ef28218bf2cde56be123074da5adba66",
-        "sha256:4dd2b9887bdd1fc9c9b0ad3cb3bfe4374d5430b07c8f8632e9550cb000ac254a",
+        "9a4cc23cb9092a04b0a6e72eec6657a570660c73",
+        "sha256:9d383a7d19027c09324d1b811caeef90184dd1065a2bcff226b6df665c1e4432",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
         "zero schema-v5 Case, Control, Shadow Entry, Position, or Outcome records",
-        "`31/31` ready samples",
+        "`31/31` samples over `302.1 s`",
         "`128/128` current Radar coverage",
         "zero reconnects and zero protocol gaps",
-        "`99 ms` median",
-        "`650 ms` p95",
-        "`693 ms` maximum",
-        "`815 ms` median",
-        "`1,129 ms` p95",
-        "`1,340 ms` maximum",
-        "reusing unchanged peers' current core calculations",
-        "no remaining production implementation or compatibility branch",
-        "review-only HIGH score rows rendered as `0/3` confirmation",
-        "`18` `KNOWN_NO_CONTROL` terminals",
-        "36 research activation batches",
-        "33 `KNOWN_NO_CONTROL` terminals",
-        "exactly one clean stop, one start from synchronized clean `main`",
-        "one 300-second read-only HTTP gate",
+        "zero rows in the 30-to-45-minute review-only TTE band",
+        "live window did not exercise a non-empty review-only band",
+        "18-to-23 `CONFIRMING` rows",
+        "13 `CORE_UNKNOWN`, 36 `LEADER_CHANGE`, 9 `SCOPE_LOSS`, and 6 `SCORE_BAND_CHANGE`",
+        "`RADAR_EPISODE_OR_REVIEW_ENDED`",
+        "conserved `1 = 1`",
+        "`278 ms` median",
+        "`2,303 ms` p95",
+        "`4,560 ms` maximum",
+        "`929 ms` median",
+        "`2,677 ms` p95",
+        "`5,057 ms` maximum",
+        "`244 ms` median",
+        "`2,310 ms` p95",
+        "`4,569 ms` maximum",
+        "PR #44",
+        "PR #45",
     ):
         assert phrase in normalized
     for identity in (
@@ -229,10 +229,7 @@ def test_current_stage_authorizes_one_review_truth_main_cutover() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
-        "TEMPLATE.md",
-        "INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION.md",
-    }
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
 
