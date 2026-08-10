@@ -1,4 +1,4 @@
-# Task — V2 index-grid phase repair
+# Task — V2 source-grid and confirmation-continuity repair
 
 **Status:** ACTIVE
 
@@ -22,85 +22,89 @@
 
 **Current funnel node:** `RADAR_KNOWN → ANOMALY_ACTIVE`
 
-**Baseline:** at `2026-08-11 02:32:18 +0800`, the live runtime had
-`33,482,555` known post-warmup instrument evaluations and zero distinct canonical
-`ANOMALY_ACTIVE` Episodes, zero admitted Shadow Cases, and zero Positions. Direct live sampling
-observed the same eligible multiday HIGH leader recur approximately every five minutes, remain
-HIGH for approximately 120 seconds, and reset before its 300-second second-confirmation boundary.
+**Baseline:** after the source-grid fixes, the clean Draft PR #48 runtime remained healthy, ready,
+`CURRENT`, `KNOWN_COMPLETE`, and `128/128`, with zero schema-v5 Case. Eligible HIGH leaders in the
+6-to-24-hour and 24-to-72-hour bands each reached confirmation `2/3` under their frozen 150-second
+and 300-second separations. Three consecutive scheduled history-refresh cycles produced queue-lag
+peaks of `3,045 ms`, `4,032 ms`, and `5,003 ms`.
 
-**Primary blocker:** `ALIGNED_INDEX_HISTORY_REFRESH_RACE`. The initial repair removed
-`ROTATING_FIVE_MINUTE_INDEX_SAMPLE_PHASE`: the official one-minute chart can no longer rotate the
-five-minute sample phase. Live validation then reached confirmation `2/3`, but at the next UTC grid
-boundary it reset `2 → 0 → 1` while the same leader remained known, HIGH, and book-usable. In that
-same frame the global `CORE_UNKNOWN` counter increased by `12`. Trusted time had advanced the
-required anchor before the independently phased five-minute chart refresh had delivered that
-anchor, creating a one-frame `INDEX_HISTORY_WINDOW_GAP` across the active buckets.
+**Primary blocker:** `ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`. On the
+threshold-crossing refresh, the queue-lag currentness gate correctly changed every current Radar
+evaluation to `UNKNOWN`, but the bucket owner also erased every nonzero, not-yet-active
+confirmation. One known HIGH target changed `2 → 0`; the global `CORE_UNKNOWN` reset counter
+increased by `13`. About half a second later the same session, bucket leader, HIGH band, and
+source-confirmed baseline recovered, yet confirmation restarted at `0 → 1`. Reconnect, protocol
+gap, and continuity-epoch counts did not change.
 
-**Expected user-visible delta:** a declared five-minute baseline uses the latest completed,
-source-confirmed UTC-epoch-aligned grid point. Trusted-time movement cannot rotate its phase or
-advance it ahead of the public chart response. A newly delivered aligned point advances the tuple
-atomically. Workbench identifies this source-confirmed semantics explicitly, and the artificial
-five-minute confirmation reset disappears.
+**Expected user-visible delta:** while ordered queue lag is above the fixed currentness deadline,
+Radar remains `UNKNOWN`, bucket coverage is `UNKNOWN`, no observation is counted, and no Episode or
+downstream admission can occur. An inactive tracker retains only confirmations already accepted
+before the lag. On catch-up the current facts are recomputed: the same leader and band continue
+from the retained count, while a changed leader, band, scope, or persistent core loss resets under
+the existing rules.
 
 **Durable-data effect:** `NONE` before a normal V2 admission. The repair neither creates nor
 migrates a Case and retains the existing stable schema-v5 repository.
 
-**Complexity added:** one bounded tuple of aligned source timestamps inside the existing history
-owner for logarithmic source-ready anchor selection; no second history or baseline path.
+**Complexity added:** one bounded currentness-pause branch in the existing runtime bucket owner, in
+addition to the already-landed aligned-source timestamp tuple; no new state owner, timer, schema,
+history, or baseline path.
 
 **Complexity deleted:** the rotating five-phase sampling behavior, the wall-clock-ahead-of-source
-anchor race, and the misleading baseline source label.
+anchor race, the misleading baseline source label, and the destructive interpretation of a
+transient ordered backlog as lost pre-confirmation evidence.
 
 ## Business closure
 
-**Given:** strictly chronological, minute-aligned Deribit index-chart `average_price` points and a
-Policy return interval of five minutes.
+**Given:** an inactive clue-eligible bucket tracker with accepted nonzero confirmation, followed by
+an ordered envelope whose receive-to-reducer lag exceeds the fixed Policy currentness deadline.
 
-**When:** trusted time crosses a canonical five-minute boundary before or after the next public
-chart refresh delivers the newly completed aligned point.
+**When:** the lagged envelope settles and a later ordered envelope catches the reducer up without a
+session, continuity, scope, leader, or score-band change.
 
-**Then:** `IndexHistoryReducer.current_tail` retains the prior exact sampled tuple and economic
-identity until the next UTC-aligned five-minute point is both causally complete and source-confirmed;
-it then advances atomically.
+**Then:** the lagged frame remains `UNKNOWN` and contributes no observation or admission, the
+previous confirmation count is unchanged, and recovery resumes from that count only after current
+truth proves the same leader and score band.
 
-**Valid zero/UNKNOWN:** a missing interior point inside the selected aligned suffix remains
-`WINDOW_GAP`; stale, revision, warmup, and invalid source states remain truthful. A newly completed
-but not-yet-delivered leading anchor is normal refresh latency and retains the prior valid suffix.
-Zero canonical Shadow admissions is valid if no corrected HIGH survives Policy persistence or
-Underwriting does not produce a Candidate; artificial phase rotation or refresh-race reset is not
-valid.
+**Valid zero/UNKNOWN:** the queue-lag interval itself remains current `UNKNOWN`; an active Episode
+continues to end fail-closed on core loss. A missing interior index point, stale source, revision,
+warmup, invalid input, real scope loss, leader change, score-band change, session gap, or run stop
+still resets or ends through its existing owner. Zero canonical Shadow admissions is valid if no
+corrected HIGH survives three real separated observations or Underwriting does not produce a
+Candidate; a reset caused only by a transient ordered queue backlog is not valid.
 
-**Cheapest falsification:** feed one-minute points whose five phase offsets have deliberately
-different realized variance, advance trusted time minute by minute, and observe any sampled tail
-or baseline change before the next aligned five-minute boundary.
+**Cheapest falsification:** establish one pre-activation observation, process one deliberately
+lagged but ordered envelope, catch up without counting a new observation, and observe any change in
+the prior count or any Candidate/Case created during the `UNKNOWN` interval.
 
 ## Change declarations
 
-**Market/Decision input contract change:** five-minute index-chart samples are fixed to UTC epoch
-alignment and advance only to a completed aligned point already present in the public response,
-instead of being re-anchored to finer points or projected ahead of the response.
+**Market/Decision input contract change:** five-minute index-chart samples remain fixed to the
+source-confirmed UTC epoch grid. Ordered queue-lag currentness is a pre-activation observation pause,
+not evidence that previously accepted observations disappeared; current score and admission truth
+remain `UNKNOWN` until catch-up.
 
 **Decision Policy change:** `NONE`; the three Policy artifacts and identities remain byte-exact.
 
 **Outcome/evaluation contract change:** `NONE`.
 
-**Stage/authorization change:** authorize this bounded repair and its Draft PR. The first clean
-stop/start established the source-ahead race; one additional clean stop/start on `127.0.0.1:8675`
-from the amended clean repair commit may use the unchanged stable Case root. Continued public-only
-observation runs until the first admitted active Shadow or a newly measured fixed blocker is
-established. No private or execution permission is added.
+**Stage/authorization change:** authorize this bounded repair in the existing Draft PR and one
+clean stop/start on `127.0.0.1:8675` from the clean checked commit, using the unchanged stable Case
+root. Continued public-only observation runs until the first admitted active Shadow or a newly
+measured fixed blocker is established. No private or execution permission is added.
 
 ## Scope
 
-**In:** the sole `IndexHistoryReducer` sampling owner; focused market/runtime/Workbench tests;
-baseline-source wording in owning contracts and Workbench; task and Current Stage authority; the
-bounded public-only cutover and observation.
+**In:** the sole runtime bucket-settlement owner and its queue-lag currentness transition; the
+already-landed `IndexHistoryReducer` source-grid repair; focused market/runtime/Workbench tests;
+owning contract, task, and Current Stage authority; the bounded public-only cutover and observation.
 
-**Out:** score weights, thresholds, TTE/Delta rules, confirmation counts or separations, any Policy
-artifact, Underwriting or Position economics, Case schema, state-root migration, private data,
-orders, fills, capital, process supervision, or a second baseline path.
+**Out:** score weights, thresholds, TTE/Delta rules, confirmation counts or separations, preservation
+of an already-active Episode, any Policy artifact, Underwriting or Position economics, Case schema,
+state-root migration, private data, orders, fills, capital, process supervision, or a second
+baseline path.
 
-**Owning module:** `packages/market_monitor/src/market_monitor/index_history.py`
+**Owning module:** `apps/radar_runtime/src/radar_runtime/runtime.py`
 
 ## Validation
 
@@ -115,8 +119,9 @@ orders, fills, capital, process supervision, or a second baseline path.
 
 ## Definition of done
 
-The rotating phase and source-ahead race are impossible by direct tests; the full repository gate
-passes; the live clean repair commit remains current while the baseline tuple advances only when a
-canonical aligned point is source-confirmed; any first active admitted Shadow is verified through
-the API and official Case reader, or the next truthful fixed funnel blocker is reported without
-changing Policy to manufacture admission; the diff is bounded and remote state is exact.
+The rotating phase, source-ahead race, and queue-lag destructive pre-confirmation reset are
+impossible by direct tests; the full repository gate passes; the live clean repair commit remains
+current; threshold-crossing lag contributes zero observations while a same-truth recovery retains
+the prior count; any first active admitted Shadow is verified through the API and official Case
+reader, or the next truthful fixed funnel blocker is reported without changing Policy to
+manufacture admission; the diff is bounded and remote state is exact.

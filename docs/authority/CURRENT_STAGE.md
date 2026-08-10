@@ -6,13 +6,13 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR_ACTIVE`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_CONFIRMATION_CONTINUITY_REPAIR_ACTIVE`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_F887197`
+**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_17D94DA`
 
 **Live commands:** `REQUIRED_BOUNDED_REPAIR_CUTOVER`
 
@@ -21,71 +21,50 @@
 
 ## Active repair authorization
 
-At `2026-08-11 02:32:18 +0800`, the running code identity remained
-`9a4cc23cb9092a04b0a6e72eec6657a570660c73`, healthy, ready, `CURRENT`, and
-`KNOWN_COMPLETE`, with zero admitted Shadow Case and zero Position. Direct live attribution found
-that the one-minute official index-chart source was being re-anchored every minute into five
-different five-minute sampling phases. The same eligible leader consequently repeated a
-two-minute HIGH / three-minute LOW pattern and could not reach its Policy-owned second confirmation.
+The source-grid repairs in Draft PR #48 removed both the rotating five-minute phase and the
+trusted-time-ahead-of-source race without changing a Policy artifact. Running code identity
+`17d94dafb8eb6fb0044df100de3f10b4f8fca24b` subsequently allowed eligible HIGH leaders in the
+6-to-24-hour and 24-to-72-hour bands to reach confirmation `2/3` at their Policy-owned 150-second
+and 300-second separations.
 
-The first repair commit fixed that market-input boundary to one UTC-aligned five-minute phase
-without changing any Policy artifact, score threshold, TTE/Delta eligibility, persistence rule,
-Underwriting economics, Position rule, or Case schema. Live code identity
-`f8871979f7e58b12515839063a7b1e824d3b8227` then reached confirmation `2/3` for the same known HIGH
-leader. At the next UTC grid boundary, confirmation reset `2 → 0 → 1` while leader, score band,
-book usability, and prior baseline remained unchanged; global `CORE_UNKNOWN` increased by `12` in
-that exact frame. The fixed cause is `ALIGNED_INDEX_HISTORY_REFRESH_RACE`: trusted time required a
-new grid anchor just before the independently phased chart refresh delivered it.
+Live fixed-attribution then established the next blocker. Three consecutive scheduled history
+refresh cycles produced processing-lag peaks of `3,045 ms`, `4,032 ms`, and `5,003 ms`. At the
+threshold-crossing frame, `queue_lag_currentness_active=true`, the known HIGH leader became
+`QUEUE_LAG_CURRENTNESS`, its confirmation changed `2 → 0`, and the runtime-local `CORE_UNKNOWN`
+reset count increased by `13`. The session epoch remained `1`, reconnect and protocol-gap counts
+remained zero, and current truth recovered about half a second later. The fixed cause is
+`ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`: an ordered reducer backlog correctly paused
+current evaluation but incorrectly erased earlier accepted observations.
 
-The amended repair retains the latest completed, source-confirmed aligned suffix until a new
-aligned point is present, while interior gaps, staleness, revisions, and invalid input remain
-fail-closed. This authority permits one additional clean stop and one clean start on
-`127.0.0.1:8675` from the amended repair commit, reusing the unchanged stable Case repository
+The repair keeps every lagged frame `UNKNOWN`, globally degrades leader coverage, counts no
+observation, and permits no Episode, Underwriting admission, Candidate, or Shadow Case. Only an
+inactive pre-confirmation tracker retains its previously accepted leader, score band, and count.
+After catch-up, the current score is recomputed; a different leader, band, scope, or persistent core
+loss still resets normally, and an already-active Episode remains fail-closed. No score threshold,
+confirmation count, separation, TTE/Delta rule, Underwriting economics, Position rule, Case schema,
+or Policy identity changes.
+
+This authority permits one clean stop and one clean start on `127.0.0.1:8675` from the clean repair
+commit after direct and repository checks pass, reusing the unchanged stable Case repository
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. Continued observation remains
 production-public Shadow only and cannot claim Edge, profitability, an order, a fill, or actual
-exposure. The bounded implementation is [Draft PR
+exposure. The bounded implementation remains [Draft PR
 #48](https://github.com/loganleegithub/Optimatrix/pull/48).
 
 ## Current online boundary
 
 The sole Online Runtime is serving `127.0.0.1:8675` from clean Draft PR #48 code identity
-`f8871979f7e58b12515839063a7b1e824d3b8227`. Its runtime identity is
-`sha256:d6b5a0d58c7b932031f6bc3d652eec0da0e7277d146348d8178c8747a4e860ae`.
+`17d94dafb8eb6fb0044df100de3f10b4f8fca24b`. Its runtime identity is
+`sha256:d9741461cbe0ff3d59aa3cc864521f5d70efeb6ceb465d06b28ebcccdb5e4775`.
 It holds the single-instance lease for the stable Case repository
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; no Case root was copied, migrated,
 replaced, or deleted during the cutover.
 
-The review-truth implementation was merged by
-[PR #44](https://github.com/loganleegithub/Optimatrix/pull/44); its one-stop/one-start cutover was
-authorized by [PR #45](https://github.com/loganleegithub/Optimatrix/pull/45), and the consumed
-cutover was recorded by [PR #46](https://github.com/loganleegithub/Optimatrix/pull/46).
-Immediately before stop, the old runtime had 41 research activation batches, 38 selected decisions, 38
-`KNOWN_NO_CONTROL` terminals, and zero schema-v5 Case, Control, Shadow Entry, Position, or Outcome
-records. The accepted cutover used the unchanged stable root and port 8675.
-
-The authorized post-start gate completed `31/31` samples over `302.1 s`. Every sample reported
-health, readiness, `RUNNING`, `CURRENT`, `KNOWN_COMPLETE`, inactive queue-lag currentness, and
-`128/128` current Radar coverage. The post-gate snapshot still had zero reconnects and zero
-protocol gaps.
-
-The current option universe contained zero rows in the 30-to-45-minute review-only TTE band during
-the gate, so live review-only confirmation violations were zero but the live window did not exercise
-a non-empty review-only band. Direct deterministic coverage remains the acceptance evidence that an
-ineligible review row stays `IDLE` with `0` confirmation. Across all current rows, the gate observed
-18-to-23 `CONFIRMING` rows and zero-to-four `ACTIVE` rows.
-
-By the final gate sample, lost nonzero pre-activation confirmation was attributed to 13
-`CORE_UNKNOWN`, 36 `LEADER_CHANGE`, 9 `SCOPE_LOSS`, and 6 `SCORE_BAND_CHANGE` resets. These are
-reset events, not distinct Episodes or a market-frequency estimate. One prospective research batch
-selected one `ABSTAIN` decision and terminated as one `KNOWN_NO_CONTROL`; its one fixed reason was
-`RADAR_EPISODE_OR_REVIEW_ENDED`, so the reason and terminal denominators conserved `1 = 1`. It
-opened no Case, Control, Shadow Entry, Position, or Outcome.
-
-Observed processing-queue lag was `0 ms` minimum, `278 ms` median, `2,303 ms` p95, and `4,560 ms`
-maximum. Latest market-event age was `299 ms` minimum, `929 ms` median, `2,677 ms` p95, and
-`5,057 ms` maximum. Wire-message age was `0 ms` minimum, `244 ms` median, `2,310 ms` p95, and
-`4,569 ms` maximum. These measurements establish the bounded cutover result, not future uptime,
-latency, market frequency, Policy quality, Edge, or profitability.
+The latest pre-repair inventory reported health, readiness, `RUNNING`, `CURRENT`,
+`KNOWN_COMPLETE`, `128/128` current Radar coverage, zero reconnects, zero protocol gaps, and no
+schema-v5 Case row. The API's Shadow Entry, Position, Outcome, and Decision Control `rows` were all
+empty, and the official Case reader reported zero opened Case. Those are current inventory facts,
+not Policy-quality or future-frequency claims.
 
 ## Current product truth
 
@@ -116,6 +95,6 @@ settlement action, actual exposure, or private execution. The accepted smoke and
 checks do not establish future uptime, source freshness, fillability, qualification, Edge, or
 profitability.
 
-All repair sampling, stop/start, Case reading, and live commands are consumed. A future live probe,
-restart, state-root operation, Policy change, or roadmap-channel implementation requires a new
-explicit task and permission update under the Delivery Contract.
+Only the bounded repair cutover and continued public-only monitoring declared above are authorized.
+Any extra restart, state-root operation, Policy change, or roadmap-channel implementation requires a
+new explicit task and permission update under the Delivery Contract.

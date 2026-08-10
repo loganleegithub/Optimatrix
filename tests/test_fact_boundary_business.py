@@ -54,6 +54,7 @@ from short_vol_radar.baseline import BaselineStatistics
 from short_vol_radar.black import DecimalInterval, black_price
 from short_vol_radar.bucket import (
     BucketConfirmationResetReason,
+    BucketEpisodeState,
     RadarBucketEpisodeTracker,
     RadarBucketTrackerTransition,
 )
@@ -3949,6 +3950,11 @@ def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_resta
     )
     establish_joint_witness(reducer, instrument)
     result = reducer.results[instrument.instrument_name]
+    assert result.calculation is not None
+    bucket_key = reducer.score_bucket_keys[instrument.instrument_name]
+    bucket_tracker = reducer.bucket_trackers[bucket_key]
+    assert bucket_tracker.confirmation_observation_count == 1
+    resets_before = dict(reducer.confirmation_reset_counts)
     counter = reducer._scope_counter(
         instrument.option_type,
         result.band_id or "",
@@ -3993,6 +3999,13 @@ def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_resta
     assert reducer._global_continuity_epoch == 1
     assert reducer.diagnostics.session_gap_count == 0
     assert statistics_calls == 0
+    assert bucket_tracker.confirmation_observation_count == 1
+    assert dict(reducer.confirmation_reset_counts) == resets_before
+    projection = bucket_tracker.projection(result.calculation.rule)
+    assert projection.state is BucketEpisodeState.CONFIRMING
+    assert projection.leader_instrument_name == instrument.instrument_name
+    assert reducer.bucket_leader_by_key[bucket_key] == instrument.instrument_name
+    assert reducer.bucket_leader_coverage[bucket_key] is LeaderCoverage.UNKNOWN
 
     catch_up = InboundEnvelope(
         {
@@ -4013,6 +4026,9 @@ def test_ordered_queue_lag_blocks_observation_until_catch_up_without_epoch_resta
     assert reducer._coverage._current_blocking_reason == "NONE"
     assert reducer._global_continuity_epoch == 1
     assert statistics_calls == 1
+    assert bucket_tracker.confirmation_observation_count == 1
+    assert dict(reducer.confirmation_reset_counts) == resets_before
+    assert reducer.bucket_leader_coverage[bucket_key] is LeaderCoverage.COMPLETE
 
     summary = reducer.clean_stop(2_200)
     coverage_segments = cast(list[dict[str, object]], summary["coverage_segments"])

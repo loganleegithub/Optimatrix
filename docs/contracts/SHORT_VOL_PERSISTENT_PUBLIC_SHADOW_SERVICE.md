@@ -128,6 +128,12 @@ envelope's local receive-to-reducer delay. Only the third value is compared with
 `queue_lag_deadline_ms` and may activate `QUEUE_LAG_CURRENTNESS`. A source-event age above that
 queue deadline is not, by itself, a slow reducer, stale ticker, or reconnect condition.
 
+`QUEUE_LAG_CURRENTNESS` makes current Radar truth and leader coverage `UNKNOWN` and blocks new
+observations and admission until the ordered queue catches up. It does not by itself erase an
+inactive bucket's earlier accepted confirmation observations. Recovery must recompute the current
+leader and score band before that count can continue; changed truth still resets normally, and an
+already-active Episode remains fail-closed.
+
 Every active admitted Entry appears once by its original `shadow_entry_identity`, whether opened in
 this runtime or restored. The snapshot distinguishes origin runtime from current Segment runtime
 and exposes Segment state, `CONTINUOUS | GAPPED`, gap count, current-data availability, durable

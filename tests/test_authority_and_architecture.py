@@ -182,47 +182,34 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_the_index_grid_phase_repair() -> None:
+def test_current_stage_authorizes_the_confirmation_continuity_repair() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR_ACTIVE`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_CONFIRMATION_CONTINUITY_REPAIR_ACTIVE`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_F887197`" in current
-    assert "`ALIGNED_INDEX_HISTORY_REFRESH_RACE`" in current
-    assert "one additional clean stop and one clean start" in normalized
+    assert "**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_17D94DA`" in current
+    assert "`ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`" in current
+    assert "one clean stop and one clean start" in normalized
     assert "**Live commands:** `REQUIRED_BOUNDED_REPAIR_CUTOVER`" in current
     assert "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
-        "9a4cc23cb9092a04b0a6e72eec6657a570660c73",
-        "sha256:d6b5a0d58c7b932031f6bc3d652eec0da0e7277d146348d8178c8747a4e860ae",
+        "17d94dafb8eb6fb0044df100de3f10b4f8fca24b",
+        "sha256:d9741461cbe0ff3d59aa3cc864521f5d70efeb6ceb465d06b28ebcccdb5e4775",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
-        "zero schema-v5 Case, Control, Shadow Entry, Position, or Outcome records",
-        "`31/31` samples over `302.1 s`",
+        "no schema-v5 Case row",
         "`128/128` current Radar coverage",
-        "zero reconnects and zero protocol gaps",
-        "zero rows in the 30-to-45-minute review-only TTE band",
-        "live window did not exercise a non-empty review-only band",
-        "18-to-23 `CONFIRMING` rows",
-        "13 `CORE_UNKNOWN`, 36 `LEADER_CHANGE`, 9 `SCOPE_LOSS`, and 6 `SCORE_BAND_CHANGE`",
-        "`RADAR_EPISODE_OR_REVIEW_ENDED`",
-        "conserved `1 = 1`",
-        "`278 ms` median",
-        "`2,303 ms` p95",
-        "`4,560 ms` maximum",
-        "`929 ms` median",
-        "`2,677 ms` p95",
-        "`5,057 ms` maximum",
-        "`244 ms` median",
-        "`2,310 ms` p95",
-        "`4,569 ms` maximum",
-        "PR #44",
-        "PR #45",
-        "PR #46",
+        "zero reconnects, zero protocol gaps",
+        "`3,045 ms`, `4,032 ms`, and `5,003 ms`",
+        "confirmation changed `2 → 0`",
+        "`CORE_UNKNOWN` reset count increased by `13`",
+        "counts no observation",
+        "already-active Episode remains fail-closed",
+        "one clean stop and one clean start",
     ):
         assert phrase in normalized
     for identity in (

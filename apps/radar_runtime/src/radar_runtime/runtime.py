@@ -5074,6 +5074,16 @@ class RadarReducer:
                 ),
             )
             if selection.leader is None and bucket_tracker is not None:
+                prior_leader = self.bucket_leader_by_key.get(bucket_key)
+                if (
+                    self._queue_lag_currentness_active
+                    and bucket_tracker.episode is None
+                    and bucket_tracker.confirmation_observation_count > 0
+                    and prior_leader in names
+                ):
+                    new_bucket_leaders[bucket_key] = prior_leader
+                    new_bucket_coverages[bucket_key] = LeaderCoverage.UNKNOWN
+                    continue
                 transition = (
                     bucket_tracker.scope_loss(causal_seq=commit.boundary.causal_seq)
                     if selection.reason == "FROZEN_LEADER_SCOPE_LOSS"

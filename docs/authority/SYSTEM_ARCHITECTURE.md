@@ -74,6 +74,12 @@ pending deque. One synchronous reducer exclusively owns mutable market and Radar
 local option fact locally, and never waits for network I/O. Cooperative yielding keeps reader,
 sender, and clock-source tasks schedulable while the queue is non-empty.
 
+If ordered receive-to-reducer lag exceeds the fixed currentness deadline, the reducer exposes
+current Radar and leader coverage as `UNKNOWN` and counts no observation. The existing bucket owner
+may retain an inactive bucket's previously accepted pre-activation count across that pause; catch-up
+must recompute the same leader and score band before persistence continues. This adds no second
+queue, timer, tracker, or durable checkpoint, and it does not preserve active decision authority.
+
 The reducer settles one accepted fact completely before calling the downstream owner. The owner
 then settles Underwriting, admission, every open Shadow Position, and Outcome before Workbench or
 funnel publication. No second reducer, response-future owner, or persisted replay path may apply

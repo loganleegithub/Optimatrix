@@ -262,6 +262,14 @@ revision/gap/staleness, continuity loss, or run stop. After any source loss, fre
 required. A confirmed LOW/MID research-review Episode can be designated at most once and cannot
 repeat until it has ended and a later Episode completes fresh persistence.
 
+Ordered queue-lag currentness is a global decision pause, not a source observation. While it is
+active, current evaluations and bucket coverage are `UNKNOWN`, no persistence observation is
+counted, and no Episode, Candidate, or Case can open. A bucket with no active Episode retains only
+its already-accepted pre-activation leader, band, and count through that pause. Catch-up recomputes
+current truth: the same leader and band may continue from the retained count, while leader, band,
+scope, or persistent core change applies the normal reset. An already-active Episode remains
+fail-closed and ends on required core loss; queue lag never extends active decision authority.
+
 A ticker application is a distinct persistence observation only when forward, signed Delta, or
 mark IV changes. OI/gamma-only changes refresh the unsigned diagnostic but do not advance score
 confirmation. Because S/T may select either option type and the adjacent expiry, a ticker change
@@ -295,7 +303,8 @@ loss remain post-warmup UNKNOWN. Every Radar UNKNOWN contributes exactly one bou
 When a bucket loses a nonzero but not-yet-confirmed observation count, the reducer increments one
 fixed reset reason: leader change, score-band change, core UNKNOWN, scope loss, clue ineligibility,
 or run stop. The counter is runtime-local, non-durable, and is neither an Episode count nor a market
-frequency estimate; zero-observation state alignment does not increment it.
+frequency estimate; zero-observation state alignment does not increment it. A transient ordered
+queue-lag pause that preserves the count is not a loss and therefore increments no reset reason.
 
 ## Trader handoff and persistence
 
