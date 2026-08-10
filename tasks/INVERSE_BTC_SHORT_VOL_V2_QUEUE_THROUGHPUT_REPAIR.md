@@ -10,7 +10,8 @@
 
 **Base commit:** `c7f718b9f3b1d83ad17083c84466acbcc84dcc72`
 
-**Target branch/PR:** `codex/v2-queue-throughput-repair` / Draft PR `TBD`
+**Target branch/PR:** `codex/v2-queue-throughput-repair` / Draft PR
+[`#41`](https://github.com/loganleegithub/Optimatrix/pull/41)
 
 **Owning authority/contract:**
 [`CURRENT_STAGE`](../docs/authority/CURRENT_STAGE.md),
