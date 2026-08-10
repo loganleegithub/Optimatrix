@@ -14,7 +14,7 @@
 
 **Persistent service:** `RUNNING_CURRENT_8675_STABLE_SCHEMA_V5`
 
-**Live commands:** `ONE_PRESTOP_8675_CASE_INVENTORY_AUTHORIZED`
+**Live commands:** `ONE_QUEUE_REPAIR_8675_CLEAN_CUTOVER_AUTHORIZED`
 
 **Sole authorized closure:**
 [`INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR.md)
@@ -40,16 +40,24 @@ Static code inspection, focused tests, and the repository gate remain permitted.
 repair only this measured synchronous reducer hot path; it may not change a Policy, threshold,
 market universe, score, Case schema, or public/private boundary.
 
-The code change, direct profile, focused tests, repository gate, and Draft PR #41 CI are green. The
-active task may now perform exactly one same-frame loopback GET of `/api/workbench/current` and one
-official schema-v5 report against the already-bound stable root
-`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. This inventory must fix the exact
-active admitted-Entry count and Segment-close/recovery effect before any stop.
+The pre-stop inventory is consumed. Its same-frame Workbench snapshot was
+`RUNNING / CURRENT / ready`, `KNOWN_COMPLETE 128 / 128`, with market-event age `5,147 ms`, wire age
+`3,784 ms`, queue-processing lag `4,129 ms` against the `5,000 ms` deadline, and zero reconnects or
+session gaps. It reported no Shadow Entry, Position, Outcome, Decision Control, or canonical
+`SHADOW_CASE_OPENED`. The official schema-v5 report found zero Case rows in every view for the
+already-bound stable root `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`.
 
-This authority permits no live sample retry, stop, restart, second process, state-root mutation, or
-Case write outside ordinary operation, external source probe, PID/log/resource inspection, or
-deployment yet. After the inventory, `CURRENT_STAGE` must explicitly authorize the one cutover
-before it occurs.
+Durable cutover effect is exactly `NONE`: there is no admitted Entry Segment to close or recover,
+and no Case will be migrated, copied, deleted, or rewritten. The active task may mark PR #41 ready,
+merge it to `main`, delete its local and remote topic branch, clean-stop only the currently owned
+8675 runtime session, verify the six declared routes refuse connection, and start exactly one
+replacement from clean synchronized `main` using the same stable root and port.
+
+One bounded post-start smoke may inspect all six GET/HEAD routes, schema/code/runtime/Policy
+identities, and at most 60 seconds of the three schema-v7 latency values plus
+service/readiness/coverage and FactBoundary progress, followed by one official Case report. No
+retry, second root/process, Policy change, Case migration, PID/log/resource inspection, or
+additional restart is authorized.
 
 ## Completed latency-attribution result
 

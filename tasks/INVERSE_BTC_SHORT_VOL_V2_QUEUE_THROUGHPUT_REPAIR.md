@@ -35,9 +35,9 @@ client-side summary failed serialization, so it produced no retained aggregate a
 public-market bursts no longer make local processing lag systematically cross the fixed deadline;
 keep true exchange-event age separately visible and fail closed during any remaining overload.
 
-**Durable-data effect:** diagnosis and code verification write no business data. Before any later
-restart, an official Case inventory must fix the exact Segment-close/recovery effect; no Case may
-be migrated, copied, deleted, or rewritten.
+**Durable-data effect:** `NONE`. The consumed pre-stop Workbench frame and official schema-v5 report
+found zero Case/Entry/Position/Outcome/Control rows. No Segment is closed or recovered and no Case
+is migrated, copied, deleted, or rewritten.
 
 **Complexity added:** one optional locality input on the existing score-context calculator; no new
 process, queue, worker, monitor, schema, cache, retry, controller, or dependency.
@@ -72,10 +72,10 @@ one score context for the one affected instrument while preserving the full surf
 
 **Outcome/evaluation contract change:** `NONE`
 
-**Stage/authorization change:** the failed loopback sample is consumed without a retained
-aggregate. With code, profile, repository gate, and PR CI green, authorize exactly one current
-Workbench inventory plus one official schema-v5 report of the already-bound stable root. No retry,
-stop, restart, state-root mutation, or deployment is authorized until the durable effect is fixed.
+**Stage/authorization change:** the pre-stop inventory is consumed and establishes durable effect
+`NONE`. Authorize PR #41 merge and topic-branch deletion, one clean stop of the owned 8675 session,
+one replacement start from clean synchronized `main` on the same stable root and port, and one
+bounded post-start route/latency/Case-reader smoke. No retry or second restart/root is authorized.
 
 ## Scope
 
@@ -95,8 +95,8 @@ owned `recalculation_names` locality.
 - focused test first reproduces redundant work or latency amplification;
 - direct deterministic profile/benchmark validates the owning function rather than whole-host CPU;
 - `make check`;
-- exactly one pre-stop Workbench/official-reader inventory, then deployment only after an explicit
-  cutover authority update.
+- consumed pre-stop Workbench/official-reader inventory; one explicitly authorized clean cutover
+  and bounded post-start smoke.
 
 ## Definition of done
 
