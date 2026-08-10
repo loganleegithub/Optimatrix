@@ -12,9 +12,9 @@
 
 **Accepted implementation boundary:** `INVERSE_BTC_V1_ONLY_REPOSITORY`
 
-**Persistent service:** `STABLE_CASE_REPOSITORY_RECOVERY_ACCEPTED`
+**Persistent service:** `RUNNING_CURRENT_GAPPED_ENTRY_RECOVERY`
 
-**Live commands:** `FORBIDDEN_PENDING_SEPARATE_RESTART_AUTHORITY`
+**Live commands:** `NO_ADDITIONAL_START_STOP_OR_RESTART_AUTHORIZED`
 
 **Sole authorized closure:** `NONE`
 
@@ -43,26 +43,30 @@ The component-book lifecycle remains a public-book counterfactual. It is `NOT_AN
 `NOT_A_FILL`, `NOT_AN_ATOMIC_QUOTE`, provides no liquidity reservation, and proves neither
 fillability, strategy edge, profitability, nor qualification.
 
-## Existing live process boundary
+## Current live process boundary
 
-At the 2026-08-10 Authority freeze, the already-running loopback Workbench at
+At `2026-08-10T11:29:56+08:00`, the externally started loopback Workbench at
 `http://127.0.0.1:8765` reported:
 
 ```text
-code identity:                270920fb1fcb255c648e95361f31c1e5075ec294
-runtime identity:             sha256:33dedd47cff3f6cb10bb5b2844f58b79218f40c931bf02221440a1894a785bf4
+code identity:                c5cc2e605de7df028be18b6ff00ca3b76dd86f27
+runtime identity:             sha256:888729c63e0deec4aea2bb1a3787a205501910351ae66c4d07e66e5017048676
 product spec identity:        sha256:ff90da92cefe8e530339df38505fe7726b92b45b1855b751f2633ffd4fdb2172
 Radar Policy identity:        sha256:283c2a8cc5e14cbed94b0f2a41ddd18ff2410772ae45d07abfea80d04446b1af
 Underwriting Policy identity: sha256:76a93725bb4923a70a2865b1e06add3b5a23ae80a831029c558ce188be6e7834
 Position Policy identity:     sha256:cb3866b8efd45d5c05ed23ab56658c2cdbf0359132e39f52ce329761ad933b8e
 observed service state:       RUNNING / CURRENT / ready
+declared GET routes:          6 / 6 HTTP 200
+declared HEAD routes:         6 / 6 HTTP 200
+current Radar rows:           128
+recovered admitted Entries:   14 / 14, latest Segment OPEN / GAPPED
 ```
 
-That process was launched from the pre-Inverse-only checkout. Its identity is a read-only
-operational observation, not evidence that the accepted repository is deployed. Its health and
-market counters may change after the observation. It must not be hot-swapped, stopped, restarted,
-relaunched, repointed, or used for a post-change smoke under this Authority. A later restart
-requires a new explicit task and permission boundary.
+The one authorized start has been consumed. The process runs the accepted Inverse-only source and
+reuses `/private/tmp/optimatrix-inverse-btc-stable-97AYba`. Its identity and health are a bounded
+operational observation; current health and market counters must be re-read before any later claim.
+No additional start, stop, restart, repoint, Policy change, or live smoke is authorized. Any such
+action requires a new active task and permission boundary.
 
 ## Accepted repository closure
 
@@ -78,15 +82,18 @@ product roadmap does not create code or authority for any unimplemented channel.
 
 ## Durable-data boundary
 
-The repository closure had durable-data effect `NONE`. External state roots and Shadow Case
-repositories were not enumerated, opened, migrated, rewritten, copied, or deleted. The accepted
-Inverse Case shape, identities, process-independent Entry aggregate, Observation Segment,
-first-CLOSE/attempt, and Outcome semantics remain unchanged.
+The stable repository contains `51` Case directories. Recovery created no Case directory and no
+Outcome, migrated/copied/deleted/rewrote no existing record, and did not restore the `37` historical
+selected no-trade Controls. It appended one contract-owned `GAPPED` Observation Segment to each of
+the `14` compatible non-terminal admitted Entries. Their latest Segments are `OPEN / GAPPED`; this
+does not restore continuity or qualification across the prior unclean exit. The accepted Inverse
+Case shape, identities, Entry aggregate, first-CLOSE/attempt, and Outcome semantics are unchanged.
 
 ## Current non-claims
 
-Repository checks establish source behavior only. They do not authorize a live command or prove
-the identity or health of a later process. They do not establish current market health,
-fillability, opportunity frequency, account margin, edge, profitability, qualification, or
-execution permission. Any later implementation, validation, restart, Policy discussion, or new
-2×2 channel requires a new active task under the Delivery Contract.
+The current live snapshot establishes only the identity, reachability, currentness, and recovery
+state shown above. It does not establish continuous future uptime, fillability, opportunity
+frequency, account margin, edge, profitability, qualification, or execution permission. The `14`
+Outcome rows are pending Entry projections, not mature Outcomes. Any later implementation,
+validation, stop/restart, Policy discussion, or new 2×2 channel requires a new active task under the
+Delivery Contract.

@@ -43,16 +43,15 @@ offline from Shadow Cases.
 
 The permission boundary remains `PUBLIC_SHADOW`. The repository's accepted online surface is
 Inverse BTC only: the canonical startup, product specification, public source, Policy chain, and
-schema family all resolve to `INVERSE_BTC_V1`. There is no active implementation task and no live
-command is authorized by the accepted repository state.
+schema family all resolve to `INVERSE_BTC_V1`.
 
-The existing loopback process at `127.0.0.1:8765` was observed from the older code identity
-`270920fb1fcb255c648e95361f31c1e5075ec294`. It has not been hot-swapped, stopped, restarted, or
-repointed, and no external state root was opened, migrated, rewritten, or deleted for this
-repository closure. Repository checks do not prove the accepted source is deployed or establish
-current market health, fillability, account margin, frequency, edge, profitability, or
-qualification. Exact live identity and permission details are in
-`docs/authority/CURRENT_STAGE.md`.
+At the current Authority observation, `127.0.0.1:8765` is served by clean Inverse-only code and is
+`RUNNING / CURRENT / ready`. The process restored every compatible non-terminal admitted Entry from
+the stable Case repository as a new `GAPPED` Observation Segment; no historical selected no-trade
+Control was restored. There is no active task and no additional start, stop, restart, or live smoke
+is authorized. A live snapshot does not establish future uptime, fillability, account margin,
+frequency, edge, profitability, or qualification. Exact runtime identity, durable effect, and
+permission details are in `docs/authority/CURRENT_STAGE.md`.
 
 See:
 
