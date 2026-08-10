@@ -4,98 +4,85 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `VALIDATION_ONLY`
+**Current task kind:** `NONE`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_8675_CUTOVER_AUTHORIZED_PENDING`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_8675_LIVE_CURRENT`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
-**Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_ONE_8675_CUTOVER`
+**Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `NO_CURRENT_SERVICE_8765_UNAVAILABLE_PENDING_8675_START`
+**Persistent service:** `RUNNING_CURRENT_8675_FRESH_SCHEMA_V5`
 
-**Live commands:** `ONE_NEW_ROOT_8675_START_ONE_BOUNDED_SMOKE`
+**Live commands:** `NONE_AUTHORIZED_8675_CUTOVER_CONSUMED`
 
-**Sole authorized closure:**
-[`INVERSE_BTC_SHORT_VOL_V2_8675_CUTOVER`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_8675_CUTOVER.md)
+**Sole authorized closure:** `NONE`
 
-## Active cutover boundary
+## Current online boundary
 
-The repository repair is merged at `main@b6fb446ca608648ac4a0d872e656eaee0ddedbfb`.
-It fixes delayed-HIGH activation-packet ownership, optional S/T cross-sectional source coherence,
-cross-Call/Put dependency invalidation, score-relevant ticker countability, native tick-ladder
-spread distance, and conditional Case reporting. The remaining measured baseline is `0 / 1` Online
-Runtime instances binding that chain on the user-requested port `8675`; the blocker is
-`V2_COHERENCE_POLICY_CHAIN_NOT_ONLINE`.
-
-The sole authorized topology is:
-
-1. retain the observed six-route connection refusal at `127.0.0.1:8765` and the official
-   schema-v5 reader result of `0` Case directories in its stable H2 root
-   `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2`;
-2. verify the exact new root `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9` is absent;
-3. from one clean commit on the declared task branch, invoke canonical `serve-shadow` exactly once
-   on `127.0.0.1:8675` with that fresh root;
-4. consume one bounded read-only smoke over the six declared GET/HEAD routes, immutable current API,
-   exact product/Policy identities, and official schema-v5 reader;
-5. preserve both old historical roots and the superseded H2 root in place without copy, migration,
-   deletion, rewrite, or recovery into the new root.
-
-No retry, second new root, old-root repoint, Case compatibility mode, source-contract probe,
-threshold tuning, process supervisor, PID/log/`lsof`/launchd inspection, or private action is
-authorized. A failed new start or smoke leaves the product unavailable and is reported as the
-blocker.
-
-## Target identity chain
-
-```text
-product spec identity:        sha256:a7880d3a0b3da12f74438b292ed49d7c034e683d2e1654037229c62474127131
-Radar Policy identity:        sha256:fd604c22b6f4a111955f432fe09647e93c38e914e81c4045905ca79b935bdc9d
-Underwriting Policy identity: sha256:933dce3e4d9736b465aaca95a352ef8c3196592bfef04cf1f958442afe0f5e7d
-Position Policy identity:     sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe
-deployment state:             AUTHORIZED_NOT_YET_RUNNING
-```
-
-The numeric score weights, thresholds, TTE/Delta bands, persistence, Underwriting thresholds,
-Position thresholds, Case schema, and Outcome arithmetic are unchanged by this cutover. The score
-remains an expert ordinal hypothesis, not a probability, oracle, Edge, or profitability claim.
-
-## Current product truth
-
-The sole Online Runtime product is `INVERSE_BTC_V1`. There is no product selector, fallback
-product, compatibility profile, alternate online schema, or in-process Policy switch. The
-repository contains only the three fixed V2 Inverse Policy artifacts in the target chain. Both the
-superseded and target services are Deribit production-public, BTC-native Shadow processes with no
-private execution capability.
-
-## Pre-cutover accepted online boundary
-
-At the last accepted H2 observation, `http://127.0.0.1:8765` reported:
+The causal-coherence repair is deployed as the sole `INVERSE_BTC_SHORT_VOL_V2` Online Runtime. At
+`2026-08-10T17:59:55+08:00`, the bounded same-frame smoke at
+`http://127.0.0.1:8675` reported:
 
 ```text
 channel:                      INVERSE_BTC_SHORT_VOL_V2
 Workbench schema:             6
-code identity:                cd9243ff9f92ca6e1b6c142dc9d61cbc5a21a359
-runtime identity:             sha256:8c34f476bc91928678eb36b0e3528b2a7bc4f0b9d47157b018b805fb7d065260
-Radar Policy identity:        sha256:79b5ec7c886964ee4c886fb272f287f0645cc69a0b585cf53711c7b5ad0fef57
-Underwriting Policy identity: sha256:5cea5bc8153071359597526e0f1bd665bbf55215b5368ed6135f96ca3b607c31
-Position Policy identity:     sha256:f05646f7c1ed1a55bd8747879f1153c2633afde83aa3652549e01140552a6c67
-observed service state:       RUNNING / CURRENT / ready
+code identity:                a2de69894dbcc5913c414f4074506340c991c587
+runtime identity:             sha256:4421619ac60b840c374c0bfee23e2cdb70abb8c21f3fabe9f621ef337ebdea38
+product spec identity:        sha256:a7880d3a0b3da12f74438b292ed49d7c034e683d2e1654037229c62474127131
+Radar Policy identity:        sha256:fd604c22b6f4a111955f432fe09647e93c38e914e81c4045905ca79b935bdc9d
+Underwriting Policy identity: sha256:933dce3e4d9736b465aaca95a352ef8c3196592bfef04cf1f958442afe0f5e7d
+Position Policy identity:     sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe
+observed service state:       RUNNING / CURRENT / health / ready
+declared GET routes:          6 / 6 HTTP 200
+declared HEAD routes:         6 / 6 HTTP 200
+coverage state:               KNOWN_COMPLETE, 128 / 128 instruments
+current Radar rows:           128
+Shadow Entry rows:            0
+Position rows:                0
+Outcome rows:                 0
+Decision Control rows:        0
 ```
 
-That service uses `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2`. Its health and Case
-inventory were read again before cutover. At `2026-08-10T17:56:38+08:00`, all six declared routes
-refused connection and the official schema-v5 report found `0` Case directories. The superseded
-service is therefore already unavailable; there is no clean-stop or old-root Segment write to
-perform.
+The one authorized start used the fresh stable root
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. The official schema-v5 report
+validated its exact product/Policy chain with `0` Case directories. The start and bounded smoke are
+consumed; no restart, second root, repoint, or additional live operation is authorized.
 
-## Durable-data boundary and non-claims
+## Superseded service and durable roots
 
-The superseded H2 root remains its own immutable research epoch. Clean stop may append only the
-contract-owned current Segment close for any admitted Entry. The new V2-v9 root starts empty and
-accepts only schema-v5 Cases bound to the target chain. Zero new Cases or Outcomes is valid and is
-not a zero-opportunity, zero-risk, frequency, qualification, or profitability claim.
+Before the new start, all six declared routes at `127.0.0.1:8765` refused connection. The prior H2
+process was therefore already absent; this cutover issued no stop command and wrote no Segment
+close to its root. Its stable repository
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2` was preserved in place and the official
+schema-v5 report found `0` Case directories.
 
-The permission remains Deribit production public data and loopback read-only Workbench only. There
-is no credential, account, balance, margin, order, fill, capital, settlement action, actual
-position, or private execution authority.
+The historical V1 `/private/tmp/optimatrix-inverse-btc-stable-97AYba` repository also remains
+untouched. No Case was copied, migrated, rewritten, deleted, or recovered from either prior root
+into the new V2-v9 epoch.
+
+## Current product truth
+
+The sole Online Runtime product is `INVERSE_BTC_V1`. It consumes Deribit production public BTC
+options and `btc_usd`, uses BTC-native premium/fees/settlement/PnL, and labels current valuation as
+`USD_EQUIVALENT`. Its accepted durable family is schema v5. There is no product selector, fallback
+product, compatibility profile, alternate online schema, or in-process Policy switch. The
+repository contains only the three fixed V2 Inverse Policy artifacts shown above.
+
+The V2 score is an expert ordinal opportunity-ranking hypothesis, not a probability, oracle,
+expected return, Edge, or profitability claim. The component-book lifecycle is a public-book
+counterfactual, not an order, fill, atomic quote, liquidity reservation, or actual position.
+
+## Current funnel observation and non-claims
+
+In the accepted same-frame snapshot, post-warmup `RADAR_KNOWN` was
+`107,371 / 113,251`; the earliest measured loss was `OPTION_BOOK_UNKNOWN`, with `5,880` total
+blocked evaluations at that stage including `128` `POST_STATUS_BOOTSTRAP_REQUIRED`. No anomaly
+Episode, Candidate, Shadow Case, or mature Outcome had formed. These are rapidly changing current
+runtime diagnostics, not an opportunity-frequency or Policy-quality estimate.
+
+The permission remains `PUBLIC_SHADOW`: no credential, account, balance, margin, order, fill,
+capital, settlement action, actual exposure, or private execution. Current health and coverage do
+not establish future uptime, fillability, qualification, Edge, or profitability. A future service
+operation, Policy change, or new roadmap channel requires a new active task and explicit permission
+update under the Delivery Contract.

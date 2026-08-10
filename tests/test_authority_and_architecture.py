@@ -182,47 +182,44 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_one_v2_8675_cutover() -> None:
+def test_current_stage_records_consumed_v2_8675_cutover() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `VALIDATION_ONLY`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_8675_CUTOVER`" in current
+    assert "**Current task kind:** `NONE`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_8675_LIVE_CURRENT`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert (
-        "**Persistent service:** `NO_CURRENT_SERVICE_8765_UNAVAILABLE_PENDING_8675_START`"
-        in current
-    )
-    assert "ONE_NEW_ROOT_8675_START_ONE_BOUNDED_SMOKE" in current
-    assert "**Sole authorized closure:**" in current
+    assert "**Persistent service:** `RUNNING_CURRENT_8675_FRESH_SCHEMA_V5`" in current
+    assert "**Live commands:** `NONE_AUTHORIZED_8675_CUTOVER_CONSUMED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
         "channel: INVERSE_BTC_SHORT_VOL_V2",
-        "code identity: cd9243ff9f92ca6e1b6c142dc9d61cbc5a21a359",
-        "runtime identity: sha256:8c34f476bc91928678eb36b0e3528b2a7bc4f0b9d47157b018b805fb7d065260",
-        "deployment state: AUTHORIZED_NOT_YET_RUNNING",
-        "invoke canonical `serve-shadow` exactly once",
-        "all six declared routes refused connection",
+        "code identity: a2de69894dbcc5913c414f4074506340c991c587",
+        "runtime identity: sha256:4421619ac60b840c374c0bfee23e2cdb70abb8c21f3fabe9f621ef337ebdea38",
+        "6 / 6 HTTP 200",
+        "KNOWN_COMPLETE, 128 / 128 instruments",
+        "Shadow Entry rows: 0",
+        "Position rows: 0",
+        "Outcome rows: 0",
+        "Decision Control rows: 0",
+        "all six declared routes at `127.0.0.1:8765` refused connection",
         "official schema-v5 report found `0` Case directories",
-        "A failed new start or smoke leaves the product unavailable",
+        "The start and bounded smoke are consumed",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
     ):
         assert phrase in normalized
     for identity in (
         "sha256:a7880d3a0b3da12f74438b292ed49d7c034e683d2e1654037229c62474127131",
-        "sha256:79b5ec7c886964ee4c886fb272f287f0645cc69a0b585cf53711c7b5ad0fef57",
-        "sha256:5cea5bc8153071359597526e0f1bd665bbf55215b5368ed6135f96ca3b607c31",
-        "sha256:f05646f7c1ed1a55bd8747879f1153c2633afde83aa3652549e01140552a6c67",
         "sha256:fd604c22b6f4a111955f432fe09647e93c38e914e81c4045905ca79b935bdc9d",
         "sha256:933dce3e4d9736b465aaca95a352ef8c3196592bfef04cf1f958442afe0f5e7d",
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
     assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
-        "INVERSE_BTC_SHORT_VOL_V2_8675_CUTOVER.md",
         "TEMPLATE.md",
     }
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()

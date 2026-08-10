@@ -43,17 +43,16 @@ offline from Shadow Cases.
 
 ## Current stage
 
-The permission boundary remains `PUBLIC_SHADOW`. The causal-coherence repair is merged, and the
-active validation task authorizes one bounded recovery onto the fixed V2 chain on `8675`; the
-superseded H2 surface on `8765` was already unavailable at the pre-cutover probe. The new service
-must use the fresh stable root
-`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; the prior H2 root is inventoried and
-preserved without migration or recovery into the new epoch.
+The permission boundary remains `PUBLIC_SHADOW`. The sole current service runs the fixed
+causal-coherence V2 chain at `http://127.0.0.1:8675` from the fresh stable root
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. Its bounded launch smoke confirmed
+the exact product/Policy identities, all declared GET/HEAD routes, current 128/128 public coverage,
+and an empty reader-valid schema-v5 Case repository.
 
-The new service is started exactly once and must pass the declared route, identity, current-state,
-and official-reader smoke. No retry, process supervisor, private action, or Edge/frequency gate is
-authorized. Exact runtime identity, durable effect, and permission details are in
-`docs/authority/CURRENT_STAGE.md`.
+The superseded `8765` surface was already unavailable before the new start; its prior stable root
+was preserved without migration or recovery into the new epoch. The one start and smoke are
+consumed. No restart, process supervisor, private action, or Edge/frequency claim is authorized.
+Exact runtime identity and durable boundaries are in `docs/authority/CURRENT_STAGE.md`.
 
 See:
 
