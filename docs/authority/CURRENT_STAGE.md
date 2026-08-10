@@ -82,6 +82,11 @@ truthfully `INCOMPLETE_UNCLEAN_EXIT` while the runtime is stopped.
 
 The one authorized clean start completed on `127.0.0.1:8675` from the checked repair commit, reusing
 the unchanged stable Case repository. No Case was copied, rewritten, migrated, or deleted.
+The first post-repair write on the former fatal path published decision Control
+`sha256:a9e10899eb7b4f2b8e923d77c23ca6b1d6b1caf6c0b52b9b465177fb510c42cf`; the official
+policy-aware Case reader restored it as `OPEN` under the new code/runtime identities. It is an
+ABSTAIN research Control, not an admitted Shadow Entry, but proves the Decimal packet defect no
+longer prevents durable Case publication.
 
 ## Current online boundary
 
@@ -95,10 +100,11 @@ replaced, or deleted during the cutover.
 The repaired live boundary reports health, readiness, `RUNNING`, `CURRENT`, `KNOWN_COMPLETE`,
 `128/128` current Radar coverage, zero reconnects, and zero protocol gaps. All 23 score packets in
 the first verified frame passed exact policy-aware recomputation. Three HIGH leaders were at
-confirmation `1/3`; zero Candidate, admitted Shadow Entry, or Position existed. The single durable
-Case remains a non-admitted LOW research Control with the prior runtime's truthful
-`INCOMPLETE_UNCLEAN_EXIT` status. These are bounded observations, not Policy-quality or
-future-frequency claims.
+confirmation `1/3`; zero Candidate, admitted Shadow Entry, or Position existed. The stable root now
+contains two non-admitted Controls: the prior LOW Radar-score-band Control remains
+`INCOMPLETE_UNCLEAN_EXIT`, while the new HIGH selected-Underwriting decision Control is
+`PENDING_OPEN` under the active runtime. Admitted Shadow count remains zero. These are bounded
+observations, not Policy-quality or future-frequency claims.
 
 ## Current product truth
 

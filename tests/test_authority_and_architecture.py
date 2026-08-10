@@ -223,6 +223,10 @@ def test_current_stage_authorizes_decimal_packet_live_observation() -> None:
         "Three HIGH leaders were at confirmation `1/3`",
         "b119633bfb9d137d912b905b2572fa7f4e243bd3",
         "sha256:b86939fdc61728b0ba2ea8a197b8f911c6ebe1e0855ca0d7c5e71c7694a232ba",
+        "sha256:a9e10899eb7b4f2b8e923d77c23ca6b1d6b1caf6c0b52b9b465177fb510c42cf",
+        "two non-admitted Controls",
+        "new HIGH selected-Underwriting decision Control is `PENDING_OPEN`",
+        "Admitted Shadow count remains zero",
     ):
         assert phrase in normalized
     for identity in (

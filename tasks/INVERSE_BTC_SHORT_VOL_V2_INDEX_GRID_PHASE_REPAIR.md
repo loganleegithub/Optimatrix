@@ -166,6 +166,9 @@ serializer in `packages/short_vol_radar/src/short_vol_radar/score.py`
   store-written Control Case is readable under its canonical prefixed identity;
 - prove a greater-than-28-digit raw path share survives packet serialization and exact
   policy-aware recomputation, then validate live projected packets after the bounded cutover;
+- prove the first post-repair decision Control on the former fatal path is published and restored
+  by the official reader under its exact code/runtime and Policy identities, while admitted Shadow
+  remains zero;
 - no manifest, receipt, commissioning subsystem, runtime self-acceptance, or host inspection.
 
 ## Definition of done
