@@ -4,7 +4,7 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `NONE`
+**Current task kind:** `VALIDATION_ONLY`
 
 **Current implementation status:** `INVERSE_ONLY_REPOSITORY_ACCEPTED`
 
@@ -14,9 +14,38 @@
 
 **Persistent service:** `STABLE_CASE_REPOSITORY_RECOVERY_ACCEPTED`
 
-**Live commands:** `FORBIDDEN_PENDING_SEPARATE_RESTART_AUTHORITY`
+**Live commands:** `ONE_CANONICAL_PUBLIC_SHADOW_RESTART_REQUIRED`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** `RESTORE_INVERSE_BTC_WORKBENCH_8765`
+
+**Active task:**
+[`SHORT_VOL_8765_OUTAGE_RECOVERY`](../../tasks/SHORT_VOL_8765_OUTAGE_RECOVERY.md)
+
+## Active outage-recovery authority
+
+At `2026-08-10T11:22+08:00`, all six declared loopback Workbench routes returned connection
+refused. The official Case reader validated all `51` Cases in
+`/private/tmp/optimatrix-inverse-btc-stable-97AYba`, found `14` compatible non-terminal admitted
+Entries, and classified every latest Observation Segment from runtime
+`sha256:33dedd47cff3f6cb10bb5b2844f58b79218f40c931bf02221440a1894a785bf4` as
+`INCOMPLETE_UNCLEAN_EXIT`. The stable repository lease was available. Focused service/Workbench
+tests and the repository gate passed on base `7093c9e4630da041ea8b68e650bdce3406606c90`.
+
+This task authorizes one external long-lived start from its clean commit, using only:
+
+```text
+product:        INVERSE_BTC_V1
+state root:     /private/tmp/optimatrix-inverse-btc-stable-97AYba
+Workbench:      http://127.0.0.1:8765
+Policy chain:   the exact identities below
+```
+
+The start must restore every compatible admitted Entry and may append the contract-required new
+`GAPPED` Observation Segment after the first settled public boundary. It may not migrate, copy,
+delete, rewrite, or selectively recover a Case. It may not restore selected no-trade Controls. One
+bounded read-only route/currentness check is authorized after the start. No second start, retry,
+alternate root, Policy change, private input, host inspection, process supervisor, or automatic
+restart implementation is authorized by this task.
 
 ## Current product truth
 

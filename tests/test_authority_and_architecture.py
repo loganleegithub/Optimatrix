@@ -181,16 +181,16 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_accepts_inverse_only_repository() -> None:
+def test_current_stage_authorizes_one_inverse_outage_recovery() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
+    assert "**Current task kind:** `VALIDATION_ONLY`" in current
     assert "`INVERSE_ONLY_REPOSITORY_ACCEPTED`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert "**Persistent service:** `STABLE_CASE_REPOSITORY_RECOVERY_ACCEPTED`" in current
-    assert "**Live commands:** `FORBIDDEN_PENDING_SEPARATE_RESTART_AUTHORITY`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "**Live commands:** `ONE_CANONICAL_PUBLIC_SHADOW_RESTART_REQUIRED`" in current
+    assert "**Sole authorized closure:** `RESTORE_INVERSE_BTC_WORKBENCH_8765`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
@@ -212,7 +212,18 @@ def test_current_stage_accepts_inverse_only_repository() -> None:
         "sha256:cb3866b8efd45d5c05ed23ab56658c2cdbf0359132e39f52ce329761ad933b8e",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "TEMPLATE.md",
+        "SHORT_VOL_8765_OUTAGE_RECOVERY.md",
+    }
+    task = (ROOT / "tasks/SHORT_VOL_8765_OUTAGE_RECOVERY.md").read_text(encoding="utf-8")
+    assert "**Status:** ACTIVE" in task
+    assert "**Task kind:** VALIDATION_ONLY" in task
+    assert "**Runtime implementation:** FORBIDDEN" in task
+    assert "**Live commands:** REQUIRED" in task
+    assert "`0 / 6` declared loopback GET routes" in task
+    assert "`14` compatible" in task
+    assert "new `GAPPED` Observation Segment for each of the `14`" in task
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
 
