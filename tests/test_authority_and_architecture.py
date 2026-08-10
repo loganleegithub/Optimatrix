@@ -182,16 +182,19 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_accepted_queue_backlog_repair() -> None:
+def test_current_stage_authorizes_only_offline_review_truth_attribution() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_QUEUE_BACKLOG_REPAIR_LIVE_CURRENT`" in current
+    assert "**Current task kind:** `IMPLEMENTATION`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION_OFFLINE`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert "**Persistent service:** `RUNNING_8675_FROM_MAIN_D5D4C88`" in current
-    assert "**Live commands:** `NONE_CONSUMED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
+    assert (
+        "**Sole authorized closure:** `INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION`"
+        in current
+    )
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
@@ -211,6 +214,9 @@ def test_current_stage_records_accepted_queue_backlog_repair() -> None:
         "`1,340 ms` maximum",
         "reusing unchanged peers' current core calculations",
         "no remaining production implementation or compatibility branch",
+        "review-only HIGH score rows rendered as `0/3` confirmation",
+        "`18` `KNOWN_NO_CONTROL` terminals",
+        "Public probing, 8675 stop/start/restart",
     ):
         assert phrase in normalized
     for identity in (
@@ -220,7 +226,10 @@ def test_current_stage_records_accepted_queue_backlog_repair() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "TEMPLATE.md",
+        "INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION.md",
+    }
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
 

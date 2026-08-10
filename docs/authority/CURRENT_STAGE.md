@@ -4,9 +4,9 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_QUEUE_BACKLOG_REPAIR_LIVE_CURRENT`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION_OFFLINE`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
@@ -14,9 +14,30 @@
 
 **Persistent service:** `RUNNING_8675_FROM_MAIN_D5D4C88`
 
-**Live commands:** `NONE_CONSUMED`
+**Live commands:** `FORBIDDEN`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** `INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION`
+
+## Current bounded implementation authority
+
+The one active task is
+[`INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION.md)
+from base `5a32e62069324ac83a389ca899ef0cf878650105` on branch
+`codex/v2-review-truth-attribution`. It may change only the existing in-memory Radar confirmation,
+selected-decision terminal attribution, Funnel projection, and Workbench rendering path. It may
+create one Draft PR after direct and repository checks. The bounded closure is published as
+[Draft PR #44](https://github.com/loganleegithub/Optimatrix/pull/44).
+
+The bounded observation immediately preceding this task found review-only HIGH score rows rendered
+as `0/3` confirmation and a cumulative selected-decision projection of `21` activation batches,
+`18` selected decisions, `18` `KNOWN_NO_CONTROL` terminals, and zero opened Cases without a fixed
+reason split. Those counts are the task baseline, not durable research evidence and not a claim
+about the current instant.
+
+This task changes no source input, Policy byte or threshold, Shadow Case schema, state root,
+Outcome arithmetic, process, queue, or deployment. Public probing, 8675 stop/start/restart,
+state-root access, and every other live command are forbidden. The running service below remains
+the prior accepted `main`; an offline branch or green check does not update that online identity.
 
 ## Current online boundary
 

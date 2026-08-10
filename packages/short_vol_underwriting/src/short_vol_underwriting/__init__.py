@@ -49,6 +49,7 @@ from short_vol_underwriting.constants import (
 from short_vol_underwriting.control import (
     DecisionControlAttempt,
     DecisionControlAttemptOutcome,
+    DecisionControlKnownNoControlReason,
     DecisionControlRefreshClassification,
     RadarScoreControlDesignation,
     designate_radar_score_control_review,
@@ -150,6 +151,7 @@ __all__ = [
     "ComponentPostCloseAttempt",
     "DecisionControlAttempt",
     "DecisionControlAttemptOutcome",
+    "DecisionControlKnownNoControlReason",
     "DecisionControlRefreshClassification",
     "EntryEconomics",
     "FactBoundary",

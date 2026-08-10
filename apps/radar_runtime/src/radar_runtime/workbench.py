@@ -1615,6 +1615,7 @@ def _decision_control_rows(
                 or selection_payload.get("radar_score_packet"),
                 "refresh_terminal_outcome": refresh_terminal_outcome,
                 "refresh_unknown_reasons": refresh_unknown_reasons,
+                "refresh_known_no_control_reason": terminal_payload.get("known_no_control_reason"),
                 "refresh_component_pair_timing": enrollment_payload.get(
                     "entry_refresh_component_pair_timing"
                 )

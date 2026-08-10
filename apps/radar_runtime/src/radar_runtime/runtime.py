@@ -823,6 +823,7 @@ class RadarReducer:
         self._fact_transaction_revision = 0
         self._latest_funnel_causal_seq = 0
         self._latest_funnel_evaluations: tuple[RadarFunnelEvaluation, ...] = ()
+        self._confirmation_reset_counts: Counter[str] = Counter()
         self._queue_lag_currentness_active = False
         self._queue_lag_transition_pending = False
         self._queue_lag_transition_application: tuple[int, int] | None = None
@@ -3034,8 +3035,8 @@ class RadarReducer:
             )
             if bucket_tracker is not None and bucket_tracker.frozen_instrument_name == name:
                 transition = bucket_tracker.scope_loss(causal_seq=self._causal_seq)
-                self._record_bucket_episode_end(
-                    transition.ended,
+                self._record_bucket_tracker_transition(
+                    transition,
                     boundary.received_monotonic_ms,
                 )
             self._ticker_accepted_currentness.pop(name, None)
@@ -5001,8 +5002,8 @@ class RadarReducer:
             if bucket_key in grouped_names:
                 continue
             transition = existing_bucket_tracker.scope_loss(causal_seq=commit.boundary.causal_seq)
-            self._record_bucket_episode_end(
-                transition.ended,
+            self._record_bucket_tracker_transition(
+                transition,
                 commit.boundary.received_monotonic_ms,
             )
             self.bucket_trackers.pop(bucket_key, None)
@@ -5081,8 +5082,8 @@ class RadarReducer:
                         reason=selection.reason or "BUCKET_CORE_UNKNOWN",
                     )
                 )
-                self._record_bucket_episode_end(
-                    transition.ended,
+                self._record_bucket_tracker_transition(
+                    transition,
                     commit.boundary.received_monotonic_ms,
                 )
                 selection = select_bucket_leader(tuple(candidates))
@@ -5157,9 +5158,13 @@ class RadarReducer:
 
             leader_packet = new_packets[leader_name]
             if bucket_tracker.episode is None:
-                bucket_tracker.align_leader(
+                alignment_transition = bucket_tracker.align_leader(
                     instrument_name=leader_name,
                     score_band=leader_packet.result.band,
+                )
+                self._record_bucket_tracker_transition(
+                    alignment_transition,
+                    commit.boundary.received_monotonic_ms,
                 )
             leader_item = prepared_by_name.get(leader_name)
             bucket_transition = RadarBucketTrackerTransition()
@@ -5171,8 +5176,8 @@ class RadarReducer:
                     trusted_time=trusted,
                     rule=leader_calculation.rule,
                 )
-            self._record_bucket_episode_end(
-                bucket_transition.ended,
+            self._record_bucket_tracker_transition(
+                bucket_transition,
                 commit.boundary.received_monotonic_ms,
             )
             if (
@@ -5283,6 +5288,16 @@ class RadarReducer:
                 )
             )
         return evaluated
+
+    def _record_bucket_tracker_transition(
+        self,
+        transition: RadarBucketTrackerTransition,
+        monotonic_ms: int,
+    ) -> None:
+        reset_reason = transition.confirmation_reset_reason
+        if reset_reason is not None:
+            self._confirmation_reset_counts[reset_reason.value] += 1
+        self._record_bucket_episode_end(transition.ended, monotonic_ms)
 
     def _record_bucket_episode_end(
         self,
@@ -5519,8 +5534,8 @@ class RadarReducer:
                 causal_seq=boundary.causal_seq,
                 reason=reason,
             )
-            self._record_bucket_episode_end(
-                bucket_transition.ended,
+            self._record_bucket_tracker_transition(
+                bucket_transition,
                 boundary.received_monotonic_ms,
             )
         tracker.state = TrackerState.UNKNOWN
@@ -6381,6 +6396,10 @@ class RadarReducer:
         return self._latest_funnel_evaluations
 
     @property
+    def confirmation_reset_counts(self) -> Mapping[str, int]:
+        return self._confirmation_reset_counts
+
+    @property
     def current_diagnostic_tickers(self) -> dict[str, TickerState]:
         """Return only tickers whose source currentness was settled as CURRENT."""
         return {
@@ -6618,7 +6637,7 @@ class RadarReducer:
         )
         for bucket_tracker in self.bucket_trackers.values():
             transition = bucket_tracker.stop(causal_seq=self._causal_seq)
-            self._record_bucket_episode_end(transition.ended, monotonic_ms)
+            self._record_bucket_tracker_transition(transition, monotonic_ms)
         for compatibility in self.trackers.values():
             compatibility.state = TrackerState.UNKNOWN
             compatibility.episode_id = None

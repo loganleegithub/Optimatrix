@@ -12,7 +12,9 @@ from options_domain import OptionType
 from short_vol_radar.baseline import PI_OVER_TWO, compute_baseline
 from short_vol_radar.black import DecimalInterval
 from short_vol_radar.bucket import (
+    BucketConfirmationResetReason,
     BucketEpisodeEndReason,
+    BucketEpisodeState,
     BucketLeaderCandidate,
     LeaderCoverage,
     RadarBucketEpisodeTracker,
@@ -637,8 +639,11 @@ def test_bucket_tracker_leader_change_resets_preconfirmation() -> None:
     )
     assert reset.newly_confirmed is None
     assert reset.observation_counted
+    assert reset.confirmation_reset_reason is BucketConfirmationResetReason.LEADER_CHANGE
 
-    assert tracker.align_leader(instrument_name="THIRD", score_band=ScoreBand.LOW)
+    alignment = tracker.align_leader(instrument_name="THIRD", score_band=ScoreBand.LOW)
+    assert alignment.state_changed
+    assert alignment.confirmation_reset_reason is BucketConfirmationResetReason.LEADER_CHANGE
     aligned = tracker.observe(
         packet=_packet(instrument="THIRD", band=ScoreBand.LOW),
         observation_identity=(4,),
@@ -757,6 +762,16 @@ def test_review_only_tte_bucket_never_forms_research_episode() -> None:
         score_model=policy.score_model,
         clue_eligible=review_band.clue_eligible,
     )
+    alignment = tracker.align_leader(
+        instrument_name=packet.leader_instrument_name,
+        score_band=packet.result.band,
+    )
+    assert not alignment.state_changed
+    assert alignment.confirmation_reset_reason is None
+    assert (
+        tracker.projection(review_band.option_rules[OptionType.CALL]).state
+        is BucketEpisodeState.IDLE
+    )
     for index, timestamp in enumerate((0, 60_000, 120_000), start=1):
         transition = tracker.observe(
             packet=packet,
@@ -767,3 +782,46 @@ def test_review_only_tte_bucket_never_forms_research_episode() -> None:
         )
     assert transition.newly_confirmed is None
     assert tracker.episode is None
+    assert tracker.confirmation_observation_count == 0
+    assert (
+        tracker.projection(review_band.option_rules[OptionType.CALL]).state
+        is BucketEpisodeState.IDLE
+    )
+
+
+def test_bucket_tracker_attributes_score_band_and_core_unknown_confirmation_resets() -> None:
+    policy = _policy()
+    rule = policy.tte_bands[1].option_rules[OptionType.CALL]
+    packet = _packet(band=ScoreBand.MID)
+    tracker = RadarBucketEpisodeTracker(
+        runtime_identity="sha256:" + "4" * 64,
+        policy_identity=IDENTITY,
+        bucket_key=packet.bucket_key,
+        score_model=policy.score_model,
+        clue_eligible=True,
+    )
+    tracker.observe(
+        packet=packet,
+        observation_identity=(1,),
+        causal_seq=1,
+        trusted_time=TimeInterval(0, 0),
+        rule=rule,
+    )
+
+    band_reset = tracker.align_leader(
+        instrument_name=packet.leader_instrument_name,
+        score_band=ScoreBand.LOW,
+    )
+    assert band_reset.confirmation_reset_reason is BucketConfirmationResetReason.SCORE_BAND_CHANGE
+    assert tracker.confirmation_observation_count == 0
+
+    tracker.observe(
+        packet=_packet(band=ScoreBand.LOW),
+        observation_identity=(2,),
+        causal_seq=2,
+        trusted_time=TimeInterval(60_000, 60_000),
+        rule=rule,
+    )
+    unknown_reset = tracker.core_unknown(causal_seq=3, reason="OPTION_BOOK_UNKNOWN")
+    assert unknown_reset.confirmation_reset_reason is BucketConfirmationResetReason.CORE_UNKNOWN
+    assert tracker.projection(rule).state is BucketEpisodeState.IDLE

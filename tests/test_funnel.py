@@ -35,6 +35,7 @@ def _reducer(
     atomic_state: PublicAtomicQuoteState | None = None,
     index_availability: IndexAvailabilityState = IndexAvailabilityState.AVAILABLE,
     band_id: str = "band",
+    confirmation_reset_counts: Mapping[str, int] | None = None,
 ) -> RadarReducer:
     trackers: dict[str, object] = {}
     atomic_states: dict[str, PublicAtomicQuoteState] = {}
@@ -53,6 +54,7 @@ def _reducer(
         SimpleNamespace(
             latest_funnel_causal_seq=causal_seq,
             latest_funnel_evaluations=evaluations,
+            confirmation_reset_counts=confirmation_reset_counts or {},
             trackers=trackers,
             atomic_states=atomic_states,
             results=results,
@@ -108,6 +110,7 @@ def _observe(
     records: Sequence[Mapping[str, object]] = (),
     index_availability: IndexAvailabilityState = IndexAvailabilityState.AVAILABLE,
     band_id: str = "band",
+    confirmation_reset_counts: Mapping[str, int] | None = None,
 ) -> FunnelSnapshot:
     commit = _commit(causal_seq)
     resolved_evaluations = (
@@ -123,6 +126,7 @@ def _observe(
             atomic_state=atomic_state,
             index_availability=index_availability,
             band_id=band_id,
+            confirmation_reset_counts=confirmation_reset_counts,
         ),
         commit=commit,
         new_shadow_records=records,
@@ -143,6 +147,24 @@ def test_funnel_reports_no_post_warmup_scope_without_inventing_a_later_blocker()
         "numerator": 0,
         "denominator": 0,
         "ratio": None,
+    }
+
+
+def test_funnel_projects_bounded_cumulative_confirmation_reset_reasons() -> None:
+    snapshot = _observe(
+        FunnelTracker(),
+        causal_seq=1,
+        confirmation_reset_counts={"LEADER_CHANGE": 2, "SCORE_BAND_CHANGE": 3},
+    )
+
+    assert snapshot.radar_confirmation.as_object() == {
+        "unit": "LOST_NONZERO_PRE_ACTIVATION_CONFIRMATION",
+        "reset_counts": {"LEADER_CHANGE": 2, "SCORE_BAND_CHANGE": 3},
+        "non_claims": [
+            "NOT_AN_EPISODE_COUNT",
+            "NOT_A_MARKET_FREQUENCY_ESTIMATE",
+            "RESETS_BEFORE_THIS_RUNTIME_ARE_NOT_RECOVERABLE",
+        ],
     }
 
 
@@ -182,6 +204,7 @@ def test_selected_decision_research_funnel_is_separate_from_canonical_candidate_
         "decision_outcome_count": 0,
         "selected_action_counts": {"ABSTAIN": 1},
         "attempt_terminal_counts": {"CONTROL_OPENED": 1},
+        "known_no_control_reason_counts": {},
         "pending_counts": {
             "batch_without_selected_evaluable_decision": 0,
             "selected_without_case": 0,
@@ -241,6 +264,35 @@ def test_selected_candidate_reuses_admission_terminal_in_research_funnel() -> No
 
     assert snapshot.decision_control_research.attempt_terminal_counts == {"ENTRY_EMITTED": 1}
     assert tracker.retained_state_counts["selected_candidate_identities"] == 0
+
+
+def test_funnel_attributes_known_no_control_to_one_bounded_reason() -> None:
+    snapshot = _observe(
+        FunnelTracker(),
+        causal_seq=1,
+        records=(
+            _record(
+                "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
+                payload={
+                    "terminal_outcome": "KNOWN_NO_CONTROL",
+                    "known_no_control_reason": "NO_PROTECTIVE_COMPONENT",
+                },
+            ),
+            _record(
+                "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL",
+                payload={
+                    "terminal_outcome": "KNOWN_NO_CONTROL",
+                    "known_no_control_reason": "UNBOUNDED_FREE_TEXT",
+                },
+            ),
+        ),
+    )
+
+    assert snapshot.decision_control_research.attempt_terminal_counts == {"KNOWN_NO_CONTROL": 2}
+    assert snapshot.decision_control_research.known_no_control_reason_counts == {
+        "NO_PROTECTIVE_COMPONENT": 1,
+        "OTHER_KNOWN_NO_CONTROL": 1,
+    }
 
 
 def test_funnel_separates_startup_warmup_from_steady_state_knownness() -> None:

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from market_monitor import ContinuityGap, IndexAvailabilityState
 from short_vol_radar.detector import DetectorState
 from short_vol_radar.evidence import CoverageBlockingReason
+from short_vol_underwriting.control import DecisionControlKnownNoControlReason
 
 if TYPE_CHECKING:
     from radar_runtime.runtime import CausalCommit, RadarFunnelEvaluation, RadarReducer
@@ -69,6 +70,10 @@ _NUMERICAL_UNKNOWN_REASONS = frozenset(
         "ratio denominator must be finite and positive",
         "binary64 model result is not finite",
     }
+)
+
+_KNOWN_NO_CONTROL_REASONS = frozenset(
+    reason.value for reason in DecisionControlKnownNoControlReason
 )
 
 
@@ -175,6 +180,22 @@ class RadarKnownnessSnapshot:
 
 
 @dataclass(frozen=True)
+class RadarConfirmationSnapshot:
+    reset_counts: Mapping[str, int]
+
+    def as_object(self) -> dict[str, object]:
+        return {
+            "unit": "LOST_NONZERO_PRE_ACTIVATION_CONFIRMATION",
+            "reset_counts": dict(sorted(self.reset_counts.items())),
+            "non_claims": [
+                "NOT_AN_EPISODE_COUNT",
+                "NOT_A_MARKET_FREQUENCY_ESTIMATE",
+                "RESETS_BEFORE_THIS_RUNTIME_ARE_NOT_RECOVERABLE",
+            ],
+        }
+
+
+@dataclass(frozen=True)
 class DecisionControlResearchSnapshot:
     activation_batch_count: int
     selected_decision_count: int
@@ -182,6 +203,7 @@ class DecisionControlResearchSnapshot:
     decision_outcome_count: int
     selected_action_counts: Mapping[str, int]
     attempt_terminal_counts: Mapping[str, int]
+    known_no_control_reason_counts: Mapping[str, int]
 
     def as_object(self) -> dict[str, object]:
         return {
@@ -192,6 +214,9 @@ class DecisionControlResearchSnapshot:
             "decision_outcome_count": self.decision_outcome_count,
             "selected_action_counts": dict(sorted(self.selected_action_counts.items())),
             "attempt_terminal_counts": dict(sorted(self.attempt_terminal_counts.items())),
+            "known_no_control_reason_counts": dict(
+                sorted(self.known_no_control_reason_counts.items())
+            ),
             "pending_counts": {
                 "batch_without_selected_evaluable_decision": max(
                     0,
@@ -219,6 +244,7 @@ class FunnelSnapshot:
     stages: tuple[FunnelStageSnapshot, ...]
     primary_blocker: PrimaryFunnelBlocker
     radar_knownness: RadarKnownnessSnapshot
+    radar_confirmation: RadarConfirmationSnapshot
     atomic_combo_diagnostic_counts: Mapping[str, int]
     decision_control_research: DecisionControlResearchSnapshot
 
@@ -227,6 +253,7 @@ class FunnelSnapshot:
             "stages": [stage.as_object() for stage in self.stages],
             "primary_blocker": self.primary_blocker.as_object(),
             "radar_knownness": self.radar_knownness.as_object(),
+            "radar_confirmation": self.radar_confirmation.as_object(),
             "atomic_combo_diagnostic": {
                 "unit": "DISTINCT_ANOMALY_EPISODE_EVER_OBSERVED_IN_STATE",
                 "counts": dict(sorted(self.atomic_combo_diagnostic_counts.items())),
@@ -273,6 +300,7 @@ class FunnelTracker:
         self._post_warmup_radar_known_evaluation_count = 0
         self._post_warmup_radar_blockers: Counter[str] = Counter()
         self._warmed_band_ids: set[str] = set()
+        self._radar_confirmation_reset_counts: Counter[str] = Counter()
 
         self._anomaly_episode_count = 0
         self._structure_episode_count = 0
@@ -289,6 +317,7 @@ class FunnelTracker:
         self._decision_outcome_count = 0
         self._selected_decision_action_counts: Counter[str] = Counter()
         self._decision_control_attempt_terminal_counts: Counter[str] = Counter()
+        self._decision_control_known_no_control_reason_counts: Counter[str] = Counter()
         self._decision_selection_by_enrollment: dict[str, str] = {}
         self._decision_selection_by_candidate: dict[str, str] = {}
 
@@ -316,6 +345,7 @@ class FunnelTracker:
         commit: CausalCommit,
         new_shadow_records: Sequence[Mapping[str, object]],
     ) -> None:
+        self._radar_confirmation_reset_counts = Counter(reducer.confirmation_reset_counts)
         active_episodes = self._observe_radar(reducer, commit)
         self._observe_shadow_records(new_shadow_records)
         self._retire_inactive_episodes(active_episodes)
@@ -433,6 +463,7 @@ class FunnelTracker:
             stages,
             self._primary_blocker(stages),
             knownness,
+            RadarConfirmationSnapshot(self._radar_confirmation_reset_counts),
             self._atomic_diagnostic_episode_counts,
             DecisionControlResearchSnapshot(
                 self._decision_control_activation_batch_count,
@@ -441,6 +472,7 @@ class FunnelTracker:
                 self._decision_outcome_count,
                 self._selected_decision_action_counts,
                 self._decision_control_attempt_terminal_counts,
+                self._decision_control_known_no_control_reason_counts,
             ),
         )
 
@@ -638,6 +670,9 @@ class FunnelTracker:
             terminal = _optional_string(payload.get("terminal_outcome"))
             if terminal is not None:
                 self._decision_control_attempt_terminal_counts[terminal] += 1
+            if terminal == "KNOWN_NO_CONTROL":
+                reason = _bounded_known_no_control_reason(payload.get("known_no_control_reason"))
+                self._decision_control_known_no_control_reason_counts[reason] += 1
             return
         if kind == "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN":
             enrollment = _optional_string(value.get("object_identity"))
@@ -871,6 +906,13 @@ def _bounded_blocker_reason(value: str | None, *, fallback: str) -> str:
     if suffix in _BOUNDED_INSTRUMENT_REASON_SUFFIXES:
         return suffix
     return fallback
+
+
+def _bounded_known_no_control_reason(value: object) -> str:
+    reason = _optional_string(value)
+    if reason is not None and reason in _KNOWN_NO_CONTROL_REASONS:
+        return reason
+    return "OTHER_KNOWN_NO_CONTROL"
 
 
 def _optional_string(value: object) -> str | None:

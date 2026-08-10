@@ -1378,6 +1378,7 @@ const radar = api.orderedRadarRows([
   {{instrument_name:'N', score_result:{{band:'LOW'}}, attention_rank:3}},
   {{instrument_name:'U', attention_rank:2}},
   {{instrument_name:'A', score_result:{{band:'HIGH'}}, attention_rank:1,
+    clue_eligible_tte:true, clue_eligible_delta:true,
     is_bucket_leader:true, bucket_episode_leader_instrument_name:'A',
     bucket_episode_state:'ACTIVE', bucket_episode_score_band:'HIGH',
     bucket_episode_identity:'sha256:active'}}

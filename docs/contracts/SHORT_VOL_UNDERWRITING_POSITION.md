@@ -189,6 +189,12 @@ state, either enrollment variant directly carries the consumed refresh terminal 
 unknown reasons, pair timing, and Policy limits needed by Workbench; the projection never depends
 on retired Candidate history.
 
+Every selected-decision terminal with `KNOWN_NO_CONTROL` carries exactly one owner-calculated fixed
+reason, covering Episode/review retirement, slot consumption, absent protective structure or target
+depth, atomic-structure ineligibility, lifecycle/admission cutoff, changed refreshed opportunity,
+request retirement, or runtime termination. These terminal records and aggregate reason counters
+remain non-durable unless a Control actually opens a Case; they do not backfill earlier runs.
+
 ## Candidate lifecycle and admission
 
 A Candidate is current in-memory state identified by the exact product, opportunity, Policies,

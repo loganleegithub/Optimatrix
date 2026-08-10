@@ -37,6 +37,7 @@ from short_vol_underwriting import (
     ComponentLegRole,
     DecisionControlAttempt,
     DecisionControlAttemptOutcome,
+    DecisionControlKnownNoControlReason,
     DecisionControlRefreshClassification,
     FactBoundary,
     FixedContractShadowOwner,
@@ -433,8 +434,14 @@ def test_radar_score_control_single_stratum_probability_and_no_fallback_membersh
         )
 
 
-def test_low_band_candidate_refresh_opens_only_non_admitted_schema_v5_control(
+@pytest.mark.parametrize(
+    "refresh_known_no_control",
+    (False, True),
+    ids=("control-opened", "known-no-control"),
+)
+def test_low_band_candidate_refresh_opens_control_or_attributes_known_no_control(
     tmp_path: Path,
+    refresh_known_no_control: bool,
 ) -> None:
     bindings = _bindings()
     policies = load_policy_chain(
@@ -553,12 +560,36 @@ def test_low_band_candidate_refresh_opens_only_non_admitted_schema_v5_control(
         long_source=SourceFact(pair.long.source_identity, pair.long.boundary),
         pair=pair,
     )
+    if refresh_known_no_control:
+        refreshed_facts = replace(
+            refreshed_facts,
+            component_state="NO_PROTECTIVE_COMPONENT",
+            component_quote=None,
+            component_blockers=("NO_PROTECTIVE_COMPONENT",),
+        )
 
     opened_transition = owner.settle_component_decision_control(
         selection_identity=selection_identity,
         refreshed_facts=refreshed_facts,
         pair_witness=pair,
     )
+
+    if refresh_known_no_control:
+        assert not any(
+            emitted.object_kind == "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN"
+            for emitted in opened_transition.emitted
+        )
+        terminal = next(
+            value
+            for value in state.objects
+            if value["object_kind"] == "UNDERWRITING_DECISION_CONTROL_ATTEMPT_TERMINAL"
+        )
+        payload = terminal["payload"]
+        assert isinstance(payload, Mapping)
+        assert payload["terminal_outcome"] == "KNOWN_NO_CONTROL"
+        assert payload["known_no_control_reason"] == "NO_PROTECTIVE_COMPONENT"
+        assert list(cases.iterdir()) == []
+        return
 
     assert any(
         emitted.object_kind == "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN"
@@ -1191,6 +1222,71 @@ def test_decision_control_attempt_opens_only_from_one_strictly_later_valid_pair(
     assert attempt.terminal_outcome is DecisionControlAttemptOutcome.CONTROL_OPENED
     assert attempt.terminal_boundary == pair.boundary
     assert attempt.take_request_intents() == ()
+
+
+def test_decision_control_attempt_requires_one_fixed_reason_for_known_no_control() -> None:
+    origin = _boundary(1, 100)
+    short_identity = "sha256:" + "6" * 64
+    long_identity = "sha256:" + "7" * 64
+    attempt = DecisionControlAttempt.schedule(
+        selection_identity="sha256:" + "5" * 64,
+        short_option_identity=short_identity,
+        long_option_identity=long_identity,
+        short_request_id=41,
+        long_request_id=42,
+        boundary=origin,
+        short_instrument_name="BTC-SHORT",
+        long_instrument_name="BTC-LONG",
+    )
+    attempt.take_request_intents()
+    short_sent = _boundary(2, 110)
+    long_sent = _boundary(3, 111)
+    attempt.mark_sent(request_id=41, boundary=short_sent, send_budget_ms=30_000)
+    attempt.mark_sent(request_id=42, boundary=long_sent, send_budget_ms=30_000)
+    pair = component_pair_witness(
+        short=_witness(
+            role=ComponentLegRole.SHORT,
+            request_id=41,
+            option_identity=short_identity,
+            instrument_name="BTC-SHORT",
+            origin=origin,
+            sent=short_sent,
+            response=_boundary(4, 120),
+            source_timestamp_ms=1_000,
+        ),
+        long=_witness(
+            role=ComponentLegRole.LONG,
+            request_id=42,
+            option_identity=long_identity,
+            instrument_name="BTC-LONG",
+            origin=origin,
+            sent=long_sent,
+            response=_boundary(5, 121),
+            source_timestamp_ms=1_001,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires exactly one"):
+        attempt.accept_pair(
+            witness=pair,
+            response_budget_ms=30_000,
+            maximum_source_skew_ms=6_000,
+            maximum_receive_skew_ms=4_000,
+            classification=DecisionControlRefreshClassification.NOT_EVALUATED,
+        )
+
+    assert attempt.accept_pair(
+        witness=pair,
+        response_budget_ms=30_000,
+        maximum_source_skew_ms=6_000,
+        maximum_receive_skew_ms=4_000,
+        classification=DecisionControlRefreshClassification.NOT_EVALUATED,
+        known_no_control_reason=(DecisionControlKnownNoControlReason.NO_PROTECTIVE_COMPONENT),
+    )
+    assert attempt.terminal_outcome is DecisionControlAttemptOutcome.KNOWN_NO_CONTROL
+    assert attempt.terminal_known_no_control_reason is (
+        DecisionControlKnownNoControlReason.NO_PROTECTIVE_COMPONENT
+    )
 
 
 def test_decision_control_attempt_fails_closed_on_pair_skew() -> None:

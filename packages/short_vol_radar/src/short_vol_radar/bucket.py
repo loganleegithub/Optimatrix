@@ -33,6 +33,15 @@ class BucketEpisodeEndReason(StrEnum):
     STOP = "STOP"
 
 
+class BucketConfirmationResetReason(StrEnum):
+    LEADER_CHANGE = "LEADER_CHANGE"
+    SCORE_BAND_CHANGE = "SCORE_BAND_CHANGE"
+    CORE_UNKNOWN = "CORE_UNKNOWN"
+    SCOPE_LOSS = "SCOPE_LOSS"
+    CLUE_INELIGIBLE = "CLUE_INELIGIBLE"
+    STOP = "STOP"
+
+
 @dataclass(frozen=True)
 class BucketLeaderCandidate:
     bucket_key: RadarBucketKey
@@ -118,6 +127,7 @@ class RadarBucketTrackerTransition:
     ended: RadarBucketEpisodeEnd | None = None
     state_changed: bool = False
     observation_counted: bool = False
+    confirmation_reset_reason: BucketConfirmationResetReason | None = None
 
 
 @dataclass(frozen=True)
@@ -283,10 +293,16 @@ class RadarBucketEpisodeTracker:
             raise ValueError("bucket tracker packet key mismatch")
         if not self.clue_eligible:
             changed = self.state is not BucketEpisodeState.IDLE
+            reset_reason = self._preconfirmation_reset_reason(
+                BucketConfirmationResetReason.CLUE_INELIGIBLE
+            )
             self.episode = None
             self._reset_confirmation()
             self._reset_end_confirmation()
-            return RadarBucketTrackerTransition(state_changed=changed)
+            return RadarBucketTrackerTransition(
+                state_changed=changed,
+                confirmation_reset_reason=reset_reason,
+            )
         band = packet.result.band
         if self.episode is not None:
             if packet.leader_instrument_name != self.episode.leader_instrument_name:
@@ -308,12 +324,23 @@ class RadarBucketEpisodeTracker:
             )
         if band is ScoreBand.REVIEW:
             changed = self.state is not BucketEpisodeState.IDLE
+            reset_reason = self._preconfirmation_reset_reason(
+                BucketConfirmationResetReason.SCORE_BAND_CHANGE
+            )
             self._reset_confirmation()
-            return RadarBucketTrackerTransition(state_changed=changed)
+            return RadarBucketTrackerTransition(
+                state_changed=changed,
+                confirmation_reset_reason=reset_reason,
+            )
 
         leader_or_band_changed = (
             self._confirming_leader != packet.leader_instrument_name
             or self._confirming_band is not band
+        )
+        reset_reason = (
+            self._leader_or_band_reset_reason(packet.leader_instrument_name, band)
+            if leader_or_band_changed
+            else None
         )
         if leader_or_band_changed:
             self._reset_confirmation()
@@ -321,9 +348,15 @@ class RadarBucketEpisodeTracker:
             self._confirming_band = band
             self.state = BucketEpisodeState.CONFIRMING
         if observation_identity in self._seen_observation_identities:
-            return RadarBucketTrackerTransition(state_changed=leader_or_band_changed)
+            return RadarBucketTrackerTransition(
+                state_changed=leader_or_band_changed,
+                confirmation_reset_reason=reset_reason,
+            )
         if not _separated(self._last_interval, trusted_time, rule.minimum_separation_ms):
-            return RadarBucketTrackerTransition(state_changed=leader_or_band_changed)
+            return RadarBucketTrackerTransition(
+                state_changed=leader_or_band_changed,
+                confirmation_reset_reason=reset_reason,
+            )
         self._seen_observation_identities.add(observation_identity)
         self._last_interval = trusted_time
         self._observation_count += 1
@@ -331,6 +364,7 @@ class RadarBucketEpisodeTracker:
             return RadarBucketTrackerTransition(
                 state_changed=leader_or_band_changed,
                 observation_counted=True,
+                confirmation_reset_reason=reset_reason,
             )
 
         episode = RadarBucketEpisode(
@@ -357,6 +391,7 @@ class RadarBucketEpisodeTracker:
             newly_confirmed=episode,
             state_changed=True,
             observation_counted=True,
+            confirmation_reset_reason=reset_reason,
         )
 
     def consume_designation(self) -> RadarBucketEpisode:
@@ -367,7 +402,12 @@ class RadarBucketEpisodeTracker:
         self.episode = replace(self.episode, designation_consumed=True)
         return self.episode
 
-    def align_leader(self, *, instrument_name: str, score_band: ScoreBand) -> bool:
+    def align_leader(
+        self,
+        *,
+        instrument_name: str,
+        score_band: ScoreBand,
+    ) -> RadarBucketTrackerTransition:
         """Reset pre-confirmation without counting an unchanged leader observation."""
         if not instrument_name:
             raise ValueError("aligned bucket leader must be non-empty")
@@ -377,41 +417,77 @@ class RadarBucketEpisodeTracker:
                 or self.episode.score_band is not score_band
             ):
                 raise RuntimeError("cannot align away from one active frozen bucket episode")
-            return False
+            return RadarBucketTrackerTransition()
+        if not self.clue_eligible:
+            changed = self.state is not BucketEpisodeState.IDLE
+            reset_reason = self._preconfirmation_reset_reason(
+                BucketConfirmationResetReason.CLUE_INELIGIBLE
+            )
+            self._reset_confirmation()
+            return RadarBucketTrackerTransition(
+                state_changed=changed,
+                confirmation_reset_reason=reset_reason,
+            )
         if score_band is ScoreBand.REVIEW:
             changed = self.state is not BucketEpisodeState.IDLE
+            reset_reason = self._preconfirmation_reset_reason(
+                BucketConfirmationResetReason.SCORE_BAND_CHANGE
+            )
             self._reset_confirmation()
-            return changed
+            return RadarBucketTrackerTransition(
+                state_changed=changed,
+                confirmation_reset_reason=reset_reason,
+            )
         changed = (
             self._confirming_leader != instrument_name or self._confirming_band is not score_band
+        )
+        reset_reason = (
+            self._leader_or_band_reset_reason(instrument_name, score_band) if changed else None
         )
         if changed:
             self._reset_confirmation()
             self._confirming_leader = instrument_name
             self._confirming_band = score_band
             self.state = BucketEpisodeState.CONFIRMING
-        return changed
+        return RadarBucketTrackerTransition(
+            state_changed=changed,
+            confirmation_reset_reason=reset_reason,
+        )
 
     def core_unknown(self, *, causal_seq: int, reason: str) -> RadarBucketTrackerTransition:
         if self.episode is not None:
             return self._end(BucketEpisodeEndReason.CORE_UNKNOWN, causal_seq, reason)
         changed = self.state is not BucketEpisodeState.IDLE
+        reset_reason = self._preconfirmation_reset_reason(
+            BucketConfirmationResetReason.CORE_UNKNOWN
+        )
         self._reset_confirmation()
-        return RadarBucketTrackerTransition(state_changed=changed)
+        return RadarBucketTrackerTransition(
+            state_changed=changed,
+            confirmation_reset_reason=reset_reason,
+        )
 
     def scope_loss(self, *, causal_seq: int) -> RadarBucketTrackerTransition:
         if self.episode is not None:
             return self._end(BucketEpisodeEndReason.SCOPE_LOSS, causal_seq)
         changed = self.state is not BucketEpisodeState.IDLE
+        reset_reason = self._preconfirmation_reset_reason(BucketConfirmationResetReason.SCOPE_LOSS)
         self._reset_confirmation()
-        return RadarBucketTrackerTransition(state_changed=changed)
+        return RadarBucketTrackerTransition(
+            state_changed=changed,
+            confirmation_reset_reason=reset_reason,
+        )
 
     def stop(self, *, causal_seq: int) -> RadarBucketTrackerTransition:
         if self.episode is not None:
             return self._end(BucketEpisodeEndReason.STOP, causal_seq)
         changed = self.state is not BucketEpisodeState.IDLE
+        reset_reason = self._preconfirmation_reset_reason(BucketConfirmationResetReason.STOP)
         self._reset_confirmation()
-        return RadarBucketTrackerTransition(state_changed=changed)
+        return RadarBucketTrackerTransition(
+            state_changed=changed,
+            confirmation_reset_reason=reset_reason,
+        )
 
     def _end(
         self,
@@ -469,6 +545,25 @@ class RadarBucketEpisodeTracker:
         self._last_end_interval = None
         self._seen_end_observation_identities.clear()
 
+    def _preconfirmation_reset_reason(
+        self,
+        reason: BucketConfirmationResetReason,
+    ) -> BucketConfirmationResetReason | None:
+        return reason if self._observation_count > 0 else None
+
+    def _leader_or_band_reset_reason(
+        self,
+        instrument_name: str,
+        score_band: ScoreBand,
+    ) -> BucketConfirmationResetReason | None:
+        if self._observation_count == 0:
+            return None
+        if self._confirming_leader != instrument_name:
+            return BucketConfirmationResetReason.LEADER_CHANGE
+        if self._confirming_band is not score_band:
+            return BucketConfirmationResetReason.SCORE_BAND_CHANGE
+        return None
+
 
 def _separated(previous: TimeInterval | None, current: TimeInterval, minimum_ms: int) -> bool:
     if previous is None:
@@ -501,6 +596,7 @@ def radar_bucket_episode_identity(
 
 
 __all__ = [
+    "BucketConfirmationResetReason",
     "BucketEpisodeEndReason",
     "BucketEpisodeState",
     "BucketLeaderCandidate",

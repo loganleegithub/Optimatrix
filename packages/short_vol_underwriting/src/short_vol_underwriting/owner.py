@@ -55,6 +55,7 @@ from short_vol_underwriting.constants import (
 from short_vol_underwriting.control import (
     DecisionControlAttempt,
     DecisionControlAttemptOutcome,
+    DecisionControlKnownNoControlReason,
     DecisionControlRefreshClassification,
     RadarScoreControlDesignation,
     designate_radar_score_control_review,
@@ -319,6 +320,7 @@ class _UnderwritingEvaluation:
     economics: EntryEconomics | None
     economic_fingerprint: str | None
     action: UnderwritingAction | None
+    known_ineligibility_reason: DecisionControlKnownNoControlReason | None = None
 
 
 @dataclass
@@ -717,6 +719,9 @@ class FixedContractShadowOwner:
                         boundary.as_object(),
                     ),
                     boundary=boundary,
+                    known_no_control_reason=(
+                        DecisionControlKnownNoControlReason.RADAR_EPISODE_OR_REVIEW_ENDED
+                    ),
                 )
                 self._emit_decision_control_terminal(control)
                 self._decision_control_retirements.add(control.selection_identity)
@@ -1146,6 +1151,12 @@ class FixedContractShadowOwner:
             if classification is DecisionControlRefreshClassification.UNKNOWN
             else ()
         )
+        known_no_control_reason = None
+        if classification is DecisionControlRefreshClassification.NOT_EVALUATED:
+            known_no_control_reason = (
+                evaluation.known_ineligibility_reason
+                or DecisionControlKnownNoControlReason.REFRESHED_OPPORTUNITY_CHANGED
+            )
         accepted = record.attempt.accept_pair(
             witness=pair_witness,
             response_budget_ms=(
@@ -1159,6 +1170,7 @@ class FixedContractShadowOwner:
             ),
             classification=classification,
             classification_unknown_reasons=classification_unknown_reasons,
+            known_no_control_reason=known_no_control_reason,
         )
         if not accepted:
             return self._finish_transition()
@@ -1480,6 +1492,9 @@ class FixedContractShadowOwner:
                 control.attempt.invalidate_before_refresh(
                     source_identity=source_identity,
                     boundary=boundary,
+                    known_no_control_reason=(
+                        DecisionControlKnownNoControlReason.REQUEST_RETIRED_BEFORE_REFRESH
+                    ),
                 )
                 if terminal_status is PostCloseAttemptStatus.RETIRED
                 else control.attempt.fail_request(
@@ -1842,6 +1857,9 @@ class FixedContractShadowOwner:
             if control.attempt.invalidate_before_refresh(
                 source_identity=terminal_source_identity,
                 boundary=boundary,
+                known_no_control_reason=(
+                    DecisionControlKnownNoControlReason.RUNTIME_TERMINATED_BEFORE_REFRESH
+                ),
             ):
                 self._emit_decision_control_terminal(control)
                 self._decision_control_retirements.add(control.selection_identity)
@@ -1966,23 +1984,11 @@ class FixedContractShadowOwner:
         inverse_atomic_unsupported = self._inverse_atomic_unsupported_reason(facts)
         slot_identity = self._slot_identity(facts)
         slot_consumed = slot_identity is not None and slot_identity in self._slot_consumed
-        known_negative = (
-            self._underwriting_anchor_identity(facts) is None
-            or slot_consumed
-            or facts.atomic_state
-            in {
-                "NOT_EVALUATED",
-                "NO_ACTIVE_COMBO",
-                "NO_TARGET_SIZE_CREDIT_QUOTE",
-            }
-            or self._known_structural_unavailability(facts)
-            or (
-                facts.expiry_ms is not None
-                and facts.trusted_time_upper_ms is not None
-                and facts.trusted_time_upper_ms >= facts.expiry_ms - ADMISSION_CUTOFF_LEAD_MS
-            )
+        known_ineligibility_reason = self._known_underwriting_ineligibility_reason(
+            facts,
+            slot_identity=slot_identity,
         )
-        if known_negative:
+        if known_ineligibility_reason is not None:
             availability = UnderwritingAvailability.NOT_EVALUATED
         elif (
             inverse_atomic_unsupported is not None
@@ -2025,6 +2031,7 @@ class FixedContractShadowOwner:
                 None,
                 None,
                 None,
+                known_ineligibility_reason,
             )
         if (
             slot_identity is None
@@ -2126,19 +2133,11 @@ class FixedContractShadowOwner:
         slot_consumed = slot_identity is not None and slot_identity in self._slot_consumed
         product_mismatch = self._component_product_mismatch_reason(facts.component_quote)
         projection_mismatch = self._component_fact_projection_mismatch_reason(facts)
-        known_negative = (
-            self._underwriting_anchor_identity(facts) is None
-            or slot_consumed
-            or facts.component_state
-            in {NO_PROTECTIVE_COMPONENT, NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE}
-            or self._known_structural_unavailability(facts)
-            or (
-                facts.expiry_ms is not None
-                and facts.trusted_time_upper_ms is not None
-                and facts.trusted_time_upper_ms >= facts.expiry_ms - ADMISSION_CUTOFF_LEAD_MS
-            )
+        known_ineligibility_reason = self._known_underwriting_ineligibility_reason(
+            facts,
+            slot_identity=slot_identity,
         )
-        if known_negative:
+        if known_ineligibility_reason is not None:
             availability = UnderwritingAvailability.NOT_EVALUATED
         elif (
             facts.component_state != COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE
@@ -2178,6 +2177,7 @@ class FixedContractShadowOwner:
                 None,
                 None,
                 None,
+                known_ineligibility_reason,
             )
         quote = facts.component_quote
         if (
@@ -2252,6 +2252,43 @@ class FixedContractShadowOwner:
         quote: ComponentBookVerticalQuote,
     ) -> dict[str, object]:
         return quote.fingerprint_members
+
+    def _known_underwriting_ineligibility_reason(
+        self,
+        facts: UnderwritingFacts,
+        *,
+        slot_identity: str | None,
+    ) -> DecisionControlKnownNoControlReason | None:
+        if self._underwriting_anchor_identity(facts) is None:
+            return DecisionControlKnownNoControlReason.RADAR_EPISODE_OR_REVIEW_ENDED
+        if slot_identity is not None and slot_identity in self._slot_consumed:
+            return DecisionControlKnownNoControlReason.POSITION_SLOT_CONSUMED
+        if self._uses_component_books(facts):
+            if facts.component_state == NO_PROTECTIVE_COMPONENT:
+                return DecisionControlKnownNoControlReason.NO_PROTECTIVE_COMPONENT
+            if facts.component_state == NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE:
+                return DecisionControlKnownNoControlReason.NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE
+        else:
+            atomic_reason = {
+                "NOT_EVALUATED": (
+                    DecisionControlKnownNoControlReason.ATOMIC_STRUCTURE_NOT_EVALUATED
+                ),
+                "NO_ACTIVE_COMBO": DecisionControlKnownNoControlReason.NO_ACTIVE_COMBO,
+                "NO_TARGET_SIZE_CREDIT_QUOTE": (
+                    DecisionControlKnownNoControlReason.NO_TARGET_SIZE_CREDIT_QUOTE
+                ),
+            }.get(facts.atomic_state)
+            if atomic_reason is not None:
+                return atomic_reason
+        if self._known_structural_unavailability(facts):
+            return DecisionControlKnownNoControlReason.STRUCTURE_OR_LIFECYCLE_INELIGIBLE
+        if (
+            facts.expiry_ms is not None
+            and facts.trusted_time_upper_ms is not None
+            and facts.trusted_time_upper_ms >= facts.expiry_ms - ADMISSION_CUTOFF_LEAD_MS
+        ):
+            return DecisionControlKnownNoControlReason.LATEST_ADMISSION_BOUNDARY_REACHED
+        return None
 
     @staticmethod
     def _admission_time_class(facts: UnderwritingFacts) -> str:
@@ -3206,6 +3243,11 @@ class FixedContractShadowOwner:
             "terminal_outcome": attempt.terminal_outcome.value,
             "terminal_source_identity": attempt.terminal_source_identity,
             "terminal_unknown_reasons": list(attempt.terminal_unknown_reasons),
+            "known_no_control_reason": (
+                attempt.terminal_known_no_control_reason.value
+                if attempt.terminal_known_no_control_reason is not None
+                else None
+            ),
             "component_pair_timing": attempt.terminal_pair_timing,
             "component_pair_limits": attempt.terminal_pair_limits,
             "terminal_fact_boundary": attempt.terminal_boundary.as_object(),
