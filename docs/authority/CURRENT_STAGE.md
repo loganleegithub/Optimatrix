@@ -106,6 +106,15 @@ contains two non-admitted Controls: the prior LOW Radar-score-band Control remai
 `PENDING_OPEN` under the active runtime. Admitted Shadow count remains zero. These are bounded
 observations, not Policy-quality or future-frequency claims.
 
+Subsequent live fixed attribution crossed queue currentness at `5,005 ms`. The crossing frame was
+`UNKNOWN/0`, added no `CORE_UNKNOWN` reset, and recovered to `KNOWN_COMPLETE/128` about 220 ms later;
+two unchanged HIGH buckets retained and advanced to confirmation `2/3`. A separate real
+`TRANSPORT_READ_FAILURE` changed session epoch `1 → 2`, reconnect and protocol-gap counts `0 → 1`,
+and correctly added 13 `CORE_UNKNOWN` resets before automatic recovery. These two causes are not
+conflated. Seven HIGH Episodes reached fully evaluable Underwriting after the clean start; all seven
+were known non-Candidates first blocked by `CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE`. Admitted Shadow
+count remains zero.
+
 ## Current product truth
 
 The sole Online Runtime product is `INVERSE_BTC_V1`. Its channel is

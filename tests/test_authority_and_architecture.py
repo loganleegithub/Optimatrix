@@ -227,6 +227,13 @@ def test_current_stage_authorizes_decimal_packet_live_observation() -> None:
         "two non-admitted Controls",
         "new HIGH selected-Underwriting decision Control is `PENDING_OPEN`",
         "Admitted Shadow count remains zero",
+        "queue currentness at `5,005 ms`",
+        "added no `CORE_UNKNOWN` reset",
+        "about 220 ms later",
+        "session epoch `1 → 2`",
+        "correctly added 13 `CORE_UNKNOWN` resets",
+        "These two causes are not conflated",
+        "Seven HIGH Episodes reached fully evaluable Underwriting",
     ):
         assert phrase in normalized
     for identity in (

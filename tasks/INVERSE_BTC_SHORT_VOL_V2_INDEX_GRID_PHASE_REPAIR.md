@@ -169,6 +169,9 @@ serializer in `packages/short_vol_radar/src/short_vol_radar/score.py`
 - prove the first post-repair decision Control on the former fatal path is published and restored
   by the official reader under its exact code/runtime and Policy identities, while admitted Shadow
   remains zero;
+- fixed-attribution live evidence: cross queue currentness above five seconds and prove the frame is
+  UNKNOWN/non-countable, adds zero `CORE_UNKNOWN` reset, and preserves accepted pre-confirmation
+  through catch-up; keep any separate transport/session reset explicitly attributed;
 - no manifest, receipt, commissioning subsystem, runtime self-acceptance, or host inspection.
 
 ## Definition of done
