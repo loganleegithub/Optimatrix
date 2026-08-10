@@ -129,10 +129,11 @@ remain `UNKNOWN` until catch-up.
 policy-aware Case validator can reproduce exact derived truth; no Outcome arithmetic or economic
 definition changes.
 
-**Stage/authorization change:** the old runtime already stopped fail-closed. Authorize one bounded
-clean start on `127.0.0.1:8675` from the checked Decimal repair commit, using the unchanged stable
-Case root. Continued public-only observation runs until the first admitted active Shadow or a newly
-measured fixed blocker is established. No private or execution permission is added.
+**Stage/authorization change:** the old runtime stopped fail-closed and the one bounded clean start
+on `127.0.0.1:8675` completed from code identity
+`b119633bfb9d137d912b905b2572fa7f4e243bd3`, using the unchanged stable Case root. Continued
+public-only observation runs until the first admitted active Shadow or a newly measured fixed
+blocker is established. No private or execution permission is added.
 
 ## Scope
 
@@ -156,10 +157,9 @@ serializer in `packages/short_vol_radar/src/short_vol_radar/score.py`
 
 - focused tests: `.venv/bin/pytest -q tests/test_market_monitor.py tests/test_runtime_reducer.py tests/test_fact_boundary_business.py tests/test_trader_workbench.py`;
 - repository gate: `make check`;
-- public observation: after binding the Draft PR and passing repository checks, use the official
-  reader to inventory the already-stopped stable root, then start the clean repair commit on port
-  `8675` with
-  `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`, verify exact runtime identity,
+- public observation: the official reader inventoried the already-stopped stable root, then clean
+  code identity `b119633bfb9d137d912b905b2572fa7f4e243bd3` started on port `8675` with
+  `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; verify its exact runtime identity,
   health/readiness/currentness, fixed-grid baseline behavior across canonical boundaries, and
   continue the already-authorized public-only monitor;
 - run `report-v2-cases --runtime-active` against the unchanged stable root and prove the first

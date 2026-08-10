@@ -182,28 +182,24 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_decimal_packet_integrity_repair() -> None:
+def test_current_stage_authorizes_decimal_packet_live_observation() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_DECIMAL_PACKET_INTEGRITY_REPAIR_ACTIVE`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_DECIMAL_PACKET_LIVE_OBSERVATION_ACTIVE`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert (
-        "**Persistent service:** `STOPPED_8675_AFTER_SCORE_PACKET_INTEGRITY_FAILURE_6FBCF9F`"
-        in current
-    )
+    assert "**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_B119633`" in current
     assert "`ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`" in current
     assert "`OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`" in current
     assert "`LOSSY_DECIMAL_PACKET_SERIALIZATION`" in current
-    assert "**Live commands:** `REQUIRED_BOUNDED_DECIMAL_REPAIR_CUTOVER`" in current
+    assert "**Live commands:** `CONTINUED_BOUNDED_MONITORING`" in current
     assert "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
         "6fbcf9fbf4237d6685cbf7ae986dc4dfa4dfee76",
-        "sha256:5f1f5989c6475e1608af90e9d4b15dde553e71b270ccbaf0eaa80798957aa2f8",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
         "`128/128` current Radar coverage",
         "zero reconnects, and zero protocol gaps",
@@ -215,7 +211,7 @@ def test_current_stage_authorizes_decimal_packet_integrity_repair() -> None:
         "One separately selected LOW research Control",
         "bare 64-hex digest",
         "CaseStore's directory-name-to-Case-identity conversion",
-        "one clean start",
+        "one authorized clean start completed",
         "zero Candidate, admitted Shadow Entry, or Position",
         "ninth HIGH Episode",
         "`5,011 ms`",
@@ -223,6 +219,10 @@ def test_current_stage_authorizes_decimal_packet_integrity_repair() -> None:
         "future written Case could become unreadable",
         "`ShadowRuntimeIntegrityError`",
         "`INCOMPLETE_UNCLEAN_EXIT`",
+        "All 23 score packets",
+        "Three HIGH leaders were at confirmation `1/3`",
+        "b119633bfb9d137d912b905b2572fa7f4e243bd3",
+        "sha256:b86939fdc61728b0ba2ea8a197b8f911c6ebe1e0855ca0d7c5e71c7694a232ba",
     ):
         assert phrase in normalized
     for identity in (

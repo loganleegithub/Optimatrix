@@ -6,15 +6,15 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_DECIMAL_PACKET_INTEGRITY_REPAIR_ACTIVE`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_DECIMAL_PACKET_LIVE_OBSERVATION_ACTIVE`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `STOPPED_8675_AFTER_SCORE_PACKET_INTEGRITY_FAILURE_6FBCF9F`
+**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_B119633`
 
-**Live commands:** `REQUIRED_BOUNDED_DECIMAL_REPAIR_CUTOVER`
+**Live commands:** `CONTINUED_BOUNDED_MONITORING`
 
 **Sole authorized closure:**
 [`INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md)
@@ -80,24 +80,24 @@ failure to `ShadowRuntimeIntegrityError`, and the process exited fail-closed. No
 Candidate, admitted Entry, or Position was written. The existing Control is still readable and is
 truthfully `INCOMPLETE_UNCLEAN_EXIT` while the runtime is stopped.
 
-This authority permits one clean start on `127.0.0.1:8675` from the checked repair commit, reusing
-the unchanged stable Case repository. No Case may be copied, rewritten, migrated, or deleted.
+The one authorized clean start completed on `127.0.0.1:8675` from the checked repair commit, reusing
+the unchanged stable Case repository. No Case was copied, rewritten, migrated, or deleted.
 
 ## Current online boundary
 
-The last Online Runtime served `127.0.0.1:8675` from clean Draft PR #48 code identity
-`6fbcf9fbf4237d6685cbf7ae986dc4dfa4dfee76`. Its runtime identity was
-`sha256:5f1f5989c6475e1608af90e9d4b15dde553e71b270ccbaf0eaa80798957aa2f8`.
-It released the single-instance lease when the integrity failure stopped the process. The stable
-Case repository remains `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; no Case
-root was copied, migrated, replaced, or deleted.
+The sole Online Runtime serves `127.0.0.1:8675` from clean Draft PR #48 code identity
+`b119633bfb9d137d912b905b2572fa7f4e243bd3`. Its runtime identity is
+`sha256:b86939fdc61728b0ba2ea8a197b8f911c6ebe1e0855ca0d7c5e71c7694a232ba`.
+It holds the single-instance lease for the stable Case repository
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; no Case root was copied, migrated,
+replaced, or deleted during the cutover.
 
-The Decimal-repair discovery boundary reported health, readiness, `RUNNING`, `CURRENT`,
-`KNOWN_COMPLETE`, `128/128` current Radar coverage, zero reconnects, and zero protocol gaps. Before
-the failure it had nine distinct
-HIGH Episodes and zero Candidate, admitted Shadow Entry, or Position. The single durable Case was a
-non-admitted LOW research Control; the repaired official report now reads it under inactive-runtime
-truth as `INCOMPLETE_UNCLEAN_EXIT`. These are bounded observations, not Policy-quality or
+The repaired live boundary reports health, readiness, `RUNNING`, `CURRENT`, `KNOWN_COMPLETE`,
+`128/128` current Radar coverage, zero reconnects, and zero protocol gaps. All 23 score packets in
+the first verified frame passed exact policy-aware recomputation. Three HIGH leaders were at
+confirmation `1/3`; zero Candidate, admitted Shadow Entry, or Position existed. The single durable
+Case remains a non-admitted LOW research Control with the prior runtime's truthful
+`INCOMPLETE_UNCLEAN_EXIT` status. These are bounded observations, not Policy-quality or
 future-frequency claims.
 
 ## Current product truth
@@ -129,6 +129,6 @@ settlement action, actual exposure, or private execution. The accepted smoke and
 checks do not establish future uptime, source freshness, fillability, qualification, Edge, or
 profitability.
 
-Only the bounded Decimal repair start and continued public-only monitoring declared above are
-authorized. Any extra restart, state-root operation, Policy change, or roadmap-channel
-implementation requires a new explicit task and permission update under the Delivery Contract.
+Only continued public-only monitoring declared above is authorized. Any extra restart, state-root
+operation, Policy change, or roadmap-channel implementation requires a new explicit task and
+permission update under the Delivery Contract.
