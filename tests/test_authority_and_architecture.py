@@ -190,7 +190,7 @@ def test_current_stage_records_active_queue_lag_root_cause() -> None:
     assert "`INVERSE_BTC_SHORT_VOL_V2_SCHEMA7_8675_LIVE_CURRENT`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert "**Persistent service:** `RUNNING_8675_FROM_MAIN_6236F14`" in current
-    assert "**Live commands:** `NONE_CONSUMED`" in current
+    assert "**Live commands:** `MERGE_PRESTOP_CLEAN_RESTART_SMOKE_AUTHORIZED`" in current
     assert "INVERSE_BTC_SHORT_VOL_V2_QUEUE_LAG_ROOT_CAUSE" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
@@ -216,7 +216,10 @@ def test_current_stage_records_active_queue_lag_root_cause() -> None:
         "`0.675 s` per modeled second",
         "the exact required `67 ticker + 67 book + 128 global` calculations",
         "including `732` tests",
-        "No additional live sample, PID, host log, resource, network-source, Policy, threshold",
+        "one official schema-v5 report",
+        "reuse that same stable repository",
+        "One bounded post-start smoke of at most `120 s`",
+        "local/remote topic branch must be removed",
     ):
         assert phrase in normalized
     for identity in (

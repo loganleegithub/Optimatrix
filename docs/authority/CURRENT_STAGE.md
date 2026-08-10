@@ -14,7 +14,7 @@
 
 **Persistent service:** `RUNNING_8675_FROM_MAIN_6236F14`
 
-**Live commands:** `NONE_CONSUMED`
+**Live commands:** `MERGE_PRESTOP_CLEAN_RESTART_SMOKE_AUTHORIZED`
 
 **Sole authorized closure:**
 [`INVERSE_BTC_SHORT_VOL_V2_QUEUE_LAG_ROOT_CAUSE`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_QUEUE_LAG_ROOT_CAUSE.md)
@@ -51,11 +51,21 @@ the exact required `67 ticker + 67 book + 128 global` calculations. A causal reg
 one ticker change performs one core calculation while still refreshing an immediately shorter
 expiry's term score. Focused tests and the full repository gate pass, including `732` tests.
 
-The clean bounded branch and Draft PR are authorized. The current `8675` runtime still executes the
-pre-repair identity and may retain the observed backlog until a separately authorized merge,
-pre-stop inventory, clean stop, restart from synchronized `main`, and bounded post-start smoke. No
-additional live sample, PID, host log, resource, network-source, Policy, threshold, universe,
-schema, or state-root operation is authorized by this task stage.
+The user explicitly authorized merge, cleanup, and restart with the new code. PR `#43` may be made
+ready and merged only while its required checks remain green. Before stopping, one current
+Workbench snapshot and one official schema-v5 report may inventory the stable root
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. The exact `8675` listener may then
+receive one clean termination signal. The replacement must start from clean synchronized `main`,
+reuse that same stable repository under its single-instance lease, and bind the unchanged product
+and three-Policy identities. Compatible non-terminal admitted Entries are restored into GAPPED
+Segments; Cases are neither copied nor rewritten.
+
+One bounded post-start smoke of at most `120 s` may verify the new code/runtime/Policy identities,
+loopback health/readiness, `128/128` current coverage after warmup, and queue/current market latency.
+The task-created active task file and local/remote topic branch must be removed after acceptance.
+Only code made unused by this repair may be deleted; no unrelated historical research root or Case
+may be removed. No repeated start, Policy/threshold/universe/schema change, private input, host
+resource gate, log inspection, or alternate state root is authorized.
 
 ## Current online boundary
 

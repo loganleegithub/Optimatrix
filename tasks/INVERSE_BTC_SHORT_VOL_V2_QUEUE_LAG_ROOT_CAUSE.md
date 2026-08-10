@@ -6,7 +6,7 @@
 
 **Runtime implementation:** IMPLEMENTED_OFFLINE
 
-**Live commands:** CONSUMED
+**Live commands:** MERGE_PRESTOP_CLEAN_RESTART_SMOKE_AUTHORIZED
 
 **Base commit:** `fbc2637f362745da42a1a986b099cbe8095719b0`
 
@@ -90,9 +90,10 @@ rejected rather than patched.
 
 **Outcome/evaluation contract change:** `NONE`
 
-**Stage/authorization change:** the one at-most-30-second loopback sample is consumed. The bounded
-branch and Draft PR are authorized. Merge, restart, state-root access, and post-start smoke remain
-unauthorized until a later explicit Authority update.
+**Stage/authorization change:** the attribution sample is consumed. The user explicitly authorized
+PR `#43` merge, one official pre-stop inventory of the existing stable root, exact clean stop, one
+restart from synchronized `main` over the same root, and one at-most-`120 s` post-start smoke. The
+task file and topic branch must then be deleted. No retry or alternate root is authorized.
 
 ## Scope
 
@@ -103,6 +104,11 @@ proven.
 **Out:** Policy/threshold/universe/score changes; another queue, worker, process, monitor, endpoint,
 schema, cache subsystem, retry, controller, sampling/drop rule, source probe, PID/log/resource
 inspection, Case/Outcome changes, and UI redesign.
+
+**Cleanup:** remove this completed task and the task-created local/remote branch after acceptance;
+retain the one optimized reducer path and delete only imports, variables, tests, files, or
+directories made unused by this change. The current diff introduced no dependency, cache, worker,
+alternate reducer, generated benchmark file, or state-root artifact.
 
 ## Validation
 
