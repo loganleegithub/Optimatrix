@@ -207,5 +207,5 @@ Recovery tests run at least runtime A → B → C over one repository and prove 
 all-active scanning, Control/terminal exclusion, recovery-first UNKNOWN, segment-chain ordering,
 gap quality without synthetic CLOSE, one combined first-close/attempt schedule, no retry after
 uncertain loss, one mature gapped Outcome with qualification false, no duplicate funnel admission,
-and immutable records. The schema-v5 runtime has no V1 migration or compatibility command. H2
-authorizes its one start only from the exact fresh stable root declared by `CURRENT_STAGE`.
+and immutable records. The schema-v5 runtime has no V1 migration or compatibility command. Every
+live invocation and stable-root choice remains governed by `CURRENT_STAGE`.

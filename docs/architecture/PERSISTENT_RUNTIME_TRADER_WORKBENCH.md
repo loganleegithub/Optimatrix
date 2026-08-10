@@ -54,7 +54,6 @@ The application exposes `/healthz`, `/readyz`, and `/api/workbench/current` on l
 supervision, restart policy, CPU, memory, and host logs are external operational concerns. The
 application does not inspect or manage them.
 
-H2 authorizes the one clean handoff declared in `CURRENT_STAGE`: inventory and clean-stop the older
-V1 process, preserve its temporary root in place as historical truth, then start V2 once on the
-fresh stable non-temporary root. No V1 Case is copied, migrated, or recovered into V2, and the H2
-start grants no automatic restart authority.
+The current V2 process uses the fresh stable non-temporary root declared in `CURRENT_STAGE`. The V1
+temporary root remains separate historical truth; no V1 Case is copied, migrated, or recovered into
+V2. Runtime reachability grants no automatic restart authority.

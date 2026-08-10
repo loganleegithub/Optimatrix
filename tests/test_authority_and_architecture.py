@@ -182,33 +182,33 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_only_one_v2_cutover() -> None:
+def test_current_stage_records_consumed_v2_cutover_and_no_live_command() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_H2_CUTOVER_AUTHORIZED_PENDING`" in current
+    assert "**Current task kind:** `NONE`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_H2_LIVE_CURRENT`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `V1_RUNNING_CURRENT_PENDING_CLEAN_HANDOFF`" in current
-    assert (
-        "**Live commands:** `ONE_V1_CLEAN_STOP_ONE_V2_START_ONE_BOUNDED_READ_ONLY_SMOKE`"
-    ) in current
-    assert "INVERSE_BTC_SHORT_VOL_V2_CLOSED_LOOP.md" in current
+    assert "**Persistent service:** `RUNNING_CURRENT_FRESH_SCHEMA_V5`" in current
+    assert "**Live commands:** `NONE_AUTHORIZED_H2_CONSUMED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
-        "The repository contains only those three Inverse Policy artifacts",
-        "code identity: c5cc2e605de7df028be18b6ff00ca3b76dd86f27",
-        "runtime identity: sha256:888729c63e0deec4aea2bb1a3787a205501910351ae66c4d07e66e5017048676",
+        "The repository contains only the three fixed V2 Inverse Policy artifacts",
+        "channel: INVERSE_BTC_SHORT_VOL_V2",
+        "code identity: cd9243ff9f92ca6e1b6c142dc9d61cbc5a21a359",
+        "runtime identity: sha256:8c34f476bc91928678eb36b0e3528b2a7bc4f0b9d47157b018b805fb7d065260",
         "6 / 6 HTTP 200",
-        "14 / 14, latest Segment OPEN / GAPPED",
-        "The prior V1 start has been consumed",
-        "The previously accepted V1 repository result was `1 / 1`",
-        "The obsolete product specification",
-        "The stable repository contains `51` Case directories",
-        "did not restore the `37` historical selected no-trade Controls",
-        "The `14` Outcome rows were pending Entry projections",
-        "No retry, second root, old-root repoint, Case copy, migration",
+        "Shadow Entry rows: 0",
+        "Position rows: 0",
+        "Outcome rows: 0",
+        "Decision Control rows: 0",
+        "`0` Case directories and `0` recoverable admitted Entries",
+        "`51 / 51` Case directories",
+        "`14` admitted trades, `37` selected no-trade Controls, and `0` mature Outcomes",
+        "all `14` latest Segments were `CENSORED_AT_STOP`",
+        "copied, migrated, deleted, rewrote, or recovered none of its Cases into V2",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2",
     ):
         assert phrase in normalized
@@ -217,16 +217,9 @@ def test_current_stage_authorizes_only_one_v2_cutover() -> None:
         "sha256:79b5ec7c886964ee4c886fb272f287f0645cc69a0b585cf53711c7b5ad0fef57",
         "sha256:5cea5bc8153071359597526e0f1bd665bbf55215b5368ed6135f96ca3b607c31",
         "sha256:f05646f7c1ed1a55bd8747879f1153c2633afde83aa3652549e01140552a6c67",
-        "sha256:ff90da92cefe8e530339df38505fe7726b92b45b1855b751f2633ffd4fdb2172",
-        "sha256:283c2a8cc5e14cbed94b0f2a41ddd18ff2410772ae45d07abfea80d04446b1af",
-        "sha256:76a93725bb4923a70a2865b1e06add3b5a23ae80a831029c558ce188be6e7834",
-        "sha256:cb3866b8efd45d5c05ed23ab56658c2cdbf0359132e39f52ce329761ad933b8e",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
-        "INVERSE_BTC_SHORT_VOL_V2_CLOSED_LOOP.md",
-        "TEMPLATE.md",
-    }
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
 
