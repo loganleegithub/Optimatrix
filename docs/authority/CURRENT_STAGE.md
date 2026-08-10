@@ -4,17 +4,17 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `VALIDATION_ONLY`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION_OFFLINE`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_MAIN_CUTOVER_AUTHORIZED`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_8675_FROM_MAIN_D5D4C88`
+**Persistent service:** `RUNNING_8675_FROM_MAIN_D5D4C88_PENDING_ONE_CUTOVER`
 
-**Live commands:** `FORBIDDEN`
+**Live commands:** `ONE_CLEAN_STOP_ONE_START_AND_300_SECOND_READ_ONLY_GATE`
 
 **Sole authorized closure:** `INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION`
 
@@ -22,11 +22,10 @@
 
 The one active task is
 [`INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION.md)
-from base `5a32e62069324ac83a389ca899ef0cf878650105` on branch
-`codex/v2-review-truth-attribution`. It may change only the existing in-memory Radar confirmation,
-selected-decision terminal attribution, Funnel projection, and Workbench rendering path. It may
-create one Draft PR after direct and repository checks. The bounded closure is published as
-[Draft PR #44](https://github.com/loganleegithub/Optimatrix/pull/44).
+is now a `VALIDATION_ONLY` cutover closure. The implementation was merged by
+[PR #44](https://github.com/loganleegithub/Optimatrix/pull/44) as
+`main@aee7ba3a3c8d50f3da151607069872d7c2cd5d82`; the authorization update is bounded to branch
+`codex/v2-review-truth-deployment` and its one Draft PR.
 
 The bounded observation immediately preceding this task found review-only HIGH score rows rendered
 as `0/3` confirmation and a cumulative selected-decision projection of `21` activation batches,
@@ -34,10 +33,13 @@ as `0/3` confirmation and a cumulative selected-decision projection of `21` acti
 reason split. Those counts are the task baseline, not durable research evidence and not a claim
 about the current instant.
 
-This task changes no source input, Policy byte or threshold, Shadow Case schema, state root,
-Outcome arithmetic, process, queue, or deployment. Public probing, 8675 stop/start/restart,
-state-root access, and every other live command are forbidden. The running service below remains
-the prior accepted `main`; an offline branch or green check does not update that online identity.
+The stop inventory immediately before this authorization observed `RUNNING/CURRENT/ready`, 128
+Radar rows, 36 research activation batches, 33 selected decisions, 33 `KNOWN_NO_CONTROL`
+terminals, and zero schema-v5 Case, Control, Shadow Entry, Position, or Outcome records. It
+authorizes exactly one clean stop, one start from synchronized clean `main` in the non-temporary
+`/Users/logan/Optimatrix-runtime` worktree with the unchanged stable root and port 8675, followed by
+one 300-second read-only HTTP gate. It authorizes no retry, Policy/schema/root change, second
+runtime, host/PID/log/resource inspection, or private execution.
 
 ## Current online boundary
 
