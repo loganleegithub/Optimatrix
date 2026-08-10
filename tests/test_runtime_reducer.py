@@ -217,7 +217,7 @@ def test_time_currentness_tokens_reuse_one_frozen_index_tail_identity(
     policy_factory: PolicyFactory,
 ) -> None:
     reducer = make_reducer(tmp_path, policy_factory)
-    server_ms = 1_000_000
+    server_ms = 1_200_000
     reducer.clock = TrustedClock.from_response(
         server_ms,
         1_000,

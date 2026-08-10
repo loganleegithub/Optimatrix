@@ -182,16 +182,16 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_completed_review_truth_main_cutover() -> None:
+def test_current_stage_authorizes_the_index_grid_phase_repair() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_LIVE_CURRENT`" in current
+    assert "**Current task kind:** `IMPLEMENTATION`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR_ACTIVE`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert "**Persistent service:** `RUNNING_8675_FROM_MAIN_9A4CC23`" in current
-    assert "**Live commands:** `NONE_CONSUMED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "**Live commands:** `REQUIRED_BOUNDED_REPAIR_CUTOVER`" in current
+    assert "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
@@ -230,7 +230,10 @@ def test_current_stage_records_completed_review_truth_main_cutover() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md",
+        "TEMPLATE.md",
+    }
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
 

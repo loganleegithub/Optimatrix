@@ -1161,7 +1161,7 @@ def _radar_rows(
                     (
                         "ANNUALIZED_VARIANCE_FLOOR"
                         if calculation.baseline.selected_lookback_minutes is None
-                        else "OFFICIAL_INDEX_CHART_AVERAGE_PRICE_RV"
+                        else "UTC_ALIGNED_5M_INDEX_CHART_AVERAGE_PRICE_RV"
                     )
                     if calculation is not None
                     else None

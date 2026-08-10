@@ -264,7 +264,7 @@ def test_radar_projection_explains_candidate_baseline_sampling_and_selection() -
 
     assert row["baseline_return_interval_minutes"] == 5
     assert row["baseline_selected_lookback_minutes"] == 120
-    assert row["baseline_source"] == "OFFICIAL_INDEX_CHART_AVERAGE_PRICE_RV"
+    assert row["baseline_source"] == "UTC_ALIGNED_5M_INDEX_CHART_AVERAGE_PRICE_RV"
     assert row["clue_eligible_tte"] is True
     assert row["clue_eligible_delta"] is False
 

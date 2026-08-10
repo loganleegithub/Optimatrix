@@ -57,6 +57,58 @@ def test_index_history_selects_a_causal_five_minute_suffix_from_finer_chart_poin
     assert tail.contract.exact_suffix_minutes == 395
 
 
+def test_index_history_keeps_one_utc_aligned_phase_until_the_next_completed_grid_point() -> None:
+    reducer = IndexHistoryReducer(
+        maximum_lookback_minutes=30,
+        return_interval_minutes=5,
+    )
+    rows = [
+        [minute * 60_000, 100 + (10 if minute % 5 in {1, 2} else 0) + minute / 10_000]
+        for minute in range(50)
+    ]
+    assert reducer.apply_chart_result(rows)
+
+    within_grid = tuple(
+        reducer.current_tail(
+            30,
+            trusted_time=TimeInterval(minute * 60_000, minute * 60_000),
+            source_stale_deadline_ms=900_000,
+        )
+        for minute in range(40, 45)
+    )
+
+    assert all(state.availability is IndexAvailabilityState.AVAILABLE for state in within_grid)
+    assert {state.economic_identity for state in within_grid} == {within_grid[0].economic_identity}
+    assert {state.points[-1].timestamp_ms for state in within_grid} == {35 * 60_000}
+
+    next_grid = reducer.current_tail(
+        30,
+        trusted_time=TimeInterval(45 * 60_000, 45 * 60_000),
+        source_stale_deadline_ms=900_000,
+    )
+    assert next_grid.availability is IndexAvailabilityState.AVAILABLE
+    assert next_grid.points[-1].timestamp_ms == 40 * 60_000
+    assert next_grid.economic_identity != within_grid[0].economic_identity
+
+
+def test_index_history_does_not_fall_back_to_an_off_grid_phase_when_anchor_is_missing() -> None:
+    reducer = IndexHistoryReducer(
+        maximum_lookback_minutes=30,
+        return_interval_minutes=5,
+    )
+    rows = [[minute * 60_000, 100 + minute / 100] for minute in range(50) if minute != 35]
+    assert reducer.apply_chart_result(rows)
+
+    tail = reducer.current_tail(
+        30,
+        trusted_time=TimeInterval(40 * 60_000, 40 * 60_000),
+        source_stale_deadline_ms=900_000,
+    )
+
+    assert tail.availability is IndexAvailabilityState.WINDOW_GAP
+    assert tail.reason == "INDEX_HISTORY_WINDOW_GAP"
+
+
 def test_index_history_fails_closed_for_gap_staleness_and_invalid_shape() -> None:
     reducer = IndexHistoryReducer(
         maximum_lookback_minutes=30,

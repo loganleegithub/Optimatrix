@@ -206,9 +206,11 @@ class IndexHistoryReducer:
 
         interval_ms = self.return_interval_minutes * MINUTE_MS
         completed_cutoff_ms = trusted_time.lower_ms - interval_ms
+        aligned_cutoff_ms = completed_cutoff_ms - (completed_cutoff_ms % interval_ms)
         # Consume only points old enough to represent a completed configured interval. The
         # source probe separately reports whether the provider's newest response point usually
-        # falls outside this cutoff; no undocumented open-bucket rule is invented here.
+        # falls outside this cutoff. The economic suffix is anchored to one UTC-epoch-aligned
+        # grid so finer source points cannot rotate the return-sampling phase every minute.
         eligible = self._points[: bisect_right(self._timestamps, completed_cutoff_ms)]
         contract = self._contract(eligible, trusted_time=trusted_time)
 
@@ -246,7 +248,7 @@ class IndexHistoryReducer:
 
         required_count = lookback_minutes // self.return_interval_minutes + 1
         required_timestamps = tuple(
-            latest.timestamp_ms - offset * interval_ms for offset in reversed(range(required_count))
+            aligned_cutoff_ms - offset * interval_ms for offset in reversed(range(required_count))
         )
         selected = tuple(
             self._point_by_timestamp[timestamp]

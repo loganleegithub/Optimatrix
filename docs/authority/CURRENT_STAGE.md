@@ -4,9 +4,9 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_LIVE_CURRENT`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR_ACTIVE`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
@@ -14,9 +14,28 @@
 
 **Persistent service:** `RUNNING_8675_FROM_MAIN_9A4CC23`
 
-**Live commands:** `NONE_CONSUMED`
+**Live commands:** `REQUIRED_BOUNDED_REPAIR_CUTOVER`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:**
+[`INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md)
+
+## Active repair authorization
+
+At `2026-08-11 02:32:18 +0800`, the running code identity remained
+`9a4cc23cb9092a04b0a6e72eec6657a570660c73`, healthy, ready, `CURRENT`, and
+`KNOWN_COMPLETE`, with zero admitted Shadow Case and zero Position. Direct live attribution found
+that the one-minute official index-chart source was being re-anchored every minute into five
+different five-minute sampling phases. The same eligible leader consequently repeated a
+two-minute HIGH / three-minute LOW pattern and could not reach its Policy-owned second confirmation.
+
+The sole active repair fixes that market-input boundary to one UTC-aligned five-minute grid without
+changing any Policy artifact, score threshold, TTE/Delta eligibility, persistence rule,
+Underwriting economics, Position rule, or Case schema. After the Draft PR is bound and repository
+checks pass, this authority permits one clean stop and one clean start on `127.0.0.1:8675` from the
+repair commit, reusing the unchanged stable Case repository
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. Continued observation remains
+production-public Shadow only and cannot claim Edge, profitability, an order, a fill, or actual
+exposure.
 
 ## Current online boundary
 
