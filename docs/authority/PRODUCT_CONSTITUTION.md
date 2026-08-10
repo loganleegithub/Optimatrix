@@ -219,6 +219,12 @@ is an unsigned concentration diagnostic only: dealer sign remains `UNKNOWN` and 
 score. The runtime persists no clue, score, quote, or review before Case opening and claims no
 calendar forecast, signed dealer GEX, pin target, Policy Edge, or profitability.
 
+Optional surface/term adjustments require their exact contributing ticker source times to be
+within the fixed cross-sectional skew budget and ATM proxies to be within the fixed Delta distance.
+Failure of that optional coherence test reduces score coverage rather than fabricating a neutral
+value or erasing otherwise known A/D/E evidence. Every future Case binds selection to the actual
+Episode-activation packet even when another HIGH member in the same batch was designated first.
+
 ## Underwriting and admission
 
 A fixed Underwriting Policy compares the conservative full-quantity two-leg net premium with

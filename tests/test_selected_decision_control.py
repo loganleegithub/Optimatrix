@@ -111,8 +111,10 @@ def _score_packet(
         stressed_richness=richness,
         stressed_executable_bid_iv=DecimalInterval(Decimal("0.3"), Decimal("0.3")),
         local_same_type_mark_iv=Decimal("0.3"),
+        surface_source_skew_ms=0,
         current_expiry_atm_mark_iv=Decimal("0.3"),
         adjacent_expiry_atm_mark_iv=Decimal("0.3"),
+        term_source_skew_ms=0,
         adverse_semivariance_share=point_zero,
         jump_share=point_zero,
         target_spread_ticks=point_one,
@@ -137,7 +139,13 @@ def _score_packet(
     )
 
 
-def _component_quote() -> tuple[
+def _component_quote(
+    *,
+    short_name: str = "BTC-8AUG26-100000-C",
+    long_name: str = "BTC-8AUG26-102000-C",
+    short_strike: str = "100000",
+    long_strike: str = "102000",
+) -> tuple[
     OptionInstrument,
     OptionInstrument,
     ComponentBookVerticalQuote,
@@ -145,18 +153,18 @@ def _component_quote() -> tuple[
     amount = AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1"))
     tick = PriceTickMetadata(Decimal("0.0001"))
     short = OptionInstrument(
-        "BTC-8AUG26-100000-C",
+        short_name,
         1_786_150_800_000,
-        Decimal("100000"),
+        Decimal(short_strike),
         OptionType.CALL,
         amount,
         tick,
         product=INVERSE_BTC,
     )
     long = OptionInstrument(
-        "BTC-8AUG26-102000-C",
+        long_name,
         1_786_150_800_000,
-        Decimal("102000"),
+        Decimal(long_strike),
         OptionType.CALL,
         amount,
         tick,
@@ -893,6 +901,237 @@ def test_high_with_combo_owns_batch_before_low_mid_control_designation() -> None
     assert selected_payload["radar_research_review_identity"] is None
     assert owner.active_candidate_identities
     assert owner.active_decision_control_identities == frozenset()
+
+
+def test_non_designated_delayed_high_candidate_uses_activation_packet_for_case(
+    tmp_path: Path,
+) -> None:
+    bindings = _bindings()
+    policies = load_policy_chain(
+        radar_path=ROOT / "policies/short-vol-inverse-btc-public-shadow-radar.json",
+        underwriting_path=(ROOT / "policies/short-vol-inverse-btc-public-shadow-underwriting.json"),
+        position_path=(ROOT / "policies/short-vol-inverse-btc-public-shadow-position.json"),
+        radar_identity=INVERSE_BTC_RADAR_POLICY_IDENTITY,
+        underwriting_identity=INVERSE_BTC_UNDERWRITING_POLICY_IDENTITY,
+        position_identity=INVERSE_BTC_POSITION_POLICY_IDENTITY,
+    )
+    cases = tmp_path / "cases"
+    cases.mkdir()
+    case_store = ShadowCaseStore(cases, bindings=bindings, policies=policies)
+    state = ShadowStateStore(bindings=bindings, observer=case_store)
+    owner = FixedContractShadowOwner(
+        policies=policies,
+        bindings=bindings,
+        state_store=state,
+    )
+    component_pairs = (
+        _component_quote(),
+        _component_quote(
+            short_name="BTC-8AUG26-104000-C",
+            long_name="BTC-8AUG26-106000-C",
+            short_strike="104000",
+            long_strike="106000",
+        ),
+    )
+    first_short = component_pairs[0][0]
+    activation = _boundary(1, 100)
+    bucket_keys = (
+        RadarBucketKey(
+            tte_band_id="six-to-twenty-four-hours",
+            expiry_ms=first_short.expiration_timestamp_ms,
+            option_type=OptionType.CALL,
+            delta_bucket="0.05-0.15",
+        ),
+        RadarBucketKey(
+            tte_band_id="six-to-twenty-four-hours",
+            expiry_ms=first_short.expiration_timestamp_ms,
+            option_type=OptionType.CALL,
+            delta_bucket="0.15-0.25",
+        ),
+    )
+    packets = tuple(
+        _score_packet(
+            boundary=activation,
+            band=ScoreBand.HIGH,
+            bucket_key=bucket_key,
+            leader_instrument_name=component_pairs[index][0].instrument_name,
+        )
+        for index, bucket_key in enumerate(bucket_keys)
+    )
+    episode_identities = tuple(
+        radar_bucket_episode_identity(
+            runtime_identity=bindings.runtime_identity,
+            policy_identity=bindings.radar_policy_identity,
+            bucket_key=bucket_key,
+            leader_instrument_name=component_pairs[index][0].instrument_name,
+            score_band=ScoreBand.HIGH,
+            activation_causal_seq=activation.causal_seq,
+        )
+        for index, bucket_key in enumerate(bucket_keys)
+    )
+    batch_identity = selected_decision_batch_identity(
+        bindings=bindings,
+        activation_causal_seq=activation.causal_seq,
+    )
+    designated = designate_selected_decision_episode(
+        bindings=bindings,
+        batch_identity=batch_identity,
+        episode_identities=episode_identities,
+    )
+    target_index = next(
+        index
+        for index, episode_identity in enumerate(episode_identities)
+        if episode_identity != designated
+    )
+    target_episode = episode_identities[target_index]
+    short, long, quote = component_pairs[target_index]
+    activation_source = SourceFact(
+        canonical_identity("DelayedHighActivationSource", activation.as_object()),
+        activation,
+    )
+    activation_facts = []
+    for index, (packet, episode_identity, (member_short, member_long, member_quote)) in enumerate(
+        zip(
+            packets,
+            episode_identities,
+            component_pairs,
+            strict=True,
+        )
+    ):
+        member = replace(
+            _review_facts(
+                boundary=activation,
+                activation_causal_seq=activation.causal_seq,
+                review_identity=episode_identity,
+                packet=packet,
+                short=member_short,
+                long=member_long,
+                quote=member_quote,
+                short_source=activation_source,
+                long_source=activation_source,
+            ),
+            radar_scope_identity=canonical_identity("RadarScope", episode_identity),
+            active_episode_identity=episode_identity,
+            anomaly_activation_seq=activation.causal_seq,
+            radar_research_review_identity=None,
+            radar_research_activation_seq=None,
+            component_state="COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN",
+            component_blockers=("COMPONENT_BOOK_UNKNOWN",),
+            component_quote=None,
+            component_short_quote_source=None,
+            component_long_quote_source=None,
+            unknown_reasons=("COMPONENT_BOOK_UNKNOWN",),
+            short_delta=Decimal("0.10") if index == 0 else Decimal("0.20"),
+        )
+        activation_facts.append(member)
+    request_ids = count(301)
+
+    first = owner.settle_underwriting(
+        tuple(activation_facts),
+        allocate_request_id=lambda: next(request_ids),
+    )
+
+    assert first.request_intents == ()
+    assert owner.active_candidate_identities == frozenset()
+    selection_boundary = _boundary(2, 110)
+    current_packet = _score_packet(
+        boundary=selection_boundary,
+        band=ScoreBand.MID,
+        bucket_key=bucket_keys[target_index],
+        leader_instrument_name=short.instrument_name,
+    )
+    selection_source = SourceFact(
+        canonical_identity("DelayedHighSelectionSource", selection_boundary.as_object()),
+        selection_boundary,
+    )
+    current = replace(
+        _review_facts(
+            boundary=selection_boundary,
+            activation_causal_seq=activation.causal_seq,
+            review_identity=target_episode,
+            packet=current_packet,
+            short=short,
+            long=long,
+            quote=quote,
+            short_source=selection_source,
+            long_source=selection_source,
+        ),
+        radar_scope_identity=canonical_identity("RadarScope", target_episode),
+        active_episode_identity=target_episode,
+        anomaly_activation_seq=activation.causal_seq,
+        radar_research_review_identity=None,
+        radar_research_activation_seq=None,
+        short_delta=Decimal("0.10") if target_index == 0 else Decimal("0.20"),
+    )
+
+    selected = owner.settle_underwriting(
+        (current,),
+        allocate_request_id=lambda: next(request_ids),
+    )
+
+    assert len(selected.request_intents) == 2
+    assert len(owner.active_candidate_identities) == 1
+    candidate_identity = next(iter(owner.active_candidate_identities))
+    sent_boundaries = (_boundary(3, 120), _boundary(4, 121))
+    for intent, sent_boundary in zip(selected.request_intents, sent_boundaries, strict=True):
+        owner.note_request_sent(request_id=intent.request_id, boundary=sent_boundary)
+    pair = component_pair_witness(
+        short=_witness(
+            role=ComponentLegRole.SHORT,
+            request_id=selected.request_intents[0].request_id,
+            option_identity=canonical_identity("OptionIdentity", short.instrument_name),
+            instrument_name=short.instrument_name,
+            origin=selection_boundary,
+            sent=sent_boundaries[0],
+            response=_boundary(5, 130),
+            source_timestamp_ms=1_000,
+        ),
+        long=_witness(
+            role=ComponentLegRole.LONG,
+            request_id=selected.request_intents[1].request_id,
+            option_identity=canonical_identity("OptionIdentity", long.instrument_name),
+            instrument_name=long.instrument_name,
+            origin=selection_boundary,
+            sent=sent_boundaries[1],
+            response=_boundary(6, 131),
+            source_timestamp_ms=1_001,
+        ),
+    )
+    refresh_packet = _score_packet(
+        boundary=pair.boundary,
+        band=ScoreBand.MID,
+        bucket_key=bucket_keys[target_index],
+        leader_instrument_name=short.instrument_name,
+    )
+    refreshed = replace(
+        current,
+        boundary=pair.boundary,
+        radar_score_packet=refresh_packet,
+        component_short_quote_source=SourceFact(pair.short.source_identity, pair.short.boundary),
+        component_long_quote_source=SourceFact(pair.long.source_identity, pair.long.boundary),
+        component_pair_witness=pair,
+    )
+
+    owner.settle_component_admission(
+        candidate_identity=candidate_identity,
+        refreshed_facts=refreshed,
+        pair_witness=pair,
+    )
+
+    entry = next(value for value in state.objects if value["object_kind"] == "SHADOW_ENTRY")
+    entry_identity = entry["object_identity"]
+    assert isinstance(entry_identity, str)
+    case_id = case_store.case_id_for_enrollment(entry_identity)
+    assert case_id is not None
+    opened = case_store.read_case(case_id, runtime_active=True).opened
+    selection_object = opened["selection_score_packet"]
+    refresh_object = opened["entry_refresh_score_packet"]
+    assert isinstance(selection_object, Mapping)
+    assert isinstance(refresh_object, Mapping)
+    assert selection_object["result"]["band"] == "HIGH"
+    assert selection_object["fact_boundary"] == activation.as_object()
+    assert refresh_object["result"]["band"] == "MID"
+    assert refresh_object["fact_boundary"] == pair.boundary.as_object()
 
 
 def test_decision_control_attempt_opens_only_from_one_strictly_later_valid_pair() -> None:

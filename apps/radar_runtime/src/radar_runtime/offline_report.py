@@ -21,7 +21,7 @@ from short_vol_underwriting.identity import require_identity
 from radar_runtime.identity import git_repository_root
 from radar_runtime.service import load_persistent_product_policies
 
-V2_CASE_REPORT_SCHEMA_VERSION = 1
+V2_CASE_REPORT_SCHEMA_VERSION = 2
 V2_CHANNEL_ID = "INVERSE_BTC_SHORT_VOL_V2"
 
 
@@ -36,8 +36,14 @@ class _CaseOutcomeRow:
     observation_quality: str
     terminal_state: str
     expiry_ms: int
+    selection_tte_band_id: str
+    selection_option_type: str
+    selection_delta_bucket: str
     selection_score_band: str
+    selection_score_coverage: str
     entry_refresh_score_band: str
+    selected_economic_action: str
+    refreshed_economic_action: str
     sampling_kind: str | None
     inclusion_numerator: int | None
     inclusion_denominator: int | None
@@ -51,8 +57,14 @@ class _CaseOutcomeRow:
             "observation_quality": self.observation_quality,
             "terminal_state": self.terminal_state,
             "expiry_ms": self.expiry_ms,
+            "selection_tte_band_id": self.selection_tte_band_id,
+            "selection_option_type": self.selection_option_type,
+            "selection_delta_bucket": self.selection_delta_bucket,
             "selection_score_band": self.selection_score_band,
+            "selection_score_coverage": self.selection_score_coverage,
             "entry_refresh_score_band": self.entry_refresh_score_band,
+            "selected_economic_action": self.selected_economic_action,
+            "refreshed_economic_action": self.refreshed_economic_action,
             "sampling_kind": self.sampling_kind,
             "inclusion_numerator": self.inclusion_numerator,
             "inclusion_denominator": self.inclusion_denominator,
@@ -65,6 +77,7 @@ def load_v2_case_report(
     cases_directory: Path,
     *,
     repository: Path | None = None,
+    runtime_active: bool = False,
 ) -> dict[str, object]:
     """Read only official schema-v5 Cases and derive one descriptive research report."""
 
@@ -95,8 +108,15 @@ def load_v2_case_report(
             case_ids.append(require_identity(member.name, "case_id"))
         except ValueError as exc:
             raise V2CaseReportError("cases directory contains an invalid Case identity") from exc
-    cases = tuple(store.read_case(case_id) for case_id in case_ids)
-    return build_v2_case_report(cases, product=product, policies=policies)
+    cases = tuple(store.read_case(case_id, runtime_active=runtime_active) for case_id in case_ids)
+    return build_v2_case_report(
+        cases,
+        product=product,
+        policies=policies,
+        snapshot_mode=(
+            "CALLER_ASSERTED_ACTIVE_RUNTIME" if runtime_active else "INACTIVE_OR_UNKNOWN_RUNTIME"
+        ),
+    )
 
 
 def build_v2_case_report(
@@ -104,6 +124,7 @@ def build_v2_case_report(
     *,
     product: OptionProductSpec,
     policies: PolicyChain,
+    snapshot_mode: str = "SUPPLIED_CASE_READ_STATES",
 ) -> dict[str, object]:
     """Derive conditional V2 score-band and Outcome evidence without replay or storage."""
 
@@ -111,7 +132,8 @@ def build_v2_case_report(
     continuous = tuple(row for row in rows if row.observation_quality == "CONTINUOUS")
     gapped = tuple(row for row in rows if row.observation_quality == "GAPPED")
     incomplete = tuple(row for row in rows if row.observation_quality == "INCOMPLETE_UNCLEAN_EXIT")
-    if len(continuous) + len(gapped) + len(incomplete) != len(rows):
+    pending = tuple(row for row in rows if row.observation_quality == "PENDING_OPEN")
+    if len(continuous) + len(gapped) + len(incomplete) + len(pending) != len(rows):
         raise V2CaseReportError("Case observation quality is outside the V2 report contract")
     return {
         "report_schema_version": V2_CASE_REPORT_SCHEMA_VERSION,
@@ -127,16 +149,20 @@ def build_v2_case_report(
             "interpretation": "CONDITIONAL_DESCRIPTIVE_RESEARCH_ONLY",
             "primary_view": "CONTINUOUS",
             "secondary_view": "GAPPED",
+            "pending_view": "PENDING_OPEN",
             "incomplete_view": "INCOMPLETE_UNCLEAN_EXIT",
+            "snapshot_mode": snapshot_mode,
             "non_claims": [
                 "NOT_UNCONDITIONAL_MARKET_OPPORTUNITY_RATE",
                 "NOT_CAUSAL_ALPHA_OR_EXPECTED_PROFIT",
+                "NOT_CROSS_ENROLLMENT_ALPHA_COMPARISON",
                 "NOT_ORDER_FILL_TRADE_OR_ACCOUNT_PNL",
             ],
         },
         "views": {
             "continuous_primary": _view_object(continuous),
             "gapped_secondary": _view_object(gapped),
+            "pending_open": _view_object(pending),
             "incomplete_unclean_exit": _view_object(incomplete),
         },
     }
@@ -153,6 +179,12 @@ def _case_outcome_row(
         raise V2CaseReportError("offline V2 report accepts schema-v5 Cases only")
     case_id = _identity(opened.get("case_id"), "case_id")
     enrollment_kind = _text(opened.get("enrollment_kind"), "enrollment_kind")
+    if enrollment_kind not in {
+        "ADMITTED_SHADOW_TRADE",
+        "SELECTED_UNDERWRITING_DECISION_CONTROL",
+        "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
+    }:
+        raise V2CaseReportError("Case carries an invalid enrollment kind")
     structure = _mapping(opened.get("structure"), "structure")
     expiry_ms = _non_negative_integer(structure.get("expiry_ms"), "expiry_ms")
     selection_packet = _mapping(
@@ -165,6 +197,54 @@ def _case_outcome_row(
     )
     selection_band = _score_band(selection_packet, "selection_score_packet")
     entry_band = _score_band(entry_packet, "entry_refresh_score_packet")
+    selection_bucket = _mapping(
+        selection_packet.get("bucket_key"),
+        "selection_score_packet.bucket_key",
+    )
+    selection_result = _mapping(
+        selection_packet.get("result"),
+        "selection_score_packet.result",
+    )
+    selection_tte_band_id = _text(
+        selection_bucket.get("tte_band_id"),
+        "selection_score_packet.bucket_key.tte_band_id",
+    )
+    selection_option_type = _text(
+        selection_bucket.get("option_type"),
+        "selection_score_packet.bucket_key.option_type",
+    )
+    if selection_option_type not in {"call", "put"}:
+        raise V2CaseReportError("selection packet option_type is invalid")
+    selection_delta_bucket = _text(
+        selection_bucket.get("delta_bucket"),
+        "selection_score_packet.bucket_key.delta_bucket",
+    )
+    selection_score_coverage = _text(
+        selection_result.get("coverage"),
+        "selection_score_packet.result.coverage",
+    )
+    if selection_score_coverage not in {"COMPLETE", "PARTIAL"}:
+        raise V2CaseReportError("selection packet score coverage is invalid")
+    underwriting = _mapping(opened.get("underwriting"), "underwriting")
+    refreshed_economic_action = _text(
+        underwriting.get("action"),
+        "underwriting.action",
+    )
+    selected_decision = opened.get("selected_underwriting_decision")
+    if selected_decision is None:
+        if enrollment_kind != "ADMITTED_SHADOW_TRADE":
+            raise V2CaseReportError("Control Case lacks its selected decision")
+        selected_economic_action = "CANDIDATE"
+    else:
+        selected_economic_action = _text(
+            _mapping(selected_decision, "selected_underwriting_decision").get(
+                "selected_economic_action"
+            ),
+            "selected_underwriting_decision.selected_economic_action",
+        )
+    for action in (selected_economic_action, refreshed_economic_action):
+        if action not in {"CANDIDATE", "WATCH", "ABSTAIN"}:
+            raise V2CaseReportError("Case carries an invalid Underwriting action")
     sampling_kind, inclusion_numerator, inclusion_denominator = _sampling_projection(
         selection_packet
     )
@@ -173,6 +253,8 @@ def _case_outcome_row(
     terminal_state = (
         "INCOMPLETE_UNCLEAN_EXIT"
         if observation_quality == "INCOMPLETE_UNCLEAN_EXIT"
+        else "PENDING_OPEN"
+        if observation_quality == "PENDING_OPEN"
         else _text(outcome.get("terminal_state"), "terminal_state")
         if outcome is not None
         else "RIGHT_CENSORED"
@@ -214,6 +296,7 @@ def _case_outcome_row(
         "CENSORED_AT_FAILURE",
         "RIGHT_CENSORED",
         "INCOMPLETE_UNCLEAN_EXIT",
+        "PENDING_OPEN",
     }:
         raise V2CaseReportError("Case Outcome terminal state is outside the V2 report contract")
     return _CaseOutcomeRow(
@@ -222,8 +305,14 @@ def _case_outcome_row(
         observation_quality=observation_quality,
         terminal_state=terminal_state,
         expiry_ms=expiry_ms,
+        selection_tte_band_id=selection_tte_band_id,
+        selection_option_type=selection_option_type,
+        selection_delta_bucket=selection_delta_bucket,
         selection_score_band=selection_band,
+        selection_score_coverage=selection_score_coverage,
         entry_refresh_score_band=entry_band,
+        selected_economic_action=selected_economic_action,
+        refreshed_economic_action=refreshed_economic_action,
         sampling_kind=sampling_kind,
         inclusion_numerator=inclusion_numerator,
         inclusion_denominator=inclusion_denominator,
@@ -232,7 +321,11 @@ def _case_outcome_row(
     )
 
 
-def _view_object(rows: Sequence[_CaseOutcomeRow]) -> dict[str, object]:
+def _view_object(
+    rows: Sequence[_CaseOutcomeRow],
+    *,
+    include_enrollment_breakdown: bool = True,
+) -> dict[str, object]:
     terminal_counts = Counter(row.terminal_state for row in rows)
     censored = sum(
         terminal_counts[state]
@@ -261,6 +354,7 @@ def _view_object(rows: Sequence[_CaseOutcomeRow]) -> dict[str, object]:
             "mature_unknown": terminal_counts["MATURE_UNKNOWN"],
             "censored": censored,
             "right_censored_without_outcome": terminal_counts["RIGHT_CENSORED"],
+            "pending_open": terminal_counts["PENDING_OPEN"],
             "incomplete_unclean_exit": terminal_counts["INCOMPLETE_UNCLEAN_EXIT"],
         },
         "score_band_counts": {
@@ -280,6 +374,18 @@ def _view_object(rows: Sequence[_CaseOutcomeRow]) -> dict[str, object]:
         band: _band_view_object(tuple(row for row in rows if row.selection_score_band == band))
         for band in ("LOW", "MID", "HIGH", "REVIEW")
     }
+    if include_enrollment_breakdown:
+        result["by_enrollment_kind"] = {
+            kind: _view_object(
+                tuple(row for row in rows if row.enrollment_kind == kind),
+                include_enrollment_breakdown=False,
+            )
+            for kind in (
+                "ADMITTED_SHADOW_TRADE",
+                "SELECTED_UNDERWRITING_DECISION_CONTROL",
+                "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
+            )
+        }
     return result
 
 
@@ -306,6 +412,7 @@ def _band_view_object(rows: Sequence[_CaseOutcomeRow]) -> dict[str, object]:
             "mature_unknown": terminal_counts["MATURE_UNKNOWN"],
             "censored": censored,
             "right_censored_without_outcome": terminal_counts["RIGHT_CENSORED"],
+            "pending_open": terminal_counts["PENDING_OPEN"],
             "incomplete_unclean_exit": terminal_counts["INCOMPLETE_UNCLEAN_EXIT"],
         },
         "expiry_cluster_count": len({row.expiry_ms for row in rows}),
@@ -432,6 +539,8 @@ def _observation_quality(
     }
     if case_status == "INCOMPLETE_UNCLEAN_EXIT" or "INCOMPLETE_UNCLEAN_EXIT" in (segment_statuses):
         return "INCOMPLETE_UNCLEAN_EXIT"
+    if case_status == "OPEN":
+        return "PENDING_OPEN"
     observed = {segment.opened.get("observation_quality") for segment in case.segments}
     if case.outcome is not None and case.outcome.get("observation_quality") is not None:
         observed.add(case.outcome.get("observation_quality"))

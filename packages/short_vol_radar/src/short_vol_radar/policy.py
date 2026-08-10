@@ -46,6 +46,8 @@ class ScoreModel:
     richness_knots: tuple[RichnessKnot, ...]
     surface_residual_saturation_iv_fraction: Decimal
     term_residual_saturation_iv_fraction: Decimal
+    maximum_cross_sectional_ticker_source_skew_ms: int
+    maximum_atm_delta_distance: Decimal
     surface_adjustment_weight: Decimal
     term_adjustment_weight: Decimal
     path_adverse_semivariance_weight: Decimal
@@ -267,8 +269,8 @@ def _bands_are_adjacent(touched: tuple[TteBand, ...]) -> bool:
 
 def _parse_policy(raw: dict[str, object], identity: str) -> RadarPolicy:
     schema_version = _positive_int(raw.get("policy_schema_version"), "policy_schema_version")
-    if schema_version != 8:
-        raise PolicyError("policy_schema_version must be exactly 8")
+    if schema_version != 9:
+        raise PolicyError("policy_schema_version must be exactly 9")
     expected_keys = {
         "policy_schema_version",
         "policy_family",
@@ -322,6 +324,8 @@ def _parse_score_model(value: object) -> ScoreModel:
         "richness_knots",
         "surface_residual_saturation_iv_fraction",
         "term_residual_saturation_iv_fraction",
+        "maximum_cross_sectional_ticker_source_skew_ms",
+        "maximum_atm_delta_distance",
         "surface_adjustment_weight",
         "term_adjustment_weight",
         "path_adverse_semivariance_weight",
@@ -434,6 +438,12 @@ def _parse_score_model(value: object) -> ScoreModel:
     )
     if clear_score >= activation_score:
         raise PolicyError("score_model requires clear_score_upper < activation_score_lower")
+    maximum_atm_delta_distance = _positive_decimal(
+        value["maximum_atm_delta_distance"],
+        "score_model.maximum_atm_delta_distance",
+    )
+    if maximum_atm_delta_distance > Decimal("0.5"):
+        raise PolicyError("score_model.maximum_atm_delta_distance must be <= 0.5")
     return ScoreModel(
         richness_knots=tuple(knots),
         surface_residual_saturation_iv_fraction=_positive_decimal(
@@ -444,6 +454,11 @@ def _parse_score_model(value: object) -> ScoreModel:
             value["term_residual_saturation_iv_fraction"],
             "score_model.term_residual_saturation_iv_fraction",
         ),
+        maximum_cross_sectional_ticker_source_skew_ms=_positive_int(
+            value["maximum_cross_sectional_ticker_source_skew_ms"],
+            "score_model.maximum_cross_sectional_ticker_source_skew_ms",
+        ),
+        maximum_atm_delta_distance=maximum_atm_delta_distance,
         surface_adjustment_weight=surface_weight,
         term_adjustment_weight=term_weight,
         path_adverse_semivariance_weight=path_adverse_weight,

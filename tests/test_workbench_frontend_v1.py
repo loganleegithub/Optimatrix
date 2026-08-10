@@ -53,6 +53,11 @@ def test_opportunity_blotter_exposes_the_roadmap_without_fabricating_future_trut
     assert "避免浏览器误拼不同 Episode" in JS
     assert "服务器未提供 V2 score packet" in JS
     assert "浏览器不补算" in JS
+    assert "A · 可执行 IV / RV 丰厚度" in JS
+    assert "S · 可执行 bid-IV \u2212 同类型局部 mark-IV" in JS
+    assert "T · 本到期 ATM mark-IV \u2212 下一到期 ATM mark-IV" in JS
+    assert "局部曲面贡献行情不同步\uff0cS 因子不计分" in JS
+    assert "相邻期限贡献行情不同步\uff0cT 因子不计分" in JS
 
 
 def test_opportunity_blotter_preserves_public_only_read_only_boundaries() -> None:

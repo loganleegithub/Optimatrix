@@ -74,8 +74,10 @@ def _inputs(**overrides: object) -> RadarScoreInputs:
         "stressed_richness": _interval("1.2"),
         "stressed_executable_bid_iv": _interval("0.30", "0.32"),
         "local_same_type_mark_iv": Decimal("0.30"),
+        "surface_source_skew_ms": 0,
         "current_expiry_atm_mark_iv": Decimal("0.32"),
         "adjacent_expiry_atm_mark_iv": Decimal("0.31"),
+        "term_source_skew_ms": 0,
         "adverse_semivariance_share": _interval("0.5"),
         "jump_share": _interval("0.1"),
         "target_spread_ticks": _interval("5"),
@@ -173,6 +175,54 @@ def test_optional_surface_and_term_are_missing_not_fabricated_neutral_values() -
         assert factor.weighted_contribution is None
         assert factor.unknown_reason is not None
     assert result.premium_evidence == _interval("0.8")
+
+
+@pytest.mark.parametrize(
+    ("surface_skew_ms", "expected_coverage", "expected_reason"),
+    [
+        (6_000, ScoreCoverage.COMPLETE, None),
+        (6_001, ScoreCoverage.PARTIAL, "SURFACE_SOURCE_SKEW_EXCEEDED"),
+        (None, ScoreCoverage.PARTIAL, "SURFACE_SOURCE_TIME_UNKNOWN"),
+    ],
+)
+def test_surface_factor_enforces_policy_source_skew_without_blocking_core_score(
+    surface_skew_ms: int | None,
+    expected_coverage: ScoreCoverage,
+    expected_reason: str | None,
+) -> None:
+    result = compute_radar_score(
+        _model(),
+        _inputs(surface_source_skew_ms=surface_skew_ms),
+    )
+    surface = next(
+        factor for factor in result.factors if factor.name is ScoreFactorName.SURFACE_RESIDUAL
+    )
+
+    assert result.coverage is expected_coverage
+    assert surface.unknown_reason == expected_reason
+    if expected_reason is None:
+        assert surface.weighted_contribution is not None
+    else:
+        assert surface.weighted_contribution is None
+        assert result.score is not None
+
+
+@pytest.mark.parametrize(
+    ("term_skew_ms", "expected_reason"),
+    [
+        (6_000, None),
+        (6_001, "TERM_SOURCE_SKEW_EXCEEDED"),
+        (None, "TERM_SOURCE_TIME_UNKNOWN"),
+    ],
+)
+def test_term_factor_enforces_same_policy_source_skew_boundary(
+    term_skew_ms: int | None,
+    expected_reason: str | None,
+) -> None:
+    result = compute_radar_score(_model(), _inputs(term_source_skew_ms=term_skew_ms))
+    term = next(factor for factor in result.factors if factor.name is ScoreFactorName.TERM_RESIDUAL)
+
+    assert term.unknown_reason == expected_reason
 
 
 @pytest.mark.parametrize(
@@ -378,6 +428,7 @@ def _packet(
         "band_vs_score",
         "aggregate_vs_factors",
         "factor_contribution",
+        "surface_source_skew",
         "legacy_diagnostic",
         "oi_diagnostic",
     ),
@@ -402,6 +453,12 @@ def test_policy_aware_packet_validator_rejects_derived_truth_tampering(
         factors = result["factors"]
         assert isinstance(factors, list) and isinstance(factors[0], dict)
         factors[0]["weighted_contribution"] = {"lower": "0.1", "upper": "0.1"}
+    elif tamper == "surface_source_skew":
+        factors = result["factors"]
+        assert isinstance(factors, list) and isinstance(factors[1], dict)
+        raw_inputs = factors[1]["raw_inputs"]
+        assert isinstance(raw_inputs, list) and isinstance(raw_inputs[2], dict)
+        raw_inputs[2]["interval"] = {"lower": "6001", "upper": "6001"}
     elif tamper == "legacy_diagnostic":
         value["legacy_v1_threshold_pass"] = False
     elif tamper == "oi_diagnostic":

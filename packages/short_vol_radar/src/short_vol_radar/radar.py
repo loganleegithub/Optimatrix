@@ -568,7 +568,10 @@ def calculate_current_evaluation(
         stressed_target_bid=stressed_target_bid,
         price_tick_usdc=model_price_tick,
         target_spread_usdc=model_spread,
-        target_spread_ticks=native_spread / price_tick,
+        target_spread_ticks=instrument.price_tick.tick_equivalent_distance(
+            target_bid.vwap,
+            target_ask.vwap,
+        ),
         bid_premium_ticks=target_bid.vwap / price_tick,
         forward_usdc=ticker.forward_usdc,
         executable_sell_price_usdc=model_target_bid,
@@ -671,8 +674,10 @@ def radar_score_inputs(
     calculation: DetectorCalculation,
     *,
     local_same_type_mark_iv: Decimal | None = None,
+    surface_source_skew_ms: int | None = None,
     current_expiry_atm_mark_iv: Decimal | None = None,
     adjacent_expiry_atm_mark_iv: Decimal | None = None,
+    term_source_skew_ms: int | None = None,
 ) -> RadarScoreInputs:
     diagnostics = calculation.baseline.window_diagnostics
     if not diagnostics:
@@ -697,8 +702,10 @@ def radar_score_inputs(
         stressed_richness=calculation.richness,
         stressed_executable_bid_iv=calculation.stressed_executable_bid_iv,
         local_same_type_mark_iv=local_same_type_mark_iv,
+        surface_source_skew_ms=surface_source_skew_ms,
         current_expiry_atm_mark_iv=current_expiry_atm_mark_iv,
         adjacent_expiry_atm_mark_iv=adjacent_expiry_atm_mark_iv,
+        term_source_skew_ms=term_source_skew_ms,
         adverse_semivariance_share=DecimalInterval(adverse, adverse),
         jump_share=DecimalInterval(selected.jump_share, selected.jump_share),
         target_spread_ticks=DecimalInterval(

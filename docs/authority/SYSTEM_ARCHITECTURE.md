@@ -228,6 +228,18 @@ class `CANDIDATE > WATCH > ABSTAIN`, then the complete signed predicate-margin v
 width, and instrument name. Composition freezes that result and does not switch it during the
 Episode. Official Combo availability remains a separate diagnostic.
 
+Cross-sectional S/T composition uses ticker source timestamps with one Policy-owned `6000 ms`
+maximum skew and ATM proxies within five absolute Delta points of `0.50`. Missing or over-skew
+optional neighbours remove only their optional adjustment. Forward, Delta, and mark-IV changes are
+score-countable and invalidate Call/Put peers on the affected expiry plus the immediately shorter
+expiry whose `T` depends on it; OI/gamma-only changes remain non-countable diagnostics. The existing
+global ticker source-staleness owner is not duplicated.
+
+The Underwriting owner freezes every eligible HIGH member's activation score packet when the
+action-blind batch is registered. A later non-designated Candidate consumes its own frozen HIGH
+packet at selection and a truly later recomputed packet at entry refresh; it never relabels the
+current packet as the activation witness.
+
 `options_domain` owns the one product specification and one component-book calculator. Entry walks
 short bids and long asks at the full target quantity, stresses short sells down one native legal
 tick and long buys up one native legal tick, then applies both standard fees in the product's native

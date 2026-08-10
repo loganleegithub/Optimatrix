@@ -182,16 +182,16 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_consumed_v2_cutover_and_no_live_command() -> None:
+def test_current_stage_records_v2_coherence_repair_without_live_permission() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_H2_LIVE_CURRENT`" in current
+    assert "**Current task kind:** `IMPLEMENTATION`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_CAUSAL_COHERENCE_REPAIR`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_CURRENT_FRESH_SCHEMA_V5`" in current
-    assert "**Live commands:** `NONE_AUTHORIZED_H2_CONSUMED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "**Persistent service:** `RUNNING_CURRENT_H2_UNCHANGED`" in current
+    assert "**Live commands:** `FORBIDDEN`" in current
+    assert "**Sole authorized closure:**" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
@@ -199,6 +199,7 @@ def test_current_stage_records_consumed_v2_cutover_and_no_live_command() -> None
         "channel: INVERSE_BTC_SHORT_VOL_V2",
         "code identity: cd9243ff9f92ca6e1b6c142dc9d61cbc5a21a359",
         "runtime identity: sha256:8c34f476bc91928678eb36b0e3528b2a7bc4f0b9d47157b018b805fb7d065260",
+        "deployment state: REPOSITORY_ONLY_NOT_RUNNING",
         "6 / 6 HTTP 200",
         "Shadow Entry rows: 0",
         "Position rows: 0",
@@ -217,9 +218,15 @@ def test_current_stage_records_consumed_v2_cutover_and_no_live_command() -> None
         "sha256:79b5ec7c886964ee4c886fb272f287f0645cc69a0b585cf53711c7b5ad0fef57",
         "sha256:5cea5bc8153071359597526e0f1bd665bbf55215b5368ed6135f96ca3b607c31",
         "sha256:f05646f7c1ed1a55bd8747879f1153c2633afde83aa3652549e01140552a6c67",
+        "sha256:fd604c22b6f4a111955f432fe09647e93c38e914e81c4045905ca79b935bdc9d",
+        "sha256:933dce3e4d9736b465aaca95a352ef8c3196592bfef04cf1f958442afe0f5e7d",
+        "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "INVERSE_BTC_SHORT_VOL_V2_CAUSAL_COHERENCE_REPAIR.md",
+        "TEMPLATE.md",
+    }
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
 
@@ -393,13 +400,13 @@ def test_internal_package_dependency_direction() -> None:
 def test_inverse_policy_files_remain_byte_exact_and_content_identified() -> None:
     expected = {
         "policies/short-vol-inverse-btc-public-shadow-radar.json": (
-            "79b5ec7c886964ee4c886fb272f287f0645cc69a0b585cf53711c7b5ad0fef57"
+            "fd604c22b6f4a111955f432fe09647e93c38e914e81c4045905ca79b935bdc9d"
         ),
         "policies/short-vol-inverse-btc-public-shadow-underwriting.json": (
-            "5cea5bc8153071359597526e0f1bd665bbf55215b5368ed6135f96ca3b607c31"
+            "933dce3e4d9736b465aaca95a352ef8c3196592bfef04cf1f958442afe0f5e7d"
         ),
         "policies/short-vol-inverse-btc-public-shadow-position.json": (
-            "f05646f7c1ed1a55bd8747879f1153c2633afde83aa3652549e01140552a6c67"
+            "8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe"
         ),
     }
     for relative, digest in expected.items():
@@ -415,8 +422,10 @@ def test_inverse_policy_files_remain_byte_exact_and_content_identified() -> None
     assert radar["product_spec_identity"] == (
         "sha256:a7880d3a0b3da12f74438b292ed49d7c034e683d2e1654037229c62474127131"
     )
-    assert radar["policy_schema_version"] == 8
+    assert radar["policy_schema_version"] == 9
     assert radar["policy_family"] == "INVERSE_BTC_SHORT_VOL_ORDINAL_MARKET_STRUCTURE_V2"
+    assert radar["score_model"]["maximum_cross_sectional_ticker_source_skew_ms"] == 6000
+    assert radar["score_model"]["maximum_atm_delta_distance"] == 0.05
     limits = radar["runtime_limits"]
     assert (
         limits["clock_refresh_interval_ms"]

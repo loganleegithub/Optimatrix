@@ -4,9 +4,9 @@ const DRAWER_MEDIA_QUERY = '(max-width: 1471px)';
 const THEME_STORAGE_KEY = 'optimatrix-workbench-theme';
 const ACTIVE_PRODUCT_SPEC_IDENTITY = 'sha256:a7880d3a0b3da12f74438b292ed49d7c034e683d2e1654037229c62474127131';
 const ACTIVE_POLICY_IDENTITIES = Object.freeze({
-  radar: 'sha256:79b5ec7c886964ee4c886fb272f287f0645cc69a0b585cf53711c7b5ad0fef57',
-  underwriting: 'sha256:5cea5bc8153071359597526e0f1bd665bbf55215b5368ed6135f96ca3b607c31',
-  position: 'sha256:f05646f7c1ed1a55bd8747879f1153c2633afde83aa3652549e01140552a6c67'
+  radar: 'sha256:fd604c22b6f4a111955f432fe09647e93c38e914e81c4045905ca79b935bdc9d',
+  underwriting: 'sha256:933dce3e4d9736b465aaca95a352ef8c3196592bfef04cf1f958442afe0f5e7d',
+  position: 'sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe'
 });
 
 const CHANNELS = [
@@ -68,6 +68,12 @@ const reasonLabels = {
   INGRESS_GAP_OR_DUPLICATE: '行情输入序列存在缺口或重复',
   QUEUE_OVERFLOW: '行情处理队列溢出',
   TICKER_SOURCE_STALE: '期权行情来源已陈旧',
+  SURFACE_RESIDUAL_UNKNOWN: '同类型局部曲面残差不可确认',
+  SURFACE_SOURCE_TIME_UNKNOWN: '局部曲面贡献行情缺少来源时间',
+  SURFACE_SOURCE_SKEW_EXCEEDED: '局部曲面贡献行情不同步，S 因子不计分',
+  TERM_RESIDUAL_UNKNOWN: '相邻期限 ATM 残差不可确认',
+  TERM_SOURCE_TIME_UNKNOWN: '相邻期限贡献行情缺少来源时间',
+  TERM_SOURCE_SKEW_EXCEEDED: '相邻期限贡献行情不同步，T 因子不计分',
   KNOWN_DEGRADED: '已知覆盖降级',
   NO_APPLICABLE_SCOPE: '当前无适用合约范围',
   NO_APPLICABLE_MARKET_SCOPE_OBSERVED: '当前无适用合约范围',
@@ -137,6 +143,14 @@ const displayText = value => isMissing(value)
   : (typeof value === 'object' ? JSON.stringify(value) : String(value));
 const safeText = value => escapeHtml(displayText(value));
 const reasonText = value => isMissing(value) ? '—' : (reasonLabels[value] || String(value));
+
+const scoreFactorLabels = {
+  A: 'A · 可执行 IV / RV 丰厚度',
+  S: 'S · 可执行 bid-IV − 同类型局部 mark-IV',
+  T: 'T · 本到期 ATM mark-IV − 下一到期 ATM mark-IV',
+  D: 'D · 历史路径质量',
+  E: 'E · 目标规模盘口质量'
+};
 
 function syncThemeControl() {
   if (!document.documentElement || typeof document.querySelectorAll !== 'function') return;
@@ -254,8 +268,10 @@ const scoreFactorMarkup = packet => {
       factor.weighted_contribution,
       value => formatCompactNumber(value, 3)
     );
-    const detail = factor.unknown_reason || `标准化 ${normalized} · 加权 ${contribution}`;
-    return `<div class="predicate-row"><span>因子 ${safeText(factor.name)}</span>` +
+    const detail = factor.unknown_reason
+      ? reasonText(factor.unknown_reason)
+      : `标准化 ${normalized} · 加权 ${contribution}`;
+    return `<div class="predicate-row"><span>${safeText(scoreFactorLabels[factor.name] || factor.name)}</span>` +
       `<span class="predicate-margin">${safeText(detail)}</span></div>`;
   }).join('')}</div>`;
 };

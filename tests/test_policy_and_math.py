@@ -59,7 +59,7 @@ def test_policy_requires_and_binds_ticker_source_stale_deadline(
 
     policy = load_policy_bytes(exact, digest)
 
-    assert policy.schema_version == 8
+    assert policy.schema_version == 9
     assert policy.product_spec_identity == INVERSE_BTC.identity
     assert policy.runtime_limits.ticker_source_stale_deadline_ms == 5_000
     assert policy.runtime_limits.as_object()["ticker_source_stale_deadline_ms"] == 5_000
@@ -95,7 +95,7 @@ def test_policy_loads_exact_bytes_once_and_binds_digest(
     path.write_bytes(exact)
     policy = load_policy(path, digest)
     assert policy.identity == digest
-    assert policy.schema_version == 8
+    assert policy.schema_version == 9
     assert policy.product_spec_identity == INVERSE_BTC.identity
     assert policy.target_base_quantity_btc == Decimal("0.1")
     assert policy.runtime_limits.index_history_refresh_interval_ms == 300_000
@@ -116,7 +116,7 @@ def test_production_radar_policy_is_the_exact_credible_clue_screen() -> None:
     exact = path.read_bytes()
     policy = load_policy_bytes(exact, digest_policy_bytes(exact))
 
-    assert policy.schema_version == 8
+    assert policy.schema_version == 9
     assert policy.product_spec_identity == INVERSE_BTC.identity
     assert policy.family == "INVERSE_BTC_SHORT_VOL_ORDINAL_MARKET_STRUCTURE_V2"
     assert policy.target_base_quantity_btc == Decimal("0.1")
@@ -160,6 +160,8 @@ def test_production_radar_policy_is_the_exact_credible_clue_screen() -> None:
     )
     assert policy.score_model.activation_score_lower == Decimal(65)
     assert policy.score_model.clear_score_upper == Decimal(50)
+    assert policy.score_model.maximum_cross_sectional_ticker_source_skew_ms == 6_000
+    assert policy.score_model.maximum_atm_delta_distance == Decimal("0.05")
 
 
 def test_two_materially_different_policy_fixtures_change_runtime_values(
@@ -215,6 +217,18 @@ def test_policy_rejects_digest_mismatch_unknown_keys_and_relationships(
     document["tte_bands"][0]["lookbacks_minutes"] = [6]
     changed = json.dumps(document).encode()
     with pytest.raises(PolicyError, match="divisible"):
+        load_policy_bytes(changed, digest_policy_bytes(changed))
+
+    document = json.loads(exact)
+    document["score_model"]["maximum_cross_sectional_ticker_source_skew_ms"] = 0
+    changed = json.dumps(document).encode()
+    with pytest.raises(PolicyError, match="must be positive"):
+        load_policy_bytes(changed, digest_policy_bytes(changed))
+
+    document = json.loads(exact)
+    document["score_model"]["maximum_atm_delta_distance"] = 0.51
+    changed = json.dumps(document).encode()
+    with pytest.raises(PolicyError, match=r"must be <= 0\.5"):
         load_policy_bytes(changed, digest_policy_bytes(changed))
 
 

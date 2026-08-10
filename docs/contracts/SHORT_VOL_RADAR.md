@@ -95,6 +95,8 @@ For one short-leg option at one causal boundary:
 3. consume official native `tick_size` and `tick_size_steps` metadata;
 4. move every consumed bid level down by one native legal tick, respecting tick-regime boundaries;
    a non-positive stressed price is known ineligible;
+   target-spread distance is integrated across every crossed tick regime rather than divided by the
+   tick size at only the first bid level;
 5. convert raw bid, stressed bid, and ask native VWAPs through the fixed product's model rule,
    then invert Black total volatility from those model-domain prices;
 6. derive the short-leg Delta interval and classify its explicit review bucket;
@@ -154,6 +156,14 @@ it is never stored as an observed zero or neutral 50%. D/E are required for a kn
 server exposes the numerical score interval, LOW `[0,50)`, MID `[50,65)`, or HIGH `[65,100]`,
 premium/risk decomposition, coverage, missing mask, raw inputs, and normalized contributions.
 
+S/T are optional cross-sectional observations, not independent clocks. `S` freezes the maximum
+source-timestamp skew across the target ticker and the same-type lower/upper interpolation
+neighbours. `T` freezes the skew between the current-expiry and immediate-next-longer-expiry ATM
+proxies. Each adjustment is usable only when all contributors carry source time and the skew is at
+most `6000 ms`; otherwise that factor is explicitly missing while A/D/E may still produce a
+`PARTIAL` score. This local rule does not replace the separate `300000 ms` ticker source-staleness
+deadline or make every current ticker mutually synchronous.
+
 ## Regime diagnostics
 
 The baseline calculator also derives, for every declared horizon:
@@ -174,7 +184,8 @@ turn historical VRP into an Edge claim.
 For current, active, open same-expiry options with usable ticker Delta and mark IV, the review layer
 may show:
 
-- nearest ATM mark-IV proxy and its actual Delta;
+- nearest ATM mark-IV proxy across Calls and Puts and its actual Delta, only within five Delta
+  points of absolute `0.50`;
 - nearest 25-Delta Call and Put only when each lies within five Delta points;
 - 25-Delta risk reversal when both proxies are usable;
 - local same-type mark-IV interpolation around the clue's Delta;
@@ -245,6 +256,13 @@ leader change before freeze, membership or scope loss, required core-score fact 
 revision/gap/staleness, continuity loss, or run stop. After any source loss, fresh observations are
 required. A confirmed LOW/MID research-review Episode can be designated at most once and cannot
 repeat until it has ended and a later Episode completes fresh persistence.
+
+A ticker application is a distinct persistence observation only when forward, signed Delta, or
+mark IV changes. OI/gamma-only changes refresh the unsigned diagnostic but do not advance score
+confirmation. Because S/T may select either option type and the adjacent expiry, a ticker change
+recomputes both Call and Put peers on the affected expiry and the immediately shorter expiry whose
+`T` uses it as the next-longer term. Unchanged polling and timestamp-only updates remain
+non-countable.
 
 ## Official atomic diagnostic
 

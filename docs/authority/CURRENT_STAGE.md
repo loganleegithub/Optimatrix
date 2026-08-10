@@ -4,19 +4,46 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_H2_LIVE_CURRENT`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_CAUSAL_COHERENCE_REPAIR`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_CURRENT_FRESH_SCHEMA_V5`
+**Persistent service:** `RUNNING_CURRENT_H2_UNCHANGED`
 
-**Live commands:** `NONE_AUTHORIZED_H2_CONSUMED`
+**Live commands:** `FORBIDDEN`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:**
+[`INVERSE_BTC_SHORT_VOL_V2_CAUSAL_COHERENCE_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_CAUSAL_COHERENCE_REPAIR.md)
+
+## Repository repair boundary
+
+The sole active task repairs four directly falsifiable V2 causal-coherence paths: a
+non-designated delayed HIGH Candidate must retain its Episode-activation HIGH packet; optional S/T
+must consume an explicit bounded cross-sectional ticker timestamp skew; ticker changes must
+invalidate Call/Put peers across the actual surface dependency and count every score-relevant
+forward/Delta/mark-IV change; and target-spread ticks must respect the full exchange tick ladder.
+
+This is a repository implementation closure only. It may advance the Radar Policy schema and the
+fixed three-Policy content identities, but it may not inspect, stop, restart, repoint, smoke, or
+otherwise change the current H2 process, port `8765`, or any external state root. The live facts
+below remain the last accepted H2 observation and do not claim that the repair is deployed. A later
+deployment requires a separate active task and a fresh compatible root boundary.
+
+The repository repair freezes this not-yet-deployed Policy chain:
+
+```text
+Radar Policy identity:        sha256:fd604c22b6f4a111955f432fe09647e93c38e914e81c4045905ca79b935bdc9d
+Underwriting Policy identity: sha256:933dce3e4d9736b465aaca95a352ef8c3196592bfef04cf1f958442afe0f5e7d
+Position Policy identity:     sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe
+deployment state:             REPOSITORY_ONLY_NOT_RUNNING
+```
+
+These identities supersede the repository artifacts only. They do not rewrite, migrate, or
+describe the still-running H2 process or either historical root.
 
 ## Current online boundary
 

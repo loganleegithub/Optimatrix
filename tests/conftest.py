@@ -41,7 +41,7 @@ def policy_document(
         "minimum_separation_ms": separation_ms,
     }
     return {
-        "policy_schema_version": 8,
+        "policy_schema_version": 9,
         "policy_family": "INVERSE_BTC_SHORT_VOL_ORDINAL_MARKET_STRUCTURE_V2",
         "product_spec_identity": INVERSE_BTC.identity,
         "target_base_quantity_btc": target,
@@ -66,6 +66,8 @@ def policy_document(
             ],
             "surface_residual_saturation_iv_fraction": 0.1,
             "term_residual_saturation_iv_fraction": 0.1,
+            "maximum_cross_sectional_ticker_source_skew_ms": 6_000,
+            "maximum_atm_delta_distance": 0.05,
             "surface_adjustment_weight": 0.1,
             "term_adjustment_weight": 0.05,
             "path_adverse_semivariance_weight": 0.5,

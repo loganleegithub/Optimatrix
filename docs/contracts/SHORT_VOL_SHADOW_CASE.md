@@ -288,6 +288,13 @@ refresh. Any evaluable refreshed action opens the non-admitted Control, includin
 Candidate, `SHADOW_ENTRY`, admitted trade, order, fill, capital exposure, or causal-effect estimate.
 An ordinary HIGH Candidate is never duplicated as a Control.
 
+The read-only `report-v2-cases` projection keeps the three enrollment kinds in separate strata and
+does not weight them into a market-population or causal-alpha estimate. It reports an opened Case
+without an Outcome as `PENDING_OPEN` only when the official reader returns `OPEN`; callers reading
+a currently owned Control root must opt in with `--runtime-active`. The default is
+inactive-or-unknown runtime status, under which an abandoned non-recoverable Control remains an
+explicit incomplete unclean exit. The report stores nothing and cannot alter Case truth.
+
 Qualification Cohorts are later offline views over completed Cases under a pre-registered
 evaluator. A `GAPPED` admitted Outcome is valid research data but is never eligible for a
 continuous-observation Cohort. The Online Runtime never writes Cohort or aligned-pair objects.

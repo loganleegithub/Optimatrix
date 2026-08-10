@@ -15,6 +15,7 @@ from options_domain import (
 )
 
 from short_vol_radar.detector import DetectorState
+from short_vol_radar.policy import ScoreModel
 from short_vol_radar.radar import DetectorCalculation, TickerState, radar_score_inputs
 from short_vol_radar.score import RadarScoreInputs
 
@@ -81,6 +82,7 @@ class SurfaceContext:
     same_expiry_atm_instrument_name: str | None = None
     same_expiry_atm_abs_delta: Decimal | None = None
     same_expiry_atm_mark_iv: Decimal | None = None
+    same_expiry_atm_source_timestamp_ms: int | None = None
     nearest_25d_call_instrument_name: str | None = None
     nearest_25d_call_abs_delta: Decimal | None = None
     nearest_25d_call_mark_iv: Decimal | None = None
@@ -91,15 +93,20 @@ class SurfaceContext:
     local_lower_instrument_name: str | None = None
     local_lower_abs_delta: Decimal | None = None
     local_lower_mark_iv: Decimal | None = None
+    local_lower_source_timestamp_ms: int | None = None
     local_upper_instrument_name: str | None = None
     local_upper_abs_delta: Decimal | None = None
     local_upper_mark_iv: Decimal | None = None
+    local_upper_source_timestamp_ms: int | None = None
     local_interpolated_mark_iv: Decimal | None = None
+    local_source_skew_ms: int | None = None
     stressed_executable_bid_iv_midpoint: Decimal | None = None
     stressed_executable_bid_iv_minus_local_mark_iv: Decimal | None = None
     adjacent_expiry_timestamp_ms: int | None = None
     adjacent_expiry_atm_instrument_name: str | None = None
     adjacent_expiry_atm_mark_iv: Decimal | None = None
+    adjacent_expiry_atm_source_timestamp_ms: int | None = None
+    term_source_skew_ms: int | None = None
     current_minus_adjacent_expiry_atm_iv: Decimal | None = None
 
     def as_object(self) -> dict[str, object]:
@@ -109,6 +116,7 @@ class SurfaceContext:
                 "instrument_name": self.same_expiry_atm_instrument_name,
                 "abs_delta": _decimal_text(self.same_expiry_atm_abs_delta),
                 "mark_iv": _decimal_text(self.same_expiry_atm_mark_iv),
+                "source_timestamp_ms": self.same_expiry_atm_source_timestamp_ms,
             },
             "nearest_25d_call": {
                 "instrument_name": self.nearest_25d_call_instrument_name,
@@ -125,10 +133,13 @@ class SurfaceContext:
                 "lower_instrument_name": self.local_lower_instrument_name,
                 "lower_abs_delta": _decimal_text(self.local_lower_abs_delta),
                 "lower_mark_iv": _decimal_text(self.local_lower_mark_iv),
+                "lower_source_timestamp_ms": self.local_lower_source_timestamp_ms,
                 "upper_instrument_name": self.local_upper_instrument_name,
                 "upper_abs_delta": _decimal_text(self.local_upper_abs_delta),
                 "upper_mark_iv": _decimal_text(self.local_upper_mark_iv),
+                "upper_source_timestamp_ms": self.local_upper_source_timestamp_ms,
                 "interpolated_mark_iv": _decimal_text(self.local_interpolated_mark_iv),
+                "source_skew_ms": self.local_source_skew_ms,
             },
             "stressed_executable_bid_iv_midpoint": _decimal_text(
                 self.stressed_executable_bid_iv_midpoint
@@ -140,6 +151,8 @@ class SurfaceContext:
                 "expiration_timestamp_ms": self.adjacent_expiry_timestamp_ms,
                 "instrument_name": self.adjacent_expiry_atm_instrument_name,
                 "mark_iv": _decimal_text(self.adjacent_expiry_atm_mark_iv),
+                "source_timestamp_ms": self.adjacent_expiry_atm_source_timestamp_ms,
+                "source_skew_ms": self.term_source_skew_ms,
                 "current_minus_adjacent_iv": _decimal_text(
                     self.current_minus_adjacent_expiry_atm_iv
                 ),
@@ -312,8 +325,10 @@ class ScoreFeatureContext:
             self.option_type,
             calculation,
             local_same_type_mark_iv=self.surface.local_interpolated_mark_iv,
+            surface_source_skew_ms=self.surface.local_source_skew_ms,
             current_expiry_atm_mark_iv=self.surface.same_expiry_atm_mark_iv,
             adjacent_expiry_atm_mark_iv=self.surface.adjacent_expiry_atm_mark_iv,
+            term_source_skew_ms=self.surface.term_source_skew_ms,
         )
 
 
@@ -324,6 +339,7 @@ class _SurfacePoint:
     option_type: OptionType
     abs_delta: Decimal
     mark_iv: Decimal
+    source_timestamp_ms: int
 
 
 @dataclass(frozen=True)
@@ -347,6 +363,7 @@ def build_review_contexts(
     index_usdc_per_btc: Decimal | None,
     target_quantity_btc: Decimal,
     fee_rate_index_fraction: Decimal,
+    score_model: ScoreModel,
     attention_top_n: int = DEFAULT_ATTENTION_TOP_N,
 ) -> dict[str, ReviewContext]:
     if isinstance(attention_top_n, bool) or attention_top_n <= 0:
@@ -358,6 +375,7 @@ def build_review_contexts(
         options=options,
         calculations=calculations,
         tickers=tickers,
+        score_model=score_model,
     )
     unranked: dict[str, ReviewContext] = {}
     for instrument_name, instrument in options.items():
@@ -421,6 +439,7 @@ def build_score_feature_contexts(
     options: Mapping[str, OptionInstrument],
     calculations: Mapping[str, DetectorCalculation],
     tickers: Mapping[str, TickerState],
+    score_model: ScoreModel,
 ) -> dict[str, ScoreFeatureContext]:
     points = _surface_points(options, tickers)
     return {
@@ -431,6 +450,7 @@ def build_score_feature_contexts(
                 instrument=instrument,
                 calculation=calculations.get(instrument_name),
                 points=points,
+                score_model=score_model,
             ),
         )
         for instrument_name, instrument in options.items()
@@ -503,6 +523,7 @@ def _surface_points(
                 option_type=instrument.option_type,
                 abs_delta=abs_delta,
                 mark_iv=mark_iv,
+                source_timestamp_ms=ticker.source_timestamp_ms,
             )
         )
     return tuple(points)
@@ -513,6 +534,7 @@ def _surface_context(
     instrument: OptionInstrument,
     calculation: DetectorCalculation | None,
     points: tuple[_SurfacePoint, ...],
+    score_model: ScoreModel,
 ) -> SurfaceContext:
     if calculation is None:
         return SurfaceContext(DiagnosticState.UNKNOWN)
@@ -524,12 +546,9 @@ def _surface_context(
     if not same_expiry:
         return SurfaceContext(DiagnosticState.UNKNOWN)
 
-    atm = min(
+    atm = _nearest_atm_point(
         same_expiry,
-        key=lambda point: (
-            abs(point.abs_delta - TARGET_ATM_DELTA),
-            point.instrument_name,
-        ),
+        maximum_delta_distance=score_model.maximum_atm_delta_distance,
     )
     call_25 = _nearest_delta_point(same_expiry, OptionType.CALL, TARGET_TWENTY_FIVE_DELTA)
     put_25 = _nearest_delta_point(same_expiry, OptionType.PUT, TARGET_TWENTY_FIVE_DELTA)
@@ -555,6 +574,11 @@ def _surface_context(
         default=None,
     )
     local_iv = _interpolate_mark_iv(lower, upper, target_delta)
+    target_point = next(
+        (point for point in same_expiry if point.instrument_name == instrument.instrument_name),
+        None,
+    )
+    local_source_skew_ms = _source_timestamp_skew((target_point, lower, upper))
     executable_midpoint = _interval_midpoint(
         calculation.stressed_executable_bid_iv.lower,
         calculation.stressed_executable_bid_iv.upper,
@@ -564,10 +588,19 @@ def _surface_context(
     adjacent = _adjacent_expiry_atm(
         points,
         current_expiry_ms=instrument.expiration_timestamp_ms,
+        maximum_delta_distance=score_model.maximum_atm_delta_distance,
     )
-    adjacent_difference = atm.mark_iv - adjacent.mark_iv if adjacent is not None else None
+    adjacent_difference = (
+        atm.mark_iv - adjacent.mark_iv if atm is not None and adjacent is not None else None
+    )
+    term_source_skew_ms = _source_timestamp_skew((atm, adjacent))
 
-    primary_values = (atm.mark_iv, risk_reversal, local_iv, adjacent_difference)
+    primary_values = (
+        atm.mark_iv if atm is not None else None,
+        risk_reversal,
+        local_iv,
+        adjacent_difference,
+    )
     state = (
         DiagnosticState.AVAILABLE
         if all(value is not None for value in primary_values)
@@ -575,9 +608,10 @@ def _surface_context(
     )
     return SurfaceContext(
         state=state,
-        same_expiry_atm_instrument_name=atm.instrument_name,
-        same_expiry_atm_abs_delta=atm.abs_delta,
-        same_expiry_atm_mark_iv=atm.mark_iv,
+        same_expiry_atm_instrument_name=atm.instrument_name if atm is not None else None,
+        same_expiry_atm_abs_delta=atm.abs_delta if atm is not None else None,
+        same_expiry_atm_mark_iv=atm.mark_iv if atm is not None else None,
+        same_expiry_atm_source_timestamp_ms=(atm.source_timestamp_ms if atm is not None else None),
         nearest_25d_call_instrument_name=(call_25.instrument_name if call_25 is not None else None),
         nearest_25d_call_abs_delta=call_25.abs_delta if call_25 is not None else None,
         nearest_25d_call_mark_iv=call_25.mark_iv if call_25 is not None else None,
@@ -588,10 +622,13 @@ def _surface_context(
         local_lower_instrument_name=lower.instrument_name if lower is not None else None,
         local_lower_abs_delta=lower.abs_delta if lower is not None else None,
         local_lower_mark_iv=lower.mark_iv if lower is not None else None,
+        local_lower_source_timestamp_ms=(lower.source_timestamp_ms if lower is not None else None),
         local_upper_instrument_name=upper.instrument_name if upper is not None else None,
         local_upper_abs_delta=upper.abs_delta if upper is not None else None,
         local_upper_mark_iv=upper.mark_iv if upper is not None else None,
+        local_upper_source_timestamp_ms=(upper.source_timestamp_ms if upper is not None else None),
         local_interpolated_mark_iv=local_iv,
+        local_source_skew_ms=local_source_skew_ms,
         stressed_executable_bid_iv_midpoint=executable_midpoint,
         stressed_executable_bid_iv_minus_local_mark_iv=residual,
         adjacent_expiry_timestamp_ms=(
@@ -601,8 +638,38 @@ def _surface_context(
             adjacent.instrument_name if adjacent is not None else None
         ),
         adjacent_expiry_atm_mark_iv=adjacent.mark_iv if adjacent is not None else None,
+        adjacent_expiry_atm_source_timestamp_ms=(
+            adjacent.source_timestamp_ms if adjacent is not None else None
+        ),
+        term_source_skew_ms=term_source_skew_ms,
         current_minus_adjacent_expiry_atm_iv=adjacent_difference,
     )
+
+
+def _nearest_atm_point(
+    points: tuple[_SurfacePoint, ...],
+    *,
+    maximum_delta_distance: Decimal,
+) -> _SurfacePoint | None:
+    if not points:
+        return None
+    nearest = min(
+        points,
+        key=lambda point: (
+            abs(point.abs_delta - TARGET_ATM_DELTA),
+            point.instrument_name,
+        ),
+    )
+    return nearest if abs(nearest.abs_delta - TARGET_ATM_DELTA) <= maximum_delta_distance else None
+
+
+def _source_timestamp_skew(
+    points: tuple[_SurfacePoint | None, ...],
+) -> int | None:
+    if not points or any(point is None for point in points):
+        return None
+    timestamps = tuple(point.source_timestamp_ms for point in points if point is not None)
+    return max(timestamps) - min(timestamps)
 
 
 def _nearest_delta_point(
@@ -635,6 +702,7 @@ def _adjacent_expiry_atm(
     points: tuple[_SurfacePoint, ...],
     *,
     current_expiry_ms: int,
+    maximum_delta_distance: Decimal,
 ) -> _SurfacePoint | None:
     by_expiry: dict[int, list[_SurfacePoint]] = {}
     for point in points:
@@ -643,12 +711,9 @@ def _adjacent_expiry_atm(
     if not by_expiry:
         return None
     expiry = min(by_expiry)
-    return min(
-        by_expiry[expiry],
-        key=lambda point: (
-            abs(point.abs_delta - TARGET_ATM_DELTA),
-            point.instrument_name,
-        ),
+    return _nearest_atm_point(
+        tuple(by_expiry[expiry]),
+        maximum_delta_distance=maximum_delta_distance,
     )
 
 

@@ -355,8 +355,10 @@ def activate_directly(
             stressed_richness=DecimalInterval(Decimal("1.30"), Decimal("1.31")),
             stressed_executable_bid_iv=DecimalInterval(Decimal("0.49"), Decimal("0.51")),
             local_same_type_mark_iv=Decimal("0.40"),
+            surface_source_skew_ms=0,
             current_expiry_atm_mark_iv=Decimal("0.50"),
             adjacent_expiry_atm_mark_iv=Decimal("0.40"),
+            term_source_skew_ms=0,
             adverse_semivariance_share=DecimalInterval(Decimal(0), Decimal(0)),
             jump_share=DecimalInterval(Decimal(0), Decimal(0)),
             target_spread_ticks=DecimalInterval(Decimal(1), Decimal(1)),
@@ -1420,6 +1422,99 @@ def test_ticker_candidate_without_trusted_time_is_not_classified_current(
 
     assert reducer._coverage._current_state is CoverageState.UNKNOWN
     assert reducer._global_continuity_epoch == 1
+
+
+@pytest.mark.parametrize(
+    ("delta", "mark_iv", "open_interest", "gamma", "expected_countable"),
+    [
+        ("0.25", "50", "11", "0.02", False),
+        ("0.26", "50", "10", "0.01", True),
+        ("0.25", "51", "10", "0.01", True),
+    ],
+)
+def test_ticker_countability_tracks_score_inputs_but_not_oi_diagnostics(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    delta: str,
+    mark_iv: str,
+    open_interest: str,
+    gamma: str,
+    expected_countable: bool,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    name = "BTC-27SEP24-100010-C"
+    reducer.options[name] = make_option(name, 1_000_000 + 60 * 60_000)
+    reducer.tickers[name] = TickerState(
+        Decimal(100),
+        "index_price",
+        1_000_000,
+        signed_delta=Decimal("0.25"),
+        mark_iv_fraction=Decimal("0.50"),
+        open_interest=Decimal(10),
+        option_gamma=Decimal("0.01"),
+    )
+    countability: list[bool] = []
+
+    def capture_boundary(
+        _instrument_name: str,
+        *,
+        boundary: FactBoundary,
+        cause: CausalCause,
+        countable: bool,
+    ) -> None:
+        assert boundary.causal_seq == 1
+        assert cause is CausalCause.TICKER_APPLIED
+        countability.append(countable)
+
+    monkeypatch.setattr(reducer, "_settle_ticker_boundary", capture_boundary)
+
+    assert reducer._apply_ticker(
+        name,
+        {
+            "instrument_name": name,
+            "timestamp": 1_000_001,
+            "underlying_price": 100,
+            "underlying_index": "index_price",
+            "greeks": {"delta": delta, "gamma": gamma},
+            "mark_iv": mark_iv,
+            "open_interest": open_interest,
+        },
+        FactBoundary(1, 1, 1_001, 1),
+    )
+
+    assert countability == [expected_countable]
+
+
+def test_cross_sectional_ticker_dependency_includes_call_put_and_immediately_shorter_expiry(
+    tmp_path: Path,
+    policy_factory: PolicyFactory,
+) -> None:
+    exact, digest = policy_factory()
+    reducer = make_reducer(tmp_path, load_policy_bytes(exact, digest))
+    previous_expiry = 1_000_000 + 30 * 60_000
+    current_expiry = 1_000_000 + 60 * 60_000
+    next_expiry = 1_000_000 + 120 * 60_000
+    far_expiry = 1_000_000 + 240 * 60_000
+    current_call = make_option("CURRENT-C", current_expiry)
+    current_put = replace(make_option("CURRENT-P", current_expiry), option_type=OptionType.PUT)
+    previous_put = replace(
+        make_option("PREVIOUS-P", previous_expiry),
+        option_type=OptionType.PUT,
+    )
+    next_call = make_option("NEXT-C", next_expiry)
+    far_put = replace(make_option("FAR-P", far_expiry), option_type=OptionType.PUT)
+    reducer.options = {
+        option.instrument_name: option
+        for option in (current_call, current_put, previous_put, next_call, far_put)
+    }
+
+    assert reducer._cross_sectional_score_dependents((current_call.instrument_name,)) == (
+        "CURRENT-C",
+        "CURRENT-P",
+        "PREVIOUS-P",
+    )
 
 
 def test_latched_stale_generation_candidate_is_not_counted_as_timestamp_regression(
