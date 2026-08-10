@@ -181,28 +181,30 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_one_inverse_outage_recovery() -> None:
+def test_current_stage_records_restored_inverse_runtime() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `VALIDATION_ONLY`" in current
+    assert "**Current task kind:** `NONE`" in current
     assert "`INVERSE_ONLY_REPOSITORY_ACCEPTED`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `STABLE_CASE_REPOSITORY_RECOVERY_ACCEPTED`" in current
-    assert "**Live commands:** `ONE_CANONICAL_PUBLIC_SHADOW_RESTART_REQUIRED`" in current
-    assert "**Sole authorized closure:** `RESTORE_INVERSE_BTC_WORKBENCH_8765`" in current
+    assert "**Persistent service:** `RUNNING_CURRENT_GAPPED_ENTRY_RECOVERY`" in current
+    assert "**Live commands:** `NO_ADDITIONAL_START_STOP_OR_RESTART_AUTHORIZED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only those three Inverse Policy artifacts",
-        "code identity: 270920fb1fcb255c648e95361f31c1e5075ec294",
-        "runtime identity: sha256:33dedd47cff3f6cb10bb5b2844f58b79218f40c931bf02221440a1894a785bf4",
-        "pre-Inverse-only checkout",
-        "must not be hot-swapped, stopped, restarted",
+        "code identity: c5cc2e605de7df028be18b6ff00ca3b76dd86f27",
+        "runtime identity: sha256:888729c63e0deec4aea2bb1a3787a205501910351ae66c4d07e66e5017048676",
+        "6 / 6 HTTP 200",
+        "14 / 14, latest Segment OPEN / GAPPED",
+        "The one authorized start has been consumed",
         "The accepted repository result is `1 / 1`",
         "The obsolete product specification",
-        "durable-data effect `NONE`",
-        "External state roots and Shadow Case repositories were not enumerated",
+        "The stable repository contains `51` Case directories",
+        "did not restore the `37` historical selected no-trade Controls",
+        "The `14` Outcome rows are pending Entry projections",
     ):
         assert phrase in normalized
     for identity in (
@@ -212,18 +214,7 @@ def test_current_stage_authorizes_one_inverse_outage_recovery() -> None:
         "sha256:cb3866b8efd45d5c05ed23ab56658c2cdbf0359132e39f52ce329761ad933b8e",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
-        "TEMPLATE.md",
-        "SHORT_VOL_8765_OUTAGE_RECOVERY.md",
-    }
-    task = (ROOT / "tasks/SHORT_VOL_8765_OUTAGE_RECOVERY.md").read_text(encoding="utf-8")
-    assert "**Status:** ACTIVE" in task
-    assert "**Task kind:** VALIDATION_ONLY" in task
-    assert "**Runtime implementation:** FORBIDDEN" in task
-    assert "**Live commands:** REQUIRED" in task
-    assert "`0 / 6` declared loopback GET routes" in task
-    assert "`14` compatible" in task
-    assert "new `GAPPED` Observation Segment for each of the `14`" in task
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
 
