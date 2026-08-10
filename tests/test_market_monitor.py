@@ -91,7 +91,43 @@ def test_index_history_keeps_one_utc_aligned_phase_until_the_next_completed_grid
     assert next_grid.economic_identity != within_grid[0].economic_identity
 
 
-def test_index_history_does_not_fall_back_to_an_off_grid_phase_when_anchor_is_missing() -> None:
+def test_index_history_waits_for_the_next_source_confirmed_grid_anchor() -> None:
+    reducer = IndexHistoryReducer(
+        maximum_lookback_minutes=30,
+        return_interval_minutes=5,
+    )
+    rows_before_refresh = [[minute * 60_000, 100 + minute / 100] for minute in range(40)]
+    assert reducer.apply_chart_result(rows_before_refresh)
+
+    before_boundary = reducer.current_tail(
+        30,
+        trusted_time=TimeInterval(44 * 60_000, 44 * 60_000),
+        source_stale_deadline_ms=900_000,
+    )
+    awaiting_refresh = reducer.current_tail(
+        30,
+        trusted_time=TimeInterval(45 * 60_000, 45 * 60_000),
+        source_stale_deadline_ms=900_000,
+    )
+
+    assert before_boundary.availability is IndexAvailabilityState.AVAILABLE
+    assert awaiting_refresh.availability is IndexAvailabilityState.AVAILABLE
+    assert awaiting_refresh.economic_identity == before_boundary.economic_identity
+    assert awaiting_refresh.points[-1].timestamp_ms == 35 * 60_000
+
+    rows_after_refresh = [[minute * 60_000, 100 + minute / 100] for minute in range(45)]
+    assert reducer.apply_chart_result(rows_after_refresh)
+    advanced = reducer.current_tail(
+        30,
+        trusted_time=TimeInterval(45 * 60_000, 45 * 60_000),
+        source_stale_deadline_ms=900_000,
+    )
+    assert advanced.availability is IndexAvailabilityState.AVAILABLE
+    assert advanced.points[-1].timestamp_ms == 40 * 60_000
+    assert advanced.economic_identity != awaiting_refresh.economic_identity
+
+
+def test_index_history_fails_when_later_source_points_prove_the_aligned_anchor_is_missing() -> None:
     reducer = IndexHistoryReducer(
         maximum_lookback_minutes=30,
         return_interval_minutes=5,

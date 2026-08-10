@@ -45,7 +45,7 @@ It exposes:
 - newest response timestamp and age;
 - whether the newest response point falls outside the configured completion cutoff;
 - latest confirmed point and age;
-- exact consecutive UTC-epoch-aligned five-minute suffix points and minutes;
+- exact consecutive source-confirmed UTC-epoch-aligned five-minute suffix points and minutes;
 - completed-overlap revision count, pending state, and revised timestamps.
 
 The owner never interpolates, backfills, persists, or synthesizes a missing point. A completed-point
@@ -100,7 +100,8 @@ For one short-leg option at one causal boundary:
 5. convert raw bid, stressed bid, and ask native VWAPs through the fixed product's model rule,
    then invert Black total volatility from those model-domain prices;
 6. derive the short-leg Delta interval and classify its explicit review bucket;
-7. consume the exact confirmed UTC-epoch-aligned five-minute `average_price` suffix and compute the
+7. consume the exact source-confirmed UTC-epoch-aligned five-minute `average_price` suffix and
+   compute the
    Policy band's realized-variance rates;
 8. form the reference rate as the larger of the variance floor and
    `0.5 × maximum window rate + 0.5 × mean window rate`;

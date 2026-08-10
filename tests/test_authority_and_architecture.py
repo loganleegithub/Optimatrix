@@ -189,7 +189,9 @@ def test_current_stage_authorizes_the_index_grid_phase_repair() -> None:
     assert "**Current task kind:** `IMPLEMENTATION`" in current
     assert "`INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR_ACTIVE`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_8675_FROM_MAIN_9A4CC23`" in current
+    assert "**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_F887197`" in current
+    assert "`ALIGNED_INDEX_HISTORY_REFRESH_RACE`" in current
+    assert "one additional clean stop and one clean start" in normalized
     assert "**Live commands:** `REQUIRED_BOUNDED_REPAIR_CUTOVER`" in current
     assert "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR" in current
     for phrase in (
@@ -197,7 +199,7 @@ def test_current_stage_authorizes_the_index_grid_phase_repair() -> None:
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
         "9a4cc23cb9092a04b0a6e72eec6657a570660c73",
-        "sha256:9d383a7d19027c09324d1b811caeef90184dd1065a2bcff226b6df665c1e4432",
+        "sha256:d6b5a0d58c7b932031f6bc3d652eec0da0e7277d146348d8178c8747a4e860ae",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
         "zero schema-v5 Case, Control, Shadow Entry, Position, or Outcome records",
         "`31/31` samples over `302.1 s`",

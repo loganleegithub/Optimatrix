@@ -12,7 +12,7 @@
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_8675_FROM_MAIN_9A4CC23`
+**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_F887197`
 
 **Live commands:** `REQUIRED_BOUNDED_REPAIR_CUTOVER`
 
@@ -28,11 +28,19 @@ that the one-minute official index-chart source was being re-anchored every minu
 different five-minute sampling phases. The same eligible leader consequently repeated a
 two-minute HIGH / three-minute LOW pattern and could not reach its Policy-owned second confirmation.
 
-The sole active repair fixes that market-input boundary to one UTC-aligned five-minute grid without
-changing any Policy artifact, score threshold, TTE/Delta eligibility, persistence rule,
-Underwriting economics, Position rule, or Case schema. After the Draft PR is bound and repository
-checks pass, this authority permits one clean stop and one clean start on `127.0.0.1:8675` from the
-repair commit, reusing the unchanged stable Case repository
+The first repair commit fixed that market-input boundary to one UTC-aligned five-minute phase
+without changing any Policy artifact, score threshold, TTE/Delta eligibility, persistence rule,
+Underwriting economics, Position rule, or Case schema. Live code identity
+`f8871979f7e58b12515839063a7b1e824d3b8227` then reached confirmation `2/3` for the same known HIGH
+leader. At the next UTC grid boundary, confirmation reset `2 → 0 → 1` while leader, score band,
+book usability, and prior baseline remained unchanged; global `CORE_UNKNOWN` increased by `12` in
+that exact frame. The fixed cause is `ALIGNED_INDEX_HISTORY_REFRESH_RACE`: trusted time required a
+new grid anchor just before the independently phased chart refresh delivered it.
+
+The amended repair retains the latest completed, source-confirmed aligned suffix until a new
+aligned point is present, while interior gaps, staleness, revisions, and invalid input remain
+fail-closed. This authority permits one additional clean stop and one clean start on
+`127.0.0.1:8675` from the amended repair commit, reusing the unchanged stable Case repository
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. Continued observation remains
 production-public Shadow only and cannot claim Edge, profitability, an order, a fill, or actual
 exposure. The bounded implementation is [Draft PR
@@ -40,9 +48,9 @@ exposure. The bounded implementation is [Draft PR
 
 ## Current online boundary
 
-The sole Online Runtime is serving `127.0.0.1:8675` from clean synchronized `main` at code
-identity `9a4cc23cb9092a04b0a6e72eec6657a570660c73`. Its runtime identity is
-`sha256:9d383a7d19027c09324d1b811caeef90184dd1065a2bcff226b6df665c1e4432`.
+The sole Online Runtime is serving `127.0.0.1:8675` from clean Draft PR #48 code identity
+`f8871979f7e58b12515839063a7b1e824d3b8227`. Its runtime identity is
+`sha256:d6b5a0d58c7b932031f6bc3d652eec0da0e7277d146348d8178c8747a4e860ae`.
 It holds the single-instance lease for the stable Case repository
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; no Case root was copied, migrated,
 replaced, or deleted during the cutover.

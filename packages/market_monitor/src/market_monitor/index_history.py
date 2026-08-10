@@ -80,6 +80,7 @@ class IndexHistoryReducer:
         self._revised_timestamps: tuple[int, ...] = ()
         self._completed_cutoff_ms: int | None = None
         self._timestamps: tuple[int, ...] = ()
+        self._aligned_timestamps: tuple[int, ...] = ()
         self._point_by_timestamp: dict[int, IndexHistoryPoint] = {}
         self._exact_suffix_count_by_timestamp: dict[int, int] = {}
         self._interval_counts: tuple[tuple[int, int], ...] = ()
@@ -143,6 +144,9 @@ class IndexHistoryReducer:
             )
         self._points = parsed
         self._timestamps = tuple(point.timestamp_ms for point in parsed)
+        self._aligned_timestamps = tuple(
+            point.timestamp_ms for point in parsed if point.timestamp_ms % exact_interval_ms == 0
+        )
         self._point_by_timestamp = {point.timestamp_ms: point for point in parsed}
         self._exact_suffix_count_by_timestamp = exact_suffix_counts
         self._interval_counts = tuple(sorted(source_intervals.items()))
@@ -206,11 +210,12 @@ class IndexHistoryReducer:
 
         interval_ms = self.return_interval_minutes * MINUTE_MS
         completed_cutoff_ms = trusted_time.lower_ms - interval_ms
-        aligned_cutoff_ms = completed_cutoff_ms - (completed_cutoff_ms % interval_ms)
+        expected_aligned_cutoff_ms = completed_cutoff_ms - (completed_cutoff_ms % interval_ms)
         # Consume only points old enough to represent a completed configured interval. The
         # source probe separately reports whether the provider's newest response point usually
-        # falls outside this cutoff. The economic suffix is anchored to one UTC-epoch-aligned
-        # grid so finer source points cannot rotate the return-sampling phase every minute.
+        # falls outside this cutoff. Anchor the economic suffix to the latest source-confirmed,
+        # completed UTC-grid point. This keeps one phase without declaring a transient gap when
+        # trusted time crosses a grid boundary just before the next chart refresh arrives.
         eligible = self._points[: bisect_right(self._timestamps, completed_cutoff_ms)]
         contract = self._contract(eligible, trusted_time=trusted_time)
 
@@ -245,6 +250,26 @@ class IndexHistoryReducer:
                 reason="INDEX_HISTORY_SOURCE_STALE",
                 contract=contract,
             )
+
+        if expected_aligned_cutoff_ms not in self._point_by_timestamp and bisect_right(
+            self._timestamps, expected_aligned_cutoff_ms
+        ) < len(self._timestamps):
+            return IndexHistoryState(
+                IndexAvailabilityState.WINDOW_GAP,
+                latest_source_timestamp_ms=latest.timestamp_ms,
+                reason="INDEX_HISTORY_WINDOW_GAP",
+                contract=contract,
+            )
+
+        aligned_index = bisect_right(self._aligned_timestamps, completed_cutoff_ms) - 1
+        if aligned_index < 0:
+            return IndexHistoryState(
+                IndexAvailabilityState.WARMUP,
+                latest_source_timestamp_ms=latest.timestamp_ms,
+                reason="INDEX_HISTORY_WARMUP",
+                contract=contract,
+            )
+        aligned_cutoff_ms = self._aligned_timestamps[aligned_index]
 
         required_count = lookback_minutes // self.return_interval_minutes + 1
         required_timestamps = tuple(

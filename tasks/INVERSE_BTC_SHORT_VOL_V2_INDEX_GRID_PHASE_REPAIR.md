@@ -28,39 +28,47 @@
 observed the same eligible multiday HIGH leader recur approximately every five minutes, remain
 HIGH for approximately 120 seconds, and reset before its 300-second second-confirmation boundary.
 
-**Primary blocker:** `ROTATING_FIVE_MINUTE_INDEX_SAMPLE_PHASE`. The official chart returns
-one-minute `average_price` points, while the current five-minute tail is re-anchored to the latest
-completed one-minute point. Its five possible sampling phases produced live multiday annualized RV
-values of approximately `28.0%`, `33.6%`, `33.1%`, `31.6%`, and `28.0%` from the same response,
-making the V2 score alternate HIGH for two minutes and LOW for three minutes.
+**Primary blocker:** `ALIGNED_INDEX_HISTORY_REFRESH_RACE`. The initial repair removed
+`ROTATING_FIVE_MINUTE_INDEX_SAMPLE_PHASE`: the official one-minute chart can no longer rotate the
+five-minute sample phase. Live validation then reached confirmation `2/3`, but at the next UTC grid
+boundary it reset `2 → 0 → 1` while the same leader remained known, HIGH, and book-usable. In that
+same frame the global `CORE_UNKNOWN` counter increased by `12`. Trusted time had advanced the
+required anchor before the independently phased five-minute chart refresh had delivered that
+anchor, creating a one-frame `INDEX_HISTORY_WINDOW_GAP` across the active buckets.
 
-**Expected user-visible delta:** a declared five-minute baseline uses one UTC-epoch-aligned grid.
-Trusted-time movement inside the same completed five-minute grid interval cannot rotate the sampled
-price tuple, baseline RV, or score. Real source changes and canonical five-minute grid advancement
-remain able to change the score. Workbench identifies this fixed source semantics explicitly.
+**Expected user-visible delta:** a declared five-minute baseline uses the latest completed,
+source-confirmed UTC-epoch-aligned grid point. Trusted-time movement cannot rotate its phase or
+advance it ahead of the public chart response. A newly delivered aligned point advances the tuple
+atomically. Workbench identifies this source-confirmed semantics explicitly, and the artificial
+five-minute confirmation reset disappears.
 
 **Durable-data effect:** `NONE` before a normal V2 admission. The repair neither creates nor
 migrates a Case and retains the existing stable schema-v5 repository.
 
-**Complexity added:** `NONE`; one existing tail selector gains a fixed alignment rule.
+**Complexity added:** one bounded tuple of aligned source timestamps inside the existing history
+owner for logarithmic source-ready anchor selection; no second history or baseline path.
 
-**Complexity deleted:** the rotating five-phase sampling behavior and its misleading baseline
-source label.
+**Complexity deleted:** the rotating five-phase sampling behavior, the wall-clock-ahead-of-source
+anchor race, and the misleading baseline source label.
 
 ## Business closure
 
 **Given:** strictly chronological, minute-aligned Deribit index-chart `average_price` points and a
 Policy return interval of five minutes.
 
-**When:** trusted time advances within one canonical completed five-minute grid interval.
+**When:** trusted time crosses a canonical five-minute boundary before or after the next public
+chart refresh delivers the newly completed aligned point.
 
-**Then:** `IndexHistoryReducer.current_tail` returns the same exact sampled tuple and economic
-identity; it advances only after the next UTC-aligned five-minute point is causally complete.
+**Then:** `IndexHistoryReducer.current_tail` retains the prior exact sampled tuple and economic
+identity until the next UTC-aligned five-minute point is both causally complete and source-confirmed;
+it then advances atomically.
 
-**Valid zero/UNKNOWN:** a missing required UTC-aligned point remains `WINDOW_GAP`; stale,
-revision, warmup, and invalid source states remain truthful. Zero canonical Shadow admissions is
-valid if no corrected HIGH survives Policy persistence or Underwriting does not produce a
-Candidate; artificial phase rotation is not valid.
+**Valid zero/UNKNOWN:** a missing interior point inside the selected aligned suffix remains
+`WINDOW_GAP`; stale, revision, warmup, and invalid source states remain truthful. A newly completed
+but not-yet-delivered leading anchor is normal refresh latency and retains the prior valid suffix.
+Zero canonical Shadow admissions is valid if no corrected HIGH survives Policy persistence or
+Underwriting does not produce a Candidate; artificial phase rotation or refresh-race reset is not
+valid.
 
 **Cheapest falsification:** feed one-minute points whose five phase offsets have deliberately
 different realized variance, advance trusted time minute by minute, and observe any sampled tail
@@ -69,16 +77,18 @@ or baseline change before the next aligned five-minute boundary.
 ## Change declarations
 
 **Market/Decision input contract change:** five-minute index-chart samples are fixed to UTC epoch
-alignment instead of being re-anchored to each latest completed one-minute source point.
+alignment and advance only to a completed aligned point already present in the public response,
+instead of being re-anchored to finer points or projected ahead of the response.
 
 **Decision Policy change:** `NONE`; the three Policy artifacts and identities remain byte-exact.
 
 **Outcome/evaluation contract change:** `NONE`.
 
-**Stage/authorization change:** authorize this one bounded repair, its Draft PR, one clean stop and
-one start on `127.0.0.1:8675` from the clean repair commit using the unchanged stable Case root, and
-continued public-only observation until the first admitted active Shadow or a newly measured fixed
-blocker is established. No private or execution permission is added.
+**Stage/authorization change:** authorize this bounded repair and its Draft PR. The first clean
+stop/start established the source-ahead race; one additional clean stop/start on `127.0.0.1:8675`
+from the amended clean repair commit may use the unchanged stable Case root. Continued public-only
+observation runs until the first admitted active Shadow or a newly measured fixed blocker is
+established. No private or execution permission is added.
 
 ## Scope
 
@@ -105,8 +115,8 @@ orders, fills, capital, process supervision, or a second baseline path.
 
 ## Definition of done
 
-The rotating phase is impossible by direct test; the full repository gate passes; the live clean
-repair commit remains current while the baseline tuple advances only on the canonical grid; any
-first active admitted Shadow is verified through the API and official Case reader, or the next
-truthful fixed funnel blocker is reported without changing Policy to manufacture admission; the
-diff is bounded and remote state is exact.
+The rotating phase and source-ahead race are impossible by direct tests; the full repository gate
+passes; the live clean repair commit remains current while the baseline tuple advances only when a
+canonical aligned point is source-confirmed; any first active admitted Shadow is verified through
+the API and official Case reader, or the next truthful fixed funnel blocker is reported without
+changing Policy to manufacture admission; the diff is bounded and remote state is exact.

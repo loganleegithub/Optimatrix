@@ -210,7 +210,8 @@ not mean the two option legs lack public depth, the defined-risk structure canno
 Shadow counterfactual is unavailable.
 
 The Radar must show the trader the score interval, LOW/MID/HIGH band, premium/risk decomposition,
-causal UTC-epoch-aligned five-minute `average_price` baseline horizons, coverage/missing mask,
+causal source-confirmed UTC-epoch-aligned five-minute `average_price` baseline horizons,
+coverage/missing mask,
 bucket leader, and upgrade/invalidation condition. A clue must be target-size, two-sided, uncrossed,
 official-tick-aware, one-tick robust, time-persistent, and inside an explicit TTE/Delta risk bucket.
 Local surface and adjacent-term residuals are bounded optional adjustments; adverse semivariance,

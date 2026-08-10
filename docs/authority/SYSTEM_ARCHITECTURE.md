@@ -217,7 +217,8 @@ never interpolates or fills a gap. The warmup gate is per Policy TTE band:
 The V2 calculator in `short_vol_radar` is the sole owner of target-size bid/ask use, official native
 tick stress, Inverse product-owned Black-model normalization, Black inversion, TTE/Delta
 eligibility, mixed reference RV, score normalization, bucket leadership, and persistence truth.
-The history owner supplies its five-minute RV samples on one UTC-epoch-aligned grid; finer official
+The history owner supplies its five-minute RV samples on one source-confirmed UTC-epoch-aligned
+grid; finer official
 chart points cannot rotate that grid as trusted time advances inside the same completed interval.
 Depth walking and adverse tick stress
 happen in the exchange-native BTC premium unit before conversion. Native BTC premium is converted
