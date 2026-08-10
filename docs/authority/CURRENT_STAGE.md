@@ -14,7 +14,7 @@
 
 **Persistent service:** `RUNNING_CURRENT_8675_FRESH_SCHEMA_V5`
 
-**Live commands:** `ONE_PRESTOP_8675_CASE_INVENTORY_AUTHORIZED`
+**Live commands:** `ONE_SCHEMA7_8675_CLEAN_CUTOVER_AUTHORIZED`
 
 **Sole authorized closure:**
 [`INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_MARKET_LATENCY_ATTRIBUTION.md)
@@ -34,21 +34,33 @@ The active task may correct that non-durable Workbench schema and expose the alr
 lag separately. The bounded observation does not prove a synchronous runtime hot path, so no
 performance architecture or Decision Policy change is authorized.
 
-This authority permits no further live command, stop, restart, second process, state-root operation,
-external public-source probe, PID/log/resource inspection, Policy change, Case write, or deployment.
-Any later live validation or deployment requires a subsequent explicit authority update.
+The original latency-sampling authority is consumed. Except for the clean cutover explicitly
+authorized in the next section, no further live command, second process, state-root operation,
+external public-source probe, PID/log/resource inspection, Policy change, or Case write is
+authorized.
 
-## Authorized pre-stop inventory
+## Pre-stop inventory and authorized clean cutover
 
 The human has authorized merge, branch deletion, and restart of the schema-v7 Workbench change.
-Before any stop, the active task may perform exactly one same-frame read-only GET of the current
-8675 Workbench plus one official schema-v5 Case report against the already-bound stable root
-`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. This gate fixes the exact durable
-effect of the requested restart.
+The one pre-stop inventory is consumed. The same-frame schema-v6 snapshot reported `0` Shadow
+Entries, `0` Positions, `0` Outcomes, and `0` Decision Controls. The official schema-v5 reader
+reported `0` Case rows in every enrollment/quality view for the already-bound stable root
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. Durable cutover effect is therefore
+`NONE`: there is no admitted Entry Segment to close or recover, and no Case will be migrated,
+copied, deleted, or rewritten.
 
-This inventory authority permits no stop, merge, branch deletion, restart, second process, Case
-mutation, root migration, or deployment yet. After the inventory, `CURRENT_STAGE` must name the
-observed active admitted-Entry count and explicitly authorize the one clean cutover before it occurs.
+That same frame was `RUNNING / STALE / ready=false`, with `QUEUE_LAG_CURRENTNESS`, `0 / 128` known
+instruments, `0` reconnects, and `0` session gaps. This proves an intermittent real reducer backlog
+in addition to the already-proven schema-v6 source-event-age naming defect. The schema-v7 change
+attributes the two facts separately; this cutover does not claim to eliminate the runtime backlog.
+
+The active task may now mark PR #39 ready, merge it to `main`, delete its local and remote topic
+branch, clean-stop only the currently owned 8675 runtime session, confirm the six loopback routes
+refuse connection, and start exactly one replacement from clean synchronized `main` using the same
+stable root and port. One bounded post-start smoke may inspect the six declared GET/HEAD routes,
+schema-v7 identity and latency fields, service/readiness/coverage state, and one official Case
+report. No second root/process, Policy change, root mutation outside normal empty-root startup,
+host PID/log/resource inspection, or additional restart is authorized.
 
 ## Current online boundary
 
