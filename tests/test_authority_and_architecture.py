@@ -182,17 +182,21 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_the_case_reader_closure_and_monitoring() -> None:
+def test_current_stage_authorizes_decimal_packet_integrity_repair() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_CASE_READER_CLOSURE_ACTIVE`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_DECIMAL_PACKET_INTEGRITY_REPAIR_ACTIVE`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_6FBCF9F`" in current
+    assert (
+        "**Persistent service:** `STOPPED_8675_AFTER_SCORE_PACKET_INTEGRITY_FAILURE_6FBCF9F`"
+        in current
+    )
     assert "`ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`" in current
     assert "`OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`" in current
-    assert "**Live commands:** `CONTINUED_BOUNDED_MONITORING`" in current
+    assert "`LOSSY_DECIMAL_PACKET_SERIALIZATION`" in current
+    assert "**Live commands:** `REQUIRED_BOUNDED_DECIMAL_REPAIR_CUTOVER`" in current
     assert "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
@@ -211,8 +215,14 @@ def test_current_stage_authorizes_the_case_reader_closure_and_monitoring() -> No
         "One separately selected LOW research Control",
         "bare 64-hex digest",
         "CaseStore's directory-name-to-Case-identity conversion",
-        "requires no runtime restart",
+        "one clean start",
         "zero Candidate, admitted Shadow Entry, or Position",
+        "ninth HIGH Episode",
+        "`5,011 ms`",
+        "50-digit precision",
+        "future written Case could become unreadable",
+        "`ShadowRuntimeIntegrityError`",
+        "`INCOMPLETE_UNCLEAN_EXIT`",
     ):
         assert phrase in normalized
     for identity in (

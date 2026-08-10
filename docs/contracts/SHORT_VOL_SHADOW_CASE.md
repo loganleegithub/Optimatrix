@@ -104,6 +104,10 @@ The opened record contains:
   states `NOT_A_CANDIDATE_ACTIVATION`, `NOT_A_SHADOW_ENTRY`, `NOT_AN_ADMITTED_TRADE`, and
   `NO_CAPITAL_EXPOSURE`.
 
+Score-packet raw Decimal text is lossless and context-independent. The reader restores it and uses
+the Radar-owned policy-aware calculator to require exact equality with every stored derived score
+field; tolerance-based acceptance or a second Case-owned score formula is forbidden.
+
 The exact economic shape is the accepted Inverse schema-v5 record. It contains one exact product
 object with native premium/settlement currency, price index, strike and valuation currencies,
 economic-semantics identity, and the declared valuation basis. Entry legs retain BTC-native

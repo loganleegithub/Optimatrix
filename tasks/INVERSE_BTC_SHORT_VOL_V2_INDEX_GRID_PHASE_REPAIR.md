@@ -16,7 +16,8 @@
 **Owning authority/contract:**
 [`PRODUCT_CONSTITUTION.md`](../docs/authority/PRODUCT_CONSTITUTION.md),
 [`SYSTEM_ARCHITECTURE.md`](../docs/authority/SYSTEM_ARCHITECTURE.md), and
-[`SHORT_VOL_RADAR.md`](../docs/contracts/SHORT_VOL_RADAR.md)
+[`SHORT_VOL_RADAR.md`](../docs/contracts/SHORT_VOL_RADAR.md), and
+[`SHORT_VOL_SHADOW_CASE.md`](../docs/contracts/SHORT_VOL_SHADOW_CASE.md)
 
 ## Product movement
 
@@ -24,12 +25,13 @@
 
 **Baseline:** after the source-grid and confirmation-continuity fixes, clean code identity
 `6fbcf9fbf4237d6685cbf7ae986dc4dfa4dfee76` remained healthy, ready, `CURRENT`,
-`KNOWN_COMPLETE`, and `128/128`. Three HIGH Episodes reached fully evaluable Underwriting; each was
+`KNOWN_COMPLETE`, and `128/128`. Nine HIGH Episodes reached fully evaluable Underwriting; each was
 a known non-Candidate because credit did not exceed the fixed future-cost reserve. One bounded LOW
 research Control opened in the stable schema-v5 repository, while admitted Shadow count remained
-zero.
+zero. A later `5,011 ms` queue-lag frame became `STALE/UNKNOWN`, recovered about one second later,
+and produced zero destructive pre-confirmation core resets.
 
-**Primary blocker:** `ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`. On the
+**Repaired baseline blocker:** `ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`. On the
 threshold-crossing refresh, the queue-lag currentness gate correctly changed every current Radar
 evaluation to `UNKNOWN`, but the bucket owner also erased every nonzero, not-yet-active
 confirmation. One known HIGH target changed `2 → 0`; the global `CORE_UNKNOWN` reset counter
@@ -37,13 +39,23 @@ increased by `13`. About half a second later the same session, bucket leader, HI
 source-confirmed baseline recovered, yet confirmation restarted at `0 → 1`. Reconnect, protocol
 gap, and continuity-epoch counts did not change.
 
-That runtime blocker is repaired. The next observed verification blocker is
+That runtime blocker is repaired. The first observed verification blocker was
 `OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`: the CaseStore writes a canonical `sha256:<digest>` Case
 under a bare `<digest>` directory, but `report-v2-cases` duplicated the scanner and required the
 directory name itself to match `sha256:<digest>`. The official report therefore rejected the first
 valid Control Case before reading it. This is not Case corruption and is not the current business
-funnel blocker; the measured business blocker remains
-`CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE` for all three observed HIGH Episodes.
+funnel blocker. That reader defect is repaired.
+
+**Current implementation blocker:** `LOSSY_DECIMAL_PACKET_SERIALIZATION`. Direct validation of live
+projected packets established that `Decimal.normalize()` rounded a 50-digit raw path
+share under the ambient 28-digit context, while D had been calculated from the unrounded value.
+The restored packet therefore differed by one final decimal unit. The ninth Episode selected a
+no-trade Control, exercised this exact path, and the CaseStore rejected it before publication;
+runtime exited fail-closed with `ShadowRuntimeIntegrityError`. This bounded serialization repair is
+required before the Online Runtime can resume.
+
+**Measured business blocker:** `CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE` for all nine observed HIGH
+Episodes. It is not changed by this implementation repair.
 
 **Expected user-visible delta:** while ordered queue lag is above the fixed currentness deadline,
 Radar remains `UNKNOWN`, bucket coverage is `UNKNOWN`, no observation is counted, and no Episode or
@@ -56,8 +68,13 @@ The offline report additionally reads the exact directories produced by `ShadowC
 Control and admitted enrollment strata separate, and can independently verify the first future
 admitted Shadow without changing the running service.
 
-**Durable-data effect:** `NONE`. The repair neither creates, rewrites, migrates, nor deletes a Case
-and retains the existing stable schema-v5 repository.
+The score-packet projection additionally preserves every significant digit of each frozen raw
+Decimal, so the sole policy-aware validator reproduces the exact stored A/S/T/D/E result after JSON
+restoration. Online scores, bands, rankings, and admission decisions do not change.
+
+**Durable-data effect:** no existing Case is created, rewritten, migrated, or deleted. Future Case
+JSON may carry more significant raw-input digits, under the unchanged schema-v5 key shape and
+Policy semantics, solely so its derived score remains exactly reproducible.
 
 **Complexity added:** one bounded currentness-pause branch in the existing runtime bucket owner, in
 addition to the already-landed aligned-source timestamp tuple; one public CaseStore-owned
@@ -66,7 +83,7 @@ directory-name conversion function; no new state owner, timer, schema, history, 
 **Complexity deleted:** the rotating five-phase sampling behavior, the wall-clock-ahead-of-source
 anchor race, the misleading baseline source label, the destructive interpretation of a transient
 ordered backlog as lost pre-confirmation evidence, and the offline report's duplicate Case identity
-parser.
+parser. It also deletes the score packet's ambient-context-dependent Decimal normalization.
 
 ## Business closure
 
@@ -95,6 +112,10 @@ For the reader boundary, create or observe one store-written bare 64-hex Case di
 official report. Rejecting that directory, changing its Case identity, or mixing its Control row
 into admitted Shadow is a direct falsification.
 
+For packet integrity, calculate D from a baseline share carrying more than 28 significant digits,
+serialize the packet, restore it, and policy-recompute it. Any lost raw digit or result mismatch is
+a direct falsification.
+
 ## Change declarations
 
 **Market/Decision input contract change:** five-minute index-chart samples remain fixed to the
@@ -104,19 +125,22 @@ remain `UNKNOWN` until catch-up.
 
 **Decision Policy change:** `NONE`; the three Policy artifacts and identities remain byte-exact.
 
-**Outcome/evaluation contract change:** `NONE`.
+**Outcome/evaluation contract change:** preserve raw score-packet Decimal precision so the existing
+policy-aware Case validator can reproduce exact derived truth; no Outcome arithmetic or economic
+definition changes.
 
-**Stage/authorization change:** authorize the bounded offline reader closure in the existing Draft
-PR without restarting `127.0.0.1:8675` or changing its stable Case root. Continued public-only
-observation runs until the first admitted active Shadow or a newly measured fixed blocker is
-established. No private or execution permission is added.
+**Stage/authorization change:** the old runtime already stopped fail-closed. Authorize one bounded
+clean start on `127.0.0.1:8675` from the checked Decimal repair commit, using the unchanged stable
+Case root. Continued public-only observation runs until the first admitted active Shadow or a newly
+measured fixed blocker is established. No private or execution permission is added.
 
 ## Scope
 
 **In:** the sole runtime bucket-settlement owner and its queue-lag currentness transition; the
 already-landed `IndexHistoryReducer` source-grid repair; the CaseStore-owned directory identity
-conversion and read-only V2 report; focused market/runtime/Workbench/Case/report tests; owning
-contracts, task, and Current Stage authority; continued bounded public-only observation.
+conversion and read-only V2 report; lossless V2 packet Decimal serialization; focused
+market/runtime/Workbench/Radar/Case/report tests; owning contracts, task, and Current Stage
+authority; one bounded cutover and continued public-only observation.
 
 **Out:** score weights, thresholds, TTE/Delta rules, confirmation counts or separations, preservation
 of an already-active Episode, any Policy artifact, Underwriting or Position economics, Case schema,
@@ -125,27 +149,32 @@ baseline path.
 
 **Owning modules:** `apps/radar_runtime/src/radar_runtime/runtime.py`,
 `apps/radar_runtime/src/radar_runtime/offline_report.py`, and
-`packages/short_vol_underwriting/src/short_vol_underwriting/case_store.py`
+`packages/short_vol_underwriting/src/short_vol_underwriting/case_store.py`, plus the score-packet
+serializer in `packages/short_vol_radar/src/short_vol_radar/score.py`
 
 ## Validation
 
 - focused tests: `.venv/bin/pytest -q tests/test_market_monitor.py tests/test_runtime_reducer.py tests/test_fact_boundary_business.py tests/test_trader_workbench.py`;
 - repository gate: `make check`;
-- public observation: after binding the Draft PR and passing repository checks, clean-stop the
-  current runtime once, start the clean repair commit on port `8675` with
+- public observation: after binding the Draft PR and passing repository checks, use the official
+  reader to inventory the already-stopped stable root, then start the clean repair commit on port
+  `8675` with
   `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`, verify exact runtime identity,
   health/readiness/currentness, fixed-grid baseline behavior across canonical boundaries, and
   continue the already-authorized public-only monitor;
 - run `report-v2-cases --runtime-active` against the unchanged stable root and prove the first
   store-written Control Case is readable under its canonical prefixed identity;
+- prove a greater-than-28-digit raw path share survives packet serialization and exact
+  policy-aware recomputation, then validate live projected packets after the bounded cutover;
 - no manifest, receipt, commissioning subsystem, runtime self-acceptance, or host inspection.
 
 ## Definition of done
 
 The rotating phase, source-ahead race, and queue-lag destructive pre-confirmation reset are
 impossible by direct tests; the official reader accepts store-owned bare digest directories and
-preserves their canonical prefixed Case identities; the full repository gate passes; the live
-clean repair commit remains current; threshold-crossing lag contributes zero observations while a
-same-truth recovery retains the prior count; any first active admitted Shadow is verified through
-the API and official Case reader, or the next truthful fixed funnel blocker is reported without
-changing Policy to manufacture admission; the diff is bounded and remote state is exact.
+preserves their canonical prefixed Case identities; high-precision raw score inputs round-trip and
+recompute exactly; the full repository gate passes; the live clean repair commit remains current;
+threshold-crossing lag contributes zero observations while a same-truth recovery retains the prior
+count; any first active admitted Shadow is verified through the API and official Case reader, or
+the next truthful fixed funnel blocker is reported without changing Policy to manufacture
+admission; the diff is bounded and remote state is exact.

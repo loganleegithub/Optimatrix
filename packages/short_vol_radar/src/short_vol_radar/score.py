@@ -1205,7 +1205,7 @@ def _decimal_text(value: Decimal | None) -> str | None:
         raise ValueError("Decimal must be finite")
     if value == 0:
         return "0"
-    text = format(value.normalize(), "f")
+    text = format(value, "f")
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 

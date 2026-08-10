@@ -157,6 +157,12 @@ it is never stored as an observed zero or neutral 50%. D/E are required for a kn
 server exposes the numerical score interval, LOW `[0,50)`, MID `[50,65)`, or HIGH `[65,100]`,
 premium/risk decomposition, coverage, missing mask, raw inputs, and normalized contributions.
 
+Every score-packet Decimal is serialized from its full coefficient in fixed-point form, with only
+non-significant trailing fractional zeros removed. Serialization must not invoke an ambient
+precision context or round a raw input. The one policy-aware packet validator restores those raw
+values and reproduces the exact A/S/T/D/E factors, aggregates, score interval, band, coverage, and
+diagnostics before the packet may enter a durable Case.
+
 S/T are optional cross-sectional observations, not independent clocks. `S` freezes the maximum
 source-timestamp skew across the target ticker and the same-type lower/upper interpolation
 neighbours. `T` freezes the skew between the current-expiry and immediate-next-longer-expiry ATM
