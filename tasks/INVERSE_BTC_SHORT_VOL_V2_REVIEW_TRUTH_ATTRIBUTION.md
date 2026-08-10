@@ -10,7 +10,8 @@
 
 **Base commit:** `aee7ba3a3c8d50f3da151607069872d7c2cd5d82`
 
-**Target branch/PR:** `codex/v2-review-truth-deployment` / deployment-authority Draft PR
+**Target branch/PR:** `codex/v2-review-truth-deployment` /
+[Draft PR #45](https://github.com/loganleegithub/Optimatrix/pull/45)
 
 **Owning authority/contract:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md),
