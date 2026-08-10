@@ -4,7 +4,7 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
 **Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_SCHEMA7_8675_LIVE_CURRENT`
 
@@ -14,9 +14,50 @@
 
 **Persistent service:** `RUNNING_CURRENT_8675_STABLE_SCHEMA_V5`
 
-**Live commands:** `NONE_CONSUMED`
+**Live commands:** `ONE_QUEUE_REPAIR_8675_CLEAN_CUTOVER_AUTHORIZED`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:**
+[`INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR.md)
+
+## Active queue-throughput repair authority
+
+The trader reports that schema v7 currently shows both market-event age and queue-processing lag
+elevated. The accepted pre-task facts already prove that `QUEUE_LAG_CURRENTNESS` can intermittently
+drop `RADAR_KNOWN` from `128 / 128` to `0 / 128` without a reconnect or session gap. The largest
+current blocker is therefore `QUEUE_PROCESSING_THROUGHPUT_INTERMITTENT`, not the removed schema-v6
+label ambiguity.
+
+The one at-most-60-second loopback sample is consumed. Its client collected the frames but failed
+while serializing tuple-keyed state counts, so no sample aggregate survived and no retry is
+authorized. Static inspection plus a deterministic 128-instrument profile independently isolated
+the hot path: 200 single-book transactions averaged `10.698 ms` each, while rebuilding all score
+feature contexts consumed `1.798 s` of their `2.137 s` cumulative transaction time. The local
+repair keeps all cross-sectional ticker points but builds contexts only for the transaction's
+existing `recalculation_names`; the identical profile then averaged `1.724 ms` per transaction, a
+bounded `83.9%` reduction with unchanged Decision inputs and formulas.
+
+Static code inspection, focused tests, and the repository gate remain permitted. The task may
+repair only this measured synchronous reducer hot path; it may not change a Policy, threshold,
+market universe, score, Case schema, or public/private boundary.
+
+The pre-stop inventory is consumed. Its same-frame Workbench snapshot was
+`RUNNING / CURRENT / ready`, `KNOWN_COMPLETE 128 / 128`, with market-event age `5,147 ms`, wire age
+`3,784 ms`, queue-processing lag `4,129 ms` against the `5,000 ms` deadline, and zero reconnects or
+session gaps. It reported no Shadow Entry, Position, Outcome, Decision Control, or canonical
+`SHADOW_CASE_OPENED`. The official schema-v5 report found zero Case rows in every view for the
+already-bound stable root `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`.
+
+Durable cutover effect is exactly `NONE`: there is no admitted Entry Segment to close or recover,
+and no Case will be migrated, copied, deleted, or rewritten. The active task may mark PR #41 ready,
+merge it to `main`, delete its local and remote topic branch, clean-stop only the currently owned
+8675 runtime session, verify the six declared routes refuse connection, and start exactly one
+replacement from clean synchronized `main` using the same stable root and port.
+
+One bounded post-start smoke may inspect all six GET/HEAD routes, schema/code/runtime/Policy
+identities, and at most 60 seconds of the three schema-v7 latency values plus
+service/readiness/coverage and FactBoundary progress, followed by one official Case report. No
+retry, second root/process, Policy change, Case migration, PID/log/resource inspection, or
+additional restart is authorized.
 
 ## Completed latency-attribution result
 
@@ -104,6 +145,6 @@ or Policy-quality estimate.
 
 The permission remains `PUBLIC_SHADOW`: no credential, account, balance, margin, order, fill,
 capital, settlement action, actual exposure, or private execution. Current health and coverage do
-not establish future uptime, fillability, qualification, Edge, or profitability. A future service
-operation, Policy change, or new roadmap channel requires a new active task and explicit permission
-update under the Delivery Contract.
+not establish future uptime, fillability, qualification, Edge, or profitability. Beyond the exact
+active-task sample, a future service operation, Policy change, or new roadmap channel requires an
+explicit permission update under the Delivery Contract.

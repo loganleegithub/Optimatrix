@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import StrEnum
@@ -440,12 +440,18 @@ def build_score_feature_contexts(
     calculations: Mapping[str, DetectorCalculation],
     tickers: Mapping[str, TickerState],
     score_model: ScoreModel,
+    instrument_names: Iterable[str] | None = None,
 ) -> dict[str, ScoreFeatureContext]:
     points = _surface_points(options, tickers)
+    selected_names = tuple(options) if instrument_names is None else tuple(instrument_names)
+    selected_options = ((name, options[name]) for name in selected_names)
     return {
         instrument_name: ScoreFeatureContext(
             option_type=instrument.option_type,
-            regime=_regime_context(instrument.option_type, calculations.get(instrument_name)),
+            regime=_regime_context(
+                instrument.option_type,
+                calculations.get(instrument_name),
+            ),
             surface=_surface_context(
                 instrument=instrument,
                 calculation=calculations.get(instrument_name),
@@ -453,7 +459,7 @@ def build_score_feature_contexts(
                 score_model=score_model,
             ),
         )
-        for instrument_name, instrument in options.items()
+        for instrument_name, instrument in selected_options
     }
 
 

@@ -4734,6 +4734,7 @@ class RadarReducer:
             calculations=calculations,
             tickers=self.current_diagnostic_tickers,
             score_model=self.policy.score_model,
+            instrument_names=names,
         )
         finalized_prepared: list[ScopeCurrent] = []
         for item in prepared:
