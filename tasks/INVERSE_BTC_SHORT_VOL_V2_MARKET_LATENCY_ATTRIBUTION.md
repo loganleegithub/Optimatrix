@@ -10,7 +10,8 @@
 
 **Base commit:** `52c61d411ada7838777b15a0555ddae3f7f26958`
 
-**Target branch/PR:** `codex/v2-market-latency-attribution` / one Draft PR opened from that branch
+**Target branch/PR:** `codex/v2-market-latency-attribution` / Draft PR
+[`#39`](https://github.com/loganleegithub/Optimatrix/pull/39)
 
 **Owning authority/contract:**
 [`CURRENT_STAGE`](../docs/authority/CURRENT_STAGE.md),
