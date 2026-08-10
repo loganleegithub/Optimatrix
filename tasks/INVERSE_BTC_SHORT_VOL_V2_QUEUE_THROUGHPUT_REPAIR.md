@@ -72,8 +72,10 @@ one score context for the one affected instrument while preserving the full surf
 
 **Outcome/evaluation contract change:** `NONE`
 
-**Stage/authorization change:** the one loopback sample is consumed without a retained aggregate;
-no retry, stop, restart, state-root mutation, or deployment is authorized yet.
+**Stage/authorization change:** the failed loopback sample is consumed without a retained
+aggregate. With code, profile, repository gate, and PR CI green, authorize exactly one current
+Workbench inventory plus one official schema-v5 report of the already-bound stable root. No retry,
+stop, restart, state-root mutation, or deployment is authorized until the durable effect is fixed.
 
 ## Scope
 
@@ -93,7 +95,8 @@ owned `recalculation_names` locality.
 - focused test first reproduces redundant work or latency amplification;
 - direct deterministic profile/benchmark validates the owning function rather than whole-host CPU;
 - `make check`;
-- live deployment only after a later explicit inventory and cutover authority.
+- exactly one pre-stop Workbench/official-reader inventory, then deployment only after an explicit
+  cutover authority update.
 
 ## Definition of done
 

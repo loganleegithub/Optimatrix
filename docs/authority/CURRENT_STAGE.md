@@ -14,7 +14,7 @@
 
 **Persistent service:** `RUNNING_CURRENT_8675_STABLE_SCHEMA_V5`
 
-**Live commands:** `NONE_CONSUMED`
+**Live commands:** `ONE_PRESTOP_8675_CASE_INVENTORY_AUTHORIZED`
 
 **Sole authorized closure:**
 [`INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR.md)
@@ -40,10 +40,16 @@ Static code inspection, focused tests, and the repository gate remain permitted.
 repair only this measured synchronous reducer hot path; it may not change a Policy, threshold,
 market universe, score, Case schema, or public/private boundary.
 
+The code change, direct profile, focused tests, repository gate, and Draft PR #41 CI are green. The
+active task may now perform exactly one same-frame loopback GET of `/api/workbench/current` and one
+official schema-v5 report against the already-bound stable root
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. This inventory must fix the exact
+active admitted-Entry count and Segment-close/recovery effect before any stop.
+
 This authority permits no live sample retry, stop, restart, second process, state-root mutation, or
 Case write outside ordinary operation, external source probe, PID/log/resource inspection, or
-deployment. Any later cutover requires a pre-stop official Case inventory and a subsequent explicit
-authority update.
+deployment yet. After the inventory, `CURRENT_STAGE` must explicitly authorize the one cutover
+before it occurs.
 
 ## Completed latency-attribution result
 

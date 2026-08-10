@@ -190,7 +190,7 @@ def test_current_stage_records_active_queue_throughput_repair() -> None:
     assert "`INVERSE_BTC_SHORT_VOL_V2_SCHEMA7_8675_LIVE_CURRENT`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert "**Persistent service:** `RUNNING_CURRENT_8675_STABLE_SCHEMA_V5`" in current
-    assert "**Live commands:** `NONE_CONSUMED`" in current
+    assert "**Live commands:** `ONE_PRESTOP_8675_CASE_INVENTORY_AUTHORIZED`" in current
     assert "INVERSE_BTC_SHORT_VOL_V2_QUEUE_THROUGHPUT_REPAIR" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
@@ -224,6 +224,9 @@ def test_current_stage_records_active_queue_throughput_repair() -> None:
         "`10.698 ms` each",
         "`1.724 ms` per transaction",
         "bounded `83.9%` reduction",
+        "Draft PR #41 CI are green",
+        "exactly one same-frame loopback GET",
+        "one official schema-v5 report",
         "no live sample retry, stop, restart, second process, state-root mutation",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
