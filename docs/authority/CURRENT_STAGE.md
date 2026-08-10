@@ -4,68 +4,60 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `VALIDATION_ONLY`
+**Current task kind:** `NONE`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_MAIN_CUTOVER_AUTHORIZED`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_LIVE_CURRENT`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_8675_FROM_MAIN_D5D4C88_PENDING_ONE_CUTOVER`
+**Persistent service:** `RUNNING_8675_FROM_MAIN_9A4CC23`
 
-**Live commands:** `ONE_CLEAN_STOP_ONE_START_AND_300_SECOND_READ_ONLY_GATE`
+**Live commands:** `NONE_CONSUMED`
 
-**Sole authorized closure:** `INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION`
-
-## Current bounded implementation authority
-
-The one active task is
-[`INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_ATTRIBUTION.md)
-is now a `VALIDATION_ONLY` cutover closure. The implementation was merged by
-[PR #44](https://github.com/loganleegithub/Optimatrix/pull/44) as
-`main@aee7ba3a3c8d50f3da151607069872d7c2cd5d82`; the authorization update is bounded to branch
-`codex/v2-review-truth-deployment` and its one Draft PR.
-
-The bounded observation immediately preceding this task found review-only HIGH score rows rendered
-as `0/3` confirmation and a cumulative selected-decision projection of `21` activation batches,
-`18` selected decisions, `18` `KNOWN_NO_CONTROL` terminals, and zero opened Cases without a fixed
-reason split. Those counts are the task baseline, not durable research evidence and not a claim
-about the current instant.
-
-The stop inventory immediately before this authorization observed `RUNNING/CURRENT/ready`, 128
-Radar rows, 36 research activation batches, 33 selected decisions, 33 `KNOWN_NO_CONTROL`
-terminals, and zero schema-v5 Case, Control, Shadow Entry, Position, or Outcome records. It
-authorizes exactly one clean stop, one start from synchronized clean `main` in the non-temporary
-`/Users/logan/Optimatrix-runtime` worktree with the unchanged stable root and port 8675, followed by
-one 300-second read-only HTTP gate. It authorizes no retry, Policy/schema/root change, second
-runtime, host/PID/log/resource inspection, or private execution.
+**Sole authorized closure:** `NONE`
 
 ## Current online boundary
 
 The sole Online Runtime is serving `127.0.0.1:8675` from clean synchronized `main` at code
-identity `d5d4c880ef28218bf2cde56be123074da5adba66`. Its runtime identity is
-`sha256:4dd2b9887bdd1fc9c9b0ad3cb3bfe4374d5430b07c8f8632e9550cb000ac254a`.
+identity `9a4cc23cb9092a04b0a6e72eec6657a570660c73`. Its runtime identity is
+`sha256:9d383a7d19027c09324d1b811caeef90184dd1065a2bcff226b6df665c1e4432`.
 It holds the single-instance lease for the stable Case repository
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; no Case root was copied, migrated,
 replaced, or deleted during the cutover.
 
-The clean-stop inventory found zero schema-v5 Case, Control, Shadow Entry, Position, or Outcome
-records. The one authorized post-start smoke completed `31/31` ready samples over more than
-`60 s`. Every sample reported health, readiness, `RUNNING`, `CURRENT`, `KNOWN_COMPLETE`, inactive
-queue backlog, and `128/128` current Radar coverage, with zero reconnects and zero protocol gaps.
+The review-truth implementation was merged by
+[PR #44](https://github.com/loganleegithub/Optimatrix/pull/44); its one-stop/one-start cutover was
+authorized by [PR #45](https://github.com/loganleegithub/Optimatrix/pull/45), and the consumed
+cutover was recorded by [PR #46](https://github.com/loganleegithub/Optimatrix/pull/46).
+Immediately before stop, the old runtime had 41 research activation batches, 38 selected decisions, 38
+`KNOWN_NO_CONTROL` terminals, and zero schema-v5 Case, Control, Shadow Entry, Position, or Outcome
+records. The accepted cutover used the unchanged stable root and port 8675.
 
-Observed processing-queue lag was `0 ms` minimum, `99 ms` median, `650 ms` p95, and `693 ms`
-maximum. Latest market-event age was `310 ms` minimum, `815 ms` median, `1,129 ms` p95, and
-`1,340 ms` maximum. These measurements verify the accepted runtime transition and removal of the
-previously reproduced backlog during the bounded smoke; they do not guarantee future uptime or
-latency.
+The authorized post-start gate completed `31/31` samples over `302.1 s`. Every sample reported
+health, readiness, `RUNNING`, `CURRENT`, `KNOWN_COMPLETE`, inactive queue-lag currentness, and
+`128/128` current Radar coverage. The post-gate snapshot still had zero reconnects and zero
+protocol gaps.
 
-The accepted repair preserves the full cross-sectional surface and term dependencies while
-reusing unchanged peers' current core calculations and recomputing only their dependent scores.
-It adds no process, queue, worker, cache, retry, controller, dependency, schema, threshold, score
-formula, market-universe change, or private input. The replaced all-peer core-recalculation path
-has no remaining production implementation or compatibility branch.
+The current option universe contained zero rows in the 30-to-45-minute review-only TTE band during
+the gate, so live review-only confirmation violations were zero but the live window did not exercise
+a non-empty review-only band. Direct deterministic coverage remains the acceptance evidence that an
+ineligible review row stays `IDLE` with `0` confirmation. Across all current rows, the gate observed
+18-to-23 `CONFIRMING` rows and zero-to-four `ACTIVE` rows.
+
+By the final gate sample, lost nonzero pre-activation confirmation was attributed to 13
+`CORE_UNKNOWN`, 36 `LEADER_CHANGE`, 9 `SCOPE_LOSS`, and 6 `SCORE_BAND_CHANGE` resets. These are
+reset events, not distinct Episodes or a market-frequency estimate. One prospective research batch
+selected one `ABSTAIN` decision and terminated as one `KNOWN_NO_CONTROL`; its one fixed reason was
+`RADAR_EPISODE_OR_REVIEW_ENDED`, so the reason and terminal denominators conserved `1 = 1`. It
+opened no Case, Control, Shadow Entry, Position, or Outcome.
+
+Observed processing-queue lag was `0 ms` minimum, `278 ms` median, `2,303 ms` p95, and `4,560 ms`
+maximum. Latest market-event age was `299 ms` minimum, `929 ms` median, `2,677 ms` p95, and
+`5,057 ms` maximum. Wire-message age was `0 ms` minimum, `244 ms` median, `2,310 ms` p95, and
+`4,569 ms` maximum. These measurements establish the bounded cutover result, not future uptime,
+latency, market frequency, Policy quality, Edge, or profitability.
 
 ## Current product truth
 
