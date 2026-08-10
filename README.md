@@ -43,17 +43,16 @@ offline from Shadow Cases.
 
 ## Current stage
 
-The permission boundary remains `PUBLIC_SHADOW`. H2 already started the sole V2 process on its
-stable non-temporary root. The active repository-only task repairs V2 causal coherence for delayed
-HIGH enrollment, optional S/T source skew, cross-Call/Put invalidation, ticker countability, tick
-ladder distance, and Case-report strata. It changes the fixed three-Policy repository identity
-chain but is explicitly not deployed.
+The permission boundary remains `PUBLIC_SHADOW`. The sole current service runs the fixed
+causal-coherence V2 chain at `http://127.0.0.1:8675` from the fresh stable root
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. Its bounded launch smoke confirmed
+the exact product/Policy identities, all declared GET/HEAD routes, current 128/128 public coverage,
+and an empty reader-valid schema-v5 Case repository.
 
-This task neither inspects nor changes `127.0.0.1:8765`, the running H2 process, or any external
-root. Deployment requires a later explicit task and a fresh Policy-compatible root boundary. A
-historical live snapshot does not establish future uptime, fillability, account margin, frequency,
-edge, profitability, or qualification. Exact runtime identity, durable effect, and permission
-details are in `docs/authority/CURRENT_STAGE.md`.
+The superseded `8765` surface was already unavailable before the new start; its prior stable root
+was preserved without migration or recovery into the new epoch. The one start and smoke are
+consumed. No restart, process supervisor, private action, or Edge/frequency claim is authorized.
+Exact runtime identity and durable boundaries are in `docs/authority/CURRENT_STAGE.md`.
 
 See:
 
