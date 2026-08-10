@@ -10,7 +10,8 @@
 
 **Base commit:** `5a32e62069324ac83a389ca899ef0cf878650105`
 
-**Target branch/PR:** `codex/v2-review-truth-attribution` / Draft PR pending creation
+**Target branch/PR:** `codex/v2-review-truth-attribution` /
+[Draft PR #44](https://github.com/loganleegithub/Optimatrix/pull/44)
 
 **Owning authority/contract:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md),

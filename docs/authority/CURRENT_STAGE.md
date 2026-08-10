@@ -25,7 +25,8 @@ The one active task is
 from base `5a32e62069324ac83a389ca899ef0cf878650105` on branch
 `codex/v2-review-truth-attribution`. It may change only the existing in-memory Radar confirmation,
 selected-decision terminal attribution, Funnel projection, and Workbench rendering path. It may
-create one Draft PR after direct and repository checks.
+create one Draft PR after direct and repository checks. The bounded closure is published as
+[Draft PR #44](https://github.com/loganleegithub/Optimatrix/pull/44).
 
 The bounded observation immediately preceding this task found review-only HIGH score rows rendered
 as `0/3` confirmation and a cumulative selected-decision projection of `21` activation batches,
