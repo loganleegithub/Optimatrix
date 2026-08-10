@@ -10,7 +10,8 @@
 
 **Base commit:** `89e83e04871fd2b230b1868d399d7dec45865a6b`
 
-**Target branch/PR:** `codex/v2-index-grid-phase-fix`; Draft PR to be bound before live cutover
+**Target branch/PR:** `codex/v2-index-grid-phase-fix` /
+[Draft PR #48](https://github.com/loganleegithub/Optimatrix/pull/48)
 
 **Owning authority/contract:**
 [`PRODUCT_CONSTITUTION.md`](../docs/authority/PRODUCT_CONSTITUTION.md),

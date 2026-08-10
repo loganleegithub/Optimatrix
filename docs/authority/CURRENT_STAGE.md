@@ -35,7 +35,8 @@ checks pass, this authority permits one clean stop and one clean start on `127.0
 repair commit, reusing the unchanged stable Case repository
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. Continued observation remains
 production-public Shadow only and cannot claim Edge, profitability, an order, a fill, or actual
-exposure.
+exposure. The bounded implementation is [Draft PR
+#48](https://github.com/loganleegithub/Optimatrix/pull/48).
 
 ## Current online boundary
 
