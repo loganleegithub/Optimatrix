@@ -332,6 +332,15 @@ runtime, current segment runtime, segment availability, gap count, observation q
 qualification eligibility. A recovered Entry begins `UNKNOWN` until fresh facts settle. The browser
 never infers `HOLD` or `CLOSE` from `HANDOFF_GAP`.
 
+The browser may arrange the immutable current Radar rows into an expiry-by-strike discovery map and
+select the already-server-owned subset `HIGH + bucket leader + clue eligible + CONFIRMING|ACTIVE`.
+That is a bounded view filter over typed current facts, not a second detector. It reports the
+visible numerator against the complete current Radar row denominator, preserves fixed strike
+positions, and exposes the selected row's server evidence without recomputing Score, leader,
+confirmation, forward, IV, RV, history, or downstream structure state. Shadow and AI labels in the
+product navigation cannot create an implementation, transition, or authority that their owning
+surface does not already have.
+
 Funnel diagnostics may be displayed and logged externally, but they are not business evidence or
 qualification data.
 

@@ -128,6 +128,14 @@ blocker economically misleading. Radar should therefore expose selective, time-p
 clues with the causal benchmark, confidence, missing facts, and upgrade/invalidation
 conditions. An unrelated `UNKNOWN` must not erase a known positive witness.
 
+The trader's primary Radar surface is a discovery map, not a server-field inventory. It may default
+to the current `HIGH` bucket leaders that are `CONFIRMING | ACTIVE`, while reporting that visible
+count against the complete current Radar denominator. Expiry and strike remain fixed spatial
+coordinates; LOW/MID members, review-only rows, and source blockers remain available to the server
+and on-demand evidence but do not compete with strong signals for first-screen attention. Shadow
+tracking and later AI research are separate product surfaces. Radar cannot imply that the trader
+confirmed a signal, selected a structure, or advanced it into Shadow.
+
 ### Underwriting and Shadow admission
 
 A Candidate or Shadow admission requires its declared facts and executable economics. Missing

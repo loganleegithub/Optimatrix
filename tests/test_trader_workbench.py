@@ -1318,7 +1318,7 @@ def test_get_handler_reads_only_immutable_store_bytes() -> None:
 
 def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None:
     combined = f"{HTML}\n{JS}"
-    assert SIMULATION_LABEL in HTML
+    assert "PUBLIC SHADOW · READ ONLY · 非订单/成交" in HTML
     assert "/api/workbench/current" in JS
     assert "WebSocket" not in combined
     assert "deribit.com" not in combined.lower()
@@ -1336,6 +1336,7 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert 'id="runtime-blocker"' in HTML
     assert 'id="channel-list"' in HTML
     assert 'id="queue-body"' in HTML
+    assert 'id="radar-map"' in HTML
     assert 'id="detail-panel"' in HTML
     assert 'role="alert"' in HTML
     assert "function renderUnavailable" in JS
@@ -1357,7 +1358,7 @@ def test_browser_formats_business_states_and_orders_rows_without_recomputing() -
     test_js = JS.replace(
         "syncThemeControl();\nupdateResponsiveDetailState();\nrefresh();\nsetInterval(refresh, 2000);",
         "globalThis.__workbenchTest = { structureState, radarState, orderedStructureRows, "
-        "orderedRadarRows, predicateMarginForFailure, formatMargin, formatDurationInterval, "
+        "isStrongSignalRow, strongSignalRows, predicateMarginForFailure, formatMargin, formatDurationInterval, "
         "reasonText, channelSnapshotState };",
     )
     assert test_js != JS
@@ -1374,16 +1375,18 @@ assert.equal(api.formatDurationInterval({{
 assert.equal(api.reasonText('QUEUE_LAG_CURRENTNESS'), '处理队列延迟\uff0c行情时效性不可确认');
 assert.equal(api.reasonText('NO_ACTIVE_COMBO'), '无现成官方组合\uff1b不阻塞双腿 Shadow 模拟');
 
-const radar = api.orderedRadarRows([
-  {{instrument_name:'N', score_result:{{band:'LOW'}}, attention_rank:3}},
-  {{instrument_name:'U', attention_rank:2}},
-  {{instrument_name:'A', score_result:{{band:'HIGH'}}, attention_rank:1,
+const strongRow = {{instrument_name:'A', score_result:{{band:'HIGH', score:{{lower:78, upper:78}}}}, attention_rank:1,
     clue_eligible_tte:true, clue_eligible_delta:true,
     is_bucket_leader:true, bucket_episode_leader_instrument_name:'A',
     bucket_episode_state:'ACTIVE', bucket_episode_score_band:'HIGH',
-    bucket_episode_identity:'sha256:active'}}
-]);
-assert.deepEqual(radar.map(row => row.instrument_name), ['A', 'U', 'N']);
+    bucket_episode_identity:'sha256:active', expiration_timestamp_ms:2, strike_price:'65000'}};
+const radar = api.strongSignalRows({{radar:{{rows:[
+  {{instrument_name:'N', score_result:{{band:'LOW'}}, attention_rank:3}},
+  {{instrument_name:'U', attention_rank:2}}, strongRow,
+  {{...strongRow, instrument_name:'MEMBER', is_bucket_leader:false}}
+]}}}});
+assert.deepEqual(radar.map(row => row.instrument_name), ['A']);
+assert.equal(api.isStrongSignalRow(strongRow), true);
 assert.equal(api.radarState(radar[0]).key, 'HIGH');
 assert.equal(api.radarState(radar[0]).label, 'HIGH · 已确认线索');
 
@@ -1543,6 +1546,32 @@ def test_browser_executes_fail_closed_and_recovery_paths() -> None:
             "baseline_annualized_volatility": "0.37",
             "richness_ratio_interval": {"lower": "1.3", "upper": "1.3"},
             "target_spread_ticks": "3",
+            "score_result": {
+                "band": "HIGH",
+                "score": {"lower": "78", "upper": "78"},
+                "premium_evidence": {"lower": "0.76", "upper": "0.76"},
+                "risk_quality": {"lower": "0.75", "upper": "0.75"},
+                "coverage": "FULL",
+                "missing_factors": [],
+                "factors": [],
+            },
+            "score_bucket_key": {
+                "tte_band_id": "NEAR",
+                "expiry_ms": 1_800_000_000_000,
+                "option_type": "put",
+                "delta_bucket": "TAIL",
+            },
+            "is_bucket_leader": True,
+            "bucket_leader_instrument_name": "BTC-TEST-65000-P",
+            "bucket_leader_coverage": "FULL",
+            "clue_eligible_tte": True,
+            "clue_eligible_delta": True,
+            "bucket_episode_state": "ACTIVE",
+            "bucket_episode_identity": "sha256:episode",
+            "bucket_episode_leader_instrument_name": "BTC-TEST-65000-P",
+            "bucket_episode_score_band": "HIGH",
+            "confirmation_observation_count": 3,
+            "required_confirmation_observation_count": 3,
         }
     ]
     restarted_document = json.loads(json.dumps(document))
@@ -1554,6 +1583,13 @@ def test_browser_executes_fail_closed_and_recovery_paths() -> None:
     restarted_rows = restarted_underwriting["rows"]
     assert isinstance(restarted_rows, list)
     restarted_rows[0]["short_leg_instrument_name"] = "BTC-NEWER-65000-P"
+    restarted_radar = restarted_newer_document["radar"]
+    assert isinstance(restarted_radar, dict)
+    restarted_radar_rows = restarted_radar["rows"]
+    assert isinstance(restarted_radar_rows, list)
+    restarted_radar_rows[0]["instrument_name"] = "BTC-NEWER-65000-P"
+    restarted_radar_rows[0]["bucket_leader_instrument_name"] = "BTC-NEWER-65000-P"
+    restarted_radar_rows[0]["bucket_episode_leader_instrument_name"] = "BTC-NEWER-65000-P"
     retired_document = json.loads(json.dumps(document))
     retired_document["publication_sequence"] = 2
     malformed_document = json.loads(json.dumps(document))
@@ -1571,7 +1607,11 @@ const assert = require('node:assert/strict');
 const elementIds = [
   'connection', 'as-of', 'runtime', 'channel-list', 'queue-context', 'queue-filters',
   'queue-status', 'queue-head', 'queue-body', 'detail-title', 'detail-content',
-  'detail-panel', 'detail-scrim', 'shadow-jump', 'evidence-toggle', 'footer-summary',
+  'detail-panel', 'detail-scrim', 'shadow-jump', 'evidence-toggle',
+  'active-product', 'product-matrix-count', 'radar-toolbar', 'active-only-toggle',
+  'product-matrix-toggle', 'channel-rail', 'radar-map-view', 'structure-queue-view',
+  'radar-map', 'queue-title', 'queue-kicker', 'structure-status',
+  'footer-radar-count', 'footer-shadow-count', 'footer-evidence',
   'runtime-status', 'runtime-state-label', 'runtime-state-detail', 'service-phase',
   'data-currentness', 'data-delay', 'wire-age', 'queue-lag', 'runtime-blocker'
 ];
@@ -1619,12 +1659,12 @@ const assertUnavailable = () => {{
   assert.equal(elements['runtime-status'].dataset.state, 'unknown');
   assert.equal(elements['runtime-state-label'].textContent, 'Runtime 状态未知');
   assert.equal(elements.runtime.textContent, 'runtime —');
-  assert.match(elements['queue-body'].innerHTML, /旧业务数据已隐藏/);
-  assert.doesNotMatch(elements['queue-body'].innerHTML, /BTC-TEST-65000-P|STALE SENTINEL/);
+  assert.match(elements['radar-map'].innerHTML, /旧业务数据已隐藏/);
+  assert.doesNotMatch(elements['radar-map'].innerHTML, /BTC-TEST-65000-P|STALE SENTINEL/);
   assert.doesNotMatch(elements['detail-content'].innerHTML, /64\\.8|STALE SENTINEL/);
 }};
 const markStalePanels = () => {{
-  elements['queue-body'].innerHTML = 'STALE SENTINEL';
+  elements['radar-map'].innerHTML = 'STALE SENTINEL';
   elements['detail-content'].innerHTML = 'STALE SENTINEL';
 }};
 
@@ -1637,14 +1677,14 @@ const markStalePanels = () => {{
   assert.match(elements['runtime-blocker'].textContent, /系统阻塞/);
   assert.match(elements['channel-list'].innerHTML, /INVERSE_BTC_SHORT_VOL_V2/);
   assert.match(elements['channel-list'].innerHTML, /INVERSE_ETH_LONG_GAMMA/);
-  assert.match(elements['queue-body'].innerHTML, /BTC-TEST-65000-P/);
-  assert.match(elements['queue-body'].innerHTML, /继续观察/);
-  assert.match(elements['detail-content'].innerHTML, /64\\.8/);
-  assert.match(elements['detail-content'].innerHTML, /不是到期 BTC 负债/);
+  assert.match(elements['radar-map'].innerHTML, /BTC-TEST-65000-P/);
+  assert.match(elements['radar-map'].innerHTML, /ACTIVE/);
+  assert.match(elements['detail-content'].innerHTML, /V2 Score/);
+  assert.match(elements['detail-content'].innerHTML, /只读发现信号/);
 
-  elements['queue-body'].innerHTML = 'UNCHANGED PUBLICATION SENTINEL';
+  elements['radar-map'].innerHTML = 'UNCHANGED PUBLICATION SENTINEL';
   await refreshAt(1500, {{kind: 'ok', value: {json.dumps(document)}}});
-  assert.equal(elements['queue-body'].innerHTML, 'UNCHANGED PUBLICATION SENTINEL');
+  assert.equal(elements['radar-map'].innerHTML, 'UNCHANGED PUBLICATION SENTINEL');
 
   markStalePanels();
   await refreshAt(2000, {{kind: 'fetch-error'}});
@@ -1652,7 +1692,7 @@ const markStalePanels = () => {{
 
   await refreshAt(3000, {{kind: 'ok', value: {json.dumps(document)}}});
   assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
-  assert.match(elements['queue-body'].innerHTML, /BTC-TEST-65000-P/);
+  assert.match(elements['radar-map'].innerHTML, /BTC-TEST-65000-P/);
 
   markStalePanels();
   await refreshAt(4000, {{kind: 'http-error'}});
@@ -1668,8 +1708,8 @@ const markStalePanels = () => {{
   assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
   assert.equal(elements.connection.hidden, true);
   assert.match(elements.runtime.textContent, /…f{{6}}$/);
-  assert.match(elements['queue-body'].innerHTML, /BTC-TEST-65000-P/);
-  assert.doesNotMatch(elements['queue-body'].innerHTML, /旧业务数据已隐藏|STALE SENTINEL/);
+  assert.match(elements['radar-map'].innerHTML, /BTC-TEST-65000-P/);
+  assert.doesNotMatch(elements['radar-map'].innerHTML, /旧业务数据已隐藏|STALE SENTINEL/);
 
   await refreshAt(7100, {{kind: 'ok', value: {json.dumps(retired_document)}}});
   assertUnavailable();
@@ -1690,14 +1730,14 @@ const markStalePanels = () => {{
   releaseOldResponse();
   await oldRefresh;
   assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
-  assert.match(elements['queue-body'].innerHTML, /BTC-NEWER-65000-P/);
-  assert.doesNotMatch(elements['queue-body'].innerHTML, /旧业务数据已隐藏/);
+  assert.match(elements['radar-map'].innerHTML, /BTC-NEWER-65000-P/);
+  assert.doesNotMatch(elements['radar-map'].innerHTML, /旧业务数据已隐藏/);
 
   await refreshAt(7500, {{kind: 'ok', value: {json.dumps(restarted_document)}}});
   assertUnavailable();
   await refreshAt(7600, {{kind: 'ok', value: {json.dumps(restarted_newer_document)}}});
   assert.equal(document.body.dataset.workbenchState, 'CURRENT_FETCH');
-  assert.match(elements['queue-body'].innerHTML, /BTC-NEWER-65000-P/);
+  assert.match(elements['radar-map'].innerHTML, /BTC-NEWER-65000-P/);
 }})().catch(error => {{
   console.error(error.stack || error);
   process.exitCode = 1;

@@ -50,7 +50,7 @@ def test_opportunity_blotter_exposes_the_roadmap_without_fabricating_future_trut
     assert "身份不匹配" in JS
     assert "拒绝展示" in JS
     assert "Radar 线索与已结算结构分成两类队列" not in combined
-    assert "避免浏览器误拼不同 Episode" in JS
+    assert "浏览器不按合约名拼接 Episode" in JS
     assert "服务器未提供 V2 score packet" in JS
     assert "浏览器不补算" in JS
     assert "A · 可执行 IV / RV 丰厚度" in JS
@@ -64,7 +64,7 @@ def test_opportunity_blotter_preserves_public_only_read_only_boundaries() -> Non
     combined = f"{HTML}\n{JS}"
 
     assert "PUBLIC SHADOW · READ ONLY · 非订单/成交" in HTML
-    assert "公共行情反事实\uff0c不是订单、成交、实际持仓、流动性预留或账户保证金" in HTML
+    assert "只读发现信号 · 非交易指令 · 尚未形成 Shadow Entry" in JS
     assert "不是到期 BTC 负债、精确最大损失或账户保证金" in JS
     assert "不是实际账户 PnL" in JS
     assert "actual_account_margin_availability !== 'UNKNOWN'" in JS
@@ -83,18 +83,19 @@ def test_opportunity_blotter_preserves_public_only_read_only_boundaries() -> Non
 
 
 def test_opportunity_blotter_uses_fixed_detail_and_responsive_dismissible_drawer() -> None:
-    assert "grid-template-columns: 238px minmax(700px, 0.85fr) minmax(534px, 1.15fr)" in CSS
-    assert "@media (max-width: 1471px)" in CSS
-    assert "width: min(648px, calc(100vw - 240px))" in CSS
-    assert "width: min(648px, calc(100vw - 24px))" in CSS
+    assert 'id="radar-map"' in HTML
+    assert 'id="detail-panel"' in HTML
+    assert "grid-template-columns: 160px minmax(720px, 1fr)" in CSS
+    assert "width: min(390px, calc(100vw - 56px))" in CSS
+    assert "@media (max-width: 900px)" in CSS
+    assert "width: min(620px, calc(100vw - 24px))" in CSS
     assert "body.detail-open .detail-panel" in CSS
     assert "prefers-reduced-motion" in CSS
-    assert "Esc 关闭" in HTML
-    assert "DRAWER_MEDIA_QUERY = '(max-width: 1471px)'" in JS
+    assert "DRAWER_MEDIA_QUERY = '(max-width: 900px)'" in JS
     assert "panel.setAttribute('aria-modal', 'true')" in JS
-    assert "setElementInert('.topbar', open)" in JS
-    assert "setElementInert('.queue-workspace', open)" in JS
-    assert "setElementInert('#detail-panel', drawer && !open)" in JS
+    assert "setElementInert('.topbar', drawer && open)" in JS
+    assert "setElementInert('.queue-workspace', drawer && open)" in JS
+    assert "setElementInert('#detail-panel', !open)" in JS
     assert 'aria-hidden="true" inert' in HTML
     assert JS.index("updateResponsiveDetailState();\nrefresh();") < JS.index(
         "setInterval(refresh, 2000);"
@@ -247,7 +248,7 @@ assert.equal(topbar.inert, false);
 api.openDetail('row-1');
 assert.equal(panel.inert, false);
 assert.equal(topbar.inert, true);
-assert.equal(rail.inert, true);
+assert.equal(rail.inert, false);
 assert.equal(queue.inert, true);
 assert.equal(scrim.hidden, false);
 assert.equal(document.activeElement, close);
@@ -272,7 +273,7 @@ assert.equal(document.activeElement, trigger);
 api.openDetail('row-1');
 drawerMatches = false;
 mediaChangeHandler();
-assert.equal(panel.inert, false);
+assert.equal(panel.inert, true);
 assert.equal(topbar.inert, false);
 assert.equal(panel.attributes.role, 'complementary');
 assert.equal(document.activeElement, trigger);
@@ -292,7 +293,8 @@ def test_opportunity_blotter_maps_server_states_without_recomputing_strategy_tru
         "syncThemeControl();\nupdateResponsiveDetailState();\nrefresh();\nsetInterval(refresh, 2000);",
         "globalThis.__workbenchTest = { channelSnapshotState, latencyState, roadmapState, structureState, "
         "radarState, radarReviewConstraint, radarConfirmationText, reasonCountsText, radarDetailMarkup, "
-        "orderedStructureRows, orderedRadarRows, predicateMarginForFailure, "
+        "orderedStructureRows, isStrongSignalRow, strongSignalRows, groupStrongSignalsByExpiry, "
+        "signalStrikeBounds, signalXPercent, predicateMarginForFailure, "
         "formatMargin, firstFailureSummary, structureJudgement, canonicalShadowMarkup, "
         "canonicalShadowEntry, structureEntryFacts, structureIdentity, structureDetailMarkup, "
         "shadowStructureRow, structureQueueRows, shadowTrackingPresentation, "
@@ -406,6 +408,32 @@ assert.equal(api.radarState({{
   bucket_episode_score_band: 'HIGH', bucket_episode_identity: 'sha256:active',
   bucket_episode_leader_instrument_name: 'LEADER'
 }}).label, 'HIGH · 已确认线索');
+const strongActive = {{
+  instrument_name: 'LEADER', is_bucket_leader: true,
+  clue_eligible_tte: true, clue_eligible_delta: true,
+  score_result: {{band: 'HIGH', score: {{lower: '78', upper: '78'}}}},
+  bucket_episode_state: 'ACTIVE', bucket_episode_score_band: 'HIGH',
+  bucket_episode_identity: 'sha256:active', bucket_episode_leader_instrument_name: 'LEADER',
+  expiration_timestamp_ms: 1800000000000, strike_price: '63000', option_type: 'put'
+}};
+assert.equal(api.isStrongSignalRow(strongActive), true);
+assert.equal(api.isStrongSignalRow({{...strongActive, is_bucket_leader: false}}), false);
+assert.equal(api.isStrongSignalRow({{...strongActive, clue_eligible_tte: false}}), false);
+assert.equal(api.isStrongSignalRow({{...strongActive, score_result: {{band: 'MID'}}}}), false);
+assert.equal(api.isStrongSignalRow({{...strongActive, bucket_episode_state: 'IDLE'}}), false);
+const confirming = {{...strongActive, instrument_name: 'CONFIRM', strike_price: '69000',
+  bucket_episode_leader_instrument_name: 'CONFIRM', bucket_episode_identity: 'sha256:confirm',
+  bucket_episode_state: 'CONFIRMING'}};
+const mapDocument = {{radar: {{rows: [
+  {{instrument_name: 'MEMBER', expiration_timestamp_ms: 1800000000000,
+    strike_price: '60000', option_type: 'put', score_result: {{band: 'HIGH'}}}},
+  strongActive, confirming
+]}}}};
+assert.deepEqual(api.strongSignalRows(mapDocument).map(row => row.instrument_name), ['LEADER', 'CONFIRM']);
+assert.equal(api.groupStrongSignalsByExpiry(api.strongSignalRows(mapDocument)).length, 1);
+assert.deepEqual(api.signalStrikeBounds(mapDocument), {{lower: 60000, upper: 69000}});
+assert.equal(api.signalXPercent(60000, {{lower: 60000, upper: 69000}}), 4);
+assert.equal(api.signalXPercent(69000, {{lower: 60000, upper: 69000}}), 96);
 assert.match(api.radarState({{
   instrument_name: 'MEMBER', is_bucket_leader: false,
   clue_eligible_tte: true, clue_eligible_delta: true,
