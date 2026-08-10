@@ -6,31 +6,45 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_H1_IMPLEMENTED_OFFLINE_VERIFIED`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_H2_CUTOVER_AUTHORIZED_PENDING`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
-**Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_H1_REPOSITORY_ONLY`
+**Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_H2_ONE_CUTOVER`
 
-**Persistent service:** `RUNNING_CURRENT_GAPPED_ENTRY_RECOVERY`
+**Persistent service:** `V1_RUNNING_CURRENT_PENDING_CLEAN_HANDOFF`
 
-**Live commands:** `FORBIDDEN_DURING_V2_H1`
+**Live commands:** `ONE_V1_CLEAN_STOP_ONE_V2_START_ONE_BOUNDED_READ_ONLY_SMOKE`
 
 **Sole authorized closure:** [`INVERSE_BTC_SHORT_VOL_V2_CLOSED_LOOP`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_CLOSED_LOOP.md)
 
-## Active V2 implementation boundary
+## Active V2 cutover boundary
 
-H1 directly replaces the repository's V1 ratio-only Radar with the sole
+H1 directly replaced the repository's V1 ratio-only Radar with the sole
 `INVERSE_BTC_SHORT_VOL_V2` ordinal opportunity-ranking Policy and connects its frozen
 selection/entry-refresh facts to future schema-v5 Shadow Outcomes. The measured baseline is `0 / 1`
 online Radar Policies with that causal V2 score-to-Outcome link; the primary blocker is
 `V2_SCORE_TO_FUTURE_OUTCOME_LINK_ABSENT`.
 
-This is repository implementation and offline verification authority only. It authorizes no public
-source probe, live smoke, process stop/start/restart, state-root inventory/archive/migration, V2
-state-root creation, or deployment. The observed V1 process and its `/private/tmp` repository stay
-untouched. H2 cutover requires a later explicit permission update after the H1 Draft PR is
-reviewable.
+H2 is now the one authorized clean handoff from the still-running V1 process to that V2 code. It
+does not reopen H1 design or Policy tuning. The exact topology is:
+
+1. read the current loopback snapshot and validate the V1 Case repository at
+   `/private/tmp/optimatrix-inverse-btc-stable-97AYba` with the official V1 reader;
+2. clean-stop that one V1 process once, close only its current admitted-Entry Observation Segments,
+   and confirm the loopback surface is down;
+3. preserve the complete V1 repository in place as read-only historical research truth, without
+   copy, migration, deletion, synthetic Outcome, or V2 recovery;
+4. create the previously absent stable V2 repository at
+   `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2`;
+5. from one clean commit on the declared task branch, invoke the canonical `serve-shadow` exactly
+   once on `127.0.0.1:8765` with that fresh root; and
+6. consume one bounded read-only smoke over the six declared GET/HEAD routes, the immutable current
+   API snapshot, and the official schema-v5 reader.
+
+No retry, second root, old-root repoint, Case copy, migration, compatibility mode, source-contract
+probe, threshold tuning, process supervisor, PID/log/`lsof`/launchd inspection, or private action is
+authorized. A failed stop/start/smoke is reported as the H2 blocker rather than silently retried.
 
 ## Current product truth
 
@@ -58,7 +72,7 @@ The component-book lifecycle remains a public-book counterfactual. It is `NOT_AN
 `NOT_A_FILL`, `NOT_AN_ATOMIC_QUOTE`, provides no liquidity reservation, and proves neither
 fillability, strategy edge, profitability, nor qualification.
 
-## Current live process boundary
+## Pre-cutover live process boundary
 
 At `2026-08-10T11:29:56+08:00`, the externally started loopback Workbench at
 `http://127.0.0.1:8765` reported:
@@ -77,11 +91,11 @@ current Radar rows:           128
 recovered admitted Entries:   14 / 14, latest Segment OPEN / GAPPED
 ```
 
-The one authorized start has been consumed. The process runs the accepted Inverse-only source and
+The prior V1 start has been consumed. The process runs the accepted Inverse-only source and
 reuses `/private/tmp/optimatrix-inverse-btc-stable-97AYba`. Its identity and health are a bounded
-operational observation; current health and market counters must be re-read before any later claim.
-No additional start, stop, restart, repoint, Policy change, or live smoke is authorized. Any such
-action requires a new active task and permission boundary.
+operational observation; H2 must re-read its health, market counters, and durable Case state before
+the clean stop. Only the exact H2 topology above authorizes one stop, one fresh-root start, and one
+bounded read-only smoke. It grants no general deployment or restart authority.
 
 ## Accepted repository closure
 
@@ -107,9 +121,10 @@ Case shape, identities, Entry aggregate, first-CLOSE/attempt, and Outcome semant
 
 ## Current non-claims
 
-The current live snapshot establishes only the identity, reachability, currentness, and recovery
+The pre-cutover live snapshot establishes only the identity, reachability, currentness, and recovery
 state shown above. It does not establish continuous future uptime, fillability, opportunity
 frequency, account margin, edge, profitability, qualification, or execution permission. The `14`
-Outcome rows are pending Entry projections, not mature Outcomes. H1 cannot turn this observation
-into V2 deployment evidence. Any stop/archive/root creation/start/restart/live validation or new
-2×2 channel requires a later explicit permission update under the Delivery Contract.
+Outcome rows were pending Entry projections, not mature Outcomes, and must be re-counted before
+stop. H2 may establish only the declared V2 identity, fresh-root isolation, current public-source
+reachability, and truthful zero/UNKNOWN state. It cannot establish Policy quality, market frequency,
+profitability, qualification, or permission for another start.

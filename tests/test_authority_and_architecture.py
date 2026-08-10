@@ -182,15 +182,17 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_only_v2_repository_implementation() -> None:
+def test_current_stage_authorizes_only_one_v2_cutover() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_H1_IMPLEMENTED_OFFLINE_VERIFIED`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_H2_CUTOVER_AUTHORIZED_PENDING`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_CURRENT_GAPPED_ENTRY_RECOVERY`" in current
-    assert "**Live commands:** `FORBIDDEN_DURING_V2_H1`" in current
+    assert "**Persistent service:** `V1_RUNNING_CURRENT_PENDING_CLEAN_HANDOFF`" in current
+    assert (
+        "**Live commands:** `ONE_V1_CLEAN_STOP_ONE_V2_START_ONE_BOUNDED_READ_ONLY_SMOKE`"
+    ) in current
     assert "INVERSE_BTC_SHORT_VOL_V2_CLOSED_LOOP.md" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
@@ -200,13 +202,14 @@ def test_current_stage_authorizes_only_v2_repository_implementation() -> None:
         "runtime identity: sha256:888729c63e0deec4aea2bb1a3787a205501910351ae66c4d07e66e5017048676",
         "6 / 6 HTTP 200",
         "14 / 14, latest Segment OPEN / GAPPED",
-        "The one authorized start has been consumed",
+        "The prior V1 start has been consumed",
         "The previously accepted V1 repository result was `1 / 1`",
         "The obsolete product specification",
         "The stable repository contains `51` Case directories",
         "did not restore the `37` historical selected no-trade Controls",
-        "The `14` Outcome rows are pending Entry projections",
-        "H2 cutover requires a later explicit permission update",
+        "The `14` Outcome rows were pending Entry projections",
+        "No retry, second root, old-root repoint, Case copy, migration",
+        "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2",
     ):
         assert phrase in normalized
     for identity in (

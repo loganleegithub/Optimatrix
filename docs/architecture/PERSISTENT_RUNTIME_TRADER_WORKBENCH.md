@@ -54,7 +54,7 @@ The application exposes `/healthz`, `/readyz`, and `/api/workbench/current` on l
 supervision, restart policy, CPU, memory, and host logs are external operational concerns. The
 application does not inspect or manage them.
 
-The H1 repository state authorizes no live command. The last observed `127.0.0.1:8765` process is
-the older V1 chain on a temporary root; H1 does not hot-swap, stop, restart, repoint, inspect, or
-prove it deployed. H2 must receive explicit authority, preserve the V1 root separately, and start
-V2 on a fresh stable non-temporary root. No V1 Case is copied or migrated into V2.
+H2 authorizes the one clean handoff declared in `CURRENT_STAGE`: inventory and clean-stop the older
+V1 process, preserve its temporary root in place as historical truth, then start V2 once on the
+fresh stable non-temporary root. No V1 Case is copied, migrated, or recovered into V2, and the H2
+start grants no automatic restart authority.

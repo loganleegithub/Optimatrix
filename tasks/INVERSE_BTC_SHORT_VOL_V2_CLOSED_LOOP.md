@@ -6,7 +6,7 @@
 
 **Runtime implementation:** REQUIRED
 
-**Live commands:** FORBIDDEN
+**Live commands:** ONE V1 CLEAN STOP, ONE FRESH-ROOT V2 START, ONE BOUNDED READ-ONLY SMOKE
 
 **Base commit:** `04ff60f1b7763e00b6f4d1f1f2b5e7981b307278`
 
@@ -112,10 +112,13 @@ primary; raw-book sensitivity is derived offline with fees recomputed from raw V
 conditional on successful paired refresh and Case opening and keeps continuous and gapped views
 separate.
 
-**Stage/authorization change:** H1 authorizes repository implementation and offline verification
-only. It does not authorize a source probe, integration smoke, service stop/start/restart, V1-root
-inventory/archive/migration, stable V2-root creation, or live cutover. Those are H2 and require a
-later explicit permission update after this implementation is reviewable.
+**Stage/authorization change:** H1 authorized repository implementation and offline verification.
+H2 now authorizes one exact clean handoff: official-reader inventory of the current V1 root, one
+clean stop, in-place preservation of that root, creation of the previously absent stable V2 root at
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2`, one canonical V2 start on loopback port
+8765 from a clean task-branch commit, and one bounded read-only smoke. It authorizes no retry,
+second root, V1 Case copy/migration/recovery, threshold change, source-contract probe, process
+supervision, host inspection, or private action.
 
 LOW is `[0, 50)`, MID is `[50, 65)`, and HIGH is `[65, 100]`. The leader key is
 `(TTE band, expiry, option type, Delta bucket)`. Before activation, a leader change resets
@@ -132,12 +135,13 @@ refresh becomes unavailable or `UNKNOWN`.
 **In:** V2 Policy chain and identities; pure score/features; existing Radar reducer/state machine;
 existing formal protective-leg selector and paired refresh; schema-v5 Case writer/reader; Workbench
 server projection/rendering; Case-only offline score report; Authority/contracts/tests required by
-those changes.
+those changes; one official-reader V1 inventory; one V1 clean stop; in-place V1-root preservation;
+one fresh non-temporary V2 root; one V2 start; one bounded read-only smoke.
 
-**Out:** all live commands; `/private/tmp` reads or writes; V1 root handling; process supervision;
-private/account/order/fill/capital behavior; second runtime; database; replay/tape; pre-Case
-persistence; full-surface model; signed dealer GEX; auto-training; V2 probability or Edge claims;
-Long Gamma or ETH roadmap cells.
+**Out:** retry or automatic restart; V1 Case copy, migration, rewrite, deletion, or V2 recovery;
+second V2 root; process supervision or host inspection; private/account/order/fill/capital behavior;
+second runtime; database; replay/tape; pre-Case persistence; full-surface model; signed dealer GEX;
+auto-training; V2 probability or Edge claims; Long Gamma or ETH roadmap cells.
 
 **Owning module:** `short_vol_radar` owns score/features/state; `short_vol_underwriting` consumes the
 packet for enrollment and owns schema-v5 Case/Outcome; `radar_runtime` composes and projects without
@@ -148,14 +152,16 @@ recalculating strategy truth.
 - focused tests: authority, Radar Policy/score/engine/reducer, Underwriting Control, Case store,
   Workbench/frontend, and offline report suites;
 - repository gate: `make check`;
-- public observation: `NOT_APPLICABLE` and forbidden in H1;
-- direct source probing, live smoke, state-root creation, and deployment are not part of this task
-  until H2 receives explicit authority.
+- public observation: one H2 bounded read-only smoke after the only V2 start;
+- no direct source-contract probe, market-frequency gate, Policy tuning, repeated start, or
+  runtime-duration acceptance.
 
 ## Definition of done
 
 The V2 score drives the only repository Radar path; trader-visible score truth and Case-derived
 future-Outcome linkage exist; LOW/MID sampling is bounded, future-blind, and never becomes a
 Candidate or admitted Entry; schema-v5 conserves the product/Policy/economic chain; zero pre-Case
-files is proven; direct and full checks pass; one Draft PR contains the bounded H1 change; and the
-running V1 process plus every external root remain untouched.
+files is proven; direct and full checks pass; one Draft PR contains the bounded H1+H2 closure; the
+V1 process is clean-stopped with its root preserved in place; the sole V2 process runs from a clean
+commit on the fresh stable non-temporary root; and the one bounded smoke confirms exact V2
+product/Policy/schema identity and truthful public currentness without claiming an Outcome or Edge.
