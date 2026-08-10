@@ -4,7 +4,7 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
 **Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_SCHEMA7_8675_LIVE_CURRENT`
 
@@ -16,7 +16,46 @@
 
 **Live commands:** `NONE_CONSUMED`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:**
+[`INVERSE_BTC_SHORT_VOL_V2_QUEUE_LAG_ROOT_CAUSE`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_QUEUE_LAG_ROOT_CAUSE.md)
+
+## Active queue-lag repair authority
+
+The trader reports a current Workbench frame near the fixed queue deadline: processing queue lag
+approximately `5.0 s` and latest market-event age approximately `5.2 s`. A fresh Chronicle frame at
+`2026-08-10 22:44 +08:00` independently showed processing lag `4.4 s` and market-event age `4.7 s`
+while the service remained visibly running. The accepted prior locality repair removed one measured
+single-book hotspot, but its direct profile did not include the global one-second time boundary or
+Workbench business projection. It therefore did not establish the complete live bottleneck.
+
+The one authorized `25.020 s` loopback sample is consumed. Across `92` observations, accepted
+ingress advanced by `3,366` frames, approximately `134.6 frames/s`, while queue lag remained between
+`4,106 ms` and `5,041 ms` with `4,600 ms` median. Thirteen observations crossed the fixed currentness
+deadline and changed `RADAR_KNOWN` coverage from `128/128` to `0/128`. Loopback HTTP latency remained
+about `20 ms` median. This directly establishes a processing backlog rather than a slow Workbench
+request; it does not independently identify upstream wire latency because the displayed wire age is
+settled reducer state.
+
+The attributed blocker is `TICKER_CROSS_SECTIONAL_CORE_RECOMPUTATION`. A production-shaped offline
+profile used `128` varied-strike instruments and `135` facts per modeled market second. Before the
+repair, one modeled second consumed `1.268 s` and invoked the full option core calculator `3,907`
+times. The ticker path was recomputing Black inversion and baseline economics for every same-expiry
+and immediately shorter-expiry score peer even though only S/T surface inputs changed. Workbench
+publication measured approximately `26 ms` per one-second publication and is not the primary
+blocker.
+
+The bounded repair keeps the complete cross-sectional dependency and countability semantics, but
+reuses each unchanged peer's current core calculation and recomputes only its S/T score. The
+identical profile consumed `0.675 s` per modeled second and invoked the core calculator `262` times,
+the exact required `67 ticker + 67 book + 128 global` calculations. A causal regression proves that
+one ticker change performs one core calculation while still refreshing an immediately shorter
+expiry's term score. Focused tests and the full repository gate pass, including `732` tests.
+
+The clean bounded branch and Draft PR are authorized. The current `8675` runtime still executes the
+pre-repair identity and may retain the observed backlog until a separately authorized merge,
+pre-stop inventory, clean stop, restart from synchronized `main`, and bounded post-start smoke. No
+additional live sample, PID, host log, resource, network-source, Policy, threshold, universe,
+schema, or state-root operation is authorized by this task stage.
 
 ## Current online boundary
 
