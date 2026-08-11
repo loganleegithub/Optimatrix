@@ -162,14 +162,15 @@ Episode is `UNKNOWN`, ends, or its refresh fails, there is no fallback. At most 
 selected per batch.
 
 Before the action-blind designation is consumed, the owner freezes the canonical activation packet
-for every eligible HIGH member in the batch, not only the hash-designated member. If a different
-HIGH member becomes a fully evaluable Candidate later, its eventual Case selection packet remains
-that member's HIGH activation packet. Current MID/LOW score under hysteresis may be the strictly
-later entry-refresh packet, but can never replace the activation witness or weaken the schema-v5
-HIGH enrollment binding.
+for every eligible HIGH member in the batch, not only the hash-designated member. If a member first
+becomes Underwriting-evaluable after activation, its typed facts still carry the immutable Episode
+packet and the owner freezes it on first encounter. If that member becomes a Candidate later, its
+eventual Case selection packet remains that member's HIGH activation packet. Current MID/LOW score
+under hysteresis may be the strictly later entry-refresh packet, but can never replace the
+activation witness or weaken the schema-v5 HIGH enrollment binding.
 
-The activation packet comes from the Radar Episode itself at its activation boundary, not from a
-best-effort lookup in the mutable current-packet projection.
+The activation packet comes from the Radar Episode itself and is distinct from the mutable current
+packet on every projection. It is transient composition state, not a second durable schema.
 
 The designated Episode's first fully evaluable `CANDIDATE | WATCH | ABSTAIN` freezes the original
 complete predicate-margin vector and schedules one future-blind paired refresh. WATCH/ABSTAIN use

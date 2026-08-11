@@ -182,15 +182,18 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_activation_packet_and_heartbeat_recovery() -> None:
+def test_current_stage_authorizes_typed_activation_packet_and_heartbeat_recovery() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_ACTIVATION_PACKET_AND_TRANSPORT_HEARTBEAT_REPAIR`" in current
+    assert (
+        "`INVERSE_BTC_SHORT_VOL_V2_TYPED_ACTIVATION_PACKET_AND_TRANSPORT_HEARTBEAT_REPAIR`"
+        in current
+    )
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert (
-        "**Persistent service:** `STOPPED_AFTER_FIRST_TWO_ADMISSIONS_AND_PACKET_INTEGRITY_FAILURE`"
+        "**Persistent service:** `STOPPED_AFTER_FOUR_ADMISSIONS_AND_REPEATED_PACKET_HANDOFF_FAILURE`"
         in current
     )
     assert "**Live commands:** `ONE_CHECKED_RECOVERY_CUTOVER_AND_CONTINUED_MONITORING`" in current
@@ -201,18 +204,20 @@ def test_current_stage_authorizes_activation_packet_and_heartbeat_recovery() -> 
     assert "`INTERRUPTED_TERMINAL_CANDIDATE_RETIREMENT_GAP`" in current
     assert "`ORDERED_BUSINESS_QUEUE_HEARTBEAT_TEST_RESPONSE_DELAY`" in current
     assert "`ACTIVATION_PACKET_MUTABLE_PROJECTION_GAP`" in current
+    assert "`EPISODE_ACTIVATION_PACKET_TYPED_HANDOFF_GAP`" in current
     assert "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
-        "6093cd0825cf6c7352d30270ecb2c5742c81182a",
-        "sha256:506d0e32ae3e276704fc3dbee85afddbaefd17170e84e02a4ff94895ffcf0173",
+        "3bb90768b43816700f3c0a9222e45a1c949264be",
+        "sha256:1a34a90f59087a5b93a835332cb308240b48a2a04b27ef78f721d58025d4e53b",
         "`613,931 ms` apart",
         "first `2` admitted Shadow Cases",
+        "validates `4` admitted Cases",
         "non-empty `shadow_entry_identity`",
-        "official policy-aware Case reader validates both admitted Cases",
+        "official policy-aware Case reader now validates `4` admitted Cases",
         "recoverable active Entries",
         "`CENSORED_AT_FAILURE`",
         "No Case was copied, rewritten, migrated, or deleted",

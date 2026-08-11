@@ -934,7 +934,7 @@ def test_high_with_combo_owns_batch_before_low_mid_control_designation() -> None
     assert owner.active_decision_control_identities == frozenset()
 
 
-def test_non_designated_delayed_high_candidate_uses_activation_packet_for_case(
+def test_first_late_high_candidate_uses_episode_activation_packet_for_case(
     tmp_path: Path,
 ) -> None:
     bindings = _bindings()
@@ -1000,20 +1000,7 @@ def test_non_designated_delayed_high_candidate_uses_activation_packet_for_case(
         )
         for index, bucket_key in enumerate(bucket_keys)
     )
-    batch_identity = selected_decision_batch_identity(
-        bindings=bindings,
-        activation_causal_seq=activation.causal_seq,
-    )
-    designated = designate_selected_decision_episode(
-        bindings=bindings,
-        batch_identity=batch_identity,
-        episode_identities=episode_identities,
-    )
-    target_index = next(
-        index
-        for index, episode_identity in enumerate(episode_identities)
-        if episode_identity != designated
-    )
+    target_index = 1
     target_episode = episode_identities[target_index]
     short, long, quote = component_pairs[target_index]
     activation_source = SourceFact(
@@ -1029,6 +1016,8 @@ def test_non_designated_delayed_high_candidate_uses_activation_packet_for_case(
             strict=True,
         )
     ):
+        if index == target_index:
+            continue
         member = replace(
             _review_facts(
                 boundary=activation,
@@ -1092,6 +1081,7 @@ def test_non_designated_delayed_high_candidate_uses_activation_packet_for_case(
         anomaly_activation_seq=activation.causal_seq,
         radar_research_review_identity=None,
         radar_research_activation_seq=None,
+        radar_activation_score_packet=packets[target_index],
         short_delta=Decimal("0.10") if target_index == 0 else Decimal("0.20"),
     )
 

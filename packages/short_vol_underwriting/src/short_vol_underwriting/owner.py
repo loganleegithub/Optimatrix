@@ -157,6 +157,7 @@ class UnderwritingFacts:
     component_pair_witness: ComponentBookPairWitness | None = None
     protective_leg_selection_rule_identity: str | None = None
     candidate_protective_leg_count: int | None = None
+    radar_activation_score_packet: RadarScorePacket | None = None
     radar_score_packet: RadarScorePacket | None = None
     radar_research_review_identity: str | None = None
     radar_research_activation_seq: int | None = None
@@ -822,6 +823,7 @@ class FixedContractShadowOwner:
         boundaries = {member.boundary for member in facts}
         if len(boundaries) != 1:
             raise ValueError("one Underwriting transaction requires one settled boundary")
+        self._remember_activation_score_packets(facts)
         self._register_decision_control_batches(facts)
         facts_by_scope = {member.radar_scope_identity: member for member in facts}
         handled_scopes: set[str] = set()
@@ -1913,6 +1915,49 @@ class FixedContractShadowOwner:
                 or packet.sampling_metadata is not None
             ):
                 raise ValueError("Radar score packet is not bound to its Underwriting facts")
+        activation_packet = facts.radar_activation_score_packet
+        if activation_packet is not None:
+            activation_boundary = FactBoundary.from_object(activation_packet.fact_boundary)
+            expected_activation_seq = (
+                facts.anomaly_activation_seq
+                if facts.active_episode_identity is not None
+                else facts.radar_research_activation_seq
+            )
+            activation_band = activation_packet.result.band
+            if (
+                anchor_identity is None
+                or expected_activation_seq is None
+                or activation_boundary.code_identity != facts.boundary.code_identity
+                or activation_boundary.runtime_identity != facts.boundary.runtime_identity
+                or activation_boundary.causal_seq != expected_activation_seq
+                or activation_boundary.causal_seq > facts.boundary.causal_seq
+                or activation_packet.policy_identity != self.bindings.radar_policy_identity
+                or activation_packet.leader_instrument_name != facts.short_leg_instrument_name
+                or activation_packet.bucket_key.expiry_ms != facts.expiry_ms
+                or activation_packet.bucket_key.option_type.value != facts.option_type
+                or activation_packet.sampling_metadata is not None
+                or (packet is not None and activation_packet.bucket_key != packet.bucket_key)
+                or (
+                    facts.active_episode_identity is not None
+                    and activation_band is not ScoreBand.HIGH
+                )
+                or (
+                    facts.radar_research_review_identity is not None
+                    and activation_band not in {ScoreBand.LOW, ScoreBand.MID}
+                )
+                or anchor_identity
+                != radar_bucket_episode_identity(
+                    runtime_identity=self.bindings.runtime_identity,
+                    policy_identity=self.bindings.radar_policy_identity,
+                    bucket_key=activation_packet.bucket_key,
+                    leader_instrument_name=activation_packet.leader_instrument_name,
+                    score_band=activation_band,
+                    activation_causal_seq=expected_activation_seq,
+                )
+            ):
+                raise ValueError(
+                    "Radar activation score packet is not bound to its Underwriting facts"
+                )
         episode_identity = facts.active_episode_identity
         if episode_identity is None:
             if (
@@ -2814,6 +2859,15 @@ class FixedContractShadowOwner:
         if anchor_identity is None:
             raise RuntimeError("Radar-owned Underwriting facts lack an activation anchor")
         activation_score_packet = self._activation_score_packet_by_episode.get(anchor_identity)
+        supplied_activation_packet = facts.radar_activation_score_packet
+        if (
+            activation_score_packet is not None
+            and supplied_activation_packet is not None
+            and supplied_activation_packet != activation_score_packet
+        ):
+            raise RuntimeError("Radar Episode activation score packet changed")
+        if activation_score_packet is None:
+            activation_score_packet = supplied_activation_packet
         if activation_score_packet is None:
             raise RuntimeError("Radar-owned Underwriting facts lack their activation score packet")
         activation_boundary = FactBoundary.from_object(activation_score_packet.fact_boundary)
@@ -2836,6 +2890,29 @@ class FixedContractShadowOwner:
         ):
             raise RuntimeError("activation score packet is not bound to its Radar Episode")
         return activation_score_packet
+
+    def _remember_activation_score_packets(
+        self,
+        facts: Sequence[UnderwritingFacts],
+    ) -> None:
+        for member in facts:
+            anchor_identity = self._underwriting_anchor_identity(member)
+            if anchor_identity is None:
+                continue
+            activation_packet = member.radar_activation_score_packet
+            expected_activation_seq = (
+                member.anomaly_activation_seq
+                if member.active_episode_identity is not None
+                else member.radar_research_activation_seq
+            )
+            if activation_packet is None and expected_activation_seq == member.boundary.causal_seq:
+                activation_packet = member.radar_score_packet
+            if activation_packet is None:
+                continue
+            previous = self._activation_score_packet_by_episode.get(anchor_identity)
+            if previous is not None and previous != activation_packet:
+                raise RuntimeError("Radar Episode activation score packet changed")
+            self._activation_score_packet_by_episode[anchor_identity] = activation_packet
 
     @staticmethod
     def _score_control_sampling_metadata(
@@ -2994,14 +3071,8 @@ class FixedContractShadowOwner:
                     )
                 continue
             self._decision_control_designated_by_batch[batch_identity] = designated
-            activation_members = high_members if high_members else review_members
-            activation_packets = {
-                anchor_identity: member.radar_score_packet
-                for member in activation_members
-                if (anchor_identity := self._underwriting_anchor_identity(member)) is not None
-            }
             for member_identity in member_identities:
-                activation_packet = activation_packets.get(member_identity)
+                activation_packet = self._activation_score_packet_by_episode.get(member_identity)
                 if activation_packet is None:
                     raise RuntimeError(
                         "decision-control batch member lacks its activation score packet"

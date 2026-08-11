@@ -351,6 +351,7 @@ class AtomicScopeSnapshot:
     anomaly_activation_seq: int
     activation_band_id: str
     score_band: ScoreBand
+    activation_score_packet: RadarScorePacket
     radar_score_packet: RadarScorePacket
     detector_state: DetectorState
     detector_causal_seq: int
@@ -5783,6 +5784,7 @@ class RadarReducer:
             anomaly_activation_seq=anomaly_activation_seq,
             activation_band_id=activation_band_id,
             score_band=episode.score_band,
+            activation_score_packet=activation_packet,
             radar_score_packet=score_packet,
             detector_state=(
                 DetectorState.ANOMALY_ACTIVE

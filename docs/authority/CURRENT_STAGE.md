@@ -6,13 +6,13 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_ACTIVATION_PACKET_AND_TRANSPORT_HEARTBEAT_REPAIR`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_TYPED_ACTIVATION_PACKET_AND_TRANSPORT_HEARTBEAT_REPAIR`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `STOPPED_AFTER_FIRST_TWO_ADMISSIONS_AND_PACKET_INTEGRITY_FAILURE`
+**Persistent service:** `STOPPED_AFTER_FOUR_ADMISSIONS_AND_REPEATED_PACKET_HANDOFF_FAILURE`
 
 **Live commands:** `ONE_CHECKED_RECOVERY_CUTOVER_AND_CONTINUED_MONITORING`
 
@@ -147,24 +147,45 @@ Candidates, and the first `2` admitted Shadow Cases. Both appeared in the API wi
 `shadow_entry_identity` and active Position projections. The following admission stopped
 fail-closed because its Candidate lacked the activation packet required to open a Case. The Radar
 Episode did own that immutable packet; composition incorrectly looked only in the mutable current
-packet cache at the activation boundary. This is
+packet cache at the activation boundary. That first observed defect was
 `ACTIVATION_PACKET_MUTABLE_PROJECTION_GAP`, not an economic or Policy blocker.
 
-The official policy-aware Case reader validates both admitted Cases and returns both as recoverable
-active Entries. Their origin Segments were closed `CENSORED_AT_FAILURE`; no Outcome was fabricated.
-No Case was copied, rewritten, migrated, or deleted. One checked recovery cutover is authorized
-after direct and repository gates pass; it must reuse the stable root and open truthful GAPPED
-Segments for both Entries.
+Code identity `3bb90768b43816700f3c0a9222e45a1c949264be` repaired that exact-boundary lookup and moved the
+Deribit `public/test` response below the business queue. Its checked recovery start restored the two
+existing Entries as GAPPED and subsequently opened two additional admitted Shadow Cases. During
+the first `462` seconds of the intended ten-minute transport gate, the runtime remained `128/128`,
+reported zero reconnects and zero protocol gaps, and kept observed queue lag below `936 ms`. The
+gate was then interrupted by the same fail-closed message, so it is not a completed ten-minute
+heartbeat proof.
+
+The repeated run exposed the broader root cause
+`EPISODE_ACTIVATION_PACKET_TYPED_HANDOFF_GAP`: an Episode can activate before any complete
+Underwriting scope exists. In that path there is no activation-boundary Underwriting fact for the
+owner to freeze, and the later first projection carried only the current score packet rather than
+the Episode-owned activation packet. Selecting the Episode packet only at the activation boundary
+therefore fixed one lookup but not the ownership handoff.
+
+The bounded repair carries the immutable activation packet on every current Episode-owned atomic
+snapshot and transient Underwriting fact until the owner validates and freezes it. A retired scope
+clears that packet together with its Episode anchor. The current packet is still recomputed at the
+current causal boundary, and schema-v5 Case validation is unchanged and remains fail-closed.
+
+The official policy-aware Case reader now validates `4` admitted Cases and returns all four as
+recoverable active Entries. All latest Segments were closed `CENSORED_AT_FAILURE`; two original
+Entries are `GAPPED` with one prior recovery and the two Entries opened by code identity `3bb9076`
+remain `CONTINUOUS`. No Outcome was fabricated and no Case was copied, rewritten, migrated, or
+deleted. One checked recovery cutover is authorized after direct and repository gates pass; it must
+reuse the stable root and open truthful GAPPED Segments for all four Entries.
 
 ## Current online boundary
 
 The last Online Runtime on `127.0.0.1:8675` used clean Draft PR #48 code identity
-`6093cd0825cf6c7352d30270ecb2c5742c81182a` and runtime identity
-`sha256:506d0e32ae3e276704fc3dbee85afddbaefd17170e84e02a4ff94895ffcf0173`
-from `/Users/logan/Optimatrix-runtime`. It is stopped after the handled integrity failure and no
-longer owns the stable-root lease. Its two admitted Entries remain the durable business truth in
+`3bb90768b43816700f3c0a9222e45a1c949264be` and runtime identity
+`sha256:1a34a90f59087a5b93a835332cb308240b48a2a04b27ef78f721d58025d4e53b`
+from `/Users/logan/Optimatrix-runtime`. It is stopped after the repeated integrity failure and no
+longer owns the stable-root lease. Four admitted Entries remain the durable business truth in
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; the next authorized runtime must
-recover both rather than recreate Candidate or admission history.
+recover all four rather than recreate Candidate or admission history.
 
 ## Current product truth
 

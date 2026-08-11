@@ -719,6 +719,7 @@ def test_activation_scope_uses_episode_packet_when_current_packet_cache_is_absen
 
     assert len(snapshots) == 1
     assert snapshots[0].episode_identity == tracker.episode.episode_identity
+    assert snapshots[0].activation_score_packet is activation_packet
     assert snapshots[0].radar_score_packet is activation_packet
 
     intents = adapter.on_settled_transaction(

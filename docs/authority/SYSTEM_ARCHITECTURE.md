@@ -256,12 +256,14 @@ score-countable and invalidate Call/Put peers on the affected expiry plus the im
 expiry whose `T` depends on it; OI/gamma-only changes remain non-countable diagnostics. The existing
 global ticker source-staleness owner is not duplicated.
 
-The Radar Episode is the immutable owner of its activation score packet. At the activation causal
-boundary, composition projects that frozen packet even if the mutable current-packet cache is
-temporarily absent. The Underwriting owner freezes every eligible HIGH member's activation packet
-when the action-blind batch is registered. A later non-designated Candidate consumes its own frozen
-HIGH packet at selection and a truly later recomputed packet at entry refresh; it never relabels
-the current packet as the activation witness.
+The Radar Episode is the immutable owner of its activation score packet. Every current
+Episode-owned atomic snapshot carries that frozen packet separately from the score packet
+recomputed at the snapshot's causal boundary. Composition passes both through the typed transient
+Underwriting boundary, including when the first complete Underwriting scope appears after
+activation. The Underwriting owner validates and freezes every eligible HIGH member's activation
+packet when it first sees the Episode; a retired scope clears the transient binding. A later
+non-designated Candidate consumes its own frozen HIGH packet at selection and a truly later
+recomputed packet at entry refresh; it never relabels the current packet as the activation witness.
 
 `options_domain` owns the one product specification and one component-book calculator. Entry walks
 short bids and long asks at the full target quantity, stresses short sells down one native legal
