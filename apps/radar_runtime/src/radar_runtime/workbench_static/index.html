@@ -4,18 +4,25 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Optimatrix Opportunity Blotter</title>
+  <title>Optimatrix</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
-<body>
-  <a class="skip-link" href="#queue-workspace">跳至机会队列</a>
+<body data-surface="radar">
+  <a class="skip-link" href="#queue-workspace">跳至强信号地图</a>
 
   <header class="topbar">
     <div class="topbar-main">
       <div class="brand-lockup">
-        <h1>Optimatrix Opportunity Blotter</h1>
+        <h1>Optimatrix</h1>
         <span class="environment-badge">只读快照</span>
       </div>
+
+      <nav class="product-nav" aria-label="系统视图">
+        <button type="button" data-queue-mode="radar" aria-pressed="true">Radar 强信号</button>
+        <button type="button" data-queue-mode="structures" aria-pressed="false">Shadow 跟踪</button>
+        <button type="button" aria-disabled="true" disabled>AI 进化</button>
+      </nav>
+
       <div class="topbar-tools">
         <div class="theme-switch" role="group" aria-label="显示主题">
           <button type="button" data-theme-option="light" aria-pressed="true">日间</button>
@@ -44,40 +51,68 @@
     <p id="connection" class="connection-warning" role="alert" hidden></p>
   </header>
 
-  <main id="main-content" class="workspace-shell">
-    <aside class="channel-rail" aria-labelledby="channel-title">
-      <div class="rail-heading">
-        <h2 id="channel-title">策略通道</h2>
-        <span>2 × 2</span>
+  <section class="product-toolbar" aria-label="产品与 Radar 筛选">
+    <div class="product-toolbar-left">
+      <div id="active-product" class="active-product" aria-live="polite">
+        <strong>INVERSE_BTC_SHORT_VOL_V2</strong>
+        <span class="state-badge tone-neutral">等待快照</span>
       </div>
-      <div id="channel-list" class="channel-list" aria-label="产品策略通道"></div>
-      <p class="rail-boundary">
-        只有身份匹配的独立快照才能显示机会。未接入不等于当前机会为零。
-      </p>
-    </aside>
+      <button id="product-matrix-toggle" class="product-matrix-toggle" type="button"
+        aria-expanded="false" aria-controls="channel-rail">产品矩阵 <span id="product-matrix-count">1 / 4</span></button>
+      <span class="surface-boundary">Radar 仅发现强信号；Shadow 与 AI 归因在独立视图</span>
+    </div>
+    <div id="radar-toolbar" class="radar-toolbar">
+      <div class="option-filter" role="group" aria-label="期权类型">
+        <button type="button" data-option-filter="both" aria-pressed="true">Both</button>
+        <button type="button" data-option-filter="put" aria-pressed="false">Put</button>
+        <button type="button" data-option-filter="call" aria-pressed="false">Call</button>
+      </div>
+      <button id="active-only-toggle" class="active-only-toggle" type="button"
+        aria-pressed="false"><span class="toggle-track" aria-hidden="true"><span></span></span>只看 ACTIVE</button>
+    </div>
+  </section>
 
+  <aside id="channel-rail" class="channel-rail" aria-labelledby="channel-title" hidden inert>
+    <div class="rail-heading">
+      <h2 id="channel-title">产品矩阵</h2>
+      <button id="channel-close" class="channel-close" type="button">关闭</button>
+    </div>
+    <div id="channel-list" class="channel-list" aria-label="产品策略通道"></div>
+    <p class="rail-boundary">只有身份匹配的独立快照才能显示机会。未接入不等于当前机会为零。</p>
+  </aside>
+
+  <main id="main-content" class="workspace-shell">
     <section id="queue-workspace" class="queue-workspace" aria-labelledby="queue-title">
       <header class="queue-header">
         <div>
-          <p class="section-kicker">跨产品机会</p>
-          <h2 id="queue-title">统一决策队列</h2>
+          <p id="queue-kicker" class="section-kicker">当前 Radar</p>
+          <h2 id="queue-title">强信号 Strike 地图</h2>
         </div>
         <p id="queue-context" class="queue-context" aria-live="polite"></p>
       </header>
 
-      <div class="queue-controls" aria-label="队列视图与筛选">
-        <div class="segmented-control" id="queue-mode-control" aria-label="队列对象">
-          <button type="button" data-queue-mode="structures" aria-pressed="true">已结算结构</button>
-          <button type="button" data-queue-mode="radar" aria-pressed="false">当前 Radar 线索</button>
+      <section id="radar-map-view" class="radar-map-view" aria-label="强信号 Radar 地图">
+        <div class="radar-map-meta">
+          <p id="queue-status" class="queue-status" aria-live="polite"></p>
+          <div class="signal-legend" aria-label="地图图例">
+            <span><i class="legend-diamond" aria-hidden="true"></i>Leader</span>
+            <span><i class="legend-dot active" aria-hidden="true"></i>ACTIVE</span>
+            <span><i class="legend-dot confirming" aria-hidden="true"></i>CONFIRMING</span>
+          </div>
         </div>
-        <div id="queue-filters" class="filter-row" aria-label="状态筛选"></div>
-      </div>
+        <div id="radar-map" class="radar-map" role="list"></div>
+      </section>
 
-      <div id="queue-status" class="queue-status" aria-live="polite"></div>
-      <div class="queue-table" role="table" aria-label="交易员决策队列">
-        <div id="queue-head" class="queue-table-head" role="row"></div>
-        <div id="queue-body" class="queue-table-body" role="rowgroup"></div>
-      </div>
+      <section id="structure-queue-view" class="structure-queue-view" hidden>
+        <div class="queue-controls" aria-label="结构筛选">
+          <div id="queue-filters" class="filter-row"></div>
+        </div>
+        <div id="structure-status" class="queue-status" aria-live="polite"></div>
+        <div class="queue-table" role="table" aria-label="已结算结构队列">
+          <div id="queue-head" class="queue-table-head" role="row"></div>
+          <div id="queue-body" class="queue-table-body" role="rowgroup"></div>
+        </div>
+      </section>
     </section>
 
     <button id="detail-scrim" class="detail-scrim" type="button" aria-label="关闭详情" hidden></button>
@@ -85,16 +120,13 @@
     <aside id="detail-panel" class="detail-panel" aria-labelledby="detail-title" aria-hidden="true" inert tabindex="-1">
       <header class="detail-header">
         <div>
-          <p class="section-kicker">当前最值得看</p>
-          <h2 id="detail-title">选择一条机会查看详情</h2>
+          <p class="section-kicker">当前信号证据</p>
+          <h2 id="detail-title">选择强信号查看证据</h2>
         </div>
-        <div class="detail-dismiss">
-          <span class="detail-close-hint" aria-hidden="true">Esc 关闭</span>
-          <button id="detail-close" class="detail-close" type="button">关闭详情</button>
-        </div>
+        <button id="detail-close" class="detail-close" type="button">关闭</button>
       </header>
       <div id="detail-content" class="detail-content">
-        <div class="detail-placeholder">从队列中选择一条已结算结构或 Radar 线索。</div>
+        <div class="detail-placeholder">从地图中选择一个强信号。</div>
       </div>
       <div id="detail-actions" class="detail-actions">
         <button id="shadow-jump" class="primary-button" type="button" data-detail-action="shadow">查看 Shadow 条件</button>
@@ -103,9 +135,21 @@
     </aside>
   </main>
 
-  <footer class="status-footer">
-    <span id="footer-summary">规范 Shadow Case — · 等待 Outcome —</span>
-    <span>模拟入场, 不是订单或成交。公共行情反事实，不是订单、成交、实际持仓、流动性预留或账户保证金。</span>
+  <footer class="status-footer" aria-label="系统上下文">
+    <div class="system-context-title">
+      <strong>系统上下文</strong>
+      <span>导航视图</span>
+    </div>
+    <button type="button" class="system-context-item" data-queue-mode="radar">
+      <span>Radar 强信号</span><strong id="footer-radar-count">—</strong>
+    </button>
+    <button type="button" class="system-context-item" data-queue-mode="structures">
+      <span>Shadow 跟踪</span><strong id="footer-shadow-count">—</strong>
+    </button>
+    <div class="system-context-item system-context-disabled">
+      <span>AI Evolution 进化</span><strong>尚未接入 · 独立研究面</strong>
+    </div>
+    <button id="footer-evidence" class="footer-evidence" type="button">查看当前信号证据</button>
   </footer>
 
   <script src="/app.js" defer></script>

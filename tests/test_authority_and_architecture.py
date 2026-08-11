@@ -182,42 +182,39 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_typed_activation_packet_and_heartbeat_recovery() -> None:
+def test_current_stage_authorizes_v2_strong_signal_map_8765_cutover() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_TYPED_ACTIVATION_PACKET_LIVE_VALIDATION`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP_CUTOVER`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_WITH_FOUR_RECOVERED_ADMITTED_ENTRIES`" in current
-    assert "**Live commands:** `CONTINUED_PUBLIC_ONLY_MONITORING`" in current
-    assert "`ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`" in current
-    assert "`OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`" in current
-    assert "`LOSSY_DECIMAL_PACKET_SERIALIZATION`" in current
-    assert "`TERMINAL_ATTEMPT_CANDIDATE_RETIREMENT_GAP`" in current
-    assert "`INTERRUPTED_TERMINAL_CANDIDATE_RETIREMENT_GAP`" in current
-    assert "`ORDERED_BUSINESS_QUEUE_HEARTBEAT_TEST_RESPONSE_DELAY`" in current
-    assert "`ACTIVATION_PACKET_MUTABLE_PROJECTION_GAP`" in current
-    assert "`EPISODE_ACTIVATION_PACKET_TYPED_HANDOFF_GAP`" in current
-    assert "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR" in current
+    assert "`RUNNING_8675_PR48_WITH_FOUR_RECOVERED_ADMITTED_ENTRIES`" in current
+    assert "`ONE_CLEAN_STOP_8675_AND_ONE_CLEAN_START_8765`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
+        "main@d237aaf4579ab041441edebae93a4c56f32031c4",
+        "PR #48",
+        "branch `codex/v2-strong-signal-map` and Draft PR #47",
         "2739ad26745aca2884ed56f296b8d4d3d07ff9cc",
         "sha256:9a6d7f937d08118eb13c15e4dd511d67c8b1c8232b2c69560bf8d402fb377688",
-        "`613,931 ms` apart",
-        "first `2` admitted Shadow Cases",
-        "validates `4` admitted Cases",
-        "non-empty `shadow_entry_identity`",
-        "official policy-aware Case reader now validates `4` admitted Cases",
-        "`REMOTE_CONNECTION_CLOSED` session incident",
-        "zero-reconnect heartbeat gate is therefore falsified",
-        "recoverable active Entries",
-        "`CENSORED_AT_FAILURE`",
-        "No Case was copied, rewritten, migrated, or deleted",
-        "truthful GAPPED Segments",
+        "127.0.0.1:8675",
+        "127.0.0.1:8765",
+        "one clean stop through the existing runtime process handle",
+        "/Users/logan/Optimatrix-runtime",
+        "eligible `HIGH` bucket leaders in `CONFIRMING | ACTIVE`",
+        "may not calculate score, leader, confirmation, forward, history",
+        "clean stop closes the four active Entry Observation Segments",
+        "truthful `HANDOFF_GAP` Segments",
+        "No Case, Entry, Control, or Outcome may be copied, migrated, rewritten, deleted",
+        "Port `8675` must no longer serve after cutover",
+        "failed or consumed start grants no retry",
+        "`RUNNING/CURRENT`, `KNOWN_COMPLETE`, and `128/128`",
+        "one normal remote public-WebSocket close",
     ):
         assert phrase in normalized
     for identity in (
@@ -228,9 +225,10 @@ def test_current_stage_authorizes_typed_activation_packet_and_heartbeat_recovery
     ):
         assert identity in current
     assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
-        "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md",
+        "INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP.md",
         "TEMPLATE.md",
     }
+    assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
 

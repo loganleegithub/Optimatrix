@@ -252,8 +252,14 @@ confirmation observation, and never form a HIGH or LOW/MID Episode. Workbench ma
 server-settled score band, but must label the exact TTE/Delta review constraint instead of rendering
 `0/N` as confirmation progress.
 
-The default Workbench view is bounded Top-N with `ALL` available. It displays the server-owned V2
-score and leader truth and never recomputes either in the browser.
+The default trader view is a bounded current strong-signal map. It selects only clue-eligible
+`HIGH` bucket leaders whose server-owned state is `CONFIRMING | ACTIVE`, reports that count against
+the complete current Radar denominator, and places each visible signal at its exact expiry and
+strike. Ordinary members, LOW/MID Controls, review-only rows, and UNKNOWN rows remain owner truth
+but need not compete for first-screen attention. The selected row exposes packet, coverage,
+missing-factor, blocker, and invalidation evidence on demand. The browser may group and filter these
+exact current fields; it never derives a forward line, interpolates a smile, ranks a new leader,
+calculates confirmation, or infers a Shadow transition.
 
 ## Episode semantics
 

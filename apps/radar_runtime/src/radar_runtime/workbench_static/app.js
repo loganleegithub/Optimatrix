@@ -1,6 +1,6 @@
 const SUPPORTED_SCHEMA_VERSION = 7;
 const ACTIVE_CHANNEL_ID = 'INVERSE_BTC_SHORT_VOL_V2';
-const DRAWER_MEDIA_QUERY = '(max-width: 1471px)';
+const DRAWER_MEDIA_QUERY = '(max-width: 900px)';
 const THEME_STORAGE_KEY = 'optimatrix-workbench-theme';
 const ACTIVE_PRODUCT_SPEC_IDENTITY = 'sha256:a7880d3a0b3da12f74438b292ed49d7c034e683d2e1654037229c62474127131';
 const ACTIVE_POLICY_IDENTITIES = Object.freeze({
@@ -22,15 +22,6 @@ const STRUCTURE_FILTERS = [
   ['CANDIDATE', 'Shadow 候选'],
   ['WATCH', '继续观察'],
   ['ABSTAIN', '暂不参与'],
-  ['UNKNOWN', '暂不可判断']
-];
-
-const RADAR_FILTERS = [
-  ['ALL', '全部'],
-  ['HIGH', 'HIGH'],
-  ['MID', 'MID'],
-  ['LOW', 'LOW'],
-  ['REVIEW', '边界复核'],
   ['UNKNOWN', '暂不可判断']
 ];
 
@@ -376,13 +367,6 @@ const economicsCard = (label, value, meta, variant = '') =>
   `<span class="economics-value">${safeText(value)}</span>` +
   `<span class="economics-meta">${safeText(meta)}</span></div>`;
 
-const stageCount = (documentValue, stageName) => {
-  const stages = documentValue && documentValue.funnel && documentValue.funnel.stages;
-  if (!Array.isArray(stages)) return null;
-  const stage = stages.find(value => value.stage === stageName);
-  return stage ? stage.observed_count : null;
-};
-
 const channelSnapshotState = documentValue => {
   if (!documentValue) {
     return {code: 'UNAVAILABLE', label: '连接中断', tone: 'amber', note: '旧快照已隐藏'};
@@ -606,6 +590,70 @@ const radarState = row => {
   return raw;
 };
 
+const isStrongSignalRow = row => {
+  const result = scorePacketResult(radarScoreView(row));
+  return Boolean(result) && result.band === 'HIGH' &&
+    row.is_bucket_leader === true &&
+    row.clue_eligible_tte === true && row.clue_eligible_delta === true &&
+    row.bucket_episode_leader_instrument_name === row.instrument_name &&
+    row.bucket_episode_score_band === 'HIGH' &&
+    ['CONFIRMING', 'ACTIVE'].includes(row.bucket_episode_state) &&
+    isIdentity(row.bucket_episode_identity);
+};
+
+const scoreLowerBound = row => {
+  const result = scorePacketResult(radarScoreView(row));
+  const value = result && result.score && Number(result.score.lower);
+  return Number.isFinite(value) ? value : null;
+};
+
+const strongSignalRows = documentValue => {
+  const rows = documentValue && documentValue.radar && Array.isArray(documentValue.radar.rows)
+    ? documentValue.radar.rows : [];
+  return [...rows].filter(isStrongSignalRow).sort((left, right) =>
+    Number(left.expiration_timestamp_ms || 0) - Number(right.expiration_timestamp_ms || 0) ||
+    (scoreLowerBound(right) || 0) - (scoreLowerBound(left) || 0) ||
+    Number(left.strike_price || 0) - Number(right.strike_price || 0) ||
+    String(left.instrument_name || '').localeCompare(String(right.instrument_name || ''))
+  );
+};
+
+const filteredStrongSignalRows = documentValue => strongSignalRows(documentValue).filter(row =>
+  (optionFilter === 'both' || row.option_type === optionFilter) &&
+  (!activeOnly || row.bucket_episode_state === 'ACTIVE')
+);
+
+const signalStrikeBounds = documentValue => {
+  const rows = documentValue && documentValue.radar && Array.isArray(documentValue.radar.rows)
+    ? documentValue.radar.rows : [];
+  const strikes = rows
+    .filter(row => optionFilter === 'both' || row.option_type === optionFilter)
+    .map(row => Number(row.strike_price))
+    .filter(Number.isFinite);
+  if (!strikes.length) return null;
+  const lower = Math.min(...strikes);
+  const upper = Math.max(...strikes);
+  return {lower, upper: upper === lower ? lower + 1 : upper};
+};
+
+const signalXPercent = (strike, bounds) => {
+  const numeric = Number(strike);
+  if (!bounds || !Number.isFinite(numeric)) return 50;
+  const raw = (numeric - bounds.lower) / (bounds.upper - bounds.lower);
+  return Math.max(4, Math.min(96, 4 + raw * 92));
+};
+
+const groupStrongSignalsByExpiry = rows => {
+  const groups = new Map();
+  rows.forEach(row => {
+    const key = Number(row.expiration_timestamp_ms);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+  return [...groups.entries()].sort(([left], [right]) => left - right)
+    .map(([expiry, groupRows]) => ({expiry, rows: groupRows}));
+};
+
 const reasonCountsText = values => {
   if (!values || typeof values !== 'object') return '本运行尚未记录';
   const entries = Object.entries(values)
@@ -763,14 +811,6 @@ const orderedStructureRows = rows => [...rows].sort((left, right) =>
   String(left.short_leg_instrument_name || '').localeCompare(String(right.short_leg_instrument_name || ''))
 );
 
-const orderedRadarRows = rows => [...rows].sort((left, right) =>
-  (Number.isFinite(Number(left.attention_rank)) ? Number(left.attention_rank) : 999999) -
-    (Number.isFinite(Number(right.attention_rank)) ? Number(right.attention_rank) : 999999) ||
-  radarState(left).priority - radarState(right).priority ||
-  Number(left.expiration_timestamp_ms || 0) - Number(right.expiration_timestamp_ms || 0) ||
-  String(left.instrument_name || '').localeCompare(String(right.instrument_name || ''))
-);
-
 const predicateMarginForFailure = (row, failedPredicate) => {
   const vector = Array.isArray(row.predicate_margin_vector) ? row.predicate_margin_vector : [];
   const vectorKey = predicateVectorKeys[failedPredicate] || failedPredicate;
@@ -891,15 +931,17 @@ let lastPublicationChangeAtMs = null;
 let refreshInFlight = false;
 const retiredRuntimeIdentities = new Set();
 let currentDocument = null;
-let selectedChannelId = 'ALL';
-let queueMode = 'structures';
+let selectedChannelId = ACTIVE_CHANNEL_ID;
+let queueMode = 'radar';
 let structureFilter = 'ALL';
-let radarFilter = 'ALL';
+let optionFilter = 'both';
+let activeOnly = false;
 let selectedStructureId = null;
 let selectedRadarId = null;
 let drawerOpen = false;
 let lastDetailTriggerId = null;
 let evidenceExpanded = false;
+let productMatrixOpen = false;
 
 const isDrawerViewport = () => typeof window !== 'undefined' &&
   typeof window.matchMedia === 'function' && window.matchMedia(DRAWER_MEDIA_QUERY).matches;
@@ -914,7 +956,7 @@ const captureFocusIdentity = () => {
   const active = document.activeElement;
   if (!active || active === document.body) return null;
   if (active.id) return {kind: 'id', value: active.id};
-  for (const key of ['channelId', 'queueMode', 'queueFilter', 'rowId']) {
+  for (const key of ['channelId', 'queueMode', 'queueFilter', 'optionFilter', 'rowId']) {
     if (active.dataset && active.dataset[key]) return {kind: key, value: active.dataset[key]};
   }
   if (typeof active.matches === 'function' && active.matches('[data-evidence-details] summary')) {
@@ -942,11 +984,11 @@ function updateResponsiveDetailState() {
   const scrim = document.getElementById('detail-scrim');
   if (!panel || !scrim) return;
   const drawer = isDrawerViewport();
-  const open = drawer && drawerOpen;
+  const open = drawerOpen;
   if (document.body && document.body.classList) {
     document.body.classList.toggle('detail-open', open);
   }
-  panel.setAttribute('aria-hidden', drawer && !open ? 'true' : 'false');
+  panel.setAttribute('aria-hidden', open ? 'false' : 'true');
   if (drawer) {
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-modal', 'true');
@@ -954,11 +996,12 @@ function updateResponsiveDetailState() {
     panel.setAttribute('role', 'complementary');
     panel.removeAttribute('aria-modal');
   }
-  scrim.hidden = !open;
-  setElementInert('.channel-rail', open);
-  setElementInert('.queue-workspace', open);
-  setElementInert('.topbar', open);
-  setElementInert('#detail-panel', drawer && !open);
+  scrim.hidden = !(drawer && open);
+  setElementInert('.queue-workspace', drawer && open);
+  setElementInert('.topbar', drawer && open);
+  setElementInert('.product-toolbar', drawer && open);
+  setElementInert('.status-footer', drawer && open);
+  setElementInert('#detail-panel', !open);
 }
 
 function focusDetailPanel() {
@@ -970,11 +1013,12 @@ function focusDetailPanel() {
 
 function openDetail(rowId) {
   lastDetailTriggerId = rowId;
-  if (!isDrawerViewport()) return;
   drawerOpen = true;
   updateResponsiveDetailState();
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(focusDetailPanel);
-  else focusDetailPanel();
+  if (isDrawerViewport()) {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(focusDetailPanel);
+    else focusDetailPanel();
+  }
 }
 
 function restoreDetailTriggerFocus() {
@@ -985,7 +1029,6 @@ function restoreDetailTriggerFocus() {
 }
 
 function closeDetail() {
-  if (!isDrawerViewport()) return;
   drawerOpen = false;
   updateResponsiveDetailState();
   restoreDetailTriggerFocus();
@@ -995,13 +1038,6 @@ function renderChannelRail(documentValue) {
   const list = document.getElementById('channel-list');
   if (!list) return;
   const currentState = channelSnapshotState(documentValue);
-  const allState = currentState.code === 'CONNECTED'
-    ? {label: '1 / 4 已接入', tone: 'purple', note: '仅一条真实通道'}
-    : {label: currentState.label, tone: currentState.tone, note: currentState.note};
-  const allCard = `<button type="button" class="channel-card all-opportunities" data-channel-id="ALL" ` +
-    `aria-pressed="${selectedChannelId === 'ALL'}"><span class="channel-name">全部机会</span>` +
-    `<span class="channel-meta">${badgeMarkup(allState.label, allState.tone)}` +
-    `<span class="channel-note">${safeText(allState.note)}</span></span></button>`;
   const cards = CHANNELS.map(channel => {
     const state = channel.id === ACTIVE_CHANNEL_ID ? currentState : roadmapState(channel);
     return `<button type="button" class="channel-card" data-channel-id="${escapeHtml(channel.id)}" ` +
@@ -1010,7 +1046,44 @@ function renderChannelRail(documentValue) {
       `<span class="channel-meta">${badgeMarkup(state.label, state.tone)}` +
       `<span class="channel-note">${safeText(state.note)}</span></span></button>`;
   }).join('');
-  list.innerHTML = allCard + cards;
+  list.innerHTML = cards;
+}
+
+function setProductMatrixOpen(open) {
+  productMatrixOpen = Boolean(open);
+  const rail = document.getElementById('channel-rail');
+  const toggle = document.getElementById('product-matrix-toggle');
+  if (!rail || !toggle) return;
+  rail.hidden = !productMatrixOpen;
+  rail.inert = !productMatrixOpen;
+  toggle.setAttribute('aria-expanded', String(productMatrixOpen));
+}
+
+function renderProductToolbar(documentValue) {
+  const activeProduct = document.getElementById('active-product');
+  const count = document.getElementById('product-matrix-count');
+  const radarToolbar = document.getElementById('radar-toolbar');
+  const activeToggle = document.getElementById('active-only-toggle');
+  if (!activeProduct || !count || !radarToolbar || !activeToggle) return;
+  const activeChannel = CHANNELS.find(channel => channel.id === selectedChannelId);
+  const state = selectedChannelId === ACTIVE_CHANNEL_ID
+    ? channelSnapshotState(documentValue)
+    : roadmapState(activeChannel || {id: ''});
+  activeProduct.innerHTML = `<strong>${safeText(activeChannel ? activeChannel.id : ACTIVE_CHANNEL_ID)}</strong>` +
+    badgeMarkup(state.label, state.tone);
+  count.textContent = '1 / 4';
+  radarToolbar.hidden = queueMode !== 'radar';
+  activeToggle.setAttribute('aria-pressed', String(activeOnly));
+  if (document.body) document.body.dataset.surface = queueMode;
+  if (typeof document.querySelectorAll === 'function') {
+    document.querySelectorAll('[data-option-filter]').forEach(button => {
+      button.setAttribute('aria-pressed', String(button.dataset.optionFilter === optionFilter));
+    });
+    document.querySelectorAll('[data-queue-mode]').forEach(button => {
+      button.setAttribute('aria-pressed', String(button.dataset.queueMode === queueMode));
+    });
+  }
+  setProductMatrixOpen(productMatrixOpen);
 }
 
 function renderHeader(documentValue) {
@@ -1045,7 +1118,7 @@ function renderHeader(documentValue) {
 }
 
 const selectedChannelCanUseCurrentSnapshot = documentValue =>
-  ['ALL', ACTIVE_CHANNEL_ID].includes(selectedChannelId) &&
+  selectedChannelId === ACTIVE_CHANNEL_ID &&
   channelSnapshotState(documentValue).code === 'CONNECTED';
 
 function visibleRows(documentValue) {
@@ -1054,20 +1127,19 @@ function visibleRows(documentValue) {
     const rows = structureQueueRows(documentValue);
     return structureFilter === 'ALL' ? rows : rows.filter(row => structureState(row).key === structureFilter);
   }
-  const rows = orderedRadarRows(documentValue.radar.rows);
-  return radarFilter === 'ALL' ? rows : rows.filter(row => radarState(row).key === radarFilter);
+  return filteredStrongSignalRows(documentValue);
 }
 
 function totalRows(documentValue) {
   if (!selectedChannelCanUseCurrentSnapshot(documentValue)) return [];
   return queueMode === 'structures'
     ? structureQueueRows(documentValue)
-    : orderedRadarRows(documentValue.radar.rows);
+    : documentValue.radar.rows;
 }
 
 function renderFilters() {
-  const filters = queueMode === 'structures' ? STRUCTURE_FILTERS : RADAR_FILTERS;
-  const selected = queueMode === 'structures' ? structureFilter : radarFilter;
+  const filters = STRUCTURE_FILTERS;
+  const selected = structureFilter;
   document.getElementById('queue-filters').innerHTML = filters.map(([value, label]) =>
     `<button type="button" data-queue-filter="${escapeHtml(value)}" ` +
     `aria-pressed="${selected === value}">${escapeHtml(label)}</button>`
@@ -1080,9 +1152,7 @@ function renderFilters() {
 }
 
 function renderQueueHead() {
-  const labels = queueMode === 'structures'
-    ? ['优先级', '策略通道', '结构', '决策', '入场经济', '首项门槛差']
-    : ['优先级', '策略通道', '合约', 'Score band', 'V2 分数', '覆盖 / 阻塞'];
+  const labels = ['优先级', '策略通道', '结构', '决策', '入场经济', '首项门槛差'];
   document.getElementById('queue-head').innerHTML = labels.map(value =>
     `<span role="columnheader">${escapeHtml(value)}</span>`
   ).join('');
@@ -1113,28 +1183,75 @@ function structureRowMarkup(row, index) {
     `<span class="cell-secondary">${safeText(failure.label)}</span></span></button>`;
 }
 
-function radarRowMarkup(row, index) {
+const signalMarkerMarkup = (row, index, bounds) => {
   const id = radarIdentity(row, index);
-  const state = radarState(row);
-  const packet = radarScoreView(row);
-  const result = scorePacketResult(packet);
-  const rank = isMissing(row.attention_rank) ? index + 1 : row.attention_rank;
-  return `<button type="button" class="queue-row radar-row" role="row" ` +
-    `data-row-id="${escapeHtml(id)}" aria-pressed="${selectedRadarId === id}">` +
-    `<span class="queue-priority" role="cell">${safeText(rank)}</span>` +
-    `<span role="cell"><span class="cell-primary">BTC Short Vol</span>` +
-    `<span class="cell-secondary">${escapeHtml(ACTIVE_CHANNEL_ID)}</span></span>` +
-    `<span role="cell"><span class="cell-primary">${safeText(row.instrument_name)}</span>` +
-    `<span class="cell-secondary">${safeText(formatDate(row.expiration_timestamp_ms))} · ${safeText(formatStrike(row.strike_price))} ${safeText(optionTypeText(row.option_type))}</span></span>` +
-    `<span role="cell">${badgeMarkup(state.label, state.tone, 'decision-badge')}</span>` +
-    `<span role="cell"><span class="cell-value">${safeText(scoreIntervalText(packet))}</span>` +
-    `<span class="cell-secondary">Premium ${safeText(scoreComponentText(packet, 'premium_evidence'))} · Risk ${safeText(scoreComponentText(packet, 'risk_quality'))}</span></span>` +
-    `<span role="cell"><span class="cell-primary">${safeText(scoreCoverageText(packet))}</span>` +
-    `<span class="cell-secondary">${safeText(result ? `leader ${packet.leader_instrument_name}` : reasonText(row.primary_blocker || row.detector_reason))}</span></span></button>`;
+  const score = scoreLowerBound(row);
+  const state = row.bucket_episode_state;
+  const optionClass = row.option_type === 'call' ? 'call' : 'put';
+  const stateClass = state === 'ACTIVE' ? 'active' : 'confirming';
+  const confirmation = `${displayText(row.confirmation_observation_count)}/${displayText(row.required_confirmation_observation_count)}`;
+  return `<button type="button" class="signal-marker ${optionClass} ${stateClass}" role="listitem" ` +
+    `data-row-id="${escapeHtml(id)}" aria-pressed="${selectedRadarId === id}" ` +
+    `aria-label="${safeText(`${row.instrument_name}，V2 Score ${score === null ? '未知' : formatCompactNumber(score, 1)}，${state}`)}" ` +
+    `style="--signal-x:${signalXPercent(row.strike_price, bounds)}%">` +
+      `<span class="signal-leader-mark" aria-hidden="true"></span>` +
+      `<span class="signal-card"><small>${safeText(formatCompactNumber(row.strike_price, 0))}</small>` +
+      `<strong>${safeText(score === null ? '—' : formatCompactNumber(score, 1))}</strong>` +
+      `<em>${safeText(state === 'ACTIVE' ? 'ACTIVE' : confirmation)}</em></span>` +
+      `<span class="signal-state-ring" aria-hidden="true"></span>` +
+    `</button>`;
+};
+
+const signalAxisMarkup = bounds => {
+  if (!bounds) return '';
+  const labels = Array.from({length: 7}, (_, index) =>
+    bounds.lower + (bounds.upper - bounds.lower) * index / 6);
+  return `<div class="signal-axis" aria-hidden="true">${labels.map(value =>
+    `<span>${safeText(formatCompactNumber(value, 0))}</span>`).join('')}</div>`;
+};
+
+function renderRadarMap(documentValue, rows) {
+  const map = document.getElementById('radar-map');
+  if (!map) return;
+  if (!selectedChannelCanUseCurrentSnapshot(documentValue) || !rows.length) {
+    map.innerHTML = `<div class="signal-map-empty">${emptyQueueMarkup(documentValue)}</div>`;
+    return;
+  }
+  const bounds = signalStrikeBounds(documentValue);
+  const allRadarRows = documentValue.radar.rows;
+  const scopeGroups = new Map();
+  allRadarRows.filter(row =>
+    (optionFilter === 'both' || row.option_type === optionFilter) &&
+    Number.isFinite(Number(row.expiration_timestamp_ms)) &&
+    Number.isFinite(Number(row.strike_price))
+  ).forEach(row => {
+    const expiry = Number(row.expiration_timestamp_ms);
+    if (!scopeGroups.has(expiry)) scopeGroups.set(expiry, []);
+    scopeGroups.get(expiry).push(row);
+  });
+  const groups = [...scopeGroups.entries()].sort(([left], [right]) => left - right)
+    .map(([expiry, scopeRows]) => ({
+      expiry,
+      scopeRows,
+      rows: rows.filter(row => Number(row.expiration_timestamp_ms) === expiry)
+    }));
+  const selected = rows.find((row, index) => radarIdentity(row, index) === selectedRadarId);
+  const lanes = groups.map(group => {
+    const ticks = group.scopeRows.map(row =>
+      `<span class="scope-tick" style="--signal-x:${signalXPercent(row.strike_price, bounds)}%"></span>`
+    ).join('');
+    const isCurrent = selected && Number(selected.expiration_timestamp_ms) === group.expiry;
+    return `<section class="signal-lane" aria-current="${isCurrent ? 'true' : 'false'}">` +
+      `<div class="signal-lane-label"><strong>${safeText(formatDate(group.expiry))}</strong>` +
+      `<span>${safeText(formatDurationInterval(group.scopeRows[0].tte_interval_ms))}</span></div>` +
+      `<div class="signal-lane-track">${ticks}${group.rows.map((row, index) =>
+        signalMarkerMarkup(row, index, bounds)).join('')}</div></section>`;
+  }).join('');
+  map.innerHTML = lanes + signalAxisMarkup(bounds);
 }
 
 function emptyQueueMarkup(documentValue) {
-  if (!["ALL", ACTIVE_CHANNEL_ID].includes(selectedChannelId)) {
+  if (selectedChannelId !== ACTIVE_CHANNEL_ID) {
     const channel = CHANNELS.find(value => value.id === selectedChannelId);
     const state = channel ? roadmapState(channel) : roadmapState({id: ''});
     return `<div class="queue-empty"><strong>${safeText(state.label)}：${safeText(channel && channel.id)}</strong>` +
@@ -1152,36 +1269,50 @@ function emptyQueueMarkup(documentValue) {
 function renderQueue(documentValue) {
   const table = document.querySelector && document.querySelector('.queue-table');
   const previousScrollTop = table ? table.scrollTop : 0;
-  renderFilters();
-  renderQueueHead();
   const rows = visibleRows(documentValue);
   const total = totalRows(documentValue);
+  const allStrong = selectedChannelCanUseCurrentSnapshot(documentValue)
+    ? strongSignalRows(documentValue) : [];
   const body = document.getElementById('queue-body');
+  const mapView = document.getElementById('radar-map-view');
+  const structureView = document.getElementById('structure-queue-view');
+  const title = document.getElementById('queue-title');
+  const kicker = document.getElementById('queue-kicker');
   const context = document.getElementById('queue-context');
   const status = document.getElementById('queue-status');
-  const roadmapOnly = !['ALL', ACTIVE_CHANNEL_ID].includes(selectedChannelId);
+  const structureStatus = document.getElementById('structure-status');
+  const roadmapOnly = selectedChannelId !== ACTIVE_CHANNEL_ID;
   const snapshotState = channelSnapshotState(documentValue);
-  context.textContent = queueMode === 'structures'
-    ? '结构队列与 Radar 线索分开呈现，避免浏览器误拼不同 Episode。'
-    : '这里只显示当前 Radar 合约事实，不把线索称为 Candidate。';
-  if (roadmapOnly) {
-    status.textContent = '尚未接入 · 无独立队列快照';
-  } else if (snapshotState.code !== 'CONNECTED') {
-    status.textContent = `${snapshotState.label} · 不报告业务零值`;
+  mapView.hidden = queueMode !== 'radar';
+  structureView.hidden = queueMode !== 'structures';
+  if (queueMode === 'structures') {
+    renderFilters();
+    renderQueueHead();
+    kicker.textContent = '当前 Shadow';
+    title.textContent = '已结算结构队列';
+    context.textContent = 'Radar、Shadow 与 AI 研究分面呈现；浏览器不按合约名拼接 Episode。';
+    if (roadmapOnly) structureStatus.textContent = '尚未接入 · 无独立队列快照';
+    else if (snapshotState.code !== 'CONNECTED') structureStatus.textContent = `${snapshotState.label} · 不报告业务零值`;
+    else structureStatus.textContent = `显示 ${rows.length} / ${total.length} · 按服务器已结算结构状态排序`;
+    if (!rows.length) {
+      body.innerHTML = emptyQueueMarkup(documentValue);
+    } else {
+      const ids = rows.map(structureIdentity);
+      if (!selectedStructureId || !ids.includes(selectedStructureId)) selectedStructureId = ids[0];
+      body.innerHTML = rows.map(structureRowMarkup).join('');
+    }
   } else {
-    status.textContent = `显示 ${rows.length} / ${total.length} · ` +
-      (queueMode === 'structures' ? '按服务器已结算的结构状态排序' : '按服务器 Attention rank 排序');
-  }
-  if (!rows.length) {
-    body.innerHTML = emptyQueueMarkup(documentValue);
-  } else if (queueMode === 'structures') {
-    const ids = rows.map(structureIdentity);
-    if (!selectedStructureId || !ids.includes(selectedStructureId)) selectedStructureId = ids[0];
-    body.innerHTML = rows.map(structureRowMarkup).join('');
-  } else {
+    kicker.textContent = '当前 Radar';
+    title.textContent = '强信号 Strike 地图';
+    context.textContent = '只提升服务器已确认的 HIGH bucket leader；不是交易指令，也不是 Shadow Entry。';
+    if (roadmapOnly) status.textContent = '尚未接入 · 无独立 Radar 快照';
+    else if (snapshotState.code !== 'CONNECTED') status.textContent = `${snapshotState.label} · 不报告业务零值`;
+    else status.textContent = `${rows.length} 个当前可见 / ${allStrong.length} 个强信号 / ${total.length} 个扫描合约`;
     const ids = rows.map(radarIdentity);
-    if (!selectedRadarId || !ids.includes(selectedRadarId)) selectedRadarId = ids[0];
-    body.innerHTML = rows.map(radarRowMarkup).join('');
+    const selectionChanged = !selectedRadarId || !ids.includes(selectedRadarId);
+    if (selectionChanged) selectedRadarId = ids[0] || null;
+    if (selectionChanged && selectedRadarId && !isDrawerViewport()) drawerOpen = true;
+    renderRadarMap(documentValue, rows);
   }
   if (table) table.scrollTop = previousScrollTop;
 }
@@ -1397,66 +1528,72 @@ function structureDetailMarkup(row, documentValue) {
     rawEvidenceMarkup(row.shadow_entry_projection || row);
 }
 
+const scoreMetricWidth = (result, member) => {
+  const value = result && result[member] && Number(result[member].lower);
+  return Number.isFinite(value) ? Math.max(0, Math.min(100, value * 100)) : 0;
+};
+
 function radarDetailMarkup(row, documentValue) {
-  const state = radarState(row);
   const packet = radarScoreView(row);
   const result = scorePacketResult(packet);
-  const oi = packet && packet.oi_diagnostic && typeof packet.oi_diagnostic === 'object'
-    ? packet.oi_diagnostic : null;
-  const delta = formatInterval(row.delta_interval, value => formatCompactNumber(value, 3));
+  const deltaBucket = packet && packet.bucket_key && packet.bucket_key.delta_bucket;
   const funnel = documentValue && documentValue.funnel && typeof documentValue.funnel === 'object'
     ? documentValue.funnel : {};
   const confirmation = funnel.radar_confirmation && typeof funnel.radar_confirmation === 'object'
     ? funnel.radar_confirmation : {};
   const controlResearch = funnel.decision_control_research &&
     typeof funnel.decision_control_research === 'object' ? funnel.decision_control_research : {};
-  return `<div class="detail-title-line"><h3>INVERSE BTC × SHORT VOL</h3>` +
-    `${badgeMarkup(state.label, state.tone, 'decision-badge')}</div>` +
-    `<p class="detail-subtitle">${safeText(row.instrument_name)} · ${safeText(formatDate(row.expiration_timestamp_ms))}</p>` +
-    `<div class="fact-grid">` +
-      factMarkup('TTE', formatDurationInterval(row.tte_interval_ms)) +
-      factMarkup('执行价', formatDecimal(row.strike_price)) +
-      factMarkup('Delta', delta) +
-      factMarkup('Score', scoreIntervalText(packet)) +
-      factMarkup('Band', result && result.band) +
-      factMarkup('Coverage', scoreCoverageText(packet)) +
+  const oi = packet && packet.oi_diagnostic && typeof packet.oi_diagnostic === 'object'
+    ? packet.oi_diagnostic : null;
+  return `<div class="signal-detail-head"><h3>${safeText(row.instrument_name)}</h3>` +
+    `${badgeMarkup('Leader', 'purple', 'decision-badge')}</div>` +
+    `<div class="signal-detail-grid">` +
+      `<div class="signal-detail-fact"><span>V2 Score</span><strong class="signal-score">${safeText(scoreIntervalText(packet))}</strong></div>` +
+      `<div class="signal-detail-fact"><span>状态</span><strong>${safeText(radarConfirmationText(row))}</strong></div>` +
+      `<div class="signal-detail-fact"><span>到期 / TTE</span><strong>${safeText(formatDate(row.expiration_timestamp_ms))}<br>${safeText(formatDurationInterval(row.tte_interval_ms))}</strong></div>` +
+      `<div class="signal-detail-fact"><span>Delta Bucket</span><strong>${safeText(deltaBucket)}</strong></div>` +
     `</div>` +
-    `<section class="detail-section"><div class="detail-section-title"><h4>V2 score decomposition</h4>` +
-      `<span class="detail-section-note">服务器结算 · 非概率、非 Edge</span></div>` +
-      `<div class="economics-grid">` +
-        economicsCard('Score', scoreIntervalText(packet), `Band ${displayText(result && result.band)}`, state.key === 'HIGH' ? 'positive' : '') +
-        economicsCard('Premium evidence', scoreComponentText(packet, 'premium_evidence'), 'A + optional S/T') +
-        economicsCard('Risk quality', scoreComponentText(packet, 'risk_quality'), 'D + E') +
-        economicsCard('Coverage', scoreCoverageText(packet), '缺失不填中性值') +
-      `</div></section>` +
-    `<section class="detail-section"><div class="detail-section-title"><h4>A / S / T / D / E</h4>` +
-      `<span class="detail-section-note">原始输入保留在 packet 证据中</span></div>` +
-      `${scoreFactorMarkup(packet)}</section>` +
-    `<section class="detail-section"><div class="detail-section-title"><h4>Bucket 与 leader</h4></div>` +
-      `<div class="callout-list">` +
-        `<div class="callout info"><strong>Bucket</strong>${safeText(scoreBucketText(packet))}</div>` +
-        `<div class="callout info"><strong>Leader</strong>${safeText(packet && packet.leader_instrument_name)}</div>` +
-        `<div class="callout info"><strong>Episode 状态</strong>${safeText(radarConfirmationText(row))}</div>` +
-        `<div class="callout blocker"><strong>当前阻塞</strong>${safeText(reasonText(row.primary_blocker || row.detector_reason))}</div>` +
-        `<div class="callout upgrade"><strong>升级条件</strong>${safeText(reasonText(row.upgrade_condition))}</div>` +
-        `<div class="callout invalidation"><strong>失效条件</strong>${safeText(reasonText(row.invalidation_condition))}</div>` +
-      `</div></section>` +
-    `<section class="detail-section"><div class="detail-section-title"><h4>只读诊断</h4></div>` +
-      `<div class="fact-grid">` +
-        factMarkup('Unsigned OI / gamma', oi && oi.state) +
-        factMarkup('OI concentration', oi && formatPercent(oi.concentration_share)) +
-        factMarkup('Dealer gamma sign', oi && oi.dealer_gamma_sign) +
-        factMarkup('Legacy V1 1.20 threshold', `${legacyDiagnosticText(packet)} · diagnostic only`) +
-      `</div><div class="data-gap-panel">Legacy threshold 与 unsigned OI/gamma 只作诊断；不驱动第二个 V1 detector，不声明 dealer 仓位方向。</div></section>` +
-    `<section class="detail-section"><div class="detail-section-title"><h4>本 Runtime 有界归因</h4>` +
-      `<span class="detail-section-note">累计诊断 · 非本行因果归因</span></div>` +
-      `<div class="callout-list">` +
-        `<div class="callout info"><strong>非零确认归零</strong>${safeText(reasonCountsText(confirmation.reset_counts))}</div>` +
-        `<div class="callout info"><strong>KNOWN_NO_CONTROL</strong>${safeText(reasonCountsText(controlResearch.known_no_control_reason_counts))}</div>` +
-      `</div><div class="data-gap-panel">只统计本 Runtime 内已经实际发生的固定原因；不补写重启前历史，不是 Episode、交易频率或收益结论。</div></section>` +
-    `<section class="detail-section"><div class="data-gap-panel"><strong>关联边界：</strong>` +
-      `本行只信任 packet 内的 bucket、leader 与 fact boundary；不会按合约名拼接 Candidate 或 Shadow 状态。</div></section>` +
-    rawEvidenceMarkup(row);
+    `<div class="signal-metrics">` +
+      `<div class="signal-metric"><div class="signal-metric-head"><span>Premium Strength (A/S/T)</span>` +
+      `<strong>${safeText(scoreComponentText(packet, 'premium_evidence'))}</strong></div>` +
+      `<div class="signal-meter" style="--meter-value:${scoreMetricWidth(result, 'premium_evidence')}%"><span></span></div></div>` +
+      `<div class="signal-metric risk"><div class="signal-metric-head"><span>Risk Quality (D/E)</span>` +
+      `<strong>${safeText(scoreComponentText(packet, 'risk_quality'))}</strong></div>` +
+      `<div class="signal-meter" style="--meter-value:${scoreMetricWidth(result, 'risk_quality')}%"><span></span></div></div>` +
+    `</div>` +
+    `<p class="signal-summary">服务器将该 bucket leader 结算为 ${safeText(result && result.band)}；` +
+      `当前覆盖为 ${safeText(scoreCoverageText(packet))}。</p>` +
+    `<p class="signal-nonclaim">只读发现信号 · 非交易指令 · 尚未形成 Shadow Entry</p>` +
+    `<details class="signal-evidence" data-evidence-details${evidenceExpanded ? ' open' : ''}>` +
+      `<summary>查看完整证据</summary><div class="signal-evidence-body">` +
+        `<div class="fact-grid">` +
+          factMarkup('Bucket', scoreBucketText(packet)) +
+          factMarkup('Leader coverage', packet && packet.leader_coverage) +
+          factMarkup('执行价', formatDecimal(row.strike_price)) +
+          factMarkup('Delta', formatInterval(row.delta_interval, value => formatCompactNumber(value, 3))) +
+        `</div>` +
+        scoreFactorMarkup(packet) +
+        `<div class="callout-list">` +
+          `<div class="callout info"><strong>Episode</strong>${safeText(radarConfirmationText(row))}</div>` +
+          `<div class="callout blocker"><strong>当前 Radar 条件</strong>${safeText(reasonText(row.primary_blocker || row.detector_reason))}</div>` +
+          `<div class="callout upgrade"><strong>升级条件</strong>${safeText(reasonText(row.upgrade_condition))}</div>` +
+          `<div class="callout invalidation"><strong>失效条件</strong>${safeText(reasonText(row.invalidation_condition))}</div>` +
+        `</div>` +
+        `<div class="fact-grid">` +
+          factMarkup('Unsigned OI / gamma', oi && oi.state) +
+          factMarkup('OI concentration', oi && formatPercent(oi.concentration_share)) +
+          factMarkup('Legacy V1 threshold', `${legacyDiagnosticText(packet)} · diagnostic only`) +
+          factMarkup('Fact boundary', packet && packet.fact_boundary && packet.fact_boundary.causal_seq) +
+        `</div>` +
+        `<div class="data-gap-panel">Legacy threshold 与 unsigned OI/gamma 只作诊断；不驱动第二个 V1 detector，不声明 dealer 仓位方向。</div>` +
+        `<div class="callout-list"><div class="callout info"><strong>非零确认归零</strong>` +
+          `${safeText(reasonCountsText(confirmation.reset_counts))}</div>` +
+          `<div class="callout info"><strong>KNOWN_NO_CONTROL</strong>` +
+          `${safeText(reasonCountsText(controlResearch.known_no_control_reason_counts))}</div></div>` +
+        `<div class="data-gap-panel">本 Runtime 累计诊断仅用于有界归因，非本行因果归因；` +
+          `本行只信任 packet 内的 bucket、leader 与 fact boundary，不按合约名拼接 Candidate 或 Shadow 状态。</div>` +
+        `<pre class="evidence-raw">${escapeHtml(JSON.stringify(row, null, 2))}</pre>` +
+      `</div></details>`;
 }
 
 function selectedRow(documentValue) {
@@ -1479,13 +1616,14 @@ function renderDetail(documentValue) {
   const shadowJump = document.getElementById('shadow-jump');
   const evidenceToggle = document.getElementById('evidence-toggle');
   if (!row) {
+    drawerOpen = false;
     title.textContent = '当前没有可显示的详情';
     content.innerHTML = `<div class="detail-placeholder">${emptyQueueMarkup(documentValue)}</div>`;
   } else if (queueMode === 'structures') {
     title.textContent = '已结算结构详情';
     content.innerHTML = structureDetailMarkup(row, documentValue);
   } else {
-    title.textContent = 'Radar 线索详情';
+    title.textContent = '强信号证据';
     content.innerHTML = radarDetailMarkup(row, documentValue);
   }
   if (shadowJump) shadowJump.hidden = !row || queueMode !== 'structures';
@@ -1498,21 +1636,24 @@ function renderDetail(documentValue) {
 }
 
 function renderFooter(documentValue) {
-  const footer = document.getElementById('footer-summary');
-  if (!documentValue) {
-    footer.textContent = '规范 Shadow Case — · 等待 Outcome —';
+  const radarCount = document.getElementById('footer-radar-count');
+  const shadowCount = document.getElementById('footer-shadow-count');
+  const evidence = document.getElementById('footer-evidence');
+  if (!radarCount || !shadowCount || !evidence) return;
+  if (!documentValue || !selectedChannelCanUseCurrentSnapshot(documentValue)) {
+    radarCount.textContent = '—';
+    shadowCount.textContent = '—';
+    evidence.disabled = true;
     return;
   }
-  const cases = stageCount(documentValue, 'SHADOW_CASE_OPENED');
-  const outcomes = stageCount(documentValue, 'SHADOW_CASE_OUTCOME');
-  const pending = cases === null || outcomes === null ? null : Math.max(0, Number(cases) - Number(outcomes));
-  const research = documentValue.funnel && documentValue.funnel.decision_control_research;
-  const controls = research ? research.decision_case_opened_count : null;
-  footer.textContent = `规范 Shadow Case ${formatCompactNumber(cases, 0)} · 等待 Outcome ${formatCompactNumber(pending, 0)} · 无交易研究对照 ${formatCompactNumber(controls, 0)}`;
+  radarCount.textContent = `${strongSignalRows(documentValue).length} 个当前强信号`;
+  shadowCount.textContent = `${documentValue.shadow_entries.rows.length} 条 Entry`;
+  evidence.disabled = queueMode !== 'radar' || !selectedRow(documentValue);
 }
 
 function renderWorkspace(documentValue) {
   renderChannelRail(documentValue);
+  renderProductToolbar(documentValue);
   renderQueue(documentValue);
   renderDetail(documentValue);
   renderFooter(documentValue);
@@ -1577,13 +1718,14 @@ function renderUnavailable() {
 }
 
 function activateChannel(channelId) {
-  if (channelId !== 'ALL' && !CHANNELS.some(value => value.id === channelId)) return;
+  if (!CHANNELS.some(value => value.id === channelId)) return;
   const focusIdentity = captureFocusIdentity();
   selectedChannelId = channelId;
   selectedStructureId = null;
   selectedRadarId = null;
   drawerOpen = false;
   evidenceExpanded = false;
+  productMatrixOpen = false;
   renderWorkspace(currentDocument);
   restoreFocusIdentity(focusIdentity);
 }
@@ -1599,9 +1741,30 @@ function activateQueueMode(mode) {
 }
 
 function activateFilter(filter) {
+  if (queueMode !== 'structures' || !STRUCTURE_FILTERS.some(([value]) => value === filter)) return;
   const focusIdentity = captureFocusIdentity();
-  if (queueMode === 'structures') structureFilter = filter;
-  else radarFilter = filter;
+  structureFilter = filter;
+  drawerOpen = false;
+  evidenceExpanded = false;
+  renderWorkspace(currentDocument);
+  restoreFocusIdentity(focusIdentity);
+}
+
+function activateOptionFilter(filter) {
+  if (!['both', 'put', 'call'].includes(filter)) return;
+  const focusIdentity = captureFocusIdentity();
+  optionFilter = filter;
+  selectedRadarId = null;
+  drawerOpen = false;
+  evidenceExpanded = false;
+  renderWorkspace(currentDocument);
+  restoreFocusIdentity(focusIdentity);
+}
+
+function toggleActiveOnly() {
+  const focusIdentity = captureFocusIdentity();
+  activeOnly = !activeOnly;
+  selectedRadarId = null;
   drawerOpen = false;
   evidenceExpanded = false;
   renderWorkspace(currentDocument);
@@ -1662,6 +1825,23 @@ if (typeof document.addEventListener === 'function') {
       activateQueueMode(mode.dataset.queueMode);
       return;
     }
+    const option = target.closest('[data-option-filter]');
+    if (option) {
+      activateOptionFilter(option.dataset.optionFilter);
+      return;
+    }
+    if (target.closest('#active-only-toggle')) {
+      toggleActiveOnly();
+      return;
+    }
+    if (target.closest('#product-matrix-toggle')) {
+      setProductMatrixOpen(!productMatrixOpen);
+      return;
+    }
+    if (target.closest('#channel-close')) {
+      setProductMatrixOpen(false);
+      return;
+    }
     const filter = target.closest('[data-queue-filter]');
     if (filter) {
       activateFilter(filter.dataset.queueFilter);
@@ -1670,6 +1850,11 @@ if (typeof document.addEventListener === 'function') {
     const row = target.closest('[data-row-id]');
     if (row) {
       activateRow(row.dataset.rowId);
+      return;
+    }
+    if (target.closest('#footer-evidence')) {
+      const selected = selectedRow(currentDocument);
+      if (selected && queueMode === 'radar') openDetail(radarIdentity(selected));
       return;
     }
     const detailAction = target.closest('[data-detail-action]');
@@ -1688,13 +1873,24 @@ if (typeof document.addEventListener === 'function') {
       }
       return;
     }
-    if (target.closest('#detail-close') || target.closest('#detail-scrim')) closeDetail();
+    if (target.closest('#detail-close') || target.closest('#detail-scrim')) {
+      closeDetail();
+      return;
+    }
+    if (productMatrixOpen && !target.closest('#channel-rail')) setProductMatrixOpen(false);
   });
 
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && drawerOpen) {
       event.preventDefault();
       closeDetail();
+      return;
+    }
+    if (event.key === 'Escape' && productMatrixOpen) {
+      event.preventDefault();
+      setProductMatrixOpen(false);
+      const toggle = document.getElementById('product-matrix-toggle');
+      if (toggle && typeof toggle.focus === 'function') toggle.focus();
       return;
     }
     trapDrawerFocus(event);
