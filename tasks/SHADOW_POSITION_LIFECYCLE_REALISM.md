@@ -124,3 +124,21 @@ failed pairs and restart, settles expiry from the official public fact, restores
 projects named Cohort eligibility without online qualification authority, passes the full business
 scenario matrix and repository gate, runs as the sole stable runtime, and produces and validates at
 least one naturally occurring admitted Outcome. Tests alone do not satisfy the task.
+
+## Closure evidence
+
+- The modified runtime read an isolated copy of all 64 stable Cases, recovered 40/40 admitted
+  Positions with their immutable first CLOSE, retried strictly future public pairs across repeated
+  process boundaries, and produced 20 `EXITED_KNOWN` Outcomes without ending the 20 Cases whose
+  full quantity remained unavailable.
+- The deterministic business matrix exercised Entry persistence, every current Position predicate,
+  failed/skewed pairs, retry-to-exit, recovery-to-exit, recovery-to-settlement, delivery-price
+  fanout, future Control recovery, terminal economics, and all named Cohort projections.
+- Runtime validation exposed and repaired offline exclusion of valid terminal Outcome Segments and
+  the obsolete Workbench "no retry" label. `make check` then passed with 769 tests.
+- Runtime code `6ff78068a7990584aae630bd31dbabcd6b90da9a` is the sole service on loopback port
+  8765. All declared GET/HEAD routes, static-asset identity, API schema, browser rendering,
+  `RUNNING/CURRENT/ready`, single-writer ownership, and PUBLIC_SHADOW boundaries passed.
+- The stable repository naturally produced 20 admitted `EXITED_KNOWN/MARKET_EXIT` Outcomes from
+  public Deribit facts. All 20 passed durable first-CLOSE binding, dual-source, fee/PnL arithmetic,
+  `GAPPED`, and terminal-economics Cohort validation; 20 Positions continue `EXIT_ACQUIRING`.

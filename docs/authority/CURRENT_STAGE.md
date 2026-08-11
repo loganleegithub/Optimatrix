@@ -6,56 +6,69 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_POSITION_LIFECYCLE_REALISM_ACTIVE`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_POSITION_LIFECYCLE_REALISM_DEPLOYED_AND_FIRST_OUTCOME_VALIDATED`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_8765_LEGACY_9002B6E_PENDING_AUTHORIZED_CUTOVER`
+**Persistent service:** `RUNNING_8765_CODE_6FF78068A7990584AAE630BD31DBABCD6B90DA9A`
 
-**Live commands:** `TASK_SCOPED_SIMULATION_CUTOVER_AND_FIRST_NATURAL_OUTCOME_MONITOR_AUTHORIZED`
+**Live commands:** `TASK_SCOPED_SIMULATION_CUTOVER_AND_FIRST_NATURAL_OUTCOME_MONITOR_COMPLETED_NO_ADDITIONAL_LIVE_AUTHORITY`
 
-**Sole authorized closure:**
+**Completed closure:**
 [`SHADOW_POSITION_LIFECYCLE_REALISM`](../../tasks/SHADOW_POSITION_LIFECYCLE_REALISM.md)
 
 ## Current business baseline
 
 The stable repository is
-`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. Before this task, its official
-reader validated 62 schema-v5 Cases, including 40 compatible non-terminal admitted Entries and
-zero admitted Outcome files. Their latest Segments were open and gapped. The repository also held
-12 Radar-score Controls and 10 selected Underwriting Controls created under the legacy segmentless
-Control contract.
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. At task start its official reader
+validated 62 schema-v5 Cases, including 40 compatible non-terminal admitted Entries and zero
+admitted Outcome files. By the cutover boundary normal runtime intake had increased the repository
+to 64 Cases. The task-start baseline also held 12 Radar-score Controls and 10 selected Underwriting
+Controls under the legacy segmentless Control contract.
 
-The sole Online Runtime still serving `127.0.0.1:8765` at task start came from
+The sole Online Runtime serving `127.0.0.1:8765` at task start came from
 `/Users/logan/Optimatrix-runtime` and legacy code
-`9002b6ef7b0ec183cd1448fc975a4b7ebea19084`. It is the pre-cutover baseline, not acceptance of the
-new lifecycle. No state-root file may be rewritten, migrated, copied over, or relabeled during the
-cutover.
+`9002b6ef7b0ec183cd1448fc975a4b7ebea19084`. Its final process boundary left the latest Position
+Segments without close records. The new runtime did not repair or relabel those intervals: it
+restored all 40 first-CLOSE Positions from `INCOMPLETE_UNCLEAN_EXIT`, opened truthful `HANDOFF_GAP`
+Segments, and continued exit acquisition.
 
-The primary funnel blocker is `SHADOW_CASE_OPENED -> SHADOW_CASE_OUTCOME`: immutable first-CLOSE
+The primary funnel blocker was `SHADOW_CASE_OPENED -> SHADOW_CASE_OUTCOME`: immutable first-CLOSE
 history was coupled to a lifetime single quote attempt, and normal expiry had no official
-delivery-price settlement path. The active task must preserve the first Policy reason while
-continuing exit responsibility after failed pairs and process loss, produce official Inverse
-settlement economics at expiry, recover future Segment-bearing Controls, and derive named offline
-Cohort eligibility without online global qualification authority.
+delivery-price settlement path. Runtime code
+`6ff78068a7990584aae630bd31dbabcd6b90da9a` now serves the stable repository. Public Deribit facts
+naturally produced 20 admitted `EXITED_KNOWN/MARKET_EXIT` Outcomes; all 20 validate exact first-CLOSE
+identity, dual-leg source references, fee/PnL conservation, `GAPPED`, and
+`terminal_economics_eligible=true`. The other 20 admitted Positions remain `EXIT_ACQUIRING` because
+no full-quantity accepted pair has ended their responsibility.
 
-## Authorized live closure
+The offline terminal-economics Cohort contains all 20 known Outcomes. Continuous-path and complete
+exit-acquisition Cohorts contain zero because their histories are gapped; this is a per-question
+qualification result, not a global economic rejection.
 
-This task authorizes exactly:
+## Completed live closure
 
-1. one isolated full-business-chain simulation on non-production data using the modified runtime;
-2. one clean cutover of the sole stable runtime to the accepted task commit while preserving every
-   existing Case byte and opening truthful `HANDOFF_GAP` Segments;
-3. bounded loopback/API/browser and single-writer validation of that runtime;
-4. read-only monitoring until at least one admitted `EXITED_KNOWN | SETTLED_KNOWN` Outcome is
-   naturally produced from public Deribit facts and validated end to end.
+The authorized acceptance required one isolated full-business-chain simulation, bounded
+loopback/API/browser and single-writer validation, and read-only monitoring until at least one
+admitted `EXITED_KNOWN | SETTLED_KNOWN` Outcome appeared. Each requirement completed.
 
-If validation exposes a lifecycle defect, the task may repair the same owning boundary on the same
-branch, rerun the complete business matrix and repository gate, and repeat the cutover. It does not
-authorize another product, Policy-threshold change, Case migration, replay, supervisor, database,
-order, fill, account, margin, capital, or private execution.
+The task completed exactly:
+
+1. an isolated full-business-chain simulation over a copy of all 64 Cases, including 40/40 Position
+   recovery and 20 natural public-market exits;
+2. a cutover of the sole stable runtime without rewriting existing Case bytes;
+3. all six loopback routes under GET and HEAD, exact static-asset identity, API/browser rendering,
+   one writer, `RUNNING/CURRENT/ready`, and PUBLIC_SHADOW non-order/non-fill validation;
+4. natural production of 20 admitted `EXITED_KNOWN` Outcomes and end-to-end durable arithmetic and
+   named-Cohort validation.
+
+Validation exposed and repaired two owning-boundary defects: completed Outcome Segments were
+initially excluded from offline Cohorts, and the Workbench still described recovered attempts as
+"no retry." The final repository gate passes 769 tests. This completed closure grants no continuing
+live command and no authority for another product, Policy-threshold change, Case migration, replay,
+supervisor, database, order, fill, account, margin, capital, or private execution.
 
 ## Fixed product and Policy truth
 
