@@ -6,13 +6,13 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_DECIMAL_PACKET_LIVE_OBSERVATION_ACTIVE`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_CANDIDATE_RETIREMENT_REPAIR_PENDING_CUTOVER`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_B119633`
+**Persistent service:** `STOPPED_AFTER_FIRST_CANDIDATE_RETIREMENT_INTEGRITY_FAILURE`
 
 **Live commands:** `CONTINUED_BOUNDED_MONITORING`
 
@@ -88,17 +88,36 @@ policy-aware Case reader restored it as `OPEN` under the new code/runtime identi
 ABSTAIN research Control, not an admitted Shadow Entry, but proves the Decimal packet defect no
 longer prevents durable Case publication.
 
+Continued fixed-attribution observation then reached `50` distinct HIGH Episodes and `36`
+fully evaluable Underwriting Episodes. The fiftieth Episode produced the runtime's first canonical
+Candidate. Its admission refresh became `KNOWN_INVALIDATED_BEFORE_REFRESH`, correctly emitted no
+Entry, Position, or durable admitted Case, but the service then exited with
+`ended Radar episode still owns an active Candidate`. The exact owner-state reproduction proved
+`TERMINAL_ATTEMPT_CANDIDATE_RETIREMENT_GAP`: when the admission attempt was already terminal while
+the Candidate lifecycle was still `VALID`, Episode retirement skipped Candidate invalidation
+because the attempt could not transition a second time, then failed its bounded-owner invariant.
+This is a lifecycle cleanup defect, not a Policy, credit-threshold, score, or market-data failure.
+
+The bounded repair emits an admission terminal only when the attempt first transitions, but always
+invalidates a still-valid Candidate when its Episode ends. The pre-repair regression reproduces the
+same fatal invariant and the repaired owner retires the Candidate exactly once. No admission rule,
+paired-witness requirement, Case schema, or Policy identity changes. The stopped stable repository
+contains zero admitted Shadow trades; no Case was created, rewritten, migrated, or deleted by the
+failed Candidate.
+
 ## Current online boundary
 
-The sole Online Runtime serves `127.0.0.1:8675` from clean Draft PR #48 code identity
-`b119633bfb9d137d912b905b2572fa7f4e243bd3`. Its runtime identity is
+The most recent Online Runtime served `127.0.0.1:8675` from clean Draft PR #48 code identity
+`b119633bfb9d137d912b905b2572fa7f4e243bd3` before the Candidate-retirement failure above. Its
+runtime identity was
 `sha256:b86939fdc61728b0ba2ea8a197b8f911c6ebe1e0855ca0d7c5e71c7694a232ba`.
-It holds the single-instance lease for the stable Case repository
+It released the single-instance lease for the stable Case repository
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; no Case root was copied, migrated,
 replaced, or deleted during the cutover.
 
-The repaired live boundary reports health, readiness, `RUNNING`, `CURRENT`, `KNOWN_COMPLETE`,
-`128/128` current Radar coverage, zero reconnects, and zero protocol gaps. All 23 score packets in
+Before the latest stop, the repaired live boundary reported health, readiness, `RUNNING`,
+`CURRENT`, `KNOWN_COMPLETE`, `128/128` current Radar coverage, zero reconnects, and zero protocol
+gaps. All 23 score packets in
 the first verified frame passed exact policy-aware recomputation. Three HIGH leaders were at
 confirmation `1/3`; zero Candidate, admitted Shadow Entry, or Position existed. The stable root now
 contains two non-admitted Controls: the prior LOW Radar-score-band Control remains

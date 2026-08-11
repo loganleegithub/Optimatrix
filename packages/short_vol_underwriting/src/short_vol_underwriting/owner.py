@@ -5527,12 +5527,13 @@ class FixedContractShadowOwner:
             list(reasons),
             boundary.as_object(),
         )
-        if record.attempt.invalidate_before_refresh(
+        attempt_transitioned = record.attempt.invalidate_before_refresh(
             source_identity=source_identity,
             boundary=boundary,
-        ):
+        )
+        if attempt_transitioned:
             self._emit_admission_terminal(record)
-            self._invalidate_candidate(record, reasons, boundary)
+        self._invalidate_candidate(record, reasons, boundary)
 
     @staticmethod
     def _require_quote_witness(

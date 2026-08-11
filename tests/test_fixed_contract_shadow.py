@@ -929,6 +929,53 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
     )
 
 
+def test_episode_retirement_reconciles_an_already_terminal_candidate_attempt(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    intents = _settled_transaction(
+        adapter,
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    assert len(intents) == 2
+    assert owner.retained_state_counts["active_candidates"] == 1
+    (record,) = owner._candidates.values()
+    episode_identity = record.facts.active_episode_identity
+    assert episode_identity is not None
+    attempt_boundary = DownstreamFactBoundary(
+        code_identity=owner.bindings.code_identity,
+        runtime_identity=owner.bindings.runtime_identity,
+        session_epoch=1,
+        ingress_seq=2,
+        received_monotonic_ms=120,
+        causal_seq=2,
+    )
+    assert record.attempt.invalidate_before_refresh(
+        source_identity=canonical_identity("TestAttemptTerminal", episode_identity),
+        boundary=attempt_boundary,
+    )
+    owner._emit_admission_terminal(record)
+
+    transition = owner.retire_radar_episode(
+        episode_identity,
+        boundary=replace(
+            attempt_boundary,
+            ingress_seq=3,
+            received_monotonic_ms=130,
+            causal_seq=3,
+        ),
+    )
+
+    assert owner.retained_state_counts["active_candidates"] == 0
+    assert [item.object_kind for item in transition.emitted] == ["CANDIDATE_INVALIDATION"]
+    assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
+
+
 def test_no_active_radar_episode_skips_review_context_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

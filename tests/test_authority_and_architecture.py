@@ -182,17 +182,21 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_decimal_packet_live_observation() -> None:
+def test_current_stage_authorizes_candidate_retirement_repair_and_cutover() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_DECIMAL_PACKET_LIVE_OBSERVATION_ACTIVE`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_CANDIDATE_RETIREMENT_REPAIR_PENDING_CUTOVER`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_8675_FROM_DRAFT_PR_48_B119633`" in current
+    assert (
+        "**Persistent service:** `STOPPED_AFTER_FIRST_CANDIDATE_RETIREMENT_INTEGRITY_FAILURE`"
+        in current
+    )
     assert "`ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`" in current
     assert "`OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`" in current
     assert "`LOSSY_DECIMAL_PACKET_SERIALIZATION`" in current
+    assert "`TERMINAL_ATTEMPT_CANDIDATE_RETIREMENT_GAP`" in current
     assert "**Live commands:** `CONTINUED_BOUNDED_MONITORING`" in current
     assert "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR" in current
     for phrase in (
@@ -234,6 +238,11 @@ def test_current_stage_authorizes_decimal_packet_live_observation() -> None:
         "correctly added 13 `CORE_UNKNOWN` resets",
         "These two causes are not conflated",
         "Seven HIGH Episodes reached fully evaluable Underwriting",
+        "`50` distinct HIGH Episodes and `36` fully evaluable Underwriting Episodes",
+        "first canonical Candidate",
+        "`KNOWN_INVALIDATED_BEFORE_REFRESH`",
+        "ended Radar episode still owns an active Candidate",
+        "contains zero admitted Shadow trades",
     ):
         assert phrase in normalized
     for identity in (

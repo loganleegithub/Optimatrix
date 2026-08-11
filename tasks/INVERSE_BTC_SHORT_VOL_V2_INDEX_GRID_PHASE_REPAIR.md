@@ -17,6 +17,7 @@
 [`PRODUCT_CONSTITUTION.md`](../docs/authority/PRODUCT_CONSTITUTION.md),
 [`SYSTEM_ARCHITECTURE.md`](../docs/authority/SYSTEM_ARCHITECTURE.md), and
 [`SHORT_VOL_RADAR.md`](../docs/contracts/SHORT_VOL_RADAR.md), and
+[`SHORT_VOL_UNDERWRITING_POSITION.md`](../docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md), and
 [`SHORT_VOL_SHADOW_CASE.md`](../docs/contracts/SHORT_VOL_SHADOW_CASE.md)
 
 ## Product movement
@@ -46,16 +47,20 @@ directory name itself to match `sha256:<digest>`. The official report therefore 
 valid Control Case before reading it. This is not Case corruption and is not the current business
 funnel blocker. That reader defect is repaired.
 
-**Current implementation blocker:** `LOSSY_DECIMAL_PACKET_SERIALIZATION`. Direct validation of live
-projected packets established that `Decimal.normalize()` rounded a 50-digit raw path
-share under the ambient 28-digit context, while D had been calculated from the unrounded value.
-The restored packet therefore differed by one final decimal unit. The ninth Episode selected a
-no-trade Control, exercised this exact path, and the CaseStore rejected it before publication;
-runtime exited fail-closed with `ShadowRuntimeIntegrityError`. This bounded serialization repair is
-required before the Online Runtime can resume.
+**Current implementation blocker:** `TERMINAL_ATTEMPT_CANDIDATE_RETIREMENT_GAP`. Continued live
+observation reached 50 HIGH Episodes, 36 fully evaluable Underwriting Episodes, and the first
+canonical Candidate. The paired admission did not remain eligible and correctly became
+`KNOWN_INVALIDATED_BEFORE_REFRESH`, but Episode retirement then failed with
+`ended Radar episode still owns an active Candidate`. An exact owner-state regression proves the
+root cause: if an admission attempt is already terminal while its Candidate is still `VALID`, the
+pre-refresh terminalizer used the attempt's second-transition result as a condition for Candidate
+invalidation. The false result skipped cleanup and violated the bounded active-owner invariant.
 
-**Measured business blocker:** `CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE` for all nine observed HIGH
-Episodes. It is not changed by this implementation repair.
+**Measured business blocker:** 33 of the first 36 fully evaluable HIGH Episodes were first blocked
+by `CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE`; one each was first blocked by
+`MINIMUM_NET_CREDIT_TO_PAYOFF_CAP` and `MINIMUM_NET_ENTRY_CREDIT`, and one became the first
+canonical Candidate. It was invalidated before paired admission and opened no Shadow Case. None of
+these economic rules changes in this implementation repair.
 
 **Expected user-visible delta:** while ordered queue lag is above the fixed currentness deadline,
 Radar remains `UNKNOWN`, bucket coverage is `UNKNOWN`, no observation is counted, and no Episode or
@@ -72,13 +77,19 @@ The score-packet projection additionally preserves every significant digit of ea
 Decimal, so the sole policy-aware validator reproduces the exact stored A/S/T/D/E result after JSON
 restoration. Online scores, bands, rankings, and admission decisions do not change.
 
+Candidate cleanup additionally decouples two distinct transitions: an admission terminal record is
+emitted only if the attempt first becomes terminal, while Episode loss always invalidates any
+still-valid Candidate. A terminal attempt can therefore never strand its Candidate in the active
+owner map or turn ordinary Episode retirement into a process-fatal integrity error.
+
 **Durable-data effect:** no existing Case is created, rewritten, migrated, or deleted. Future Case
 JSON may carry more significant raw-input digits, under the unchanged schema-v5 key shape and
 Policy semantics, solely so its derived score remains exactly reproducible.
 
 **Complexity added:** one bounded currentness-pause branch in the existing runtime bucket owner, in
 addition to the already-landed aligned-source timestamp tuple; one public CaseStore-owned
-directory-name conversion function; no new state owner, timer, schema, history, or baseline path.
+directory-name conversion function; one idempotent Candidate-lifecycle cleanup condition in the
+existing owner; no new state owner, timer, schema, history, or baseline path.
 
 **Complexity deleted:** the rotating five-phase sampling behavior, the wall-clock-ahead-of-source
 anchor race, the misleading baseline source label, the destructive interpretation of a transient
@@ -116,6 +127,10 @@ For packet integrity, calculate D from a baseline share carrying more than 28 si
 serialize the packet, restore it, and policy-recompute it. Any lost raw digit or result mismatch is
 a direct falsification.
 
+For Candidate retirement, terminalize an admission attempt while its Candidate remains `VALID`,
+then retire the owning Episode. Any duplicate admission terminal, retained Candidate, missing
+Candidate invalidation, or runtime exception is a direct falsification.
+
 ## Change declarations
 
 **Market/Decision input contract change:** five-minute index-chart samples remain fixed to the
@@ -127,7 +142,8 @@ remain `UNKNOWN` until catch-up.
 
 **Outcome/evaluation contract change:** preserve raw score-packet Decimal precision so the existing
 policy-aware Case validator can reproduce exact derived truth; no Outcome arithmetic or economic
-definition changes.
+definition changes. Episode retirement also reconciles an already-terminal attempt with its
+still-valid Candidate; it creates no Outcome or durable Case.
 
 **Stage/authorization change:** the old runtime stopped fail-closed and the one bounded clean start
 on `127.0.0.1:8675` completed from code identity
@@ -151,7 +167,8 @@ baseline path.
 **Owning modules:** `apps/radar_runtime/src/radar_runtime/runtime.py`,
 `apps/radar_runtime/src/radar_runtime/offline_report.py`, and
 `packages/short_vol_underwriting/src/short_vol_underwriting/case_store.py`, plus the score-packet
-serializer in `packages/short_vol_radar/src/short_vol_radar/score.py`
+serializer in `packages/short_vol_radar/src/short_vol_radar/score.py` and the bounded Candidate
+lifecycle owner in `packages/short_vol_underwriting/src/short_vol_underwriting/owner.py`
 
 ## Validation
 
@@ -169,6 +186,8 @@ serializer in `packages/short_vol_radar/src/short_vol_radar/score.py`
 - prove the first post-repair decision Control on the former fatal path is published and restored
   by the official reader under its exact code/runtime and Policy identities, while admitted Shadow
   remains zero;
+- prove an already-terminal admission attempt cannot strand a valid Candidate during Episode
+  retirement, emits no duplicate terminal, and leaves no active Candidate or durable Case;
 - fixed-attribution live evidence: cross queue currentness above five seconds and prove the frame is
   UNKNOWN/non-countable, adds zero `CORE_UNKNOWN` reset, and preserves accepted pre-confirmation
   through catch-up; keep any separate transport/session reset explicitly attributed;
