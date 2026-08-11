@@ -6,13 +6,13 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_CANDIDATE_RETIREMENT_REPAIR_PENDING_CUTOVER`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_CANDIDATE_RETIREMENT_REPAIR_LIVE_MONITORING`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `STOPPED_AFTER_FIRST_CANDIDATE_RETIREMENT_INTEGRITY_FAILURE`
+**Persistent service:** `RUNNING_REPAIRED_CANDIDATE_RETIREMENT`
 
 **Live commands:** `CONTINUED_BOUNDED_MONITORING`
 
@@ -105,25 +105,33 @@ paired-witness requirement, Case schema, or Policy identity changes. The stopped
 contains zero admitted Shadow trades; no Case was created, rewritten, migrated, or deleted by the
 failed Candidate.
 
+The authorized clean cutover then started code identity
+`21128eb6807cd1403b3b458da1c418c16dcdf099` from the non-temporary checkout
+`/Users/logan/Optimatrix-runtime`, reusing the unchanged stable Case repository. The repaired
+runtime activated and subsequently retired its first HIGH Episode without an exception or retained
+Candidate; that Episode truthfully stopped at `NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE`. This proves the
+observed retirement failure is no longer reproduced, but it does not prove future admission,
+Policy quality, or uptime.
+
 ## Current online boundary
 
-The most recent Online Runtime served `127.0.0.1:8675` from clean Draft PR #48 code identity
-`b119633bfb9d137d912b905b2572fa7f4e243bd3` before the Candidate-retirement failure above. Its
-runtime identity was
-`sha256:b86939fdc61728b0ba2ea8a197b8f911c6ebe1e0855ca0d7c5e71c7694a232ba`.
-It released the single-instance lease for the stable Case repository
+The current Online Runtime serves `127.0.0.1:8675` from clean Draft PR #48 code identity
+`21128eb6807cd1403b3b458da1c418c16dcdf099` in the non-temporary checkout
+`/Users/logan/Optimatrix-runtime`. Its runtime identity is
+`sha256:45eadc60aa925e460416ef7dca89b0306bdc005cb96c6caf956c499063b5a06b`.
+It owns the single-instance lease for the unchanged stable Case repository
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; no Case root was copied, migrated,
 replaced, or deleted during the cutover.
 
-Before the latest stop, the repaired live boundary reported health, readiness, `RUNNING`,
-`CURRENT`, `KNOWN_COMPLETE`, `128/128` current Radar coverage, zero reconnects, and zero protocol
-gaps. All 23 score packets in
-the first verified frame passed exact policy-aware recomputation. Three HIGH leaders were at
-confirmation `1/3`; zero Candidate, admitted Shadow Entry, or Position existed. The stable root now
-contains two non-admitted Controls: the prior LOW Radar-score-band Control remains
-`INCOMPLETE_UNCLEAN_EXIT`, while the new HIGH selected-Underwriting decision Control is
-`PENDING_OPEN` under the active runtime. Admitted Shadow count remains zero. These are bounded
-observations, not Policy-quality or future-frequency claims.
+The first accepted live frame reported health, readiness, `RUNNING`, `CURRENT`, `KNOWN_COMPLETE`,
+`128/128` current Radar coverage, zero reconnects, and zero protocol gaps. Every projected score
+packet in continued one-second sampling passed exact Policy-aware recomputation. The repaired
+runtime has observed one HIGH Episode, which stopped at the known structure blocker
+`NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE`; zero Candidate, admitted Shadow Entry, or Position exists.
+The official active-runtime Case report reads all 13 prior schema-v5 Cases: 11 are non-admitted
+Radar-score-band Controls and two are selected-Underwriting decision Controls, all classified
+`INCOMPLETE_UNCLEAN_EXIT` across their former runtime boundaries. Admitted Shadow count remains
+zero. These are bounded observations, not Policy-quality or future-frequency claims.
 
 Subsequent live fixed attribution crossed queue currentness at `5,005 ms`. The crossing frame was
 `UNKNOWN/0`, added no `CORE_UNKNOWN` reset, and recovered to `KNOWN_COMPLETE/128` about 220 ms later;

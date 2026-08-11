@@ -147,7 +147,8 @@ still-valid Candidate; it creates no Outcome or durable Case.
 
 **Stage/authorization change:** the old runtime stopped fail-closed and the one bounded clean start
 on `127.0.0.1:8675` completed from code identity
-`b119633bfb9d137d912b905b2572fa7f4e243bd3`, using the unchanged stable Case root. Continued
+`21128eb6807cd1403b3b458da1c418c16dcdf099`, using the unchanged stable Case root from the
+non-temporary `/Users/logan/Optimatrix-runtime` checkout. Continued
 public-only observation runs until the first admitted active Shadow or a newly measured fixed
 blocker is established. No private or execution permission is added.
 
@@ -175,7 +176,7 @@ lifecycle owner in `packages/short_vol_underwriting/src/short_vol_underwriting/o
 - focused tests: `.venv/bin/pytest -q tests/test_market_monitor.py tests/test_runtime_reducer.py tests/test_fact_boundary_business.py tests/test_trader_workbench.py`;
 - repository gate: `make check`;
 - public observation: the official reader inventoried the already-stopped stable root, then clean
-  code identity `b119633bfb9d137d912b905b2572fa7f4e243bd3` started on port `8675` with
+  code identity `21128eb6807cd1403b3b458da1c418c16dcdf099` started on port `8675` with
   `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; verify its exact runtime identity,
   health/readiness/currentness, fixed-grid baseline behavior across canonical boundaries, and
   continue the already-authorized public-only monitor;

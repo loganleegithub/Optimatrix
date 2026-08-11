@@ -182,17 +182,17 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_candidate_retirement_repair_and_cutover() -> None:
+def test_current_stage_authorizes_candidate_retirement_repair_live_monitoring() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_CANDIDATE_RETIREMENT_REPAIR_PENDING_CUTOVER`" in current
-    assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert (
-        "**Persistent service:** `STOPPED_AFTER_FIRST_CANDIDATE_RETIREMENT_INTEGRITY_FAILURE`"
+        "`INVERSE_BTC_SHORT_VOL_V2_CANDIDATE_RETIREMENT_REPAIR_LIVE_MONITORING`"
         in current
     )
+    assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
+    assert "**Persistent service:** `RUNNING_REPAIRED_CANDIDATE_RETIREMENT`" in current
     assert "`ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`" in current
     assert "`OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`" in current
     assert "`LOSSY_DECIMAL_PACKET_SERIALIZATION`" in current
@@ -223,13 +223,14 @@ def test_current_stage_authorizes_candidate_retirement_repair_and_cutover() -> N
         "future written Case could become unreadable",
         "`ShadowRuntimeIntegrityError`",
         "`INCOMPLETE_UNCLEAN_EXIT`",
-        "All 23 score packets",
-        "Three HIGH leaders were at confirmation `1/3`",
-        "b119633bfb9d137d912b905b2572fa7f4e243bd3",
-        "sha256:b86939fdc61728b0ba2ea8a197b8f911c6ebe1e0855ca0d7c5e71c7694a232ba",
+        "Every projected score packet",
+        "21128eb6807cd1403b3b458da1c418c16dcdf099",
+        "sha256:45eadc60aa925e460416ef7dca89b0306bdc005cb96c6caf956c499063b5a06b",
         "sha256:a9e10899eb7b4f2b8e923d77c23ca6b1d6b1caf6c0b52b9b465177fb510c42cf",
-        "two non-admitted Controls",
-        "new HIGH selected-Underwriting decision Control is `PENDING_OPEN`",
+        "all 13 prior schema-v5 Cases",
+        "11 are non-admitted Radar-score-band Controls",
+        "two are selected-Underwriting decision Controls",
+        "`NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE`",
         "Admitted Shadow count remains zero",
         "queue currentness at `5,005 ms`",
         "added no `CORE_UNKNOWN` reset",
