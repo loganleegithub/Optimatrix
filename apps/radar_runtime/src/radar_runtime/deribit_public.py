@@ -14,6 +14,7 @@ from websockets.asyncio.client import ClientConnection, connect
 PRODUCTION_PUBLIC_ENDPOINT = "wss://www.deribit.com/ws/api/v2"
 MAX_PENDING_INBOUND_FRAMES = 10_000
 PUBLIC_TRANSPORT_CLOSE_TIMEOUT_SECONDS = 5.0
+TRANSPORT_HEARTBEAT_REQUEST_ID_PREFIX = "optimatrix.transport-heartbeat"
 PUBLIC_METHODS = frozenset(
     {
         "public/subscribe",
@@ -26,7 +27,6 @@ PUBLIC_METHODS = frozenset(
         "public/status",
         "public/get_time",
         "public/set_heartbeat",
-        "public/test",
     }
 )
 TRANSPORT_CLOSE_CODE_ALLOWLIST = frozenset(
@@ -177,10 +177,13 @@ class DeribitPublicClient:
         )
         self._connection: ClientConnection | None = None
         self._reader_task: asyncio.Task[None] | None = None
+        self._send_lock = asyncio.Lock()
         self._inbound: asyncio.Queue[InboundEnvelope] = asyncio.Queue(
             maxsize=MAX_PENDING_INBOUND_FRAMES
         )
         self._next_application_seq = 1
+        self._next_transport_heartbeat_seq = 1
+        self._pending_transport_heartbeat_id: str | None = None
         self._reader_error: PublicProtocolError | None = None
         self.last_inbound_monotonic = time.monotonic()
         self.queue_high_water_frames = 0
@@ -218,23 +221,12 @@ class DeribitPublicClient:
         request_id: int,
         method: str,
         params: dict[str, object],
-        responding_to_test_request: bool = False,
     ) -> None:
         if method not in PUBLIC_METHODS:
             raise PublicProtocolError(f"method is outside production-public allowlist: {method}")
-        if method == "public/test" and not responding_to_test_request:
-            raise PublicProtocolError("public/test is allowed only as a heartbeat response")
         if request_id <= 0:
             raise PublicProtocolError("request id must be positive")
-        if self._connection is None:
-            raise PublicSessionError("public connection is not open")
-        message = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-            "params": params,
-        }
-        await self._connection.send(json.dumps(message, separators=(",", ":"), allow_nan=False))
+        await self._send_json_rpc(request_id=request_id, method=method, params=params)
 
     async def next_envelope(self, timeout_seconds: float | None = None) -> InboundEnvelope:
         if self._reader_error is not None and self._inbound.empty():
@@ -277,9 +269,16 @@ class DeribitPublicClient:
         try:
             async for raw_message in self._connection:
                 self.last_inbound_monotonic = time.monotonic()
-                self._enqueue_wire_message(
-                    _decode_message(raw_message),
-                    received_monotonic_ms=time.monotonic_ns() // 1_000_000,
+                message = _decode_message(raw_message)
+                received_monotonic_ms = time.monotonic_ns() // 1_000_000
+                self.received_frame_count += 1
+                if _is_heartbeat_test_request(message):
+                    await self._respond_to_heartbeat_test_request()
+                if self._consume_transport_heartbeat_response(message):
+                    continue
+                self._enqueue_application_event(
+                    message,
+                    received_monotonic_ms=received_monotonic_ms,
                 )
         except asyncio.CancelledError:
             raise
@@ -320,6 +319,65 @@ class DeribitPublicClient:
             message,
             received_monotonic_ms=received_monotonic_ms,
         )
+
+    async def _respond_to_heartbeat_test_request(self) -> None:
+        if self._pending_transport_heartbeat_id is not None:
+            raise PublicProtocolIncompatibility(
+                "received another heartbeat test_request before public/test completed"
+            )
+        request_id = (
+            f"{TRANSPORT_HEARTBEAT_REQUEST_ID_PREFIX}:"
+            f"{self.session_epoch}:{self._next_transport_heartbeat_seq}"
+        )
+        self._next_transport_heartbeat_seq += 1
+        self._pending_transport_heartbeat_id = request_id
+        await self._send_json_rpc(
+            request_id=request_id,
+            method="public/test",
+            params={},
+        )
+
+    def _consume_transport_heartbeat_response(self, message: dict[str, object]) -> bool:
+        request_id = message.get("id")
+        pending_request_id = self._pending_transport_heartbeat_id
+        if request_id != pending_request_id:
+            if isinstance(request_id, str) and request_id.startswith(
+                f"{TRANSPORT_HEARTBEAT_REQUEST_ID_PREFIX}:"
+            ):
+                raise PublicProtocolIncompatibility(
+                    "public/test response does not match the pending transport heartbeat"
+                )
+            return False
+        if pending_request_id is None:
+            return False
+        self._pending_transport_heartbeat_id = None
+        result = message.get("result")
+        if (
+            "error" in message
+            or not isinstance(result, dict)
+            or not isinstance(result.get("version"), str)
+            or not result["version"]
+        ):
+            raise PublicProtocolIncompatibility("public/test result lacks a valid version")
+        return True
+
+    async def _send_json_rpc(
+        self,
+        *,
+        request_id: int | str,
+        method: str,
+        params: dict[str, object],
+    ) -> None:
+        if self._connection is None:
+            raise PublicSessionError("public connection is not open")
+        message = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": params,
+        }
+        async with self._send_lock:
+            await self._connection.send(json.dumps(message, separators=(",", ":"), allow_nan=False))
 
     def _enqueue_connection_error(
         self,
@@ -428,3 +486,10 @@ def _decode_message(raw_message: str | bytes) -> dict[str, object]:
     if not isinstance(decoded, dict) or decoded.get("jsonrpc") != "2.0":
         raise PublicProtocolIncompatibility("message is not a JSON-RPC 2.0 object")
     return decoded
+
+
+def _is_heartbeat_test_request(message: dict[str, object]) -> bool:
+    if message.get("method") != "heartbeat":
+        return False
+    params = message.get("params")
+    return isinstance(params, dict) and params.get("type") == "test_request"

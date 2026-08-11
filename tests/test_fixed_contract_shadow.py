@@ -694,6 +694,48 @@ def _shadow_system(
     return reducer, adapter, owner
 
 
+def test_activation_scope_uses_episode_packet_when_current_packet_cache_is_absent(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    instrument_name = "BTC-1JAN00-101000-C"
+    _install_v2_episode(reducer, instrument_name=instrument_name)
+    tracker = next(
+        value
+        for value in reducer.bucket_trackers.values()
+        if value.episode is not None and value.episode.leader_instrument_name == instrument_name
+    )
+    assert tracker.episode is not None
+    activation_packet = tracker.episode.activation_packet
+    reducer.score_packets.pop(instrument_name)
+
+    snapshots = reducer.active_radar_scope_snapshots(
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        )
+    )
+
+    assert len(snapshots) == 1
+    assert snapshots[0].episode_identity == tracker.episode.episode_identity
+    assert snapshots[0].activation_score_packet is activation_packet
+    assert snapshots[0].radar_score_packet is activation_packet
+
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+
+    assert len(_object_payloads(owner, "UNDERWRITING_DECISION_BATCH_DESIGNATION")) == 1
+    assert len(owner.active_candidate_identities) == 1
+    assert len(intents) == 2
+
+
 def _activate_real_episode(reducer: RadarReducer) -> str:
     rule = reducer.policy.tte_bands[0].option_rules[OptionType.CALL]
     reducer.bucket_trackers.clear()
@@ -927,6 +969,102 @@ def test_inactive_underwriting_scope_transitions_once_then_stays_settled(
         facts.active_episode_identity == next_episode
         for facts in adapter._underwriting_by_scope.values()
     )
+
+
+def test_episode_retirement_reconciles_an_already_terminal_candidate_attempt(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    intents = _settled_transaction(
+        adapter,
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    assert len(intents) == 2
+    assert owner.retained_state_counts["active_candidates"] == 1
+    (record,) = owner._candidates.values()
+    episode_identity = record.facts.active_episode_identity
+    assert episode_identity is not None
+    attempt_boundary = DownstreamFactBoundary(
+        code_identity=owner.bindings.code_identity,
+        runtime_identity=owner.bindings.runtime_identity,
+        session_epoch=1,
+        ingress_seq=2,
+        received_monotonic_ms=120,
+        causal_seq=2,
+    )
+    assert record.attempt.invalidate_before_refresh(
+        source_identity=canonical_identity("TestAttemptTerminal", episode_identity),
+        boundary=attempt_boundary,
+    )
+    owner._emit_admission_terminal(record)
+
+    transition = owner.retire_radar_episode(
+        episode_identity,
+        boundary=replace(
+            attempt_boundary,
+            ingress_seq=3,
+            received_monotonic_ms=130,
+            causal_seq=3,
+        ),
+    )
+
+    assert owner.retained_state_counts["active_candidates"] == 0
+    assert [item.object_kind for item in transition.emitted] == ["CANDIDATE_INVALIDATION"]
+    assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
+
+
+def test_episode_retirement_clears_candidate_from_an_interrupted_terminal_transition(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    intents = _settled_transaction(
+        adapter,
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    assert len(intents) == 2
+    (record,) = owner._candidates.values()
+    episode_identity = record.facts.active_episode_identity
+    assert episode_identity is not None
+    interrupted_boundary = DownstreamFactBoundary(
+        code_identity=owner.bindings.code_identity,
+        runtime_identity=owner.bindings.runtime_identity,
+        session_epoch=1,
+        ingress_seq=2,
+        received_monotonic_ms=120,
+        causal_seq=2,
+    )
+    owner._begin_transition()
+    owner._terminalize_candidate_before_refresh(
+        record,
+        reasons=("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN",),
+        boundary=interrupted_boundary,
+    )
+    assert record.state.lifecycle.value == "INVALIDATED"
+    assert owner.retained_state_counts["active_candidates"] == 1
+
+    transition = owner.retire_radar_episode(
+        episode_identity,
+        boundary=replace(
+            interrupted_boundary,
+            ingress_seq=3,
+            received_monotonic_ms=130,
+            causal_seq=3,
+        ),
+    )
+
+    assert transition.emitted == ()
+    assert owner.retained_state_counts["active_candidates"] == 0
+    assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
 
 
 def test_no_active_radar_episode_skips_review_context_projection(

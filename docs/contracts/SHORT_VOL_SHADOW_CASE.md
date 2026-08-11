@@ -65,6 +65,11 @@ Policy identities are exact content digests. The code identity is the exact Git 
 contract bytes, file paths, host identity, PID, manifest, receipt, directory inventory, and
 Workbench publication sequence do not enter the Case identity.
 
+The stable filesystem directory uses only the 64-hex digest suffix of `case_id`; the record and all
+public APIs retain the canonical `sha256:<64 lowercase hex>` identity. Every repository scanner
+uses the CaseStore-owned directory-name conversion and must not reinterpret the directory name as
+an already-prefixed business identity.
+
 Every record binds the same Case, `INVERSE_BTC_V1` product, and frozen Policy semantics.
 `SHADOW_CASE_OPENED` binds the origin code/runtime. Each Segment and any later first-close or
 Outcome record binds the exact code/runtime that emitted it plus its Segment identity.
@@ -98,6 +103,10 @@ The opened record contains:
   `NO_LIQUIDITY_RESERVATION`, and `ATOMIC_EXECUTABILITY_UNPROVEN`. A no-trade control additionally
   states `NOT_A_CANDIDATE_ACTIVATION`, `NOT_A_SHADOW_ENTRY`, `NOT_AN_ADMITTED_TRADE`, and
   `NO_CAPITAL_EXPOSURE`.
+
+Score-packet raw Decimal text is lossless and context-independent. The reader restores it and uses
+the Radar-owned policy-aware calculator to require exact equality with every stored derived score
+field; tolerance-based acceptance or a second Case-owned score formula is forbidden.
 
 The exact economic shape is the accepted Inverse schema-v5 record. It contains one exact product
 object with native premium/settlement currency, price index, strike and valuation currencies,

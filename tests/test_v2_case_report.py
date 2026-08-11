@@ -18,6 +18,7 @@ from short_vol_underwriting import (
     ShadowCaseReadStatus,
     ShadowCaseSegmentRead,
     ShadowCaseSegmentStatus,
+    ShadowCaseStore,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -376,6 +377,49 @@ def test_offline_reader_ignores_only_official_case_staging_directories(
     (file_cases / staging_name).write_text("partial", encoding="utf-8")
     with pytest.raises(V2CaseReportError, match="non-Case member"):
         load_v2_case_report(file_cases, repository=ROOT)
+
+
+def test_offline_reader_restores_store_owned_bare_hex_case_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases = tmp_path / "cases"
+    cases.mkdir()
+    case_id = "sha256:" + "a" * 64
+    (cases / case_id.removeprefix("sha256:")).mkdir()
+    expected = _case(
+        "a",
+        expiry_ms=4_000,
+        selection_band="MID",
+        entry_band="MID",
+        outcome_state=None,
+        enrollment_kind="RADAR_SCORE_BAND_NO_TRADE_CONTROL",
+        sampling_inclusion=(1, 3),
+    )
+    requested: list[str] = []
+
+    def read_case(
+        _store: ShadowCaseStore,
+        requested_case_id: str,
+        *,
+        runtime_active: bool = False,
+    ) -> ShadowCaseRead:
+        requested.append(requested_case_id)
+        assert runtime_active
+        return expected
+
+    monkeypatch.setattr(ShadowCaseStore, "read_case", read_case)
+
+    report = load_v2_case_report(cases, repository=ROOT, runtime_active=True)
+
+    assert requested == [case_id]
+    views = report["views"]
+    assert isinstance(views, Mapping)
+    pending = views["pending_open"]
+    assert isinstance(pending, Mapping)
+    denominators = pending["denominators"]
+    assert isinstance(denominators, Mapping)
+    assert denominators["pending_open"] == 1
 
 
 def test_open_control_is_pending_not_an_unclean_exit() -> None:

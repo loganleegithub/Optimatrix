@@ -195,7 +195,7 @@ def run_nonempty_scenario(
         response(
             reducer,
             index_history,
-            [[0, 100], [300_000, 100]],
+            [[0, 100], [300_000, 100], [600_000, 100]],
             seq=5,
             received_ms=1_004,
         ),

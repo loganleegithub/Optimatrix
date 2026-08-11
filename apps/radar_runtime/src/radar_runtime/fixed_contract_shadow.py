@@ -1472,6 +1472,7 @@ class FixedContractShadowRuntimeAdapter:
                 anomaly_activation_seq=None,
                 radar_research_review_identity=None,
                 radar_research_activation_seq=None,
+                radar_activation_score_packet=None,
                 radar_score_packet=None,
                 atomic_state=PublicAtomicQuoteState.NOT_EVALUATED.value,
                 entry_consumed_levels=(),
@@ -1778,6 +1779,7 @@ class FixedContractShadowRuntimeAdapter:
             ticker_source=ticker_source,
             short_leg_instrument_name=short_name,
             long_leg_instrument_name=frozen_long_name,
+            radar_activation_score_packet=snapshot.activation_score_packet,
             radar_score_packet=snapshot.radar_score_packet,
             radar_research_review_identity=(None if is_high_episode else snapshot.episode_identity),
             radar_research_activation_seq=(
@@ -2103,6 +2105,7 @@ class FixedContractShadowRuntimeAdapter:
             long_leg_instrument_name=(
                 long_instrument.instrument_name if long_instrument is not None else None
             ),
+            radar_activation_score_packet=snapshot.activation_score_packet,
             radar_score_packet=snapshot.radar_score_packet,
             radar_research_review_identity=(None if is_high_episode else snapshot.episode_identity),
             radar_research_activation_seq=(
@@ -2177,6 +2180,7 @@ class FixedContractShadowRuntimeAdapter:
             ticker_source=None,
             short_leg_instrument_name=(snapshot.short_leg.instrument_name),
             long_leg_instrument_name=None,
+            radar_activation_score_packet=snapshot.activation_score_packet,
             radar_score_packet=snapshot.radar_score_packet,
             radar_research_review_identity=(None if is_high_episode else snapshot.episode_identity),
             radar_research_activation_seq=(
@@ -2205,6 +2209,7 @@ class FixedContractShadowRuntimeAdapter:
             or episode.leader_instrument_name != snapshot.short_leg.instrument_name
             or episode.activation_causal_seq != snapshot.anomaly_activation_seq
             or episode.score_band is not snapshot.score_band
+            or episode.activation_packet != snapshot.activation_score_packet
             or snapshot.radar_score_packet.policy_identity != reducer.policy.identity
             or snapshot.radar_score_packet.leader_instrument_name
             != snapshot.short_leg.instrument_name

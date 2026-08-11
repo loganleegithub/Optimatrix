@@ -45,6 +45,12 @@ Workbench keeps a second in-memory event history.
 Every retained source, current-state identity, funnel denominator, and Case belongs to
 `INVERSE_BTC_V1`. Product comparison is not part of the Online Runtime.
 
+Deribit session liveness is transport work, not business reduction. On a server `test_request`, the
+public client sends the required `public/test` immediately before the notification can wait behind
+the application queue. One transport-local request id binds and validates the matching version
+response; the reducer cannot schedule a duplicate heartbeat-test RPC. Ordinary heartbeat
+notifications remain non-causal and cannot change Radar, Underwriting, Candidate, or Case truth.
+
 ## State root
 
 One external absolute, non-temporary state root is the stable business repository across process
@@ -128,6 +134,12 @@ envelope's local receive-to-reducer delay. Only the third value is compared with
 `queue_lag_deadline_ms` and may activate `QUEUE_LAG_CURRENTNESS`. A source-event age above that
 queue deadline is not, by itself, a slow reducer, stale ticker, or reconnect condition.
 
+`QUEUE_LAG_CURRENTNESS` makes current Radar truth and leader coverage `UNKNOWN` and blocks new
+observations and admission until the ordered queue catches up. It does not by itself erase an
+inactive bucket's earlier accepted confirmation observations. Recovery must recompute the current
+leader and score band before that count can continue; changed truth still resets normally, and an
+already-active Episode remains fail-closed.
+
 Every active admitted Entry appears once by its original `shadow_entry_identity`, whether opened in
 this runtime or restored. The snapshot distinguishes origin runtime from current Segment runtime
 and exposes Segment state, `CONTINUOUS | GAPPED`, gap count, current-data availability, durable
@@ -209,7 +221,8 @@ foreign-product rejection, fixed Policies, reconnect without owner replacement, 
 count zero, paired component admission/close, exact Inverse schema-v5 reader states and V2 score
 packets,
 Workbench product/unit projection, coalescing/status bypass/flush, loopback HTTP, truthful
-zero/UNKNOWN, and Inverse public-method allowlisting. Repeated Episode, Candidate,
+zero/UNKNOWN, transport-immediate heartbeat response and response filtering, and Inverse
+application-method allowlisting. Repeated Episode, Candidate,
 scope-replacement, and completed-Case tests must prove that retained collections return to the
 active-set bound. Public observation requires explicit `CURRENT_STAGE` authority. A bounded gate
 may establish current-state reachability and negative product contamination only; a later natural

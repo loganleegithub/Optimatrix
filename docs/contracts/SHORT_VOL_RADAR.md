@@ -45,7 +45,7 @@ It exposes:
 - newest response timestamp and age;
 - whether the newest response point falls outside the configured completion cutoff;
 - latest confirmed point and age;
-- exact consecutive five-minute suffix points and minutes;
+- exact consecutive source-confirmed UTC-epoch-aligned five-minute suffix points and minutes;
 - completed-overlap revision count, pending state, and revised timestamps.
 
 The owner never interpolates, backfills, persists, or synthesizes a missing point. A completed-point
@@ -100,8 +100,9 @@ For one short-leg option at one causal boundary:
 5. convert raw bid, stressed bid, and ask native VWAPs through the fixed product's model rule,
    then invert Black total volatility from those model-domain prices;
 6. derive the short-leg Delta interval and classify its explicit review bucket;
-7. consume the exact confirmed five-minute `average_price` suffix and compute the Policy band's
-   realized-variance rates;
+7. consume the exact source-confirmed UTC-epoch-aligned five-minute `average_price` suffix and
+   compute the
+   Policy band's realized-variance rates;
 8. form the reference rate as the larger of the variance floor and
    `0.5 × maximum window rate + 0.5 × mean window rate`;
 9. map **one-tick-stressed executable bid IV / reference RV** into premium anchor `A`;
@@ -155,6 +156,12 @@ S/T missingness contributes zero adjustment but remains an explicit `UNKNOWN` fe
 it is never stored as an observed zero or neutral 50%. D/E are required for a known score. The
 server exposes the numerical score interval, LOW `[0,50)`, MID `[50,65)`, or HIGH `[65,100]`,
 premium/risk decomposition, coverage, missing mask, raw inputs, and normalized contributions.
+
+Every score-packet Decimal is serialized from its full coefficient in fixed-point form, with only
+non-significant trailing fractional zeros removed. Serialization must not invoke an ambient
+precision context or round a raw input. The one policy-aware packet validator restores those raw
+values and reproduces the exact A/S/T/D/E factors, aggregates, score interval, band, coverage, and
+diagnostics before the packet may enter a durable Case.
 
 S/T are optional cross-sectional observations, not independent clocks. `S` freezes the maximum
 source-timestamp skew across the target ticker and the same-type lower/upper interpolation
@@ -255,11 +262,24 @@ product, Radar Policy, bucket, leader, score band, and confirmation causal seque
 heartbeat, polling, display publication, unchanged recomputation, and multiple changes inside one
 separation interval do not advance persistence.
 
+The Episode freezes its canonical activation score packet. Every current Episode-owned atomic
+snapshot carries it separately from the current-boundary packet, including when the first complete
+Underwriting projection occurs after activation. A later packet cannot be substituted for the
+activation witness.
+
 An Episode ends on clear/band exit, known ineligibility, transition into a review-only TTE bucket,
 leader change before freeze, membership or scope loss, required core-score fact loss, history
 revision/gap/staleness, continuity loss, or run stop. After any source loss, fresh observations are
 required. A confirmed LOW/MID research-review Episode can be designated at most once and cannot
 repeat until it has ended and a later Episode completes fresh persistence.
+
+Ordered queue-lag currentness is a global decision pause, not a source observation. While it is
+active, current evaluations and bucket coverage are `UNKNOWN`, no persistence observation is
+counted, and no Episode, Candidate, or Case can open. A bucket with no active Episode retains only
+its already-accepted pre-activation leader, band, and count through that pause. Catch-up recomputes
+current truth: the same leader and band may continue from the retained count, while leader, band,
+scope, or persistent core change applies the normal reset. An already-active Episode remains
+fail-closed and ends on required core loss; queue lag never extends active decision authority.
 
 A ticker application is a distinct persistence observation only when forward, signed Delta, or
 mark IV changes. OI/gamma-only changes refresh the unsigned diagnostic but do not advance score
@@ -294,7 +314,8 @@ loss remain post-warmup UNKNOWN. Every Radar UNKNOWN contributes exactly one bou
 When a bucket loses a nonzero but not-yet-confirmed observation count, the reducer increments one
 fixed reset reason: leader change, score-band change, core UNKNOWN, scope loss, clue ineligibility,
 or run stop. The counter is runtime-local, non-durable, and is neither an Episode count nor a market
-frequency estimate; zero-observation state alignment does not increment it.
+frequency estimate; zero-observation state alignment does not increment it. A transient ordered
+queue-lag pause that preserves the count is not a loss and therefore increments no reset reason.
 
 ## Trader handoff and persistence
 

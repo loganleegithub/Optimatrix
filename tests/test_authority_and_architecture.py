@@ -182,45 +182,42 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_completed_review_truth_main_cutover() -> None:
+def test_current_stage_authorizes_typed_activation_packet_and_heartbeat_recovery() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_REVIEW_TRUTH_LIVE_CURRENT`" in current
+    assert "**Current task kind:** `IMPLEMENTATION`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_TYPED_ACTIVATION_PACKET_LIVE_VALIDATION`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_8675_FROM_MAIN_9A4CC23`" in current
-    assert "**Live commands:** `NONE_CONSUMED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "**Persistent service:** `RUNNING_WITH_FOUR_RECOVERED_ADMITTED_ENTRIES`" in current
+    assert "**Live commands:** `CONTINUED_PUBLIC_ONLY_MONITORING`" in current
+    assert "`ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`" in current
+    assert "`OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`" in current
+    assert "`LOSSY_DECIMAL_PACKET_SERIALIZATION`" in current
+    assert "`TERMINAL_ATTEMPT_CANDIDATE_RETIREMENT_GAP`" in current
+    assert "`INTERRUPTED_TERMINAL_CANDIDATE_RETIREMENT_GAP`" in current
+    assert "`ORDERED_BUSINESS_QUEUE_HEARTBEAT_TEST_RESPONSE_DELAY`" in current
+    assert "`ACTIVATION_PACKET_MUTABLE_PROJECTION_GAP`" in current
+    assert "`EPISODE_ACTIVATION_PACKET_TYPED_HANDOFF_GAP`" in current
+    assert "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
-        "9a4cc23cb9092a04b0a6e72eec6657a570660c73",
-        "sha256:9d383a7d19027c09324d1b811caeef90184dd1065a2bcff226b6df665c1e4432",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
-        "zero schema-v5 Case, Control, Shadow Entry, Position, or Outcome records",
-        "`31/31` samples over `302.1 s`",
-        "`128/128` current Radar coverage",
-        "zero reconnects and zero protocol gaps",
-        "zero rows in the 30-to-45-minute review-only TTE band",
-        "live window did not exercise a non-empty review-only band",
-        "18-to-23 `CONFIRMING` rows",
-        "13 `CORE_UNKNOWN`, 36 `LEADER_CHANGE`, 9 `SCOPE_LOSS`, and 6 `SCORE_BAND_CHANGE`",
-        "`RADAR_EPISODE_OR_REVIEW_ENDED`",
-        "conserved `1 = 1`",
-        "`278 ms` median",
-        "`2,303 ms` p95",
-        "`4,560 ms` maximum",
-        "`929 ms` median",
-        "`2,677 ms` p95",
-        "`5,057 ms` maximum",
-        "`244 ms` median",
-        "`2,310 ms` p95",
-        "`4,569 ms` maximum",
-        "PR #44",
-        "PR #45",
-        "PR #46",
+        "2739ad26745aca2884ed56f296b8d4d3d07ff9cc",
+        "sha256:9a6d7f937d08118eb13c15e4dd511d67c8b1c8232b2c69560bf8d402fb377688",
+        "`613,931 ms` apart",
+        "first `2` admitted Shadow Cases",
+        "validates `4` admitted Cases",
+        "non-empty `shadow_entry_identity`",
+        "official policy-aware Case reader now validates `4` admitted Cases",
+        "`REMOTE_CONNECTION_CLOSED` session incident",
+        "zero-reconnect heartbeat gate is therefore falsified",
+        "recoverable active Entries",
+        "`CENSORED_AT_FAILURE`",
+        "No Case was copied, rewritten, migrated, or deleted",
+        "truthful GAPPED Segments",
     ):
         assert phrase in normalized
     for identity in (
@@ -230,7 +227,10 @@ def test_current_stage_records_completed_review_truth_main_cutover() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md",
+        "TEMPLATE.md",
+    }
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
 

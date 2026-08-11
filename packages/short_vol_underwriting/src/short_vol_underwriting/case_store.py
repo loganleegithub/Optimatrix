@@ -1517,9 +1517,7 @@ def _bindings_from_opened(opened: Mapping[str, object]) -> RuntimeBindings:
 
 
 def _case_id_from_directory(case_directory: Path) -> str:
-    case_id = f"sha256:{case_directory.name}"
-    _identity(case_id, "case_id")
-    return case_id
+    return shadow_case_id_from_directory_name(case_directory.name)
 
 
 def _segment_directory_sort_key(path: Path) -> int:
@@ -1609,6 +1607,12 @@ def is_shadow_case_staging_name(name: str) -> bool:
         and len(middle) == 32
         and all(character in "0123456789abcdef" for character in middle)
     )
+
+
+def shadow_case_id_from_directory_name(name: str) -> str:
+    """Restore the canonical Case identity from its store-owned directory name."""
+
+    return _identity(f"sha256:{name}", "case_id")
 
 
 def _is_staging_segment_name(name: str) -> bool:

@@ -474,6 +474,38 @@ def test_policy_aware_packet_validator_rejects_derived_truth_tampering(
         validate_radar_score_packet(value, policy=policy)
 
 
+def test_packet_serialization_preserves_high_precision_factor_inputs() -> None:
+    policy = _policy()
+    adverse_share = Decimal("0.72208817542761025957486936731234567890123456789012")
+    result = compute_radar_score(
+        policy.score_model,
+        _inputs(adverse_semivariance_share=_interval(str(adverse_share))),
+    )
+    packet = replace(
+        _packet(),
+        policy_identity=policy.identity,
+        result=result,
+    )
+
+    serialized = packet.as_object()
+    restored = validate_radar_score_packet(serialized, policy=policy)
+
+    assert restored == packet
+    serialized_result = serialized["result"]
+    assert isinstance(serialized_result, dict)
+    factors = serialized_result["factors"]
+    assert isinstance(factors, list)
+    factor_d = factors[3]
+    assert isinstance(factor_d, dict)
+    raw_inputs = factor_d["raw_inputs"]
+    assert isinstance(raw_inputs, list)
+    raw_adverse = raw_inputs[0]
+    assert isinstance(raw_adverse, dict)
+    adverse_interval = raw_adverse["interval"]
+    assert isinstance(adverse_interval, dict)
+    assert adverse_interval["lower"] == str(adverse_share)
+
+
 def _leader_candidate(
     *,
     instrument: str,

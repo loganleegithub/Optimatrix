@@ -160,7 +160,6 @@ PUBLIC_RPC_METHODS = frozenset(
         "public/set_heartbeat",
         "public/status",
         "public/subscribe",
-        "public/test",
         "public/unsubscribe",
     }
 )
@@ -175,7 +174,6 @@ class PublicClient(Protocol):
         request_id: int,
         method: str,
         params: dict[str, object],
-        responding_to_test_request: bool = False,
     ) -> None: ...
 
     async def next_envelope(self, timeout_seconds: float | None = None) -> InboundEnvelope: ...
@@ -353,6 +351,7 @@ class AtomicScopeSnapshot:
     anomaly_activation_seq: int
     activation_band_id: str
     score_band: ScoreBand
+    activation_score_packet: RadarScorePacket
     radar_score_packet: RadarScorePacket
     detector_state: DetectorState
     detector_causal_seq: int
@@ -393,7 +392,6 @@ class RpcPurpose(StrEnum):
     OPTION_METADATA = "OPTION_METADATA"
     COMBO_CATALOG = "COMBO_CATALOG"
     COMBO_METADATA = "COMBO_METADATA"
-    HEARTBEAT_TEST = "HEARTBEAT_TEST"
     ADMISSION_REFRESH = "ADMISSION_REFRESH"
     POST_CLOSE_REFRESH = "POST_CLOSE_REFRESH"
 
@@ -1699,10 +1697,7 @@ class RadarReducer:
             sent_monotonic_ms,
         )
         self.pending_rpcs.pop(request_id, None)
-        if request.purpose not in {
-            RpcPurpose.SET_HEARTBEAT,
-            RpcPurpose.HEARTBEAT_TEST,
-        }:
+        if request.purpose is not RpcPurpose.SET_HEARTBEAT:
             self._causal_seq += 1
         if terminal_monotonic_ms > deadline_monotonic_ms:
             self._finish_rpc(
@@ -1745,18 +1740,6 @@ class RadarReducer:
             RpcPurpose.SUBSCRIBE_CHANNELS,
             RpcPurpose.UNSUBSCRIBE_CHANNELS,
         }
-        if request.purpose is RpcPurpose.HEARTBEAT_TEST and (
-            not isinstance(result, dict)
-            or not isinstance(result.get("version"), str)
-            or not result["version"]
-        ):
-            self._finish_rpc(
-                request,
-                state=RpcState.ERROR,
-                terminal_monotonic_ms=terminal_monotonic_ms,
-                record_latency=True,
-            )
-            raise PublicProtocolIncompatibility("public/test result lacks a valid version")
         if not channel_change_response:
             self._finish_rpc(
                 request,
@@ -2648,15 +2631,7 @@ class RadarReducer:
             return
         if heartbeat_type != "test_request":
             raise PublicProtocolIncompatibility("unknown heartbeat type")
-        self._schedule(
-            purpose=RpcPurpose.HEARTBEAT_TEST,
-            method="public/test",
-            params={},
-            scope="SESSION_CONTROL",
-            generation=None,
-            origin_boundary=self._current_boundary(envelope),
-            failure_scope=FailureScope.SESSION,
-        )
+        return
 
     def _apply_option_snapshot(
         self,
@@ -5074,6 +5049,16 @@ class RadarReducer:
                 ),
             )
             if selection.leader is None and bucket_tracker is not None:
+                prior_leader = self.bucket_leader_by_key.get(bucket_key)
+                if (
+                    self._queue_lag_currentness_active
+                    and bucket_tracker.episode is None
+                    and bucket_tracker.confirmation_observation_count > 0
+                    and prior_leader in names
+                ):
+                    new_bucket_leaders[bucket_key] = prior_leader
+                    new_bucket_coverages[bucket_key] = LeaderCoverage.UNKNOWN
+                    continue
                 transition = (
                     bucket_tracker.scope_loss(causal_seq=commit.boundary.causal_seq)
                     if selection.reason == "FROZEN_LEADER_SCOPE_LOSS"
@@ -5711,7 +5696,13 @@ class RadarReducer:
         anomaly_activation_seq = episode.activation_causal_seq
         activation_band_id = episode.bucket_key.tte_band_id
         short_leg = self.options.get(episode.leader_instrument_name)
-        score_packet = self.score_packets.get(episode.leader_instrument_name)
+        activation_packet = episode.activation_packet
+        score_packet = (
+            activation_packet
+            if dict(activation_packet.fact_boundary)
+            == self._radar_packet_fact_boundary(commit.boundary)
+            else self.score_packets.get(episode.leader_instrument_name)
+        )
         if (
             short_leg is None
             or score_packet is None
@@ -5793,6 +5784,7 @@ class RadarReducer:
             anomaly_activation_seq=anomaly_activation_seq,
             activation_band_id=activation_band_id,
             score_band=episode.score_band,
+            activation_score_packet=activation_packet,
             radar_score_packet=score_packet,
             detector_state=(
                 DetectorState.ANOMALY_ACTIVE
@@ -7227,7 +7219,6 @@ class LiveRadarRuntime:
                     request_id=command.request_id,
                     method=command.method,
                     params=command.params,
-                    responding_to_test_request=(command.purpose is RpcPurpose.HEARTBEAT_TEST),
                 )
         except asyncio.CancelledError:
             client.enqueue_send_control(
