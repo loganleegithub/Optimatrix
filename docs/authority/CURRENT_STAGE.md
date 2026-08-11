@@ -4,9 +4,9 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_LIVE_8765`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
@@ -14,9 +14,33 @@
 
 **Persistent service:** `RUNNING_8765_MAIN_CCD773B_WITH_34_RECOVERED_ADMITTED_ENTRIES`
 
-**Live commands:** `NONE_CONSUMED`
+**Live commands:** `ONE_CLEAN_STOP_AND_ONE_CLEAN_START_8765`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:**
+[`INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR.md)
+
+## Current bounded implementation authority
+
+The current schema-v7 Workbench emits all dynamic Radar map coordinates and both selected-signal
+metric widths through inline CSS variables. The declared `style-src 'self'` policy rejects those
+attributes: every inspected marker computes to the track origin and both meters appear full even
+when their server values are lower. This is a trader-visible rendering failure, not missing Radar
+truth or a reason to change Policy.
+
+Starting from synchronized direct `main@bfcf876ef443db109f5bec47579cad123b51dcf5`, the active task
+may replace only that inline-style rendering path with CSP-safe native coordinate/value semantics,
+add direct regression coverage, and update its Authority closure. Radar selection, scoring,
+product/Policy identities, server projection, Workbench/Case schemas, and the stable repository
+remain unchanged.
+
+After focused and full gates, one clean stop of the sole 8765 runtime and one clean start from the
+exact accepted runtime checkout are authorized on the unchanged stable repository. The stop closes
+active admitted Entry Segments without creating an admitted Outcome; the new runtime restores every
+compatible non-terminal Entry and begins fresh facts in truthful `GAPPED` Segments. One bounded
+GET/HEAD, snapshot, official-reader, served-asset, and in-app-browser review of every declared page
+module is authorized. A consumed or failed start grants no retry. No source probe, second runtime,
+Policy/schema/root operation, migration, commissioning, supervision, or private execution is
+authorized.
 
 ## Current online boundary
 

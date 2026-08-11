@@ -1352,10 +1352,10 @@ body {
 .signal-lane {
   position: relative;
   display: grid;
-  grid-template-columns: 160px minmax(720px, 1fr);
-  min-width: 920px;
-  min-height: 146px;
-  flex: 1 0 146px;
+  grid-template-columns: 160px minmax(1000px, 1fr);
+  min-width: 1160px;
+  min-height: 150px;
+  flex: 0 0 auto;
   border-bottom: 1px solid var(--border);
 }
 .signal-lane:last-child { border-bottom: 0; }
@@ -1374,43 +1374,49 @@ body {
 
 .signal-lane-track {
   position: relative;
-  min-height: 146px;
+  min-height: 150px;
   overflow: hidden;
 }
-.signal-lane-track::before {
-  position: absolute;
-  right: 4%;
-  bottom: 34px;
-  left: 4%;
-  height: 1px;
-  background: var(--border-strong);
-  content: "";
+.signal-lane-chart {
+  display: block;
+  width: 100%;
+  overflow: hidden;
 }
 
+.signal-track-line { stroke: var(--border-strong); stroke-width: 1; }
 .scope-tick {
-  position: absolute;
-  bottom: 30px;
-  left: var(--signal-x);
-  width: 1px;
-  height: 8px;
-  background: var(--subtle);
+  stroke: var(--subtle);
+  stroke-width: 1;
   opacity: 0.38;
 }
+.signal-marker-slot { overflow: visible; }
+.signal-stem {
+  pointer-events: none;
+  stroke: var(--signal-put);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+.signal-stem.call { stroke: var(--signal-call); }
+.signal-ring {
+  pointer-events: none;
+  fill: var(--surface-soft);
+  stroke: var(--signal-put);
+  stroke-width: 3;
+}
+.signal-ring.call { stroke: var(--signal-call); }
+.signal-ring.active { fill: var(--signal-put); }
+.signal-ring.call.active { fill: var(--signal-call); }
 
 .signal-marker {
-  position: absolute;
-  bottom: 25px;
-  left: var(--signal-x);
-  z-index: 3;
+  position: static;
   display: grid;
   justify-items: center;
-  width: 84px;
+  width: 80px;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--text);
   cursor: pointer;
-  transform: translateX(-50%);
 }
 .signal-marker:hover .signal-card,
 .signal-marker:focus-visible .signal-card { border-color: var(--text); }
@@ -1450,24 +1456,11 @@ body {
 }
 .signal-marker.call .signal-card em { color: var(--signal-call); }
 
-.signal-state-ring {
-  width: 19px;
-  height: 19px;
-  margin-top: 5px;
-  border: 3px solid var(--signal-put);
-  border-radius: 50%;
-  background: transparent;
-  box-shadow: 0 0 0 3px var(--purple-soft);
-}
-.signal-marker.active .signal-state-ring { background: var(--signal-put); }
-.signal-marker.call .signal-state-ring { border-color: var(--signal-call); box-shadow: 0 0 0 3px var(--amber-soft); }
-.signal-marker.call.active .signal-state-ring { background: var(--signal-call); }
-
 .signal-axis {
   display: flex;
   flex: 0 0 auto;
   justify-content: space-between;
-  min-width: 920px;
+  min-width: 1160px;
   padding: 8px 38px 9px 198px;
   border-top: 1px solid var(--border);
   color: var(--subtle);
@@ -1551,9 +1544,21 @@ body[data-surface="radar"] .detail-actions .secondary-button { flex: 1 1 auto; }
 .signal-metrics { display: grid; gap: 11px; margin-top: 14px; }
 .signal-metric-head { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 0.66rem; }
 .signal-metric-head strong { color: var(--text); }
-.signal-meter { height: 7px; overflow: hidden; border-radius: 999px; background: var(--border); }
-.signal-meter span { display: block; width: var(--meter-value); height: 100%; background: var(--green); }
-.signal-metric.risk .signal-meter span { background: var(--blue); }
+.signal-meter {
+  display: block;
+  width: 100%;
+  height: 7px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  appearance: none;
+  background: var(--border);
+}
+.signal-meter::-webkit-progress-bar { border-radius: 999px; background: var(--border); }
+.signal-meter::-webkit-progress-value { border-radius: 999px; background: var(--green); }
+.signal-meter::-moz-progress-bar { border-radius: 999px; background: var(--green); }
+.signal-metric.risk .signal-meter::-webkit-progress-value { background: var(--blue); }
+.signal-metric.risk .signal-meter::-moz-progress-bar { background: var(--blue); }
 .signal-summary {
   margin: 15px 0 0;
   padding-top: 13px;

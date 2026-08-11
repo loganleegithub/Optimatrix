@@ -182,16 +182,15 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_v2_confirming_map_live_on_8765() -> None:
+def test_current_stage_authorizes_v2_radar_map_csp_layout_repair() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_LIVE_8765`" in current
+    assert "**Current task kind:** `IMPLEMENTATION`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert "`RUNNING_8765_MAIN_CCD773B_WITH_34_RECOVERED_ADMITTED_ENTRIES`" in current
-    assert "**Live commands:** `NONE_CONSUMED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "**Live commands:** `ONE_CLEAN_STOP_AND_ONE_CLEAN_START_8765`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
@@ -225,6 +224,13 @@ def test_current_stage_records_v2_confirming_map_live_on_8765() -> None:
         "not an admitted Shadow Outcome",
         "No Case, Entry, Control, or Outcome was copied, migrated, rewritten, deleted",
         "main CI passed with 750 tests",
+        "style-src 'self'",
+        "every inspected marker computes to the track origin",
+        "both meters appear full",
+        "bfcf876ef443db109f5bec47579cad123b51dcf5",
+        "one clean stop of the sole 8765 runtime",
+        "one clean start from the exact accepted runtime checkout",
+        "A consumed or failed start grants no retry",
     ):
         assert phrase in normalized
     for identity in (
@@ -234,7 +240,10 @@ def test_current_stage_records_v2_confirming_map_live_on_8765() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR.md",
+        "TEMPLATE.md",
+    }
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()

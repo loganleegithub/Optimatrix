@@ -85,7 +85,7 @@ def test_opportunity_blotter_preserves_public_only_read_only_boundaries() -> Non
 def test_opportunity_blotter_uses_fixed_detail_and_responsive_dismissible_drawer() -> None:
     assert 'id="radar-map"' in HTML
     assert 'id="detail-panel"' in HTML
-    assert "grid-template-columns: 160px minmax(720px, 1fr)" in CSS
+    assert "grid-template-columns: 160px minmax(1000px, 1fr)" in CSS
     assert "width: min(390px, calc(100vw - 56px))" in CSS
     assert "@media (max-width: 900px)" in CSS
     assert "width: min(620px, calc(100vw - 24px))" in CSS
@@ -116,7 +116,6 @@ def test_opportunity_blotter_supports_explicit_day_and_night_themes() -> None:
     assert 'html[data-theme="light"]' in CSS
     assert "function setTheme(theme)" in JS
     assert "storage.setItem(THEME_STORAGE_KEY, theme)" in JS
-
     test_js = JS.replace(
         "syncThemeControl();\nupdateResponsiveDetailState();\nrefresh();\nsetInterval(refresh, 2000);",
         "globalThis.__themeTest = { setTheme, syncThemeControl, restoreThemePreference };",
@@ -188,6 +187,19 @@ assert.equal(light.attributes['aria-pressed'], 'true');
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_opportunity_blotter_uses_csp_safe_dynamic_graphics() -> None:
+    combined = f"{HTML}\n{JS}"
+
+    assert 'style="' not in combined
+    assert "--signal-x" not in CSS
+    assert "--meter-value" not in CSS
+    assert 'class="signal-lane-chart"' in JS
+    assert 'class="signal-marker-slot"' in JS
+    assert 'transform="translate(-40 0)"' in JS
+    assert '<progress class="signal-meter"' in JS
+    assert ".signal-meter::-webkit-progress-value" in CSS
 
 
 def test_responsive_drawer_executes_inert_focus_trap_escape_and_focus_restore() -> None:
@@ -294,7 +306,9 @@ def test_opportunity_blotter_maps_server_states_without_recomputing_strategy_tru
         "globalThis.__workbenchTest = { channelSnapshotState, latencyState, roadmapState, structureState, "
         "radarState, radarReviewConstraint, radarConfirmationText, reasonCountsText, radarDetailMarkup, "
         "orderedStructureRows, isStrongSignalRow, strongSignalRows, groupStrongSignalsByExpiry, "
-        "signalStrikeBounds, signalXPercent, predicateMarginForFailure, "
+        "signalStrikeBounds, signalXPercent, signalLaneLayout, signalMarkerMarkup, "
+        "signalLaneChartMarkup, "
+        "predicateMarginForFailure, "
         "formatMargin, firstFailureSummary, structureJudgement, canonicalShadowMarkup, "
         "canonicalShadowEntry, structureEntryFacts, structureIdentity, structureDetailMarkup, "
         "shadowStructureRow, structureQueueRows, shadowTrackingPresentation, "
@@ -437,6 +451,25 @@ assert.equal(api.groupStrongSignalsByExpiry(api.strongSignalRows(mapDocument)).l
 assert.deepEqual(api.signalStrikeBounds(mapDocument), {{lower: 60000, upper: 69000}});
 assert.equal(api.signalXPercent(60000, {{lower: 60000, upper: 69000}}), 4);
 assert.equal(api.signalXPercent(69000, {{lower: 60000, upper: 69000}}), 96);
+const markerMarkup = api.signalMarkerMarkup(confirming, 0, {{lower: 60000, upper: 69000}}, 0, 130);
+assert.match(markerMarkup, /<foreignObject[^>]+x="96%"[^>]+y="34"/);
+assert.match(markerMarkup, /transform="translate\\(-40 0\\)"/);
+assert.match(markerMarkup, /<circle class="signal-ring/);
+assert.match(markerMarkup, /<button[^>]+role="listitem"/);
+assert.doesNotMatch(markerMarkup, /style=/);
+const stackedGroup = {{scopeRows: mapDocument.radar.rows, rows: [strongActive, {{
+  ...confirming, instrument_name: 'CONFIRM-SAME', strike_price: '63000',
+  bucket_episode_leader_instrument_name: 'CONFIRM-SAME'
+}}]}};
+const chartMarkup = api.signalLaneChartMarkup(stackedGroup, {{lower: 60000, upper: 69000}});
+const stackedLayout = api.signalLaneLayout(stackedGroup.rows, {{lower: 60000, upper: 69000}});
+assert.equal(stackedLayout.tierCount, 2);
+assert.equal(stackedLayout.chartHeight, 236);
+assert.match(chartMarkup, /<svg class="signal-lane-chart"/);
+assert.match(chartMarkup, /<line class="signal-track-line"/);
+assert.match(chartMarkup, /y="34"/);
+assert.match(chartMarkup, /y="120"/);
+assert.doesNotMatch(chartMarkup, /style=/);
 assert.match(api.radarState({{
   instrument_name: 'MEMBER', is_bucket_leader: false,
   clue_eligible_tte: true, clue_eligible_delta: true,
@@ -478,6 +511,14 @@ assert.match(radarDetail, /TTE 仅供审查 · 不进入确认/);
 assert.match(radarDetail, /核心 Radar 事实变为 UNKNOWN 2/);
 assert.match(radarDetail, /没有可冻结的同到期保护腿 4/);
 assert.match(radarDetail, /非本行因果归因/);
+const meteredDetail = api.radarDetailMarkup({{...strongActive, score_result: {{
+  band: 'HIGH', score: {{lower: '78', upper: '78'}},
+  premium_evidence: {{lower: '0.72', upper: '0.72'}},
+  risk_quality: {{lower: '0.64', upper: '0.64'}}
+}}}}, {{funnel: {{}}}});
+assert.match(meteredDetail, /<progress class="signal-meter" max="100" value="72"/);
+assert.match(meteredDetail, /<progress class="signal-meter" max="100" value="64"/);
+assert.doesNotMatch(meteredDetail, /style=/);
 
 const ordered = api.orderedStructureRows([
   {{short_leg_instrument_name: 'A', availability: 'EVALUABLE', action: 'ABSTAIN'}},

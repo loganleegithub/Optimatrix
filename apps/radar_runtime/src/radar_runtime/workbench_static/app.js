@@ -1186,23 +1186,66 @@ function structureRowMarkup(row, index) {
     `<span class="cell-secondary">${safeText(failure.label)}</span></span></button>`;
 }
 
-const signalMarkerMarkup = (row, index, bounds) => {
+const signalLaneLayout = (rows, bounds) => {
+  const positioned = rows.map((row, index) => ({
+    index,
+    x: signalXPercent(row.strike_price, bounds),
+    instrumentName: String(row.instrument_name || '')
+  })).sort((left, right) => left.x - right.x ||
+    left.instrumentName.localeCompare(right.instrumentName));
+  const lastXByTier = [];
+  const tierByIndex = new Map();
+  positioned.forEach(item => {
+    let tier = lastXByTier.findIndex(lastX => item.x - lastX >= 8.5);
+    if (tier < 0) tier = lastXByTier.length;
+    lastXByTier[tier] = item.x;
+    tierByIndex.set(item.index, tier);
+  });
+  const tierCount = Math.max(1, lastXByTier.length);
+  const chartHeight = 150 + (tierCount - 1) * 86;
+  return {tierByIndex, tierCount, chartHeight, baselineY: chartHeight - 20};
+};
+
+const signalMarkerMarkup = (row, index, bounds, tier, baselineY) => {
   const id = radarIdentity(row, index);
   const score = scoreLowerBound(row);
   const state = row.bucket_episode_state;
   const optionClass = row.option_type === 'call' ? 'call' : 'put';
   const stateClass = state === 'ACTIVE' ? 'active' : 'confirming';
+  const x = signalXPercent(row.strike_price, bounds);
+  const cardY = baselineY - 96 - tier * 86;
   const confirmation = `${displayText(row.confirmation_observation_count)}/${displayText(row.required_confirmation_observation_count)}`;
-  return `<button type="button" class="signal-marker ${optionClass} ${stateClass}" role="listitem" ` +
+  return `<line class="signal-stem ${optionClass}" x1="${x}%" x2="${x}%" ` +
+    `y1="${cardY + 80}" y2="${baselineY - 10}"></line>` +
+    `<circle class="signal-ring ${optionClass} ${stateClass}" cx="${x}%" cy="${baselineY}" r="9"></circle>` +
+    `<foreignObject class="signal-marker-slot" x="${x}%" y="${cardY}" ` +
+    `width="80" height="86" transform="translate(-40 0)">` +
+    `<button xmlns="http://www.w3.org/1999/xhtml" type="button" ` +
+    `class="signal-marker ${optionClass} ${stateClass}" role="listitem" ` +
     `data-row-id="${escapeHtml(id)}" aria-pressed="${selectedRadarId === id}" ` +
     `aria-label="${safeText(`${row.instrument_name}，V2 Score ${score === null ? '未知' : formatCompactNumber(score, 1)}，${state}`)}" ` +
-    `style="--signal-x:${signalXPercent(row.strike_price, bounds)}%">` +
+    `>` +
       `<span class="signal-leader-mark" aria-hidden="true"></span>` +
       `<span class="signal-card"><small>${safeText(formatCompactNumber(row.strike_price, 0))}</small>` +
       `<strong>${safeText(score === null ? '—' : formatCompactNumber(score, 1))}</strong>` +
       `<em>${safeText(state === 'ACTIVE' ? 'ACTIVE' : confirmation)}</em></span>` +
-      `<span class="signal-state-ring" aria-hidden="true"></span>` +
-    `</button>`;
+    `</button></foreignObject>`;
+};
+
+const signalLaneChartMarkup = (group, bounds) => {
+  const layout = signalLaneLayout(group.rows, bounds);
+  const markers = group.rows.map((row, index) => signalMarkerMarkup(
+    row, index, bounds, layout.tierByIndex.get(index), layout.baselineY
+  )).join('');
+  const ticks = group.scopeRows.map(row => {
+    const x = signalXPercent(row.strike_price, bounds);
+    return `<line class="scope-tick" x1="${x}%" x2="${x}%" ` +
+      `y1="${layout.baselineY - 4}" y2="${layout.baselineY + 4}"></line>`;
+  }).join('');
+  return `<svg class="signal-lane-chart" width="100%" height="${layout.chartHeight}" focusable="false">` +
+    `<line class="signal-track-line" x1="4%" x2="96%" ` +
+    `y1="${layout.baselineY}" y2="${layout.baselineY}"></line>` +
+    `${ticks}${markers}</svg>`;
 };
 
 const signalAxisMarkup = bounds => {
@@ -1240,15 +1283,11 @@ function renderRadarMap(documentValue, rows) {
     }));
   const selected = rows.find((row, index) => radarIdentity(row, index) === selectedRadarId);
   const lanes = groups.map(group => {
-    const ticks = group.scopeRows.map(row =>
-      `<span class="scope-tick" style="--signal-x:${signalXPercent(row.strike_price, bounds)}%"></span>`
-    ).join('');
     const isCurrent = selected && Number(selected.expiration_timestamp_ms) === group.expiry;
     return `<section class="signal-lane" aria-current="${isCurrent ? 'true' : 'false'}">` +
       `<div class="signal-lane-label"><strong>${safeText(formatDate(group.expiry))}</strong>` +
       `<span>${safeText(formatDurationInterval(group.scopeRows[0].tte_interval_ms))}</span></div>` +
-      `<div class="signal-lane-track">${ticks}${group.rows.map((row, index) =>
-        signalMarkerMarkup(row, index, bounds)).join('')}</div></section>`;
+      `<div class="signal-lane-track">${signalLaneChartMarkup(group, bounds)}</div></section>`;
   }).join('');
   map.innerHTML = lanes + signalAxisMarkup(bounds);
 }
@@ -1559,10 +1598,12 @@ function radarDetailMarkup(row, documentValue) {
     `<div class="signal-metrics">` +
       `<div class="signal-metric"><div class="signal-metric-head"><span>Premium Strength (A/S/T)</span>` +
       `<strong>${safeText(scoreComponentText(packet, 'premium_evidence'))}</strong></div>` +
-      `<div class="signal-meter" style="--meter-value:${scoreMetricWidth(result, 'premium_evidence')}%"><span></span></div></div>` +
+      `<progress class="signal-meter" max="100" value="${scoreMetricWidth(result, 'premium_evidence')}" ` +
+      `aria-label="Premium Strength"></progress></div>` +
       `<div class="signal-metric risk"><div class="signal-metric-head"><span>Risk Quality (D/E)</span>` +
       `<strong>${safeText(scoreComponentText(packet, 'risk_quality'))}</strong></div>` +
-      `<div class="signal-meter" style="--meter-value:${scoreMetricWidth(result, 'risk_quality')}%"><span></span></div></div>` +
+      `<progress class="signal-meter" max="100" value="${scoreMetricWidth(result, 'risk_quality')}" ` +
+      `aria-label="Risk Quality"></progress></div>` +
     `</div>` +
     `<p class="signal-summary">服务器将该 bucket leader 结算为 ${safeText(result && result.band)}；` +
       `当前覆盖为 ${safeText(scoreCoverageText(packet))}。</p>` +
