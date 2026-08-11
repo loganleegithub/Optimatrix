@@ -976,6 +976,55 @@ def test_episode_retirement_reconciles_an_already_terminal_candidate_attempt(
     assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
 
 
+def test_episode_retirement_clears_candidate_from_an_interrupted_terminal_transition(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    intents = _settled_transaction(
+        adapter,
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    assert len(intents) == 2
+    (record,) = owner._candidates.values()
+    episode_identity = record.facts.active_episode_identity
+    assert episode_identity is not None
+    interrupted_boundary = DownstreamFactBoundary(
+        code_identity=owner.bindings.code_identity,
+        runtime_identity=owner.bindings.runtime_identity,
+        session_epoch=1,
+        ingress_seq=2,
+        received_monotonic_ms=120,
+        causal_seq=2,
+    )
+    owner._begin_transition()
+    owner._terminalize_candidate_before_refresh(
+        record,
+        reasons=("SOURCE_GAP_PLATFORM_DEGRADATION_OR_REQUIRED_FACT_UNKNOWN",),
+        boundary=interrupted_boundary,
+    )
+    assert record.state.lifecycle.value == "INVALIDATED"
+    assert owner.retained_state_counts["active_candidates"] == 1
+
+    transition = owner.retire_radar_episode(
+        episode_identity,
+        boundary=replace(
+            interrupted_boundary,
+            ingress_seq=3,
+            received_monotonic_ms=130,
+            causal_seq=3,
+        ),
+    )
+
+    assert transition.emitted == ()
+    assert owner.retained_state_counts["active_candidates"] == 0
+    assert _terminal_outcomes(owner) == ["KNOWN_INVALIDATED_BEFORE_REFRESH"]
+
+
 def test_no_active_radar_episode_skips_review_context_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

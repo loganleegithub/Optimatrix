@@ -733,6 +733,7 @@ class FixedContractShadowOwner:
                 reasons=("RADAR_POLICY_OR_EPISODE_PAUSED_ENDED_OR_CHANGED",),
                 boundary=boundary,
             )
+            self._candidate_retirements.add(record.state.candidate_identity)
         transition = self._finish_transition()
         if any(
             record.facts.active_episode_identity == episode_identity

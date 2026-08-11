@@ -6,13 +6,13 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_CANDIDATE_RETIREMENT_REPAIR_LIVE_MONITORING`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_INTERRUPTED_TERMINAL_RETIREMENT_REPAIR_PENDING_CUTOVER`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_REPAIRED_CANDIDATE_RETIREMENT`
+**Persistent service:** `STOPPED_AFTER_INTERRUPTED_TERMINAL_RETIREMENT_FAILURE`
 
 **Live commands:** `CONTINUED_BOUNDED_MONITORING`
 
@@ -113,21 +113,37 @@ Candidate; that Episode truthfully stopped at `NO_TARGET_SIZE_COMPONENT_BOOK_QUO
 observed retirement failure is no longer reproduced, but it does not prove future admission,
 Policy quality, or uptime.
 
+Continued observation reached seven HIGH Episodes and two simultaneous Candidates before runtime
+failure handling retired the current epoch. Candidate cleanup again raised
+`ended Radar episode still owns an active Candidate`. The broader reproduction established
+`INTERRUPTED_TERMINAL_CANDIDATE_RETIREMENT_GAP`: a prior owner transition can terminalize a
+Candidate and then fail before `_finish_transition()` removes it. The next Episode-retirement
+transition clears its pending-retirement set, sees a lifecycle that is already non-`VALID`, emits no
+duplicate invalidation, but previously failed to remove the terminal Candidate from the active map.
+That cleanup exception also masked the earlier failure which initiated reconnect, so the exact
+initiating exception remains `UNKNOWN` for the stopped run.
+
+The bounded follow-up marks every Candidate owned by the ending Episode for map retirement after
+terminalization, including an already-terminal record left by an interrupted transition. It does
+not change admission or Case truth, emit a duplicate terminal, or suppress the initiating failure;
+if that earlier failure recurs, the runtime can now report it directly after cleanup.
+
 ## Current online boundary
 
-The current Online Runtime serves `127.0.0.1:8675` from clean Draft PR #48 code identity
+The most recent Online Runtime served `127.0.0.1:8675` from clean Draft PR #48 code identity
 `21128eb6807cd1403b3b458da1c418c16dcdf099` in the non-temporary checkout
 `/Users/logan/Optimatrix-runtime`. Its runtime identity is
 `sha256:45eadc60aa925e460416ef7dca89b0306bdc005cb96c6caf956c499063b5a06b`.
-It owns the single-instance lease for the unchanged stable Case repository
+It released the single-instance lease for the unchanged stable Case repository
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; no Case root was copied, migrated,
 replaced, or deleted during the cutover.
 
 The first accepted live frame reported health, readiness, `RUNNING`, `CURRENT`, `KNOWN_COMPLETE`,
 `128/128` current Radar coverage, zero reconnects, and zero protocol gaps. Every projected score
 packet in continued one-second sampling passed exact Policy-aware recomputation. The repaired
-runtime has observed one HIGH Episode, which stopped at the known structure blocker
-`NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE`; zero Candidate, admitted Shadow Entry, or Position exists.
+runtime first observed one HIGH Episode which stopped at the known structure blocker
+`NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE`, then reached seven Episodes and two Candidates before the
+interrupted-terminal cleanup failure. It opened zero admitted Shadow Entry or Position.
 The official active-runtime Case report reads all 13 prior schema-v5 Cases: 11 are non-admitted
 Radar-score-band Controls and two are selected-Underwriting decision Controls, all classified
 `INCOMPLETE_UNCLEAN_EXIT` across their former runtime boundaries. Admitted Shadow count remains

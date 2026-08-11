@@ -47,14 +47,16 @@ directory name itself to match `sha256:<digest>`. The official report therefore 
 valid Control Case before reading it. This is not Case corruption and is not the current business
 funnel blocker. That reader defect is repaired.
 
-**Current implementation blocker:** `TERMINAL_ATTEMPT_CANDIDATE_RETIREMENT_GAP`. Continued live
-observation reached 50 HIGH Episodes, 36 fully evaluable Underwriting Episodes, and the first
-canonical Candidate. The paired admission did not remain eligible and correctly became
-`KNOWN_INVALIDATED_BEFORE_REFRESH`, but Episode retirement then failed with
-`ended Radar episode still owns an active Candidate`. An exact owner-state regression proves the
-root cause: if an admission attempt is already terminal while its Candidate is still `VALID`, the
-pre-refresh terminalizer used the attempt's second-transition result as a condition for Candidate
-invalidation. The false result skipped cleanup and violated the bounded active-owner invariant.
+**Current implementation blocker:** `INTERRUPTED_TERMINAL_CANDIDATE_RETIREMENT_GAP`. The first
+repair covered an admission attempt that was already terminal while its Candidate remained
+`VALID`. Continued live observation then reached seven HIGH Episodes and two simultaneous
+Candidates before failure handling retired the epoch and reproduced
+`ended Radar episode still owns an active Candidate`. The broader reproduction proves the remaining
+root cause: a prior owner transition can terminalize a Candidate and then fail before
+`_finish_transition()` removes it. The next retirement transition resets the pending-retirement
+set, correctly avoids a duplicate invalidation for the already-terminal lifecycle, but previously
+left that record in the active Candidate map. The cleanup exception masked the initiating failure,
+whose exact type remains `UNKNOWN` for the stopped run.
 
 **Measured business blocker:** 33 of the first 36 fully evaluable HIGH Episodes were first blocked
 by `CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE`; one each was first blocked by
@@ -81,6 +83,11 @@ Candidate cleanup additionally decouples two distinct transitions: an admission 
 emitted only if the attempt first becomes terminal, while Episode loss always invalidates any
 still-valid Candidate. A terminal attempt can therefore never strand its Candidate in the active
 owner map or turn ordinary Episode retirement into a process-fatal integrity error.
+
+Interrupted-transition cleanup additionally marks every Candidate owned by an ending Episode for
+map retirement after terminalization. An already-terminal lifecycle produces no duplicate business
+record, while any initiating exception remains available to be raised after cleanup instead of
+being hidden by a second Candidate-owner invariant.
 
 **Durable-data effect:** no existing Case is created, rewritten, migrated, or deleted. Future Case
 JSON may carry more significant raw-input digits, under the unchanged schema-v5 key shape and
@@ -145,10 +152,10 @@ policy-aware Case validator can reproduce exact derived truth; no Outcome arithm
 definition changes. Episode retirement also reconciles an already-terminal attempt with its
 still-valid Candidate; it creates no Outcome or durable Case.
 
-**Stage/authorization change:** the old runtime stopped fail-closed and the one bounded clean start
-on `127.0.0.1:8675` completed from code identity
-`21128eb6807cd1403b3b458da1c418c16dcdf099`, using the unchanged stable Case root from the
-non-temporary `/Users/logan/Optimatrix-runtime` checkout. Continued
+**Stage/authorization change:** the last runtime stopped fail-closed after the interrupted-terminal
+cleanup failure. The next bounded clean start on `127.0.0.1:8675` is authorized from the checked
+follow-up repair, using the unchanged stable Case root from the non-temporary
+`/Users/logan/Optimatrix-runtime` checkout. Continued
 public-only observation runs until the first admitted active Shadow or a newly measured fixed
 blocker is established. No private or execution permission is added.
 
@@ -189,6 +196,8 @@ lifecycle owner in `packages/short_vol_underwriting/src/short_vol_underwriting/o
   remains zero;
 - prove an already-terminal admission attempt cannot strand a valid Candidate during Episode
   retirement, emits no duplicate terminal, and leaves no active Candidate or durable Case;
+- prove a Candidate terminalized in an interrupted owner transition is removed by later Episode
+  retirement without a duplicate emission, and that cleanup no longer masks an initiating failure;
 - fixed-attribution live evidence: cross queue currentness above five seconds and prove the frame is
   UNKNOWN/non-countable, adds zero `CORE_UNKNOWN` reset, and preserves accepted pre-confirmation
   through catch-up; keep any separate transport/session reset explicitly attributed;

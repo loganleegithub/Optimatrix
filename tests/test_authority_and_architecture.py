@@ -188,15 +188,18 @@ def test_current_stage_authorizes_candidate_retirement_repair_live_monitoring() 
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
     assert (
-        "`INVERSE_BTC_SHORT_VOL_V2_CANDIDATE_RETIREMENT_REPAIR_LIVE_MONITORING`"
+        "`INVERSE_BTC_SHORT_VOL_V2_INTERRUPTED_TERMINAL_RETIREMENT_REPAIR_PENDING_CUTOVER`"
         in current
     )
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_REPAIRED_CANDIDATE_RETIREMENT`" in current
+    assert (
+        "**Persistent service:** `STOPPED_AFTER_INTERRUPTED_TERMINAL_RETIREMENT_FAILURE`" in current
+    )
     assert "`ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`" in current
     assert "`OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`" in current
     assert "`LOSSY_DECIMAL_PACKET_SERIALIZATION`" in current
     assert "`TERMINAL_ATTEMPT_CANDIDATE_RETIREMENT_GAP`" in current
+    assert "`INTERRUPTED_TERMINAL_CANDIDATE_RETIREMENT_GAP`" in current
     assert "**Live commands:** `CONTINUED_BOUNDED_MONITORING`" in current
     assert "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR" in current
     for phrase in (
@@ -216,7 +219,7 @@ def test_current_stage_authorizes_candidate_retirement_repair_live_monitoring() 
         "bare 64-hex digest",
         "CaseStore's directory-name-to-Case-identity conversion",
         "one authorized clean start completed",
-        "zero Candidate, admitted Shadow Entry, or Position",
+        "zero admitted Shadow Entry or Position",
         "ninth HIGH Episode",
         "`5,011 ms`",
         "50-digit precision",
@@ -244,6 +247,8 @@ def test_current_stage_authorizes_candidate_retirement_repair_live_monitoring() 
         "`KNOWN_INVALIDATED_BEFORE_REFRESH`",
         "ended Radar episode still owns an active Candidate",
         "contains zero admitted Shadow trades",
+        "seven HIGH Episodes and two simultaneous Candidates",
+        "exact initiating exception remains `UNKNOWN`",
     ):
         assert phrase in normalized
     for identity in (
