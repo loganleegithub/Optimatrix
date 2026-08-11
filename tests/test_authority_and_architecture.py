@@ -182,16 +182,16 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_v2_strong_signal_map_8765_cutover() -> None:
+def test_current_stage_records_v2_strong_signal_map_live_current() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP_CUTOVER`" in current
+    assert "**Current task kind:** `NONE`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP_LIVE_CURRENT`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "`STOPPED_UNCLEAN_8675_WITH_32_RECOVERABLE_ADMITTED_ENTRIES`" in current
-    assert "`ONE_CLEAN_START_8765`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP`" in current
+    assert "`RUNNING_8765_FROM_MAIN_54E3B58_WITH_32_RECOVERED_ADMITTED_ENTRIES`" in current
+    assert "**Live commands:** `NONE_CONSUMED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
@@ -201,23 +201,25 @@ def test_current_stage_authorizes_v2_strong_signal_map_8765_cutover() -> None:
         "main@54e3b589ba5ffd7eff7f7acf018fbc0530492614",
         "PR #48",
         "PR #47",
-        "2739ad26745aca2884ed56f296b8d4d3d07ff9cc",
-        "sha256:9a6d7f937d08118eb13c15e4dd511d67c8b1c8232b2c69560bf8d402fb377688",
+        "54e3b589ba5ffd7eff7f7acf018fbc0530492614",
+        "sha256:3d548ef832ac917c11575650de682af3f6adf359d75648b02a9c6e4a0baaee26",
         "127.0.0.1:8675",
         "127.0.0.1:8765",
         "/Users/logan/Optimatrix-runtime",
-        "eligible `HIGH` bucket leaders in `CONFIRMING | ACTIVE`",
-        "may not calculate score, leader, confirmation, forward, history",
-        "validated 47 schema-v5 Cases: 32 admitted Shadow Entries",
-        "4 selected Underwriting Controls, and 11 Radar score Controls",
-        "All 47 retain `INCOMPLETE_UNCLEAN_EXIT`",
-        "restore all 32 admitted Entry aggregates",
-        "truthful `HANDOFF_GAP` Segments",
-        "No Case, Entry, Control, or Outcome may be copied, migrated, rewritten, deleted",
-        "Port `8675` must no longer serve after cutover",
-        "failed or consumed start grants no retry",
-        "no process holds the stable-root lease",
-        "latest Segments are `INCOMPLETE_UNCLEAN_EXIT`",
+        "HTTP `200` for GET and HEAD",
+        "`RUNNING`, `CURRENT`, ready and healthy service",
+        "`KNOWN_COMPLETE` Radar coverage",
+        "`128/128` current instruments",
+        "32 non-terminal admitted Shadow Entries",
+        "4 selected Underwriting Controls, and 11 Radar-score Controls",
+        "zero mature Outcome",
+        "restored all 32 admitted Entry identities exactly once",
+        "32 Shadow Entry rows, 32 Position rows, and 32 pending Outcome projections",
+        "every latest admitted Segment as `OPEN`",
+        "Every restored Entry is truthfully `GAPPED`",
+        "No Case, Entry, Control, or Outcome was copied, migrated, rewritten, deleted",
+        "zero current strong signals is a valid settled state",
+        "completed implementation task is removed from the final tree",
     ):
         assert phrase in normalized
     for identity in (
@@ -227,10 +229,8 @@ def test_current_stage_authorizes_v2_strong_signal_map_8765_cutover() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
-        "INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP.md",
-        "TEMPLATE.md",
-    }
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_PROCESS_INDEPENDENT_SHADOW_ENTRY_RECOVERY.md").exists()
