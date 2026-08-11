@@ -652,7 +652,7 @@ assert.equal(api.postCloseAttemptText('NOT_SCHEDULED'), '尚未安排');
 assert.equal(api.postCloseAttemptText('SCHEDULED'), '已安排');
 assert.equal(api.postCloseAttemptText('TERMINAL'), '已终结');
 assert.equal(api.postCloseAttemptText('ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS'),
-  '进程中断后状态未知\\uFF08不重试\\uFF09');
+  '旧尝试状态未知 · 当前 Segment 持续承担退出责任');
 const trackingEvidence = api.shadowTrackingEvidenceMarkup(gappedShadow);
 assert.match(trackingEvidence, /跨进程跟踪/);
 assert.match(trackingEvidence, /观察有间隙/);
@@ -663,7 +663,7 @@ assert.match(trackingEvidence, /入场 causal seq/);
 assert.match(trackingEvidence, />4</);
 assert.match(trackingEvidence, /双腿源时间/);
 assert.match(trackingEvidence, new RegExp('1000 / 1001'));
-assert.match(trackingEvidence, /进程中断后状态未知\\uFF08不重试\\uFF09/);
+assert.match(trackingEvidence, /旧尝试状态未知 · 当前 Segment 持续承担退出责任/);
 assert.doesNotMatch(trackingEvidence, /callout blocker/);
 const gappedShadowMarkup = api.canonicalShadowMarkup(gappedRow, gappedDocument);
 assert.match(gappedShadowMarkup, /跨进程跟踪/);

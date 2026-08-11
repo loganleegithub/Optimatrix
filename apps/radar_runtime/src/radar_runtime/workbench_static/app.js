@@ -131,7 +131,7 @@ const postCloseAttemptLabels = {
   NOT_SCHEDULED: '尚未安排',
   SCHEDULED: '已安排',
   TERMINAL: '已终结',
-  ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS: '进程中断后状态未知（不重试）'
+  ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS: '旧尝试状态未知 · 当前 Segment 持续承担退出责任'
 };
 
 const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
