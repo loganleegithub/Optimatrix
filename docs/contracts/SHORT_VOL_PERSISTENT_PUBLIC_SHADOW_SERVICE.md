@@ -45,6 +45,12 @@ Workbench keeps a second in-memory event history.
 Every retained source, current-state identity, funnel denominator, and Case belongs to
 `INVERSE_BTC_V1`. Product comparison is not part of the Online Runtime.
 
+Deribit session liveness is transport work, not business reduction. On a server `test_request`, the
+public client sends the required `public/test` immediately before the notification can wait behind
+the application queue. One transport-local request id binds and validates the matching version
+response; the reducer cannot schedule a duplicate heartbeat-test RPC. Ordinary heartbeat
+notifications remain non-causal and cannot change Radar, Underwriting, Candidate, or Case truth.
+
 ## State root
 
 One external absolute, non-temporary state root is the stable business repository across process
@@ -215,7 +221,8 @@ foreign-product rejection, fixed Policies, reconnect without owner replacement, 
 count zero, paired component admission/close, exact Inverse schema-v5 reader states and V2 score
 packets,
 Workbench product/unit projection, coalescing/status bypass/flush, loopback HTTP, truthful
-zero/UNKNOWN, and Inverse public-method allowlisting. Repeated Episode, Candidate,
+zero/UNKNOWN, transport-immediate heartbeat response and response filtering, and Inverse
+application-method allowlisting. Repeated Episode, Candidate,
 scope-replacement, and completed-Case tests must prove that retained collections return to the
 active-set bound. Public observation requires explicit `CURRENT_STAGE` authority. A bounded gate
 may establish current-state reachability and negative product contamination only; a later natural

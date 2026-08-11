@@ -182,75 +182,41 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_candidate_retirement_repair_live_monitoring() -> None:
+def test_current_stage_authorizes_activation_packet_and_heartbeat_recovery() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_ACTIVATION_PACKET_AND_TRANSPORT_HEARTBEAT_REPAIR`" in current
+    assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert (
-        "`INVERSE_BTC_SHORT_VOL_V2_INTERRUPTED_TERMINAL_RETIREMENT_REPAIR_LIVE_MONITORING`"
+        "**Persistent service:** `STOPPED_AFTER_FIRST_TWO_ADMISSIONS_AND_PACKET_INTEGRITY_FAILURE`"
         in current
     )
-    assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Persistent service:** `RUNNING_REPAIRED_INTERRUPTED_TERMINAL_RETIREMENT`" in current
+    assert "**Live commands:** `ONE_CHECKED_RECOVERY_CUTOVER_AND_CONTINUED_MONITORING`" in current
     assert "`ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`" in current
     assert "`OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`" in current
     assert "`LOSSY_DECIMAL_PACKET_SERIALIZATION`" in current
     assert "`TERMINAL_ATTEMPT_CANDIDATE_RETIREMENT_GAP`" in current
     assert "`INTERRUPTED_TERMINAL_CANDIDATE_RETIREMENT_GAP`" in current
-    assert "**Live commands:** `CONTINUED_BOUNDED_MONITORING`" in current
+    assert "`ORDERED_BUSINESS_QUEUE_HEARTBEAT_TEST_RESPONSE_DELAY`" in current
+    assert "`ACTIVATION_PACKET_MUTABLE_PROJECTION_GAP`" in current
     assert "INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
-        "6fbcf9fbf4237d6685cbf7ae986dc4dfa4dfee76",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
-        "`128/128` current Radar coverage",
-        "zero reconnects, and zero protocol gaps",
-        "`3,045 ms`, `4,032 ms`, and `5,003 ms`",
-        "confirmation changed `2 → 0`",
-        "`CORE_UNKNOWN` reset count increased by `13`",
-        "counts no observation",
-        "already-active Episode remains fail-closed",
-        "One separately selected LOW research Control",
-        "bare 64-hex digest",
-        "CaseStore's directory-name-to-Case-identity conversion",
-        "one authorized clean start completed",
-        "zero admitted Shadow Entry or Position",
-        "ninth HIGH Episode",
-        "`5,011 ms`",
-        "50-digit precision",
-        "future written Case could become unreadable",
-        "`ShadowRuntimeIntegrityError`",
-        "`INCOMPLETE_UNCLEAN_EXIT`",
-        "Every projected score packet",
-        "21128eb6807cd1403b3b458da1c418c16dcdf099",
-        "sha256:a9e10899eb7b4f2b8e923d77c23ca6b1d6b1caf6c0b52b9b465177fb510c42cf",
-        "all 13 prior schema-v5 Cases",
-        "11 are non-admitted Radar-score-band Controls",
-        "two are selected-Underwriting decision Controls",
-        "`NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE`",
-        "Admitted Shadow count remains zero",
-        "queue currentness at `5,005 ms`",
-        "added no `CORE_UNKNOWN` reset",
-        "about 220 ms later",
-        "session epoch `1 → 2`",
-        "correctly added 13 `CORE_UNKNOWN` resets",
-        "These two causes are not conflated",
-        "Seven HIGH Episodes reached fully evaluable Underwriting",
-        "`50` distinct HIGH Episodes and `36` fully evaluable Underwriting Episodes",
-        "first canonical Candidate",
-        "`KNOWN_INVALIDATED_BEFORE_REFRESH`",
-        "ended Radar episode still owns an active Candidate",
-        "contains zero admitted Shadow trades",
-        "seven HIGH Episodes and two simultaneous Candidates",
-        "exact initiating exception remains `UNKNOWN`",
         "6093cd0825cf6c7352d30270ecb2c5742c81182a",
         "sha256:506d0e32ae3e276704fc3dbee85afddbaefd17170e84e02a4ff94895ffcf0173",
-        "six HIGH Episodes became fully Underwriting-evaluable",
-        "Both Candidates became `ADMISSION_KNOWN_INVALIDATED_BEFORE_REFRESH`",
-        "active Candidate map returned to zero",
+        "`613,931 ms` apart",
+        "first `2` admitted Shadow Cases",
+        "non-empty `shadow_entry_identity`",
+        "official policy-aware Case reader validates both admitted Cases",
+        "recoverable active Entries",
+        "`CENSORED_AT_FAILURE`",
+        "No Case was copied, rewritten, migrated, or deleted",
+        "truthful GAPPED Segments",
     ):
         assert phrase in normalized
     for identity in (

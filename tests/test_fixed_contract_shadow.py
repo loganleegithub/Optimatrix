@@ -694,6 +694,47 @@ def _shadow_system(
     return reducer, adapter, owner
 
 
+def test_activation_scope_uses_episode_packet_when_current_packet_cache_is_absent(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    instrument_name = "BTC-1JAN00-101000-C"
+    _install_v2_episode(reducer, instrument_name=instrument_name)
+    tracker = next(
+        value
+        for value in reducer.bucket_trackers.values()
+        if value.episode is not None and value.episode.leader_instrument_name == instrument_name
+    )
+    assert tracker.episode is not None
+    activation_packet = tracker.episode.activation_packet
+    reducer.score_packets.pop(instrument_name)
+
+    snapshots = reducer.active_radar_scope_snapshots(
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        )
+    )
+
+    assert len(snapshots) == 1
+    assert snapshots[0].episode_identity == tracker.episode.episode_identity
+    assert snapshots[0].radar_score_packet is activation_packet
+
+    intents = adapter.on_settled_transaction(
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+
+    assert len(_object_payloads(owner, "UNDERWRITING_DECISION_BATCH_DESIGNATION")) == 1
+    assert len(owner.active_candidate_identities) == 1
+    assert len(intents) == 2
+
+
 def _activate_real_episode(reducer: RadarReducer) -> str:
     rule = reducer.policy.tte_bands[0].option_rules[OptionType.CALL]
     reducer.bucket_trackers.clear()

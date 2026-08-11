@@ -6,15 +6,15 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_INTERRUPTED_TERMINAL_RETIREMENT_REPAIR_LIVE_MONITORING`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_ACTIVATION_PACKET_AND_TRANSPORT_HEARTBEAT_REPAIR`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_REPAIRED_INTERRUPTED_TERMINAL_RETIREMENT`
+**Persistent service:** `STOPPED_AFTER_FIRST_TWO_ADMISSIONS_AND_PACKET_INTEGRITY_FAILURE`
 
-**Live commands:** `CONTINUED_BOUNDED_MONITORING`
+**Live commands:** `ONE_CHECKED_RECOVERY_CUTOVER_AND_CONTINUED_MONITORING`
 
 **Sole authorized closure:**
 [`INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md)
@@ -137,35 +137,34 @@ service recovered to `CURRENT` and `128/128` without the cleanup invariant or an
 The initiating event is therefore identified as a transport reconnect for this new run; the prior
 stopped run's masked initiating exception remains unknowable.
 
+Continued monitoring identified two `REMOTE_CONNECTION_CLOSED` transitions `613,931 ms` apart.
+Deribit's official session contract requires `public/test` immediately after `test_request`; the
+old application scheduled that response behind the synchronous business queue. This is now the
+fixed transport blocker `ORDERED_BUSINESS_QUEUE_HEARTBEAT_TEST_RESPONSE_DELAY`.
+
+The next session then reached `16` HIGH Episodes, `15` fully evaluable Underwriting Episodes, `6`
+Candidates, and the first `2` admitted Shadow Cases. Both appeared in the API with non-empty
+`shadow_entry_identity` and active Position projections. The following admission stopped
+fail-closed because its Candidate lacked the activation packet required to open a Case. The Radar
+Episode did own that immutable packet; composition incorrectly looked only in the mutable current
+packet cache at the activation boundary. This is
+`ACTIVATION_PACKET_MUTABLE_PROJECTION_GAP`, not an economic or Policy blocker.
+
+The official policy-aware Case reader validates both admitted Cases and returns both as recoverable
+active Entries. Their origin Segments were closed `CENSORED_AT_FAILURE`; no Outcome was fabricated.
+No Case was copied, rewritten, migrated, or deleted. One checked recovery cutover is authorized
+after direct and repository gates pass; it must reuse the stable root and open truthful GAPPED
+Segments for both Entries.
+
 ## Current online boundary
 
-The current Online Runtime serves `127.0.0.1:8675` from clean Draft PR #48 code identity
-`6093cd0825cf6c7352d30270ecb2c5742c81182a` in the non-temporary checkout
-`/Users/logan/Optimatrix-runtime`. Its runtime identity is
-`sha256:506d0e32ae3e276704fc3dbee85afddbaefd17170e84e02a4ff94895ffcf0173`.
-It owns the single-instance lease for the unchanged stable Case repository
-`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; no Case root was copied, migrated,
-replaced, or deleted during the cutover.
-
-The first accepted live frame reported health, readiness, `RUNNING`, `CURRENT`, `KNOWN_COMPLETE`,
-`128/128` current Radar coverage, zero reconnects, and zero protocol gaps. Every projected score
-packet in continued one-second sampling passed exact Policy-aware recomputation. The repaired
-runtime has observed six fully Underwriting-evaluable HIGH Episodes and two Candidates. A transport
-reconnect invalidated both before refresh; the runtime recovered automatically and opened zero
-admitted Shadow Entry or Position.
-The official active-runtime Case report reads all 13 prior schema-v5 Cases: 11 are non-admitted
-Radar-score-band Controls and two are selected-Underwriting decision Controls, all classified
-`INCOMPLETE_UNCLEAN_EXIT` across their former runtime boundaries. Admitted Shadow count remains
-zero. These are bounded observations, not Policy-quality or future-frequency claims.
-
-Subsequent live fixed attribution crossed queue currentness at `5,005 ms`. The crossing frame was
-`UNKNOWN/0`, added no `CORE_UNKNOWN` reset, and recovered to `KNOWN_COMPLETE/128` about 220 ms later;
-two unchanged HIGH buckets retained and advanced to confirmation `2/3`. A separate real
-`TRANSPORT_READ_FAILURE` changed session epoch `1 → 2`, reconnect and protocol-gap counts `0 → 1`,
-and correctly added 13 `CORE_UNKNOWN` resets before automatic recovery. These two causes are not
-conflated. Seven HIGH Episodes reached fully evaluable Underwriting after the clean start; all seven
-were known non-Candidates first blocked by `CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE`. Admitted Shadow
-count remains zero.
+The last Online Runtime on `127.0.0.1:8675` used clean Draft PR #48 code identity
+`6093cd0825cf6c7352d30270ecb2c5742c81182a` and runtime identity
+`sha256:506d0e32ae3e276704fc3dbee85afddbaefd17170e84e02a4ff94895ffcf0173`
+from `/Users/logan/Optimatrix-runtime`. It is stopped after the handled integrity failure and no
+longer owns the stable-root lease. Its two admitted Entries remain the durable business truth in
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; the next authorized runtime must
+recover both rather than recreate Candidate or admission history.
 
 ## Current product truth
 

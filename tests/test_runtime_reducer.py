@@ -1489,7 +1489,7 @@ def test_session_epoch_cannot_be_reused_or_regressed(
         reducer.begin_session(session_epoch=1, monotonic_ms=2_000)
 
 
-def test_success_error_late_notification_and_heartbeat_response_reduce_once(
+def test_success_error_late_and_transport_owned_heartbeat_notification_reduce_once(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
@@ -1524,28 +1524,17 @@ def test_success_error_late_notification_and_heartbeat_response_reduce_once(
         envelope({"id": 999_999, "result": "late"}, seq=seq + 2),
         processed_monotonic_ms=1_002 + seq,
     )
-    heartbeat_command = only(
-        reducer.reduce(
-            envelope(
-                {"method": "heartbeat", "params": {"type": "test_request"}},
-                seq=seq + 3,
-            ),
-            processed_monotonic_ms=1_003 + seq,
+    commands = reducer.reduce(
+        envelope(
+            {"method": "heartbeat", "params": {"type": "test_request"}},
+            seq=seq + 3,
         ),
-        RpcPurpose.HEARTBEAT_TEST,
+        processed_monotonic_ms=1_003 + seq,
     )
-    reducer.reduce(
-        response(
-            reducer,
-            heartbeat_command,
-            {"version": "2.1.1"},
-            seq=seq + 4,
-        ),
-        processed_monotonic_ms=1_004 + seq,
-    )
+    assert commands == ()
 
 
-def test_heartbeat_control_is_live_while_channel_rpc_is_pending(
+def test_transport_owned_heartbeat_notification_does_not_join_pending_rpcs(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
@@ -1563,9 +1552,7 @@ def test_heartbeat_control_is_live_while_channel_rpc_is_pending(
         processed_monotonic_ms=1_002,
     )
 
-    public_test = only(commands, RpcPurpose.HEARTBEAT_TEST)
-    assert public_test.method == "public/test"
-    assert public_test.failure_scope is FailureScope.SESSION
+    assert commands == ()
     assert subscribe.request_id in reducer.pending_rpcs
 
 
@@ -1679,7 +1666,7 @@ def test_negative_platform_guard_cannot_be_overwritten_in_same_epoch(
     assert reducer.platform.reason == "PLATFORM_MAINTENANCE"
 
 
-def test_heartbeat_success_cannot_satisfy_post_status_business_probe(
+def test_transport_heartbeat_notification_cannot_satisfy_post_status_business_probe(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
@@ -1691,36 +1678,12 @@ def test_heartbeat_success_cannot_satisfy_post_status_business_probe(
     reducer.platform.apply_public_methods_notification(
         {"allow_unauthenticated_public_requests": True}
     )
-    reducer._last_ingress_seq = 5
-    reducer._platform_status_ingress_seq = 5
-    old_request = reducer._schedule(
-        purpose=RpcPurpose.HEARTBEAT_TEST,
-        method="public/test",
-        params={},
-        scope="SESSION_CONTROL",
-        generation=None,
-        origin_boundary=runtime_module.FactBoundary(1, 4, 1_004, 1),
-        failure_scope=FailureScope.SESSION,
-    )
-
     reducer.reduce(
-        response(reducer, old_request, {"version": "1"}, seq=6),
+        envelope(
+            {"method": "heartbeat", "params": {"type": "test_request"}},
+            seq=6,
+        ),
         processed_monotonic_ms=1_006,
-    )
-    assert not reducer.platform.post_status_probe
-
-    new_request = reducer._schedule(
-        purpose=RpcPurpose.HEARTBEAT_TEST,
-        method="public/test",
-        params={},
-        scope="SESSION_CONTROL",
-        generation=None,
-        origin_boundary=reducer._current_fact_boundary(),
-        failure_scope=FailureScope.SESSION,
-    )
-    reducer.reduce(
-        response(reducer, new_request, {"version": "1"}, seq=7),
-        processed_monotonic_ms=1_007,
     )
 
     assert not reducer.platform.post_status_probe
@@ -2993,7 +2956,7 @@ def test_close_while_option_snapshot_is_pending_wins_over_old_snapshot(
     )
 
 
-def test_heartbeat_is_live_while_unsubscribe_ack_is_blocked(
+def test_transport_owned_heartbeat_does_not_disturb_pending_unsubscribe(
     tmp_path: Path,
     policy_factory: PolicyFactory,
 ) -> None:
@@ -3020,7 +2983,7 @@ def test_heartbeat_is_live_while_unsubscribe_ack_is_blocked(
         processed_monotonic_ms=1_001 + seq,
     )
 
-    assert only(commands, RpcPurpose.HEARTBEAT_TEST).method == "public/test"
+    assert commands == ()
     assert unsubscribe.request_id in reducer.pending_rpcs
     assert reducer.channel_state(channel) is ChannelState.UNSUBSCRIBE_PENDING
 

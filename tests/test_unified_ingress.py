@@ -175,26 +175,111 @@ def test_client_sends_public_request() -> None:
     }
 
 
-def test_public_test_remains_a_guarded_control_response() -> None:
+def test_business_sender_cannot_issue_public_test() -> None:
     async def scenario() -> None:
         client = DeribitPublicClient(session_epoch=1, rpc_deadline_ms=30_000)
         client._connection = IncomingConnection([])  # type: ignore[assignment]
 
-        with pytest.raises(PublicProtocolError, match="heartbeat response"):
+        with pytest.raises(PublicProtocolError, match="allowlist"):
             await client.send_request(
                 request_id=1,
                 method="public/test",
                 params={},
             )
 
-        await client.send_request(
-            request_id=2,
-            method="public/test",
-            params={},
-            responding_to_test_request=True,
+    asyncio.run(scenario())
+
+
+def test_reader_answers_test_request_before_business_queue_and_filters_response() -> None:
+    async def scenario() -> tuple[
+        tuple[InboundEnvelope, ...],
+        tuple[dict[str, object], ...],
+        int,
+    ]:
+        client = DeribitPublicClient(session_epoch=7, rpc_deadline_ms=30_000)
+        connection = IncomingConnection(
+            [
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "subscription",
+                        "params": {"channel": "book.X.agg2", "data": {"change_id": 1}},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "heartbeat",
+                        "params": {"type": "test_request"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "optimatrix.transport-heartbeat:7:1",
+                        "result": {"version": "2.1.1"},
+                    }
+                ),
+            ]
+        )
+        client._connection = connection  # type: ignore[assignment]
+
+        await client._reader()
+        sent = tuple(cast(dict[str, object], json.loads(value)) for value in connection.sent)
+        return client.drain_envelopes(), sent, client.received_frame_count
+
+    frames, sent, received_frame_count = asyncio.run(scenario())
+    wire_frames = tuple(frame for frame in frames if frame.get("method") != "connection_error")
+
+    assert sent == (
+        {
+            "jsonrpc": "2.0",
+            "id": "optimatrix.transport-heartbeat:7:1",
+            "method": "public/test",
+            "params": {},
+        },
+    )
+    assert [frame.get("method") for frame in wire_frames] == ["subscription", "heartbeat"]
+    assert [frame.ingress_seq for frame in wire_frames] == [1, 2]
+    assert received_frame_count == 3
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"result": {}},
+        {"result": {"version": ""}},
+        {"error": {"code": 10_000, "message": "test failure"}},
+    ],
+)
+def test_reader_fails_closed_on_invalid_transport_heartbeat_response(
+    response: dict[str, object],
+) -> None:
+    async def scenario() -> InboundEnvelope:
+        request_id = "optimatrix.transport-heartbeat:3:1"
+        client = DeribitPublicClient(session_epoch=3, rpc_deadline_ms=30_000)
+        client._connection = IncomingConnection(  # type: ignore[assignment]
+            [
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "heartbeat",
+                        "params": {"type": "test_request"},
+                    }
+                ),
+                json.dumps({"jsonrpc": "2.0", "id": request_id, **response}),
+            ]
         )
 
-    asyncio.run(scenario())
+        await client._reader()
+        return client.drain_envelopes()[-1]
+
+    terminal = asyncio.run(scenario())
+    params = terminal.get("params")
+
+    assert terminal.get("method") == "connection_error"
+    assert isinstance(params, dict)
+    assert params["reason"] == "PROTOCOL_INCOMPATIBILITY"
 
 
 def test_transport_rejects_nonproduction_endpoint_and_private_method() -> None:

@@ -262,6 +262,10 @@ product, Radar Policy, bucket, leader, score band, and confirmation causal seque
 heartbeat, polling, display publication, unchanged recomputation, and multiple changes inside one
 separation interval do not advance persistence.
 
+The Episode freezes its canonical activation score packet. Composition must use that packet at the
+activation causal boundary even if a mutable current-packet projection is absent; a later packet
+cannot be substituted for the activation witness.
+
 An Episode ends on clear/band exit, known ineligibility, transition into a review-only TTE bucket,
 leader change before freeze, membership or scope loss, required core-score fact loss, history
 revision/gap/staleness, continuity loss, or run stop. After any source loss, fresh observations are

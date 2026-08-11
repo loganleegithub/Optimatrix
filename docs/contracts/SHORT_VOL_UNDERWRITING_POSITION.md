@@ -168,6 +168,9 @@ that member's HIGH activation packet. Current MID/LOW score under hysteresis may
 later entry-refresh packet, but can never replace the activation witness or weaken the schema-v5
 HIGH enrollment binding.
 
+The activation packet comes from the Radar Episode itself at its activation boundary, not from a
+best-effort lookup in the mutable current-packet projection.
+
 The designated Episode's first fully evaluable `CANDIDATE | WATCH | ABSTAIN` freezes the original
 complete predicate-margin vector and schedules one future-blind paired refresh. WATCH/ABSTAIN use
 exactly two control-owned `public/get_order_book` requests under the same quantity, send/response,

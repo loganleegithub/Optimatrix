@@ -47,22 +47,31 @@ directory name itself to match `sha256:<digest>`. The official report therefore 
 valid Control Case before reading it. This is not Case corruption and is not the current business
 funnel blocker. That reader defect is repaired.
 
-**Current implementation blocker:** `INTERRUPTED_TERMINAL_CANDIDATE_RETIREMENT_GAP`. The first
-repair covered an admission attempt that was already terminal while its Candidate remained
-`VALID`. Continued live observation then reached seven HIGH Episodes and two simultaneous
-Candidates before failure handling retired the epoch and reproduced
-`ended Radar episode still owns an active Candidate`. The broader reproduction proves the remaining
-root cause: a prior owner transition can terminalize a Candidate and then fail before
-`_finish_transition()` removes it. The next retirement transition resets the pending-retirement
-set, correctly avoids a duplicate invalidation for the already-terminal lifecycle, but previously
-left that record in the active Candidate map. The cleanup exception masked the initiating failure,
-whose exact type remains `UNKNOWN` for the stopped run.
+**Current implementation blockers:**
+`ACTIVATION_PACKET_MUTABLE_PROJECTION_GAP` and
+`ORDERED_BUSINESS_QUEUE_HEARTBEAT_TEST_RESPONSE_DELAY`. Code identity
+`6093cd0825cf6c7352d30270ecb2c5742c81182a` proved the interrupted-terminal Candidate cleanup:
+two separate reconnects retired four Candidates without the former cleanup invariant. The
+reconnects occurred `613,931 ms` apart, each near the ten-minute session boundary. Deribit requires
+an immediate `public/test` response to each server `test_request`, but the response was previously
+scheduled only after that notification traversed the same synchronous Radar/Underwriting queue
+whose measured lag can exceed five seconds.
 
-**Measured business blocker:** 33 of the first 36 fully evaluable HIGH Episodes were first blocked
-by `CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE`; one each was first blocked by
-`MINIMUM_NET_CREDIT_TO_PAYOFF_CAP` and `MINIMUM_NET_ENTRY_CREDIT`, and one became the first
-canonical Candidate. It was invalidated before paired admission and opened no Shadow Case. None of
-these economic rules changes in this implementation repair.
+The same continued run then produced the first two admitted Shadow Cases. A later Candidate's
+paired refresh remained Candidate, but Case creation stopped fail-closed with
+`Radar-owned Underwriting facts lack their activation score packet`. The Radar Episode already
+owned the immutable activation packet. At its activation boundary, however, composition looked up
+the mutable current-packet cache and projected no Underwriting facts when that cache was absent.
+The later Candidate was therefore valid but the owner had never received the original packet
+needed for its schema-v5 Case. This is a composition-source bug, not a missing market fact or a
+reason to weaken Case validation.
+
+**Measured business blocker:** the stopped run reached `16` HIGH Episodes, `15` fully evaluable
+Underwriting Episodes, `6` Candidates, and `2` admitted Shadow Cases. Four Candidates were first
+blocked by `ADMISSION_KNOWN_INVALIDATED_BEFORE_REFRESH`; the two admitted Cases remain readable and
+recoverable. The next admission reached complete Candidate economics but hit the activation-packet
+composition defect before a third Case could open. None of the economic rules changes in this
+implementation repair.
 
 **Expected user-visible delta:** while ordered queue lag is above the fixed currentness deadline,
 Radar remains `UNKNOWN`, bucket coverage is `UNKNOWN`, no observation is counted, and no Episode or
@@ -89,19 +98,28 @@ map retirement after terminalization. An already-terminal lifecycle produces no 
 record, while any initiating exception remains available to be raised after cleanup instead of
 being hidden by a second Candidate-owner invariant.
 
-**Durable-data effect:** no existing Case is created, rewritten, migrated, or deleted. Future Case
-JSON may carry more significant raw-input digits, under the unchanged schema-v5 key shape and
-Policy semantics, solely so its derived score remains exactly reproducible.
+Activation composition additionally uses the Episode-owned frozen packet at the exact activation
+causal boundary. Later boundaries continue to require a truly current packet. The transport
+additionally answers Deribit `test_request` immediately, validates and consumes the matching
+transport-local response, and leaves the reducer with no heartbeat-test RPC lifecycle to delay or
+duplicate.
 
-**Complexity added:** one bounded currentness-pause branch in the existing runtime bucket owner, in
-addition to the already-landed aligned-source timestamp tuple; one public CaseStore-owned
-directory-name conversion function; one idempotent Candidate-lifecycle cleanup condition in the
-existing owner; no new state owner, timer, schema, history, or baseline path.
+**Durable-data effect:** no existing Case is rewritten, migrated, or deleted. The stopped run's two
+admitted Cases are preserved byte-for-byte and the official reader finds both as recoverable active
+Entries whose prior Segments ended `CENSORED_AT_FAILURE`. The authorized recovery start opens one
+ordinary `GAPPED` Observation Segment for each Entry; that process-boundary fact cannot be derived
+offline. No heartbeat or pre-Shadow diagnostic is persisted.
+
+**Complexity added:** one activation-boundary selection of the Episode-owned packet and one bounded
+transport-local in-flight heartbeat request id, in addition to the already-landed currentness,
+reader, Decimal, and Candidate-cleanup repairs. There is no new business owner, timer, schema,
+history, or baseline path.
 
 **Complexity deleted:** the rotating five-phase sampling behavior, the wall-clock-ahead-of-source
 anchor race, the misleading baseline source label, the destructive interpretation of a transient
-ordered backlog as lost pre-confirmation evidence, and the offline report's duplicate Case identity
-parser. It also deletes the score packet's ambient-context-dependent Decimal normalization.
+ordered backlog as lost pre-confirmation evidence, the offline report's duplicate Case identity
+parser, the score packet's ambient-context-dependent Decimal normalization, and the reducer-owned
+`HEARTBEAT_TEST` purpose/send/response lifecycle.
 
 ## Business closure
 
@@ -138,31 +156,44 @@ For Candidate retirement, terminalize an admission attempt while its Candidate r
 then retire the owning Episode. Any duplicate admission terminal, retained Candidate, missing
 Candidate invalidation, or runtime exception is a direct falsification.
 
+For activation-packet closure, confirm an Episode, remove its mutable current-packet projection at
+the same causal boundary, and project Underwriting. Missing the Episode-owned activation packet,
+failing to register the batch, or later being unable to open a valid Candidate Case is a direct
+falsification.
+
+For transport liveness, queue business frames without reducing them, receive `test_request`, and
+observe the required `public/test` on the socket before any application dequeue. Enqueuing a
+heartbeat-test application RPC, accepting a mismatched/invalid response, or waiting for business
+reduction is a direct falsification.
+
 ## Change declarations
 
 **Market/Decision input contract change:** five-minute index-chart samples remain fixed to the
 source-confirmed UTC epoch grid. Ordered queue-lag currentness is a pre-activation observation pause,
 not evidence that previously accepted observations disappeared; current score and admission truth
-remain `UNKNOWN` until catch-up.
+remain `UNKNOWN` until catch-up. Deribit connection liveness is answered below the business queue;
+it contributes no market or decision input.
 
 **Decision Policy change:** `NONE`; the three Policy artifacts and identities remain byte-exact.
 
 **Outcome/evaluation contract change:** preserve raw score-packet Decimal precision so the existing
 policy-aware Case validator can reproduce exact derived truth; no Outcome arithmetic or economic
-definition changes. Episode retirement also reconciles an already-terminal attempt with its
-still-valid Candidate; it creates no Outcome or durable Case.
+definition changes. Episode retirement reconciles an already-terminal attempt with its still-valid
+Candidate. Case selection consumes the actual Episode-owned activation packet and never a later
+substitute.
 
-**Stage/authorization change:** the checked follow-up repair started on `127.0.0.1:8675` from code
-identity `6093cd0825cf6c7352d30270ecb2c5742c81182a`, using the unchanged stable Case root from the
-non-temporary `/Users/logan/Optimatrix-runtime` checkout. Six Episodes and two Candidates then
-survived a real transport-reconnect cleanup without process exit; both Candidates were known
-invalidated before refresh and admitted zero Case. Continued
-public-only observation runs until the first admitted active Shadow or a newly measured fixed
-blocker is established. No private or execution permission is added.
+**Stage/authorization change:** code identity
+`6093cd0825cf6c7352d30270ecb2c5742c81182a` produced and durably opened the first two admitted
+Shadow Cases before the activation-packet composition failure stopped the service. The user's
+continued-repair authorization permits one checked recovery cutover from the non-temporary
+`/Users/logan/Optimatrix-runtime` checkout, reusing the unchanged stable root and recovering both
+Entries. Continue production-public observation across a later ten-minute heartbeat boundary. No
+private or execution permission is added.
 
 ## Scope
 
-**In:** the sole runtime bucket-settlement owner and its queue-lag currentness transition; the
+**In:** the sole public transport's Deribit heartbeat response, the sole runtime bucket-settlement
+owner and its activation/currentness transition; the
 already-landed `IndexHistoryReducer` source-grid repair; the CaseStore-owned directory identity
 conversion and read-only V2 report; lossless V2 packet Decimal serialization; focused
 market/runtime/Workbench/Radar/Case/report tests; owning contracts, task, and Current Stage
@@ -173,7 +204,8 @@ of an already-active Episode, any Policy artifact, Underwriting or Position econ
 state-root migration, private data, orders, fills, capital, process supervision, or a second
 baseline path.
 
-**Owning modules:** `apps/radar_runtime/src/radar_runtime/runtime.py`,
+**Owning modules:** `apps/radar_runtime/src/radar_runtime/deribit_public.py`,
+`apps/radar_runtime/src/radar_runtime/runtime.py`,
 `apps/radar_runtime/src/radar_runtime/offline_report.py`, and
 `packages/short_vol_underwriting/src/short_vol_underwriting/case_store.py`, plus the score-packet
 serializer in `packages/short_vol_radar/src/short_vol_radar/score.py` and the bounded Candidate
@@ -199,6 +231,12 @@ lifecycle owner in `packages/short_vol_underwriting/src/short_vol_underwriting/o
   retirement, emits no duplicate terminal, and leaves no active Candidate or durable Case;
 - prove a Candidate terminalized in an interrupted owner transition is removed by later Episode
   retirement without a duplicate emission, and that cleanup no longer masks an initiating failure;
+- prove the exact activation boundary uses the Episode-owned packet when the mutable current cache
+  is absent, and that Underwriting still registers the batch and Candidate;
+- prove the transport sends `public/test` before any application dequeue, filters one valid matching
+  response, rejects invalid/mismatched responses, and exposes no `HEARTBEAT_TEST` application RPC;
+- use the official Case reader to recover both admitted Entries from the stopped run, then verify
+  their new GAPPED Segments and active API identities after the clean start;
 - fixed-attribution live evidence: cross queue currentness above five seconds and prove the frame is
   UNKNOWN/non-countable, adds zero `CORE_UNKNOWN` reset, and preserves accepted pre-confirmation
   through catch-up; keep any separate transport/session reset explicitly attributed;
@@ -206,11 +244,10 @@ lifecycle owner in `packages/short_vol_underwriting/src/short_vol_underwriting/o
 
 ## Definition of done
 
-The rotating phase, source-ahead race, and queue-lag destructive pre-confirmation reset are
-impossible by direct tests; the official reader accepts store-owned bare digest directories and
-preserves their canonical prefixed Case identities; high-precision raw score inputs round-trip and
-recompute exactly; the full repository gate passes; the live clean repair commit remains current;
-threshold-crossing lag contributes zero observations while a same-truth recovery retains the prior
-count; any first active admitted Shadow is verified through the API and official Case reader, or
-the next truthful fixed funnel blocker is reported without changing Policy to manufacture
-admission; the diff is bounded and remote state is exact.
+The rotating phase, source-ahead race, queue-lag destructive reset, activation-packet projection
+gap, and queued heartbeat-test response are impossible by direct tests; the official reader accepts
+store-owned bare digest directories and preserves canonical identities; high-precision raw score
+inputs round-trip and recompute exactly; the full repository gate passes; both admitted Entries are
+verified through the API and official Case reader after recovery; the connection crosses a later
+ten-minute boundary without another heartbeat-driven reconnect; the diff is bounded and remote
+state is exact.

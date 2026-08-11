@@ -16,6 +16,7 @@ browser strategy engine is part of the current slice.
 
 ```text
 Deribit public WebSocket for `INVERSE_BTC_V1`
+→ transport-owned immediate `test_request` / `public/test` liveness response
 → one bounded application queue
 → one synchronous causal reducer
 → Radar current state
@@ -67,12 +68,19 @@ exact frozen Policy chain. A malformed, unsupported, or mixed active Entry fails
 the runtime cannot skip it. Terminal admitted Entries and selected no-trade Controls remain
 research history and are not restored. No CLI allowlist chooses business Entries.
 
-One application-sequence allocator stamps every accepted decoded frame and transport-control fact
-with a session epoch, consecutive ingress sequence, and monotonic receive boundary. One bounded
-transport queue preserves application order; runtime does not drain it into a second unbounded
-pending deque. One synchronous reducer exclusively owns mutable market and Radar state, processes a
-local option fact locally, and never waits for network I/O. Cooperative yielding keeps reader,
-sender, and clock-source tasks schedulable while the queue is non-empty.
+The transport answers Deribit's `test_request` immediately with `public/test`, using one
+transport-local string request id and at most one in-flight response. That mandatory connection
+liveness exchange never waits behind Radar, Underwriting, or Position work and never becomes an
+application RPC, causal market fact, Candidate, or durable record. The server notification remains
+visible to the ordered application path after the response is sent; the matching response is
+validated and consumed by the transport.
+
+One application-sequence allocator stamps every accepted application frame and transport-control
+fact with a session epoch, consecutive ingress sequence, and monotonic receive boundary. One
+bounded transport queue preserves application order; runtime does not drain it into a second
+unbounded pending deque. One synchronous reducer exclusively owns mutable market and Radar state,
+processes a local option fact locally, and never waits for network I/O. Cooperative yielding keeps
+reader, sender, and clock-source tasks schedulable while the queue is non-empty.
 
 If ordered receive-to-reducer lag exceeds the fixed currentness deadline, the reducer exposes
 current Radar and leader coverage as `UNKNOWN` and counts no observation. The existing bucket owner
@@ -248,10 +256,12 @@ score-countable and invalidate Call/Put peers on the affected expiry plus the im
 expiry whose `T` depends on it; OI/gamma-only changes remain non-countable diagnostics. The existing
 global ticker source-staleness owner is not duplicated.
 
-The Underwriting owner freezes every eligible HIGH member's activation score packet when the
-action-blind batch is registered. A later non-designated Candidate consumes its own frozen HIGH
-packet at selection and a truly later recomputed packet at entry refresh; it never relabels the
-current packet as the activation witness.
+The Radar Episode is the immutable owner of its activation score packet. At the activation causal
+boundary, composition projects that frozen packet even if the mutable current-packet cache is
+temporarily absent. The Underwriting owner freezes every eligible HIGH member's activation packet
+when the action-blind batch is registered. A later non-designated Candidate consumes its own frozen
+HIGH packet at selection and a truly later recomputed packet at entry refresh; it never relabels
+the current packet as the activation witness.
 
 `options_domain` owns the one product specification and one component-book calculator. Entry walks
 short bids and long asks at the full target quantity, stresses short sells down one native legal
