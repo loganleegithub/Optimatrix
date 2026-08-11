@@ -422,8 +422,11 @@ assert.equal(api.isStrongSignalRow({{...strongActive, clue_eligible_tte: false}}
 assert.equal(api.isStrongSignalRow({{...strongActive, score_result: {{band: 'MID'}}}}), false);
 assert.equal(api.isStrongSignalRow({{...strongActive, bucket_episode_state: 'IDLE'}}), false);
 const confirming = {{...strongActive, instrument_name: 'CONFIRM', strike_price: '69000',
-  bucket_episode_leader_instrument_name: 'CONFIRM', bucket_episode_identity: 'sha256:confirm',
+  bucket_episode_leader_instrument_name: 'CONFIRM', bucket_episode_identity: null,
   bucket_episode_state: 'CONFIRMING'}};
+assert.equal(api.isStrongSignalRow(confirming), true);
+assert.equal(api.isStrongSignalRow({{...confirming, bucket_episode_identity: 'sha256:premature'}}), false);
+assert.equal(api.isStrongSignalRow({{...strongActive, bucket_episode_identity: null}}), false);
 const mapDocument = {{radar: {{rows: [
   {{instrument_name: 'MEMBER', expiration_timestamp_ms: 1800000000000,
     strike_price: '60000', option_type: 'put', score_result: {{band: 'HIGH'}}}},

@@ -4,9 +4,9 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP_LIVE_CURRENT`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_REPAIR`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
@@ -14,9 +14,32 @@
 
 **Persistent service:** `RUNNING_8765_FROM_MAIN_54E3B58_WITH_32_RECOVERED_ADMITTED_ENTRIES`
 
-**Live commands:** `NONE_CONSUMED`
+**Live commands:** `ONE_CLEAN_STOP_AND_ONE_CLEAN_START_8765`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:**
+[`INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_REPAIR.md)
+
+## Current bounded implementation authority
+
+The live schema-v7 snapshot contains 128 Radar rows, including nine clue-eligible `HIGH` bucket
+leaders in server-owned `CONFIRMING 1/3`, while the Workbench renders zero strong signals. The
+browser incorrectly requires an Episode identity for both `CONFIRMING` and `ACTIVE`; the Radar owner
+creates that identity only when confirmation completes and the bucket becomes `ACTIVE`.
+
+The user explicitly authorizes this bounded repair directly on `main` without a feature branch.
+Starting from clean synchronized `main@7f55972028073570be7774b25f40184f8cba25e1`, the task may change
+only the browser strong-signal predicate, its direct tests, and this task/Authority closure. It may
+then perform one clean stop of the current 8765 Runtime, synchronize the clean non-temporary runtime
+checkout to the exact accepted main commit, and perform one clean start on `127.0.0.1:8765` using
+the unchanged stable Case repository and three-Policy chain.
+
+The stop closes each active admitted Entry's current Observation Segment without creating a mature
+Entry Outcome. The new runtime must restore every compatible non-terminal admitted Entry exactly
+once and open a truthful `GAPPED` Segment after fresh facts settle. No Case, Entry, Control, or
+Outcome may be copied, migrated, rewritten, deleted, or relabeled. One bounded post-start route,
+snapshot, strong-signal, and official Case-reader verification is authorized. A consumed or failed
+start grants no retry. Policy, Workbench schema, Case schema, stable-root, roadmap-channel, private
+execution, host inspection, commissioning, and supervision changes remain forbidden.
 
 ## Current online boundary
 

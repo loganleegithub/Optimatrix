@@ -592,13 +592,16 @@ const radarState = row => {
 
 const isStrongSignalRow = row => {
   const result = scorePacketResult(radarScoreView(row));
+  const episodeState = row.bucket_episode_state;
+  const episodeIdentityMatchesState = episodeState === 'CONFIRMING'
+    ? isMissing(row.bucket_episode_identity)
+    : episodeState === 'ACTIVE' && isIdentity(row.bucket_episode_identity);
   return Boolean(result) && result.band === 'HIGH' &&
     row.is_bucket_leader === true &&
     row.clue_eligible_tte === true && row.clue_eligible_delta === true &&
     row.bucket_episode_leader_instrument_name === row.instrument_name &&
     row.bucket_episode_score_band === 'HIGH' &&
-    ['CONFIRMING', 'ACTIVE'].includes(row.bucket_episode_state) &&
-    isIdentity(row.bucket_episode_identity);
+    episodeIdentityMatchesState;
 };
 
 const scoreLowerBound = row => {

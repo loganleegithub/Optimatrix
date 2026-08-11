@@ -182,16 +182,15 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_v2_strong_signal_map_live_current() -> None:
+def test_current_stage_authorizes_v2_confirming_map_repair() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP_LIVE_CURRENT`" in current
+    assert "**Current task kind:** `IMPLEMENTATION`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_REPAIR`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert "`RUNNING_8765_FROM_MAIN_54E3B58_WITH_32_RECOVERED_ADMITTED_ENTRIES`" in current
-    assert "**Live commands:** `NONE_CONSUMED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "`ONE_CLEAN_STOP_AND_ONE_CLEAN_START_8765`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
@@ -220,6 +219,14 @@ def test_current_stage_records_v2_strong_signal_map_live_current() -> None:
         "No Case, Entry, Control, or Outcome was copied, migrated, rewritten, deleted",
         "zero current strong signals is a valid settled state",
         "completed implementation task is removed from the final tree",
+        "nine clue-eligible `HIGH` bucket leaders",
+        "browser incorrectly requires an Episode identity",
+        "directly on `main` without a feature branch",
+        "7f55972028073570be7774b25f40184f8cba25e1",
+        "one clean stop of the current 8765 Runtime",
+        "one clean start on `127.0.0.1:8765`",
+        "restore every compatible non-terminal admitted Entry exactly once",
+        "A consumed or failed start grants no retry",
     ):
         assert phrase in normalized
     for identity in (
@@ -229,7 +236,10 @@ def test_current_stage_records_v2_strong_signal_map_live_current() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_REPAIR.md",
+        "TEMPLATE.md",
+    }
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
