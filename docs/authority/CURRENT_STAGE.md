@@ -4,19 +4,39 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `NONE`
+**Current task kind:** `VALIDATION_ONLY`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_LIVE_8765`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_40_ENTRY_RECOVERY_START`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_8765_MAIN_9002B6E_WITH_36_RECOVERED_ADMITTED_ENTRIES`
+**Persistent service:** `STOPPED_AFTER_UNCLEAN_TEMP_SESSION_LOSS_WITH_40_RECOVERABLE_ENTRIES`
 
-**Live commands:** `NONE_CONSUMED`
+**Live commands:** `ONE_EXTERNAL_USER_TERMINAL_START_8765`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:**
+[`INVERSE_BTC_SHORT_VOL_V2_40_ENTRY_RECOVERY_START`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_40_ENTRY_RECOVERY_START.md)
+
+## Current bounded recovery authority
+
+The endpoint `127.0.0.1:8765` is offline after the prior temporary execution session disappeared.
+The official policy-aware reader validates 62 schema-v5 Cases and 40 compatible non-terminal
+admitted Entries. Every latest admitted Segment belongs to code `9002b6e` and runtime
+`sha256:a3ba1393dbbd5406463d63b251927b8e44fbd0da42d0e5e4babc080178c354b0`,
+has no close record, and reads `INCOMPLETE_UNCLEAN_EXIT`; admitted Outcome count is zero.
+
+Exactly one external-operator start is authorized from the clean detached checkout
+`/Users/logan/Optimatrix-runtime@9002b6e` against the unchanged stable repository
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. The process must run in a
+user-owned foreground Terminal rather than a temporary execution session. Startup must restore all
+40 Entries, preserve every incomplete predecessor Segment, open one truthful `HANDOFF_GAP` Segment
+per Entry after fresh facts settle, and create no admitted Outcome.
+
+This authority adds no Runtime implementation, persistence mechanism, supervisor, automatic
+restart, Policy/schema/root change, migration, second runtime, private execution, retry, or stop.
+Runtime persistence design is explicitly deferred to a later task.
 
 ## Closed delivery truth
 
@@ -41,7 +61,10 @@ day/night themes, the 2 x 2 product matrix, explicit unimplemented-product state
 queue, Shadow detail across a publication refresh, footer navigation, disabled AI surface, and the
 responsive detail drawer. No further live command is authorized by this closure.
 
-## Current online boundary
+## Last accepted online boundary before the process loss
+
+The following is the last accepted browser/deployment snapshot, not a claim that the endpoint is
+currently serving. Current operational truth and the only authorized next action are stated above.
 
 The sole Online Runtime serves `127.0.0.1:8765` from the clean non-temporary checkout
 `/Users/logan/Optimatrix-runtime` at code identity

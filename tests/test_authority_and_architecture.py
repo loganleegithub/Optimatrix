@@ -182,16 +182,16 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_v2_radar_map_csp_layout_live_truth() -> None:
+def test_current_stage_authorizes_one_40_entry_recovery_start() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_LIVE_8765`" in current
+    assert "**Current task kind:** `VALIDATION_ONLY`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_40_ENTRY_RECOVERY_START`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "`RUNNING_8765_MAIN_9002B6E_WITH_36_RECOVERED_ADMITTED_ENTRIES`" in current
-    assert "**Live commands:** `NONE_CONSUMED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "`STOPPED_AFTER_UNCLEAN_TEMP_SESSION_LOSS_WITH_40_RECOVERABLE_ENTRIES`" in current
+    assert "**Live commands:** `ONE_EXTERNAL_USER_TERMINAL_START_8765`" in current
+    assert "INVERSE_BTC_SHORT_VOL_V2_40_ENTRY_RECOVERY_START.md" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
@@ -232,6 +232,11 @@ def test_current_stage_records_v2_radar_map_csp_layout_live_truth() -> None:
         "native progress elements",
         "one authorized clean stop and clean start were consumed",
         "No further live command is authorized by this closure",
+        "62 schema-v5 Cases and 40 compatible non-terminal admitted Entries",
+        "reads `INCOMPLETE_UNCLEAN_EXIT`",
+        "user-owned foreground Terminal rather than a temporary execution session",
+        "Startup must restore all 40 Entries",
+        "Runtime persistence design is explicitly deferred to a later task",
     ):
         assert phrase in normalized
     for identity in (
@@ -241,7 +246,10 @@ def test_current_stage_records_v2_radar_map_csp_layout_live_truth() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "INVERSE_BTC_SHORT_VOL_V2_40_ENTRY_RECOVERY_START.md",
+        "TEMPLATE.md",
+    }
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md").exists()
