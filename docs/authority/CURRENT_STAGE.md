@@ -4,75 +4,55 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `NONE`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_REPAIR`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_LIVE_8765`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_8765_FROM_MAIN_54E3B58_WITH_32_RECOVERED_ADMITTED_ENTRIES`
+**Persistent service:** `RUNNING_8765_MAIN_CCD773B_WITH_34_RECOVERED_ADMITTED_ENTRIES`
 
-**Live commands:** `ONE_CLEAN_STOP_AND_ONE_CLEAN_START_8765`
+**Live commands:** `NONE_CONSUMED`
 
-**Sole authorized closure:**
-[`INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_REPAIR.md)
-
-## Current bounded implementation authority
-
-The live schema-v7 snapshot contains 128 Radar rows, including nine clue-eligible `HIGH` bucket
-leaders in server-owned `CONFIRMING 1/3`, while the Workbench renders zero strong signals. The
-browser incorrectly requires an Episode identity for both `CONFIRMING` and `ACTIVE`; the Radar owner
-creates that identity only when confirmation completes and the bucket becomes `ACTIVE`.
-
-The user explicitly authorizes this bounded repair directly on `main` without a feature branch.
-Starting from clean synchronized `main@7f55972028073570be7774b25f40184f8cba25e1`, the task may change
-only the browser strong-signal predicate, its direct tests, and this task/Authority closure. It may
-then perform one clean stop of the current 8765 Runtime, synchronize the clean non-temporary runtime
-checkout to the exact accepted main commit, and perform one clean start on `127.0.0.1:8765` using
-the unchanged stable Case repository and three-Policy chain.
-
-The stop closes each active admitted Entry's current Observation Segment without creating a mature
-Entry Outcome. The new runtime must restore every compatible non-terminal admitted Entry exactly
-once and open a truthful `GAPPED` Segment after fresh facts settle. No Case, Entry, Control, or
-Outcome may be copied, migrated, rewritten, deleted, or relabeled. One bounded post-start route,
-snapshot, strong-signal, and official Case-reader verification is authorized. A consumed or failed
-start grants no retry. Policy, Workbench schema, Case schema, stable-root, roadmap-channel, private
-execution, host inspection, commissioning, and supervision changes remain forbidden.
+**Sole authorized closure:** `NONE`
 
 ## Current online boundary
 
 The sole Online Runtime serves `127.0.0.1:8765` from the clean non-temporary checkout
-`/Users/logan/Optimatrix-runtime` at merged `main` code identity
-`54e3b589ba5ffd7eff7f7acf018fbc0530492614`. Its runtime identity is
-`sha256:3d548ef832ac917c11575650de682af3f6adf359d75648b02a9c6e4a0baaee26`.
-The former endpoint `127.0.0.1:8675` no longer serves.
+`/Users/logan/Optimatrix-runtime` at code identity
+`ccd773b4d94fa964d0215b8ba617c2d83110d6b0`. Its runtime identity is
+`sha256:88eab249d5deeddca03fd101804ba2b2575caef4468be779e3c2fd03a037b6ed`.
+The former endpoint `127.0.0.1:8675` does not serve, and no second Runtime owns the stable
+repository at `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`.
 
-The bounded post-start matrix returned HTTP `200` for GET and HEAD on `/`, `/app.js`,
-`/styles.css`, `/api/workbench/current`, `/healthz`, and `/readyz`. The settled schema-v7 snapshot
-reported `RUNNING`, `CURRENT`, ready and healthy service, `KNOWN_COMPLETE` Radar coverage, and
-`128/128` current instruments. The deployed browser assets contain the strong-signal map; zero
-current strong signals is a valid settled state when no row satisfies the server-owned eligible
-`HIGH` bucket-leader predicate in `CONFIRMING | ACTIVE`.
+All six declared GET and HEAD routes return HTTP 200. The service reports `RUNNING`, `CURRENT`,
+`health=true`, and `ready=true`; the schema-v7 snapshot has `128/128` Radar rows and the unchanged
+product/Policy identities. The served `/app.js` bytes exactly match the accepted checkout at SHA-256
+`c2ffb0e87dbf8475787187cbc942dbdd8f2a3c2d96c7f38c6d0c6ef6f1badc59`.
 
-The runtime holds the single-instance lease for the unchanged stable Case repository
-`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. Before start, the official reader
-validated 47 schema-v5 Cases: 32 non-terminal admitted Shadow Entries, 4 selected Underwriting
-Controls, and 11 Radar-score Controls, with zero mature Outcome. The new runtime restored all 32
-admitted Entry identities exactly once and publishes 32 Shadow Entry rows, 32 Position rows, and 32
-pending Outcome projections. The official policy-aware reader validates every latest admitted
-Segment as `OPEN` under the current code/runtime identities. Every restored Entry is truthfully
-`GAPPED` and qualification-ineligible because the preceding process ended without closing its
-latest Segment. Controls remain historical Case truth and are not restored. No Case, Entry,
-Control, or Outcome was copied, migrated, rewritten, deleted, or relabeled.
+The bounded trader-visible observation showed `9 current visible / 9 strong signals / 128 scanned
+contracts`. All nine were server-owned clue-eligible HIGH leaders in `CONFIRMING 1/3`, with the
+correctly absent pre-activation Episode identity. The map placed them at their exact expiry and
+strike, exposed the selected server Score/coverage/evidence, and logged no browser warning or error.
+`ACTIVE` rows still require a valid Episode identity. Zero remains truthful only when no current row
+satisfies the exact `HIGH + leader + clue eligible + CONFIRMING|ACTIVE` subset.
 
-PR #48 is merged as `main@d237aaf4579ab041441edebae93a4c56f32031c4`; its source-grid,
-confirmation-continuity, Decimal, Candidate-retirement, heartbeat, and typed activation-packet
-repairs remain in the deployed code. PR #47 is merged as
-`main@54e3b589ba5ffd7eff7f7acf018fbc0530492614`; its strong-signal map is the deployed Workbench
-surface. The completed implementation task is removed from the final tree; Git and the merged PRs
-retain its engineering history.
+Immediately before the clean stop, the official policy-aware reader validated 49 schema-v5 Cases:
+34 non-terminal admitted Shadow Entries, 4 selected Underwriting Controls, and 11 Radar-score
+Controls. All 34 admitted latest Segments were `OPEN` under the predecessor runtime. The clean stop
+closed every one as `CENSORED_AT_STOP` and created zero admitted Outcome files. The new runtime then
+restored all 34 Entry identities exactly once. Their latest Segments are `OPEN` and bind the current
+code/runtime; Workbench publishes 34 Shadow Entry rows, 34 Position rows, and 34 `PENDING` Outcome
+projections with actual availability `UNKNOWN` and no actual PnL. All 34 are `ACTIVE/GAPPED`; gap
+counts are 2 at one, 28 at two, 2 at three, and 2 at four.
+
+The 15 Controls remain historical Case truth and are not restored as Entries. Thirteen have Outcome
+files: 12 `CENSORED_AT_FAILURE` and one `MATURE_KNOWN`; the other two remain pending Controls. The
+mature Control is not an admitted Shadow Outcome and does not establish Policy Edge or
+profitability. No Case, Entry, Control, or Outcome was copied, migrated, rewritten, deleted, or
+relabeled. Both exact-checkout `make check` runs and main CI passed with 750 tests.
 
 ## Current product truth
 
@@ -100,7 +80,7 @@ counterfactual, not an order, fill, atomic quote, liquidity reservation, or actu
 
 Permission remains `PUBLIC_SHADOW`: no credential, account, balance, margin, order, fill, capital,
 settlement action, actual exposure, or private execution. Green checks, a responsive Workbench,
-32 restored Entries, or current strong-signal counts do not establish future uptime, source
+34 restored Entries, or current strong-signal counts do not establish future uptime, source
 freshness, fillability, qualification, Edge, or profitability.
 
 All cutover probes and live commands are consumed. A future probe, restart, state-root operation,

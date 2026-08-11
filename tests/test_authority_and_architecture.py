@@ -182,51 +182,49 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_v2_confirming_map_repair() -> None:
+def test_current_stage_records_v2_confirming_map_live_on_8765() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_REPAIR`" in current
+    assert "**Current task kind:** `NONE`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_LIVE_8765`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "`RUNNING_8765_FROM_MAIN_54E3B58_WITH_32_RECOVERED_ADMITTED_ENTRIES`" in current
-    assert "`ONE_CLEAN_STOP_AND_ONE_CLEAN_START_8765`" in current
+    assert "`RUNNING_8765_MAIN_CCD773B_WITH_34_RECOVERED_ADMITTED_ENTRIES`" in current
+    assert "**Live commands:** `NONE_CONSUMED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
-        "main@d237aaf4579ab041441edebae93a4c56f32031c4",
-        "main@54e3b589ba5ffd7eff7f7acf018fbc0530492614",
-        "PR #48",
-        "PR #47",
-        "54e3b589ba5ffd7eff7f7acf018fbc0530492614",
-        "sha256:3d548ef832ac917c11575650de682af3f6adf359d75648b02a9c6e4a0baaee26",
+        "ccd773b4d94fa964d0215b8ba617c2d83110d6b0",
+        "sha256:88eab249d5deeddca03fd101804ba2b2575caef4468be779e3c2fd03a037b6ed",
         "127.0.0.1:8675",
         "127.0.0.1:8765",
         "/Users/logan/Optimatrix-runtime",
-        "HTTP `200` for GET and HEAD",
-        "`RUNNING`, `CURRENT`, ready and healthy service",
-        "`KNOWN_COMPLETE` Radar coverage",
-        "`128/128` current instruments",
-        "32 non-terminal admitted Shadow Entries",
-        "4 selected Underwriting Controls, and 11 Radar-score Controls",
-        "zero mature Outcome",
-        "restored all 32 admitted Entry identities exactly once",
-        "32 Shadow Entry rows, 32 Position rows, and 32 pending Outcome projections",
-        "every latest admitted Segment as `OPEN`",
-        "Every restored Entry is truthfully `GAPPED`",
+        "All six declared GET and HEAD routes return HTTP 200",
+        "`RUNNING`, `CURRENT`, `health=true`, and `ready=true`",
+        "`128/128` Radar rows",
+        "c2ffb0e87dbf8475787187cbc942dbdd8f2a3c2d96c7f38c6d0c6ef6f1badc59",
+        "`9 current visible / 9 strong signals / 128 scanned contracts`",
+        "HIGH leaders in `CONFIRMING 1/3`",
+        "correctly absent pre-activation Episode identity",
+        "`ACTIVE` rows still require a valid Episode identity",
+        "official policy-aware reader validated 49 schema-v5 Cases",
+        "34 non-terminal admitted Shadow Entries",
+        "closed every one as `CENSORED_AT_STOP`",
+        "zero admitted Outcome files",
+        "restored all 34 Entry identities exactly once",
+        "latest Segments are `OPEN` and bind the current code/runtime",
+        "34 Shadow Entry rows, 34 Position rows, and 34 `PENDING` Outcome projections",
+        "actual availability `UNKNOWN` and no actual PnL",
+        "gap counts are 2 at one, 28 at two, 2 at three, and 2 at four",
+        "15 Controls remain historical Case truth",
+        "12 `CENSORED_AT_FAILURE` and one `MATURE_KNOWN`",
+        "other two remain pending Controls",
+        "not an admitted Shadow Outcome",
         "No Case, Entry, Control, or Outcome was copied, migrated, rewritten, deleted",
-        "zero current strong signals is a valid settled state",
-        "completed implementation task is removed from the final tree",
-        "nine clue-eligible `HIGH` bucket leaders",
-        "browser incorrectly requires an Episode identity",
-        "directly on `main` without a feature branch",
-        "7f55972028073570be7774b25f40184f8cba25e1",
-        "one clean stop of the current 8765 Runtime",
-        "one clean start on `127.0.0.1:8765`",
-        "restore every compatible non-terminal admitted Entry exactly once",
-        "A consumed or failed start grants no retry",
+        "main CI passed with 750 tests",
     ):
         assert phrase in normalized
     for identity in (
@@ -236,10 +234,7 @@ def test_current_stage_authorizes_v2_confirming_map_repair() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
-        "INVERSE_BTC_SHORT_VOL_V2_CONFIRMING_MAP_REPAIR.md",
-        "TEMPLATE.md",
-    }
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
