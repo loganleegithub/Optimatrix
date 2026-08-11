@@ -47,10 +47,9 @@ directory name itself to match `sha256:<digest>`. The official report therefore 
 valid Control Case before reading it. This is not Case corruption and is not the current business
 funnel blocker. That reader defect is repaired.
 
-**Current implementation blocker:**
+**Repaired implementation blocker:**
 `EPISODE_ACTIVATION_PACKET_TYPED_HANDOFF_GAP`. The already-implemented transport repair addresses
-`ORDERED_BUSINESS_QUEUE_HEARTBEAT_TEST_RESPONSE_DELAY`, but its ten-minute live gate remains
-incomplete. Code identity
+`ORDERED_BUSINESS_QUEUE_HEARTBEAT_TEST_RESPONSE_DELAY`. Code identity
 `6093cd0825cf6c7352d30270ecb2c5742c81182a` proved the interrupted-terminal Candidate cleanup:
 two separate reconnects retired four Candidates without the former cleanup invariant. The
 reconnects occurred `613,931 ms` apart, each near the ten-minute session boundary. Deribit requires
@@ -82,6 +81,18 @@ were first blocked by `ADMISSION_KNOWN_INVALIDATED_BEFORE_REFRESH`. The recovery
 additional admitted Cases before the same handoff gap stopped a later admission. The official
 reader returns all `4` admitted Entries as recoverable. None of the economic rules changes in this
 implementation repair.
+
+The checked `2739ad26745aca2884ed56f296b8d4d3d07ff9cc` cutover recovered all four Entries and crossed
+the former approximately `462`-second failure point without another activation-packet exception.
+The API and official reader agree on four active Shadow Entries and four OPEN latest Segments.
+
+At connection age approximately `601` seconds, the public WebSocket entered its normal remote-close
+path. The runtime recorded `REMOTE_CONNECTION_CLOSED`, fail-closed the session boundary, reconnected
+once, and recovered `RUNNING/CURRENT`, `KNOWN_COMPLETE`, and `128/128` with all four Entries intact.
+This falsifies the proposed zero-reconnect live criterion; it does not falsify the transport-local
+heartbeat response. A remote normal close is external source continuity loss and must remain GAPPED.
+The repository-owned acceptance boundary is immediate heartbeat response plus truthful retirement
+and recovery, not an impossible promise that a remote public endpoint never closes.
 
 **Expected user-visible delta:** while ordered queue lag is above the fixed currentness deadline,
 Radar remains `UNKNOWN`, bucket coverage is `UNKNOWN`, no observation is counted, and no Episode or
@@ -199,7 +210,7 @@ Shadow Cases. Code identity `3bb90768b43816700f3c0a9222e45a1c949264be` recovered
 two more before the broader typed-handoff failure stopped the service. The user's continued-repair
 authorization permits one checked recovery cutover from the non-temporary
 `/Users/logan/Optimatrix-runtime` checkout, reusing the unchanged stable root and recovering all
-four Entries. Continue production-public observation across a later ten-minute heartbeat boundary.
+four Entries. That cutover is complete; continued production-public observation remains allowed.
 No private or execution permission is added.
 
 ## Scope
@@ -250,6 +261,8 @@ lifecycle owner in `packages/short_vol_underwriting/src/short_vol_underwriting/o
   response, rejects invalid/mismatched responses, and exposes no `HEARTBEAT_TEST` application RPC;
 - use the official Case reader to recover all four admitted Entries from the stopped run, then
   verify their new GAPPED Segments and active API identities after the clean start;
+- if the remote endpoint closes normally, prove the runtime records the session gap, reconnects,
+  returns to current `128/128`, and preserves every durable Entry instead of suppressing the gap;
 - fixed-attribution live evidence: cross queue currentness above five seconds and prove the frame is
   UNKNOWN/non-countable, adds zero `CORE_UNKNOWN` reset, and preserves accepted pre-confirmation
   through catch-up; keep any separate transport/session reset explicitly attributed;
@@ -261,6 +274,6 @@ The rotating phase, source-ahead race, queue-lag destructive reset, activation-p
 gap, and queued heartbeat-test response are impossible by direct tests; the official reader accepts
 store-owned bare digest directories and preserves canonical identities; high-precision raw score
 inputs round-trip and recompute exactly; the full repository gate passes; all four admitted Entries
-are verified through the API and official Case reader after recovery; the connection crosses a later
-ten-minute boundary without another heartbeat-driven reconnect; the diff is bounded and remote
-state is exact.
+are verified through the API and official Case reader after recovery; transport heartbeat response
+is immediate, and any external remote close is attributed, fail-closed, recovered, and never
+misrepresented as continuous observation; the diff is bounded and remote state is exact.

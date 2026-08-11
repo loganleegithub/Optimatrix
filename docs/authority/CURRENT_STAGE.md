@@ -6,15 +6,15 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_TYPED_ACTIVATION_PACKET_AND_TRANSPORT_HEARTBEAT_REPAIR`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_TYPED_ACTIVATION_PACKET_LIVE_VALIDATION`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `STOPPED_AFTER_FOUR_ADMISSIONS_AND_REPEATED_PACKET_HANDOFF_FAILURE`
+**Persistent service:** `RUNNING_WITH_FOUR_RECOVERED_ADMITTED_ENTRIES`
 
-**Live commands:** `ONE_CHECKED_RECOVERY_CUTOVER_AND_CONTINUED_MONITORING`
+**Live commands:** `CONTINUED_PUBLIC_ONLY_MONITORING`
 
 **Sole authorized closure:**
 [`INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md)
@@ -177,15 +177,39 @@ remain `CONTINUOUS`. No Outcome was fabricated and no Case was copied, rewritten
 deleted. One checked recovery cutover is authorized after direct and repository gates pass; it must
 reuse the stable root and open truthful GAPPED Segments for all four Entries.
 
+Code identity `2739ad26745aca2884ed56f296b8d4d3d07ff9cc` passed the direct and full repository gates,
+then performed that checked recovery cutover. Workbench publishes runtime identity
+`sha256:9a6d7f937d08118eb13c15e4dd511d67c8b1c8232b2c69560bf8d402fb377688` as
+`RUNNING/CURRENT`, `KNOWN_COMPLETE`, and `128/128`, with four Shadow Entry rows and four Position
+rows. The official reader independently validates all four latest Segments as `OPEN` under that
+runtime identity. The repaired runtime crossed the former approximately `462`-second packet-failure
+point without reproducing the error.
+
+At connection age approximately `601` seconds, Deribit then normally closed the public WebSocket.
+The reducer recorded one exact `REMOTE_CONNECTION_CLOSED` session incident, retired current truth,
+and automatically established session epoch `2`; the next observed frame was again
+`RUNNING/CURRENT`, `KNOWN_COMPLETE`, and `128/128` with the same four Entry and Position identities.
+This is neither the former packet-integrity failure nor a processing backlog. The intended
+zero-reconnect heartbeat gate is therefore falsified as a product acceptance criterion under this
+public-only boundary.
+
+The official heartbeat contract is still enforced: `test_request` receives its transport-immediate
+`public/test`, and matching responses are consumed below the business queue. A remote normal close
+remains an external continuity loss and must stay truthfully GAPPED; suppressing that gap, adding a
+second keepalive owner, or claiming continuous qualification would be incorrect. Acceptance is now
+the bounded behavior actually owned by this repository: immediate heartbeat response, exact close
+attribution, fail-closed retirement, automatic recovery, and no lost durable Case.
+
 ## Current online boundary
 
-The last Online Runtime on `127.0.0.1:8675` used clean Draft PR #48 code identity
-`3bb90768b43816700f3c0a9222e45a1c949264be` and runtime identity
-`sha256:1a34a90f59087a5b93a835332cb308240b48a2a04b27ef78f721d58025d4e53b`
-from `/Users/logan/Optimatrix-runtime`. It is stopped after the repeated integrity failure and no
-longer owns the stable-root lease. Four admitted Entries remain the durable business truth in
-`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; the next authorized runtime must
-recover all four rather than recreate Candidate or admission history.
+The Online Runtime on `127.0.0.1:8675` uses clean Draft PR #48 code identity
+`2739ad26745aca2884ed56f296b8d4d3d07ff9cc` and runtime identity
+`sha256:9a6d7f937d08118eb13c15e4dd511d67c8b1c8232b2c69560bf8d402fb377688`
+from `/Users/logan/Optimatrix-runtime`. It owns the unchanged stable-root lease and publishes four
+recovered admitted Entries from
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. The latest observed frame was
+`RUNNING/CURRENT`, `KNOWN_COMPLETE`, `128/128`, with queue lag `564 ms`, market-event age
+`1,089 ms`, reconnect count `1`, and session-gap count `1`.
 
 ## Current product truth
 
