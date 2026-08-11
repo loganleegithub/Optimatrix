@@ -4,79 +4,78 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `NONE`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_LIVE_8765`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_8765_MAIN_CCD773B_WITH_34_RECOVERED_ADMITTED_ENTRIES`
+**Persistent service:** `RUNNING_8765_MAIN_9002B6E_WITH_36_RECOVERED_ADMITTED_ENTRIES`
 
-**Live commands:** `ONE_CLEAN_STOP_AND_ONE_CLEAN_START_8765`
+**Live commands:** `NONE_CONSUMED`
 
-**Sole authorized closure:**
-[`INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR`](../../tasks/INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR.md)
+**Sole authorized closure:** `NONE`
 
-## Current bounded implementation authority
+## Closed delivery truth
 
-The current schema-v7 Workbench emits all dynamic Radar map coordinates and both selected-signal
-metric widths through inline CSS variables. The declared `style-src 'self'` policy rejects those
-attributes: every inspected marker computes to the track origin and both meters appear full even
-when their server values are lower. This is a trader-visible rendering failure, not missing Radar
-truth or a reason to change Policy.
+Direct `main` delivery `9002b6ef7b0ec183cd1448fc975a4b7ebea19084` closed the V2 Radar map
+CSP layout repair. The former schema-v7 Workbench emitted all dynamic coordinates and selected-
+signal meter widths through inline styles; `style-src 'self'` rejected them, collapsed every marker
+to the track origin, and rendered both meters as full. The accepted implementation now uses a
+CSP-safe SVG coordinate plane, native Strike anchors, accessible HTML marker controls, deterministic
+visual-only collision tiers, and native progress elements. It changes no Radar selection, Score,
+Policy, product, server projection, or durable schema.
 
-Starting from synchronized direct `main@bfcf876ef443db109f5bec47579cad123b51dcf5`, the active task
-may replace only that inline-style rendering path with CSP-safe native coordinate/value semantics,
-add direct regression coverage, and update its Authority closure. Radar selection, scoring,
-product/Policy identities, server projection, Workbench/Case schemas, and the stable repository
-remain unchanged.
+The one authorized clean stop and clean start were consumed. Immediately before stop, the official
+reader validated 52 schema-v5 Cases and 36 active admitted Entries. The stop closed all 36 latest
+Segments as `CENSORED_AT_STOP`, created zero admitted Outcome files, and exited cleanly. The new sole
+runtime then restored the same 36 Entry identities exactly once on the unchanged stable repository.
+No Case, Entry, Control, Outcome, Policy, schema, or state root was copied, migrated, rewritten,
+deleted, or relabeled.
 
-After focused and full gates, one clean stop of the sole 8765 runtime and one clean start from the
-exact accepted runtime checkout are authorized on the unchanged stable repository. The stop closes
-active admitted Entry Segments without creating an admitted Outcome; the new runtime restores every
-compatible non-terminal Entry and begins fresh facts in truthful `GAPPED` Segments. One bounded
-GET/HEAD, snapshot, official-reader, served-asset, and in-app-browser review of every declared page
-module is authorized. A consumed or failed start grants no retry. No source probe, second runtime,
-Policy/schema/root operation, migration, commissioning, supervision, or private execution is
-authorized.
+The bounded in-app-browser review covered the 1:1 Radar surface, Strike geometry, marker collisions,
+native meter values, Put/Call/Both filters, ACTIVE-only zero state, signal detail and evidence,
+day/night themes, the 2 x 2 product matrix, explicit unimplemented-product state, the 36-row Shadow
+queue, Shadow detail across a publication refresh, footer navigation, disabled AI surface, and the
+responsive detail drawer. No further live command is authorized by this closure.
 
 ## Current online boundary
 
 The sole Online Runtime serves `127.0.0.1:8765` from the clean non-temporary checkout
 `/Users/logan/Optimatrix-runtime` at code identity
-`ccd773b4d94fa964d0215b8ba617c2d83110d6b0`. Its runtime identity is
-`sha256:88eab249d5deeddca03fd101804ba2b2575caef4468be779e3c2fd03a037b6ed`.
+`9002b6ef7b0ec183cd1448fc975a4b7ebea19084`. Its runtime identity is
+`sha256:a3ba1393dbbd5406463d63b251927b8e44fbd0da42d0e5e4babc080178c354b0`.
 The former endpoint `127.0.0.1:8675` does not serve, and no second Runtime owns the stable
 repository at `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`.
 
 All six declared GET and HEAD routes return HTTP 200. The service reports `RUNNING`, `CURRENT`,
 `health=true`, and `ready=true`; the schema-v7 snapshot has `128/128` Radar rows and the unchanged
 product/Policy identities. The served `/app.js` bytes exactly match the accepted checkout at SHA-256
-`c2ffb0e87dbf8475787187cbc942dbdd8f2a3c2d96c7f38c6d0c6ef6f1badc59`.
+`b32e3629332e89cbcfdf0cf46f126ad49d230044b836e7a59458d2704bb9891a`.
 
-The bounded trader-visible observation showed `9 current visible / 9 strong signals / 128 scanned
-contracts`. All nine were server-owned clue-eligible HIGH leaders in `CONFIRMING 1/3`, with the
-correctly absent pre-activation Episode identity. The map placed them at their exact expiry and
-strike, exposed the selected server Score/coverage/evidence, and logged no browser warning or error.
-`ACTIVE` rows still require a valid Episode identity. Zero remains truthful only when no current row
-satisfies the exact `HIGH + leader + clue eligible + CONFIRMING|ACTIVE` subset.
+The bounded trader-visible observation moved naturally between 10 and 11 current strong signals
+while retaining 128 scanned contracts. Every displayed row was a server-owned clue-eligible HIGH
+leader in `CONFIRMING`; the sampled ACTIVE-only subset was truthfully zero because no row had the
+required active Episode identity. At 11 signals, Put showed six and Call five. Marker cards had no
+pairwise overlap, their ring-anchor horizontal error was zero, the 1:1 map had no horizontal
+overflow, and selected Premium/Risk progress values matched the server attributes. Signal detail
+showed the selected server Score, coverage, factor evidence, confirmation state, upgrade condition,
+and non-trading boundary without browser recomputation.
 
-Immediately before the clean stop, the official policy-aware reader validated 49 schema-v5 Cases:
-34 non-terminal admitted Shadow Entries, 4 selected Underwriting Controls, and 11 Radar-score
-Controls. All 34 admitted latest Segments were `OPEN` under the predecessor runtime. The clean stop
-closed every one as `CENSORED_AT_STOP` and created zero admitted Outcome files. The new runtime then
-restored all 34 Entry identities exactly once. Their latest Segments are `OPEN` and bind the current
-code/runtime; Workbench publishes 34 Shadow Entry rows, 34 Position rows, and 34 `PENDING` Outcome
-projections with actual availability `UNKNOWN` and no actual PnL. All 34 are `ACTIVE/GAPPED`; gap
-counts are 2 at one, 28 at two, 2 at three, and 2 at four.
+The official policy-aware reader currently validates 52 schema-v5 Cases: 36 non-terminal admitted
+Shadow Entries, five selected Underwriting Controls, and 11 Radar-score Controls. All 36 admitted
+latest Segments are `OPEN`, bind the current code/runtime, and are `ACTIVE/GAPPED`; segment sequence
+and gap-count distributions are two at one, two at two, 28 at three, two at four, and two at five.
+Workbench publishes 36 Shadow Entry rows, 36 Position rows, and 36 `PENDING` Outcome projections
+with actual availability `UNKNOWN` and no actual PnL. There are zero admitted Outcome files.
 
-The 15 Controls remain historical Case truth and are not restored as Entries. Thirteen have Outcome
-files: 12 `CENSORED_AT_FAILURE` and one `MATURE_KNOWN`; the other two remain pending Controls. The
-mature Control is not an admitted Shadow Outcome and does not establish Policy Edge or
-profitability. No Case, Entry, Control, or Outcome was copied, migrated, rewritten, deleted, or
-relabeled. Both exact-checkout `make check` runs and main CI passed with 750 tests.
+The 16 Controls remain historical Case truth and are not restored as Entries. Fourteen have Outcome
+files: 12 `CENSORED_AT_FAILURE`, one `CENSORED_AT_STOP`, and one `MATURE_KNOWN`; the other two remain
+pending Controls. The mature Control is not an admitted Shadow Outcome and does not establish
+Policy Edge or profitability. Delivery and exact-runtime checkouts passed Ruff, mypy, and all 751
+tests; the main implementation CI run also passed.
 
 ## Current product truth
 
@@ -104,7 +103,7 @@ counterfactual, not an order, fill, atomic quote, liquidity reservation, or actu
 
 Permission remains `PUBLIC_SHADOW`: no credential, account, balance, margin, order, fill, capital,
 settlement action, actual exposure, or private execution. Green checks, a responsive Workbench,
-34 restored Entries, or current strong-signal counts do not establish future uptime, source
+36 restored Entries, or current strong-signal counts do not establish future uptime, source
 freshness, fillability, qualification, Edge, or profitability.
 
 All cutover probes and live commands are consumed. A future probe, restart, state-root operation,

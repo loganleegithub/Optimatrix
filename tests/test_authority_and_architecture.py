@@ -182,55 +182,56 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_v2_radar_map_csp_layout_repair() -> None:
+def test_current_stage_records_v2_radar_map_csp_layout_live_truth() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR`" in current
+    assert "**Current task kind:** `NONE`" in current
+    assert "`INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_LIVE_8765`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "`RUNNING_8765_MAIN_CCD773B_WITH_34_RECOVERED_ADMITTED_ENTRIES`" in current
-    assert "**Live commands:** `ONE_CLEAN_STOP_AND_ONE_CLEAN_START_8765`" in current
+    assert "`RUNNING_8765_MAIN_9002B6E_WITH_36_RECOVERED_ADMITTED_ENTRIES`" in current
+    assert "**Live commands:** `NONE_CONSUMED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
-        "ccd773b4d94fa964d0215b8ba617c2d83110d6b0",
-        "sha256:88eab249d5deeddca03fd101804ba2b2575caef4468be779e3c2fd03a037b6ed",
+        "9002b6ef7b0ec183cd1448fc975a4b7ebea19084",
+        "sha256:a3ba1393dbbd5406463d63b251927b8e44fbd0da42d0e5e4babc080178c354b0",
         "127.0.0.1:8675",
         "127.0.0.1:8765",
         "/Users/logan/Optimatrix-runtime",
         "All six declared GET and HEAD routes return HTTP 200",
         "`RUNNING`, `CURRENT`, `health=true`, and `ready=true`",
         "`128/128` Radar rows",
-        "c2ffb0e87dbf8475787187cbc942dbdd8f2a3c2d96c7f38c6d0c6ef6f1badc59",
-        "`9 current visible / 9 strong signals / 128 scanned contracts`",
-        "HIGH leaders in `CONFIRMING 1/3`",
-        "correctly absent pre-activation Episode identity",
-        "`ACTIVE` rows still require a valid Episode identity",
-        "official policy-aware reader validated 49 schema-v5 Cases",
-        "34 non-terminal admitted Shadow Entries",
-        "closed every one as `CENSORED_AT_STOP`",
+        "b32e3629332e89cbcfdf0cf46f126ad49d230044b836e7a59458d2704bb9891a",
+        "between 10 and 11 current strong signals",
+        "server-owned clue-eligible HIGH leader in `CONFIRMING`",
+        "sampled ACTIVE-only subset was truthfully zero",
+        "At 11 signals, Put showed six and Call five",
+        "Marker cards had no pairwise overlap",
+        "ring-anchor horizontal error was zero",
+        "1:1 map had no horizontal overflow",
+        "official policy-aware reader currently validates 52 schema-v5 Cases",
+        "36 non-terminal admitted Shadow Entries",
         "zero admitted Outcome files",
-        "restored all 34 Entry identities exactly once",
-        "latest Segments are `OPEN` and bind the current code/runtime",
-        "34 Shadow Entry rows, 34 Position rows, and 34 `PENDING` Outcome projections",
+        "restored the same 36 Entry identities exactly once",
+        "latest Segments are `OPEN`, bind the current code/runtime",
+        "36 Shadow Entry rows, 36 Position rows, and 36 `PENDING` Outcome projections",
         "actual availability `UNKNOWN` and no actual PnL",
-        "gap counts are 2 at one, 28 at two, 2 at three, and 2 at four",
-        "15 Controls remain historical Case truth",
-        "12 `CENSORED_AT_FAILURE` and one `MATURE_KNOWN`",
+        "two at one, two at two, 28 at three, two at four, and two at five",
+        "16 Controls remain historical Case truth",
+        "12 `CENSORED_AT_FAILURE`, one `CENSORED_AT_STOP`, and one `MATURE_KNOWN`",
         "other two remain pending Controls",
         "not an admitted Shadow Outcome",
-        "No Case, Entry, Control, or Outcome was copied, migrated, rewritten, deleted",
-        "main CI passed with 750 tests",
+        "No Case, Entry, Control, Outcome, Policy, schema, or state root was copied",
+        "all 751 tests",
         "style-src 'self'",
-        "every inspected marker computes to the track origin",
-        "both meters appear full",
-        "bfcf876ef443db109f5bec47579cad123b51dcf5",
-        "one clean stop of the sole 8765 runtime",
-        "one clean start from the exact accepted runtime checkout",
-        "A consumed or failed start grants no retry",
+        "CSP-safe SVG coordinate plane",
+        "native progress elements",
+        "one authorized clean stop and clean start were consumed",
+        "No further live command is authorized by this closure",
     ):
         assert phrase in normalized
     for identity in (
@@ -240,10 +241,8 @@ def test_current_stage_authorizes_v2_radar_map_csp_layout_repair() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
-        "INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR.md",
-        "TEMPLATE.md",
-    }
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_INDEX_GRID_PHASE_REPAIR.md").exists()
     assert not (ROOT / "tasks/SHORT_VOL_INVERSE_ONLY_REPOSITORY_CLEANUP.md").exists()
