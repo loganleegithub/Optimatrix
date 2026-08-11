@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from options_domain import ComponentBookQuoteKind, ComponentBookVerticalQuote, product_for_identity
+from options_domain import (
+    ComponentBookQuoteKind,
+    ComponentBookVerticalQuote,
+    OptionProductSpec,
+    OptionType,
+    product_for_identity,
+)
 
 from short_vol_underwriting.constants import (
     CANDIDATE_INVALIDATION_REASONS,
@@ -268,6 +274,118 @@ class ShadowOutcomeEconomics:
 
 
 @dataclass(frozen=True)
+class ContractSettlementEconomics:
+    """Public counterfactual economics of carrying one frozen vertical to delivery."""
+
+    delivery_price_usdc_per_btc: Decimal
+    native_short_contractual_payoff: Decimal
+    native_long_contractual_payoff: Decimal
+    native_gross_settlement_cashflow: Decimal
+    native_delivery_fee_reserve: Decimal
+    native_net_settlement_cashflow: Decimal
+    native_gross_pnl: Decimal
+    native_total_fee_reserve: Decimal
+    native_net_pnl: Decimal
+    delivery_valued_gross_settlement_cashflow_usdc: Decimal
+    delivery_valued_delivery_fee_reserve_usdc: Decimal
+    delivery_valued_net_settlement_cashflow_usdc: Decimal
+    delivery_valued_gross_pnl_usdc: Decimal
+    delivery_valued_total_fee_reserve_usdc: Decimal
+    delivery_valued_net_pnl_usdc: Decimal
+    delivery_valued_net_loss_usdc: Decimal
+
+
+def compute_contract_settlement_economics(
+    *,
+    product: OptionProductSpec,
+    option_type: OptionType | str,
+    short_strike_usdc_per_btc: Decimal,
+    long_strike_usdc_per_btc: Decimal,
+    full_quantity_btc: Decimal,
+    delivery_price_usdc_per_btc: Decimal,
+    delivery_fee_rate_fraction: Decimal,
+    native_gross_entry_credit: Decimal,
+    native_entry_fee_reserve: Decimal,
+) -> ContractSettlementEconomics:
+    """Settle a short-option/long-protection vertical from one official delivery price."""
+
+    try:
+        normalized_type = (
+            option_type if isinstance(option_type, OptionType) else OptionType(option_type)
+        )
+    except ValueError as exc:
+        raise ValueError("option_type must be call or put") from exc
+    for member, field in (
+        (short_strike_usdc_per_btc, "short_strike_usdc_per_btc"),
+        (long_strike_usdc_per_btc, "long_strike_usdc_per_btc"),
+        (full_quantity_btc, "full_quantity_btc"),
+        (delivery_price_usdc_per_btc, "delivery_price_usdc_per_btc"),
+    ):
+        if not isinstance(member, Decimal) or not member.is_finite() or member <= 0:
+            raise ValueError(f"{field} must be a finite positive Decimal")
+    for member, field in (
+        (delivery_fee_rate_fraction, "delivery_fee_rate_fraction"),
+        (native_gross_entry_credit, "native_gross_entry_credit"),
+        (native_entry_fee_reserve, "native_entry_fee_reserve"),
+    ):
+        if not isinstance(member, Decimal) or not member.is_finite() or member < 0:
+            raise ValueError(f"{field} must be a finite non-negative Decimal")
+
+    def intrinsic(strike: Decimal) -> Decimal:
+        if normalized_type is OptionType.CALL:
+            return max(Decimal(0), delivery_price_usdc_per_btc - strike)
+        return max(Decimal(0), strike - delivery_price_usdc_per_btc)
+
+    short_native = product.native_payoff_from_strike_value(
+        intrinsic(short_strike_usdc_per_btc) * full_quantity_btc,
+        settlement_price=delivery_price_usdc_per_btc,
+    )
+    long_native = product.native_payoff_from_strike_value(
+        intrinsic(long_strike_usdc_per_btc) * full_quantity_btc,
+        settlement_price=delivery_price_usdc_per_btc,
+    )
+    gross_settlement = long_native - short_native
+    delivery_fee = sum(
+        (
+            min(
+                delivery_fee_rate_fraction * full_quantity_btc,
+                Decimal("0.125") * payoff,
+            )
+            for payoff in (short_native, long_native)
+            if payoff > 0
+        ),
+        Decimal(0),
+    )
+    net_settlement = gross_settlement - delivery_fee
+    gross_pnl = native_gross_entry_credit + gross_settlement
+    total_fee = native_entry_fee_reserve + delivery_fee
+    net_pnl = gross_pnl - total_fee
+
+    def delivery_value(native_amount: Decimal) -> Decimal:
+        return product.valuation(native_amount, index_price=delivery_price_usdc_per_btc)
+
+    valued_net_pnl = delivery_value(net_pnl)
+    return ContractSettlementEconomics(
+        delivery_price_usdc_per_btc=delivery_price_usdc_per_btc,
+        native_short_contractual_payoff=short_native,
+        native_long_contractual_payoff=long_native,
+        native_gross_settlement_cashflow=gross_settlement,
+        native_delivery_fee_reserve=delivery_fee,
+        native_net_settlement_cashflow=net_settlement,
+        native_gross_pnl=gross_pnl,
+        native_total_fee_reserve=total_fee,
+        native_net_pnl=net_pnl,
+        delivery_valued_gross_settlement_cashflow_usdc=delivery_value(gross_settlement),
+        delivery_valued_delivery_fee_reserve_usdc=delivery_value(delivery_fee),
+        delivery_valued_net_settlement_cashflow_usdc=delivery_value(net_settlement),
+        delivery_valued_gross_pnl_usdc=delivery_value(gross_pnl),
+        delivery_valued_total_fee_reserve_usdc=delivery_value(total_fee),
+        delivery_valued_net_pnl_usdc=valued_net_pnl,
+        delivery_valued_net_loss_usdc=max(Decimal(0), -valued_net_pnl),
+    )
+
+
+@dataclass(frozen=True)
 class PositionDecision:
     position_evaluation_identity: str
     position_action_identity: str
@@ -484,6 +602,8 @@ class OutcomeReducer:
         *,
         boundary: CaseFactBoundary,
         eligible_exit_identity: str | None = None,
+        settlement_fact_identity: str | None = None,
+        terminal_unknown_final: bool = False,
         ordinary_attempt_terminal: bool = False,
         lifecycle_ready: bool = False,
     ) -> OutcomeState:
@@ -499,10 +619,16 @@ class OutcomeReducer:
             if not close_is_earlier:
                 raise ValueError("eligible exit must be strictly after first CLOSE")
             self.selected_exit_identity = eligible_exit_identity
-            self.state = OutcomeState.MATURE_KNOWN
-        elif close_is_earlier and ordinary_attempt_terminal and lifecycle_ready:
-            self.state = OutcomeState.MATURE_UNKNOWN
+            self.state = OutcomeState.EXITED_KNOWN
+        elif settlement_fact_identity is not None:
+            require_identity(settlement_fact_identity, "settlement_fact_identity")
+            if not close_is_earlier:
+                raise ValueError("contract settlement must be strictly after first CLOSE")
+            self.state = OutcomeState.SETTLED_KNOWN
+        elif close_is_earlier and terminal_unknown_final:
+            self.state = OutcomeState.TERMINAL_UNKNOWN
         else:
+            del ordinary_attempt_terminal, lifecycle_ready
             return self.state
         self.terminal_case_boundary = boundary
         return self.state

@@ -1262,7 +1262,7 @@ def test_first_close_and_known_outcome_complete_case_with_recomputable_economics
         path.write_text(json.dumps(record), encoding="utf-8")
 
 
-def test_first_close_is_durable_only_with_its_attempt_and_is_never_retried(
+def test_first_close_intent_is_durable_before_transient_exit_attempts_and_remains_recoverable(
     tmp_path: Path,
 ) -> None:
     state, case_store, bindings = _system(tmp_path)
@@ -1289,7 +1289,10 @@ def test_first_close_is_durable_only_with_its_attempt_and_is_never_retried(
         },
     )
     first_close_path = tmp_path / "cases" / case_id.removeprefix("sha256:") / "first-close.json"
-    assert not first_close_path.exists()
+    durable_intent = json.loads(first_close_path.read_text(encoding="utf-8"))
+    assert durable_intent["transition"] == "FIRST_CLOSE_INTENT_LATCHED"
+    assert durable_intent["position_action_identity"] == close_identity
+    assert "scheduled_post_close_attempt_identity" not in durable_intent
 
     request_ids = [51, 52]
     request_params = [
@@ -1321,8 +1324,7 @@ def test_first_close_is_durable_only_with_its_attempt_and_is_never_retried(
         },
     )
     durable = json.loads(first_close_path.read_text(encoding="utf-8"))
-    assert durable["transition"] == "FIRST_CLOSE_AND_ATTEMPT_SCHEDULED"
-    assert durable["scheduled_post_close_attempt_identity"] == schedule_identity
+    assert durable == durable_intent
 
     closed = case_store.close_active_admitted_segments(
         boundary=_boundary(6),
@@ -1357,7 +1359,7 @@ def test_first_close_is_durable_only_with_its_attempt_and_is_never_retried(
     (recoverable,) = restarted.scan_active_admitted()
     assert recoverable.predecessor_segment_state.value == "CENSORED_AT_STOP"
     assert recoverable.first_close_state == "LATCHED"
-    assert recoverable.attempt_state == "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS"
+    assert recoverable.attempt_state == "NOT_SCHEDULED"
     assert recoverable.first_close_decision is not None
     assert case_residue.exists()
     assert segment_residue.exists()
@@ -1369,7 +1371,7 @@ def test_first_close_is_durable_only_with_its_attempt_and_is_never_retried(
         adoption_fact_boundary=_runtime_boundary(restarted_bindings, 1),
     )
     assert adopted.first_close_state == "LATCHED"
-    assert adopted.attempt_state == "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS"
+    assert adopted.attempt_state == "NOT_SCHEDULED"
     recovery_owner = FixedContractShadowOwner(
         policies=case_store.policies,
         bindings=restarted_bindings,

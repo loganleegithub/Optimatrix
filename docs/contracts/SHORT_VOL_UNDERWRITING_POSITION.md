@@ -15,8 +15,10 @@ Policy.
 Before Shadow enrollment, every evaluation, action, Candidate, request attempt, and display row is
 in-memory current state. None is a durable business record. `SHADOW_ENTRY` hands one admitted unit
 to the Shadow Case owner and creates a process-independent Entry aggregate after its paired entry
-witness. A runtime owns only the aggregate's current Observation Segment. The separately typed
-decision-control open creates one selected no-trade Case, not a recoverable Entry.
+witness. A runtime owns only the aggregate's current Observation Segment. A separately typed
+decision-control open creates one selected no-trade Case with no capital exposure; Controls opened
+under the current contract own the same process-independent Position/Segment lifecycle even though
+they never become admitted Entries.
 
 ## Fixed Policy chain
 
@@ -288,18 +290,27 @@ HOLD    otherwise
 ```
 
 Individual Position evaluations and HOLD/UNKNOWN changes are in-memory only. The first latched
-CLOSE and scheduling of its only paired close attempt create one atomic durable
-`SHADOW_CASE_FIRST_CLOSE / FIRST_CLOSE_AND_ATTEMPT_SCHEDULED` transition. The request intents are
-released only after publication succeeds. No runtime may create a second first CLOSE or attempt.
+`CLOSE` creates one immutable durable
+`SHADOW_CASE_FIRST_CLOSE / FIRST_CLOSE_INTENT_LATCHED` transition before any exit request may be
+released. It answers why the Policy first required exit; it is not proof that the Position ended
+and it does not consume the Case's continuing exit responsibility.
+
+The nine predicates and their thresholds remain frozen by the Position Policy identity for the
+existing book. In particular, a legacy source-discontinuity predicate may latch exit intent, but a
+process `HANDOFF_GAP` is never fabricated into such a predicate. Expiry, quote unavailability, and
+failed acquisition are lifecycle/execution facts after the intent, not evidence that an economic
+exit occurred. New predicate meanings or thresholds require a later Policy identity cutover.
 
 ## Cross-process recovery
 
-After acquiring the stable Case repository, a new runtime restores every non-terminal admitted
-Entry bound to its exact product and frozen Policy chain. It reconstructs the frozen structure,
+After acquiring the stable Case repository, a new runtime restores every compatible non-terminal
+admitted Entry and every future Control that already owns an origin Segment, bound to the exact
+product and frozen Policy chain. It reconstructs the frozen structure,
 entry economics from `opened.json` and the immutable entry baseline from the origin Segment,
 restores any durable first-CLOSE latch, and opens a new runtime Observation Segment. It does not
 recreate Underwriting, Candidate, admission, slot consumption, or source Radar state. An
-An unknown entry baseline remains `UNKNOWN`; later facts do not rewrite it.
+unknown entry baseline remains `UNKNOWN`; later facts do not rewrite it. Legacy segmentless
+Controls remain historical and are not reinterpreted or reopened.
 
 Segment data availability starts `UNKNOWN`. `HANDOFF_GAP` permanently marks observation quality but
 is not a Position predicate and cannot create `HOLD` or `CLOSE`. The first fresh complete facts are
@@ -307,12 +318,16 @@ evaluated normally; predicates whose missing cross-gap inputs cannot be establis
 `UNKNOWN` at that evaluation. A fresh known index becomes the new segment's prior-evaluation
 baseline only after the truthful first evaluation.
 
-If first CLOSE was already durable, it remains latched. If its one paired attempt was pending when
-the process stopped or crashed without a mature Outcome, recovery exposes
-`ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS` and does not retry. If first CLOSE occurs later from fresh
-facts, the same atomic first-close/schedule rule applies. A mature economic Outcome formed after any
-gap stores `observation_quality=GAPPED` and `qualification_eligible=false`; its public economics may
-be known, but it is not a continuous-observation qualification result.
+If first CLOSE was already durable, it remains latched. A paired attempt that was pending when the
+process stopped or crashed remains historically
+`ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS`; the new Segment neither rewrites nor completes it. That
+unknown attempt does not block a new strictly future exit-acquisition attempt. If first CLOSE occurs
+later from fresh facts, the intent-only durable rule applies before acquisition begins.
+
+`observation_quality=GAPPED` and the legacy strict-continuity projection
+`qualification_eligible=false` preserve the missing interval. They do not change whether the
+Position exists or whether terminal economics can become known. Cohort eligibility is derived
+offline per research question.
 
 ## Close quote and opportunity
 
@@ -329,6 +344,13 @@ Only a strictly later paired component-book snapshot for the same frozen legs ca
 eligible Shadow close opportunity. The short is bought from asks stressed up one tick and the long
 is sold from bids stressed down one tick. Each leg must cover the full remaining quantity. One
 response cannot close the Case.
+
+After first CLOSE, the owner runs a serial bounded acquisition loop: at most one two-leg attempt is
+in flight for a Position, a failed/ineligible/missing pair schedules the next attempt after the
+predeclared response interval, and the first causally eligible full-quantity pair wins. It never
+looks back for a better price and does not persist attempt history. Liquidity failure therefore
+means `EXIT_ACQUIRING | LIQUIDITY_BLOCKED`, not a completed close. Process recovery starts a new
+strictly future loop without backfilling the gap.
 
 For an eligible paired component-book close, the same product-aware order applies:
 
@@ -348,6 +370,23 @@ neither may be selected after observing the Outcome. A known Outcome conserves B
 both explicitly USD-labeled valuation views.
 Actual account margin, settlement action, and fill PnL remain outside the public contract.
 
+## Contract settlement
+
+At or after the frozen expiry, ordinary close acquisition stops and the Position becomes
+`SETTLEMENT_PENDING`. The runtime requests the official `btc_usd` delivery-price history with the
+one fixed public request shape and fans one accepted response out to every waiting expiry date.
+Missing, malformed, late, or date-incomplete responses remain pending and retry; they do not create
+zero payoff or `TERMINAL_UNKNOWN`.
+
+For each leg, the product-owned Inverse calculator forms USD intrinsic, divides it by the official
+delivery price into BTC contractual payoff, applies the signed short/long directions, and reserves
+the public delivery fee capped at 12.5% of that leg's positive payoff. Non-Friday 0–3 DTE series are
+the fee-exempt daily expiry class; Friday weekly/monthly/quarterly series use the standard option
+delivery rate. It conserves BTC-native entry credit, settlement cashflow, delivery fee, and net PnL,
+then separately values each result at the official delivery price. A valid fact produces
+`SETTLED_KNOWN`; only an explicit predeclared finality rule may produce `TERMINAL_UNKNOWN`. No such
+automatic finality timeout exists in the current runtime.
+
 ## Currentness and failure behavior
 
 Clock, platform, index, ticker, metadata, streaming book, and public refresh currentness use their
@@ -356,9 +395,10 @@ Missing or contaminated facts become `UNKNOWN` at their smallest consumer. A kno
 not erased by an unavailable quote.
 
 A reconnect retains the same in-process Shadow owner but requires fresh current market state.
-Current Candidate state does not survive process restart. Admitted Entry aggregates do survive:
-the externally started next process restores them from the stable repository and creates new
-Observation Segments. Selected no-trade Controls do not survive as active owners.
+Current Candidate state does not survive process restart. Admitted Entry aggregates and future
+Segment-bearing Controls do survive: the externally started next process restores them from the
+stable repository and creates new Observation Segments. Legacy segmentless Controls do not survive
+as active owners.
 
 ## In-memory owner view
 
@@ -383,7 +423,9 @@ economics, action boundaries, all-legal-leg selection outside Radar Top 3, produ
 predicate margins, frozen-leg identity, pair session/continuity/skew boundaries, paired admission
 races, strictly post-entry Position order, first CLOSE latching, paired close classification, exact
 Inverse behavior, no pre-Shadow durable writes, repeated A→B→C process recovery, segment-gap
-UNKNOWN, single durable attempt schedule, no retry after uncertain process loss, and mature gapped
-Outcome classification. Full graph manifests, parallel schemas, per-tick checkpoints, replay, and
+UNKNOWN, durable intent before acquisition, retry after failed/uncertain attempts, first-eligible
+exit selection, shared official delivery-price acquisition, Inverse contract settlement, future
+Control recovery, and named offline Cohort classification. Full graph manifests, parallel schemas,
+per-tick checkpoints, replay, and
 automatic rejected-counterfactual persistence are not required. Public observation is governed
 only by `CURRENT_STAGE`.

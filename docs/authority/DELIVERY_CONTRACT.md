@@ -76,9 +76,13 @@ Current permitted durable kinds are only:
 SHADOW_CASE_OPENED
 SHADOW_CASE_SEGMENT_OPENED
 SHADOW_CASE_SEGMENT_CLOSED
-SHADOW_CASE_FIRST_CLOSE / FIRST_CLOSE_AND_ATTEMPT_SCHEDULED
+SHADOW_CASE_FIRST_CLOSE / FIRST_CLOSE_INTENT_LATCHED
 SHADOW_CASE_OUTCOME
 ```
+
+Immutable legacy `FIRST_CLOSE_AND_ATTEMPT_SCHEDULED` bytes remain valid reader input. New exit
+acquisition attempts are bounded in-memory facts and cannot become a second durable history merely
+to support retry.
 
 The Observation Segment pair is owned by an already-open admitted Entry. The Online Runtime,
 trader Workbench, and AI Researcher consume its runtime provenance, adoption/end boundaries,
@@ -113,8 +117,9 @@ Use the cheapest path that can falsify the exact claim:
 - public source connectivity and current-state reachability: one explicitly authorized bounded
   read-only integration smoke;
 - Shadow Case persistence: direct write/read/crash-incomplete tests;
-- cross-process Entry recovery: two successive restart fixtures over one stable Case repository,
-  segment ordering/gap truth, single first-close attempt, and mature gapped Outcome tests;
+- cross-process Position recovery: two successive restart fixtures over one stable Case repository,
+  segment ordering/gap truth, immutable first-CLOSE intent, continuing bounded acquisition,
+  future-Control recovery, official settlement, and named gapped-Outcome Cohort tests;
 - Challenger qualification or Policy promotion: later pre-registered independent evaluation;
 - private execution: later account/order/fill reconciliation and capital controls.
 

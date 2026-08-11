@@ -27,9 +27,10 @@ Deribit public WebSocket for `INVERSE_BTC_V1`
 → loopback GET/HEAD HTTP
 ```
 
-The Online Runtime owns current decisions and one Observation Segment for each active admitted
-Entry. The stable Case repository owns Entry aggregates across processes. Qualification Cohorts,
-aligned comparisons, Challenger datasets, and promotion decisions are offline concerns.
+The Online Runtime owns current decisions and one Observation Segment for each active
+Position-bearing Case. The stable Case repository owns admitted Entry and future selected-Control
+aggregates across processes. Qualification Cohorts, aligned comparisons, Challenger datasets, and
+promotion decisions are offline concerns.
 
 ## Ownership and dependency direction
 
@@ -63,10 +64,11 @@ product reducer, owner, queue, Case store, Workbench, or in-process product-comp
 
 After acquiring the stable state-root lease and before public intake, startup scans
 `state-root/cases` and validates every Case directory through the one official reader. It restores
-all and only non-terminal `ADMITTED_SHADOW_TRADE` Entries bound to `INVERSE_BTC_V1` and the
-exact frozen Policy chain. A malformed, unsupported, or mixed active Entry fails the whole startup;
-the runtime cannot skip it. Terminal admitted Entries and selected no-trade Controls remain
-research history and are not restored. No CLI allowlist chooses business Entries.
+all compatible non-terminal `ADMITTED_SHADOW_TRADE` Entries and future Segment-bearing selected
+Controls bound to `INVERSE_BTC_V1` and the exact frozen Policy chain. A malformed, unsupported, or
+mixed active Position-bearing Case fails the whole startup; the runtime cannot skip it. Terminal
+Cases and legacy segmentless Controls remain research history and are not restored. No CLI
+allowlist chooses business Cases.
 
 The transport answers Deribit's `test_request` immediately with `public/test`, using one
 transport-local string request id and at most one in-flight response. That mandatory connection
@@ -93,7 +95,8 @@ then settles Underwriting, admission, every open Shadow Position, and Outcome be
 funnel publication. No second reducer, response-future owner, or persisted replay path may apply
 business truth.
 
-For a restored Entry, its new Observation Segment begins at the first accepted settled boundary.
+For a restored Position-bearing Case, its new Observation Segment begins at the first accepted
+settled boundary.
 Until required fresh facts arrive, current observation and Position availability are `UNKNOWN`.
 `HANDOFF_GAP` records observation quality and never manufactures a Position predicate or `CLOSE`.
 
@@ -135,7 +138,7 @@ state-root/
   cases/<case-id>/
     opened.json
     first-close.json                       optional, at most one
-    outcome.json                           optional, at most one mature Entry Outcome
+    outcome.json                           optional, at most one terminal Case Outcome
     segments/<segment-sequence>/opened.json
     segments/<segment-sequence>/closed.json      optional
 ```
@@ -146,21 +149,22 @@ qualification, Cohort membership, process supervision, host acceptance, a databa
 fencing service. `service.lock` prevents simultaneous writers on one host; it is not a distributed
 lease or commissioning proof.
 
-A new admitted Entry Case is not visible record-by-record. The writer builds and validates
-`opened.json` plus the origin `segments/0/opened.json` inside one staging Case directory on the same
+A new admitted Entry or selected Control under the current contract is not visible record-by-record.
+The writer builds and validates `opened.json` plus the origin `segments/0/opened.json` inside one
+staging Case directory on the same
 filesystem, then makes that complete directory visible with one no-replace atomic directory
-publication. A crash before publication leaves no visible Entry Case; after publication both
-records are visible. This protects the Entry boundary using the existing single-instance lease and
+publication. A crash before publication leaves no visible Case; after publication both records are
+visible. This protects the enrollment boundary using the existing single-instance lease and
 is not a manifest or fencing protocol.
 
 The one store/reader owns the accepted Inverse schema-v5 Case family. It binds `INVERSE_BTC_V1`
 explicitly, conserves BTC-native entry/close/fee/PnL facts plus separately named USD valuation facts,
 and freezes one canonical V2 score packet at selection plus the same shape at entry refresh. There
-is no online legacy-product, alternate-schema, or migration branch. A new admitted Entry's origin
+is no online legacy-product, alternate-schema, or migration branch. A new Position-bearing Case's origin
 Segment persists `entry_position_baseline`: the exact entry index and short-leg mark-IV source
 references required by a future Position owner.
 
-Each admitted Entry has one or more Observation Segments. Segment-open freezes current
+Each Position-bearing Case has one or more Observation Segments. Segment-open freezes current
 code/runtime, product/Policy binding, adoption FactBoundary, predecessor segment, and observation
 quality. The origin Segment alone owns the immutable `entry_position_baseline`; later Segments read
 it without copying or rewriting it. Segment-close freezes clean-stop or handled-failure boundary
@@ -169,16 +173,25 @@ and reason. A hard crash may leave segment-open without segment-close; the reade
 the missing record. FactBoundaries order facts only inside one segment. The immutable predecessor
 chain orders segments without pretending that different runtime clocks are directly comparable.
 
-Clean stop and handled failure close each active admitted Entry's current segment; they no longer
-write `CENSORED_AT_STOP` or `CENSORED_AT_FAILURE` as the admitted Entry's mature Outcome. The Entry
-remains recoverable until `outcome.json` exists. Selected no-trade Controls are not restored and
-retain their existing bounded terminal Case semantics.
+Clean stop and handled failure close each active Position-bearing Case's current Segment; they do
+not write `CENSORED_AT_STOP` or `CENSORED_AT_FAILURE` as a terminal Outcome. The aggregate remains
+recoverable until `outcome.json` exists. Legacy segmentless Controls retain their historical
+bounded semantics and are not reinterpreted.
 
-The first Position CLOSE and scheduling of the one paired close attempt publish atomically as one
-durable transition. No request may be sent before that transition exists. Presence of the
-transition prevents every later runtime from latching another first CLOSE or scheduling another
-attempt. If its attempt was pending when a segment became incomplete, recovery exposes
-`ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS` and does not retry.
+The first Position CLOSE publishes as one immutable `FIRST_CLOSE_INTENT_LATCHED` transition before
+any exit request may be sent. Presence of the transition prevents every later runtime from latching
+another first CLOSE, but never proves economic termination. Exit acquisition is serial and
+in-memory: at most one paired attempt per Position is in flight, failed/ineligible/missing pairs
+defer another attempt, and the first causally eligible full-quantity pair wins. If an attempt was
+pending when a Segment became incomplete, recovery exposes
+`ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS` for history while starting only a new strictly future
+attempt. Legacy combined first-close/schedule records remain valid immutable input.
+
+At expiry, ordinary component-book acquisition stops and the same owner requests the fixed public
+`public/get_delivery_prices` history. One validated response fans out by expiry date to every
+waiting Position. Missing dates or failed/late responses remain `SETTLEMENT_PENDING` and retry. The
+product-owned calculator alone produces signed Inverse settlement, capped public delivery fees,
+BTC-native PnL, and delivery-price valuation for `SETTLED_KNOWN`.
 
 ## Internal state versus durable records
 
@@ -187,8 +200,8 @@ Workbench projection. They are implementation details, not durable object contra
 inputs to offline research. Recovery uses only validated bounded Case records; it does not persist
 per-tick Position state, replay facts, content manifests, or whole-history relationship graphs.
 
-The durable Case store consumes only Case opening, segment open/close, combined first-CLOSE/attempt
-schedule, and mature Outcome. Runtime owner, trader Workbench, and AI Researcher directly consume
+The durable Case store consumes only Case opening, Segment open/close, immutable first-CLOSE intent,
+and terminal Outcome. Runtime owner, trader Workbench, and AI Researcher directly consume
 segment provenance and quality because later process boundaries cannot be derived from the original
 opened record.
 
@@ -277,13 +290,12 @@ price, while actual account margin remains `UNKNOWN`. The same product-aware val
 canonical scalar fingerprint projection used by Underwriting and Position; no second leg-price
 calculator or parallel quote schema is permitted.
 
-Candidate admission, non-Candidate selected-decision enrollment, and post-CLOSE each schedule
-exactly two bounded
+Candidate admission and non-Candidate selected-decision enrollment each schedule exactly two bounded
 `public/get_order_book` requests for the frozen legs. The downstream owner accepts a quote only
 after both strictly later responses share one causal owner, session epoch, and global continuity
 epoch; each covers the full quantity; source timestamps differ by no more than `6000 ms`; and local
 receive boundaries differ by no more than `4000 ms`. A single response cannot open or close a Case.
-Failure of either response retires the sibling and settles the one paired attempt. Session,
+Failure of either response retires the sibling and settles that paired attempt. Session,
 continuity, or skew mismatch is a bounded `UNKNOWN` with an exact reason, not an integrity exception.
 When the selected decision is already a Candidate, its ordinary admission pair is the selection's
 future-blind pair; a duplicate control refresh is forbidden. If that refresh remains Candidate it
@@ -291,6 +303,12 @@ opens the ordinary admitted Case, while a refreshed WATCH/ABSTAIN opens the disc
 Case. A selected WATCH/ABSTAIN that refreshes to Candidate opens nothing, reports
 `REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`, and cannot bypass a later Candidate's own
 strictly later admission pair. A selected `UNKNOWN` opens nothing and has no fallback Episode.
+
+Post-CLOSE uses the same two-request pair validator inside a continuing acquisition window. Each
+attempt remains bounded and serial, but a failed or ineligible pair defers another strictly future
+attempt instead of terminalizing the Position. First eligible arrival order, never best observed
+price, selects `EXITED_KNOWN`. At expiry the route changes to the shared official delivery-history
+request and `SETTLED_KNOWN` arithmetic described at the Case boundary.
 
 The canonical stages are:
 
@@ -309,10 +327,11 @@ SHADOW_CASE_OUTCOME
 The last two canonical stages count admitted-Candidate Cases only; selected no-trade Cases use the
 separate research projection below despite sharing the durable Case record family.
 
-Restoring an admitted Entry does not recreate Candidate, admission, or `SHADOW_CASE_OPENED` and
-does not increment those funnel counters. A mature Outcome is counted once for the Entry aggregate,
-regardless of which runtime segment produced it. Observation quality and qualification eligibility
-remain separate from funnel lifecycle completeness.
+Restoring a Position-bearing Case does not recreate Candidate, admission, or `SHADOW_CASE_OPENED` and
+does not increment those funnel counters. A terminal Outcome is counted once for its aggregate,
+regardless of which runtime Segment produced it; only admitted Outcomes enter the canonical funnel.
+Observation quality and named offline-Cohort eligibility remain separate from funnel lifecycle
+completeness.
 
 `APPLICABLE_MARKET_SCOPE` and `RADAR_KNOWN` use post-warmup countable instrument evaluations. The
 separate `radar_knownness.startup_warmup` projection retains startup/recovery counts and reasons, so
@@ -327,10 +346,12 @@ future Outcomes. It may include any Underwriting action, but a no-trade Case nev
 Candidate, `SHADOW_CASE_OPENED`, or `SHADOW_CASE_OUTCOME` stages. The projection retains cumulative
 scalars and only current/latest bounded identities.
 
-The Workbench projects every active admitted Entry once by `shadow_entry_identity`, with origin
-runtime, current segment runtime, segment availability, gap count, observation quality, and
-qualification eligibility. A recovered Entry begins `UNKNOWN` until fresh facts settle. The browser
-never infers `HOLD` or `CLOSE` from `HANDOFF_GAP`.
+The Workbench projects every active admitted Entry and future selected Control once by its enrollment
+identity, with origin runtime, current Segment runtime, Segment availability, gap count, observation
+quality, execution state, terminal method, and named Cohort facts. A recovered Case begins `UNKNOWN`
+until fresh facts settle. The browser never infers `HOLD` or `CLOSE` from `HANDOFF_GAP`, and the
+legacy `qualification_eligible` field is only the strict-continuity projection rather than online
+Cohort authority.
 
 The browser may arrange the immutable current Radar rows into an expiry-by-strike discovery map and
 select the already-server-owned subset `HIGH + bucket leader + clue eligible + CONFIRMING|ACTIVE`.

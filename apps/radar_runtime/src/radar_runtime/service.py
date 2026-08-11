@@ -348,7 +348,7 @@ def build_persistent_service_composition(
         bindings=startup.runtime_bindings,
         state_store=shadow_state,
     )
-    recoverable_entries = case_store.scan_active_admitted()
+    recoverable_entries = case_store.scan_active_positions()
     staged_recoveries = owner.stage_recovered_entries(
         recoverable_entries,
         recovery_projection_boundary=FactBoundary(

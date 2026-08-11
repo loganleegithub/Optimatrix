@@ -44,9 +44,10 @@ recovery, trader review, AI research, and later qualification. It never serves p
 commissioning, host monitoring, full-market reconstruction, or proof that the software did not
 deceive itself.
 
-Every admitted Entry without a mature `SHADOW_CASE_OUTCOME` is non-terminal. A later runtime using
+Every admitted Entry without a terminal `SHADOW_CASE_OUTCOME` is non-terminal. A later runtime using
 the same stable Case repository automatically restores all compatible non-terminal admitted
-Entries. It never reconstructs Candidate, Underwriting, Radar Episode, or missed market facts.
+Entries and future selected Controls that own Observation Segments. It never reconstructs
+Candidate, Underwriting, Radar Episode, or missed market facts.
 The interval between Observation Segments is explicitly `HANDOFF_GAP`; recovery data starts
 `UNKNOWN` until fresh public facts settle. A gap is observation quality, not a Position predicate,
 and cannot synthesize `CLOSE`.
@@ -182,7 +183,9 @@ An opened Case without a terminal record after an unclean process loss is
 not silently completed. Its open Observation Segment is `INCOMPLETE_UNCLEAN_EXIT`, while the
 admitted Entry remains non-terminal and is recovered into a new `HANDOFF_GAP` segment. Missing
 facts across the gap remain `UNKNOWN` and the gap permanently changes observation quality. Selected
-no-trade Controls are not Entry aggregates and retain their bounded terminal Case lifecycle.
+no-trade Controls are not admitted Entry aggregates and never imply capital exposure, but future
+Controls use the same process-independent Position horizon; legacy segmentless Controls remain
+historical.
 
 ### Qualification data
 
@@ -265,20 +268,24 @@ denominator is therefore explicitly conditional on successful paired refresh and
 ## Position and Outcome
 
 After Case opening, one fixed Position Policy continuously returns `HOLD | CLOSE | UNKNOWN` from
-strictly later public facts inside the current Observation Segment. `CLOSE` is an instruction, not
-a closing fact. The first CLOSE and scheduling of its only paired close attempt are one durable
-transition. A restart never creates a second first CLOSE or schedules a second attempt. If the one
-scheduled attempt is pending when a process is lost, recovery reports that attempt `UNKNOWN` and
-does not retry it.
+strictly later public facts inside the current Observation Segment. `CLOSE` is an immutable exit
+instruction, not a closing fact. Its first Policy reason is durably latched before acquisition, but
+quote failure or process loss cannot consume the Position's continuing exit responsibility. The
+owner keeps at most one paired attempt in flight, retries on a predeclared cadence, and accepts the
+first causally eligible full-quantity pair without retrospective price selection.
 
-A known Shadow Outcome requires the first eligible strictly later paired component-book close
-snapshot: buy back the short at ask stressed up one tick and sell the same frozen protective long at
-bid stressed down one tick, both at full quantity with both standard fees. Natural maturity without
-such an exit may be `MATURE_UNKNOWN`. Clean stop, handled failure, and unclean process loss remain
-distinct Observation Segment endings and do not terminate an admitted Entry. After recovery and
-fresh facts, the Entry may still form a mature economic Outcome. Any Entry whose segment chain has
-a gap stores `observation_quality=GAPPED` and `qualification_eligible=false`; known economics remain
-truthful, but the result cannot enter a continuous-observation qualification Cohort.
+At expiry, ordinary close acquisition gives way to official contract settlement. One validated
+Deribit `btc_usd` delivery-price history response may settle every waiting expiry date. The one
+Inverse calculator forms signed short/long payoff, public capped delivery fee, BTC-native PnL, and
+separate delivery-price valuation. The terminal union is `EXITED_KNOWN | SETTLED_KNOWN |
+TERMINAL_UNKNOWN`; temporary source failure remains `SETTLEMENT_PENDING`, and the current runtime
+has no automatic unknown-finality timeout.
+
+Clean stop, handled failure, and unclean process loss remain distinct Observation Segment endings
+and do not terminate a Position-bearing Case. After recovery and fresh facts, it may still form
+known terminal economics. A gap stores `observation_quality=GAPPED` and preserves the legacy
+strict-continuity projection as false, but it does not globally disqualify the Case. Named offline
+Cohorts separately decide terminal-economics, continuous-path, and exit-acquisition eligibility.
 
 ## AI Researcher and qualification
 
@@ -313,8 +320,9 @@ requirements.
    records; it does not persist Cohort, aligned-pair, Workbench, service, host, or full-market
    records.
 9. One run binds one exact three-Policy chain and cannot hot-reload, train, promote, or tune it.
-10. A runtime never owns an admitted Entry. Under the stable repository lease, every new runtime
-    automatically restores all compatible non-terminal admitted Entries and opens a new segment;
+10. A runtime never owns an admitted Entry or selected Control aggregate. Under the stable
+    repository lease, every new runtime automatically restores compatible non-terminal admitted
+    Entries and future Segment-bearing Controls and opens a new Segment; legacy segmentless
     Controls and pre-Shadow state are never restored.
 11. Qualification criteria are frozen before evaluating a derived Cohort.
 12. Private execution remains a separate authorization and security boundary.

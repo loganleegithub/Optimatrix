@@ -182,50 +182,33 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_40_entry_recovery_running_truth() -> None:
+def test_current_stage_authorizes_position_lifecycle_realism_closure() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
-    assert "`INVERSE_BTC_SHORT_VOL_V2_40_ENTRY_RECOVERY_RUNNING_8765`" in current
+    assert "**Current task kind:** `IMPLEMENTATION`" in current
+    assert "INVERSE_BTC_SHORT_VOL_V2_POSITION_LIFECYCLE_REALISM" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "`RUNNING_8765_USER_TERMINAL_9002B6E_WITH_40_RECOVERED_ADMITTED_ENTRIES`" in current
-    assert "**Live commands:** `NONE_CONSUMED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert "TASK_SCOPED_SIMULATION_CUTOVER_AND_FIRST_NATURAL_OUTCOME_MONITOR" in current
+    assert "SHADOW_POSITION_LIFECYCLE_REALISM" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
         "There is no product selector, fallback product, compatibility profile",
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
-        "9002b6ef7b0ec183cd1448fc975a4b7ebea19084",
-        "sha256:a3ba1393dbbd5406463d63b251927b8e44fbd0da42d0e5e4babc080178c354b0",
-        "sha256:b364a34267e62e7115a2b49c9f3ddf9afe342f5776682e742220ced6b8ed2a59",
-        "127.0.0.1:8675",
         "127.0.0.1:8765",
         "/Users/logan/Optimatrix-runtime",
-        "All six declared GET and HEAD routes return HTTP 200",
-        "`RUNNING`, `CURRENT`, `health=true`, and `ready=true`",
-        "`128/128` Radar rows",
-        "b32e3629332e89cbcfdf0cf46f126ad49d230044b836e7a59458d2704bb9891a",
-        "validated 62 schema-v5 Cases and 40 compatible non-terminal admitted Entries",
-        "read `INCOMPLETE_UNCLEAN_EXIT`",
-        "restored all 40 Entries",
-        "preserved every incomplete predecessor Segment",
-        "40 Shadow Entry rows, 40 Position rows, and 40 `PENDING` Outcome projections",
-        "all 40 predecessor Entry identities exactly once",
-        "latest Segment is `OPEN`, `GAPPED`, and bound to the current runtime",
-        "four at one, two at two, two at three, 28 at four, two at five, and two at six",
+        "validated 62 schema-v5 Cases",
+        "40 compatible non-terminal admitted Entries",
         "zero admitted Outcome files",
         "12 Radar-score Controls and 10 selected Underwriting Controls",
-        "user-owned foreground Terminal rather than a temporary execution session",
-        "manual external-operator launch, not automatic process persistence",
-        "Persistence ownership remains the next discussion",
-        "all 751 tests",
-        "style-src 'self'",
-        "CSP-safe SVG coordinate plane",
-        "native progress elements",
-        "one authorized external-operator start was consumed",
-        "Runtime persistence design remains explicitly deferred to a later task",
+        "immutable first-CLOSE history",
+        "official delivery-price settlement path",
+        "isolated full-business-chain simulation",
+        "bounded loopback/API/browser and single-writer validation",
+        "read-only monitoring until at least one admitted",
+        "does not silently reinterpret the nine Policy predicates",
+        "Permission remains `PUBLIC_SHADOW`",
     ):
         assert phrase in normalized
     for identity in (
@@ -235,7 +218,10 @@ def test_current_stage_records_40_entry_recovery_running_truth() -> None:
         "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
     ):
         assert identity in current
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "SHADOW_POSITION_LIFECYCLE_REALISM.md",
+        "TEMPLATE.md",
+    }
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_40_ENTRY_RECOVERY_START.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP.md").exists()
@@ -326,11 +312,14 @@ def test_entry_aggregate_and_segment_contracts_are_consistent() -> None:
         "HANDOFF_GAP",
         "cannot synthesize `CLOSE`",
         "recovery data starts `UNKNOWN`",
-        "FIRST_CLOSE_AND_ATTEMPT_SCHEDULED",
+        "FIRST_CLOSE_INTENT_LATCHED",
         "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS",
         "observation_quality=GAPPED",
-        "qualification_eligible=false",
-        "Selected no-trade Controls are not restored",
+        "terminal-economics Cohort",
+        "future Segment-bearing Controls",
+        "SETTLED_KNOWN",
+        "public/get_delivery_prices",
+        "first causally eligible full-quantity pair",
         "entry_position_baseline",
         "opened.json + segments/0/opened.json",
         "one no-replace atomic directory publication",

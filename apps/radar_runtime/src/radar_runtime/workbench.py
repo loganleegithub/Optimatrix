@@ -1871,9 +1871,13 @@ def _position_rows(
         str(_payload(value).get("shadow_entry_identity")): value
         for value in kinds.get("SHADOW_CLOSE_OPPORTUNITY", ())
     }
+    outcome_values = (
+        *kinds.get("SHADOW_OUTCOME", ()),
+        *kinds.get("SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME", ()),
+        *kinds.get("RADAR_SCORE_BAND_NO_TRADE_CONTROL_OUTCOME", ()),
+    )
     outcomes_by_entry = {
-        str(_payload(value).get("shadow_entry_identity")): value
-        for value in kinds.get("SHADOW_OUTCOME", ())
+        str(_payload(value).get("shadow_entry_identity")): value for value in outcome_values
     }
     expiry_by_leg = {
         str(value.get("semantic_identity")): value.get("expiration_timestamp_ms")
@@ -1881,7 +1885,12 @@ def _position_rows(
     }
     trusted = trusted_time
     rows: list[dict[str, object]] = []
-    for entry in kinds.get("SHADOW_ENTRY", ()):
+    position_opens = (
+        *kinds.get("SHADOW_ENTRY", ()),
+        *kinds.get("SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN", ()),
+        *kinds.get("RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN", ()),
+    )
+    for entry in position_opens:
         entry_identity = str(entry["object_identity"])
         entry_payload = _payload(entry)
         tracking = _entry_tracking_projection(entry)
@@ -1902,6 +1911,7 @@ def _position_rows(
         ) or opportunity_payload.get("component_pair_unknown_reasons", [])
         selected = selected_by_entry.get(entry_identity)
         outcome = outcomes_by_entry.get(entry_identity)
+        outcome_payload = _payload(outcome) if outcome is not None else {}
         leg_ids = entry_payload.get("canonical_leg_identities")
         expiry_value = entry_payload.get("expiry_ms")
         expiry_ms = expiry_value if isinstance(expiry_value, int) else None
@@ -1937,9 +1947,33 @@ def _position_rows(
         rows.append(
             {
                 "shadow_entry_identity": entry_identity,
+                "enrollment_kind": entry_payload.get("enrollment_kind", "ADMITTED_SHADOW_TRADE"),
                 "position_action": action_payload.get("serialized_action", "UNKNOWN"),
                 "observation_quality": tracking["observation_quality"],
                 "qualification_eligible": tracking["qualification_eligible"],
+                "terminal_economics_eligible": outcome_payload.get(
+                    "terminal_economics_eligible",
+                    outcome_payload.get("terminal_state")
+                    in {"MATURE_KNOWN", "EXITED_KNOWN", "SETTLED_KNOWN"},
+                ),
+                "continuous_path_eligible": (tracking["observation_quality"] == "CONTINUOUS"),
+                "exit_acquisition_eligible": outcome_payload.get(
+                    "exit_acquisition_eligible",
+                    outcome_payload.get("terminal_state") in {"MATURE_KNOWN", "EXITED_KNOWN"}
+                    and tracking["observation_quality"] == "CONTINUOUS",
+                ),
+                "position_lifecycle_state": (
+                    "TERMINAL"
+                    if outcome is not None
+                    else "SETTLEMENT_PENDING"
+                    if action_payload.get("serialized_action") == "CLOSE"
+                    and isinstance(expiry_ms, int)
+                    and trusted is not None
+                    and trusted.lower_ms >= expiry_ms
+                    else "EXIT_ACQUIRING"
+                    if action_payload.get("serialized_action") == "CLOSE"
+                    else "MONITORING"
+                ),
                 "remaining_premium_valuation": remaining_premium,
                 "remaining_premium_availability": (
                     "AVAILABLE_FROM_PERSISTED_COMPONENT_CLOSE_ECONOMICS"
@@ -1987,7 +2021,7 @@ def _position_rows(
                     str(selected["object_identity"]) if selected is not None else None
                 ),
                 "outcome_state": (
-                    _payload(outcome).get("terminal_state") if outcome is not None else "PENDING"
+                    outcome_payload.get("terminal_state") if outcome is not None else "PENDING"
                 ),
             }
         )
@@ -2083,6 +2117,19 @@ def _outcome_rows(
                 "shadow_observation_identity": observation_identity,
                 "shadow_entry_identity": payload.get("shadow_entry_identity"),
                 "state": outcome_payload.get("terminal_state", "PENDING"),
+                "terminal_method": outcome_payload.get("terminal_method"),
+                "terminal_economics_eligible": outcome_payload.get(
+                    "terminal_economics_eligible",
+                    outcome_payload.get("terminal_state")
+                    in {"MATURE_KNOWN", "EXITED_KNOWN", "SETTLED_KNOWN"},
+                ),
+                "continuous_path_eligible": outcome_payload.get(
+                    "continuous_path_eligible",
+                    payload.get("observation_quality") == "CONTINUOUS",
+                ),
+                "exit_acquisition_eligible": outcome_payload.get(
+                    "exit_acquisition_eligible", False
+                ),
                 "maturity": _outcome_maturity(
                     cast(str, outcome_payload.get("terminal_state", "PENDING"))
                 ),
@@ -2097,6 +2144,12 @@ def _outcome_rows(
                 "exit_valued_native_net_pnl_usd": outcome_payload.get(
                     "exit_valued_native_net_pnl_usd"
                 ),
+                "delivery_price_valuation_per_btc": outcome_payload.get(
+                    "delivery_price_usdc_per_btc"
+                ),
+                "official_delivery_price_source_ref": outcome_payload.get(
+                    "official_delivery_price_source_ref"
+                ),
                 "actual_pnl": outcome_payload.get("actual_pnl_usdc"),
                 "actual_availability": outcome_payload.get("actual_availability", "UNKNOWN"),
             }
@@ -2105,10 +2158,10 @@ def _outcome_rows(
 
 
 def _outcome_maturity(state: str) -> str:
-    if state == "MATURE_KNOWN":
-        return "MATURE_KNOWN"
-    if state == "MATURE_UNKNOWN":
-        return "MATURE_UNKNOWN"
+    if state in {"MATURE_KNOWN", "EXITED_KNOWN", "SETTLED_KNOWN"}:
+        return "KNOWN_TERMINAL"
+    if state in {"MATURE_UNKNOWN", "TERMINAL_UNKNOWN"}:
+        return "UNKNOWN_TERMINAL"
     if state in {"CENSORED_AT_STOP", "CENSORED_AT_FAILURE"}:
         return "CENSORED"
     return "PENDING"

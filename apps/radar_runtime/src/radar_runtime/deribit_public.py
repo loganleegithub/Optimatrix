@@ -21,6 +21,7 @@ PUBLIC_METHODS = frozenset(
         "public/unsubscribe",
         "public/get_instruments",
         "public/get_index_chart_data",
+        "public/get_delivery_prices",
         "public/get_instrument",
         "public/get_combos",
         "public/get_order_book",

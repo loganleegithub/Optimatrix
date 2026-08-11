@@ -105,11 +105,32 @@ class Observation:
             boundary=case_boundary,
             eligible_exit_identity=exit_identity,
         )
-        if state is not OutcomeState.MATURE_KNOWN:
+        if state is not OutcomeState.EXITED_KNOWN:
             raise RuntimeError("eligible exit did not mature observation")
         self.selected_exit_identity = exit_identity
         self._freeze_terminal_identity(case_boundary)
         return exit_identity
+
+    def accept_contract_settlement(
+        self,
+        *,
+        settlement_fact_identity: str,
+        boundary: CaseFactBoundary | FactBoundary,
+    ) -> str | None:
+        if self.state is not OutcomeState.PENDING:
+            return None
+        first_close_boundary = self.reducer.first_close_boundary
+        if first_close_boundary is None:
+            raise ValueError("contract settlement requires a first CLOSE")
+        case_boundary = self._case_boundary(boundary, first_close_boundary.segment_sequence)
+        state = self.reducer.settle(
+            boundary=case_boundary,
+            settlement_fact_identity=settlement_fact_identity,
+        )
+        if state is not OutcomeState.SETTLED_KNOWN:
+            raise RuntimeError("official delivery fact did not settle observation")
+        self._freeze_terminal_identity(case_boundary)
+        return self.terminal_outcome_identity
 
     def settle_without_exit(
         self,

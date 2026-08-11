@@ -50,6 +50,10 @@ class _CaseOutcomeRow:
     inclusion_denominator: int | None
     stressed_normalized_net_pnl: Decimal | None
     raw_vwap_normalized_net_pnl: Decimal | None
+    terminal_method: str | None
+    terminal_economics_eligible: bool
+    continuous_path_eligible: bool
+    exit_acquisition_eligible: bool
 
     def as_object(self) -> dict[str, object]:
         return {
@@ -71,6 +75,10 @@ class _CaseOutcomeRow:
             "inclusion_denominator": self.inclusion_denominator,
             "stressed_normalized_net_pnl": _decimal_text(self.stressed_normalized_net_pnl),
             "raw_vwap_normalized_net_pnl": _decimal_text(self.raw_vwap_normalized_net_pnl),
+            "terminal_method": self.terminal_method,
+            "terminal_economics_eligible": self.terminal_economics_eligible,
+            "continuous_path_eligible": self.continuous_path_eligible,
+            "exit_acquisition_eligible": self.exit_acquisition_eligible,
         }
 
 
@@ -165,6 +173,17 @@ def build_v2_case_report(
             "gapped_secondary": _view_object(gapped),
             "pending_open": _view_object(pending),
             "incomplete_unclean_exit": _view_object(incomplete),
+        },
+        "cohorts": {
+            "terminal_economics": _view_object(
+                tuple(row for row in rows if row.terminal_economics_eligible)
+            ),
+            "continuous_path": _view_object(
+                tuple(row for row in rows if row.continuous_path_eligible)
+            ),
+            "exit_acquisition": _view_object(
+                tuple(row for row in rows if row.exit_acquisition_eligible)
+            ),
         },
     }
 
@@ -262,7 +281,8 @@ def _case_outcome_row(
     )
     stressed: Decimal | None = None
     raw: Decimal | None = None
-    if terminal_state == "MATURE_KNOWN":
+    known_terminal_states = {"MATURE_KNOWN", "EXITED_KNOWN", "SETTLED_KNOWN"}
+    if terminal_state in known_terminal_states:
         if outcome is None:
             raise V2CaseReportError("known mature Case lacks its Outcome")
         payoff_cap = _positive_decimal(
@@ -281,18 +301,20 @@ def _case_outcome_row(
             )
             / payoff_cap
         )
-        raw = (
-            _raw_vwap_boundary_net_pnl(
-                opened=opened,
-                outcome=outcome,
-                product=product,
-                entry_fee_rate=policies.underwriting.fee_rate_index_fraction,
-                close_fee_rate=policies.position.fee_rate_index_fraction,
+        if terminal_state in {"MATURE_KNOWN", "EXITED_KNOWN"}:
+            raw = (
+                _raw_vwap_boundary_net_pnl(
+                    opened=opened,
+                    outcome=outcome,
+                    product=product,
+                    entry_fee_rate=policies.underwriting.fee_rate_index_fraction,
+                    close_fee_rate=policies.position.fee_rate_index_fraction,
+                )
+                / payoff_cap
             )
-            / payoff_cap
-        )
     elif terminal_state not in {
         "MATURE_UNKNOWN",
+        "TERMINAL_UNKNOWN",
         "CENSORED_AT_STOP",
         "CENSORED_AT_FAILURE",
         "RIGHT_CENSORED",
@@ -319,6 +341,19 @@ def _case_outcome_row(
         inclusion_denominator=inclusion_denominator,
         stressed_normalized_net_pnl=stressed,
         raw_vwap_normalized_net_pnl=raw,
+        terminal_method=(
+            _text(outcome.get("terminal_method"), "terminal_method")
+            if outcome is not None and outcome.get("terminal_method") is not None
+            else "MARKET_EXIT"
+            if terminal_state == "MATURE_KNOWN"
+            else None
+        ),
+        terminal_economics_eligible=terminal_state in known_terminal_states,
+        continuous_path_eligible=observation_quality == "CONTINUOUS",
+        exit_acquisition_eligible=(
+            terminal_state in {"MATURE_KNOWN", "EXITED_KNOWN"}
+            and observation_quality == "CONTINUOUS"
+        ),
     )
 
 
@@ -351,12 +386,23 @@ def _view_object(
     result: dict[str, object] = {
         "denominators": {
             "opened": len(rows),
-            "mature_known": terminal_counts["MATURE_KNOWN"],
-            "mature_unknown": terminal_counts["MATURE_UNKNOWN"],
+            "mature_known": sum(
+                terminal_counts[state]
+                for state in ("MATURE_KNOWN", "EXITED_KNOWN", "SETTLED_KNOWN")
+            ),
+            "mature_unknown": terminal_counts["MATURE_UNKNOWN"]
+            + terminal_counts["TERMINAL_UNKNOWN"],
             "censored": censored,
             "right_censored_without_outcome": terminal_counts["RIGHT_CENSORED"],
             "pending_open": terminal_counts["PENDING_OPEN"],
             "incomplete_unclean_exit": terminal_counts["INCOMPLETE_UNCLEAN_EXIT"],
+        },
+        "terminal_method_counts": {
+            "market_exit": sum(1 for row in rows if row.terminal_method == "MARKET_EXIT"),
+            "contract_settlement": sum(
+                1 for row in rows if row.terminal_method == "CONTRACT_SETTLEMENT"
+            ),
+            "terminal_unknown": terminal_counts["TERMINAL_UNKNOWN"],
         },
         "score_band_counts": {
             "selection": dict(sorted(selection_bands.items())),
@@ -409,12 +455,23 @@ def _band_view_object(rows: Sequence[_CaseOutcomeRow]) -> dict[str, object]:
     return {
         "denominators": {
             "opened": len(rows),
-            "mature_known": terminal_counts["MATURE_KNOWN"],
-            "mature_unknown": terminal_counts["MATURE_UNKNOWN"],
+            "mature_known": sum(
+                terminal_counts[state]
+                for state in ("MATURE_KNOWN", "EXITED_KNOWN", "SETTLED_KNOWN")
+            ),
+            "mature_unknown": terminal_counts["MATURE_UNKNOWN"]
+            + terminal_counts["TERMINAL_UNKNOWN"],
             "censored": censored,
             "right_censored_without_outcome": terminal_counts["RIGHT_CENSORED"],
             "pending_open": terminal_counts["PENDING_OPEN"],
             "incomplete_unclean_exit": terminal_counts["INCOMPLETE_UNCLEAN_EXIT"],
+        },
+        "terminal_method_counts": {
+            "market_exit": sum(1 for row in rows if row.terminal_method == "MARKET_EXIT"),
+            "contract_settlement": sum(
+                1 for row in rows if row.terminal_method == "CONTRACT_SETTLEMENT"
+            ),
+            "terminal_unknown": terminal_counts["TERMINAL_UNKNOWN"],
         },
         "expiry_cluster_count": len({row.expiry_ms for row in rows}),
         "stressed_normalized_outcome": _tail_summary(stressed),
@@ -535,6 +592,17 @@ def _observation_quality(
     enrollment_kind: str,
 ) -> str:
     case_status = getattr(case.status, "value", case.status)
+    if (
+        case_status == "COMPLETE"
+        and case.outcome is not None
+        and case.outcome.get("outcome_contract_version") == 2
+        and case.outcome.get("terminal_state")
+        in {"EXITED_KNOWN", "SETTLED_KNOWN", "TERMINAL_UNKNOWN"}
+    ):
+        terminal_quality = case.outcome.get("observation_quality")
+        if terminal_quality not in {"CONTINUOUS", "GAPPED"}:
+            raise V2CaseReportError("terminal Outcome carries an invalid observation quality")
+        return str(terminal_quality)
     segment_statuses = {
         getattr(segment.status, "value", segment.status) for segment in case.segments
     }

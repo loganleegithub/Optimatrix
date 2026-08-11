@@ -532,6 +532,10 @@ def test_recovered_entry_stays_one_shadow_row_and_position_starts_unknown() -> N
     assert position_rows[0]["position_action"] == "UNKNOWN"
     assert position_rows[0]["observation_quality"] == "GAPPED"
     assert position_rows[0]["qualification_eligible"] is False
+    assert position_rows[0]["terminal_economics_eligible"] is False
+    assert position_rows[0]["continuous_path_eligible"] is False
+    assert position_rows[0]["exit_acquisition_eligible"] is False
+    assert position_rows[0]["position_lifecycle_state"] == "MONITORING"
     assert projection.underwriting_counts == {
         "candidate_count": 0,
         "underwriting_availability_evaluable_count": 0,

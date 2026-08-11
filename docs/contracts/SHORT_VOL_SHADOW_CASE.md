@@ -11,10 +11,11 @@ Case begins
 when one counterfactual is explicitly enrolled before its future path is known: either an admitted
 HIGH Candidate trade, one action-blind HIGH selected decision, or one future-blind LOW/MID
 Radar-score Control for its causal batch.
-For an admitted trade it is a process-independent Entry aggregate. It preserves minimum enrollment
-context, a chain of runtime Observation Segments, one combined first-CLOSE/attempt-schedule
-transition, and one mature terminal result for online recovery, trader review, AI research, and
-later offline qualification. A selected no-trade Control remains a bounded non-recoverable Case.
+For an admitted trade it is a process-independent Entry aggregate. Every Case opened under the
+current contract preserves minimum enrollment context, a chain of runtime Observation Segments,
+one immutable first-CLOSE intent, and one terminal result for online recovery, trader review, AI
+research, and later offline qualification. A selected no-trade Control remains explicitly
+non-admitted and has no capital exposure, but its Position lifecycle is no longer process-censored.
 
 The Online Runtime does not persist qualification Cohorts, aligned pairs, comparison tables,
 Challenger features, Radar events, Underwriting events, or unselected/automatic no-trade
@@ -28,8 +29,8 @@ Exactly five record kinds are authorized:
 SHADOW_CASE_OPENED               exactly one per Case
 SHADOW_CASE_SEGMENT_OPENED       one per runtime Observation Segment
 SHADOW_CASE_SEGMENT_CLOSED       zero or one per Segment
-SHADOW_CASE_FIRST_CLOSE          zero or one per admitted Entry; also schedules its one attempt
-SHADOW_CASE_OUTCOME              zero or one mature Outcome per Case
+SHADOW_CASE_FIRST_CLOSE          zero or one immutable exit intent per Position-bearing Case
+SHADOW_CASE_OUTCOME              zero or one terminal Outcome per Case
 ```
 
 Each Case directory is:
@@ -128,16 +129,17 @@ thresholds in their declared units. For v4, native arithmetic and each native-to
 also conserve independently. The record may not contain the full option chain or unrelated market
 state.
 
-For every new admitted Entry Case, the writer constructs `opened.json` and the origin
+For every new admitted Entry Case or selected Control opened under the current contract, the writer
+constructs `opened.json` and the origin
 `segments/0/opened.json` inside the same staging Case directory and validates the complete pair
 before either is visible. One no-replace atomic directory publication makes both visible together.
 A crash before that publication leaves no visible Case, never an `opened.json` without its origin
 Segment. For an ordinary online enrollment, both records use the origin runtime and Entry boundary;
 the origin Segment has sequence zero, no predecessor, and `observation_quality=CONTINUOUS`. For a
-new admitted Entry its `entry_position_baseline` is `KNOWN` and freezes the causal entry index and
+new Position-bearing Case its `entry_position_baseline` is `KNOWN` and freezes the causal entry index and
 short-leg mark IV with their exact source identities and FactBoundaries. Only a later Segment opened
 by a new runtime records an intervening `HANDOFF_GAP`, becomes `GAPPED`, increments `gap_count`, and
-makes qualification ineligible.
+makes the legacy strict-continuity projection ineligible.
 
 ## Observation Segment records
 
@@ -148,7 +150,8 @@ makes qualification ineligible.
 - adoption FactBoundary and zero or one predecessor Segment identity;
 - predecessor close state when available;
 - `observation_quality=CONTINUOUS | GAPPED`, gap reason, and cumulative gap count;
-- `qualification_eligible`, which is permanently false after the first gap;
+- `qualification_eligible`, retained as the legacy strict-continuity projection and permanently
+  false after the first gap;
 
 The origin Segment alone contains `entry_position_baseline`. A new admitted Entry requires its
 `KNOWN` entry index and short-leg mark-IV values, source identities, and source FactBoundaries.
@@ -172,31 +175,37 @@ and remains gapped.
 
 ## `SHADOW_CASE_FIRST_CLOSE`
 
-The optional first-close record is written only when the Position owner first latches CLOSE. It is
-the atomic `FIRST_CLOSE_AND_ATTEMPT_SCHEDULED` transition and contains:
+The optional first-close record is written only when the Position owner first latches CLOSE. New
+records use `FIRST_CLOSE_INTENT_LATCHED` and contain:
 
 - same Case/product/Policy identities plus the emitting Segment/code/runtime;
 - the exact first Position action identity and boundary;
 - primary and ordered latched close reasons;
 - the predicate truth vector consumed at that boundary.
-- the one post-CLOSE attempt identity, its two frozen leg request identities, quantity, and schedule
-  boundary.
 
-The writer publishes this record before releasing either request intent. Later Position evaluations
-and runtimes cannot rewrite it, create another first-close record, or schedule another attempt. If
-the attempt lacks a terminal mature Outcome when its process is lost, recovery reports
-`ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS` and does not retry.
+The writer publishes this record before releasing an exit request. Later Position evaluations and
+runtimes cannot rewrite it or create another first-close record. Exit acquisition remains in
+memory: only one attempt is in flight per Position, but failed, ineligible, missing, or
+process-unknown attempts never consume the Case's future exit responsibility. Recovery may expose
+the historical `ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS` while scheduling a new strictly future
+attempt in the new Segment.
+
+The reader continues to accept immutable legacy
+`FIRST_CLOSE_AND_ATTEMPT_SCHEDULED` records with their original attempt fields. It never rewrites
+those bytes or treats the legacy attempt as reusable; its unknown result simply does not prohibit
+future acquisition.
 
 ## `SHADOW_CASE_OUTCOME`
 
-An admitted Entry's terminal record has one immutable mature state:
+Outcome contract version 2 has one immutable terminal state and method:
 
 ```text
-MATURE_KNOWN
-MATURE_UNKNOWN
+EXITED_KNOWN     / MARKET_EXIT
+SETTLED_KNOWN    / CONTRACT_SETTLEMENT
+TERMINAL_UNKNOWN / TERMINAL_UNKNOWN
 ```
 
-`MATURE_KNOWN` requires the first eligible strictly post-CLOSE paired component-book exit for the
+`EXITED_KNOWN` requires the first eligible strictly post-CLOSE paired component-book exit for the
 same frozen legs. It stores the pair/source identities, raw/stressed full-quantity levels for both
 legs, gross close cashflow, both close fee reserves, net close cashflow, gross PnL, total public fee
 reserve, net PnL after reserve, and net loss.
@@ -207,21 +216,35 @@ total native BTC PnL at the close index. Both views are predeclared and conserve
 after the Outcome. They are counterfactual valuations, not fills, settlement actions, or
 account-margin facts.
 
-`MATURE_UNKNOWN` means the Case reached its natural terminal condition without an eligible paired
-component-book exit under the frozen contract. Component close facts and economic exit/PnL fields
-are absent or null.
+`SETTLED_KNOWN` requires one validated official Deribit `btc_usd` delivery-price member for the
+frozen expiry date. It stores its request/source identity, receipt boundary, date, exact delivery
+price, fee class/rate, signed short/long Inverse contractual payoff, native settlement cashflow and
+fee, native PnL, and separately delivery-valued USD economics. Component-close fields are null.
 
-Every mature admitted Outcome records its producing Segment plus
+`TERMINAL_UNKNOWN` is not produced by quote failure, process loss, expiry, or a temporarily missing
+delivery response. It is legal only after a separately predeclared settlement-finality condition is
+known false; the current runtime has no automatic finality timeout and therefore remains
+`SETTLEMENT_PENDING` while official settlement is unavailable.
+
+Every terminal Outcome records its producing Segment plus
 `observation_quality=CONTINUOUS | GAPPED`, cumulative gap count, and
-`qualification_eligible`. `GAPPED` always makes qualification eligibility false, even when public
-exit economics are fully known. Lifecycle completeness, economic knownness, and qualification
-eligibility remain distinct.
+the legacy `qualification_eligible` projection. Version 2 also records three explicit derived facts:
+`terminal_economics_eligible`, `continuous_path_eligible`, and
+`exit_acquisition_eligible`. A gapped `EXITED_KNOWN | SETTLED_KNOWN` remains eligible for the
+terminal-economics Cohort while it is excluded from continuous-path analysis; settlement is not an
+exit-acquisition sample. Lifecycle completeness, economic knownness, observation quality, and each
+offline Cohort question remain distinct.
 
-A handled clean stop or failure ends only the admitted Entry's current Segment. Selected no-trade
-Controls are not recoverable aggregates and may retain `CENSORED_AT_STOP | CENSORED_AT_FAILURE`
-with null economics under their bounded lifecycle. A stable
-owner that emits a censored admitted aggregate Outcome is rejected; stop/failure must use the
-Segment-close boundary directly.
+A valid version-2 terminal Outcome is also the terminal boundary of its producing Segment. Because
+`SHADOW_CASE_SEGMENT_CLOSED` is optional, an inactive reader must use the Outcome's validated
+Segment binding and `observation_quality` instead of relabeling that completed Case
+`INCOMPLETE_UNCLEAN_EXIT` merely because the final Segment has no separate close record.
+
+A handled clean stop or failure ends only the current Segment of an admitted Entry or future
+Segment-bearing Control. A stable owner that emits a process-censored aggregate Outcome is
+rejected; stop/failure must use the Segment-close boundary directly. Legacy segmentless Control and
+legacy `MATURE_* | CENSORED_*` Outcome bytes remain readable as version-1 history and are never
+upgraded in place.
 
 ## Unclean process loss
 
@@ -235,17 +258,18 @@ INCOMPLETE_UNCLEAN_EXIT
 It does not synthesize a close record or Outcome and does not delete the Case. The Entry remains
 non-terminal. The next runtime restores it, opens a new Segment whose predecessor state is
 `INCOMPLETE_UNCLEAN_EXIT`, marks observation quality `GAPPED`, and begins current facts at
-`UNKNOWN`. A durable first-CLOSE attempt already scheduled in the incomplete Segment is never
-retried.
+`UNKNOWN`. A durable first-CLOSE intent is retained. Any attempt from the incomplete Segment
+remains unknown, while a new strictly future acquisition may start after recovery.
 
 ## Minimal writer
 
 The Case writer:
 
 - creates a same-filesystem staging Case directory without following symlinks;
-- for an admitted Entry, writes canonical UTF-8 `opened.json` and `segments/0/opened.json`, flushes
+- for a new Position-bearing Case, writes canonical UTF-8 `opened.json` and
+  `segments/0/opened.json`, flushes
   and `fsync`s both files and their staging directories, then validates the complete initial pair;
-- publishes that initial admitted Entry Case exactly once by a no-replace atomic directory
+- publishes that initial Case exactly once by a no-replace atomic directory
   operation and `fsync`s the `cases/` parent; neither initial record is individually visible first;
 - publishes later Segment-close, recovery-Segment, first-close, and Outcome records by
   the existing same-directory no-overwrite atomic file operation and parent `fsync`;
@@ -271,18 +295,21 @@ Inverse product reader then validates each requested Case independently:
   boundaries;
 - origin-only `entry_position_baseline` knownness and exact index/mark-IV source binding, without an
   `opened.json` shape or product schema identity change;
-- zero/one combined first-close/attempt schedule across the aggregate;
-- mature Outcome producing-Segment binding, observation quality, gap count, and qualification truth;
+- zero/one immutable first-close intent across the aggregate, with compatibility validation for
+  legacy combined schedule records;
+- terminal Outcome producing-Segment binding, method, observation quality, gap count, and named
+  Cohort facts;
 - state-specific null/economic requirements;
-- recomputable paired component-book PnL arithmetic in the schema's declared native and valuation
-  units;
+- recomputable paired component-book exit or official Inverse contract-settlement arithmetic in the
+  schema's declared native and valuation units;
 - no conflicting duplicate files.
 
 It returns active/terminal Entry status, current Segment status, `CONTINUOUS | GAPPED`, and Control
-status separately. The runtime restores every compatible active admitted Inverse Entry and no
-Control. The reader does not validate Git trees, inspect host state, migrate, reconstruct market
-state, or form a qualification Cohort. It reads only the exact Inverse schema-v5 family and
-its process-independent aggregate/segment extension; unsupported product or schema input fails.
+status separately. The runtime restores every compatible active admitted Inverse Entry and each
+future Control that owns a valid origin Segment. Legacy segmentless Controls remain history. The
+reader does not validate Git trees, inspect host state, migrate, reconstruct market state, or form
+a qualification Cohort. It reads only the exact Inverse schema-v5 family and its
+process-independent aggregate/segment extension; unsupported product or schema input fails.
 
 ## No-trade controls and Cohorts
 
@@ -300,13 +327,16 @@ An ordinary HIGH Candidate is never duplicated as a Control.
 The read-only `report-v2-cases` projection keeps the three enrollment kinds in separate strata and
 does not weight them into a market-population or causal-alpha estimate. It reports an opened Case
 without an Outcome as `PENDING_OPEN` only when the official reader returns `OPEN`; callers reading
-a currently owned Control root must opt in with `--runtime-active`. The default is
-inactive-or-unknown runtime status, under which an abandoned non-recoverable Control remains an
-explicit incomplete unclean exit. The report stores nothing and cannot alter Case truth.
+a currently owned root must opt in with `--runtime-active`. The report stores nothing and cannot
+alter Case truth.
 
 Qualification Cohorts are later offline views over completed Cases under a pre-registered
-evaluator. A `GAPPED` admitted Outcome is valid research data but is never eligible for a
-continuous-observation Cohort. The Online Runtime never writes Cohort or aligned-pair objects.
+evaluator. The terminal-economics Cohort accepts a gapped known exit or settlement; the
+continuous-path Cohort excludes gaps or masks their intervals; and exit-acquisition analysis
+requires a known market exit and a complete acquisition window. Radar/Underwriting comparison
+keeps admitted and selected-Control lifecycles on the same observation horizon. The Online Runtime
+never writes Cohort or aligned-pair objects. The persisted named flags are direct facts for these
+current reports, not one global qualification verdict.
 
 ## Required verification
 
@@ -317,7 +347,8 @@ native/boundary/exit valuation conservation, rejection of schema/product/Policy 
 original/refreshed selection boundary ordering, zero Candidate/`SHADOW_ENTRY` for controls,
 atomic file publication, duplicate handling, pair/source identity and boundary binding, both-leg
 arithmetic, repeated process recovery, Segment close/incomplete/gap truth, recovery-first UNKNOWN,
-combined first-close/attempt durability, no retry after uncertain loss, and gapped mature Outcome
+intent-first durability, serial retry after failed or process-unknown attempts, first-eligible exit,
+official settlement fanout and arithmetic, future Control recovery, and named gapped Outcome Cohort
 classification. Tests also prove one shared selection/entry score-packet schema, deterministic
 LOW/MID inclusion probability, HIGH precedence, and no pre-Case score persistence.
 No database, manifest, receipt, generic graph, per-tick checkpoint, or replay is required. Live

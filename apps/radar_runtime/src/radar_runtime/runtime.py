@@ -154,6 +154,7 @@ PUBLIC_RPC_METHODS = frozenset(
     {
         "public/get_combos",
         "public/get_index_chart_data",
+        "public/get_delivery_prices",
         "public/get_instrument",
         "public/get_instruments",
         "public/get_time",
@@ -394,6 +395,7 @@ class RpcPurpose(StrEnum):
     COMBO_METADATA = "COMBO_METADATA"
     ADMISSION_REFRESH = "ADMISSION_REFRESH"
     POST_CLOSE_REFRESH = "POST_CLOSE_REFRESH"
+    SETTLEMENT_PRICE = "SETTLEMENT_PRICE"
 
 
 class RpcState(StrEnum):
@@ -522,6 +524,7 @@ SHADOW_RPC_PURPOSES = frozenset(
     {
         RpcPurpose.ADMISSION_REFRESH,
         RpcPurpose.POST_CLOSE_REFRESH,
+        RpcPurpose.SETTLEMENT_PRICE,
     }
 )
 
@@ -546,16 +549,24 @@ class ShadowRpcIntent:
             raise ValueError("Shadow request id must be a positive integer")
         if self.purpose not in SHADOW_RPC_PURPOSES:
             raise ValueError("Shadow request purpose is outside the exact typed route")
-        if self.method != "public/get_order_book":
-            raise ValueError("Shadow requests may use only public/get_order_book")
-        if dict(self.params) != {
-            "instrument_name": self.params.get("instrument_name"),
-            "depth": 10000,
-        }:
-            raise ValueError("Shadow request params must be exact")
-        instrument_name = self.params.get("instrument_name")
-        if not isinstance(instrument_name, str) or not instrument_name:
-            raise ValueError("Shadow request instrument_name must be non-empty")
+        if self.purpose is RpcPurpose.SETTLEMENT_PRICE:
+            if self.method != "public/get_delivery_prices" or dict(self.params) != {
+                "index_name": "btc_usd",
+                "offset": 0,
+                "count": 1000,
+            }:
+                raise ValueError("settlement-price request contract is invalid")
+        else:
+            if self.method != "public/get_order_book":
+                raise ValueError("Shadow quote requests may use only public/get_order_book")
+            if dict(self.params) != {
+                "instrument_name": self.params.get("instrument_name"),
+                "depth": 10000,
+            }:
+                raise ValueError("Shadow request params must be exact")
+            instrument_name = self.params.get("instrument_name")
+            if not isinstance(instrument_name, str) or not instrument_name:
+                raise ValueError("Shadow request instrument_name must be non-empty")
         if not self.scope:
             raise ValueError("Shadow request scope must be non-empty")
         for field_name in ("send_budget_ms", "response_budget_ms"):
@@ -1272,7 +1283,11 @@ class RadarReducer:
                     intent.origin_boundary.received_monotonic_ms + intent.send_budget_ms
                 ),
                 response_budget_ms=intent.response_budget_ms,
-                failure_scope=FailureScope.COMBO_LAYER,
+                failure_scope=(
+                    FailureScope.CLOCK_INDEX
+                    if intent.purpose is RpcPurpose.SETTLEMENT_PRICE
+                    else FailureScope.COMBO_LAYER
+                ),
             )
             self._reserved_shadow_request_ids.remove(intent.request_id)
             self.pending_rpcs[request.request_id] = request

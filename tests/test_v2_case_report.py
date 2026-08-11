@@ -88,19 +88,25 @@ def _case(
     }
     outcome = None
     if outcome_state is not None:
+        known = outcome_state in {"MATURE_KNOWN", "EXITED_KNOWN", "SETTLED_KNOWN"}
         outcome = {
             "terminal_state": outcome_state,
+            "terminal_method": (
+                "CONTRACT_SETTLEMENT"
+                if outcome_state == "SETTLED_KNOWN"
+                else "MARKET_EXIT"
+                if known
+                else None
+            ),
             "close_component_legs": (
                 [
                     _leg("BUY", "0.008", "110000"),
                     _leg("SELL", "0.003", "110000"),
                 ]
-                if outcome_state == "MATURE_KNOWN"
+                if outcome_state in {"MATURE_KNOWN", "EXITED_KNOWN"}
                 else []
             ),
-            "native_outcome_economics": {
-                "boundary_valued_net_pnl_usd": ("-10" if outcome_state == "MATURE_KNOWN" else None)
-            },
+            "native_outcome_economics": {"boundary_valued_net_pnl_usd": ("-10" if known else None)},
             "observation_quality": "GAPPED" if gapped else "CONTINUOUS",
         }
     segments = (
@@ -128,6 +134,45 @@ def _case(
         outcome=outcome,
         segments=segments,
     )
+
+
+def test_named_cohorts_keep_gapped_known_settlement_without_claiming_continuous_path() -> None:
+    product, policies = load_persistent_product_policies(ROOT, INVERSE_BTC)
+    report = build_v2_case_report(
+        (
+            _case(
+                "9",
+                expiry_ms=1_000,
+                selection_band="HIGH",
+                entry_band="HIGH",
+                outcome_state="SETTLED_KNOWN",
+                gapped=True,
+            ),
+        ),
+        product=product,
+        policies=policies,
+    )
+
+    cohorts = report["cohorts"]
+    assert isinstance(cohorts, Mapping)
+    terminal_economics = cohorts["terminal_economics"]
+    continuous_path = cohorts["continuous_path"]
+    exit_acquisition = cohorts["exit_acquisition"]
+    assert isinstance(terminal_economics, Mapping)
+    assert isinstance(continuous_path, Mapping)
+    assert isinstance(exit_acquisition, Mapping)
+    assert terminal_economics["denominators"]["opened"] == 1
+    assert continuous_path["denominators"]["opened"] == 0
+    assert exit_acquisition["denominators"]["opened"] == 0
+    views = report["views"]
+    assert isinstance(views, Mapping)
+    gapped_secondary = views["gapped_secondary"]
+    assert isinstance(gapped_secondary, Mapping)
+    assert gapped_secondary["terminal_method_counts"] == {
+        "market_exit": 0,
+        "contract_settlement": 1,
+        "terminal_unknown": 0,
+    }
 
 
 def test_case_only_report_separates_continuous_and_gapped_denominators() -> None:
@@ -487,3 +532,40 @@ def test_open_admitted_case_with_unclean_segment_is_not_mislabeled_pending() -> 
     denominators = incomplete["denominators"]
     assert isinstance(denominators, Mapping)
     assert denominators["incomplete_unclean_exit"] == 1
+
+
+def test_terminal_outcome_closes_the_final_segment_for_offline_cohorts() -> None:
+    product, policies = load_persistent_product_policies(ROOT, INVERSE_BTC)
+    case = _case(
+        "8",
+        expiry_ms=6_000,
+        selection_band="HIGH",
+        entry_band="HIGH",
+        outcome_state="EXITED_KNOWN",
+        gapped=True,
+    )
+    assert case.outcome is not None
+    case = ShadowCaseRead(
+        status=ShadowCaseReadStatus.COMPLETE,
+        opened=case.opened,
+        first_close=None,
+        outcome={**case.outcome, "outcome_contract_version": 2},
+        segments=(
+            ShadowCaseSegmentRead(
+                sequence=0,
+                status=ShadowCaseSegmentStatus.INCOMPLETE_UNCLEAN_EXIT,
+                opened={"observation_quality": "GAPPED"},
+                closed=None,
+            ),
+        ),
+    )
+
+    report = build_v2_case_report((case,), product=product, policies=policies)
+
+    views = report["views"]
+    cohorts = report["cohorts"]
+    assert isinstance(views, Mapping)
+    assert isinstance(cohorts, Mapping)
+    assert views["gapped_secondary"]["denominators"]["opened"] == 1
+    assert views["incomplete_unclean_exit"]["denominators"]["opened"] == 0
+    assert cohorts["terminal_economics"]["denominators"]["opened"] == 1

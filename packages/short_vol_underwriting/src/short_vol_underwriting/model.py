@@ -15,6 +15,11 @@ class PredicateTruth(StrEnum):
 
 class OutcomeState(StrEnum):
     PENDING = "PENDING"
+    EXITED_KNOWN = "EXITED_KNOWN"
+    SETTLED_KNOWN = "SETTLED_KNOWN"
+    TERMINAL_UNKNOWN = "TERMINAL_UNKNOWN"
+    # Read compatibility for schema-v5 Outcomes written before the terminal
+    # method became an explicit part of the contract.
     MATURE_KNOWN = "MATURE_KNOWN"
     MATURE_UNKNOWN = "MATURE_UNKNOWN"
     CENSORED_AT_STOP = "CENSORED_AT_STOP"

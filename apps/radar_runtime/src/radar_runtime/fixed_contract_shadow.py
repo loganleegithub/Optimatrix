@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 
@@ -25,12 +26,14 @@ from short_vol_radar.radar import TickerState
 from short_vol_radar.review import LeggedReferenceState, ReviewContext, build_review_contexts
 from short_vol_radar.score import ScoreBand
 from short_vol_underwriting import (
+    DELIVERY_PRICE_REQUEST_PARAMS,
     CloseAtomicAvailability,
     CloseBookAvailability,
     CloseOptionAvailability,
     CloseQuoteFacts,
     ComponentBookPairWitness,
     ComponentLegRole,
+    DeliveryPriceWitness,
     FixedContractShadowOwner,
     PositionFacts,
     PostCloseAttemptStatus,
@@ -46,6 +49,7 @@ from short_vol_underwriting import (
     canonical_identity,
     component_pair_witness,
     compute_component_entry_economics,
+    delivery_date_for_expiry,
     select_underwriting_component,
 )
 from short_vol_underwriting import (
@@ -118,6 +122,7 @@ class _Anchor:
     short_instrument_name: str
     long_instrument_name: str
     target_quantity_btc: Decimal
+    expiry_ms: int
 
 
 @dataclass(frozen=True)
@@ -291,6 +296,11 @@ class FixedContractShadowRuntimeAdapter:
             )
             is not None
         ]
+        crossings.extend(
+            boundary
+            for boundary in self.owner.pending_acquisition_monotonic_boundaries
+            if boundary > after_monotonic_ms
+        )
         for facts in self._underwriting_by_scope.values():
             if _radar_anchor_identity(facts) is None or facts.expiry_ms is None:
                 continue
@@ -499,10 +509,13 @@ class FixedContractShadowRuntimeAdapter:
     ) -> tuple[ShadowRpcIntent, ...]:
         reducer = self._require_reducer()
         downstream = self._boundary(reducer, boundary)
+        context = self._requests.get(request_id)
         transition = self.owner.note_request_sent(
             request_id=request_id,
             boundary=downstream,
         )
+        if context is not None and context.purpose == "SETTLEMENT_PRICE":
+            return self._consume_transition(transition, ())
         return self._consume_ordinary_post_close_terminal(
             reducer=reducer,
             request_id=request_id,
@@ -553,6 +566,14 @@ class FixedContractShadowRuntimeAdapter:
             return ()
         accepted_boundary = self._boundary(reducer, boundary)
         downstream_sent = self._boundary(reducer, sent_boundary)
+        if context.purpose == "SETTLEMENT_PRICE":
+            return self._on_delivery_price_response(
+                request_id=request_id,
+                context=context,
+                result=result,
+                sent_boundary=downstream_sent,
+                accepted_boundary=accepted_boundary,
+            )
         parsed = _parse_rest_book(result, expected_name=context.instrument_name)
         if parsed is None:
             transition = self.owner.note_request_failure(
@@ -701,6 +722,66 @@ class FixedContractShadowRuntimeAdapter:
         result_intents = self._consume_transition(transition, ())
         self._requests.pop(request_id, None)
         return result_intents
+
+    def _on_delivery_price_response(
+        self,
+        *,
+        request_id: int,
+        context: _RequestContext,
+        result: object,
+        sent_boundary: DownstreamFactBoundary,
+        accepted_boundary: DownstreamFactBoundary,
+    ) -> tuple[ShadowRpcIntent, ...]:
+        parsed = _parse_delivery_prices(result)
+        match = (
+            next(
+                (member for member in parsed[0] if member[0] == context.instrument_name),
+                None,
+            )
+            if parsed is not None
+            else None
+        )
+        if parsed is None or match is None:
+            transition = self.owner.note_request_failure(
+                request_id=request_id,
+                boundary=accepted_boundary,
+                terminal_status=PostCloseAttemptStatus.ERROR,
+            )
+            intents = self._consume_transition(transition, ())
+            self._requests.pop(request_id, None)
+            return intents
+        records_total = parsed[1]
+        witnesses = tuple(
+            DeliveryPriceWitness(
+                source_identity=canonical_identity(
+                    "OfficialDeliveryPriceSourceIdentity",
+                    accepted_boundary.runtime_identity,
+                    request_id,
+                    "public/get_delivery_prices",
+                    dict(DELIVERY_PRICE_REQUEST_PARAMS),
+                    "btc_usd",
+                    delivery_date,
+                    delivery_price,
+                    records_total,
+                    context.origin_boundary.as_object(),
+                    sent_boundary.as_object(),
+                    accepted_boundary.as_object(),
+                ),
+                boundary=accepted_boundary,
+                index_name="btc_usd",
+                delivery_date=delivery_date,
+                delivery_price_usdc_per_btc=delivery_price,
+                request_id=request_id,
+                owner_origin_boundary=context.origin_boundary,
+                sent_boundary=sent_boundary,
+                records_total=records_total,
+            )
+            for delivery_date, delivery_price in parsed[0]
+        )
+        transition = self.owner.accept_delivery_prices(witnesses)
+        intents = self._consume_transition(transition, ())
+        self._requests.pop(request_id, None)
+        return intents
 
     def _on_component_rpc_response(
         self,
@@ -1318,12 +1399,19 @@ class FixedContractShadowRuntimeAdapter:
         )
         self.owner.activate_recovered_entries(recovered)
         for entry in recovered:
+            object_kind = {
+                "ADMITTED_SHADOW_TRADE": "SHADOW_ENTRY",
+                "SELECTED_UNDERWRITING_DECISION_CONTROL": (
+                    "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN"
+                ),
+                "RADAR_SCORE_BAND_NO_TRADE_CONTROL": ("RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN"),
+            }[entry.enrollment_kind]
             value = self.owner.state_store.get_object(
-                "SHADOW_ENTRY",
+                object_kind,
                 entry.shadow_entry_identity,
             )
             if value is None:
-                raise RuntimeError("recovered Shadow Entry lacks its current projection")
+                raise RuntimeError("recovered Position lacks its current projection")
             self._remember_anchor(value)
         self._staged_recoveries = ()
 
@@ -2548,10 +2636,16 @@ class FixedContractShadowRuntimeAdapter:
                 if "_SHORT_" in intent.purpose
                 else (ComponentLegRole.LONG if "_LONG_" in intent.purpose else None)
             )
+            resource_name = intent.params.get("instrument_name") or intent.params.get("index_name")
+            if intent.purpose == "SETTLEMENT_PRICE":
+                anchor = self._anchors.get(intent.owner_identity)
+                if anchor is None:
+                    raise RuntimeError("settlement-price request lacks its active anchor")
+                resource_name = delivery_date_for_expiry(anchor.expiry_ms)
             context = _RequestContext(
                 purpose=intent.purpose,
                 owner_identity=intent.owner_identity,
-                instrument_name=str(intent.params["instrument_name"]),
+                instrument_name=str(resource_name),
                 origin_boundary=intent.origin_boundary,
                 role=role,
             )
@@ -2571,6 +2665,9 @@ class FixedContractShadowRuntimeAdapter:
     ) -> tuple[ShadowRpcIntent, ...]:
         context = self._requests.get(request_id)
         intents = list(self._consume_transition(transition, ()))
+        if context is not None and context.purpose == "SETTLEMENT_PRICE":
+            self._requests.pop(request_id, None)
+            return tuple(intents)
         terminal_kinds = {
             emitted.object_kind
             for emitted in transition.emitted
@@ -2636,6 +2733,12 @@ class FixedContractShadowRuntimeAdapter:
             response_budget = (
                 self.owner.policies.position.component_book_snapshot_response_budget_ms
             )
+        elif intent.purpose == "SETTLEMENT_PRICE":
+            purpose = RpcPurpose.SETTLEMENT_PRICE
+            send_budget = self.owner.policies.position.component_book_snapshot_send_budget_ms
+            response_budget = (
+                self.owner.policies.position.component_book_snapshot_response_budget_ms
+            )
         else:
             raise ValueError("owner returned an unknown typed request purpose")
         return ShadowRpcIntent(
@@ -2670,6 +2773,7 @@ class FixedContractShadowRuntimeAdapter:
             short_instrument_name=str(payload["short_leg_instrument_name"]),
             long_instrument_name=str(payload["long_leg_instrument_name"]),
             target_quantity_btc=_decimal(payload["full_quantity_btc"]),
+            expiry_ms=int(payload["expiry_ms"]),
         )
 
     def _retire_underwriting_scopes(
@@ -3340,6 +3444,42 @@ def _parse_rest_book(
         asks=asks or (),
         well_formed=bids is not None and asks is not None,
     )
+
+
+def _parse_delivery_prices(
+    value: object,
+) -> tuple[tuple[tuple[str, Decimal], ...], int] | None:
+    if not isinstance(value, Mapping) or set(value) != {"data", "records_total"}:
+        return None
+    records_total = value.get("records_total")
+    data = value.get("data")
+    if (
+        isinstance(records_total, bool)
+        or not isinstance(records_total, int)
+        or records_total < 0
+        or not isinstance(data, list)
+    ):
+        return None
+    parsed: list[tuple[str, Decimal]] = []
+    dates: set[str] = set()
+    for member in data:
+        if not isinstance(member, Mapping) or set(member) != {"date", "delivery_price"}:
+            return None
+        delivery_date = member.get("date")
+        if not isinstance(delivery_date, str) or delivery_date in dates:
+            return None
+        try:
+            canonical_date = datetime.strptime(delivery_date, "%Y-%m-%d").date().isoformat()
+            delivery_price = _decimal(member.get("delivery_price"))
+        except ValueError:
+            return None
+        if canonical_date != delivery_date or delivery_price <= 0:
+            return None
+        dates.add(delivery_date)
+        parsed.append((delivery_date, delivery_price))
+    if records_total < len(parsed):
+        return None
+    return tuple(parsed), records_total
 
 
 def _rest_levels(value: object, *, reverse: bool) -> tuple[PriceLevel, ...] | None:

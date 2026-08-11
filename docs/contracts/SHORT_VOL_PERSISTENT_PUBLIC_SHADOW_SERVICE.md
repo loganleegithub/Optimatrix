@@ -22,7 +22,8 @@ One process owns:
 - one Inverse BTC public Deribit client and bounded application queue;
 - one synchronous Radar reducer;
 - one in-memory Underwriting/Admission/Position owner;
-- one stable minimal Shadow Case repository and every compatible active admitted Entry it restores;
+- one stable minimal Shadow Case repository and every compatible active Position-bearing Case it
+  restores;
 - one coalesced immutable Workbench snapshot store;
 - one loopback GET/HEAD HTTP server.
 
@@ -32,12 +33,13 @@ process.
 
 Recoverable transport failure starts a new session epoch without replacing the in-process owners.
 A process restart creates a fresh runtime identity and reuses the stable Case repository. After
-acquiring its lease, it restores every compatible non-terminal admitted Entry and opens a new
-Observation Segment. Runtime identity is segment provenance, not Entry ownership.
+acquiring its lease, it restores every compatible non-terminal admitted Entry and future
+Segment-bearing Control and opens a new Observation Segment. Runtime identity is Segment
+provenance, not aggregate ownership.
 
 The long-lived process retains only current option/Combo sources, frozen protective-leg bindings,
 active Underwriting scopes, active Candidates and their bounded paired requests, restored/open
-admitted Entries,
+Position-bearing Cases,
 and one latest terminal Case for trader display. Terminal identities are evicted at their owning
 boundary. Durable Case files remain the source for historical research; neither the owner nor
 Workbench keeps a second in-memory event history.
@@ -50,6 +52,11 @@ public client sends the required `public/test` immediately before the notificati
 the application queue. One transport-local request id binds and validates the matching version
 response; the reducer cannot schedule a duplicate heartbeat-test RPC. Ordinary heartbeat
 notifications remain non-causal and cannot change Radar, Underwriting, Candidate, or Case truth.
+
+After expiry, `public/get_delivery_prices` is the sole additional application-owned public method.
+Its fixed `btc_usd`, `offset=0`, `count=1000` history request is validated once at the transport
+boundary and fanned out by delivery date to all waiting Positions. At most one such request is
+globally in flight. It is public settlement evidence, never a private settlement action.
 
 ## State root
 
@@ -78,15 +85,17 @@ commissioning, or host-identity proof.
 1. resolve one product specification, clean code identity, and exact matching three-Policy chain;
 2. reject any temporary state root, acquire the stable state-root lease, and validate every Case in
    `state-root/cases`;
-3. restore all compatible non-terminal admitted Entries and no Controls;
+3. restore all compatible non-terminal admitted Entries and future Segment-bearing Controls, while
+   leaving legacy segmentless Controls as history;
 4. start loopback Workbench and connect/reconnect one public Deribit session;
 5. on the first settled boundary, open one new `GAPPED` Observation Segment per restored Entry;
 6. settle each accepted fact through Radar and the current owner, beginning restored current state
    at `UNKNOWN` until required fresh facts arrive;
-7. publish each new admission only as one complete initial Case directory containing
+7. publish each new Position-bearing Case only as one complete initial Case directory containing
    `opened.json + segments/0/opened.json`; publish later Segment records, the combined
-   first-close/attempt transition, and mature Outcomes individually;
-8. on SIGINT/SIGTERM or handled failure, close active Segments without terminating admitted Entry
+   legacy first-close record or new intent-only first-close record, and terminal Outcomes
+   individually;
+8. on SIGINT/SIGTERM or handled failure, close active Segments without terminating aggregate
    Outcomes.
 
 Process supervision, restart policy, CPU, memory, host logs, and uptime monitoring are external.
@@ -140,12 +149,14 @@ inactive bucket's earlier accepted confirmation observations. Recovery must reco
 leader and score band before that count can continue; changed truth still resets normally, and an
 already-active Episode remains fail-closed.
 
-Every active admitted Entry appears once by its original `shadow_entry_identity`, whether opened in
-this runtime or restored. The snapshot distinguishes origin runtime from current Segment runtime
-and exposes Segment state, `CONTINUOUS | GAPPED`, gap count, current-data availability, durable
-first-CLOSE/attempt status, Outcome quality, and qualification eligibility. A restored row is
-`UNKNOWN` until fresh facts settle; the browser cannot turn `HANDOFF_GAP` into `HOLD` or `CLOSE`.
-Runtime health/readiness remains a separate service signal.
+Every active admitted Entry and future selected Control appears once by its original enrollment
+identity, whether opened in this runtime or restored. The snapshot distinguishes origin runtime
+from current Segment runtime and exposes Segment state, `CONTINUOUS | GAPPED`, gap count,
+current-data availability, immutable first-CLOSE intent, current acquisition/settlement state,
+terminal method, and named Cohort facts. The legacy `qualification_eligible` field is only the
+strict-continuity projection. A restored row is `UNKNOWN` until fresh facts settle; the browser
+cannot turn `HANDOFF_GAP` into `HOLD` or `CLOSE`. Runtime health/readiness remains a separate service
+signal.
 
 There is no publication timer, event stream, durable Workbench file, SSE, partial patch, or browser
 strategy engine. HTTP readers see old or new complete bytes only.
@@ -156,9 +167,9 @@ The service exposes non-durable funnel counts and a primary blocker in the Workb
 computed from current reducer/owner transitions and reset with the runtime. They do not create Case
 files or qualify a Policy.
 
-Restoring an Entry increments no Candidate, admission, or `SHADOW_CASE_OPENED` counter. The Entry's
-mature `SHADOW_CASE_OUTCOME` is counted once when it first becomes durable, while
-`qualification_eligible` remains false for every gapped chain.
+Restoring a Case increments no Candidate, admission, or `SHADOW_CASE_OPENED` counter. An admitted
+terminal `SHADOW_CASE_OUTCOME` is counted once when it first becomes durable. A gapped known exit or
+settlement remains terminal-economics eligible while continuous-path eligibility is false.
 
 For each evaluable Underwriting row, Workbench projects the owner-generated selected protective leg,
 complete signed six-predicate margin vector, and all failed predicates. Admission and close rows
@@ -199,17 +210,18 @@ stale business tables and displays UNKNOWN until a complete later snapshot succe
 Before reconnect or clean stop, intake stops, every accepted fact remaining in the sole bounded
 queue is settled, and pending Workbench state is flushed. A completed business summary is returned
 independently of a bounded best-effort transport close; a WebSocket closing handshake cannot consume
-the outer acceptance window. When the failure/stop boundary is available, the owner closes admitted
-Entry Segments and terminalizes non-recoverable Controls. An uncatchable process loss may leave a
+the outer acceptance window. When the failure/stop boundary is available, the owner closes every
+active Position-bearing Case Segment. An uncatchable process loss may leave a
 Segment without `closed.json`; the Case reader reports that Segment as
 `INCOMPLETE_UNCLEAN_EXIT`.
 
-For admitted Entries, clean stop and handled failure write only
+For admitted Entries and future Segment-bearing Controls, clean stop and handled failure write only
 `SHADOW_CASE_SEGMENT_CLOSED` with `CENSORED_AT_STOP | CENSORED_AT_FAILURE`; they do not write a
-mature Entry Outcome. An uncatchable loss leaves Segment close absent. The next externally started
-runtime restores all three states as gapped observation, starts current facts at `UNKNOWN`, and
-does not retry a previously scheduled close attempt. Selected no-trade Controls retain their
-existing bounded censoring behavior and are not restored.
+terminal Outcome. An uncatchable loss leaves Segment close absent. The next externally started
+runtime restores all three states as gapped observation, starts current facts at `UNKNOWN`, retains
+the immutable first-CLOSE reason, and begins only new strictly future acquisition. A prior
+in-flight attempt remains historically unknown. Legacy segmentless Controls retain their historical
+bounded censoring behavior and are not restored.
 
 No terminal manifest, inventory, service receipt, host audit, or automatic restart belongs to this
 contract.
@@ -228,9 +240,10 @@ active-set bound. Public observation requires explicit `CURRENT_STAGE` authority
 may establish current-state reachability and negative product contamination only; a later natural
 Outcome remains a separate product result.
 
-Recovery tests run at least runtime A → B → C over one repository and prove stable Entry identity,
-all-active scanning, Control/terminal exclusion, recovery-first UNKNOWN, segment-chain ordering,
-gap quality without synthetic CLOSE, one combined first-close/attempt schedule, no retry after
-uncertain loss, one mature gapped Outcome with qualification false, no duplicate funnel admission,
-and immutable records. The schema-v5 runtime has no V1 migration or compatibility command. Every
+Recovery tests run at least runtime A → B → C over one repository and prove stable aggregate
+identity, all-active scanning, terminal/legacy-Control exclusion, future-Control recovery,
+recovery-first UNKNOWN, Segment-chain ordering, gap quality without synthetic CLOSE, immutable
+first-CLOSE intent before acquisition, continued serial retry after uncertain loss, first eligible
+exit, shared official settlement, one known gapped terminal-economics Outcome, no duplicate funnel
+admission, and immutable records. The schema-v5 runtime has no V1 migration or compatibility command. Every
 live invocation and stable-root choice remains governed by `CURRENT_STAGE`.

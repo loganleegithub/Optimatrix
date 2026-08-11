@@ -2711,7 +2711,10 @@ def test_selected_abstain_opens_one_durable_control_case(tmp_path: Path) -> None
         bindings=owner.bindings,
         policies=owner.policies,
     )
-    owner.state_store.observer = case_store
+    owner.state_store.observer = _HistoryCaseStoreObserver(
+        _HISTORY_BY_OWNER[id(owner)],
+        case_store,
+    )
 
     _settle_component_pair(
         adapter=adapter,
@@ -2929,7 +2932,10 @@ def test_component_shadow_entry_opens_its_durable_case(tmp_path: Path) -> None:
         bindings=owner.bindings,
         policies=owner.policies,
     )
-    owner.state_store.observer = case_store
+    owner.state_store.observer = _HistoryCaseStoreObserver(
+        _HISTORY_BY_OWNER[id(owner)],
+        case_store,
+    )
 
     intents = _settled_transaction(
         adapter,
@@ -3102,6 +3108,17 @@ def test_component_shadow_entry_closes_from_a_new_paired_snapshot_and_writes_kno
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
+    cases = tmp_path / "settlement-cases"
+    cases.mkdir()
+    case_store = ShadowCaseStore(
+        cases,
+        bindings=owner.bindings,
+        policies=owner.policies,
+    )
+    owner.state_store.observer = _HistoryCaseStoreObserver(
+        _HISTORY_BY_OWNER[id(owner)],
+        case_store,
+    )
     _admit_component_shadow(reducer, adapter)
 
     _set_platform_usable(reducer, False)
@@ -3133,7 +3150,8 @@ def test_component_shadow_entry_closes_from_a_new_paired_snapshot_and_writes_kno
     )
 
     (outcome,) = _object_payloads(owner, "SHADOW_OUTCOME")
-    assert outcome["terminal_state"] == "MATURE_KNOWN"
+    assert outcome["terminal_state"] == "EXITED_KNOWN"
+    assert outcome["terminal_method"] == "MARKET_EXIT"
     assert outcome["execution_model"] == "BOUNDED_COMPONENT_BOOK_TAKER_COUNTERFACTUAL"
     assert outcome["close_component_pair_identity"]
     assert [leg["action"] for leg in outcome["close_component_legs"]] == ["BUY", "SELL"]
@@ -3232,7 +3250,8 @@ def test_selected_abstain_case_reuses_strictly_future_position_outcome_without_c
     assert result.status.value == "COMPLETE"
     assert result.opened["enrollment_kind"] == "SELECTED_UNDERWRITING_DECISION_CONTROL"
     assert result.outcome is not None
-    assert result.outcome["terminal_state"] == "MATURE_KNOWN"
+    assert result.outcome["terminal_state"] == "EXITED_KNOWN"
+    assert result.outcome["terminal_method"] == "MARKET_EXIT"
     assert not any(
         value["object_kind"] in {"CANDIDATE_ACTIVATION", "SHADOW_ENTRY", "SHADOW_OUTCOME"}
         for value in owner.state_store.objects
@@ -3240,6 +3259,116 @@ def test_selected_abstain_case_reuses_strictly_future_position_outcome_without_c
     assert any(
         value["object_kind"] == "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME"
         for value in owner.state_store.objects
+    )
+
+
+def test_future_selected_control_opens_segments_and_recovers_as_the_same_position(
+    tmp_path: Path,
+) -> None:
+    reducer, adapter, owner = _shadow_system(tmp_path)
+    short_book = ContinuousOrderBook("BTC-1JAN00-101000-C")
+    short_book.apply(
+        {
+            "type": "snapshot",
+            "instrument_name": "BTC-1JAN00-101000-C",
+            "change_id": 10,
+            "timestamp": 1_000_010,
+            "bids": [["new", "0.00150", "0.1"]],
+            "asks": [["new", "0.00151", "0.1"]],
+        },
+        110,
+    )
+    reducer.option_books["BTC-1JAN00-101000-C"] = short_book
+    cases = tmp_path / "recoverable-control-cases"
+    cases.mkdir()
+    case_store = ShadowCaseStore(cases, bindings=owner.bindings, policies=owner.policies)
+    owner.state_store.observer = _HistoryCaseStoreObserver(
+        _HISTORY_BY_OWNER[id(owner)],
+        case_store,
+    )
+
+    enrollment_intents = _settled_transaction(
+        adapter,
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=1,
+            monotonic_ms=110,
+            cause=CausalCause.OPTION_BOOK_FACT,
+        ),
+    )
+    _settle_component_pair(
+        adapter=adapter,
+        reducer=reducer,
+        intents=enrollment_intents,
+        first_causal_seq=2,
+        change_id=11,
+        short_bid="0.00150",
+        short_ask="0.00151",
+        long_bid="0.00100",
+        long_ask="0.00101",
+    )
+    control_open = next(
+        value
+        for value in owner.state_store.objects
+        if value["object_kind"] == "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN"
+    )
+    control_identity = str(control_open["object_identity"])
+    case_id = case_store.case_id_for_enrollment(control_identity)
+    assert case_id is not None
+    original = case_store.read_case(case_id, runtime_active=True)
+    assert len(original.segments) == 1
+
+    case_store.close_active_admitted_segments(
+        boundary=DownstreamFactBoundary(
+            code_identity=owner.bindings.code_identity,
+            runtime_identity=owner.bindings.runtime_identity,
+            session_epoch=1,
+            ingress_seq=6,
+            received_monotonic_ms=160,
+            causal_seq=6,
+        ),
+        terminal_state="CENSORED_AT_STOP",
+    )
+    restarted_bindings = RuntimeBindings(
+        code_identity=owner.bindings.code_identity,
+        runtime_identity="sha256:" + "d" * 64,
+        radar_policy_identity=owner.bindings.radar_policy_identity,
+        underwriting_policy_identity=owner.bindings.underwriting_policy_identity,
+        position_policy_identity=owner.bindings.position_policy_identity,
+    )
+    restarted_store = ShadowCaseStore(
+        cases,
+        bindings=restarted_bindings,
+        policies=owner.policies,
+    )
+    (projection,) = restarted_store.scan_active_positions()
+    assert projection.enrollment_kind == "SELECTED_UNDERWRITING_DECISION_CONTROL"
+    assert projection.shadow_entry_identity == control_identity
+    adopted = restarted_store.open_recovery_segment(
+        case_id,
+        adoption_fact_boundary=DownstreamFactBoundary(
+            code_identity=restarted_bindings.code_identity,
+            runtime_identity=restarted_bindings.runtime_identity,
+            session_epoch=1,
+            ingress_seq=1,
+            received_monotonic_ms=1,
+            causal_seq=1,
+        ),
+    )
+    recovered_owner = FixedContractShadowOwner(
+        policies=owner.policies,
+        bindings=restarted_bindings,
+        state_store=ShadowStateStore(bindings=restarted_bindings),
+    )
+    recovered_owner.activate_recovered_entries((adopted,))
+
+    assert recovered_owner.active_trade_identities == frozenset({control_identity})
+    assert (
+        recovered_owner.state_store.get_object(
+            "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN",
+            control_identity,
+        )
+        is not None
     )
 
 
@@ -3331,11 +3460,59 @@ def test_component_close_pair_over_skew_is_workbench_visible_business_unknown(
     assert row["component_pair_unknown_reasons"] == terminal["terminal_unknown_reasons"]
     assert not _object_payloads(owner, "SHADOW_OUTCOME")
 
+    retry_intents = _settled_transaction(
+        adapter,
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=11,
+            monotonic_ms=35_501,
+            cause=CausalCause.TIME_BOUNDARY,
+        ),
+    )
+    assert len(retry_intents) == 2
+    assert {intent.request_id for intent in retry_intents}.isdisjoint(
+        {intent.request_id for intent in close_intents}
+    )
+    retry_sent: dict[int, FactBoundary] = {}
+    for offset, intent in enumerate(retry_intents):
+        sent = FactBoundary(1, 12 + offset, 35_502 + offset, 12 + offset)
+        retry_sent[intent.request_id] = sent
+        adapter.on_request_sent(request_id=intent.request_id, boundary=sent)
+    for offset, intent in enumerate(retry_intents):
+        instrument_name = str(intent.params["instrument_name"])
+        _rpc_response(
+            adapter,
+            reducer=reducer,
+            request_id=intent.request_id,
+            result=_rest_option_book(
+                instrument_name,
+                bid_price=("0.00249" if instrument_name.endswith("101000-C") else "0.00149"),
+                ask_price=("0.00250" if instrument_name.endswith("101000-C") else "0.00150"),
+                change_id=13,
+                timestamp_ms=1_008_000,
+            ),
+            sent_boundary=retry_sent[intent.request_id],
+            boundary=FactBoundary(1, 14 + offset, 35_504 + offset, 14 + offset),
+        )
 
-def test_partial_component_close_then_rpc_failure_matures_unknown_without_fake_close(
+    assert _object_payloads(owner, "SHADOW_OUTCOME")[-1]["terminal_state"] == "EXITED_KNOWN"
+
+
+def test_partial_component_failure_keeps_duty_and_then_uses_official_settlement(
     tmp_path: Path,
 ) -> None:
     reducer, adapter, owner = _shadow_system(tmp_path)
+    cases = tmp_path / "settlement-cases"
+    cases.mkdir()
+    case_store = ShadowCaseStore(
+        cases,
+        bindings=owner.bindings,
+        policies=owner.policies,
+    )
+    owner.state_store.observer = _HistoryCaseStoreObserver(
+        _HISTORY_BY_OWNER[id(owner)],
+        case_store,
+    )
     _admit_component_shadow(reducer, adapter)
 
     _set_platform_usable(reducer, False)
@@ -3379,15 +3556,75 @@ def test_partial_component_close_then_rpc_failure_matures_unknown_without_fake_c
         boundary=FactBoundary(1, 10, 200, 10),
     )
 
+    assert not _object_payloads(owner, "SHADOW_OUTCOME")
+
+    (settlement_intent,) = _settled_transaction(
+        adapter,
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=11,
+            monotonic_ms=30_201,
+            cause=CausalCause.TIME_BOUNDARY,
+        ),
+    )
+    assert settlement_intent.purpose is RpcPurpose.SETTLEMENT_PRICE
+    assert settlement_intent.method == "public/get_delivery_prices"
+    sent = FactBoundary(1, 12, 30_202, 12)
+    adapter.on_request_sent(request_id=settlement_intent.request_id, boundary=sent)
+    _rpc_response(
+        adapter,
+        reducer=reducer,
+        request_id=settlement_intent.request_id,
+        result={"data": [], "records_total": 0},
+        sent_boundary=sent,
+        boundary=FactBoundary(1, 13, 30_203, 13),
+    )
+    assert not _object_payloads(owner, "SHADOW_OUTCOME")
+
+    (settlement_retry,) = _settled_transaction(
+        adapter,
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=14,
+            monotonic_ms=60_204,
+            cause=CausalCause.TIME_BOUNDARY,
+        ),
+    )
+    assert settlement_retry.purpose is RpcPurpose.SETTLEMENT_PRICE
+    assert settlement_retry.request_id != settlement_intent.request_id
+    retry_sent = FactBoundary(1, 15, 60_205, 15)
+    adapter.on_request_sent(request_id=settlement_retry.request_id, boundary=retry_sent)
+    _rpc_response(
+        adapter,
+        reducer=reducer,
+        request_id=settlement_retry.request_id,
+        result={
+            "data": [{"date": "2000-01-01", "delivery_price": 105_000}],
+            "records_total": 1,
+        },
+        sent_boundary=retry_sent,
+        boundary=FactBoundary(1, 16, 60_206, 16),
+    )
+
     (outcome,) = _object_payloads(owner, "SHADOW_OUTCOME")
-    assert outcome["terminal_state"] == "MATURE_UNKNOWN"
-    assert outcome["economic_availability"] == "UNKNOWN"
+    assert outcome["terminal_state"] == "SETTLED_KNOWN"
+    assert outcome["terminal_method"] == "CONTRACT_SETTLEMENT"
+    assert outcome["economic_availability"] == "KNOWN"
     assert outcome["selected_exit_identity"] is None
+    assert outcome["official_delivery_price_source_ref"]["delivery_date"] == "2000-01-01"
     assert outcome["close_component_pair_identity"] is None
     assert outcome["close_component_quote_source_refs"] == []
     assert outcome["close_component_legs"] == []
-    assert outcome["gross_close_cashflow_usdc"] is None
     assert adapter.retained_state_counts["request_contexts"] == 0
+    entry_identity = str(_object_payloads(owner, "SHADOW_ENTRY")[0]["shadow_entry_identity"])
+    case_id = case_store.case_id_for_entry(entry_identity)
+    assert case_id is None  # terminal Cases leave only their immutable directory
+    durable_case_id = next(path.name for path in cases.iterdir() if path.is_dir())
+    durable = case_store.read_case("sha256:" + durable_case_id)
+    assert durable.outcome is not None
+    assert durable.outcome["terminal_state"] == "SETTLED_KNOWN"
+    assert durable.outcome["terminal_economics_eligible"] is True
+    assert durable.outcome["continuous_path_eligible"] is True
 
 
 def test_component_quote_fingerprint_is_stable_scalar_identity_input(

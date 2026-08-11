@@ -629,14 +629,14 @@ def test_low_band_candidate_refresh_opens_control_or_attributes_known_no_control
         terminal_source_identity=canonical_identity("RuntimeStop", control_identity),
         terminal_source=TerminalSource.STOP,
     )
-    assert any(
+    assert not any(
         value["object_kind"] == "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OUTCOME"
         for value in state.objects
     )
-    completed = case_store.read_case(case_id)
-    assert completed.status is ShadowCaseReadStatus.COMPLETE
-    assert completed.outcome is not None
-    assert completed.outcome["terminal_state"] == "CENSORED_AT_STOP"
+    active = case_store.read_case(case_id, runtime_active=True)
+    assert active.status is ShadowCaseReadStatus.OPEN
+    assert active.outcome is None
+    assert len(active.segments) == 1
 
 
 def test_delayed_low_control_selection_freezes_activation_packet_across_band_drift(

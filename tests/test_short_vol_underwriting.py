@@ -8,7 +8,16 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from options_domain import INVERSE_BTC, OptionType
+from market_monitor import PriceLevel
+from options_domain import (
+    INVERSE_BTC,
+    AmountMetadata,
+    ComponentBookQuoteKind,
+    OptionInstrument,
+    OptionType,
+    PriceTickMetadata,
+    evaluate_component_book_vertical,
+)
 from short_vol_radar.black import DecimalInterval
 from short_vol_radar.bucket import radar_bucket_episode_identity
 from short_vol_radar.score import (
@@ -25,6 +34,7 @@ from short_vol_radar.score import (
 from short_vol_underwriting import (
     CANDIDATE_INVALIDATION_REASONS,
     DECISION_CONTROL_OBJECT_KINDS,
+    DELIVERY_PRICE_REQUEST_PARAMS,
     OUTCOME_OBJECT_KINDS,
     POSITION_CLOSE_REASONS,
     UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
@@ -39,6 +49,7 @@ from short_vol_underwriting import (
     CloseQuoteFacts,
     CloseQuoteState,
     ComponentLegRole,
+    DeliveryPriceWitness,
     EntryEconomics,
     FactBoundary,
     FixedContractShadowOwner,
@@ -69,6 +80,7 @@ from short_vol_underwriting import (
     classify_close_quote,
     component_pair_witness,
     compute_close_economics,
+    compute_contract_settlement_economics,
     compute_entry_economics,
     evaluate_close_opportunity,
     load_policy_chain,
@@ -1534,6 +1546,202 @@ def test_each_position_close_reason_independently_latches_close(reason: str) -> 
     assert decision.ordered_latched_close_reason_vector == (reason,)
 
 
+@pytest.mark.parametrize(
+    ("scenario", "expected_reason"),
+    (
+        ("expiry", "SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED"),
+        ("latest_exit", "LATEST_EXIT_BOUNDARY_REACHED"),
+        ("source_discontinuity", "PLATFORM_OR_SOURCE_DISCONTINUITY"),
+        ("maximum_loss", "MAXIMUM_NET_LOSS_BOUNDARY_REACHED"),
+        ("short_risk", "SHORT_LEG_RISK_BOUNDARY_REACHED"),
+        ("path", "PATH_OR_JUMP_RISK_BOUNDARY_REACHED"),
+        ("volatility", "VOLATILITY_STATE_BOUNDARY_REACHED"),
+        ("liquidity", "LIQUIDITY_EXIT_BOUNDARY_REACHED"),
+        ("take_profit", "ECONOMIC_EXIT_BOUNDARY_REACHED"),
+    ),
+)
+def test_all_nine_policy_predicates_reach_real_position_exit_intent(
+    tmp_path: Path,
+    scenario: str,
+    expected_reason: str,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    recovered = _typed_recovery_entry(bindings)
+    owner.activate_recovered_entries((recovered,))
+    entry_identity = recovered.shadow_entry_identity
+    owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=_quiet_position_facts(boundary=_boundary(1, 110)),
+        allocate_request_id=lambda: pytest.fail("adoption baseline scheduled acquisition"),
+    )
+    primer_boundary = _boundary(2, 120)
+    primer_witness = _position_subscription_witness(
+        boundary=primer_boundary,
+        change_id=12,
+        previous_change_id=None,
+        snapshot_kind="snapshot",
+    )
+    owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=replace(
+            _quiet_position_facts(boundary=primer_boundary),
+            quote_source=SourceFact(primer_witness.source_identity, primer_boundary),
+            quote_refresh_witness=primer_witness,
+            current_combo_subscription_witness=primer_witness,
+        ),
+        allocate_request_id=lambda: pytest.fail("quiet recovery primer scheduled acquisition"),
+    )
+    assert entry_identity in owner.active_trade_identities
+    current_boundary = _boundary(3, 130)
+    witness = _position_subscription_witness(
+        boundary=current_boundary,
+        change_id=13,
+        previous_change_id=12,
+    )
+    facts = replace(
+        _quiet_position_facts(boundary=current_boundary),
+        quote_source=SourceFact(witness.source_identity, current_boundary),
+        quote_refresh_witness=witness,
+        current_combo_subscription_witness=witness,
+    )
+    close_quote = facts.close_quote_facts
+
+    if scenario == "expiry":
+        facts = replace(
+            facts,
+            trusted_time_lower_ms=10_000_000,
+            trusted_time_upper_ms=10_000_001,
+        )
+    elif scenario == "latest_exit":
+        facts = replace(
+            facts,
+            trusted_time_lower_ms=8_200_000,
+            trusted_time_upper_ms=8_200_001,
+        )
+    elif scenario == "source_discontinuity":
+        facts = replace(facts, platform_continuous=False)
+    elif scenario == "maximum_loss":
+        quote, reasons = evaluate_component_book_vertical(
+            kind=ComponentBookQuoteKind.CLOSE,
+            short_instrument=OptionInstrument(
+                instrument_name="BTC-8AUG26-101000-C",
+                expiration_timestamp_ms=10_000_000,
+                strike=Decimal("101000"),
+                option_type=OptionType.CALL,
+                amount=AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+                price_tick=PriceTickMetadata(Decimal("0.0001")),
+            ),
+            long_instrument=OptionInstrument(
+                instrument_name="BTC-8AUG26-102000-C",
+                expiration_timestamp_ms=10_000_000,
+                strike=Decimal("102000"),
+                option_type=OptionType.CALL,
+                amount=AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+                price_tick=PriceTickMetadata(Decimal("0.0001")),
+            ),
+            short_side_levels=(PriceLevel(Decimal("0.0200"), Decimal("0.1")),),
+            long_side_levels=(PriceLevel(Decimal("0.0002"), Decimal("0.1")),),
+            index_usdc_per_btc=Decimal("100000"),
+            target_quantity_btc=Decimal("0.1"),
+            fee_rate_index_fraction=Decimal("0.0003"),
+        )
+        assert reasons == () and quote is not None
+        facts = replace(
+            facts,
+            component_quote=quote,
+            component_short_quote_source=SourceFact(
+                canonical_identity("ComponentQuoteSourceIdentity", "maximum-loss-short"),
+                current_boundary,
+            ),
+            component_long_quote_source=SourceFact(
+                canonical_identity("ComponentQuoteSourceIdentity", "maximum-loss-long"),
+                current_boundary,
+            ),
+            close_quote_facts=replace(
+                close_quote,
+                component_quote=quote,
+            ),
+        )
+    elif scenario == "short_risk":
+        facts = replace(facts, current_short_delta=Decimal("0.5"))
+    elif scenario == "path":
+        facts = replace(facts, current_index_usdc_per_btc=Decimal("99000"))
+    elif scenario == "volatility":
+        facts = replace(facts, current_short_mark_iv_fraction=Decimal("0.65"))
+    elif scenario == "liquidity":
+        facts = replace(
+            facts,
+            close_quote_facts=replace(
+                close_quote,
+                option_availability=CloseOptionAvailability.UNEXECUTABLE,
+                consumed_levels=(),
+            ),
+        )
+    elif scenario == "take_profit":
+        quote, reasons = evaluate_component_book_vertical(
+            kind=ComponentBookQuoteKind.CLOSE,
+            short_instrument=OptionInstrument(
+                instrument_name="BTC-8AUG26-101000-C",
+                expiration_timestamp_ms=10_000_000,
+                strike=Decimal("101000"),
+                option_type=OptionType.CALL,
+                amount=AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+                price_tick=PriceTickMetadata(Decimal("0.0001")),
+            ),
+            long_instrument=OptionInstrument(
+                instrument_name="BTC-8AUG26-102000-C",
+                expiration_timestamp_ms=10_000_000,
+                strike=Decimal("102000"),
+                option_type=OptionType.CALL,
+                amount=AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+                price_tick=PriceTickMetadata(Decimal("0.0001")),
+            ),
+            short_side_levels=(PriceLevel(Decimal("0.0005"), Decimal("0.1")),),
+            long_side_levels=(PriceLevel(Decimal("0.0004"), Decimal("0.1")),),
+            index_usdc_per_btc=Decimal("100000"),
+            target_quantity_btc=Decimal("0.1"),
+            fee_rate_index_fraction=Decimal("0.0003"),
+        )
+        assert reasons == () and quote is not None
+        facts = replace(
+            facts,
+            component_quote=quote,
+            component_short_quote_source=SourceFact(
+                canonical_identity("ComponentQuoteSourceIdentity", "take-profit-short"),
+                current_boundary,
+            ),
+            component_long_quote_source=SourceFact(
+                canonical_identity("ComponentQuoteSourceIdentity", "take-profit-long"),
+                current_boundary,
+            ),
+            close_quote_facts=replace(
+                close_quote,
+                component_quote=quote,
+            ),
+        )
+    else:  # pragma: no cover - the parameter table is exhaustive
+        raise AssertionError(f"unknown predicate scenario: {scenario}")
+
+    request_ids = iter((51, 52))
+    transition = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=facts,
+        allocate_request_id=lambda: next(request_ids),
+    )
+
+    actions = [item for item in transition.emitted if item.object_kind == "POSITION_ACTION"]
+    assert actions, [item.object_kind for item in transition.emitted]
+    action_identity = actions[0].object_identity
+    action = cast(
+        Mapping[str, object],
+        _written_objects(tmp_path, bindings=bindings)[action_identity]["payload"],
+    )
+    assert action["serialized_action"] == "CLOSE", action["ordered_predicate_truth_vector"]
+    assert action["primary_close_reason"] == expected_reason
+    assert action["first_latched_close_action_identity"] == action_identity
+    assert transition.request_intents
+
+
 def test_entry_and_close_economics_preserve_signs_and_public_fee_reserve() -> None:
     entry = compute_entry_economics(
         direction="SELL",
@@ -1677,7 +1885,9 @@ def test_case_fact_boundary_orders_within_and_across_observation_segments() -> N
         CaseFactBoundary(True, _boundary(1))
 
 
-def test_outcome_terminal_order_is_exit_then_natural_without_process_censoring() -> None:
+def test_outcome_terminal_order_is_exit_then_contract_settlement_without_process_censoring() -> (
+    None
+):
     reducer = OutcomeReducer(entry_boundary=CaseFactBoundary(0, _boundary(1)))
     reducer.latch_close("sha256:" + "d" * 64, CaseFactBoundary(0, _boundary(2)))
     result = reducer.settle(
@@ -1686,19 +1896,77 @@ def test_outcome_terminal_order_is_exit_then_natural_without_process_censoring()
         ordinary_attempt_terminal=True,
         lifecycle_ready=True,
     )
-    assert result is OutcomeState.MATURE_KNOWN
+    assert result is OutcomeState.EXITED_KNOWN
     assert reducer.settle(boundary=CaseFactBoundary(1, _boundary(1))) is result
 
-    natural = OutcomeReducer(entry_boundary=CaseFactBoundary(0, _boundary(1)))
-    natural.latch_close("sha256:" + "f" * 64, CaseFactBoundary(0, _boundary(2)))
+    awaiting_delivery = OutcomeReducer(entry_boundary=CaseFactBoundary(0, _boundary(1)))
+    awaiting_delivery.latch_close("sha256:" + "f" * 64, CaseFactBoundary(0, _boundary(2)))
     assert (
-        natural.settle(
+        awaiting_delivery.settle(
             boundary=CaseFactBoundary(1, _boundary(1)),
             ordinary_attempt_terminal=True,
             lifecycle_ready=True,
         )
-        is OutcomeState.MATURE_UNKNOWN
+        is OutcomeState.PENDING
     )
+    assert (
+        awaiting_delivery.settle(
+            boundary=CaseFactBoundary(1, _boundary(2)),
+            settlement_fact_identity="sha256:" + "9" * 64,
+        )
+        is OutcomeState.SETTLED_KNOWN
+    )
+
+
+@pytest.mark.parametrize(
+    ("option_type", "delivery_price", "expected_native_cashflow"),
+    (
+        ("call", "115000", "-0.004347826086956521739130434783"),
+        ("put", "95000", "-0.005263157894736842105263157895"),
+        ("call", "105000", "0"),
+    ),
+)
+def test_contract_settlement_uses_delivery_price_and_signed_vertical_payoff(
+    option_type: str,
+    delivery_price: str,
+    expected_native_cashflow: str,
+) -> None:
+    economics = compute_contract_settlement_economics(
+        product=INVERSE_BTC,
+        option_type=option_type,
+        short_strike_usdc_per_btc=Decimal("110000") if option_type == "call" else Decimal("100000"),
+        long_strike_usdc_per_btc=Decimal("120000") if option_type == "call" else Decimal("90000"),
+        full_quantity_btc=Decimal("0.1"),
+        delivery_price_usdc_per_btc=Decimal(delivery_price),
+        delivery_fee_rate_fraction=Decimal("0"),
+        native_gross_entry_credit=Decimal("0.001"),
+        native_entry_fee_reserve=Decimal("0.00003"),
+    )
+
+    assert economics.native_gross_settlement_cashflow == Decimal(expected_native_cashflow)
+    assert economics.native_delivery_fee_reserve == 0
+    assert economics.delivery_valued_gross_settlement_cashflow_usdc == (
+        economics.native_gross_settlement_cashflow * Decimal(delivery_price)
+    )
+    assert economics.native_net_pnl == (
+        Decimal("0.001") - Decimal("0.00003") + economics.native_gross_settlement_cashflow
+    )
+
+
+def test_contract_settlement_caps_non_daily_delivery_fee_per_itm_leg() -> None:
+    economics = compute_contract_settlement_economics(
+        product=INVERSE_BTC,
+        option_type="call",
+        short_strike_usdc_per_btc=Decimal("100000"),
+        long_strike_usdc_per_btc=Decimal("110000"),
+        full_quantity_btc=Decimal("0.1"),
+        delivery_price_usdc_per_btc=Decimal("120000"),
+        delivery_fee_rate_fraction=Decimal("0.00015"),
+        native_gross_entry_credit=Decimal("0.001"),
+        native_entry_fee_reserve=Decimal("0.00003"),
+    )
+
+    assert economics.native_delivery_fee_reserve == Decimal("0.00003")
 
 
 def test_admission_schedules_one_rpc_and_consumes_every_terminal_race() -> None:
@@ -2003,7 +2271,7 @@ def test_owner_restores_entry_without_replaying_admission_and_skips_adoption_bas
         owner.activate_recovered_entries(staged)
 
 
-def test_recovered_first_close_is_not_retried_and_can_mature_gapped_unknown(
+def test_recovered_first_close_continues_into_official_settlement_after_gap(
     tmp_path: Path,
 ) -> None:
     owner, bindings = _owner(tmp_path)
@@ -2038,10 +2306,14 @@ def test_recovered_first_close_is_not_retried_and_can_mature_gapped_unknown(
     transition = owner.settle_position(
         anchor_identity=entry_identity,
         facts=natural,
-        allocate_request_id=lambda: pytest.fail("recovered CLOSE attempt was retried"),
+        allocate_request_id=lambda: 71,
     )
 
-    assert transition.request_intents == ()
+    (intent,) = transition.request_intents
+    assert intent.request_id == 71
+    assert intent.purpose == "SETTLEMENT_PRICE"
+    assert intent.method == "public/get_delivery_prices"
+    assert dict(intent.params) == dict(DELIVERY_PRICE_REQUEST_PARAMS)
     assert not any(
         item.object_kind == "POST_CLOSE_ATTEMPT_SCHEDULED" for item in transition.emitted
     )
@@ -2050,14 +2322,299 @@ def test_recovered_first_close_is_not_retried_and_can_mature_gapped_unknown(
     assert action_record is not None
     action_payload = cast(Mapping[str, object], action_record["payload"])
     assert action_payload["first_latched_close_action_identity"] == first_close_identity
-    outcome = next(item for item in transition.emitted if item.object_kind == "SHADOW_OUTCOME")
+    assert not any(item.object_kind == "SHADOW_OUTCOME" for item in transition.emitted)
+
+    sent_boundary = _boundary(3, 130)
+    owner.note_request_sent(request_id=71, boundary=sent_boundary)
+    delivery_boundary = _boundary(4, 140)
+    delivery_date = "1970-01-01"
+    delivery_price = Decimal("100000")
+    source_identity = canonical_identity(
+        "OfficialDeliveryPriceSourceIdentity",
+        delivery_boundary.runtime_identity,
+        71,
+        "public/get_delivery_prices",
+        dict(DELIVERY_PRICE_REQUEST_PARAMS),
+        "btc_usd",
+        delivery_date,
+        delivery_price,
+        1,
+        terminal_boundary.as_object(),
+        sent_boundary.as_object(),
+        delivery_boundary.as_object(),
+    )
+    settled = owner.accept_delivery_price(
+        anchor_identity=entry_identity,
+        witness=DeliveryPriceWitness(
+            source_identity=source_identity,
+            boundary=delivery_boundary,
+            index_name="btc_usd",
+            delivery_date=delivery_date,
+            delivery_price_usdc_per_btc=delivery_price,
+            request_id=71,
+            owner_origin_boundary=terminal_boundary,
+            sent_boundary=sent_boundary,
+            records_total=1,
+        ),
+    )
+
+    outcome = next(item for item in settled.emitted if item.object_kind == "SHADOW_OUTCOME")
     outcome_record = owner.state_store.get_object(outcome.object_kind, outcome.object_identity)
     assert outcome_record is not None
     outcome_payload = cast(Mapping[str, object], outcome_record["payload"])
-    assert outcome_payload["terminal_state"] == "MATURE_UNKNOWN"
+    assert outcome_payload["terminal_state"] == "SETTLED_KNOWN"
+    assert outcome_payload["terminal_method"] == "CONTRACT_SETTLEMENT"
     assert outcome_payload["observation_quality"] == "GAPPED"
     assert outcome_payload["qualification_eligible"] is False
-    assert outcome_payload["economic_availability"] == "UNKNOWN"
+    assert outcome_payload["economic_availability"] == "KNOWN"
+
+
+def test_recovered_first_close_accepts_first_eligible_component_pair_after_gap(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    recovered = _typed_recovery_entry(bindings, first_close=True)
+    entry_identity = recovered.shadow_entry_identity
+    owner.activate_recovered_entries((recovered,))
+    owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=_quiet_position_facts(boundary=_boundary(1, 110)),
+        allocate_request_id=lambda: pytest.fail("adoption baseline scheduled acquisition"),
+    )
+    origin_boundary = _boundary(2, 120)
+    request_ids = iter((71, 72))
+    scheduled = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=_quiet_position_facts(boundary=origin_boundary),
+        allocate_request_id=lambda: next(request_ids),
+    )
+    assert {intent.request_id for intent in scheduled.request_intents} == {71, 72}
+
+    terms = recovered.entry_terms
+    sent_boundaries = {
+        71: _boundary(3, 130),
+        72: _boundary(4, 140),
+    }
+    for request_id, sent_boundary in sent_boundaries.items():
+        owner.note_request_sent(request_id=request_id, boundary=sent_boundary)
+
+    def leg_witness(
+        *,
+        role: ComponentLegRole,
+        request_id: int,
+        boundary: FactBoundary,
+        source_timestamp_ms: int,
+    ) -> RpcComponentLegRefreshWitness:
+        option_identity = (
+            terms.short_leg_identity if role is ComponentLegRole.SHORT else terms.long_leg_identity
+        )
+        instrument_name = (
+            terms.short_leg_instrument_name
+            if role is ComponentLegRole.SHORT
+            else terms.long_leg_instrument_name
+        )
+        params = {"instrument_name": instrument_name, "depth": 10000}
+        source_identity = canonical_identity(
+            "RpcComponentLegRefreshSourceIdentity",
+            boundary.runtime_identity,
+            request_id,
+            role.value,
+            "public/get_order_book",
+            option_identity,
+            params,
+            origin_boundary.as_object(),
+            sent_boundaries[request_id].as_object(),
+            7,
+            11,
+            source_timestamp_ms,
+            boundary.as_object(),
+        )
+        return RpcComponentLegRefreshWitness(
+            source_identity=source_identity,
+            boundary=boundary,
+            role=role,
+            canonical_option_identity=option_identity,
+            instrument_name=instrument_name,
+            request_params=params,
+            change_id=11,
+            source_timestamp_ms=source_timestamp_ms,
+            request_id=request_id,
+            owner_origin_boundary=origin_boundary,
+            sent_boundary=sent_boundaries[request_id],
+            global_continuity_epoch=7,
+            response_covers_full_quantity=True,
+        )
+
+    short = leg_witness(
+        role=ComponentLegRole.SHORT,
+        request_id=71,
+        boundary=_boundary(5, 150),
+        source_timestamp_ms=1_000,
+    )
+    long = leg_witness(
+        role=ComponentLegRole.LONG,
+        request_id=72,
+        boundary=_boundary(6, 160),
+        source_timestamp_ms=1_001,
+    )
+    pair = component_pair_witness(short=short, long=long)
+    quote, reasons = evaluate_component_book_vertical(
+        kind=ComponentBookQuoteKind.CLOSE,
+        short_instrument=OptionInstrument(
+            instrument_name=terms.short_leg_instrument_name,
+            expiration_timestamp_ms=terms.expiry_ms,
+            strike=terms.short_strike_usdc_per_btc,
+            option_type=OptionType.CALL,
+            amount=AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+            price_tick=PriceTickMetadata(Decimal("0.0001")),
+        ),
+        long_instrument=OptionInstrument(
+            instrument_name=terms.long_leg_instrument_name,
+            expiration_timestamp_ms=terms.expiry_ms,
+            strike=terms.long_strike_usdc_per_btc,
+            option_type=OptionType.CALL,
+            amount=AmountMetadata(Decimal(1), Decimal("0.1"), Decimal("0.1")),
+            price_tick=PriceTickMetadata(Decimal("0.0001")),
+        ),
+        short_side_levels=(PriceLevel(Decimal("0.0005"), Decimal("0.1")),),
+        long_side_levels=(PriceLevel(Decimal("0.0004"), Decimal("0.1")),),
+        index_usdc_per_btc=Decimal("100000"),
+        target_quantity_btc=terms.target_quantity_btc,
+        fee_rate_index_fraction=Decimal("0.0003"),
+    )
+    assert reasons == () and quote is not None
+    facts = replace(
+        _quiet_position_facts(boundary=pair.boundary),
+        component_quote=quote,
+        component_short_quote_source=SourceFact(short.source_identity, short.boundary),
+        component_long_quote_source=SourceFact(long.source_identity, long.boundary),
+        component_pair_witness=pair,
+        close_quote_facts=replace(
+            _quiet_position_facts(boundary=pair.boundary).close_quote_facts,
+            component_quote=quote,
+        ),
+    )
+    exited = owner.settle_position(
+        anchor_identity=entry_identity,
+        facts=facts,
+        allocate_request_id=lambda: pytest.fail("eligible pair scheduled another attempt"),
+    )
+
+    outcome = next(item for item in exited.emitted if item.object_kind == "SHADOW_OUTCOME")
+    payload = cast(
+        Mapping[str, object],
+        _written_objects(tmp_path, bindings=bindings)[outcome.object_identity]["payload"],
+    )
+    assert payload["terminal_state"] == "EXITED_KNOWN"
+    assert payload["terminal_method"] == "MARKET_EXIT"
+    assert payload["observation_quality"] == "GAPPED"
+
+
+def test_one_delivery_history_request_settles_every_waiting_expired_position(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    first = _typed_recovery_entry(bindings, first_close=True)
+    second_identity = canonical_identity("ShadowEntryIdentity", "settlement-fanout-second")
+    second = replace(
+        first,
+        case_id=canonical_identity("ShadowCaseIdentity", "settlement-fanout-second"),
+        shadow_entry_identity=second_identity,
+        current_segment_identity=canonical_identity(
+            "ShadowCaseSegmentIdentity", "settlement-fanout-second"
+        ),
+        entry_payload={
+            **first.entry_payload,
+            "shadow_entry_identity": second_identity,
+            "origin_case_id": canonical_identity("ShadowCaseIdentity", "settlement-fanout-second"),
+            "current_segment_identity": canonical_identity(
+                "ShadowCaseSegmentIdentity", "settlement-fanout-second"
+            ),
+        },
+    )
+    owner.activate_recovered_entries((first, second))
+
+    for entry in (first, second):
+        owner.settle_position(
+            anchor_identity=entry.shadow_entry_identity,
+            facts=_quiet_position_facts(boundary=_boundary(1, 110)),
+            allocate_request_id=lambda: pytest.fail("adoption baseline scheduled acquisition"),
+        )
+
+    terminal_boundary = _boundary(2, 120)
+    natural = replace(
+        _quiet_position_facts(boundary=terminal_boundary),
+        short_leg_state="delivered",
+        long_leg_state="delivered",
+        short_leg_active=False,
+        long_leg_active=False,
+        lifecycle_short_source=SourceFact(
+            canonical_identity("LifecycleSourceIdentity", "fanout-short"),
+            terminal_boundary,
+        ),
+        lifecycle_long_source=SourceFact(
+            canonical_identity("LifecycleSourceIdentity", "fanout-long"),
+            terminal_boundary,
+        ),
+    )
+    request_ids = iter((71, 72))
+    first_transition = owner.settle_position(
+        anchor_identity=first.shadow_entry_identity,
+        facts=natural,
+        allocate_request_id=lambda: next(request_ids),
+    )
+    second_transition = owner.settle_position(
+        anchor_identity=second.shadow_entry_identity,
+        facts=natural,
+        allocate_request_id=lambda: next(request_ids),
+    )
+
+    (intent,) = first_transition.request_intents
+    assert intent.request_id == 71
+    assert second_transition.request_intents == ()
+    sent_boundary = _boundary(3, 130)
+    owner.note_request_sent(request_id=71, boundary=sent_boundary)
+    delivery_boundary = _boundary(4, 140)
+    delivery_price = Decimal("100000")
+    delivery_date = "1970-01-01"
+    source_identity = canonical_identity(
+        "OfficialDeliveryPriceSourceIdentity",
+        delivery_boundary.runtime_identity,
+        71,
+        "public/get_delivery_prices",
+        dict(DELIVERY_PRICE_REQUEST_PARAMS),
+        "btc_usd",
+        delivery_date,
+        delivery_price,
+        1,
+        terminal_boundary.as_object(),
+        sent_boundary.as_object(),
+        delivery_boundary.as_object(),
+    )
+    settled = owner.accept_delivery_prices(
+        (
+            DeliveryPriceWitness(
+                source_identity=source_identity,
+                boundary=delivery_boundary,
+                index_name="btc_usd",
+                delivery_date=delivery_date,
+                delivery_price_usdc_per_btc=delivery_price,
+                request_id=71,
+                owner_origin_boundary=terminal_boundary,
+                sent_boundary=sent_boundary,
+                records_total=1,
+            ),
+        )
+    )
+
+    outcomes = [item for item in settled.emitted if item.object_kind == "SHADOW_OUTCOME"]
+    assert len(outcomes) == 2
+    assert owner.active_trade_identities == frozenset()
+    written = _written_objects(tmp_path, bindings=bindings)
+    assert {
+        cast(Mapping[str, object], written[item.object_identity]["payload"])["terminal_state"]
+        for item in outcomes
+    } == {"SETTLED_KNOWN"}
 
 
 def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_path: Path) -> None:
@@ -2409,7 +2966,7 @@ def test_admitted_observation_selects_the_first_exit_without_online_cohort_state
         )
         is None
     )
-    assert observation.state is OutcomeState.MATURE_KNOWN
+    assert observation.state is OutcomeState.EXITED_KNOWN
     assert observation.observation_quality is ObservationQuality.CONTINUOUS
     assert observation.qualification_eligible
     assert not hasattr(observation, "cohort_enrolled")
@@ -2454,7 +3011,7 @@ def test_gapped_observation_can_mature_known_but_is_not_qualification_eligible()
     )
 
     assert selected is not None
-    assert observation.state is OutcomeState.MATURE_KNOWN
+    assert observation.state is OutcomeState.EXITED_KNOWN
     assert observation.observation_quality is ObservationQuality.GAPPED
     assert not observation.qualification_eligible
     assert observation.reducer.terminal_case_boundary == exit_boundary

@@ -67,6 +67,7 @@ from short_vol_underwriting.control import (
 from short_vol_underwriting.domain import (
     AdmissionTerminalOutcome,
     CandidateState,
+    ContractSettlementEconomics,
     EntryEconomics,
     EntryTerms,
     PositionDecision,
@@ -77,6 +78,7 @@ from short_vol_underwriting.domain import (
     UnderwritingThresholdMargins,
     classify_underwriting_action,
     compute_component_entry_economics,
+    compute_contract_settlement_economics,
     compute_entry_economics,
     compute_shadow_outcome_economics,
     underwriting_threshold_margins,
@@ -97,6 +99,12 @@ from short_vol_underwriting.model import (
 )
 from short_vol_underwriting.observation import Observation
 from short_vol_underwriting.policy import PolicyChain
+from short_vol_underwriting.settlement import (
+    DeliveryPriceWitness,
+    SettlementPriceAttempt,
+    delivery_date_for_expiry,
+    deribit_option_delivery_fee_rate,
+)
 
 COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE = "COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE"
 COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN = "COMPONENT_BOOK_COUNTERFACTUAL_UNKNOWN"
@@ -371,7 +379,6 @@ class _TradeRecord:
     observation_quality: ObservationQuality = ObservationQuality.CONTINUOUS
     gap_count: int = 0
     qualification_eligible: bool = True
-    recovered_attempt_consumed: bool = False
     recovered_attempt_state: str = "NOT_SCHEDULED"
     last_position_fingerprint: str | None = None
     last_quote_key: tuple[str, str] | None = None
@@ -382,6 +389,11 @@ class _TradeRecord:
     last_opportunity_key: tuple[str, str] | None = None
     first_close_decision: PositionDecision | None = None
     post_close_attempt: PostCloseAttempt | ComponentPostCloseAttempt | None = None
+    settlement_price_attempt: SettlementPriceAttempt | None = None
+    settlement_waiting: bool = False
+    next_acquisition_monotonic_ms: int | None = None
+    settlement_witness: DeliveryPriceWitness | None = None
+    settlement_economics: ContractSettlementEconomics | None = None
     terminal_written: bool = False
 
 
@@ -479,7 +491,7 @@ class FixedContractShadowOwner:
         *,
         recovery_projection_boundary: FactBoundary,
     ) -> tuple[RecoverableShadowEntry, ...]:
-        """Expose frozen Entries as RECOVERING before public intake begins."""
+        """Expose frozen admitted/Control Positions as RECOVERING before intake."""
         seeds = self._validated_recovery_entries(projections)
         if (
             recovery_projection_boundary.code_identity != self.bindings.code_identity
@@ -523,7 +535,7 @@ class FixedContractShadowOwner:
             }
         )
         self.state_store.restore_current_record(
-            object_kind="SHADOW_ENTRY",
+            object_kind=self._position_open_object_kind(seed.enrollment_kind),
             object_identity=seed.shadow_entry_identity,
             fact_boundary=boundary,
             payload=payload,
@@ -541,7 +553,7 @@ class FixedContractShadowOwner:
             payload={
                 "shadow_observation_identity": observation.observation_identity,
                 "shadow_entry_identity": seed.shadow_entry_identity,
-                "enrollment_kind": "ADMITTED_SHADOW_TRADE",
+                "enrollment_kind": seed.enrollment_kind,
                 "start_fact_boundary": seed.entry_case_boundary.fact_boundary.as_object(),
                 "lifecycle_state": "PENDING",
                 "origin_runtime_identity": seed.origin_runtime_identity,
@@ -559,7 +571,7 @@ class FixedContractShadowOwner:
         self,
         projections: Sequence[RecoverableShadowEntry],
     ) -> None:
-        """Restore active admitted Entries without replaying their funnel history."""
+        """Restore active admitted/Control Positions without replaying funnel history."""
         seeds = self._validated_recovery_entries(projections)
         seen = set(self._trades)
         for seed in seeds:
@@ -580,10 +592,11 @@ class FixedContractShadowOwner:
                 or seed.qualification_eligible
             ):
                 raise ValueError("activation requires the new GAPPED recovery Segment")
-            if seed.first_close_decision is not None and seed.attempt_state != (
-                "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS"
-            ):
-                raise ValueError("recovered first CLOSE attempt cannot be retried")
+            if seed.first_close_decision is not None and seed.attempt_state not in {
+                "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS",
+                "NOT_SCHEDULED",
+            }:
+                raise ValueError("recovered first CLOSE attempt state is invalid")
         for seed in seeds:
             self._activate_recovered_entry(seed)
 
@@ -622,7 +635,7 @@ class FixedContractShadowOwner:
             )
         record = _TradeRecord(
             anchor_identity=seed.shadow_entry_identity,
-            enrollment_kind="ADMITTED_SHADOW_TRADE",
+            enrollment_kind=seed.enrollment_kind,
             slot_identity=None,
             entry_boundary=adoption.fact_boundary,
             entry_case_boundary=seed.entry_case_boundary,
@@ -643,17 +656,20 @@ class FixedContractShadowOwner:
             observation_quality=seed.observation_quality,
             gap_count=seed.gap_count,
             qualification_eligible=seed.qualification_eligible,
-            recovered_attempt_consumed=close is not None,
             recovered_attempt_state=seed.attempt_state,
             first_close_decision=close,
         )
         self.state_store.restore_current_record(
-            object_kind="SHADOW_ENTRY",
+            object_kind=self._position_open_object_kind(seed.enrollment_kind),
             object_identity=seed.shadow_entry_identity,
             fact_boundary=adoption.fact_boundary,
             payload=seed.entry_payload,
             replace_existing=(
-                self.state_store.get_object("SHADOW_ENTRY", seed.shadow_entry_identity) is not None
+                self.state_store.get_object(
+                    self._position_open_object_kind(seed.enrollment_kind),
+                    seed.shadow_entry_identity,
+                )
+                is not None
             ),
         )
         self.state_store.restore_current_record(
@@ -663,7 +679,7 @@ class FixedContractShadowOwner:
             payload={
                 "shadow_observation_identity": observation.observation_identity,
                 "shadow_entry_identity": seed.shadow_entry_identity,
-                "enrollment_kind": "ADMITTED_SHADOW_TRADE",
+                "enrollment_kind": seed.enrollment_kind,
                 "start_fact_boundary": seed.entry_case_boundary.fact_boundary.as_object(),
                 "lifecycle_state": "PENDING",
                 "origin_runtime_identity": seed.origin_runtime_identity,
@@ -684,6 +700,19 @@ class FixedContractShadowOwner:
             ),
         )
         self._trades[seed.shadow_entry_identity] = record
+
+    @staticmethod
+    def _position_open_object_kind(enrollment_kind: str) -> str:
+        try:
+            return {
+                "ADMITTED_SHADOW_TRADE": "SHADOW_ENTRY",
+                "SELECTED_UNDERWRITING_DECISION_CONTROL": (
+                    "SELECTED_UNDERWRITING_DECISION_CONTROL_OPEN"
+                ),
+                "RADAR_SCORE_BAND_NO_TRADE_CONTROL": ("RADAR_SCORE_BAND_NO_TRADE_CONTROL_OPEN"),
+            }[enrollment_kind]
+        except KeyError as exc:
+            raise ValueError("unsupported recovered Position enrollment kind") from exc
 
     def retire_underwriting_scope(self, scope_identity: str) -> None:
         self._last_availability.pop(scope_identity, None)
@@ -807,6 +836,21 @@ class FixedContractShadowOwner:
                 )
             )
         return tuple(sorted(boundaries))
+
+    @property
+    def pending_acquisition_monotonic_boundaries(self) -> tuple[int, ...]:
+        """Runtime-local retry wakeups; no quote-attempt history is made durable."""
+
+        return tuple(
+            sorted(
+                {
+                    trade.next_acquisition_monotonic_ms
+                    for trade in self._trades.values()
+                    if trade.observation.state is OutcomeState.PENDING
+                    and trade.next_acquisition_monotonic_ms is not None
+                }
+            )
+        )
 
     def settle_underwriting(
         self,
@@ -1331,6 +1375,13 @@ class FixedContractShadowOwner:
                     self._decision_control_retirements.add(control.selection_identity)
                 return self._finish_transition()
         for trade in self._trades.values():
+            settlement_attempt = trade.settlement_price_attempt
+            if settlement_attempt is not None and settlement_attempt.mark_sent(
+                request_id=request_id,
+                boundary=boundary,
+                send_budget_ms=self.policies.position.component_book_snapshot_send_budget_ms,
+            ):
+                return self._finish_transition()
             attempt = trade.post_close_attempt
             if attempt is not None and attempt.mark_sent(
                 request_id=request_id,
@@ -1431,6 +1482,115 @@ class FixedContractShadowOwner:
             allocate_request_id=reject_second_attempt,
         )
 
+    def accept_delivery_price(
+        self,
+        *,
+        anchor_identity: str,
+        witness: DeliveryPriceWitness,
+    ) -> OwnerTransition:
+        """Compatibility wrapper for one delivery-price member."""
+        if anchor_identity not in self._trades:
+            self._begin_transition()
+            return self._finish_transition()
+        return self.accept_delivery_prices((witness,))
+
+    def accept_delivery_prices(
+        self,
+        witnesses: Sequence[DeliveryPriceWitness],
+    ) -> OwnerTransition:
+        """Fan one official history response out to every waiting expired Position."""
+
+        self._begin_transition()
+        members = tuple(witnesses)
+        leader = next(
+            (
+                trade
+                for trade in self._trades.values()
+                if trade.settlement_price_attempt is not None
+            ),
+            None,
+        )
+        attempt = leader.settlement_price_attempt if leader is not None else None
+        leader_witness = (
+            next(
+                (
+                    witness
+                    for witness in members
+                    if attempt is not None
+                    and witness.delivery_date == attempt.expected_delivery_date
+                ),
+                None,
+            )
+            if members
+            else None
+        )
+        if (
+            leader is None
+            or attempt is None
+            or leader_witness is None
+            or not attempt.accepts(
+                leader_witness,
+                response_budget_ms=(
+                    self.policies.position.component_book_snapshot_response_budget_ms
+                ),
+            )
+        ):
+            return self._finish_transition()
+        by_date = {witness.delivery_date: witness for witness in members}
+        response_boundary = leader_witness.boundary
+        for trade in tuple(self._trades.values()):
+            if trade.observation.state is not OutcomeState.PENDING or (
+                trade.settlement_price_attempt is None and not trade.settlement_waiting
+            ):
+                continue
+            witness = by_date.get(delivery_date_for_expiry(trade.entry_terms.expiry_ms))
+            trade.settlement_price_attempt = None
+            trade.settlement_waiting = False
+            if witness is None:
+                self._defer_acquisition_retry(trade, response_boundary)
+                continue
+            terms = trade.entry_terms
+            native_gross_entry_credit = terms.native_gross_entry_credit
+            native_entry_fee_reserve = terms.native_entry_fee_reserve
+            if native_gross_entry_credit is None or native_entry_fee_reserve is None:
+                entry_index = terms.entry_valuation_index_price
+                if entry_index is None or entry_index <= 0:
+                    raise RuntimeError("contract settlement lacks frozen native entry economics")
+                native_gross_entry_credit = (
+                    trade.entry_economics.gross_entry_credit_usdc / entry_index
+                )
+                native_entry_fee_reserve = (
+                    trade.entry_economics.entry_fee_reserve_usdc / entry_index
+                )
+            economics = compute_contract_settlement_economics(
+                product=self.product,
+                option_type=terms.option_type,
+                short_strike_usdc_per_btc=terms.short_strike_usdc_per_btc,
+                long_strike_usdc_per_btc=terms.long_strike_usdc_per_btc,
+                full_quantity_btc=terms.target_quantity_btc,
+                delivery_price_usdc_per_btc=witness.delivery_price_usdc_per_btc,
+                delivery_fee_rate_fraction=deribit_option_delivery_fee_rate(terms.expiry_ms),
+                native_gross_entry_credit=native_gross_entry_credit,
+                native_entry_fee_reserve=native_entry_fee_reserve,
+            )
+            terminal_identity = trade.observation.accept_contract_settlement(
+                settlement_fact_identity=witness.source_identity,
+                boundary=CaseFactBoundary(trade.segment_sequence, witness.boundary),
+            )
+            if terminal_identity is None:
+                continue
+            trade.settlement_witness = witness
+            trade.settlement_economics = economics
+            trade.next_acquisition_monotonic_ms = None
+            self._emit_terminal_trade(
+                trade,
+                facts=None,
+                opportunity=None,
+                settlement_witness=witness,
+                settlement_economics=economics,
+            )
+        return self._finish_transition()
+
     def note_request_failure(
         self,
         *,
@@ -1517,6 +1677,14 @@ class FixedContractShadowOwner:
                 self._decision_control_retirements.add(control.selection_identity)
                 return self._finish_transition()
         for trade in self._trades.values():
+            settlement_attempt = trade.settlement_price_attempt
+            if settlement_attempt is not None and settlement_attempt.request_id == request_id:
+                for waiting in self._trades.values():
+                    if waiting.settlement_price_attempt is not None or waiting.settlement_waiting:
+                        waiting.settlement_price_attempt = None
+                        waiting.settlement_waiting = False
+                        self._defer_acquisition_retry(waiting, boundary)
+                return self._finish_transition()
             attempt = trade.post_close_attempt
             if attempt is None:
                 continue
@@ -1542,6 +1710,7 @@ class FixedContractShadowOwner:
             if transitioned:
                 self._retire_sibling_requests(attempt, request_id, boundary)
                 self._emit_post_close_terminal(trade)
+                self._release_post_close_attempt_for_retry(trade, attempt)
                 return self._finish_transition()
         return self._finish_transition()
 
@@ -1717,22 +1886,17 @@ class FixedContractShadowOwner:
                     decision.position_action_identity,
                     case_boundary,
                 )
-                trade.post_close_attempt = self._create_post_close_attempt(
-                    trade,
-                    facts,
-                    decision,
-                    quote_source_accepted=post_close_quote_accepted,
-                    allocate_request_id=allocate_request_id,
-                )
             self._emit_position(trade, facts, decision, position_fingerprint)
             if first_close_now:
-                if trade.post_close_attempt is None:
-                    raise RuntimeError("first CLOSE did not create its one post-close attempt")
-                self._emit_post_close_attempt(
+                self._schedule_position_acquisition(
                     trade,
                     facts,
                     decision,
-                    trade.post_close_attempt,
+                    settlement_reached=(
+                        truths["SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED"] is PredicateTruth.TRUE
+                    ),
+                    quote_source_accepted=post_close_quote_accepted,
+                    allocate_request_id=allocate_request_id,
                 )
             trade.last_position_fingerprint = position_fingerprint
             if (
@@ -1803,23 +1967,27 @@ class FixedContractShadowOwner:
                 )
         if (
             trade.observation.state is OutcomeState.PENDING
-            and trade.first_close_decision is not None
-            and case_boundary.is_strictly_after(trade.first_close_decision.action_case_boundary)
-            and self._natural_lifecycle_ready(facts)
-            and (
-                trade.recovered_attempt_consumed
-                or (
-                    attempt is not None and attempt.terminal_owner is PostCloseAttemptOwner.ORDINARY
-                )
-            )
+            and attempt is not None
+            and attempt.terminal_owner is PostCloseAttemptOwner.ORDINARY
         ):
-            state = trade.observation.settle_without_exit(
-                boundary=case_boundary,
-                ordinary_attempt_terminal=True,
-                lifecycle_ready=True,
+            self._release_post_close_attempt_for_retry(trade, attempt)
+        if (
+            trade.observation.state is OutcomeState.PENDING
+            and trade.first_close_decision is not None
+            and trade.post_close_attempt is None
+            and trade.settlement_price_attempt is None
+            and self._acquisition_retry_due(trade, facts.boundary)
+        ):
+            self._schedule_position_acquisition(
+                trade,
+                facts,
+                trade.first_close_decision,
+                settlement_reached=(
+                    truths["SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED"] is PredicateTruth.TRUE
+                ),
+                quote_source_accepted=post_close_quote_accepted,
+                allocate_request_id=allocate_request_id,
             )
-            if state is OutcomeState.MATURE_UNKNOWN:
-                self._emit_terminal_trade(trade, facts=facts, opportunity=None)
         return self._finish_transition()
 
     def terminate(
@@ -1866,34 +2034,16 @@ class FixedContractShadowOwner:
             ):
                 self._emit_decision_control_terminal(control)
                 self._decision_control_retirements.add(control.selection_identity)
-        owner = (
-            PostCloseAttemptOwner.STOP
-            if terminal_source is TerminalSource.STOP
-            else PostCloseAttemptOwner.FAILURE
-        )
         for trade in self._trades.values():
             if trade.observation.state is not OutcomeState.PENDING:
                 continue
-            if trade.enrollment_kind == "ADMITTED_SHADOW_TRADE":
-                continue
-            if trade.enrollment_kind not in {
+            if trade.enrollment_kind in {
+                "ADMITTED_SHADOW_TRADE",
                 "SELECTED_UNDERWRITING_DECISION_CONTROL",
                 "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
             }:
-                raise RuntimeError("unsupported terminal Shadow enrollment kind")
-            if trade.post_close_attempt is not None:
-                trade.post_close_attempt.censor(boundary=boundary, owner=owner)
-                self._emit_post_close_terminal(trade)
-            trade.observation.censor_control_at_process_end(
-                boundary=boundary,
-                terminal_source=terminal_source,
-            )
-            self._emit_terminal_trade(
-                trade,
-                facts=None,
-                opportunity=None,
-                terminal_source_identity=terminal_source_identity,
-            )
+                continue
+            raise RuntimeError("unsupported terminal Shadow enrollment kind")
         return self._finish_transition()
 
     def _require_radar_episode_binding(self, facts: UnderwritingFacts) -> None:
@@ -4545,6 +4695,106 @@ class FixedContractShadowOwner:
             )
         return attempt
 
+    def _schedule_position_acquisition(
+        self,
+        trade: _TradeRecord,
+        facts: PositionFacts,
+        decision: PositionDecision,
+        *,
+        settlement_reached: bool,
+        quote_source_accepted: bool,
+        allocate_request_id: Callable[[], int],
+    ) -> None:
+        if settlement_reached:
+            current = trade.post_close_attempt
+            if current is not None:
+                request_ids = self._request_ids(current)
+                if current.terminal_status is None and request_ids:
+                    if isinstance(current, ComponentPostCloseAttempt):
+                        current.fail(
+                            request_id=request_ids[0],
+                            status=PostCloseAttemptStatus.RETIRED,
+                            boundary=facts.boundary,
+                            unknown_reason="EXPIRY_REACHED_DURING_EXIT_ACQUISITION",
+                        )
+                    else:
+                        current.fail(
+                            request_id=request_ids[0],
+                            status=PostCloseAttemptStatus.RETIRED,
+                            boundary=facts.boundary,
+                        )
+                    self._retire_sibling_requests(current, request_ids[0], facts.boundary)
+                    self._retirements.append(RpcRetirementIntent(request_ids[0], facts.boundary))
+                    self._emit_post_close_terminal(trade, attempt=current)
+                self._release_post_close_attempt_for_retry(trade, current)
+            if trade.settlement_price_attempt is not None:
+                return
+            if any(
+                other.settlement_price_attempt is not None
+                for other in self._trades.values()
+                if other is not trade
+            ):
+                trade.settlement_waiting = True
+                trade.next_acquisition_monotonic_ms = None
+                return
+            settlement_attempt = SettlementPriceAttempt.schedule(
+                anchor_identity=trade.anchor_identity,
+                expiry_ms=trade.entry_terms.expiry_ms,
+                request_id=allocate_request_id(),
+                boundary=facts.boundary,
+            )
+            intent = settlement_attempt.take_request_intent()
+            if intent is None:
+                raise RuntimeError("new settlement-price attempt lacks its request intent")
+            trade.settlement_price_attempt = settlement_attempt
+            trade.settlement_waiting = False
+            trade.next_acquisition_monotonic_ms = None
+            self._intents.append(intent)
+            return
+        if trade.post_close_attempt is not None or trade.settlement_price_attempt is not None:
+            return
+        post_close_attempt = self._create_post_close_attempt(
+            trade,
+            facts,
+            decision,
+            quote_source_accepted=quote_source_accepted,
+            allocate_request_id=allocate_request_id,
+        )
+        trade.post_close_attempt = post_close_attempt
+        trade.next_acquisition_monotonic_ms = None
+        self._emit_post_close_attempt(trade, facts, decision, post_close_attempt)
+        if post_close_attempt.terminal_owner is PostCloseAttemptOwner.ORDINARY:
+            self._release_post_close_attempt_for_retry(trade, post_close_attempt)
+
+    def _defer_acquisition_retry(
+        self,
+        trade: _TradeRecord,
+        boundary: FactBoundary,
+    ) -> None:
+        trade.next_acquisition_monotonic_ms = (
+            boundary.received_monotonic_ms
+            + self.policies.position.component_book_snapshot_response_budget_ms
+        )
+
+    def _release_post_close_attempt_for_retry(
+        self,
+        trade: _TradeRecord,
+        attempt: PostCloseAttempt | ComponentPostCloseAttempt,
+    ) -> None:
+        if trade.post_close_attempt is not attempt:
+            return
+        terminal_boundary = attempt.terminal_boundary or attempt.origin_boundary
+        trade.post_close_attempt = None
+        self._defer_acquisition_retry(trade, terminal_boundary)
+
+    @staticmethod
+    def _acquisition_retry_due(
+        trade: _TradeRecord,
+        boundary: FactBoundary,
+    ) -> bool:
+        retry_at = trade.next_acquisition_monotonic_ms
+        return retry_at is None or boundary.received_monotonic_ms >= retry_at
+
     def _emit_post_close_attempt(
         self,
         trade: _TradeRecord,
@@ -4916,6 +5166,8 @@ class FixedContractShadowOwner:
         facts: PositionFacts | None,
         opportunity: CloseOpportunity | None,
         terminal_source_identity: str | None = None,
+        settlement_witness: DeliveryPriceWitness | None = None,
+        settlement_economics: ContractSettlementEconomics | None = None,
     ) -> None:
         if trade.terminal_written or trade.observation.terminal_outcome_identity is None:
             return
@@ -4933,7 +5185,7 @@ class FixedContractShadowOwner:
                 close_fee_reserve_usdc=opportunity.economics.close_fee_reserve_usdc,
             )
             if (
-                state is OutcomeState.MATURE_KNOWN
+                state is OutcomeState.EXITED_KNOWN
                 and opportunity is not None
                 and opportunity.economics is not None
             )
@@ -4988,12 +5240,72 @@ class FixedContractShadowOwner:
             )
             else None
         )
-        witnesses = (
-            self._lifecycle_witnesses(trade, facts)
-            if state is OutcomeState.MATURE_UNKNOWN and facts is not None
-            else []
+        witnesses: list[dict[str, object]] = []
+        if state is OutcomeState.SETTLED_KNOWN:
+            if settlement_witness is None or settlement_economics is None:
+                raise RuntimeError("settled Outcome lacks official delivery economics")
+            terminal_method = "CONTRACT_SETTLEMENT"
+        elif state is OutcomeState.EXITED_KNOWN:
+            terminal_method = "MARKET_EXIT"
+        elif state is OutcomeState.TERMINAL_UNKNOWN:
+            terminal_method = "TERMINAL_UNKNOWN"
+        else:
+            terminal_method = "PROCESS_CENSOR"
+        settlement = settlement_economics
+        effective_gross_close = (
+            settlement.delivery_valued_gross_settlement_cashflow_usdc
+            if settlement is not None
+            else close_economics.gross_close_cashflow_usdc
+            if known_economics is not None and close_economics is not None
+            else None
         )
+        effective_close_fee = (
+            settlement.delivery_valued_delivery_fee_reserve_usdc
+            if settlement is not None
+            else close_economics.close_fee_reserve_usdc
+            if known_economics is not None and close_economics is not None
+            else None
+        )
+        effective_net_close = (
+            settlement.delivery_valued_net_settlement_cashflow_usdc
+            if settlement is not None
+            else close_economics.net_close_cashflow_usdc
+            if known_economics is not None and close_economics is not None
+            else None
+        )
+        effective_gross_pnl = (
+            trade.entry_economics.gross_entry_credit_usdc
+            + settlement.delivery_valued_gross_settlement_cashflow_usdc
+            if settlement is not None
+            else known_economics.gross_pnl_usdc
+            if known_economics is not None
+            else None
+        )
+        effective_total_fee = (
+            trade.entry_economics.entry_fee_reserve_usdc
+            + settlement.delivery_valued_delivery_fee_reserve_usdc
+            if settlement is not None
+            else known_economics.total_public_fee_reserve_usdc
+            if known_economics is not None
+            else None
+        )
+        if settlement is not None:
+            effective_net_pnl = (
+                trade.entry_economics.gross_entry_credit_usdc
+                + settlement.delivery_valued_gross_settlement_cashflow_usdc
+                - trade.entry_economics.entry_fee_reserve_usdc
+                - settlement.delivery_valued_delivery_fee_reserve_usdc
+            )
+            effective_net_loss = max(Decimal(0), -effective_net_pnl)
+        elif known_economics is not None:
+            effective_net_pnl = known_economics.net_pnl_after_public_standard_fee_reserve_usdc
+            effective_net_loss = known_economics.net_loss_usdc
+        else:
+            effective_net_pnl = None
+            effective_net_loss = None
         payload: dict[str, object] = {
+            "outcome_contract_version": 2,
+            "terminal_method": terminal_method,
             "shadow_outcome_identity": trade.observation.terminal_outcome_identity,
             "shadow_observation_identity": trade.observation.observation_identity,
             "shadow_entry_identity": trade.anchor_identity,
@@ -5048,6 +5360,17 @@ class FixedContractShadowOwner:
                 else None
             ),
             "natural_terminal_lifecycle_witnesses": witnesses,
+            "official_delivery_price_source_ref": (
+                settlement_witness.as_ref() if settlement_witness is not None else None
+            ),
+            "delivery_price_usdc_per_btc": (
+                settlement.delivery_price_usdc_per_btc if settlement is not None else None
+            ),
+            "delivery_fee_rate_fraction": (
+                deribit_option_delivery_fee_rate(entry_terms.expiry_ms)
+                if settlement is not None
+                else None
+            ),
             "censor_mask": (
                 ["STOP"]
                 if state is OutcomeState.CENSORED_AT_STOP
@@ -5059,20 +5382,42 @@ class FixedContractShadowOwner:
             "native_gross_entry_credit": entry_terms.native_gross_entry_credit,
             "native_entry_fee_reserve": entry_terms.native_entry_fee_reserve,
             "native_net_entry_credit": entry_terms.native_net_entry_credit,
-            "native_gross_close_cashflow": native_gross_close_cashflow,
-            "native_close_fee_reserve": native_close_fee_reserve,
-            "native_net_close_cashflow": native_net_close_cashflow,
-            "native_gross_pnl": native_gross_pnl,
-            "native_total_fee_reserve": native_total_fee,
-            "native_net_pnl": native_net_pnl,
-            "exit_valued_native_net_pnl_usd": exit_valued_native_net_pnl,
-            "boundary_valued_net_pnl_usd": (
-                known_economics.net_pnl_after_public_standard_fee_reserve_usdc
-                if known_economics is not None
-                else None
+            "native_gross_close_cashflow": (
+                settlement.native_gross_settlement_cashflow
+                if settlement is not None
+                else native_gross_close_cashflow
             ),
+            "native_close_fee_reserve": (
+                settlement.native_delivery_fee_reserve
+                if settlement is not None
+                else native_close_fee_reserve
+            ),
+            "native_net_close_cashflow": (
+                settlement.native_net_settlement_cashflow
+                if settlement is not None
+                else native_net_close_cashflow
+            ),
+            "native_gross_pnl": (
+                settlement.native_gross_pnl if settlement is not None else native_gross_pnl
+            ),
+            "native_total_fee_reserve": (
+                settlement.native_total_fee_reserve if settlement is not None else native_total_fee
+            ),
+            "native_net_pnl": (
+                settlement.native_net_pnl if settlement is not None else native_net_pnl
+            ),
+            "exit_valued_native_net_pnl_usd": (
+                settlement.delivery_valued_net_pnl_usdc
+                if settlement is not None
+                else exit_valued_native_net_pnl
+            ),
+            "boundary_valued_net_pnl_usd": (effective_net_pnl),
             "entry_valuation_index_price": entry_terms.entry_valuation_index_price,
-            "close_valuation_index_price": close_valuation_index_price,
+            "close_valuation_index_price": (
+                settlement.delivery_price_usdc_per_btc
+                if settlement is not None
+                else close_valuation_index_price
+            ),
             "gross_entry_credit_usdc": trade.entry_economics.gross_entry_credit_usdc,
             "entry_fee_reserve_usdc": trade.entry_economics.entry_fee_reserve_usdc,
             "net_entry_credit_usdc": trade.entry_economics.net_entry_credit_usdc,
@@ -5085,38 +5430,16 @@ class FixedContractShadowOwner:
             "underwriting_reserved_loss_usdc": (
                 trade.entry_economics.underwriting_reserved_loss_usdc
             ),
-            "gross_close_cashflow_usdc": (
-                close_economics.gross_close_cashflow_usdc
-                if known_economics is not None and close_economics is not None
-                else None
+            "gross_close_cashflow_usdc": effective_gross_close,
+            "close_fee_reserve_usdc": effective_close_fee,
+            "net_close_cashflow_usdc": effective_net_close,
+            "gross_pnl_usdc": effective_gross_pnl,
+            "total_public_fee_reserve_usdc": effective_total_fee,
+            "net_pnl_after_public_standard_fee_reserve_usdc": effective_net_pnl,
+            "net_loss_usdc": effective_net_loss,
+            "economic_availability": (
+                "KNOWN" if known_economics is not None or settlement is not None else "UNKNOWN"
             ),
-            "close_fee_reserve_usdc": (
-                close_economics.close_fee_reserve_usdc
-                if known_economics is not None and close_economics is not None
-                else None
-            ),
-            "net_close_cashflow_usdc": (
-                close_economics.net_close_cashflow_usdc
-                if known_economics is not None and close_economics is not None
-                else None
-            ),
-            "gross_pnl_usdc": (
-                known_economics.gross_pnl_usdc if known_economics is not None else None
-            ),
-            "total_public_fee_reserve_usdc": (
-                known_economics.total_public_fee_reserve_usdc
-                if known_economics is not None
-                else None
-            ),
-            "net_pnl_after_public_standard_fee_reserve_usdc": (
-                known_economics.net_pnl_after_public_standard_fee_reserve_usdc
-                if known_economics is not None
-                else None
-            ),
-            "net_loss_usdc": (
-                known_economics.net_loss_usdc if known_economics is not None else None
-            ),
-            "economic_availability": "KNOWN" if known_economics is not None else "UNKNOWN",
             "close_component_pair_identity": (
                 component_close_facts.component_pair_witness.pair_identity
                 if component_close_facts is not None
@@ -5743,14 +6066,6 @@ class FixedContractShadowOwner:
         trade.last_opportunity_key = opportunity_key
         self._counts[f"close_opportunity_{eligibility.value.lower()}_count"] += 1
 
-    def _natural_lifecycle_ready(self, facts: PositionFacts) -> bool:
-        return (
-            facts.short_leg_state in {"delivered", "archivized"}
-            and facts.long_leg_state in {"delivered", "archivized"}
-            and facts.lifecycle_short_source is not None
-            and facts.lifecycle_long_source is not None
-        )
-
     def _fee_discontinuity_truth(self, facts: PositionFacts) -> PredicateTruth:
         values = (
             (
@@ -5881,24 +6196,13 @@ class FixedContractShadowOwner:
                 )
             attempt = trade.post_close_attempt
             pair = facts.component_pair_witness
-            if trade.recovered_attempt_consumed:
-                return bool(
-                    pair is not None
-                    and pair.boundary == facts.boundary
-                    and case_boundary.is_strictly_after(first_close.action_case_boundary)
-                    and pair.short.canonical_option_identity == trade.entry_terms.short_leg_identity
-                    and pair.short.instrument_name == trade.entry_terms.short_leg_instrument_name
-                    and pair.long.canonical_option_identity == trade.entry_terms.long_leg_identity
-                    and pair.long.instrument_name == trade.entry_terms.long_leg_instrument_name
-                    and short_source.source_identity == pair.short.source_identity
-                    and short_source.boundary == pair.short.boundary
-                    and long_source.source_identity == pair.long.source_identity
-                    and long_source.boundary == pair.long.boundary
-                )
             return bool(
                 isinstance(attempt, ComponentPostCloseAttempt)
                 and pair is not None
-                and pair.boundary.is_strictly_after(first_close.action_fact_boundary)
+                and CaseFactBoundary(
+                    trade.segment_sequence,
+                    pair.boundary,
+                ).is_strictly_after(first_close.action_case_boundary)
                 and attempt.terminal_status is PostCloseAttemptStatus.SUCCESS
                 and attempt.matched_response_identity == pair.pair_identity
                 and short_source.source_identity == pair.short.source_identity
@@ -5917,16 +6221,11 @@ class FixedContractShadowOwner:
                 trade,
                 facts,
             )
-        if trade.recovered_attempt_consumed:
-            return FixedContractShadowOwner._subscription_quote_is_accepted(
-                trade,
-                facts,
-            )
         attempt = trade.post_close_attempt
         if (
             not isinstance(attempt, PostCloseAttempt)
             or attempt.terminal_owner is not PostCloseAttemptOwner.ORDINARY
-            or not source.boundary.is_strictly_after(first_close.action_fact_boundary)
+            or not case_boundary.is_strictly_after(first_close.action_case_boundary)
         ):
             return False
         witness = facts.quote_refresh_witness
@@ -5972,7 +6271,10 @@ class FixedContractShadowOwner:
             and retained.quote_source == source
             and retained.current_combo_subscription_witness
             == facts.current_combo_subscription_witness
-            and retained.boundary.is_strictly_after(first_close.action_fact_boundary)
+            and CaseFactBoundary(
+                trade.segment_sequence,
+                retained.boundary,
+            ).is_strictly_after(first_close.action_case_boundary)
         )
 
     @staticmethod
@@ -6024,41 +6326,6 @@ class FixedContractShadowOwner:
         return witness.change_id > previous.change_id and (
             witness.snapshot_kind == "snapshot" or witness.prev_change_id == previous.change_id
         )
-
-    def _lifecycle_witnesses(
-        self,
-        trade: _TradeRecord,
-        facts: PositionFacts | None,
-    ) -> list[dict[str, object]]:
-        if facts is None or not self._natural_lifecycle_ready(facts):
-            raise RuntimeError("natural terminal lacks lifecycle witnesses")
-        short_source = facts.lifecycle_short_source
-        long_source = facts.lifecycle_long_source
-        if short_source is None or long_source is None:
-            raise RuntimeError("natural terminal lacks concrete lifecycle source facts")
-        return [
-            {
-                "canonical_leg_role": role,
-                "instrument_identity": identity,
-                "lifecycle_state": state,
-                "source_identity": source.source_identity,
-                "witness_fact_boundary": source.boundary.as_object(),
-            }
-            for role, identity, state, source in (
-                (
-                    "SHORT",
-                    trade.entry_terms.short_leg_identity,
-                    facts.short_leg_state,
-                    short_source,
-                ),
-                (
-                    "LONG",
-                    trade.entry_terms.long_leg_identity,
-                    facts.long_leg_state,
-                    long_source,
-                ),
-            )
-        ]
 
     def _emit(
         self,

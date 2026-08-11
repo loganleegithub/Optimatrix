@@ -162,6 +162,7 @@ class RecoverableShadowEntry:
     first_close_state: str
     attempt_state: str
     entry_payload: Mapping[str, object]
+    enrollment_kind: str = "ADMITTED_SHADOW_TRADE"
 
     @property
     def required_option_instrument_names(self) -> tuple[str, str]:
@@ -301,7 +302,11 @@ class ShadowCaseStore:
                 segments=segments,
                 value=outcome,
             )
-            if outcome.get("terminal_state") == "MATURE_KNOWN":
+            if outcome.get("terminal_state") in {
+                "MATURE_KNOWN",
+                "EXITED_KNOWN",
+                "SETTLED_KNOWN",
+            }:
                 if first_close is None:
                     raise ShadowCaseStoreError("known Outcome lacks its first CLOSE")
                 if outcome.get("first_latched_close_action_identity") != first_close.get(
@@ -330,34 +335,58 @@ class ShadowCaseStore:
         opened: Mapping[str, object],
         runtime_active: bool = False,
     ) -> ShadowCaseRead:
-        """Read one bounded, non-recoverable schema-v5 no-trade Control."""
+        """Read one legacy bounded or process-independent position-bearing Control."""
 
         require_identity(case_id, "case_id")
         case_directory = self._case_directory(case_id)
         segments_path = case_directory / "segments"
-        if segments_path.exists() or segments_path.is_symlink():
-            raise ShadowCaseStoreError("no-trade Control cannot carry Observation Segments")
-        _validate_case_directory_members(case_directory, stable=False)
+        has_segments = segments_path.exists() and not segments_path.is_symlink()
+        if segments_path.is_symlink():
+            raise ShadowCaseStoreError("Control Observation Segment root cannot be a symlink")
+        _validate_case_directory_members(case_directory, stable=has_segments)
+        segments = (
+            self._read_segments(case_id, opened, runtime_active=runtime_active)
+            if has_segments
+            else ()
+        )
         first_close_path = case_directory / "first-close.json"
         outcome_path = case_directory / "outcome.json"
         first_close = _read_optional_json(first_close_path)
         outcome = _read_optional_json(outcome_path)
         if first_close is not None:
-            _validate_followup(
-                opened,
-                first_close,
-                expected_kind=FIRST_CLOSE_KIND,
-                policies=self.policies,
-            )
+            if segments:
+                self._validate_stable_first_close(
+                    opened=opened,
+                    segments=segments,
+                    value=first_close,
+                )
+            else:
+                _validate_followup(
+                    opened,
+                    first_close,
+                    expected_kind=FIRST_CLOSE_KIND,
+                    policies=self.policies,
+                )
         if outcome is not None:
-            _validate_followup(
-                opened,
-                outcome,
-                expected_kind=OUTCOME_KIND,
-                policies=self.policies,
-            )
-            _validate_outcome_economics(opened, outcome)
-            if outcome.get("terminal_state") == "MATURE_KNOWN":
+            if segments:
+                self._validate_stable_outcome(
+                    opened=opened,
+                    segments=segments,
+                    value=outcome,
+                )
+            else:
+                _validate_followup(
+                    opened,
+                    outcome,
+                    expected_kind=OUTCOME_KIND,
+                    policies=self.policies,
+                )
+                _validate_outcome_economics(opened, outcome)
+            if outcome.get("terminal_state") in {
+                "MATURE_KNOWN",
+                "EXITED_KNOWN",
+                "SETTLED_KNOWN",
+            }:
                 if first_close is None:
                     raise ShadowCaseStoreError("known Outcome lacks its first CLOSE")
                 if outcome.get("first_latched_close_action_identity") != first_close.get(
@@ -368,13 +397,13 @@ class ShadowCaseStore:
             ShadowCaseReadStatus.COMPLETE
             if outcome is not None
             else ShadowCaseReadStatus.OPEN
-            if runtime_active
+            if runtime_active or segments
             else ShadowCaseReadStatus.INCOMPLETE_UNCLEAN_EXIT
         )
-        return ShadowCaseRead(status, opened, first_close, outcome)
+        return ShadowCaseRead(status, opened, first_close, outcome, segments)
 
-    def scan_active_admitted(self) -> tuple[RecoverableShadowEntry, ...]:
-        """Validate the stable repository and return every compatible active Entry."""
+    def scan_active_positions(self) -> tuple[RecoverableShadowEntry, ...]:
+        """Return every compatible process-independent admitted or future Control Position."""
 
         recovered: list[RecoverableShadowEntry] = []
         validated_opened: dict[str, Mapping[str, object]] = {}
@@ -388,15 +417,15 @@ class ShadowCaseStore:
                 raise ShadowCaseStoreError("cases repository contains a non-Case entry")
             case_id = _case_id_from_directory(case_directory)
             opened = _read_json(case_directory / "opened.json")
-            if opened.get("enrollment_kind") != "ADMITTED_SHADOW_TRADE":
+            case = self.read_case(case_id)
+            if opened.get("enrollment_kind") != "ADMITTED_SHADOW_TRADE" and not case.segments:
                 self._read_nonrecoverable_case(case_id, opened)
                 continue
-            case = self.read_case(case_id)
             if case.outcome is not None:
                 continue
             entry_identity = _identity(
-                case.opened.get("shadow_entry_identity"),
-                "shadow_entry_identity",
+                case.opened.get("enrollment_identity"),
+                "enrollment_identity",
             )
             if entry_identity in seen_entries:
                 raise ShadowCaseStoreError("duplicate active shadow_entry_identity")
@@ -423,6 +452,11 @@ class ShadowCaseStore:
         self._opened_by_case = opened_by_case
         return tuple(recovered)
 
+    def scan_active_admitted(self) -> tuple[RecoverableShadowEntry, ...]:
+        """Compatibility alias; now includes process-independent future Controls."""
+
+        return self.scan_active_positions()
+
     def open_recovery_segment(
         self,
         case_id: str,
@@ -433,11 +467,16 @@ class ShadowCaseStore:
 
         case = self.read_case(case_id)
         if (
-            case.opened.get("enrollment_kind") != "ADMITTED_SHADOW_TRADE"
+            case.opened.get("enrollment_kind")
+            not in {
+                "ADMITTED_SHADOW_TRADE",
+                "SELECTED_UNDERWRITING_DECISION_CONTROL",
+                "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
+            }
             or case.outcome is not None
             or not case.segments
         ):
-            raise ShadowCaseStoreError("only an active admitted Entry can open a recovery Segment")
+            raise ShadowCaseStoreError("only an active process-independent Position can recover")
         latest = case.segments[-1]
         if (
             latest.opened.get("code_identity") == self.bindings.code_identity
@@ -503,12 +542,10 @@ class ShadowCaseStore:
         boundary: FactBoundary | Mapping[str, object],
         terminal_state: str,
     ) -> tuple[ShadowCaseSegmentRead, ...]:
-        """Close this runtime's admitted Segments without writing aggregate Outcomes."""
+        """Close this runtime's process-independent Position Segments without Outcomes."""
 
         closed: list[ShadowCaseSegmentRead] = []
-        for case_id, opened in sorted(self._opened_by_case.items()):
-            if opened.get("enrollment_kind") != "ADMITTED_SHADOW_TRADE":
-                continue
+        for case_id, _opened in sorted(self._opened_by_case.items()):
             case = self.read_case(case_id, runtime_active=True)
             if case.outcome is not None or not case.segments:
                 continue
@@ -754,28 +791,26 @@ class ShadowCaseStore:
             bindings=self.bindings,
             policies=self.policies,
         )
-        origin_segment: Mapping[str, object] | None = None
-        if enrollment_kind == "ADMITTED_SHADOW_TRADE":
-            entry_position_baseline = _entry_position_baseline(
-                payload,
-                schema_version=self.schema_version,
-                opened_boundary=boundary,
-            )
-            origin_segment = self._segment_opened_record(
-                case_id=case_id,
-                opened=normalized,
-                sequence=0,
-                adoption_boundary=FactBoundary.from_object(boundary),
-                predecessor=None,
-                entry_position_baseline=entry_position_baseline,
-            )
+        entry_position_baseline = _entry_position_baseline(
+            payload,
+            schema_version=self.schema_version,
+            opened_boundary=boundary,
+        )
+        origin_segment: Mapping[str, object] | None = self._segment_opened_record(
+            case_id=case_id,
+            opened=normalized,
+            sequence=0,
+            adoption_boundary=FactBoundary.from_object(boundary),
+            predecessor=None,
+            entry_position_baseline=entry_position_baseline,
+        )
         self._publish_new_case(
             case_id,
             opened=normalized,
             origin_segment=origin_segment,
         )
         if origin_segment is not None:
-            current_payload = dict(_mapping(value.get("payload"), "SHADOW_ENTRY.payload"))
+            current_payload = dict(_mapping(value.get("payload"), f"{object_kind}.payload"))
             current_payload.update(
                 {
                     "origin_case_id": case_id,
@@ -790,7 +825,7 @@ class ShadowCaseStore:
                 }
             )
             state.restore_current_record(
-                object_kind="SHADOW_ENTRY",
+                object_kind=str(object_kind),
                 object_identity=enrollment_identity,
                 fact_boundary=FactBoundary.from_object(boundary),
                 payload=current_payload,
@@ -817,33 +852,58 @@ class ShadowCaseStore:
             "SELECTED_UNDERWRITING_DECISION_CONTROL",
             "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
         }:
-            record = _normalized_mapping(
-                {
-                    "record_kind": FIRST_CLOSE_KIND,
-                    "schema_version": opened.get("schema_version"),
-                    "case_id": case_id,
-                    **self._binding_object(),
-                    "first_close_fact_boundary": value.get("fact_boundary"),
-                    "position_action_identity": action_identity,
-                    "primary_close_reason": payload.get("primary_close_reason"),
-                    "ordered_latched_close_reasons": payload.get(
-                        "ordered_latched_close_reason_vector"
-                    ),
-                    "predicate_truth_vector": payload.get("ordered_predicate_truth_vector"),
-                }
-            )
-            _validate_followup(
-                opened,
-                record,
-                expected_kind=FIRST_CLOSE_KIND,
-                policies=self.policies,
-            )
-            self._publish(case_id, "first-close.json", record)
-            return
-        previous = self._pending_first_close_by_entry.get(entry_identity)
-        if previous is not None and previous != value:
-            raise ShadowCaseStoreError("conflicting pending first CLOSE")
-        self._pending_first_close_by_entry[entry_identity] = value
+            control_case = self.read_case(case_id, runtime_active=True)
+            if not control_case.segments:
+                record = _normalized_mapping(
+                    {
+                        "record_kind": FIRST_CLOSE_KIND,
+                        "schema_version": opened.get("schema_version"),
+                        "case_id": case_id,
+                        **self._binding_object(),
+                        "first_close_fact_boundary": value.get("fact_boundary"),
+                        "position_action_identity": action_identity,
+                        "primary_close_reason": payload.get("primary_close_reason"),
+                        "ordered_latched_close_reasons": payload.get(
+                            "ordered_latched_close_reason_vector"
+                        ),
+                        "predicate_truth_vector": payload.get("ordered_predicate_truth_vector"),
+                    }
+                )
+                _validate_followup(
+                    opened,
+                    record,
+                    expected_kind=FIRST_CLOSE_KIND,
+                    policies=self.policies,
+                )
+                self._publish(case_id, "first-close.json", record)
+                return
+        case = self.read_case(case_id, runtime_active=True)
+        if case.outcome is not None or not case.segments:
+            raise ShadowCaseStoreError("first CLOSE requires one active Observation Segment")
+        segment = case.segments[-1]
+        record = _normalized_mapping(
+            {
+                "record_kind": FIRST_CLOSE_KIND,
+                "schema_version": opened.get("schema_version"),
+                "case_id": case_id,
+                **self._binding_object(),
+                "product_spec_identity": self.product.identity,
+                "segment_sequence": segment.sequence,
+                "segment_identity": segment.opened.get("segment_identity"),
+                "transition": "FIRST_CLOSE_INTENT_LATCHED",
+                "first_close_fact_boundary": value.get("fact_boundary"),
+                "position_action_identity": action_identity,
+                "primary_close_reason": payload.get("primary_close_reason"),
+                "ordered_latched_close_reasons": payload.get("ordered_latched_close_reason_vector"),
+                "predicate_truth_vector": payload.get("ordered_predicate_truth_vector"),
+            }
+        )
+        self._validate_stable_first_close(
+            opened=case.opened,
+            segments=case.segments,
+            value=record,
+        )
+        self._publish(case_id, "first-close.json", record)
 
     def _record_first_close_and_attempt(self, value: Mapping[str, object]) -> None:
         schedule = _mapping(value.get("payload"), "POST_CLOSE_ATTEMPT_SCHEDULED.payload")
@@ -858,6 +918,13 @@ class ShadowCaseStore:
             "SELECTED_UNDERWRITING_DECISION_CONTROL",
             "RADAR_SCORE_BAND_NO_TRADE_CONTROL",
         }:
+            return
+        existing = self.read_case(case_id, runtime_active=True).first_close
+        if existing is not None:
+            if existing.get("position_action_identity") != schedule.get(
+                "first_latched_close_action_identity"
+            ):
+                raise ShadowCaseStoreError("post-CLOSE attempt first CLOSE identity mismatch")
             return
         pending = self._pending_first_close_by_entry.get(entry_identity)
         if pending is None:
@@ -915,10 +982,12 @@ class ShadowCaseStore:
             raise ShadowCaseStoreError("Outcome belongs to an unopened Shadow Case")
         opened = self._opened_by_case[case_id]
         admitted = opened.get("enrollment_kind") == "ADMITTED_SHADOW_TRADE"
+        current_case = self.read_case(case_id, runtime_active=True)
+        position_bearing = admitted or bool(current_case.segments)
         terminal_state = payload.get("terminal_state")
-        if admitted and terminal_state in {"CENSORED_AT_STOP", "CENSORED_AT_FAILURE"}:
+        if position_bearing and terminal_state in {"CENSORED_AT_STOP", "CENSORED_AT_FAILURE"}:
             raise ShadowCaseStoreError(
-                "stable admitted Entry cannot emit a censored aggregate Outcome"
+                "process-independent Position cannot emit a censored aggregate Outcome"
             )
         schema_version = _record_schema_version(opened)
         outcome_record: dict[str, object] = {
@@ -929,6 +998,8 @@ class ShadowCaseStore:
             "outcome_fact_boundary": value.get("fact_boundary"),
             "shadow_outcome_identity": value.get("object_identity"),
             "terminal_state": payload.get("terminal_state"),
+            "outcome_contract_version": payload.get("outcome_contract_version"),
+            "terminal_method": payload.get("terminal_method"),
             "selected_exit_identity": payload.get("selected_exit_identity"),
             "first_latched_close_action_identity": payload.get(
                 "first_latched_close_action_identity"
@@ -943,6 +1014,9 @@ class ShadowCaseStore:
             ),
             "net_loss_usdc": payload.get("net_loss_usdc"),
             "economic_availability": payload.get("economic_availability"),
+            "official_delivery_price_source_ref": payload.get("official_delivery_price_source_ref"),
+            "delivery_price_usdc_per_btc": payload.get("delivery_price_usdc_per_btc"),
+            "delivery_fee_rate_fraction": payload.get("delivery_fee_rate_fraction"),
             "close_component_pair_identity": payload.get("close_component_pair_identity"),
             "close_component_quote_source_refs": payload.get("close_component_quote_source_refs"),
             "close_component_legs": _component_legs_for_schema(
@@ -952,6 +1026,16 @@ class ShadowCaseStore:
             "censor_mask": payload.get("censor_mask"),
             "non_claims": payload.get("non_claims"),
         }
+        outcome_contract_version = payload.get("outcome_contract_version")
+        if outcome_contract_version != 2:
+            for field in (
+                "outcome_contract_version",
+                "terminal_method",
+                "official_delivery_price_source_ref",
+                "delivery_price_usdc_per_btc",
+                "delivery_fee_rate_fraction",
+            ):
+                outcome_record.pop(field, None)
         outcome_record["native_outcome_economics"] = {
             "native_gross_close_cashflow": payload.get("native_gross_close_cashflow"),
             "native_close_fee_reserve": payload.get("native_close_fee_reserve"),
@@ -968,25 +1052,44 @@ class ShadowCaseStore:
             _V5_OUTCOME_ECONOMICS_FIELDS,
         )
         producing_case: ShadowCaseRead | None = None
-        if admitted:
-            if terminal_state not in {"MATURE_KNOWN", "MATURE_UNKNOWN"}:
-                raise ShadowCaseStoreError("admitted Entry Outcome must be mature")
-            producing_case = self.read_case(case_id, runtime_active=True)
+        if position_bearing:
+            if terminal_state not in {
+                "MATURE_KNOWN",
+                "MATURE_UNKNOWN",
+                "EXITED_KNOWN",
+                "SETTLED_KNOWN",
+                "TERMINAL_UNKNOWN",
+            }:
+                raise ShadowCaseStoreError("process-independent Position Outcome must be mature")
+            producing_case = current_case
             if not producing_case.segments:
                 raise ShadowCaseStoreError("mature Outcome lacks its producing Segment")
             segment = producing_case.segments[-1]
-            outcome_record.update(
-                {
-                    "product_spec_identity": self.product.identity,
-                    "segment_sequence": segment.sequence,
-                    "segment_identity": segment.opened.get("segment_identity"),
-                    "observation_quality": segment.opened.get("observation_quality"),
-                    "gap_count": segment.opened.get("gap_count"),
-                    "qualification_eligible": segment.opened.get("qualification_eligible"),
-                }
-            )
+            segment_projection: dict[str, object] = {
+                "product_spec_identity": self.product.identity,
+                "segment_sequence": segment.sequence,
+                "segment_identity": segment.opened.get("segment_identity"),
+                "observation_quality": segment.opened.get("observation_quality"),
+                "gap_count": segment.opened.get("gap_count"),
+                "qualification_eligible": segment.opened.get("qualification_eligible"),
+            }
+            if outcome_contract_version == 2:
+                segment_projection.update(
+                    {
+                        "terminal_economics_eligible": terminal_state
+                        in {"EXITED_KNOWN", "SETTLED_KNOWN"},
+                        "continuous_path_eligible": (
+                            segment.opened.get("observation_quality") == "CONTINUOUS"
+                        ),
+                        "exit_acquisition_eligible": (
+                            terminal_state == "EXITED_KNOWN"
+                            and segment.opened.get("observation_quality") == "CONTINUOUS"
+                        ),
+                    }
+                )
+            outcome_record.update(segment_projection)
         record = _normalized_mapping(outcome_record)
-        if admitted:
+        if position_bearing:
             assert producing_case is not None
             self._validate_stable_outcome(
                 opened=opened,
@@ -1226,16 +1329,15 @@ class ShadowCaseStore:
             expected_kind=FIRST_CLOSE_KIND,
             policies=self.policies,
         )
-        if value.get("transition") != "FIRST_CLOSE_AND_ATTEMPT_SCHEDULED":
+        transition = value.get("transition")
+        if transition not in {
+            "FIRST_CLOSE_INTENT_LATCHED",
+            "FIRST_CLOSE_AND_ATTEMPT_SCHEDULED",
+        }:
             raise ShadowCaseStoreError("first CLOSE transition kind is invalid")
-        schedule_boundary = FactBoundary.from_object(
-            _boundary(value.get("schedule_fact_boundary"), "schedule_fact_boundary")
-        )
         first_close_boundary = FactBoundary.from_object(
             _boundary(value.get("first_close_fact_boundary"), "first_close_fact_boundary")
         )
-        if schedule_boundary != first_close_boundary:
-            raise ShadowCaseStoreError("first CLOSE and attempt schedule are not atomic")
         if segment.closed is not None:
             closed_boundary = FactBoundary.from_object(
                 _boundary(
@@ -1247,6 +1349,25 @@ class ShadowCaseStore:
                 first_close_boundary
             ):
                 raise ShadowCaseStoreError("first CLOSE is later than its Segment close")
+        if transition == "FIRST_CLOSE_INTENT_LATCHED":
+            absent = {
+                "scheduled_post_close_attempt_identity",
+                "request_id_or_marker",
+                "execution_model",
+                "request_method",
+                "request_params",
+                "canonical_leg_identities",
+                "full_quantity_btc",
+                "schedule_fact_boundary",
+            }
+            if any(field in value for field in absent):
+                raise ShadowCaseStoreError("first CLOSE intent carries execution-attempt fields")
+            return
+        schedule_boundary = FactBoundary.from_object(
+            _boundary(value.get("schedule_fact_boundary"), "schedule_fact_boundary")
+        )
+        if schedule_boundary != first_close_boundary:
+            raise ShadowCaseStoreError("legacy first CLOSE and attempt schedule are not atomic")
         scheduled_identity = _identity(
             value.get("scheduled_post_close_attempt_identity"),
             "scheduled_post_close_attempt_identity",
@@ -1291,6 +1412,9 @@ class ShadowCaseStore:
             "observation_quality",
             "gap_count",
             "qualification_eligible",
+            "terminal_economics_eligible",
+            "continuous_path_eligible",
+            "exit_acquisition_eligible",
         }
         legacy = {key: member for key, member in value.items() if key not in extension_fields}
         segment = _record_segment(segments, value)
@@ -1303,7 +1427,13 @@ class ShadowCaseStore:
             expected_kind=OUTCOME_KIND,
             policies=self.policies,
         )
-        if value.get("terminal_state") not in {"MATURE_KNOWN", "MATURE_UNKNOWN"}:
+        if value.get("terminal_state") not in {
+            "MATURE_KNOWN",
+            "MATURE_UNKNOWN",
+            "EXITED_KNOWN",
+            "SETTLED_KNOWN",
+            "TERMINAL_UNKNOWN",
+        }:
             raise ShadowCaseStoreError("stable admitted Outcome must be mature")
         _validate_outcome_economics(opened, legacy)
         for field in ("observation_quality", "gap_count", "qualification_eligible"):
@@ -1314,6 +1444,19 @@ class ShadowCaseStore:
             and value.get("qualification_eligible") is not False
         ):
             raise ShadowCaseStoreError("gapped Outcome cannot be qualification eligible")
+        if value.get("outcome_contract_version") == 2:
+            expected_terminal = value.get("terminal_state") in {
+                "EXITED_KNOWN",
+                "SETTLED_KNOWN",
+            }
+            if value.get("terminal_economics_eligible") is not expected_terminal:
+                raise ShadowCaseStoreError("terminal economics Cohort projection mismatch")
+            continuous = value.get("observation_quality") == "CONTINUOUS"
+            if value.get("continuous_path_eligible") is not continuous:
+                raise ShadowCaseStoreError("continuous path Cohort projection mismatch")
+            expected_exit = value.get("terminal_state") == "EXITED_KNOWN" and continuous
+            if value.get("exit_acquisition_eligible") is not expected_exit:
+                raise ShadowCaseStoreError("exit acquisition Cohort projection mismatch")
 
     def _publish_segment(
         self,
@@ -2142,7 +2285,8 @@ def _recoverable_projection(
         case.segments[0].opened.get("entry_position_baseline"),
         "entry_position_baseline",
     )
-    entry_identity = _identity(opened.get("shadow_entry_identity"), "shadow_entry_identity")
+    enrollment_kind = _text(opened.get("enrollment_kind"), "enrollment_kind")
+    entry_identity = _identity(opened.get("enrollment_identity"), "enrollment_identity")
     effective_first_close = case.first_close
     first_close_decision = (
         _recoverable_first_close(effective_first_close)
@@ -2153,6 +2297,7 @@ def _recoverable_projection(
     attempt_state = (
         "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS"
         if effective_first_close is not None
+        and effective_first_close.get("transition") == "FIRST_CLOSE_AND_ATTEMPT_SCHEDULED"
         else "NOT_SCHEDULED"
     )
     predecessor_state_value = current.opened.get("predecessor_segment_state")
@@ -2229,6 +2374,7 @@ def _recoverable_projection(
         first_close_state=first_close_state,
         attempt_state=attempt_state,
         entry_payload=_freeze_mapping(entry_payload),
+        enrollment_kind=enrollment_kind,
     )
 
 
@@ -2453,9 +2599,9 @@ def _recoverable_entry_payload(
     structure = _mapping(opened.get("structure"), "structure")
     radar = _mapping(opened.get("radar"), "radar")
     return {
-        "shadow_entry_identity": opened.get("shadow_entry_identity"),
+        "shadow_entry_identity": opened.get("enrollment_identity"),
         "candidate_identity": opened.get("candidate_identity"),
-        "enrollment_kind": "ADMITTED_SHADOW_TRADE",
+        "enrollment_kind": opened.get("enrollment_kind"),
         "entry_fact_boundary": opened.get("opened_fact_boundary"),
         "selection_score_packet": opened.get("selection_score_packet"),
         "entry_refresh_score_packet": opened.get("entry_refresh_score_packet"),
@@ -3178,6 +3324,16 @@ def _validate_followup(
         )
     if expected_kind == OUTCOME_KIND:
         expected_keys.add("native_outcome_economics")
+        if value.get("outcome_contract_version") == 2:
+            expected_keys.update(
+                {
+                    "outcome_contract_version",
+                    "terminal_method",
+                    "official_delivery_price_source_ref",
+                    "delivery_price_usdc_per_btc",
+                    "delivery_fee_rate_fraction",
+                }
+            )
     _exact_keys(value, expected_keys, "Case follow-up")
     if value.get("record_kind") != expected_kind or value.get("schema_version") != schema_version:
         raise ShadowCaseStoreError("Case follow-up kind/schema is invalid")
@@ -3243,7 +3399,7 @@ def _validate_followup(
         _string_sequence(value.get("censor_mask"), "censor_mask")
         _string_sequence(value.get("non_claims"), "non_claims")
         terminal_state = value.get("terminal_state")
-        if terminal_state == "MATURE_KNOWN":
+        if terminal_state in {"MATURE_KNOWN", "EXITED_KNOWN"}:
             _identity(
                 value.get("close_component_pair_identity"),
                 "close_component_pair_identity",
@@ -3325,6 +3481,60 @@ def _validate_followup(
             or value.get("close_component_legs") != []
         ):
             raise ShadowCaseStoreError("unknown/censored Outcome carries component close facts")
+        if value.get("outcome_contract_version") == 2:
+            terminal_method = value.get("terminal_method")
+            expected_method = {
+                "EXITED_KNOWN": "MARKET_EXIT",
+                "SETTLED_KNOWN": "CONTRACT_SETTLEMENT",
+                "TERMINAL_UNKNOWN": "TERMINAL_UNKNOWN",
+                "CENSORED_AT_STOP": "PROCESS_CENSOR",
+                "CENSORED_AT_FAILURE": "PROCESS_CENSOR",
+            }.get(str(terminal_state))
+            if terminal_method != expected_method:
+                raise ShadowCaseStoreError("Outcome terminal method/state mismatch")
+            delivery_ref = value.get("official_delivery_price_source_ref")
+            delivery_price = value.get("delivery_price_usdc_per_btc")
+            delivery_fee_rate = value.get("delivery_fee_rate_fraction")
+            if terminal_state == "SETTLED_KNOWN":
+                source = _mapping(delivery_ref, "official_delivery_price_source_ref")
+                _exact_keys(
+                    source,
+                    {
+                        "source_identity",
+                        "receipt_fact_boundary",
+                        "request_id",
+                        "index_name",
+                        "delivery_date",
+                        "records_total",
+                    },
+                    "official_delivery_price_source_ref",
+                )
+                _identity(source.get("source_identity"), "delivery source identity")
+                if FactBoundary.from_object(source.get("receipt_fact_boundary")) != later:
+                    raise ShadowCaseStoreError("delivery source boundary mismatch")
+                if source.get("index_name") != "btc_usd":
+                    raise ShadowCaseStoreError("delivery source index mismatch")
+                structure = _mapping(opened.get("structure"), "structure")
+                expected_date = (
+                    datetime.fromtimestamp(
+                        _nonnegative_int(structure.get("expiry_ms"), "expiry_ms") / 1000,
+                        tz=UTC,
+                    )
+                    .date()
+                    .isoformat()
+                )
+                if source.get("delivery_date") != expected_date:
+                    raise ShadowCaseStoreError("delivery source date mismatch")
+                if _decimal(delivery_price, "delivery_price_usdc_per_btc") <= 0:
+                    raise ShadowCaseStoreError("delivery price must be positive")
+                if _decimal(delivery_fee_rate, "delivery_fee_rate_fraction") < 0:
+                    raise ShadowCaseStoreError("delivery fee rate must be non-negative")
+                if value.get("selected_exit_identity") is not None:
+                    raise ShadowCaseStoreError("contract settlement cannot select a market exit")
+            elif any(
+                member is not None for member in (delivery_ref, delivery_price, delivery_fee_rate)
+            ):
+                raise ShadowCaseStoreError("non-settlement Outcome carries delivery facts")
 
 
 def _validate_outcome_economics(
@@ -3335,6 +3545,9 @@ def _validate_outcome_economics(
     allowed = {
         "MATURE_KNOWN",
         "MATURE_UNKNOWN",
+        "EXITED_KNOWN",
+        "SETTLED_KNOWN",
+        "TERMINAL_UNKNOWN",
         "CENSORED_AT_STOP",
         "CENSORED_AT_FAILURE",
     }
@@ -3353,7 +3566,7 @@ def _validate_outcome_economics(
             "net_loss_usdc",
         )
     )
-    if state != "MATURE_KNOWN":
+    if state not in {"MATURE_KNOWN", "EXITED_KNOWN", "SETTLED_KNOWN"}:
         if any(outcome.get(field) is not None for field in economic_fields):
             raise ShadowCaseStoreError("unknown/censored Outcome carries known economics")
         if outcome.get("economic_availability") != "UNKNOWN":
@@ -3683,7 +3896,11 @@ def _validate_product_aware_outcome(
         "exit_valued_native_net_pnl_usd",
     }
     _exact_keys(native, fields, "native_outcome_economics")
-    if outcome.get("terminal_state") != "MATURE_KNOWN":
+    if outcome.get("terminal_state") not in {
+        "MATURE_KNOWN",
+        "EXITED_KNOWN",
+        "SETTLED_KNOWN",
+    }:
         if any(native.get(field) is not None for field in fields):
             raise ShadowCaseStoreError("unknown/censored Outcome carries native economics")
         return
