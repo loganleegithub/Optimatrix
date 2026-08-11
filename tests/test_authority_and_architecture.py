@@ -189,8 +189,8 @@ def test_current_stage_authorizes_v2_strong_signal_map_8765_cutover() -> None:
     assert "**Current task kind:** `IMPLEMENTATION`" in current
     assert "`INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP_CUTOVER`" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "`RUNNING_8675_PR48_WITH_FOUR_RECOVERED_ADMITTED_ENTRIES`" in current
-    assert "`ONE_CLEAN_STOP_8675_AND_ONE_CLEAN_START_8765`" in current
+    assert "`STOPPED_UNCLEAN_8675_WITH_32_RECOVERABLE_ADMITTED_ENTRIES`" in current
+    assert "`ONE_CLEAN_START_8765`" in current
     assert "`INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP`" in current
     for phrase in (
         "The sole Online Runtime product is `INVERSE_BTC_V1`",
@@ -198,23 +198,26 @@ def test_current_stage_authorizes_v2_strong_signal_map_8765_cutover() -> None:
         "The repository contains only the three fixed V2 Inverse Policy artifacts",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
         "main@d237aaf4579ab041441edebae93a4c56f32031c4",
+        "main@54e3b589ba5ffd7eff7f7acf018fbc0530492614",
         "PR #48",
-        "branch `codex/v2-strong-signal-map` and Draft PR #47",
+        "PR #47",
         "2739ad26745aca2884ed56f296b8d4d3d07ff9cc",
         "sha256:9a6d7f937d08118eb13c15e4dd511d67c8b1c8232b2c69560bf8d402fb377688",
         "127.0.0.1:8675",
         "127.0.0.1:8765",
-        "one clean stop through the existing runtime process handle",
         "/Users/logan/Optimatrix-runtime",
         "eligible `HIGH` bucket leaders in `CONFIRMING | ACTIVE`",
         "may not calculate score, leader, confirmation, forward, history",
-        "clean stop closes the four active Entry Observation Segments",
+        "validated 47 schema-v5 Cases: 32 admitted Shadow Entries",
+        "4 selected Underwriting Controls, and 11 Radar score Controls",
+        "All 47 retain `INCOMPLETE_UNCLEAN_EXIT`",
+        "restore all 32 admitted Entry aggregates",
         "truthful `HANDOFF_GAP` Segments",
         "No Case, Entry, Control, or Outcome may be copied, migrated, rewritten, deleted",
         "Port `8675` must no longer serve after cutover",
         "failed or consumed start grants no retry",
-        "`RUNNING/CURRENT`, `KNOWN_COMPLETE`, and `128/128`",
-        "one normal remote public-WebSocket close",
+        "no process holds the stable-root lease",
+        "latest Segments are `INCOMPLETE_UNCLEAN_EXIT`",
     ):
         assert phrase in normalized
     for identity in (
