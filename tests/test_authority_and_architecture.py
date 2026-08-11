@@ -188,13 +188,11 @@ def test_current_stage_authorizes_candidate_retirement_repair_live_monitoring() 
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
     assert (
-        "`INVERSE_BTC_SHORT_VOL_V2_INTERRUPTED_TERMINAL_RETIREMENT_REPAIR_PENDING_CUTOVER`"
+        "`INVERSE_BTC_SHORT_VOL_V2_INTERRUPTED_TERMINAL_RETIREMENT_REPAIR_LIVE_MONITORING`"
         in current
     )
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert (
-        "**Persistent service:** `STOPPED_AFTER_INTERRUPTED_TERMINAL_RETIREMENT_FAILURE`" in current
-    )
+    assert "**Persistent service:** `RUNNING_REPAIRED_INTERRUPTED_TERMINAL_RETIREMENT`" in current
     assert "`ORDERED_QUEUE_LAG_DESTRUCTIVE_PRECONFIRMATION_RESET`" in current
     assert "`OFFLINE_CASE_DIRECTORY_IDENTITY_MISPARSE`" in current
     assert "`LOSSY_DECIMAL_PACKET_SERIALIZATION`" in current
@@ -228,7 +226,6 @@ def test_current_stage_authorizes_candidate_retirement_repair_live_monitoring() 
         "`INCOMPLETE_UNCLEAN_EXIT`",
         "Every projected score packet",
         "21128eb6807cd1403b3b458da1c418c16dcdf099",
-        "sha256:45eadc60aa925e460416ef7dca89b0306bdc005cb96c6caf956c499063b5a06b",
         "sha256:a9e10899eb7b4f2b8e923d77c23ca6b1d6b1caf6c0b52b9b465177fb510c42cf",
         "all 13 prior schema-v5 Cases",
         "11 are non-admitted Radar-score-band Controls",
@@ -249,6 +246,11 @@ def test_current_stage_authorizes_candidate_retirement_repair_live_monitoring() 
         "contains zero admitted Shadow trades",
         "seven HIGH Episodes and two simultaneous Candidates",
         "exact initiating exception remains `UNKNOWN`",
+        "6093cd0825cf6c7352d30270ecb2c5742c81182a",
+        "sha256:506d0e32ae3e276704fc3dbee85afddbaefd17170e84e02a4ff94895ffcf0173",
+        "six HIGH Episodes became fully Underwriting-evaluable",
+        "Both Candidates became `ADMISSION_KNOWN_INVALIDATED_BEFORE_REFRESH`",
+        "active Candidate map returned to zero",
     ):
         assert phrase in normalized
     for identity in (

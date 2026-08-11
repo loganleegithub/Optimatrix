@@ -6,13 +6,13 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_INTERRUPTED_TERMINAL_RETIREMENT_REPAIR_PENDING_CUTOVER`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_INTERRUPTED_TERMINAL_RETIREMENT_REPAIR_LIVE_MONITORING`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `STOPPED_AFTER_INTERRUPTED_TERMINAL_RETIREMENT_FAILURE`
+**Persistent service:** `RUNNING_REPAIRED_INTERRUPTED_TERMINAL_RETIREMENT`
 
 **Live commands:** `CONTINUED_BOUNDED_MONITORING`
 
@@ -128,22 +128,31 @@ terminalization, including an already-terminal record left by an interrupted tra
 not change admission or Case truth, emit a duplicate terminal, or suppress the initiating failure;
 if that earlier failure recurs, the runtime can now report it directly after cleanup.
 
+The authorized follow-up cutover started code identity
+`6093cd0825cf6c7352d30270ecb2c5742c81182a`. The repaired runtime reproduced the material pressure
+case: six HIGH Episodes became fully Underwriting-evaluable, two became Candidates, and a real
+transport reconnect then retired the epoch. Both Candidates became
+`ADMISSION_KNOWN_INVALIDATED_BEFORE_REFRESH`, the active Candidate map returned to zero, and the
+service recovered to `CURRENT` and `128/128` without the cleanup invariant or another process exit.
+The initiating event is therefore identified as a transport reconnect for this new run; the prior
+stopped run's masked initiating exception remains unknowable.
+
 ## Current online boundary
 
-The most recent Online Runtime served `127.0.0.1:8675` from clean Draft PR #48 code identity
-`21128eb6807cd1403b3b458da1c418c16dcdf099` in the non-temporary checkout
+The current Online Runtime serves `127.0.0.1:8675` from clean Draft PR #48 code identity
+`6093cd0825cf6c7352d30270ecb2c5742c81182a` in the non-temporary checkout
 `/Users/logan/Optimatrix-runtime`. Its runtime identity is
-`sha256:45eadc60aa925e460416ef7dca89b0306bdc005cb96c6caf956c499063b5a06b`.
-It released the single-instance lease for the unchanged stable Case repository
+`sha256:506d0e32ae3e276704fc3dbee85afddbaefd17170e84e02a4ff94895ffcf0173`.
+It owns the single-instance lease for the unchanged stable Case repository
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`; no Case root was copied, migrated,
 replaced, or deleted during the cutover.
 
 The first accepted live frame reported health, readiness, `RUNNING`, `CURRENT`, `KNOWN_COMPLETE`,
 `128/128` current Radar coverage, zero reconnects, and zero protocol gaps. Every projected score
 packet in continued one-second sampling passed exact Policy-aware recomputation. The repaired
-runtime first observed one HIGH Episode which stopped at the known structure blocker
-`NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE`, then reached seven Episodes and two Candidates before the
-interrupted-terminal cleanup failure. It opened zero admitted Shadow Entry or Position.
+runtime has observed six fully Underwriting-evaluable HIGH Episodes and two Candidates. A transport
+reconnect invalidated both before refresh; the runtime recovered automatically and opened zero
+admitted Shadow Entry or Position.
 The official active-runtime Case report reads all 13 prior schema-v5 Cases: 11 are non-admitted
 Radar-score-band Controls and two are selected-Underwriting decision Controls, all classified
 `INCOMPLETE_UNCLEAN_EXIT` across their former runtime boundaries. Admitted Shadow count remains

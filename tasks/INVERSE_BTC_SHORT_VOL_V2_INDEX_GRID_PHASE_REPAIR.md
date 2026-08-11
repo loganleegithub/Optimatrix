@@ -152,10 +152,11 @@ policy-aware Case validator can reproduce exact derived truth; no Outcome arithm
 definition changes. Episode retirement also reconciles an already-terminal attempt with its
 still-valid Candidate; it creates no Outcome or durable Case.
 
-**Stage/authorization change:** the last runtime stopped fail-closed after the interrupted-terminal
-cleanup failure. The next bounded clean start on `127.0.0.1:8675` is authorized from the checked
-follow-up repair, using the unchanged stable Case root from the non-temporary
-`/Users/logan/Optimatrix-runtime` checkout. Continued
+**Stage/authorization change:** the checked follow-up repair started on `127.0.0.1:8675` from code
+identity `6093cd0825cf6c7352d30270ecb2c5742c81182a`, using the unchanged stable Case root from the
+non-temporary `/Users/logan/Optimatrix-runtime` checkout. Six Episodes and two Candidates then
+survived a real transport-reconnect cleanup without process exit; both Candidates were known
+invalidated before refresh and admitted zero Case. Continued
 public-only observation runs until the first admitted active Shadow or a newly measured fixed
 blocker is established. No private or execution permission is added.
 
