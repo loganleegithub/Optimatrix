@@ -182,40 +182,40 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_control_outcome_projection_cutover() -> None:
+def test_current_stage_records_scheme_two_and_control_outcome_closure() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "INVERSE_BTC_SHORT_VOL_V2_CONTROL_OUTCOME_PROJECTION_FIX_ACTIVE" in current
+    assert "**Current task kind:** `NONE`" in current
+    assert "INVERSE_BTC_SHORT_VOL_V2_SHADOW_SCHEME_TWO_AND_CONTROL_OUTCOME_LIVE_CURRENT" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "ONE_CLEAN_STOP_ONE_REPLACEMENT_START_AND_BOUNDED_API_BROWSER_GATE_AUTHORIZED" in current
-    assert "SHADOW_SCHEME_TWO_DEPLOYMENT" in current
+    assert "**Live commands:** `NONE_CONSUMED`" in current
+    assert "**Sole authorized closure:** `NONE`" in current
     for phrase in (
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
         "127.0.0.1:8765",
-        "deb20e4f2922c823cdd96ea9b4150a6a2883ffaf",
-        "sha256:9ef0082cf3f860247ea8409416cebe3a04f8ba13a9d91b9693258e8fd5ce22af",
+        "6f286bf16444ebbe7b698f3ada215f6f9bee9cec",
+        "sha256:e6092a3a99c2b8f286a428dc74f601ce268ca71133153ee94cc29935aed7104c",
         "92 schema-v5 Cases",
-        "44/44 known terminal-economic Cases",
-        "23/23 strict terminal-sample Cases",
-        "25 pending responsibilities",
-        "one `MARKET_EXIT` and seven `CONTRACT_SETTLEMENT` Outcomes",
+        "44/44 known Outcomes",
+        "23/23 known Outcomes",
+        "Twenty-five Cases remain pending",
+        "one market exit and seven official settlements",
         "TERMINAL / SETTLED_KNOWN",
-        "Outcome projection incorrectly says `PENDING`",
-        "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME",
-        "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OUTCOME",
-        "start exactly one replacement",
-        "No historical Case may be migrated, copied, deleted, relabeled, rewritten, or backfilled",
+        "SETTLED_KNOWN / KNOWN_TERMINAL / CONTRACT_SETTLEMENT",
+        "official delivery price `63666.99`",
+        "20/20 admitted positions and zero Controls",
+        "800 x 1058 responsive drawer passed",
+        "no application console warning or error",
+        "`design-qa.md`",
+        "779 tests",
+        "All six declared GET and HEAD routes return 200",
         "The current Position Policy identity and all nine frozen predicate thresholds remain unchanged",
         "Qualification remains offline",
         "Permission remains `PUBLIC_SHADOW`",
     ):
         assert phrase in normalized
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
-        "SHADOW_SCHEME_TWO_DEPLOYMENT.md",
-        "TEMPLATE.md",
-    }
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_40_ENTRY_RECOVERY_START.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP.md").exists()
