@@ -6,9 +6,9 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** `BTC_0DTE_RADAR_MARKET_CONTEXT_EVIDENCE_GATE_V1`
 
 **Permission:** deterministic offline Shadow simulation and at most one active-task-authorized,
 bounded, read-only public Deribit current-Session snapshot after offline gates pass
@@ -22,6 +22,11 @@ bounded, read-only public Deribit current-Session snapshot after offline gates p
 **Policy qualification / Edge claim:** `NONE`
 
 ## Current business baseline
+
+The active Radar evidence closure starts from `1 / 1` applicable deterministic
+`SessionDecisionUnit`s with numeric context but missing method/coverage/source-known-at evidence being
+incorrectly counted as `MARKET_CONTEXT_KNOWN = PASSED`. The earliest blocker is
+`MARKET_CONTEXT_EVIDENCE_NOT_BOUND`.
 
 The Position-risk causal-boundary denominator moved from `0 / 1` to `1 / 1` deterministic
 `FULL_ENTRY` Positions. A risk observation now freezes a recoverable two-sided exit duty without
