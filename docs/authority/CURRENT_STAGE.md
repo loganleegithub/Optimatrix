@@ -12,9 +12,9 @@
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `STOPPED_8765_OLD_CHECKOUT_CODE_4E844F0EE6DD9C40574F7C9BA744B729E16543ED_PENDING_ONE_START`
+**Persistent service:** `STOPPED_8765_CODE_93B0B0C068631EF51CDDDDC211C31A87EDC03909_PENDING_ONE_CORRECTIVE_START`
 
-**Live commands:** `ONE_DEPLOYMENT_CHECKOUT_SYNC_ONE_START_AND_BOUNDED_API_BROWSER_GATE_AUTHORIZED`
+**Live commands:** `ONE_CORRECTIVE_LONG_LIVED_SESSION_START_AND_BOUNDED_API_BROWSER_GATE_AUTHORIZED`
 
 **Sole authorized closure:**
 [`SHADOW_SCHEME_TWO_DEPLOYMENT`](../../tasks/SHADOW_SCHEME_TWO_DEPLOYMENT.md)
@@ -26,9 +26,9 @@ PR `#53` merged the accepted scheme-two Shadow trader surface at code identity
 product, Position lifecycle, Policy, Case schema, Cohort, or durable record contract changed.
 
 The stable address `127.0.0.1:8765` is currently unavailable. The clean deployment checkout at
-`/Users/logan/Optimatrix-runtime` remains detached at the preceding code identity
-`4e844f0ee6dd9c40574f7c9ba744b729e16543ed`. This authority does not claim that either code version
-is currently serving the stable address.
+`/Users/logan/Optimatrix-runtime` is synchronized to merged Authority identity
+`93b0b0c068631ef51cddddc211c31a87edc03909`; imports resolve from that checkout. This authority
+does not claim that the code is currently serving the stable address.
 
 The stable Case root remains
 `/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. The official inactive version-3
@@ -38,13 +38,21 @@ recoverable lifecycle responsibilities: 21 admitted Shadow trades, 8 Radar score
 and 4 selected underwriting-decision Controls. Thirty-two are truthfully `GAPPED`; Gap is
 observation quality and does not end Position responsibility.
 
-## Authorized stable deployment
+## Consumed host launch and authorized correction
+
+The first authorized detached background launch did not persist in the execution host. Direct
+loopback access found no listener, and the contract-owned non-blocking service lease is unowned.
+The official reader still accepts the same 92 Cases, exposes the same 33 recoverable
+responsibilities, and reports the unchanged 36/36 terminal-economic and 15/15 strict
+terminal-sample known Outcomes. There is no evidence of a terminal Outcome, migration, or Case
+rewrite from the non-persisting launch.
 
 This closure authorizes exactly:
 
-1. merge the tested Authority branch through Draft PR `#54` and synchronize the existing clean
-   deployment checkout to that merged `main` identity;
-2. start exactly one runtime against the unchanged stable Case root and `127.0.0.1:8765`;
+1. merge this correction through Draft PR `#55` and synchronize the existing clean deployment
+   checkout to that merged `main` identity;
+2. start exactly one corrective runtime in a long-lived execution session against the unchanged
+   stable Case root and `127.0.0.1:8765`;
 3. verify import provenance, code/runtime identity, health/readiness, schema-7 API, the official
    Case reader, and recovery of every compatible lifecycle responsibility;
 4. perform one bounded desktop and responsive browser gate over the merged scheme-two Radar and
