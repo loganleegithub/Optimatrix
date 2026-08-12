@@ -190,14 +190,14 @@ def test_current_stage_authorizes_shadow_scheme_two_deployment() -> None:
     assert "INVERSE_BTC_SHORT_VOL_V2_SHADOW_SCHEME_TWO_DEPLOYMENT_AUTHORIZED" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
     assert (
-        "ONE_DEPLOYMENT_CHECKOUT_SYNC_ONE_START_AND_BOUNDED_API_BROWSER_GATE_AUTHORIZED" in current
+        "ONE_CORRECTIVE_LONG_LIVED_SESSION_START_AND_BOUNDED_API_BROWSER_GATE_AUTHORIZED" in current
     )
     assert "SHADOW_SCHEME_TWO_DEPLOYMENT" in current
     for phrase in (
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
         "127.0.0.1:8765",
         "3e59d6fde7d2de4c50777f909eb67f100a0dc88b",
-        "4e844f0ee6dd9c40574f7c9ba744b729e16543ed",
+        "93b0b0c068631ef51cddddc211c31a87edc03909",
         "92 schema-v5 Cases",
         "36/36 known Outcomes",
         "15/15 known Outcomes",
@@ -206,7 +206,9 @@ def test_current_stage_authorizes_shadow_scheme_two_deployment() -> None:
         "8 Radar score-band Controls",
         "4 selected underwriting-decision Controls",
         "Thirty-two are truthfully `GAPPED`",
-        "start exactly one runtime",
+        "first authorized detached background launch did not persist",
+        "non-blocking service lease is unowned",
+        "start exactly one corrective runtime",
         "No historical Case may be migrated, copied, deleted, relabeled, rewritten, or backfilled",
         "The current Position Policy identity and all nine frozen predicate thresholds remain unchanged",
         "Qualification remains offline",
