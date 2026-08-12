@@ -6,9 +6,9 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** `BTC_0DTE_POSITION_RISK_CAUSAL_EXIT_V1`
 
 **Permission:** deterministic offline Shadow simulation and at most one active-task-authorized,
 bounded, read-only public Deribit current-Session snapshot after offline gates pass
@@ -22,6 +22,11 @@ bounded, read-only public Deribit current-Session snapshot after offline gates p
 **Policy qualification / Edge claim:** `NONE`
 
 ## Current business baseline
+
+The active Position-risk closure starts from `0 / 1` deterministic `FULL_ENTRY` Positions that keep
+a risk-trigger intent and the first executable exit observation on separate causal boundaries. The
+current owner can create an instruction and consume the same observation as its counterfactual exit;
+the earliest blocker is `EXIT_INTENT_AND_EXECUTABLE_SAMPLE_SHARE_BOUNDARY`.
 
 At base `13902c53e972f12721d2ef9d17de866fbda288a7`, `0 / 1` canonical repository product paths
 selected one current-Session four-leg Iron Condor; `1 / 1` selected one single-side Credit Vertical.
