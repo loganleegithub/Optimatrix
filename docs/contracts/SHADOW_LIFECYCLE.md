@@ -93,14 +93,34 @@ opens no Position.
 Later remediation never rewrites `ENTRY_TERMINAL`, promotes a partial Case to `FULL_ENTRY`, or
 changes its primary-strategy ineligibility reason.
 
-The Position state preserves each leg and side independently. The owner may close the full Condor,
-both Verticals, a threatened Vertical, or a dangerous short leg without selling its wing. A short
-leg with a missing wing bid is still removable. The residual long option remains a bounded duty.
+The Position state preserves each leg and side independently. For a normal-carry `FULL_ENTRY`, any
+Base risk trigger freezes one `BOTH_SIDES` exit duty; the system may not turn the surviving side into
+an undeclared single-Vertical carry strategy. Partial-entry remediation remains scoped to the short
+exposure that was actually acquired. During either duty, a dangerous short leg may be projected
+closed without requiring its long wing to have a bid. The residual long option remains a bounded
+duty.
+
+Position risk handling is a causal reducer, not an instantaneous stop or continuous service:
+
+```text
+strictly-future Position risk observation
+→ MONITORING or frozen EXIT_REQUIRED duty
+→ strictly-future public-book exit-price observation
+→ EXIT_REQUIRED, SHORT_RISK_FLAT, or PORTFOLIO_TERMINAL
+```
+
+The observation that creates an exit duty cannot also price or clear it. Every public quote used for
+the exit projection must have source and receive timestamps strictly later than the frozen intent,
+no later than the projection boundary, no older than the Policy freshness budget, and inside the
+existing quantity and coherence constraints. Missing, stale, discontinuous, incoherent, or
+unexecutable facts keep the same duty and exact blocker; they never become a zero Delta, a completed
+exit, or a fill. Public-book exit calculations remain counterfactual price projections.
 
 `POSITION_CHECKPOINT` exists only for state that restart, trader review, or Outcome computation
 cannot derive from earlier facts. It is not a per-tick history. It freezes the originating Case and
-Entry identities, side/leg states, accepted cashflows, first risk action, and residual wings. A Gap
-or restart does not create a new Entry, clear a duty, or synthesize a transition.
+Entry identities, side/leg states, accepted counterfactual cashflows, first risk action, intent
+boundary, last material exit attempt/blocker, and residual wings. A Gap or restart does not create a
+new Entry, clear a duty, or synthesize a transition.
 
 ## Risk-flat and terminal truth
 

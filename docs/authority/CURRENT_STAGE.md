@@ -6,9 +6,9 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `NONE`
 
-**Sole authorized closure:** `BTC_0DTE_POSITION_RISK_CAUSAL_EXIT_V1`
+**Sole authorized closure:** `NONE`
 
 **Permission:** deterministic offline Shadow simulation and at most one active-task-authorized,
 bounded, read-only public Deribit current-Session snapshot after offline gates pass
@@ -23,10 +23,10 @@ bounded, read-only public Deribit current-Session snapshot after offline gates p
 
 ## Current business baseline
 
-The active Position-risk closure starts from `0 / 1` deterministic `FULL_ENTRY` Positions that keep
-a risk-trigger intent and the first executable exit observation on separate causal boundaries. The
-current owner can create an instruction and consume the same observation as its counterfactual exit;
-the earliest blocker is `EXIT_INTENT_AND_EXECUTABLE_SAMPLE_SHARE_BOUNDARY`.
+The Position-risk causal-boundary denominator moved from `0 / 1` to `1 / 1` deterministic
+`FULL_ENTRY` Positions. A risk observation now freezes a recoverable two-sided exit duty without
+using that observation as an exit price; only a strictly later, fresh, coherent, full-quantity
+public-book observation can change short-risk state.
 
 At base `13902c53e972f12721d2ef9d17de866fbda288a7`, `0 / 1` canonical repository product paths
 selected one current-Session four-leg Iron Condor; `1 / 1` selected one single-side Credit Vertical.
@@ -43,6 +43,18 @@ coherent four-leg attempt truth, fail-closed partial remediation, and eligibilit
 
 ## Accepted closure result
 
+The measured `EXIT_INTENT_AND_EXECUTABLE_SAMPLE_SHARE_BOUNDARY` blocker moved from `1 / 1` to `0 / 1`.
+Reusing the trigger books produces an exact `NOT_STRICTLY_FUTURE` blocker and leaves both shorts open.
+A later eligible observation can project both shorts flat even when the long wings have no bid;
+`SHORT_RISK_FLAT` then remains distinct from residual-wing duty and `PORTFOLIO_TERMINAL`. Missing or
+stale required Position quotes create `RISK_CONTEXT_UNKNOWN`, not a zero Delta or calm state.
+
+The Base normal-carry responsibility remains the four-leg product: any risk trigger freezes one
+`BOTH_SIDES` exit duty. Side-specific duty is reserved for remediation of an already partial entry.
+The intent boundary, material exit attempt/blockers, and public-book price projection survive local
+test/simulation recovery through the existing `POSITION_CHECKPOINT`; no new event kind, stable root,
+continuous runtime, private API, order, fill, hedge instrument, or capital permission was added.
+
 The working branch now has `1 / 1` canonical product paths selecting and presenting the current-
 Session four-leg Iron Condor and `0 / 1` selectable legacy single-side product paths. The measured
 `WRONG_CANONICAL_STRATEGY_OBJECT` blocker moved from `1 / 1` to `0 / 1`.
@@ -54,7 +66,7 @@ validation, but live reachability remains `UNVERIFIED`; no retry is authorized w
 
 ## Authorized acceptance boundary
 
-The active closure must establish:
+The repository product boundary establishes:
 
 - exact Deribit `08:00 UTC` Session and phase classification;
 - one canonical `SessionDecisionUnit` and stage numerator/denominator/blocker projection;

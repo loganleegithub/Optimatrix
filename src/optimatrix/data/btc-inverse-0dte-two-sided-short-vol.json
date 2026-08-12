@@ -48,6 +48,7 @@
   "shadow": {
     "entry_acquisition_window_ms": 120000,
     "maximum_pair_source_skew_ms": 6000,
-    "maximum_pair_receive_skew_ms": 4000
+    "maximum_pair_receive_skew_ms": 4000,
+    "maximum_position_quote_age_ms": 5000
   }
 }

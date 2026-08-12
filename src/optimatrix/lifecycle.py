@@ -57,6 +57,7 @@ class PositionState(StrEnum):
 
 class ExitReason(StrEnum):
     ENTRY_ACQUISITION_INCOMPLETE = "ENTRY_ACQUISITION_INCOMPLETE"
+    RISK_CONTEXT_UNKNOWN = "RISK_CONTEXT_UNKNOWN"
     TAKE_PROFIT = "TAKE_PROFIT"
     MAXIMUM_LOSS = "MAXIMUM_LOSS"
     PUT_SIDE_DELTA = "PUT_SIDE_DELTA"
@@ -74,6 +75,15 @@ class ExitScope(StrEnum):
     PUT_SIDE = "PUT_SIDE"
     CALL_SIDE = "CALL_SIDE"
     BOTH_SIDES = "BOTH_SIDES"
+
+
+class PositionRiskAction(StrEnum):
+    MONITORING = "MONITORING"
+    EXIT_DUTY_ARMED = "EXIT_DUTY_ARMED"
+    EXIT_DUTY_PENDING = "EXIT_DUTY_PENDING"
+    SHORT_RISK_REDUCED = "SHORT_RISK_REDUCED"
+    SHORT_RISK_FLAT = "SHORT_RISK_FLAT"
+    PORTFOLIO_TERMINAL = "PORTFOLIO_TERMINAL"
 
 
 @dataclass(frozen=True)
@@ -132,9 +142,12 @@ class SidePosition:
     last_exit_attempt_at: datetime | None = None
     exit_attempt_count: int = 0
     quote_missing_block_count: int = 0
+    quote_not_future_block_count: int = 0
+    quote_stale_block_count: int = 0
     pair_incoherent_block_count: int = 0
     pair_unexecutable_block_count: int = 0
     short_only_exit_used: bool = False
+    last_exit_blockers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -143,6 +156,15 @@ class PositionInstruction:
     at: datetime
     scope: ExitScope
     reason: ExitReason
+
+
+@dataclass(frozen=True)
+class PositionRiskObservation:
+    observed_at: datetime
+    action: PositionRiskAction
+    risk_context_known: bool
+    blockers: tuple[str, ...]
+    instruction: PositionInstruction | None
 
 
 @dataclass(frozen=True)
@@ -172,6 +194,8 @@ class PositionOutcome:
     put_exit_attempt_count: int
     call_exit_attempt_count: int
     exit_quote_missing_block_count: int
+    exit_quote_not_future_block_count: int
+    exit_quote_stale_block_count: int
     exit_pair_incoherent_block_count: int
     exit_pair_unexecutable_block_count: int
     short_only_exit_side_count: int
@@ -216,6 +240,9 @@ class ShadowPosition:
     short_risk_flat_at: datetime | None = None
     terminal_at: datetime | None = None
     outcome: PositionOutcome | None = None
+    last_risk_observed_at: datetime | None = None
+    last_risk_context_known: bool | None = None
+    last_risk_blockers: tuple[str, ...] = ()
 
     @property
     def has_short_risk(self) -> bool:
@@ -418,38 +445,96 @@ def evaluate_position(
     context: MarketContext,
     quotes: tuple[OptionQuote, ...],
     policy: BtcShortVolPolicy,
-) -> PositionInstruction | None:
+) -> PositionRiskObservation:
     if position.state is PositionState.TERMINAL or not position.has_short_risk:
-        return None
-    pending = _pending_exit_instruction(position, context.now)
+        return PositionRiskObservation(
+            observed_at=context.now,
+            action=(
+                PositionRiskAction.PORTFOLIO_TERMINAL
+                if position.state is PositionState.TERMINAL
+                else PositionRiskAction.SHORT_RISK_FLAT
+            ),
+            risk_context_known=True,
+            blockers=(),
+            instruction=None,
+        )
+    pending = _pending_exit_instruction(position)
     if pending is not None:
-        return pending
+        return PositionRiskObservation(
+            observed_at=context.now,
+            action=PositionRiskAction.EXIT_DUTY_PENDING,
+            risk_context_known=True,
+            blockers=(),
+            instruction=pending,
+        )
     by_name = {quote.instrument_name: quote for quote in quotes}
+    context_blockers = _position_risk_context_blockers(
+        position=position,
+        by_name=by_name,
+        observed_at=context.now,
+        maximum_source_age_ms=policy.shadow.maximum_position_quote_age_ms,
+        maximum_receive_age_ms=policy.shadow.maximum_position_quote_age_ms,
+    )
+    if context_blockers:
+        instruction = _instruction(
+            position,
+            context.now,
+            ExitScope.BOTH_SIDES,
+            ExitReason.RISK_CONTEXT_UNKNOWN,
+        )
+        return PositionRiskObservation(
+            observed_at=context.now,
+            action=PositionRiskAction.EXIT_DUTY_ARMED,
+            risk_context_known=False,
+            blockers=context_blockers,
+            instruction=instruction,
+        )
     estimated_pnl = _estimated_position_native_pnl(
         position=position,
         quotes=by_name,
         index_price=context.index_price,
     )
+    if estimated_pnl is None:
+        instruction = _instruction(
+            position,
+            context.now,
+            ExitScope.BOTH_SIDES,
+            ExitReason.RISK_CONTEXT_UNKNOWN,
+        )
+        return PositionRiskObservation(
+            observed_at=context.now,
+            action=PositionRiskAction.EXIT_DUTY_ARMED,
+            risk_context_known=False,
+            blockers=("POSITION_CLOSE_VALUE_UNAVAILABLE",),
+            instruction=instruction,
+        )
     credit = position.initial_net_credit_native
-    if estimated_pnl is not None:
-        if estimated_pnl >= credit * policy.position.take_profit_fraction_of_credit:
-            return _instruction(position, context.now, ExitScope.BOTH_SIDES, ExitReason.TAKE_PROFIT)
-        if estimated_pnl <= -(credit * policy.position.maximum_loss_multiple_of_credit):
-            return _instruction(
-                position,
-                context.now,
-                ExitScope.BOTH_SIDES,
-                ExitReason.MAXIMUM_LOSS,
-            )
+    if estimated_pnl >= credit * policy.position.take_profit_fraction_of_credit:
+        instruction = _instruction(
+            position, context.now, ExitScope.BOTH_SIDES, ExitReason.TAKE_PROFIT
+        )
+        return _risk_exit_observation(context.now, instruction)
+    if estimated_pnl <= -(credit * policy.position.maximum_loss_multiple_of_credit):
+        instruction = _instruction(
+            position,
+            context.now,
+            ExitScope.BOTH_SIDES,
+            ExitReason.MAXIMUM_LOSS,
+        )
+        return _risk_exit_observation(context.now, instruction)
     if session.phase is SessionPhase.DELIVERY_TWAP:
-        return _instruction(position, context.now, ExitScope.BOTH_SIDES, ExitReason.DELIVERY_TWAP)
+        instruction = _instruction(
+            position, context.now, ExitScope.BOTH_SIDES, ExitReason.DELIVERY_TWAP
+        )
+        return _risk_exit_observation(context.now, instruction)
     if session.minutes_to_expiry <= policy.position.latest_short_risk_exit_minutes_to_expiry:
-        return _instruction(
+        instruction = _instruction(
             position,
             context.now,
             ExitScope.BOTH_SIDES,
             ExitReason.LATEST_SHORT_RISK_EXIT,
         )
+        return _risk_exit_observation(context.now, instruction)
     put_threat = _side_threatened(
         side=position.put_side,
         current_quote=by_name.get(position.put_side.short_quote.instrument_name),
@@ -465,40 +550,99 @@ def evaluate_position(
         policy=policy,
     )
     if context.event_state in {EventState.LIVE_EVENT, EventState.UNSCHEDULED_SHOCK}:
-        return _instruction(position, context.now, ExitScope.BOTH_SIDES, ExitReason.EVENT_OR_SHOCK)
+        instruction = _instruction(
+            position, context.now, ExitScope.BOTH_SIDES, ExitReason.EVENT_OR_SHOCK
+        )
+        return _risk_exit_observation(context.now, instruction)
     if context.breakout_state is BreakoutState.BREAKING_CONCENTRATED_STRIKE:
-        return _instruction(
+        instruction = _instruction(
             position,
             context.now,
             ExitScope.BOTH_SIDES,
             ExitReason.CONCENTRATED_STRIKE_BREAKOUT,
         )
+        return _risk_exit_observation(context.now, instruction)
     if (
         context.rv_acceleration >= policy.position.maximum_rv_acceleration
         and position.has_short_risk
     ):
-        return _instruction(position, context.now, ExitScope.BOTH_SIDES, ExitReason.GAMMA_EXPANSION)
+        instruction = _instruction(
+            position, context.now, ExitScope.BOTH_SIDES, ExitReason.GAMMA_EXPANSION
+        )
+        return _risk_exit_observation(context.now, instruction)
     if put_threat is not None and call_threat is not None:
-        return _instruction(position, context.now, ExitScope.BOTH_SIDES, ExitReason.GAMMA_EXPANSION)
+        instruction = _instruction(
+            position, context.now, ExitScope.BOTH_SIDES, ExitReason.GAMMA_EXPANSION
+        )
+        return _risk_exit_observation(context.now, instruction)
     if put_threat is not None:
-        return _instruction(position, context.now, ExitScope.PUT_SIDE, put_threat)
+        instruction = _instruction(position, context.now, ExitScope.BOTH_SIDES, put_threat)
+        return _risk_exit_observation(context.now, instruction)
     if call_threat is not None:
-        return _instruction(position, context.now, ExitScope.CALL_SIDE, call_threat)
-    return None
+        instruction = _instruction(position, context.now, ExitScope.BOTH_SIDES, call_threat)
+        return _risk_exit_observation(context.now, instruction)
+    return PositionRiskObservation(
+        observed_at=context.now,
+        action=PositionRiskAction.MONITORING,
+        risk_context_known=True,
+        blockers=(),
+        instruction=None,
+    )
 
 
-def apply_exit_instruction(
+def project_exit_instruction(
     *,
     position: ShadowPosition,
     instruction: PositionInstruction,
     quotes: tuple[OptionQuote, ...],
     context: MarketContext,
     policy: BtcShortVolPolicy,
+) -> tuple[bool, bool, tuple[str, ...]]:
+    if position.state is PositionState.TERMINAL:
+        return False, False, ()
+    if position.first_instruction != instruction:
+        raise ValueError("exit projection must use the frozen Position instruction")
+    position.state = PositionState.EXIT_REQUIRED
+    by_name = {quote.instrument_name: quote for quote in quotes}
+    requested_sides = (
+        (position.put_side,)
+        if instruction.scope is ExitScope.PUT_SIDE
+        else (position.call_side,)
+        if instruction.scope is ExitScope.CALL_SIDE
+        else (position.put_side, position.call_side)
+    )
+    sides = tuple(side for side in requested_sides if side.short_open)
+    projection_changed = False
+    attempt_changed = False
+    blockers: list[str] = []
+    for side in sides:
+        reason = side.exit_requested_reason or instruction.reason
+        prior_attempt_count = side.exit_attempt_count
+        side_changed, side_blockers = _exit_side(
+            side=side,
+            by_name=by_name,
+            context=context,
+            reason=reason,
+            allow_short_only=policy.position.allow_short_only_risk_exit,
+            maximum_source_skew_ms=policy.shadow.maximum_pair_source_skew_ms,
+            maximum_receive_skew_ms=policy.shadow.maximum_pair_receive_skew_ms,
+            maximum_quote_age_ms=policy.shadow.maximum_position_quote_age_ms,
+            retry_interval_ms=policy.position.acquisition_retry_interval_ms,
+        )
+        projection_changed = side_changed or projection_changed
+        blockers.extend(side_blockers)
+        attempt_changed = side.exit_attempt_count > prior_attempt_count or attempt_changed
+    _refresh_position_state(position, context.now)
+    return projection_changed, attempt_changed, tuple(blockers)
+
+
+def arm_exit_instruction(
+    *,
+    position: ShadowPosition,
+    instruction: PositionInstruction,
 ) -> bool:
     if position.state is PositionState.TERMINAL:
         return False
-    position.state = PositionState.EXIT_REQUIRED
-    by_name = {quote.instrument_name: quote for quote in quotes}
     sides = (
         (position.put_side,)
         if instruction.scope is ExitScope.PUT_SIDE
@@ -506,37 +650,18 @@ def apply_exit_instruction(
         if instruction.scope is ExitScope.CALL_SIDE
         else (position.put_side, position.call_side)
     )
-    new_intent = False
+    changed = False
     for side in sides:
         if side.short_open and side.exit_requested_reason is None:
             side.exit_requested_at = instruction.at
             side.exit_requested_reason = instruction.reason
-            new_intent = True
-    if new_intent:
+            changed = True
+    if changed:
         if position.first_instruction is None:
             position.first_instruction = instruction
         position.instructions.append(instruction)
-    execution_changed = False
-    attempt_changed = False
-    for side in sides:
-        reason = side.exit_requested_reason or instruction.reason
-        prior_attempt_count = side.exit_attempt_count
-        execution_changed = (
-            _exit_side(
-                side=side,
-                by_name=by_name,
-                context=context,
-                reason=reason,
-                allow_short_only=policy.position.allow_short_only_risk_exit,
-                maximum_source_skew_ms=policy.shadow.maximum_pair_source_skew_ms,
-                maximum_receive_skew_ms=policy.shadow.maximum_pair_receive_skew_ms,
-                retry_interval_ms=policy.position.acquisition_retry_interval_ms,
-            )
-            or execution_changed
-        )
-        attempt_changed = side.exit_attempt_count > prior_attempt_count or attempt_changed
-    _refresh_position_state(position, context.now)
-    return new_intent or execution_changed or attempt_changed
+        position.state = PositionState.EXIT_REQUIRED
+    return changed
 
 
 def dispose_residual_wings(
@@ -874,10 +999,7 @@ def _wing_execution(
     )
 
 
-def _pending_exit_instruction(
-    position: ShadowPosition,
-    at: datetime,
-) -> PositionInstruction | None:
+def _pending_exit_instruction(position: ShadowPosition) -> PositionInstruction | None:
     pending = tuple(
         side
         for side in (position.put_side, position.call_side)
@@ -885,18 +1007,77 @@ def _pending_exit_instruction(
     )
     if not pending:
         return None
-    if len(pending) == 2:
-        scope = ExitScope.BOTH_SIDES
-        reason = min(
-            pending,
-            key=lambda side: side.exit_requested_at or position.opened_at,
-        ).exit_requested_reason
-    else:
-        side = pending[0]
-        scope = ExitScope.PUT_SIDE if side.side is Side.PUT else ExitScope.CALL_SIDE
-        reason = side.exit_requested_reason
-    assert reason is not None
-    return _instruction(position, at, scope, reason)
+    if position.first_instruction is None:
+        raise ValueError("pending short-risk duty lacks its frozen instruction")
+    return position.first_instruction
+
+
+def _risk_exit_observation(
+    observed_at: datetime,
+    instruction: PositionInstruction,
+) -> PositionRiskObservation:
+    return PositionRiskObservation(
+        observed_at=observed_at,
+        action=PositionRiskAction.EXIT_DUTY_ARMED,
+        risk_context_known=True,
+        blockers=(),
+        instruction=instruction,
+    )
+
+
+def _position_risk_context_blockers(
+    *,
+    position: ShadowPosition,
+    by_name: dict[str, OptionQuote],
+    observed_at: datetime,
+    maximum_source_age_ms: int,
+    maximum_receive_age_ms: int,
+) -> tuple[str, ...]:
+    observed_ms = int(observed_at.timestamp() * 1000)
+    opened_ms = int(position.opened_at.timestamp() * 1000)
+    required: list[tuple[str, OptionQuote | None]] = []
+    for side in (position.put_side, position.call_side):
+        if side.short_open:
+            required.append(
+                (f"{side.side.value}_SHORT", by_name.get(side.short_quote.instrument_name))
+            )
+        if side.long_open:
+            required.append(
+                (f"{side.side.value}_LONG", by_name.get(side.long_quote.instrument_name))
+            )
+    blockers: list[str] = []
+    usable: list[OptionQuote] = []
+    for label, quote in required:
+        if quote is None:
+            blockers.append(f"{label}_RISK_QUOTE_MISSING")
+            continue
+        if (
+            quote.source_timestamp_ms <= opened_ms
+            or quote.received_timestamp_ms <= opened_ms
+            or quote.source_timestamp_ms > observed_ms
+            or quote.received_timestamp_ms > observed_ms
+        ):
+            blockers.append(f"{label}_RISK_QUOTE_OUTSIDE_CAUSAL_BOUNDARY")
+            continue
+        if observed_ms - quote.source_timestamp_ms > maximum_source_age_ms:
+            blockers.append(f"{label}_RISK_SOURCE_STALE")
+            continue
+        if observed_ms - quote.received_timestamp_ms > maximum_receive_age_ms:
+            blockers.append(f"{label}_RISK_RECEIVE_STALE")
+            continue
+        usable.append(quote)
+    if len(usable) == len(required) and usable:
+        if (
+            len({quote.continuity_epoch for quote in usable}) != 1
+            or max(quote.source_timestamp_ms for quote in usable)
+            - min(quote.source_timestamp_ms for quote in usable)
+            > maximum_source_age_ms
+            or max(quote.received_timestamp_ms for quote in usable)
+            - min(quote.received_timestamp_ms for quote in usable)
+            > maximum_receive_age_ms
+        ):
+            blockers.append("POSITION_RISK_QUOTES_INCOHERENT")
+    return tuple(blockers)
 
 
 def _instruction(
@@ -1005,22 +1186,53 @@ def _exit_side(
     allow_short_only: bool,
     maximum_source_skew_ms: int,
     maximum_receive_skew_ms: int,
+    maximum_quote_age_ms: int,
     retry_interval_ms: int,
-) -> bool:
-    if not side.short_open and not side.long_open:
-        return False
+) -> tuple[bool, tuple[str, ...]]:
+    prefix = side.side.value
+    if not side.short_open:
+        return False, ()
     if side.last_exit_attempt_at is not None:
         elapsed_ms = int((context.now - side.last_exit_attempt_at).total_seconds() * 1000)
         if elapsed_ms < retry_interval_ms:
-            return False
+            return False, (f"{prefix}_EXIT_RETRY_NOT_DUE",)
     side.last_exit_attempt_at = context.now
     side.exit_attempt_count += 1
     short = by_name.get(side.short_quote.instrument_name)
     long = by_name.get(side.long_quote.instrument_name)
+    intent_at = side.exit_requested_at
+    if intent_at is None:
+        raise ValueError("short-risk exit attempt lacks a frozen intent boundary")
+    short_eligible, short_blocker = _exit_quote_eligible(
+        short,
+        label=f"{prefix}_SHORT",
+        after=intent_at,
+        observed_at=context.now,
+        maximum_source_age_ms=maximum_quote_age_ms,
+        maximum_receive_age_ms=maximum_quote_age_ms,
+    )
+    long_eligible, long_blocker = _exit_quote_eligible(
+        long,
+        label=f"{prefix}_LONG",
+        after=intent_at,
+        observed_at=context.now,
+        maximum_source_age_ms=maximum_quote_age_ms,
+        maximum_receive_age_ms=maximum_quote_age_ms,
+    )
+    blockers: list[str] = []
+    if short_blocker is not None:
+        blockers.append(short_blocker)
+    if long_blocker is not None and side.long_open:
+        blockers.append(long_blocker)
     pair_coherent = False
     if side.short_open and side.long_open:
         if short is None or long is None:
             side.quote_missing_block_count += 1
+        elif not short_eligible or not long_eligible:
+            if any("NOT_STRICTLY_FUTURE" in blocker for blocker in blockers):
+                side.quote_not_future_block_count += 1
+            if any("STALE" in blocker for blocker in blockers):
+                side.quote_stale_block_count += 1
         else:
             pair_coherent = _pair_coherent(
                 short,
@@ -1030,6 +1242,7 @@ def _exit_side(
             )
             if not pair_coherent:
                 side.pair_incoherent_block_count += 1
+                blockers.append(f"{prefix}_EXIT_PAIR_INCOHERENT")
     if side.short_open and side.long_open and pair_coherent:
         assert short is not None and long is not None
         close = price_close_vertical(
@@ -1060,9 +1273,11 @@ def _exit_side(
             side.terminal_at = context.now
             side.exit_reason = reason
             side.state = SideState.TERMINAL
-            return True
+            side.last_exit_blockers = tuple(blockers)
+            return True, tuple(blockers)
         side.pair_unexecutable_block_count += 1
-    if side.short_open and allow_short_only and short is not None:
+        blockers.append(f"{prefix}_EXIT_PAIR_UNEXECUTABLE")
+    if side.short_open and allow_short_only and short is not None and short_eligible:
         short_only_execution = execute_leg(
             short,
             action=Action.BUY,
@@ -1084,8 +1299,36 @@ def _exit_side(
             side.state = SideState.SHORT_FLAT_LONG_WING if side.long_open else SideState.TERMINAL
             if not side.long_open:
                 side.terminal_at = context.now
-            return True
-    return False
+            side.last_exit_blockers = tuple(blockers)
+            return True, tuple(blockers)
+        blockers.append(f"{prefix}_SHORT_EXIT_UNEXECUTABLE")
+    result_blockers = tuple(dict.fromkeys(blockers))
+    side.last_exit_blockers = result_blockers
+    return False, result_blockers
+
+
+def _exit_quote_eligible(
+    quote: OptionQuote | None,
+    *,
+    label: str,
+    after: datetime,
+    observed_at: datetime,
+    maximum_source_age_ms: int,
+    maximum_receive_age_ms: int,
+) -> tuple[bool, str | None]:
+    if quote is None:
+        return False, f"{label}_EXIT_QUOTE_MISSING"
+    after_ms = int(after.timestamp() * 1000)
+    observed_ms = int(observed_at.timestamp() * 1000)
+    if quote.source_timestamp_ms <= after_ms or quote.received_timestamp_ms <= after_ms:
+        return False, f"{label}_EXIT_QUOTE_NOT_STRICTLY_FUTURE"
+    if quote.source_timestamp_ms > observed_ms or quote.received_timestamp_ms > observed_ms:
+        return False, f"{label}_EXIT_QUOTE_AFTER_OBSERVATION_BOUNDARY"
+    if observed_ms - quote.source_timestamp_ms > maximum_source_age_ms:
+        return False, f"{label}_EXIT_SOURCE_STALE"
+    if observed_ms - quote.received_timestamp_ms > maximum_receive_age_ms:
+        return False, f"{label}_EXIT_RECEIVE_STALE"
+    return True, None
 
 
 def _refresh_position_state(position: ShadowPosition, at: datetime) -> None:
@@ -1096,7 +1339,7 @@ def _refresh_position_state(position: ShadowPosition, at: datetime) -> None:
     elif not position.has_short_risk and position.residual_wing_count == 0:
         position.state = PositionState.TERMINAL
         position.terminal_at = at
-    elif position.first_instruction is not None:
+    elif position.has_pending_exit:
         position.state = PositionState.EXIT_REQUIRED
     else:
         position.state = PositionState.MONITORING
@@ -1175,6 +1418,13 @@ def _finalize_outcome(
         exit_quote_missing_block_count=(
             position.put_side.quote_missing_block_count
             + position.call_side.quote_missing_block_count
+        ),
+        exit_quote_not_future_block_count=(
+            position.put_side.quote_not_future_block_count
+            + position.call_side.quote_not_future_block_count
+        ),
+        exit_quote_stale_block_count=(
+            position.put_side.quote_stale_block_count + position.call_side.quote_stale_block_count
         ),
         exit_pair_incoherent_block_count=(
             position.put_side.pair_incoherent_block_count

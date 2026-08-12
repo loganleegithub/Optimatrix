@@ -89,6 +89,12 @@ creates no Position.
 Remediation facts never rewrite `ENTRY_TERMINAL`, promote a partial Case to `FULL_ENTRY`, or admit it
 to normal carry or the primary strategy-Outcome denominator.
 
+For `FULL_ENTRY` normal carry, `lifecycle.py` also owns one bounded Position-risk reducer. One caller-
+supplied observation either keeps `MONITORING` or freezes a two-sided exit duty. A later observation
+may project an exit only from quotes strictly newer than that duty. Repeated calls advance the same
+recoverable responsibility; the reducer is not a scheduler, continuous runtime, order service, or
+fill source. Missing or stale required facts are risk `UNKNOWN` and cannot be converted to calm.
+
 ## Transient and durable boundaries
 
 Market catalogs, books, quotes, context, scores, structure candidates, blockers, funnel snapshots,

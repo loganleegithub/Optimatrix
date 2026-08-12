@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from optimatrix.engine import ShadowEngine
-from optimatrix.lifecycle import EntryStatus, ExitReason, PositionState
+from optimatrix.lifecycle import EntryStatus, ExitReason, PositionRiskAction, PositionState
 from optimatrix.persistence import (
     CaseJournal,
     JournalError,
@@ -29,12 +29,34 @@ def test_process_restart_recovers_same_position_and_exit_duty(policy, tmp_path) 
     recovered = restarted.recover_position(position.case_identity)
     assert recovered is not None
     assert recovered.position_identity == position.position_identity
-    restarted.observe_position(
+    risk_at = now + timedelta(hours=2)
+    armed = restarted.observe_position(
         position=recovered,
-        quotes=_update_delta(quotes, put_delta=Decimal("-0.58"), call_delta=Decimal("0.08")),
-        context=market_context(now + timedelta(hours=2), index=Decimal("96000")),
+        quotes=_update_delta(
+            quotes,
+            put_delta=Decimal("-0.58"),
+            call_delta=Decimal("0.08"),
+            observed_at=risk_at,
+        ),
+        context=market_context(risk_at, index=Decimal("96000")),
     )
-    assert not recovered.put_side.short_open
+    assert armed.action is PositionRiskAction.EXIT_DUTY_ARMED
+    assert recovered.put_side.short_open and recovered.call_side.short_open
+
+    recovered_again = ShadowEngine(policy=policy, case_root=tmp_path).recover_position(
+        position.case_identity
+    )
+    assert recovered_again is not None
+    assert recovered_again.first_instruction == armed.instruction
+    assert recovered_again.state is PositionState.EXIT_REQUIRED
+    exit_at = risk_at + timedelta(minutes=1)
+    projected = restarted.observe_position(
+        position=recovered_again,
+        quotes=restamp_quotes(quotes, exit_at),
+        context=market_context(exit_at, index=Decimal("96000")),
+    )
+    assert projected.action is PositionRiskAction.PORTFOLIO_TERMINAL
+    assert not recovered_again.has_short_risk
 
 
 def test_journal_rejects_non_consecutive_or_corrupt_records(policy, tmp_path) -> None:

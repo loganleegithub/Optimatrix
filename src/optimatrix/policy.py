@@ -64,6 +64,7 @@ class ShadowPolicy:
     entry_acquisition_window_ms: int
     maximum_pair_source_skew_ms: int
     maximum_pair_receive_skew_ms: int
+    maximum_position_quote_age_ms: int
 
 
 @dataclass(frozen=True)
@@ -188,6 +189,7 @@ def load_btc_short_vol_policy(path: Path) -> BtcShortVolPolicy:
             entry_acquisition_window_ms=_positive_int(shadow, "entry_acquisition_window_ms"),
             maximum_pair_source_skew_ms=_positive_int(shadow, "maximum_pair_source_skew_ms"),
             maximum_pair_receive_skew_ms=_positive_int(shadow, "maximum_pair_receive_skew_ms"),
+            maximum_position_quote_age_ms=_positive_int(shadow, "maximum_position_quote_age_ms"),
         ),
     )
     _validate(policy)
@@ -274,6 +276,8 @@ def _validate(policy: BtcShortVolPolicy) -> None:
         raise ValueError("pair receive skew cannot exceed the entry-acquisition window")
     if shadow.maximum_pair_source_skew_ms > shadow.entry_acquisition_window_ms:
         raise ValueError("pair source skew cannot exceed the entry-acquisition window")
+    if shadow.maximum_position_quote_age_ms > shadow.entry_acquisition_window_ms:
+        raise ValueError("position quote age cannot exceed the entry-acquisition window")
 
 
 def _fraction(value: Decimal, field_name: str) -> None:

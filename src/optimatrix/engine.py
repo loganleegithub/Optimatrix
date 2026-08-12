@@ -7,14 +7,16 @@ from pathlib import Path
 from optimatrix.lifecycle import (
     DecisionCase,
     EntryResult,
-    PositionInstruction,
     PositionOutcome,
+    PositionRiskAction,
+    PositionRiskObservation,
     ShadowPosition,
     acquire_entry,
-    apply_exit_instruction,
+    arm_exit_instruction,
     dispose_residual_wings,
     evaluate_position,
     finalize_if_terminal,
+    project_exit_instruction,
     settle_position,
 )
 from optimatrix.market import MarketContext, OptionQuote
@@ -136,26 +138,43 @@ class ShadowEngine:
         position: ShadowPosition,
         quotes: tuple[OptionQuote, ...],
         context: MarketContext,
-    ) -> PositionInstruction | None:
+    ) -> PositionRiskObservation:
         session = current_deribit_session(context.now, phase_policy=self.policy.session)
-        instruction = evaluate_position(
+        observation = evaluate_position(
             position=position,
             session=session,
             context=context,
             quotes=quotes,
             policy=self.policy,
         )
-        if instruction is None:
-            return None
-        changed = apply_exit_instruction(
+        instruction = observation.instruction
+        if observation.action is PositionRiskAction.MONITORING or instruction is None:
+            return observation
+        if observation.action is PositionRiskAction.EXIT_DUTY_ARMED:
+            position.last_risk_observed_at = observation.observed_at
+            position.last_risk_context_known = observation.risk_context_known
+            position.last_risk_blockers = observation.blockers
+            if arm_exit_instruction(position=position, instruction=instruction):
+                CaseJournal(self.case_root, position.case_identity).append(
+                    "POSITION_CHECKPOINT",
+                    position_to_object(position),
+                )
+            return observation
+        projection_changed, attempt_changed, blockers = project_exit_instruction(
             position=position,
             instruction=instruction,
             quotes=quotes,
             context=context,
             policy=self.policy,
         )
-        if not changed:
-            return instruction
+        if not projection_changed and not attempt_changed:
+            return PositionRiskObservation(
+                observed_at=context.now,
+                action=PositionRiskAction.EXIT_DUTY_PENDING,
+                risk_context_known=not blockers,
+                blockers=blockers,
+                instruction=instruction,
+            )
         journal = CaseJournal(self.case_root, position.case_identity)
         outcome = finalize_if_terminal(
             position=position,
@@ -165,7 +184,22 @@ class ShadowEngine:
         journal.append("POSITION_CHECKPOINT", position_to_object(position))
         if outcome is not None:
             journal.append("OUTCOME", _outcome_projection(outcome))
-        return instruction
+        action = (
+            PositionRiskAction.PORTFOLIO_TERMINAL
+            if outcome is not None
+            else PositionRiskAction.SHORT_RISK_FLAT
+            if not position.has_short_risk
+            else PositionRiskAction.SHORT_RISK_REDUCED
+            if projection_changed
+            else PositionRiskAction.EXIT_DUTY_PENDING
+        )
+        return PositionRiskObservation(
+            observed_at=context.now,
+            action=action,
+            risk_context_known=not blockers,
+            blockers=blockers,
+            instruction=instruction,
+        )
 
     def dispose_wings(
         self,
@@ -260,6 +294,8 @@ def _outcome_projection(outcome: PositionOutcome) -> dict[str, object]:
         "put_exit_attempt_count": outcome.put_exit_attempt_count,
         "call_exit_attempt_count": outcome.call_exit_attempt_count,
         "exit_quote_missing_block_count": outcome.exit_quote_missing_block_count,
+        "exit_quote_not_future_block_count": outcome.exit_quote_not_future_block_count,
+        "exit_quote_stale_block_count": outcome.exit_quote_stale_block_count,
         "exit_pair_incoherent_block_count": outcome.exit_pair_incoherent_block_count,
         "exit_pair_unexecutable_block_count": outcome.exit_pair_unexecutable_block_count,
         "short_only_exit_side_count": outcome.short_only_exit_side_count,

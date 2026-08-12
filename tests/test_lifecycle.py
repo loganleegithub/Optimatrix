@@ -7,7 +7,13 @@ from decimal import Decimal
 import pytest
 
 from optimatrix.engine import ShadowEngine
-from optimatrix.lifecycle import EntryStatus, ExitReason, ExitScope, PositionState, SideState
+from optimatrix.lifecycle import (
+    EntryStatus,
+    ExitReason,
+    ExitScope,
+    PositionRiskAction,
+    PositionState,
+)
 from optimatrix.radar import Decision
 from optimatrix.scenarios import (
     _opened_position,
@@ -21,32 +27,55 @@ from optimatrix.scenarios import (
 )
 
 
-def test_threatened_side_can_flatten_short_without_selling_worthless_wing(
+def test_risk_trigger_and_exit_price_projection_use_separate_boundaries(
     policy,
     tmp_path,
 ) -> None:
     now, engine, position, quotes = _opened_position(policy, tmp_path)
     risk_at = now + timedelta(hours=2)
-    quotes = _update_delta(
+    risk_quotes = _update_delta(
         quotes,
         put_delta=Decimal("-0.58"),
         call_delta=Decimal("0.10"),
         observed_at=risk_at,
     )
-    quotes = _remove_bid(quotes, instrument_suffix="93000-P")
-    instruction = engine.observe_position(
+    observation = engine.observe_position(
         position=position,
-        quotes=quotes,
+        quotes=risk_quotes,
         context=market_context(risk_at, index=Decimal("96000")),
     )
-    assert instruction is not None and instruction.scope is ExitScope.PUT_SIDE
-    assert position.put_side.state is SideState.SHORT_FLAT_LONG_WING
-    assert not position.put_side.short_open
-    assert position.put_side.long_open
-    assert position.call_side.short_open
+    assert observation.action is PositionRiskAction.EXIT_DUTY_ARMED
+    assert observation.instruction is not None
+    assert observation.instruction.scope is ExitScope.BOTH_SIDES
+    assert observation.instruction.reason is ExitReason.PUT_SIDE_DELTA
+    assert position.put_side.short_open and position.call_side.short_open
+
+    same_boundary = engine.observe_position(
+        position=position,
+        quotes=risk_quotes,
+        context=market_context(risk_at, index=Decimal("96000")),
+    )
+    assert same_boundary.action is PositionRiskAction.EXIT_DUTY_PENDING
+    assert any("NOT_STRICTLY_FUTURE" in blocker for blocker in same_boundary.blockers)
+    assert position.put_side.short_open and position.call_side.short_open
+
+    exit_at = risk_at + timedelta(minutes=1)
+    exit_quotes = restamp_quotes(risk_quotes, exit_at)
+    exit_quotes = _remove_bid(exit_quotes, instrument_suffix="93000-P")
+    exit_quotes = _remove_bid(exit_quotes, instrument_suffix="107000-C")
+    projected = engine.observe_position(
+        position=position,
+        quotes=exit_quotes,
+        context=market_context(exit_at, index=Decimal("96000")),
+    )
+    assert projected.action is PositionRiskAction.SHORT_RISK_FLAT
+    assert not position.has_short_risk
+    assert position.residual_wing_count == 2
+    assert position.state is PositionState.SHORT_RISK_FLAT
+    assert position.outcome is None
 
 
-def test_same_day_whipsaw_can_realize_two_side_stops(policy, tmp_path) -> None:
+def test_full_condor_risk_trigger_exits_both_sides_as_one_base_duty(policy, tmp_path) -> None:
     now, engine, position, quotes = _opened_position(policy, tmp_path)
     down_at = now + timedelta(hours=2)
     first = engine.observe_position(
@@ -59,19 +88,16 @@ def test_same_day_whipsaw_can_realize_two_side_stops(policy, tmp_path) -> None:
         ),
         context=market_context(down_at, index=Decimal("96000")),
     )
-    up_at = now + timedelta(hours=5)
+    exit_at = down_at + timedelta(minutes=1)
     second = engine.observe_position(
         position=position,
-        quotes=_update_delta(
-            quotes,
-            put_delta=Decimal("-0.05"),
-            call_delta=Decimal("0.6"),
-            observed_at=up_at,
-        ),
-        context=market_context(up_at, index=Decimal("104500")),
+        quotes=restamp_quotes(quotes, exit_at),
+        context=market_context(exit_at, index=Decimal("96000")),
     )
-    assert first is not None and second is not None
-    assert position.outcome is not None and position.outcome.double_side_stop
+    assert first.action is PositionRiskAction.EXIT_DUTY_ARMED
+    assert first.instruction is not None and first.instruction.scope is ExitScope.BOTH_SIDES
+    assert second.action is PositionRiskAction.PORTFOLIO_TERMINAL
+    assert position.outcome is not None
     assert position.state is PositionState.TERMINAL
 
 
@@ -114,13 +140,13 @@ def test_partial_entry_is_immediate_remediation_not_strategy_carry(
     assert position.first_instruction.reason is ExitReason.ENTRY_ACQUISITION_INCOMPLETE
 
     exit_at = entry_at + timedelta(minutes=1)
-    instruction = engine.observe_position(
+    observation = engine.observe_position(
         position=position,
         quotes=restamp_quotes(chain, exit_at),
         context=replace(context, now=exit_at),
     )
-    assert instruction is not None
-    assert instruction.reason is ExitReason.ENTRY_ACQUISITION_INCOMPLETE
+    assert observation.instruction is not None
+    assert observation.instruction.reason is ExitReason.ENTRY_ACQUISITION_INCOMPLETE
     assert not position.has_short_risk
     assert position.outcome is not None
     assert not position.outcome.strategy_outcome_eligible
@@ -166,7 +192,7 @@ def test_coherent_full_entry_stays_normal_strategy_carry(policy, tmp_path) -> No
     assert position.first_instruction is None
 
 
-def test_full_entry_outcome_remains_strategy_eligible_after_side_specific_exits(
+def test_full_entry_outcome_remains_strategy_eligible_after_two_sided_risk_exit(
     policy,
     tmp_path,
 ) -> None:
@@ -182,16 +208,11 @@ def test_full_entry_outcome_remains_strategy_eligible_after_side_specific_exits(
         ),
         context=market_context(down_at, index=Decimal("96000")),
     )
-    up_at = now + timedelta(hours=5)
+    exit_at = down_at + timedelta(minutes=1)
     engine.observe_position(
         position=position,
-        quotes=_update_delta(
-            quotes,
-            put_delta=Decimal("-0.05"),
-            call_delta=Decimal("0.60"),
-            observed_at=up_at,
-        ),
-        context=market_context(up_at, index=Decimal("104500")),
+        quotes=restamp_quotes(quotes, exit_at),
+        context=market_context(exit_at, index=Decimal("96000")),
     )
     assert position.outcome is not None
     assert position.outcome.strategy_outcome_eligible
@@ -251,24 +272,35 @@ def test_settlement_is_idempotent_and_not_journaled_twice(policy, tmp_path) -> N
 def test_pending_exit_respects_in_process_retry_cadence(policy, tmp_path) -> None:
     now, engine, position, quotes = _opened_position(policy, tmp_path)
     first_at = now + timedelta(hours=2)
-    unavailable = _remove_ask(
-        _update_delta(
-            quotes,
-            put_delta=Decimal("-0.58"),
-            call_delta=Decimal("0.10"),
-            observed_at=first_at,
-        ),
-        instrument_suffix="95000-P",
+    risk_quotes = _update_delta(
+        quotes,
+        put_delta=Decimal("-0.58"),
+        call_delta=Decimal("0.10"),
+        observed_at=first_at,
     )
     first = engine.observe_position(
         position=position,
-        quotes=unavailable,
+        quotes=risk_quotes,
         context=market_context(first_at, index=Decimal("96000")),
     )
-    assert first is not None
+    assert first.action is PositionRiskAction.EXIT_DUTY_ARMED
     assert position.put_side.short_open
 
-    too_soon = first_at + timedelta(seconds=10)
+    first_attempt_at = first_at + timedelta(seconds=1)
+    unavailable = _remove_ask(
+        restamp_quotes(risk_quotes, first_attempt_at),
+        instrument_suffix="95000-P",
+    )
+    attempted = engine.observe_position(
+        position=position,
+        quotes=unavailable,
+        context=market_context(first_attempt_at, index=Decimal("96000")),
+    )
+    assert attempted.action is PositionRiskAction.SHORT_RISK_REDUCED
+    assert position.put_side.short_open
+    assert not position.call_side.short_open
+
+    too_soon = first_attempt_at + timedelta(seconds=10)
     available_soon = _update_delta(
         quotes,
         put_delta=Decimal("-0.58"),
@@ -282,7 +314,7 @@ def test_pending_exit_respects_in_process_retry_cadence(policy, tmp_path) -> Non
     )
     assert position.put_side.short_open
 
-    after_retry = first_at + timedelta(seconds=31)
+    after_retry = first_attempt_at + timedelta(seconds=31)
     available_later = _update_delta(
         quotes,
         put_delta=Decimal("-0.58"),
@@ -302,15 +334,47 @@ def test_live_shock_after_entry_requires_both_side_risk_exit(policy, tmp_path) -
 
     now, engine, position, quotes = _opened_position(policy, tmp_path)
     shock_at = now + timedelta(hours=2)
-    instruction = engine.observe_position(
+    observation = engine.observe_position(
         position=position,
         quotes=restamp_quotes(quotes, shock_at),
         context=market_context(shock_at, event=EventState.UNSCHEDULED_SHOCK),
     )
-    assert instruction is not None
-    assert instruction.scope is ExitScope.BOTH_SIDES
-    assert instruction.reason.value == "EVENT_OR_SHOCK"
+    assert observation.instruction is not None
+    assert observation.instruction.scope is ExitScope.BOTH_SIDES
+    assert observation.instruction.reason is ExitReason.EVENT_OR_SHOCK
+    assert position.has_short_risk
+    assert position.state is PositionState.EXIT_REQUIRED
+
+    exit_at = shock_at + timedelta(minutes=1)
+    projected = engine.observe_position(
+        position=position,
+        quotes=restamp_quotes(quotes, exit_at),
+        context=market_context(exit_at, event=EventState.UNSCHEDULED_SHOCK),
+    )
+    assert projected.action is PositionRiskAction.PORTFOLIO_TERMINAL
     assert not position.has_short_risk
+
+
+def test_missing_short_quote_is_unknown_and_arms_two_sided_exit(policy, tmp_path) -> None:
+    now, engine, position, quotes = _opened_position(policy, tmp_path)
+    observed_at = now + timedelta(hours=2)
+    incomplete = tuple(
+        quote
+        for quote in restamp_quotes(quotes, observed_at)
+        if not quote.instrument_name.endswith("95000-P")
+    )
+    observation = engine.observe_position(
+        position=position,
+        quotes=incomplete,
+        context=market_context(observed_at),
+    )
+    assert not observation.risk_context_known
+    assert observation.action is PositionRiskAction.EXIT_DUTY_ARMED
+    assert observation.instruction is not None
+    assert observation.instruction.reason is ExitReason.RISK_CONTEXT_UNKNOWN
+    assert observation.instruction.scope is ExitScope.BOTH_SIDES
+    assert "PUT_SHORT_RISK_QUOTE_MISSING" in observation.blockers
+    assert position.put_side.short_open and position.call_side.short_open
 
 
 def test_entry_deadline_and_future_quote_boundaries_are_enforced(policy, tmp_path) -> None:

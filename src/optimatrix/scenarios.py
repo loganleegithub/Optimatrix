@@ -12,6 +12,7 @@ from optimatrix.lifecycle import (
     EntryStatus,
     ExitReason,
     ExitScope,
+    PositionRiskAction,
     PositionState,
     ShadowPosition,
     SideState,
@@ -50,8 +51,8 @@ def run_all_scenarios(
         calm_high_vrp_take_profit(policy, target_root / "calm"),
         gamma_explosion_is_rejected(policy, target_root / "gamma"),
         event_phase_changes_decision(policy, target_root / "event"),
-        short_only_risk_exit_keeps_long_wing(policy, target_root / "short-only"),
-        whipsaw_can_stop_both_sides(policy, target_root / "double-stop"),
+        short_risk_exit_keeps_residual_wings(policy, target_root / "short-only"),
+        strict_future_exit_closes_two_sided_duty(policy, target_root / "causal-exit"),
         partial_entry_is_persisted(policy, target_root / "partial"),
         process_recovery_keeps_position_duty(policy, target_root / "recovery"),
         expiry_settlement_terminates_residual_risk(policy, target_root / "settlement"),
@@ -93,13 +94,20 @@ def calm_high_vrp_take_profit(policy: BtcShortVolPolicy, root: Path) -> Scenario
         long_ask=Decimal("0.0003"),
         observed_at=later,
     )
-    instruction = engine.observe_position(position=position, quotes=decayed, context=later_context)
+    observation = engine.observe_position(position=position, quotes=decayed, context=later_context)
+    exit_at = later + timedelta(minutes=1)
+    projected = engine.observe_position(
+        position=position,
+        quotes=restamp_quotes(decayed, exit_at),
+        context=market_context(exit_at, index=Decimal("100100")),
+    )
     outcome = position.outcome
     passed = (
         decision.decision is Decision.CANDIDATE
         and entry_result.status is EntryStatus.FULL_ENTRY
-        and instruction is not None
-        and instruction.reason is ExitReason.TAKE_PROFIT
+        and observation.instruction is not None
+        and observation.instruction.reason is ExitReason.TAKE_PROFIT
+        and projected.action is PositionRiskAction.PORTFOLIO_TERMINAL
         and outcome is not None
         and outcome.total_native_pnl > 0
         and outcome.strategy_outcome_eligible
@@ -112,7 +120,9 @@ def calm_high_vrp_take_profit(policy: BtcShortVolPolicy, root: Path) -> Scenario
             "decision": decision.decision.value,
             "score": _score(decision),
             "entry_status": entry_result.status.value,
-            "exit_reason": instruction.reason.value if instruction else None,
+            "exit_reason": (
+                observation.instruction.reason.value if observation.instruction else None
+            ),
             "native_pnl": str(outcome.total_native_pnl) if outcome else None,
             "terminal_method": outcome.terminal_method if outcome else None,
         },
@@ -175,7 +185,7 @@ def event_phase_changes_decision(policy: BtcShortVolPolicy, root: Path) -> Scena
     )
 
 
-def short_only_risk_exit_keeps_long_wing(
+def short_risk_exit_keeps_residual_wings(
     policy: BtcShortVolPolicy,
     root: Path,
 ) -> ScenarioResult:
@@ -191,26 +201,38 @@ def short_only_risk_exit_keeps_long_wing(
         call_delta=Decimal("0.10"),
         observed_at=threatened_context.now,
     )
-    threatened = _remove_bid(threatened, instrument_suffix="93000-P")
-    instruction = engine.observe_position(
+    observation = engine.observe_position(
         position=position,
         quotes=threatened,
         context=threatened_context,
     )
+    exit_at = threatened_context.now + timedelta(minutes=1)
+    exit_quotes = restamp_quotes(threatened, exit_at)
+    exit_quotes = _remove_bid(exit_quotes, instrument_suffix="93000-P")
+    exit_quotes = _remove_bid(exit_quotes, instrument_suffix="107000-C")
+    projected = engine.observe_position(
+        position=position,
+        quotes=exit_quotes,
+        context=market_context(exit_at, index=Decimal("96000")),
+    )
     passed = (
-        instruction is not None
-        and instruction.scope is ExitScope.PUT_SIDE
+        observation.instruction is not None
+        and observation.instruction.scope is ExitScope.BOTH_SIDES
+        and projected.action is PositionRiskAction.SHORT_RISK_FLAT
         and position.put_side.state is SideState.SHORT_FLAT_LONG_WING
         and not position.put_side.short_open
         and position.put_side.long_open
-        and position.call_side.short_open
-        and position.state is PositionState.EXIT_REQUIRED
+        and not position.call_side.short_open
+        and position.call_side.long_open
+        and position.state is PositionState.SHORT_RISK_FLAT
     )
     return ScenarioResult(
-        "short_only_risk_exit_keeps_long_wing",
+        "short_risk_exit_keeps_residual_wings",
         passed,
         {
-            "instruction": instruction.reason.value if instruction else None,
+            "instruction": (
+                observation.instruction.reason.value if observation.instruction else None
+            ),
             "put_side_state": position.put_side.state.value,
             "call_side_state": position.call_side.state.value,
             "position_state": position.state.value,
@@ -220,7 +242,10 @@ def short_only_risk_exit_keeps_long_wing(
     )
 
 
-def whipsaw_can_stop_both_sides(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
+def strict_future_exit_closes_two_sided_duty(
+    policy: BtcShortVolPolicy,
+    root: Path,
+) -> ScenarioResult:
     now, engine, position, quotes = _opened_position(policy, root)
     down_context = market_context(now + timedelta(hours=2), index=Decimal("96000"))
     down_quotes = _update_delta(
@@ -230,30 +255,33 @@ def whipsaw_can_stop_both_sides(policy: BtcShortVolPolicy, root: Path) -> Scenar
         observed_at=down_context.now,
     )
     first = engine.observe_position(position=position, quotes=down_quotes, context=down_context)
-    up_context = market_context(now + timedelta(hours=5), index=Decimal("104500"))
-    up_quotes = _update_delta(
-        quotes,
-        put_delta=Decimal("-0.05"),
-        call_delta=Decimal("0.60"),
-        observed_at=up_context.now,
+    same_boundary = engine.observe_position(
+        position=position,
+        quotes=down_quotes,
+        context=down_context,
     )
-    second = engine.observe_position(position=position, quotes=up_quotes, context=up_context)
+    exit_at = down_context.now + timedelta(minutes=1)
+    second = engine.observe_position(
+        position=position,
+        quotes=restamp_quotes(quotes, exit_at),
+        context=market_context(exit_at, index=Decimal("96000")),
+    )
     outcome = position.outcome
     passed = (
-        first is not None
-        and second is not None
-        and first.scope is ExitScope.PUT_SIDE
-        and second.scope is ExitScope.CALL_SIDE
+        first.instruction is not None
+        and first.instruction.scope is ExitScope.BOTH_SIDES
+        and same_boundary.action is PositionRiskAction.EXIT_DUTY_PENDING
+        and position.state is PositionState.TERMINAL
+        and second.action is PositionRiskAction.PORTFOLIO_TERMINAL
         and outcome is not None
-        and outcome.double_side_stop
     )
     return ScenarioResult(
-        "whipsaw_can_stop_both_sides",
+        "strict_future_exit_closes_two_sided_duty",
         passed,
         {
-            "first_scope": first.scope.value if first else None,
-            "second_scope": second.scope.value if second else None,
-            "double_side_stop": outcome.double_side_stop if outcome else None,
+            "first_scope": first.instruction.scope.value if first.instruction else None,
+            "same_boundary_action": same_boundary.action.value,
+            "future_action": second.action.value,
             "native_pnl": str(outcome.total_native_pnl) if outcome else None,
         },
     )
@@ -279,7 +307,7 @@ def partial_entry_is_persisted(policy: BtcShortVolPolicy, root: Path) -> Scenari
     recovered = engine.recover_position(case.case_identity)
     assert recovered is not None
     remediation_at = now + timedelta(minutes=2)
-    instruction = engine.observe_position(
+    observation = engine.observe_position(
         position=recovered,
         quotes=restamp_quotes(chain, remediation_at),
         context=replace(context, now=remediation_at),
@@ -288,8 +316,8 @@ def partial_entry_is_persisted(policy: BtcShortVolPolicy, root: Path) -> Scenari
         result.status is EntryStatus.PUT_SIDE_ONLY
         and position is not None
         and recovered.entry_status is EntryStatus.PUT_SIDE_ONLY
-        and instruction is not None
-        and instruction.reason is ExitReason.ENTRY_ACQUISITION_INCOMPLETE
+        and observation.instruction is not None
+        and observation.instruction.reason is ExitReason.ENTRY_ACQUISITION_INCOMPLETE
         and not recovered.put_side.short_open
         and not recovered.call_side.short_open
         and recovered.outcome is not None
@@ -302,7 +330,9 @@ def partial_entry_is_persisted(policy: BtcShortVolPolicy, root: Path) -> Scenari
             "entry_status": result.status.value,
             "blockers": list(result.blockers),
             "recovered_remediation_reason": (
-                instruction.reason.value if instruction is not None else None
+                observation.instruction.reason.value
+                if observation.instruction is not None
+                else None
             ),
             "short_risk_flat": not recovered.has_short_risk,
             "strategy_outcome_eligible": (
@@ -318,11 +348,8 @@ def process_recovery_keeps_position_duty(
     policy: BtcShortVolPolicy,
     root: Path,
 ) -> ScenarioResult:
-    now, _engine, position, quotes = _opened_position(policy, root)
+    now, engine, position, quotes = _opened_position(policy, root)
     first_engine_identity = position.position_identity
-    restarted = ShadowEngine(policy=policy, case_root=root)
-    recovered = restarted.recover_position(position.case_identity)
-    assert recovered is not None
     context = market_context(now + timedelta(hours=3), index=Decimal("96000"))
     risk_quotes = _update_delta(
         quotes,
@@ -330,22 +357,34 @@ def process_recovery_keeps_position_duty(
         call_delta=Decimal("0.08"),
         observed_at=context.now,
     )
-    instruction = restarted.observe_position(
-        position=recovered,
+    observation = engine.observe_position(
+        position=position,
         quotes=risk_quotes,
         context=context,
     )
+    restarted = ShadowEngine(policy=policy, case_root=root)
+    recovered = restarted.recover_position(position.case_identity)
+    assert recovered is not None
+    exit_at = context.now + timedelta(minutes=1)
+    projected = restarted.observe_position(
+        position=recovered,
+        quotes=restamp_quotes(quotes, exit_at),
+        context=market_context(exit_at, index=Decimal("96000")),
+    )
     passed = (
         recovered.position_identity == first_engine_identity
-        and instruction is not None
-        and recovered.put_side.short_risk_exit_at is not None
+        and observation.instruction is not None
+        and projected.action is PositionRiskAction.PORTFOLIO_TERMINAL
+        and not recovered.has_short_risk
     )
     return ScenarioResult(
         "process_recovery_keeps_position_duty",
         passed,
         {
             "same_position_identity": recovered.position_identity == first_engine_identity,
-            "instruction": instruction.reason.value if instruction else None,
+            "instruction": (
+                observation.instruction.reason.value if observation.instruction else None
+            ),
             "put_short_flat": not recovered.put_side.short_open,
         },
     )
@@ -653,31 +692,42 @@ def failed_exit_survives_process_recovery(
 ) -> ScenarioResult:
     now, engine, position, quotes = _opened_position(policy, root)
     risk_at = now + timedelta(hours=2)
-    blocked_quotes = _update_delta(
+    risk_quotes = _update_delta(
         quotes,
         put_delta=Decimal("-0.58"),
         call_delta=Decimal("0.10"),
         observed_at=risk_at,
     )
-    blocked_quotes = _remove_ask(blocked_quotes, instrument_suffix="95000-P")
-    first = engine.observe_position(
+    armed = engine.observe_position(
+        position=position,
+        quotes=risk_quotes,
+        context=market_context(risk_at, index=Decimal("96000")),
+    )
+    blocked_at = risk_at + timedelta(seconds=1)
+    blocked_quotes = _remove_ask(
+        restamp_quotes(risk_quotes, blocked_at),
+        instrument_suffix="95000-P",
+    )
+    blocked = engine.observe_position(
         position=position,
         quotes=blocked_quotes,
-        context=market_context(risk_at, index=Decimal("96000")),
+        context=market_context(blocked_at, index=Decimal("96000")),
     )
     restarted = ShadowEngine(policy=policy, case_root=root)
     recovered = restarted.recover_position(position.case_identity)
     assert recovered is not None
-    exit_at = risk_at + timedelta(minutes=1)
+    exit_at = blocked_at + timedelta(minutes=1)
     second = restarted.observe_position(
         position=recovered,
         quotes=restamp_quotes(quotes, exit_at),
         context=market_context(exit_at, index=Decimal("96000")),
     )
     passed = (
-        first is not None
+        armed.instruction is not None
+        and armed.instruction.reason is ExitReason.PUT_SIDE_DELTA
+        and blocked.action is PositionRiskAction.SHORT_RISK_REDUCED
         and recovered.put_side.exit_requested_reason is ExitReason.PUT_SIDE_DELTA
-        and second is not None
+        and second.action is PositionRiskAction.PORTFOLIO_TERMINAL
         and not recovered.put_side.short_open
         and len(recovered.instructions) == 1
     )
@@ -685,7 +735,8 @@ def failed_exit_survives_process_recovery(
         "failed_exit_survives_process_recovery",
         passed,
         {
-            "first_reason": first.reason.value if first else None,
+            "first_reason": armed.instruction.reason.value if armed.instruction else None,
+            "blocked_action": blocked.action.value,
             "recovered_pending_reason": (
                 recovered.put_side.exit_requested_reason.value
                 if recovered.put_side.exit_requested_reason is not None
@@ -856,23 +907,32 @@ def live_shock_forces_short_risk_exit(
 ) -> ScenarioResult:
     now, engine, position, quotes = _opened_position(policy, root)
     shock_at = now + timedelta(hours=2)
-    instruction = engine.observe_position(
+    observation = engine.observe_position(
         position=position,
         quotes=restamp_quotes(quotes, shock_at),
         context=market_context(shock_at, event=EventState.UNSCHEDULED_SHOCK),
     )
+    exit_at = shock_at + timedelta(minutes=1)
+    projected = engine.observe_position(
+        position=position,
+        quotes=restamp_quotes(quotes, exit_at),
+        context=market_context(exit_at, event=EventState.UNSCHEDULED_SHOCK),
+    )
     passed = (
-        instruction is not None
-        and instruction.reason is ExitReason.EVENT_OR_SHOCK
-        and instruction.scope is ExitScope.BOTH_SIDES
+        observation.instruction is not None
+        and observation.instruction.reason is ExitReason.EVENT_OR_SHOCK
+        and observation.instruction.scope is ExitScope.BOTH_SIDES
+        and projected.action is PositionRiskAction.PORTFOLIO_TERMINAL
         and not position.has_short_risk
     )
     return ScenarioResult(
         "live_shock_forces_short_risk_exit",
         passed,
         {
-            "instruction": instruction.reason.value if instruction else None,
-            "scope": instruction.scope.value if instruction else None,
+            "instruction": (
+                observation.instruction.reason.value if observation.instruction else None
+            ),
+            "scope": observation.instruction.scope.value if observation.instruction else None,
             "short_risk_remaining": position.has_short_risk,
         },
     )

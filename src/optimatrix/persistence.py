@@ -554,6 +554,9 @@ def position_to_object(position: ShadowPosition) -> dict[str, object]:
         "short_risk_flat_at": _datetime_text(position.short_risk_flat_at),
         "terminal_at": _datetime_text(position.terminal_at),
         "outcome": _outcome_to_object(position.outcome) if position.outcome is not None else None,
+        "last_risk_observed_at": _datetime_text(position.last_risk_observed_at),
+        "last_risk_context_known": position.last_risk_context_known,
+        "last_risk_blockers": list(position.last_risk_blockers),
     }
 
 
@@ -575,6 +578,9 @@ def position_from_object(value: Mapping[str, object]) -> ShadowPosition:
         "short_risk_flat_at",
         "terminal_at",
         "outcome",
+        "last_risk_observed_at",
+        "last_risk_context_known",
+        "last_risk_blockers",
     }
     if set(value) != required:
         raise JournalError("position checkpoint shape is invalid")
@@ -583,6 +589,16 @@ def position_from_object(value: Mapping[str, object]) -> ShadowPosition:
         raise JournalError("instructions must be an array")
     first_raw = value["first_instruction"]
     outcome_raw = value["outcome"]
+    last_risk_blockers_raw = value["last_risk_blockers"]
+    if not isinstance(last_risk_blockers_raw, list) or not all(
+        isinstance(member, str) for member in last_risk_blockers_raw
+    ):
+        raise JournalError("last_risk_blockers must be an array of text")
+    last_risk_context_known_raw = value["last_risk_context_known"]
+    if last_risk_context_known_raw is not None and not isinstance(
+        last_risk_context_known_raw, bool
+    ):
+        raise JournalError("last_risk_context_known must be boolean or null")
     position = ShadowPosition(
         position_identity=require_identity(_text(value, "position_identity"), "position_identity"),
         case_identity=require_identity(_text(value, "case_identity"), "case_identity"),
@@ -612,6 +628,9 @@ def position_from_object(value: Mapping[str, object]) -> ShadowPosition:
             if outcome_raw is not None
             else None
         ),
+        last_risk_observed_at=_optional_datetime(value["last_risk_observed_at"]),
+        last_risk_context_known=last_risk_context_known_raw,
+        last_risk_blockers=tuple(last_risk_blockers_raw),
     )
     expected_position_identity = shadow_position_identity(
         case_identity=position.case_identity,
@@ -619,6 +638,14 @@ def position_from_object(value: Mapping[str, object]) -> ShadowPosition:
     )
     if position.position_identity != expected_position_identity:
         raise JournalError("Position identity mismatch")
+    if position.has_pending_exit and position.state is not PositionState.EXIT_REQUIRED:
+        raise JournalError("pending short-risk duty must remain EXIT_REQUIRED")
+    if position.state is PositionState.EXIT_REQUIRED and position.has_short_risk:
+        if position.first_instruction is None:
+            raise JournalError("short-risk duty lacks frozen instruction")
+        for side in (position.put_side, position.call_side):
+            if side.short_open and side.exit_requested_reason is None:
+                raise JournalError("open short lacks pending exit duty")
     if (
         position.entry_status
         in {
@@ -680,13 +707,34 @@ def _side_to_object(side: SidePosition) -> dict[str, object]:
         "exit_reason": side.exit_reason.value if side.exit_reason is not None else None,
         "exit_attempt_count": side.exit_attempt_count,
         "quote_missing_block_count": side.quote_missing_block_count,
+        "quote_not_future_block_count": side.quote_not_future_block_count,
+        "quote_stale_block_count": side.quote_stale_block_count,
         "pair_incoherent_block_count": side.pair_incoherent_block_count,
         "pair_unexecutable_block_count": side.pair_unexecutable_block_count,
         "short_only_exit_used": side.short_only_exit_used,
+        "last_exit_attempt_at": _datetime_text(side.last_exit_attempt_at),
+        "short_exit_execution": (
+            _leg_execution_to_object(side.short_exit_execution)
+            if side.short_exit_execution is not None
+            else None
+        ),
+        "long_exit_execution": (
+            _leg_execution_to_object(side.long_exit_execution)
+            if side.long_exit_execution is not None
+            else None
+        ),
+        "last_exit_blockers": list(side.last_exit_blockers),
     }
 
 
 def _side_from_object(value: Mapping[str, object]) -> SidePosition:
+    last_exit_blockers = value.get("last_exit_blockers")
+    if not isinstance(last_exit_blockers, list) or not all(
+        isinstance(member, str) for member in last_exit_blockers
+    ):
+        raise JournalError("last_exit_blockers must be an array of text")
+    short_exit_execution = value.get("short_exit_execution")
+    long_exit_execution = value.get("long_exit_execution")
     return SidePosition(
         side=Side(_text(value, "side")),
         short_quote=_quote_from_object(_mapping(value["short_quote"], "short_quote")),
@@ -715,9 +763,23 @@ def _side_from_object(value: Mapping[str, object]) -> SidePosition:
         ),
         exit_attempt_count=_non_negative_int(value, "exit_attempt_count"),
         quote_missing_block_count=_non_negative_int(value, "quote_missing_block_count"),
+        quote_not_future_block_count=_non_negative_int(value, "quote_not_future_block_count"),
+        quote_stale_block_count=_non_negative_int(value, "quote_stale_block_count"),
         pair_incoherent_block_count=_non_negative_int(value, "pair_incoherent_block_count"),
         pair_unexecutable_block_count=_non_negative_int(value, "pair_unexecutable_block_count"),
         short_only_exit_used=_bool(value, "short_only_exit_used"),
+        last_exit_attempt_at=_optional_datetime(value.get("last_exit_attempt_at")),
+        short_exit_execution=(
+            _leg_execution_from_object(_mapping(short_exit_execution, "short_exit_execution"))
+            if short_exit_execution is not None
+            else None
+        ),
+        long_exit_execution=(
+            _leg_execution_from_object(_mapping(long_exit_execution, "long_exit_execution"))
+            if long_exit_execution is not None
+            else None
+        ),
+        last_exit_blockers=tuple(last_exit_blockers),
     )
 
 
@@ -850,6 +912,8 @@ def _outcome_to_object(value: PositionOutcome) -> dict[str, object]:
         "put_exit_attempt_count": value.put_exit_attempt_count,
         "call_exit_attempt_count": value.call_exit_attempt_count,
         "exit_quote_missing_block_count": value.exit_quote_missing_block_count,
+        "exit_quote_not_future_block_count": value.exit_quote_not_future_block_count,
+        "exit_quote_stale_block_count": value.exit_quote_stale_block_count,
         "exit_pair_incoherent_block_count": value.exit_pair_incoherent_block_count,
         "exit_pair_unexecutable_block_count": value.exit_pair_unexecutable_block_count,
         "short_only_exit_side_count": value.short_only_exit_side_count,
@@ -906,6 +970,10 @@ def _outcome_from_object(value: Mapping[str, object]) -> PositionOutcome:
         put_exit_attempt_count=_non_negative_int(value, "put_exit_attempt_count"),
         call_exit_attempt_count=_non_negative_int(value, "call_exit_attempt_count"),
         exit_quote_missing_block_count=_non_negative_int(value, "exit_quote_missing_block_count"),
+        exit_quote_not_future_block_count=_non_negative_int(
+            value, "exit_quote_not_future_block_count"
+        ),
+        exit_quote_stale_block_count=_non_negative_int(value, "exit_quote_stale_block_count"),
         exit_pair_incoherent_block_count=_non_negative_int(
             value, "exit_pair_incoherent_block_count"
         ),
