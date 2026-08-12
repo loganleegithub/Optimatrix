@@ -182,44 +182,41 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_records_live_lifecycle_and_workbench_closure() -> None:
+def test_current_stage_authorizes_shadow_scheme_two_deployment() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `NONE`" in current
-    assert "INVERSE_BTC_SHORT_VOL_V2_LIFECYCLE_V3_AND_SHADOW_RISK_BOOK_LIVE_CURRENT" in current
+    assert "**Current task kind:** `VALIDATION_ONLY`" in current
+    assert "INVERSE_BTC_SHORT_VOL_V2_SHADOW_SCHEME_TWO_DEPLOYMENT_AUTHORIZED" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "**Live commands:** `NONE_CONSUMED`" in current
-    assert "**Sole authorized closure:** `NONE`" in current
+    assert (
+        "ONE_DEPLOYMENT_CHECKOUT_SYNC_ONE_START_AND_BOUNDED_API_BROWSER_GATE_AUTHORIZED" in current
+    )
+    assert "SHADOW_SCHEME_TWO_DEPLOYMENT" in current
     for phrase in (
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
         "127.0.0.1:8765",
+        "3e59d6fde7d2de4c50777f909eb67f100a0dc88b",
         "4e844f0ee6dd9c40574f7c9ba744b729e16543ed",
-        "sha256:f2d94165c94cabf14690fecd794ec9389aefdcc2b42ef4bd702c873e2f3eabd7",
-        "777 tests",
-        "91 schema-v5 Case directories",
-        "68 immutable first-CLOSE records",
-        "36 Outcome files",
-        "Every one of those 646 files remained byte-exact",
-        "764 files present before the display-only repair cutover also remained byte-exact",
-        "final accepted observation contained 828 files",
-        "15 strict terminal-sample Cases",
-        "32 pending-open Cases",
-        "Fifteen version-3 `EXITED_KNOWN/MARKET_EXIT` Outcomes",
-        "strict exit-acquisition Cohort remains zero",
-        "`KNOWN_COMPLETE 130 / 130`",
-        "20 formal Shadow holdings",
-        "pending source-gap row still says `当前仍承担退出责任`",
-        "terminal row says `持仓责任已终结`",
-        "All six declared GET and HEAD routes returned 200",
-        "Twelve browser samples",
-        "below its 5,000ms threshold",
+        "92 schema-v5 Cases",
+        "36/36 known Outcomes",
+        "15/15 known Outcomes",
+        "33 recoverable lifecycle responsibilities",
+        "21 admitted Shadow trades",
+        "8 Radar score-band Controls",
+        "4 selected underwriting-decision Controls",
+        "Thirty-two are truthfully `GAPPED`",
+        "start exactly one runtime",
+        "No historical Case may be migrated, copied, deleted, relabeled, rewritten, or backfilled",
         "The current Position Policy identity and all nine frozen predicate thresholds remain unchanged",
         "Qualification remains offline",
         "Permission remains `PUBLIC_SHADOW`",
     ):
         assert phrase in normalized
-    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {"TEMPLATE.md"}
+    assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
+        "SHADOW_SCHEME_TWO_DEPLOYMENT.md",
+        "TEMPLATE.md",
+    }
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_40_ENTRY_RECOVERY_START.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_RADAR_MAP_CSP_LAYOUT_REPAIR.md").exists()
     assert not (ROOT / "tasks/INVERSE_BTC_SHORT_VOL_V2_STRONG_SIGNAL_MAP.md").exists()
