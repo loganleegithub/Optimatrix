@@ -35,6 +35,7 @@ from optimatrix.persistence import CaseJournal
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.products import BTC
 from optimatrix.radar import Decision, RadarDecision
+from optimatrix.structure import select_iron_condor
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ def run_all_scenarios(
     return (
         calm_high_vrp_take_profit(policy, target_root / "calm"),
         unknown_market_context_stops_before_structure(policy, target_root / "unknown-context"),
+        all_joint_hard_eligible_selection(policy, target_root / "all-joint"),
         gamma_explosion_is_rejected(policy, target_root / "gamma"),
         event_phase_changes_decision(policy, target_root / "event"),
         short_risk_exit_keeps_residual_wings(policy, target_root / "short-only"),
@@ -100,6 +102,42 @@ def unknown_market_context_stops_before_structure(
             "structure_created": decision.structure is not None,
             "score_created": decision.score is not None,
             "primary_blocker": decision.blockers[0],
+        },
+    )
+
+
+def all_joint_hard_eligible_selection(
+    policy: BtcShortVolPolicy,
+    root: Path,
+) -> ScenarioResult:
+    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
+    context = market_context(now)
+    quotes = all_joint_adversarial_chain(expiry=current_expiry(now), observed_at=now)
+    selection = select_iron_condor(quotes=quotes, context=context, policy=policy)
+    decision = ShadowEngine(policy=policy, case_root=root).evaluate(
+        quotes=quotes,
+        context=context,
+    )
+    selected = decision.structure
+    passed = (
+        decision.decision is Decision.CANDIDATE
+        and selected is not None
+        and selected.long_put.strike == Decimal("93000")
+        and selection.considered_put_verticals == 4
+        and selection.considered_condors == 4
+        and selection.hard_eligible_condors == 1
+    )
+    return ScenarioResult(
+        "all_joint_hard_eligible_selection",
+        passed,
+        {
+            "decision": decision.decision.value,
+            "selected_long_put": (
+                selected.long_put.instrument_name if selected is not None else None
+            ),
+            "put_verticals": selection.considered_put_verticals,
+            "joint_candidates": selection.considered_condors,
+            "hard_eligible_candidates": selection.hard_eligible_condors,
         },
     )
 
@@ -892,6 +930,100 @@ def base_chain(*, expiry: datetime, observed_at: datetime | None = None) -> tupl
             tick,
             observed,
             300,
+        ),
+    )
+
+
+def all_joint_adversarial_chain(
+    *,
+    expiry: datetime,
+    observed_at: datetime,
+) -> tuple[OptionQuote, ...]:
+    tick = TickSchedule(Decimal("0.0001"))
+    return (
+        _quote(
+            "BTC-X-93000-P",
+            expiry,
+            Decimal("93000"),
+            OptionType.PUT,
+            "-0.05",
+            "0.0024",
+            "0.0025",
+            tick,
+            observed_at,
+            0,
+        ),
+        _quote(
+            "BTC-X-93500-P",
+            expiry,
+            Decimal("93500"),
+            OptionType.PUT,
+            "-0.20",
+            "0.0026",
+            "0.0027",
+            tick,
+            observed_at,
+            100,
+        ),
+        _quote(
+            "BTC-X-94000-P",
+            expiry,
+            Decimal("94000"),
+            OptionType.PUT,
+            "-0.20",
+            "0.0028",
+            "0.0029",
+            tick,
+            observed_at,
+            200,
+        ),
+        _quote(
+            "BTC-X-94500-P",
+            expiry,
+            Decimal("94500"),
+            OptionType.PUT,
+            "-0.20",
+            "0.0030",
+            "0.0031",
+            tick,
+            observed_at,
+            300,
+        ),
+        _quote(
+            "BTC-X-95000-P",
+            expiry,
+            Decimal("95000"),
+            OptionType.PUT,
+            "-0.25",
+            "0.0050",
+            "0.0051",
+            tick,
+            observed_at,
+            400,
+        ),
+        _quote(
+            "BTC-X-105000-C",
+            expiry,
+            Decimal("105000"),
+            OptionType.CALL,
+            "0.25",
+            "0.0050",
+            "0.0051",
+            tick,
+            observed_at,
+            500,
+        ),
+        _quote(
+            "BTC-X-107000-C",
+            expiry,
+            Decimal("107000"),
+            OptionType.CALL,
+            "0.05",
+            "0.0024",
+            "0.0025",
+            tick,
+            observed_at,
+            600,
         ),
     )
 

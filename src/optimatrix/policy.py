@@ -36,7 +36,6 @@ class StructurePolicy:
     short_delta_max: Decimal
     minimum_wing_width_usd: Decimal
     maximum_wing_width_usd: Decimal
-    top_verticals_per_side: int
 
 
 @dataclass(frozen=True)
@@ -83,7 +82,7 @@ class BtcShortVolPolicy:
     @property
     def identity(self) -> str:
         return canonical_identity(
-            "BtcTwoSidedShortVolPolicyV1",
+            "BtcTwoSidedShortVolPolicyV2",
             self.schema_version,
             self.policy_name,
             self.channel_id,
@@ -121,6 +120,14 @@ def load_btc_short_vol_policy(path: Path) -> BtcShortVolPolicy:
     session = _mapping(raw, "session")
     radar = _mapping(raw, "radar")
     structure = _mapping(raw, "structure")
+    if set(structure) != {
+        "target_quantity",
+        "short_delta_min",
+        "short_delta_max",
+        "minimum_wing_width_usd",
+        "maximum_wing_width_usd",
+    }:
+        raise ValueError("structure policy has unexpected fields")
     underwriting = _mapping(raw, "underwriting")
     position = _mapping(raw, "position")
     shadow = _mapping(raw, "shadow")
@@ -157,7 +164,6 @@ def load_btc_short_vol_policy(path: Path) -> BtcShortVolPolicy:
             short_delta_max=_decimal(structure, "short_delta_max"),
             minimum_wing_width_usd=_decimal(structure, "minimum_wing_width_usd"),
             maximum_wing_width_usd=_decimal(structure, "maximum_wing_width_usd"),
-            top_verticals_per_side=_positive_int(structure, "top_verticals_per_side"),
         ),
         underwriting=UnderwritingPolicy(
             minimum_combined_net_credit_usd=_decimal(
@@ -197,7 +203,7 @@ def load_btc_short_vol_policy(path: Path) -> BtcShortVolPolicy:
 
 
 def _validate(policy: BtcShortVolPolicy) -> None:
-    if policy.schema_version != 1:
+    if policy.schema_version != 2:
         raise ValueError("unsupported policy schema")
     if policy.status != "PUBLIC_SHADOW_UNQUALIFIED":
         raise ValueError("policy status must be PUBLIC_SHADOW_UNQUALIFIED")

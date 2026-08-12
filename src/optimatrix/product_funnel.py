@@ -85,6 +85,18 @@ _ROUTE_BLOCKERS = {
     "CREDIT_TO_MAX_SIDE_PAYOFF_TOO_SMALL",
     "ENTRY_BOUNDARY_MAX_LOSS_TOO_HIGH",
     "FOUR_LEG_FEE_BURDEN_TOO_HIGH",
+    "PUT_SHORT_BUYBACK_DEPTH_INSUFFICIENT",
+    "CALL_SHORT_BUYBACK_DEPTH_INSUFFICIENT",
+    "NO_JOINT_CANDIDATE_PASSES_HARD_UNDERWRITING",
+}
+_STRUCTURE_BLOCKERS = {
+    "NO_CURRENT_SESSION_QUOTES",
+    "MIXED_EXPIRY_INPUT",
+    "NO_ELIGIBLE_SHORT_PUT",
+    "NO_ELIGIBLE_SHORT_CALL",
+    "NO_EXECUTABLE_PUT_VERTICAL",
+    "NO_EXECUTABLE_CALL_VERTICAL",
+    "NO_COHERENT_COMBINABLE_TWO_SIDED_STRUCTURE",
 }
 
 
@@ -133,15 +145,13 @@ def project_product_funnel(
         ),
         (
             FunnelStageName.TWO_SIDED_STRUCTURE_EVALUABLE,
-            decision.structure is not None,
+            decision.structure is not None
+            or "NO_JOINT_CANDIDATE_PASSES_HARD_UNDERWRITING" in decision_blockers,
             (
                 ()
                 if decision.structure is not None
-                else tuple(
-                    blocker
-                    for blocker in decision.blockers
-                    if blocker.startswith("NO_") or blocker == "MIXED_EXPIRY_INPUT"
-                )
+                or "NO_JOINT_CANDIDATE_PASSES_HARD_UNDERWRITING" in decision_blockers
+                else _ordered_members(decision.blockers, _STRUCTURE_BLOCKERS)
             ),
         ),
         (

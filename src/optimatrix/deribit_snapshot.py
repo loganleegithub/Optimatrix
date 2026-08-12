@@ -126,6 +126,9 @@ class PublicSnapshotEvaluation:
                 "condors": self.selection.considered_condors
                 if self.selection is not None
                 else None,
+                "hard_eligible_condors": self.selection.hard_eligible_condors
+                if self.selection is not None
+                else None,
                 "decision": self.decision.decision.value,
             },
             "context": {
@@ -200,6 +203,7 @@ class PublicSnapshotEvaluation:
                         ),
                         "net_delta": str(structure.net_delta),
                         "minimum_body_distance_sigma": str(structure.minimum_body_distance_sigma),
+                        "short_buyback_depth_ready": True,
                     }
                     if structure is not None
                     else None

@@ -18,9 +18,11 @@ SessionDecisionUnit =
 
 The system may examine a bounded option chain and many candidate structures inside the unit, but it
 selects at most one asymmetric four-leg Iron Condor. It first prices legal Put and Call Credit
-Vertical components at full target quantity, retains a fixed bounded set on each side, and evaluates
-joint combinations. It never adds independent single-leg or Vertical scores, and candidates do not
-multiply the funnel denominator.
+Vertical components at full target quantity and evaluates every legal joint combination inside that
+already bounded chain. Every joint candidate must pass hard economics, directional/range limits,
+and both-short buyback-depth readiness before ranking. It never adds independent single-leg or
+Vertical scores, never prunes by an unproved single-side top-N rule, and candidates do not multiply
+the funnel denominator.
 
 The selected canonical leg order is:
 
@@ -92,6 +94,13 @@ Underwriting evaluates one joint structure: native and boundary-valued net credi
 burden, maximum side payoff and maximum loss, nearer body distance, portfolio net Delta, and fixed
 Gamma/jump/event/breakout/execution limits. Native BTC premium and USD-equivalent boundary valuation
 remain distinct quantities.
+
+At the same Decision boundary, each short body must also have enough public ask depth to repurchase
+the full target quantity under the same adverse-tick stress. This is a bounded exit-readiness
+counterfactual, not reserved liquidity, a future guarantee, an order, or a fill. A candidate that
+fails any hard condition is excluded before rank; a better heuristic rank cannot rescue it. If all
+joint candidates fail, the unit remains structurally evaluable but stops at `ENTRY_ROUTE_EVALUABLE`
+with `NO_JOINT_CANDIDATE_PASSES_HARD_UNDERWRITING` and exact reasons.
 
 ## Four-leg attempt coherence
 

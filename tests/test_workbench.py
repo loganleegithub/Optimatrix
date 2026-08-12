@@ -123,6 +123,7 @@ def _snapshot() -> dict[str, object]:
                 "entry_boundary_max_loss_usd": "161.75",
                 "net_delta": "0.00",
                 "minimum_body_distance_sigma": "2.14",
+                "short_buyback_depth_ready": True,
             },
         },
         "quotes": [
@@ -183,6 +184,9 @@ def test_document_projects_one_four_leg_strategy_without_recalculating_values() 
     assert {row["key"]: row["value"] for row in structure_metrics}[
         "combined_net_credit_usd"
     ] == "38.25"
+    assert {row["key"]: row["value"] for row in structure_metrics}[
+        "short_buyback_depth_ready"
+    ] == "YES"
     score = cast(Sequence[Mapping[str, object]], document["score"])
     context = cast(Sequence[Mapping[str, object]], document["context"])
     assert {row["key"]: row["value"] for row in score}["final_score"] == "0.78"

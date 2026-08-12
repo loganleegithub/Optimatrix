@@ -6,9 +6,9 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `NONE`
 
-**Sole authorized closure:** `BTC_0DTE_ALL_JOINT_HARD_ELIGIBLE_SELECTION_V1`
+**Sole authorized closure:** `NONE`
 
 **Permission:** deterministic offline Shadow simulation and at most one active-task-authorized,
 bounded, read-only public Deribit current-Session snapshot after offline gates pass
@@ -23,12 +23,10 @@ bounded, read-only public Deribit current-Session snapshot after offline gates p
 
 ## Current business baseline
 
-The active Radar joint-admission denominator is `1` deterministic adversarial
-`SessionDecisionUnit`. It contains a higher single-side-ranked Condor that fails hard underwriting
-and a lower single-side-ranked combination that passes all hard economics and short-buyback depth.
-The current selector searches only three Verticals per side and underwrites after selection, so
-`0 / 1` units select the hard-eligible structure. The earliest blocker is
-`JOINT_HARD_ELIGIBLE_CANDIDATE_NOT_SEARCHED`.
+The Radar joint-admission denominator moved from `0 / 1` to `1 / 1` deterministic adversarial
+`SessionDecisionUnit`s selecting the only hard-eligible joint Condor. Every legal combination inside
+the bounded chain is now hard-underwritten before rank, and both shorts must have full-quantity
+stressed public buyback depth at the Decision boundary.
 
 The Radar MarketContext evidence denominator moved from `0 / 1` to `1 / 1` deterministic
 `SessionDecisionUnit`s correctly distinguishing evidence-qualified context from `UNKNOWN`. Numeric
@@ -54,6 +52,21 @@ denominator. The current product includes one four-leg decision object, one cano
 coherent four-leg attempt truth, fail-closed partial remediation, and eligibility-separated Outcomes.
 
 ## Accepted closure result
+
+The measured `JOINT_HARD_ELIGIBLE_CANDIDATE_NOT_SEARCHED` blocker moved from `1 / 1` to `0 / 1`. In
+the adversarial chain, four Put Verticals and one Call Vertical produce four joint candidates; the
+three higher single-side-ranked combinations fail net-Delta admission, while the former fourth Put
+component forms the sole hard pass and is selected `1 / 1`. The unsafe top-N Policy field and its
+single-side rank path were physically deleted.
+
+Joint net credit, credit/payoff, boundary maximum loss, fee burden, body distance, net Delta, and
+both-short full-quantity stressed public buyback depth now gate every candidate before ranking. When
+entry-side books exist but a short cannot be fully repriced for buyback, the structure stage remains
+known and the same unit stops at `ENTRY_ROUTE_EVALUABLE` with exact depth blockers. Policy schema V2
+rotated the unqualified identity to
+`sha256:2456ff4652af1e62bd7fb2ac89e981ebe0fd077cfd2cda6dae1242c457585671`; numeric thresholds did not
+change. No durable record, live command, private route, liquidity guarantee, or Edge claim was
+added.
 
 The measured `MARKET_CONTEXT_EVIDENCE_NOT_BOUND` false pass moved from `1 / 1` to `0 / 1`. The same
 canonical unit remains in the denominator, but incomplete evidence now produces `UNKNOWN 0 / 1`,

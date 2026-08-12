@@ -7,9 +7,11 @@ from decimal import Decimal
 from optimatrix.market import MarketContext, OptionQuote, OptionType
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.pricing import (
+    Action,
     IronCondorExecution,
     VerticalExecution,
     combine_condor,
+    execute_leg,
     price_credit_vertical,
 )
 
@@ -19,7 +21,6 @@ class VerticalCandidate:
     short_quote: OptionQuote
     long_quote: OptionQuote
     execution: VerticalExecution
-    credit_to_payoff: Decimal
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class StructureSelection:
     considered_put_verticals: int
     considered_call_verticals: int
     considered_condors: int
+    hard_eligible_condors: int
     blockers: tuple[str, ...]
 
 
@@ -62,6 +64,7 @@ def select_iron_condor(
             considered_put_verticals=0,
             considered_call_verticals=0,
             considered_condors=0,
+            hard_eligible_condors=0,
             blockers=("NO_CURRENT_SESSION_QUOTES",),
         )
     expiries = {quote.expiry for quote in quotes}
@@ -71,6 +74,7 @@ def select_iron_condor(
             considered_put_verticals=0,
             considered_call_verticals=0,
             considered_condors=0,
+            hard_eligible_condors=0,
             blockers=("MIXED_EXPIRY_INPUT",),
         )
     relevant = tuple(quote for quote in quotes if _short_delta_eligible(quote, policy))
@@ -111,15 +115,15 @@ def select_iron_condor(
             considered_put_verticals=len(put_verticals),
             considered_call_verticals=len(call_verticals),
             considered_condors=0,
+            hard_eligible_condors=0,
             blockers=tuple(blockers),
         )
 
-    top_n = policy.structure.top_verticals_per_side
-    ranked_puts = sorted(put_verticals, key=_vertical_rank_key)[:top_n]
-    ranked_calls = sorted(call_verticals, key=_vertical_rank_key)[:top_n]
     candidates: list[IronCondorCandidate] = []
-    for put in ranked_puts:
-        for call in ranked_calls:
+    eligible: list[IronCondorCandidate] = []
+    rejected_blockers: list[str] = []
+    for put in put_verticals:
+        for call in call_verticals:
             if put.short_quote.expiry != call.short_quote.expiry:
                 continue
             legs = (
@@ -148,39 +152,61 @@ def select_iron_condor(
                 forward=context.forward_price,
                 physical_sigma=physical_sigma,
             )
-            candidates.append(
-                IronCondorCandidate(
-                    long_put=put.long_quote,
-                    short_put=put.short_quote,
-                    short_call=call.short_quote,
-                    long_call=call.long_quote,
-                    execution=execution,
-                    net_delta=net_delta,
-                    put_body_distance_sigma=put_distance,
-                    call_body_distance_sigma=call_distance,
-                    minimum_body_distance_sigma=min(put_distance, call_distance),
-                    average_spread_quality=sum(
-                        (_spread_quality(quote) for quote in legs),
-                        Decimal(0),
-                    )
-                    / Decimal(4),
-                    depth_quality=_depth_quality(execution),
+            candidate = IronCondorCandidate(
+                long_put=put.long_quote,
+                short_put=put.short_quote,
+                short_call=call.short_quote,
+                long_call=call.long_quote,
+                execution=execution,
+                net_delta=net_delta,
+                put_body_distance_sigma=put_distance,
+                call_body_distance_sigma=call_distance,
+                minimum_body_distance_sigma=min(put_distance, call_distance),
+                average_spread_quality=sum(
+                    (_spread_quality(quote) for quote in legs),
+                    Decimal(0),
                 )
+                / Decimal(4),
+                depth_quality=_depth_quality(execution),
             )
+            candidates.append(candidate)
+            hard_blockers = _joint_hard_blockers(
+                candidate,
+                context=context,
+                policy=policy,
+            )
+            if hard_blockers:
+                rejected_blockers.extend(hard_blockers)
+            else:
+                eligible.append(candidate)
     if not candidates:
         return StructureSelection(
             selected=None,
             considered_put_verticals=len(put_verticals),
             considered_call_verticals=len(call_verticals),
             considered_condors=0,
+            hard_eligible_condors=0,
             blockers=("NO_COHERENT_COMBINABLE_TWO_SIDED_STRUCTURE",),
         )
-    selected = min(candidates, key=lambda candidate: _condor_rank_key(candidate, policy))
+    if not eligible:
+        return StructureSelection(
+            selected=None,
+            considered_put_verticals=len(put_verticals),
+            considered_call_verticals=len(call_verticals),
+            considered_condors=len(candidates),
+            hard_eligible_condors=0,
+            blockers=(
+                "NO_JOINT_CANDIDATE_PASSES_HARD_UNDERWRITING",
+                *tuple(dict.fromkeys(rejected_blockers)),
+            ),
+        )
+    selected = min(eligible, key=_condor_rank_key)
     return StructureSelection(
         selected=selected,
         considered_put_verticals=len(put_verticals),
         considered_call_verticals=len(call_verticals),
         considered_condors=len(candidates),
+        hard_eligible_condors=len(eligible),
         blockers=(),
     )
 
@@ -233,11 +259,6 @@ def _vertical_candidates(
                     short_quote=short,
                     long_quote=long,
                     execution=execution,
-                    credit_to_payoff=(
-                        execution.usd_net_credit / execution.payoff_cap_usd
-                        if execution.payoff_cap_usd > 0
-                        else Decimal(0)
-                    ),
                 )
             )
     return tuple(output)
@@ -274,35 +295,60 @@ def _four_leg_coherent(
     )
 
 
-def _vertical_rank_key(candidate: VerticalCandidate) -> tuple[object, ...]:
-    return (
-        -candidate.credit_to_payoff,
-        -candidate.execution.usd_net_credit,
-        candidate.execution.consumed_level_count,
-        candidate.execution.width_usd_per_unit,
-        candidate.long_quote.instrument_name,
-    )
-
-
-def _condor_rank_key(
+def _joint_hard_blockers(
     candidate: IronCondorCandidate,
+    *,
+    context: MarketContext,
     policy: BtcShortVolPolicy,
-) -> tuple[object, ...]:
+) -> tuple[str, ...]:
+    execution = candidate.execution
+    blockers: list[str] = []
+    if candidate.minimum_body_distance_sigma < policy.radar.minimum_body_distance_sigma:
+        blockers.append("BODY_DISTANCE_TOO_SMALL")
+    if abs(candidate.net_delta) > policy.radar.maximum_abs_net_delta:
+        blockers.append("NET_DELTA_TOO_DIRECTIONAL")
+    if execution.usd_net_credit < policy.underwriting.minimum_combined_net_credit_usd:
+        blockers.append("COMBINED_NET_CREDIT_TOO_SMALL")
+    credit_ratio = execution.usd_net_credit / execution.maximum_side_payoff_cap_usd
+    if credit_ratio < policy.underwriting.minimum_credit_to_max_side_payoff:
+        blockers.append("CREDIT_TO_MAX_SIDE_PAYOFF_TOO_SMALL")
+    if execution.entry_boundary_max_loss_usd > policy.underwriting.maximum_entry_boundary_loss_usd:
+        blockers.append("ENTRY_BOUNDARY_MAX_LOSS_TOO_HIGH")
+    fee_fraction = execution.usd_total_fee / execution.usd_gross_credit
+    if fee_fraction > policy.underwriting.maximum_total_fee_fraction_of_credit:
+        blockers.append("FOUR_LEG_FEE_BURDEN_TOO_HIGH")
+    if (
+        execute_leg(
+            candidate.short_put,
+            action=Action.BUY,
+            quantity=policy.structure.target_quantity,
+            index_price=context.index_price,
+        )
+        is None
+    ):
+        blockers.append("PUT_SHORT_BUYBACK_DEPTH_INSUFFICIENT")
+    if (
+        execute_leg(
+            candidate.short_call,
+            action=Action.BUY,
+            quantity=policy.structure.target_quantity,
+            index_price=context.index_price,
+        )
+        is None
+    ):
+        blockers.append("CALL_SHORT_BUYBACK_DEPTH_INSUFFICIENT")
+    return tuple(blockers)
+
+
+def _condor_rank_key(candidate: IronCondorCandidate) -> tuple[object, ...]:
     execution = candidate.execution
     credit_ratio = (
         execution.usd_net_credit / execution.maximum_side_payoff_cap_usd
         if execution.maximum_side_payoff_cap_usd > 0
         else Decimal(0)
     )
-    delta_excess = max(Decimal(0), abs(candidate.net_delta) - policy.radar.maximum_abs_net_delta)
-    distance_deficit = max(
-        Decimal(0),
-        policy.radar.minimum_body_distance_sigma - candidate.minimum_body_distance_sigma,
-    )
     fee_fraction = execution.usd_total_fee / execution.usd_gross_credit
     return (
-        delta_excess,
-        distance_deficit,
         -credit_ratio,
         -execution.usd_net_credit,
         fee_fraction,

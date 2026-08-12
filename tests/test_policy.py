@@ -42,5 +42,15 @@ def test_policy_rejects_invalid_risk_and_execution_ranges(tmp_path) -> None:
 
 
 def test_policy_identity_is_stable_and_content_addressed(policy) -> None:
+    assert policy.schema_version == 2
     assert policy.identity.startswith("sha256:")
     assert len(policy.identity) == 71
+
+
+def test_policy_rejects_removed_single_side_top_n_selector(tmp_path) -> None:
+    path = _write_policy(
+        tmp_path,
+        lambda value: value["structure"].update({"top_verticals_per_side": 3}),
+    )
+    with pytest.raises(ValueError, match="structure policy has unexpected fields"):
+        load_btc_short_vol_policy(path)

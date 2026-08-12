@@ -62,6 +62,7 @@ _STRUCTURE_METRIC_LABELS = {
     "entry_boundary_max_loss_usd": "Defined maximum loss at observation boundary",
     "net_delta": "Four-leg net Delta",
     "minimum_body_distance_sigma": "Nearest short strike distance",
+    "short_buyback_depth_ready": "Both shorts full-quantity buyback depth ready",
 }
 _LEG_DEFINITIONS = (
     ("long_put", "Long Put wing", "LONG", "PUT"),

@@ -74,6 +74,7 @@ def evaluate_radar_unit(
             considered_put_verticals=0,
             considered_call_verticals=0,
             considered_condors=0,
+            hard_eligible_condors=0,
             blockers=context.evidence_blockers,
         )
         return (
@@ -154,11 +155,6 @@ def evaluate_two_sided_short_vol(
         )
     structure = selection.selected
     score = _score(session=session, context=context, structure=structure, policy=policy)
-    if structure.minimum_body_distance_sigma < policy.radar.minimum_body_distance_sigma:
-        blockers.append("BODY_DISTANCE_TOO_SMALL")
-    if abs(structure.net_delta) > policy.radar.maximum_abs_net_delta:
-        blockers.append("NET_DELTA_TOO_DIRECTIONAL")
-    blockers.extend(_underwriting_blockers(structure, policy))
 
     hard_blockers = tuple(blockers)
     if hard_blockers:
@@ -274,25 +270,6 @@ def _gamma_safety(context: MarketContext) -> Decimal:
                 Decimal(1) - Decimal("0.50") * context.concentration_strength
             )
     return _clamp(path * event_factor * breakout_factor * concentration_factor)
-
-
-def _underwriting_blockers(
-    structure: IronCondorCandidate,
-    policy: BtcShortVolPolicy,
-) -> tuple[str, ...]:
-    execution = structure.execution
-    blockers: list[str] = []
-    if execution.usd_net_credit < policy.underwriting.minimum_combined_net_credit_usd:
-        blockers.append("COMBINED_NET_CREDIT_TOO_SMALL")
-    credit_ratio = execution.usd_net_credit / execution.maximum_side_payoff_cap_usd
-    if credit_ratio < policy.underwriting.minimum_credit_to_max_side_payoff:
-        blockers.append("CREDIT_TO_MAX_SIDE_PAYOFF_TOO_SMALL")
-    if execution.entry_boundary_max_loss_usd > policy.underwriting.maximum_entry_boundary_loss_usd:
-        blockers.append("ENTRY_BOUNDARY_MAX_LOSS_TOO_HIGH")
-    fee_fraction = execution.usd_total_fee / execution.usd_gross_credit
-    if fee_fraction > policy.underwriting.maximum_total_fee_fraction_of_credit:
-        blockers.append("FOUR_LEG_FEE_BURDEN_TOO_HIGH")
-    return tuple(blockers)
 
 
 def radar_decision_identity(

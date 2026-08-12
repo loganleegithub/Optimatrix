@@ -59,9 +59,11 @@ Policy calculator.
 
 ## Four-leg structure and attempt boundary
 
-`structure.py` selects one joint structure; no caller may select a Put and Call side independently
-and later call the result a Condor. `lifecycle.py` owns one entry-attempt identity covering all four
-selected legs at the full target quantity.
+`structure.py` enumerates the bounded chain's legal joint combinations, applies hard underwriting
+and both-short full-quantity public buyback-depth readiness, then ranks only the passing set. No
+caller may select a Put and Call side independently and later call the result a Condor.
+`lifecycle.py` owns one entry-attempt identity covering all four selected legs at the full target
+quantity.
 
 `FULL_ENTRY` requires all four leg acquisitions to be:
 

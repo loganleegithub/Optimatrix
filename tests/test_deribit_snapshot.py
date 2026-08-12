@@ -143,7 +143,10 @@ def test_public_snapshot_adapter_evaluates_current_session_without_writing_cases
     assert evaluation.public_combo_id is None
     assert evaluation.selection is not None
     assert evaluation.selection.considered_condors > 0
-    workbench = build_workbench_document(evaluation.as_object())
+    snapshot = evaluation.as_object()
+    counts = cast(Mapping[str, object], snapshot["market_counts"])
+    assert counts["hard_eligible_condors"] == 1
+    workbench = build_workbench_document(snapshot)
     assert workbench["structure"]["kind"] == "ASYMMETRIC_IRON_CONDOR"
     assert any(
         row["key"] == "ENTRY_ATTEMPT_SELECTED" and row["value"] == "PASSED · 1/1"
