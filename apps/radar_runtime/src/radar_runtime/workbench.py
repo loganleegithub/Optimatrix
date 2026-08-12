@@ -1856,6 +1856,16 @@ def _shadow_rows(
     return rows
 
 
+def _terminal_outcome_values(
+    kinds: Mapping[str, Sequence[Mapping[str, object]]],
+) -> tuple[Mapping[str, object], ...]:
+    return (
+        *kinds.get("SHADOW_OUTCOME", ()),
+        *kinds.get("SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME", ()),
+        *kinds.get("RADAR_SCORE_BAND_NO_TRADE_CONTROL_OUTCOME", ()),
+    )
+
+
 def _position_rows(
     kinds: Mapping[str, Sequence[Mapping[str, object]]],
     policies: PolicyChain,
@@ -1887,11 +1897,7 @@ def _position_rows(
         str(_payload(value).get("shadow_entry_identity")): value
         for value in kinds.get("SHADOW_CLOSE_OPPORTUNITY", ())
     }
-    outcome_values = (
-        *kinds.get("SHADOW_OUTCOME", ()),
-        *kinds.get("SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME", ()),
-        *kinds.get("RADAR_SCORE_BAND_NO_TRADE_CONTROL_OUTCOME", ()),
-    )
+    outcome_values = _terminal_outcome_values(kinds)
     outcomes_by_entry = {
         str(_payload(value).get("shadow_entry_identity")): value for value in outcome_values
     }
@@ -2129,7 +2135,7 @@ def _outcome_rows(
 ) -> list[dict[str, object]]:
     outcomes_by_observation = {
         str(_payload(value).get("shadow_observation_identity")): value
-        for value in kinds.get("SHADOW_OUTCOME", ())
+        for value in _terminal_outcome_values(kinds)
     }
     rows: list[dict[str, object]] = []
     for observation in kinds.get("SHADOW_OUTCOME_OBSERVATION", ()):

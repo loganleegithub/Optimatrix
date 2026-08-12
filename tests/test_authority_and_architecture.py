@@ -182,33 +182,30 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_shadow_scheme_two_deployment() -> None:
+def test_current_stage_authorizes_control_outcome_projection_cutover() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `VALIDATION_ONLY`" in current
-    assert "INVERSE_BTC_SHORT_VOL_V2_SHADOW_SCHEME_TWO_DEPLOYMENT_AUTHORIZED" in current
+    assert "**Current task kind:** `IMPLEMENTATION`" in current
+    assert "INVERSE_BTC_SHORT_VOL_V2_CONTROL_OUTCOME_PROJECTION_FIX_ACTIVE" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert (
-        "ONE_CORRECTIVE_LONG_LIVED_SESSION_START_AND_BOUNDED_API_BROWSER_GATE_AUTHORIZED" in current
-    )
+    assert "ONE_CLEAN_STOP_ONE_REPLACEMENT_START_AND_BOUNDED_API_BROWSER_GATE_AUTHORIZED" in current
     assert "SHADOW_SCHEME_TWO_DEPLOYMENT" in current
     for phrase in (
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
         "127.0.0.1:8765",
-        "3e59d6fde7d2de4c50777f909eb67f100a0dc88b",
-        "93b0b0c068631ef51cddddc211c31a87edc03909",
+        "deb20e4f2922c823cdd96ea9b4150a6a2883ffaf",
+        "sha256:9ef0082cf3f860247ea8409416cebe3a04f8ba13a9d91b9693258e8fd5ce22af",
         "92 schema-v5 Cases",
-        "36/36 known Outcomes",
-        "15/15 known Outcomes",
-        "33 recoverable lifecycle responsibilities",
-        "21 admitted Shadow trades",
-        "8 Radar score-band Controls",
-        "4 selected underwriting-decision Controls",
-        "Thirty-two are truthfully `GAPPED`",
-        "first authorized detached background launch did not persist",
-        "non-blocking service lease is unowned",
-        "start exactly one corrective runtime",
+        "44/44 known terminal-economic Cases",
+        "23/23 strict terminal-sample Cases",
+        "25 pending responsibilities",
+        "one `MARKET_EXIT` and seven `CONTRACT_SETTLEMENT` Outcomes",
+        "TERMINAL / SETTLED_KNOWN",
+        "Outcome projection incorrectly says `PENDING`",
+        "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME",
+        "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OUTCOME",
+        "start exactly one replacement",
         "No historical Case may be migrated, copied, deleted, relabeled, rewritten, or backfilled",
         "The current Position Policy identity and all nine frozen predicate thresholds remain unchanged",
         "Qualification remains offline",

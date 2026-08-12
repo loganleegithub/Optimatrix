@@ -691,6 +691,52 @@ def test_selected_decision_projection_keeps_original_refresh_and_outcome_togethe
     )
 
 
+@pytest.mark.parametrize(
+    "outcome_kind",
+    (
+        "SELECTED_UNDERWRITING_DECISION_CONTROL_OUTCOME",
+        "RADAR_SCORE_BAND_NO_TRADE_CONTROL_OUTCOME",
+    ),
+)
+def test_outcome_projection_joins_control_terminal_fact(outcome_kind: str) -> None:
+    entry_identity = "sha256:" + "1" * 64
+    observation_identity = "sha256:" + "2" * 64
+    kinds = {
+        "SHADOW_OUTCOME_OBSERVATION": [
+            {
+                "object_identity": observation_identity,
+                "payload": {
+                    "shadow_entry_identity": entry_identity,
+                    "observation_quality": "GAPPED",
+                },
+            }
+        ],
+        outcome_kind: [
+            {
+                "object_identity": "sha256:" + "3" * 64,
+                "payload": {
+                    "shadow_observation_identity": observation_identity,
+                    "shadow_entry_identity": entry_identity,
+                    "terminal_state": "SETTLED_KNOWN",
+                    "terminal_method": "CONTRACT_SETTLEMENT",
+                    "terminal_economics_eligible": True,
+                    "net_pnl_after_public_standard_fee_reserve_usdc": "4.5",
+                    "delivery_price_usdc_per_btc": "63500",
+                },
+            }
+        ],
+    }
+
+    (row,) = workbench_module._outcome_rows(kinds)
+
+    assert row["state"] == "SETTLED_KNOWN"
+    assert row["maturity"] == "KNOWN_TERMINAL"
+    assert row["terminal_method"] == "CONTRACT_SETTLEMENT"
+    assert row["terminal_economics_eligible"] is True
+    assert row["public_quote_net_pnl_valuation"] == "4.5"
+    assert row["delivery_price_valuation_per_btc"] == "63500"
+
+
 def test_shadow_projection_exposes_exact_pair_timing_no_entry_reason() -> None:
     candidate_identity = "sha256:" + "1" * 64
     boundary = {
