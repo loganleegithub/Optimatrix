@@ -1374,6 +1374,7 @@ def test_inverse_shadow_case_v5_conserves_native_and_boundary_valued_outcome(
 
     from short_vol_underwriting import (
         UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
+        ExitAcquisitionProfile,
         FixedContractShadowOwner,
         RuntimeBindings,
         ShadowCaseReadStatus,
@@ -1863,6 +1864,11 @@ def test_inverse_shadow_case_v5_conserves_native_and_boundary_valued_outcome(
     ] == [1_000, 1_000]
 
     close_identity = canonical_identity("PositionActionIdentity", "inverse-close")
+    acquisition_profile = ExitAcquisitionProfile.create(
+        response_budget_ms=policies.position.component_book_snapshot_response_budget_ms,
+        maximum_source_skew_ms=policies.position.maximum_component_pair_source_skew_ms,
+        maximum_receive_skew_ms=policies.position.maximum_component_pair_receive_skew_ms,
+    )
     state.record(
         object_kind="POSITION_ACTION",
         object_identity=close_identity,
@@ -1876,6 +1882,7 @@ def test_inverse_shadow_case_v5_conserves_native_and_boundary_valued_outcome(
             "primary_close_reason": "ECONOMIC_EXIT_BOUNDARY_REACHED",
             "secondary_close_reasons": [],
             "first_latched_close_action_identity": close_identity,
+            "exit_acquisition_profile": acquisition_profile.as_object(),
             "action_fact_boundary": boundary(5).as_object(),
         },
     )
