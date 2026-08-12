@@ -6,10 +6,9 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `NONE`
 
-**Sole authorized closure:**
-[`BTC_0DTE_CLEAN_REBUILD`](../../tasks/BTC_0DTE_CLEAN_REBUILD.md)
+**Sole authorized closure:** `NONE`
 
 **Permission:** deterministic offline Shadow simulation and at most one active-task-authorized,
 bounded, read-only public Deribit current-Session snapshot after offline gates pass
@@ -26,27 +25,27 @@ bounded, read-only public Deribit current-Session snapshot after offline gates p
 
 At base `13902c53e972f12721d2ef9d17de866fbda288a7`, `0 / 1` canonical repository product paths
 selected one current-Session four-leg Iron Condor; `1 / 1` selected one single-side Credit Vertical.
-The active task must move that product-path denominator to `1 / 1` without retaining a selectable
-legacy strategy path.
+The completed rebuild moved that product-path denominator to `1 / 1` four-leg paths and `0 / 1`
+selectable legacy single-side paths.
 
 The canonical live-market `SessionDecisionUnit` denominator remains `NOT_YET_MEASURED`. Offline
 fixtures and one bounded public snapshot may falsify formulas, source translation, and current
 reachability; they cannot estimate opportunity frequency, qualify the Policy, or prove Edge.
 
-The active task's primary blocker is `WRONG_CANONICAL_STRATEGY_OBJECT`. Its required product result
-is one four-leg decision object, one canonical funnel, coherent four-leg attempt truth, fail-closed
-partial remediation, and eligibility-separated Outcomes.
+The measured `WRONG_CANONICAL_STRATEGY_OBJECT` blocker is closed for the repository product-path
+denominator. The current product includes one four-leg decision object, one canonical funnel,
+coherent four-leg attempt truth, fail-closed partial remediation, and eligibility-separated Outcomes.
 
-## Active closure result
+## Accepted closure result
 
 The working branch now has `1 / 1` canonical product paths selecting and presenting the current-
 Session four-leg Iron Condor and `0 / 1` selectable legacy single-side product paths. The measured
 `WRONG_CANONICAL_STRATEGY_OBJECT` blocker moved from `1 / 1` to `0 / 1`.
 
-The single authorized public snapshot attempt ended before a Decision with
+The completed task's single authorized public snapshot attempt ended before a Decision with
 `http.client.IncompleteRead(677343 bytes read)` while reading the Deribit instrument response. That
 transport exception is now mapped to a truthful `DeribitSourceError` under deterministic
-validation, but live reachability remains `UNVERIFIED`; the task does not authorize a retry.
+validation, but live reachability remains `UNVERIFIED`; no retry is authorized without a new task.
 
 ## Authorized acceptance boundary
 
