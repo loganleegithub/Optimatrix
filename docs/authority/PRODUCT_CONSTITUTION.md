@@ -1,346 +1,222 @@
 # Optimatrix Product Constitution
 
-**Status:** ACTIVE PRODUCT AUTHORITY
+**Status:** ACTIVE PRODUCT AUTHORITY — STANDALONE LOCAL-VALIDATION CANDIDATE
 
-**Long-term product:** autonomous 0–3DTE options decision and trading system
+**Long-term product:** autonomous 0–3DTE options decision and future trading system
 
-**Current product slice:** Deribit `INVERSE_BTC_V1` options defined-risk
-`INVERSE_BTC_SHORT_VOL_V2`, with process-independent Shadow Case Outcomes under
-production-public Shadow permission
+**Current product:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-## Product roadmap (non-authorizing)
+## Product and non-replacement boundary
 
-The roadmap is a 2×2 product direction, not an accepted runtime surface. Only the upper-left
-channel is implemented or authorized. `INVERSE_BTC_SHORT_VOL_V2` is the sole repository
-implementation identifier for that channel; the economic product remains `INVERSE_BTC_V1`.
+Optimatrix is arranged as a fixed 2x2 Channel roadmap:
 
-| Channel | Implementation | Policy | Runtime authority |
-| --- | --- | --- | --- |
-| `INVERSE_BTC_SHORT_VOL` (`INVERSE_BTC_SHORT_VOL_V2`) | `IMPLEMENTED` | fixed V2 Inverse three-Policy chain | `PUBLIC_SHADOW` |
-| `INVERSE_BTC_LONG_GAMMA` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
-| `INVERSE_ETH_SHORT_VOL` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
-| `INVERSE_ETH_LONG_GAMMA` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
+| Product | Short Vol | Long Gamma |
+| --- | --- | --- |
+| Inverse BTC | `IMPLEMENTED` | `RESERVED / UNIMPLEMENTED` |
+| Inverse ETH | `RESERVED / UNIMPLEMENTED` | `RESERVED / UNIMPLEMENTED` |
 
-An unimplemented roadmap cell creates no product specification, module, Policy, selector, runtime,
-Case schema, task, or permission. It cannot be inferred from the implemented BTC Short Vol channel.
+The sole implemented Channel is `INVERSE_BTC_SHORT_VOL`. The other descriptors create no Policy,
+selector, owner, Case codec, runtime, task, permission, or generic extension mechanism.
 
-## North star
+This branch is an isolated new-product candidate. It does not replace, migrate, reinterpret, or
+operate the preceding V2 runtime or its historical Cases. The legacy repository, deployment
+checkout, Policies, Case schema, and Case root remain outside this product boundary.
 
-Optimatrix is first a continuously running opportunity-discovery and Shadow-learning product for a
-trader. It must turn current public market facts into a bounded, ranked, explainable opportunity
-view, decide whether an opportunity merits Shadow observation under one fixed Policy chain, and
-learn only from facts observed strictly after that decision.
+## North-star product question
 
-Market facts, Radar calculations, anomaly state, component-book counterfactuals, official combo
-diagnostics, Underwriting state, Candidate state, and Workbench projections are **real-time
-decision state** before Shadow enrollment. They may be known, degraded, or `UNKNOWN`; they are not
-durable research records.
+For the option expiry ending the current Deribit `08:00–08:00 UTC` settlement Session:
 
-The first durable business object is `SHADOW_CASE_OPENED`. For an admitted trade it creates one
-process-independent Shadow Entry aggregate: the frozen `shadow_entry_identity`, contracts,
-quantity, entry prices, fees, entry time, economics, product, and Policies survive every process.
-A runtime owns only one bounded Observation Segment over that Entry. Persistence serves online
-recovery, trader review, AI research, and later qualification. It never serves process
-commissioning, host monitoring, full-market reconstruction, or proof that the software did not
-deceive itself.
+> Is executable same-session implied variance rich enough relative to the forecast physical path,
+> and is Theta monetizable quickly enough, while Gamma, jump, event, directional-breakout,
+> concentrated-strike, and liquidity risks remain tolerable for a two-sided defined-risk sale?
 
-Every admitted Entry without a terminal `SHADOW_CASE_OUTCOME` is non-terminal. A later runtime using
-the same stable Case repository automatically restores all compatible non-terminal admitted
-Entries and future selected Controls that own Observation Segments. It never reconstructs
-Candidate, Underwriting, Radar Episode, or missed market facts.
-The interval between Observation Segments is explicitly `HANDOFF_GAP`; recovery data starts
-`UNKNOWN` until fresh public facts settle. A gap is observation quality, not a Position predicate,
-and cannot synthesize `CLOSE`.
-
-A qualification Cohort is an offline, pre-registered view derived from completed Shadow Cases. The
-Online Runtime does not own Cohort membership, windows, aligned-pair records, qualification
-manifests, or promotion receipts.
-
-## Current permission and non-claims
-
-The current permission is `PUBLIC_SHADOW`:
-
-- Deribit production public data only;
-- no credentials, private/account API, balance, margin, order, fill, capital, settlement action, or
-  actual exposure;
-- a public quote is not a fill;
-- a `SHADOW_CASE_OPENED` record is a simulated research enrollment, not a position;
-- current Policies are unqualified and do not establish edge or profitability.
-
-Permission comes only from [`CURRENT_STAGE`](CURRENT_STAGE.md). Code, tests, files, commits, green
-CI, or historical runs grant no additional authority.
-
-## Product identity and unit boundary
-
-The sole Online Runtime product is `INVERSE_BTC_V1`. Startup binds its one canonical product
-specification and exact matching Radar, Underwriting, and Position Policies for the full run. There
-is no product selector, fallback product, compatibility profile, or in-process product switch.
-Every active Policy chain and every durable Shadow Case binds the same Inverse product identity. A
-foreign product, mismatched Policy chain, or non-Inverse leg fails before Candidate or Case.
-
-The product identity declares the market family, quote and settlement currencies, `btc_usd` price
-index, BTC-native option-price unit, economic-semantics version, model-normalization rule,
-valuation-conversion rule, payoff convention, standard fee rule, and Inverse Case schema version.
-Premium, fees, settlement cashflow, and PnL are BTC-native; the causal BTC index converts those
-native amounts to an explicitly labeled current USD valuation boundary. Model-normalized premium
-and current USD valuation are different quantities and may not be substituted. Defined strike
-width limits USD payoff, while the corresponding BTC liability depends on settlement price. Public
-facts do not establish actual account margin, which remains `UNKNOWN`.
-
-## Product funnel
-
-The first slice is managed as one measurable funnel:
+The canonical structure is one asymmetric four-leg Iron Condor:
 
 ```text
-APPLICABLE_MARKET_SCOPE
-→ RADAR_KNOWN
-→ ANOMALY_ACTIVE
-→ STRUCTURE_REVIEWABLE
-→ COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE
-→ UNDERWRITING_EVALUABLE
-→ CANDIDATE
-→ SHADOW_CASE_OPENED
-→ SHADOW_CASE_OUTCOME
+buy lower-strike Put
+sell higher-strike Put
+sell lower-strike Call
+buy higher-strike Call
 ```
 
-The canonical Case stages count admitted Candidates. Selected no-trade Cases use a separate
-research projection and cannot change those conversion counts.
+The Put and Call Credit Verticals are reusable pricing and acquisition components. Neither a single
+Vertical nor two independently selected Vertical scores are the product.
 
-Every stage has an explicit numerator, denominator, and blocker reason. A task must move one stage,
-reduce the largest measured blocker, or remove a proven non-product subsystem that blocks the
-funnel. Test count, object count, evidence count, runtime duration, and document count are not
-product progress.
-
-The primary blocker is the earliest material loss in this funnel. It may be `UNKNOWN`, but it may
-also be known absence such as `NO_PROTECTIVE_COMPONENT`,
-`NO_TARGET_SIZE_COMPONENT_BOOK_QUOTE`, known ineligibility, WATCH thresholds, or paired
-admission-refresh failure. `NO_ACTIVE_COMBO` is a parallel exchange diagnostic, not a Shadow-funnel
-loss.
-
-## Stage-specific loss functions
-
-The product does not apply execution-stage risk preferences to every earlier stage.
-
-### Radar and trader review
-
-False-positive cost is lower than at admission because no order or Shadow Case follows automatically
-from display, but it is not zero: an over-broad Radar makes every downstream conversion rate and
-blocker economically misleading. Radar should therefore expose selective, time-persistent bounded
-clues with the causal benchmark, confidence, missing facts, and upgrade/invalidation
-conditions. An unrelated `UNKNOWN` must not erase a known positive witness.
-
-The trader's primary Radar surface is a discovery map, not a server-field inventory. It may default
-to the current `HIGH` bucket leaders that are `CONFIRMING | ACTIVE`, while reporting that visible
-count against the complete current Radar denominator. Expiry and strike remain fixed spatial
-coordinates; LOW/MID members, review-only rows, and source blockers remain available to the server
-and on-demand evidence but do not compete with strong signals for first-screen attention. Shadow
-tracking and later AI research are separate product surfaces. Radar cannot imply that the trader
-confirmed a signal, selected a structure, or advanced it into Shadow.
-
-### Underwriting and Shadow admission
-
-A Candidate or Shadow admission requires its declared facts and executable economics. Missing
-required facts remain `UNKNOWN` and cannot create a Candidate or Case. The trader-facing review may
-still show the incomplete opportunity and the precise blocker.
-
-### Real execution
-
-Future private execution remains a separate fail-closed security, account, capital, and order
-boundary.
-
-## Data classes
-
-### Transient market facts
-
-Catalog, platform, clock, index, ticker, order-book, RPC, and continuity facts are maintained in
-bounded memory. Only the rolling history consumed by a declared causal feature may remain in
-memory. Normal ticks and full books are not persisted.
-
-### Current opportunity state
-
-Radar hard-screen calculations, diagnostic regime/surface/legged/rank context, component-book
-counterfactuals, atomic diagnostics, Underwriting, Candidate, admission, current Position
-assessment, health, readiness, and funnel diagnostics are current in-memory state. Workbench
-snapshots are immutable bytes for readers but are not durable records.
-
-### Shadow Case data
-
-An enrolled `SHADOW_CASE_OPENED` freezes the origin code/runtime and exact three Policy identities,
-decision boundary, frozen two-leg structure, target quantity, one strictly later paired public
-option-book snapshot, conservative stressed leg prices, standard public fees, and the minimum
-consumed decision facts. In schema v5 those facts include the same canonical V2 score-packet shape
-at selection and entry refresh, plus the protective-leg selector-rule identity and Candidate
-protective-leg count that cannot be reconstructed after option scope is released.
-`enrollment_kind` discriminates an admitted Candidate trade, one selected HIGH Underwriting
-decision control, and one sampled LOW/MID Radar-score control; either control has no Candidate or
-`SHADOW_ENTRY` identity. Strictly future bounded transitions and one terminal Outcome may then be
-stored. For a new admitted Entry, its origin `SHADOW_CASE_SEGMENT_OPENED` freezes the
-`entry_position_baseline` needed after restart: the entry index and short-leg mark IV with their
-exact source identities and boundaries. Missing accepted source references prevent a schema-v5
-Case from opening; they are never inferred or added later.
-
-An opened Case without a terminal record after an unclean process loss is
-not silently completed. Its open Observation Segment is `INCOMPLETE_UNCLEAN_EXIT`, while the
-admitted Entry remains non-terminal and is recovered into a new `HANDOFF_GAP` segment. Missing
-facts across the gap remain `UNKNOWN` and the gap permanently changes observation quality. Selected
-no-trade Controls are not admitted Entry aggregates and never imply capital exposure, but future
-Controls use the same process-independent Position horizon; legacy segmentless Controls remain
-historical.
-
-### Qualification data
-
-Qualification eligibility is determined later from persisted Shadow Cases by an offline,
-pre-registered evaluator. A Case may be useful for research without being eligible for a
-particular qualification denominator.
-
-## Radar product meaning
-
-The first Radar asks:
-
-> Given one causal, target-size executable option snapshot, does a frozen combination of premium
-> richness and observable path/liquidity quality rank this opportunity above the V2 review
-> threshold, and has that state persisted long enough to merit formal structure review?
-
-The answer is an ordinal opportunity-filter score, never an oracle, probability, expected return,
-or sufficient condition for profit. It aims to raise the conditional quality of what reaches
-Underwriting while retaining bounded LOW/MID no-trade Controls so future Shadow Outcomes can
-falsify the ranking. A numeric `65` score does not mean `65%`.
-
-It separately reports whether an existing official Deribit combo happens to expose the required
-target-size 1:1 protective credit vertical. Detector truth and the atomic diagnostic remain
-distinct:
+## Strategy identity
 
 ```text
-detector = UNKNOWN | NO_ANOMALY | ANOMALY_ACTIVE
-atomic = NOT_EVALUATED | UNKNOWN | NO_ACTIVE_COMBO |
-         NO_TARGET_SIZE_CREDIT_QUOTE | PUBLIC_ATOMIC_QUOTE_AVAILABLE
+Executable Session VRP       reason to sell
+Theta capture                monetization speed
+Range survival               probability-quality filter
+Gamma / jump / event state   primary loss filter
+Execution quality            whether the joint premium is collectible
 ```
 
-`NO_ACTIVE_COMBO` means only that the exact exchange-managed combo is not currently active. It does
-not mean the two option legs lack public depth, the defined-risk structure cannot be priced, or the
-Shadow counterfactual is unavailable.
+The score is an ordinal filtering hypothesis, not a calibrated probability, expected return, Edge,
+or sufficient condition for profit. High premium cannot compensate for a live event, shock,
+concentrated-strike breakout, accelerating path, incoherent four-leg snapshot, or unavailable risk
+exit.
 
-The Radar must show the trader the score interval, LOW/MID/HIGH band, premium/risk decomposition,
-causal source-confirmed UTC-epoch-aligned five-minute `average_price` baseline horizons,
-coverage/missing mask,
-bucket leader, and upgrade/invalidation condition. A clue must be target-size, two-sided, uncrossed,
-official-tick-aware, one-tick robust, time-persistent, and inside an explicit TTE/Delta risk bucket.
-Local surface and adjacent-term residuals are bounded optional adjustments; adverse semivariance,
-jump share, and target-book liquidity are required quality inputs. Public OI times absolute gamma
-is an unsigned concentration diagnostic only: dealer sign remains `UNKNOWN` and it cannot enter the
-score. The runtime persists no clue, score, quote, or review before Case opening and claims no
-calendar forecast, signed dealer GEX, pin target, Policy Edge, or profitability.
+## Session and canonical decision unit
 
-Optional surface/term adjustments require their exact contributing ticker source times to be
-within the fixed cross-sectional skew budget and ATM proxies to be within the fixed Delta distance.
-Failure of that optional coherence test reduces score coverage rather than fabricating a neutral
-value or erasing otherwise known A/D/E evidence. Every future Case binds selection to the actual
-Episode-activation packet even when another HIGH member in the same batch was designated first.
+An option is 0DTE only when its expiry equals the end of the current Deribit settlement Session at
+`08:00 UTC`. Each fact belongs to one `MarketSessionId` and one phase:
 
-## Underwriting and admission
+```text
+ROLL_REPRICE
+CORE_CARRY
+LATE_THETA
+EXIT_ONLY
+DELIVERY_TWAP
+```
 
-A fixed Underwriting Policy compares the conservative full-quantity two-leg net premium with
-declared path, jump, tail, liquidity, cost, and uncertainty reserves. The entry counterfactual sells
-the short leg at bid stressed down one official tick, buys the frozen protective leg at ask stressed
-up one official tick, and reserves both standard option fees. It returns
-`CANDIDATE | WATCH | ABSTAIN` only when evaluable; unavailable Underwriting has no economic action.
-Radar's Top-3 protective review is display-only. After complete positive option scope, the formal
-Underwriting selector classifies every legal target-size protective quote, prefers `CANDIDATE` over
-`WATCH` over `ABSTAIN`, then applies one declared deterministic predicate-margin order before
-freezing the chosen long for the Episode. A potentially legal leg with unknown required input keeps
-selection `UNKNOWN`; known inactive or quantity-ineligible legs are excluded.
+The initial phase boundaries are launch priors, not qualified sweet-zone claims.
 
-`SHADOW_ENTRY` requires a still-valid Candidate and exactly two strictly later, causally bound public
-option-book responses for the frozen short and protective long. Both legs must cover the full target
-quantity under the same conservative pricing rule and satisfy the pair session, continuity, and
-skew budgets frozen in the Policy chain. That transition opens the admitted Shadow Case.
-Ordinary WATCH and ABSTAIN results remain current state and do not automatically create rejected
-counterfactual trades. HIGH activation batches retain the one action-blind selected Underwriting
-decision and ordinary Candidate admission semantics. When a causal batch contains no HIGH
-activation, the Radar may designate at most one already-confirmed LOW/MID research-review Episode
-using the frozen future-blind stratum and member hashes. It then uses the same formal protective-leg
-selector and one strictly later paired refresh as ordinary admission. Any evaluable refresh opens
-one explicitly tagged non-admitted Radar-score Control, even if refreshed Underwriting happens to
-be Candidate; it never retroactively admits, consumes a slot, creates a `SHADOW_ENTRY`, or exposes
-capital. Failed/unknown refresh opens no Case and has no fallback. The Case-derived research
-denominator is therefore explicitly conditional on successful paired refresh and Case opening.
+The sole product-funnel counting unit is:
 
-## Position and Outcome
+```text
+SessionDecisionUnit =
+  product_spec_identity
+  + MarketSessionId
+  + decision_window_identity
+  + Decision Policy identity
+```
 
-After Case opening, one fixed Position Policy continuously returns `HOLD | CLOSE | UNKNOWN` from
-strictly later public facts inside the current Observation Segment. `CLOSE` is an immutable exit
-instruction, not a closing fact. Its first Policy reason is durably latched before acquisition, but
-quote failure or process loss cannot consume the Position's continuing exit responsibility. The
-owner freezes one finite acquisition profile with that future first CLOSE, keeps at most one paired
-attempt in flight, retries on the profile's cadence, and accepts the first causally eligible
-full-quantity pair without retrospective price selection. A version-3 market Outcome retains the
-complete accepted pair provenance and its selected-sample identity so the official reader can
-reconstruct that choice independently.
+One unit may inspect many options, Verticals, quotes, and joint structures, but the fixed Policy may
+designate at most one primary four-leg structure. Legs, structures, refreshes, acquisition routes,
+retries, journal records, and Workbench rows never multiply the opportunity denominator.
 
-At expiry, ordinary close acquisition gives way to official contract settlement. One validated
-Deribit `btc_usd` delivery-price history response may settle every waiting expiry date. The one
-Inverse calculator forms signed short/long payoff, public capped delivery fee, BTC-native PnL, and
-separate delivery-price valuation. The terminal record binds both the response envelope and the
-accepted expiry member; a response need not contain the request owner's date in order to settle a
-different waiting date. The terminal union is `EXITED_KNOWN | SETTLED_KNOWN |
-TERMINAL_UNKNOWN`; temporary source failure remains `SETTLEMENT_PENDING`, and the current runtime
-has no automatic unknown-finality timeout.
+## Canonical product funnel
 
-Clean stop, handled failure, and unclean process loss remain distinct Observation Segment endings
-and do not terminate a Position-bearing Case. After recovery and fresh facts, it may still form
-known terminal economics. A gap stores `observation_quality=GAPPED` and preserves the legacy
-strict-continuity projection as false, but it does not globally disqualify the Case. Named offline
-Cohorts separately decide terminal-economics, continuous-path, terminal-sample-integrity, and
-first-CLOSE-to-terminal exit-acquisition eligibility.
+```text
+APPLICABLE_SESSION_DECISION
+→ MARKET_CONTEXT_KNOWN
+→ VRP_THETA_QUALIFIED
+→ GAMMA_JUMP_BREAKOUT_RISK_ACCEPTABLE
+→ TWO_SIDED_STRUCTURE_EVALUABLE
+→ ENTRY_ROUTE_EVALUABLE
+→ ENTRY_ATTEMPT_SELECTED
+→ DECISION_CASE_OPENED
+→ ENTRY_RESULT_KNOWN
+→ DECISION_CASE_OUTCOME_KNOWN
+```
 
-## AI Researcher and qualification
+Each stage denominator is the preceding stage numerator. A known negative consumes that stage and
+records one bounded blocker. Required-fact `UNKNOWN` is reported separately. The primary blocker is
+the earliest material loss in the canonical funnel, not the largest later fraction. Tests, scenario
+count, runtime duration, and durable object count are not funnel movement.
 
-The AI Researcher reads Shadow Cases, their strictly future Outcomes, and non-durable aggregate
-funnel diagnostics. It may propose one declared Challenger. It may not rewrite online truth,
-select outcomes after seeing them, approve itself, promote a Policy, or access execution.
+`DECISION_CASE_OPENED` counts only a future-blind formal entry-attempt enrollment. Review or Abstain
+does not open a Case. The Case freezes the selected product, Policy, SessionDecisionUnit, four-leg
+structure, causal decision boundary, and non-claims before acquisition results are known.
 
-Independent verification and strict receipts are reserved for future Challenger qualification,
-Policy promotion, private execution, and capital/account safety. They are not public-Radar runtime
-requirements.
+## Four-leg attempt coherence and entry truth
 
-## Hard invariants
+One selected entry attempt has one attempt identity, full target quantity, decision boundary,
+attempt boundary, and bounded source/receive coherence budget across all four selected legs.
+`FULL_ENTRY` requires every selected leg to be acquired at full quantity inside that same attempt.
+Two Verticals acquired under unrelated or later attempts cannot be combined into a synthetic full
+Condor.
 
-1. Current decision facts are known at or before their causal boundary.
-2. Shadow observations are strictly ordered inside one runtime Observation Segment. Cross-runtime
-   order is established only by the durable segment predecessor chain; an interval between
-   segments is `HANDOFF_GAP`, never imputed continuous observation.
-3. Missing, stale, discontinuous, incomplete, or contaminated required facts remain `UNKNOWN` at
-   the smallest consumer.
-4. A known positive witness is not erased by unrelated missingness; negative absence claims require
-   complete relevant scope.
-5. Detector truth, diagnostic review/rank, component-book counterfactual, official atomic
-   diagnostic, Underwriting action,
-   admission, Position action, Shadow Outcome, future order state, and actual fill state remain
-   distinct; diagnostic context cannot create downstream truth.
-6. Shadow entry and close economics require full-quantity public depth on both frozen option legs,
-   the declared one-tick adverse stress, both standard fees, and strictly later paired snapshots.
-   They are counterfactuals, not orders, fills, atomic quotes, or liquidity reservations.
-7. Pre-Shadow durable business record count is exactly zero; Shadow begins only at explicit Case
-   enrollment.
-8. The Online Runtime persists only bounded Shadow Entry aggregate and Observation Segment
-   records; it does not persist Cohort, aligned-pair, Workbench, service, host, or full-market
-   records.
-9. One run binds one exact three-Policy chain and cannot hot-reload, train, promote, or tune it.
-10. A runtime never owns an admitted Entry or selected Control aggregate. Under the stable
-    repository lease, every new runtime automatically restores compatible non-terminal admitted
-    Entries and future Segment-bearing Controls and opens a new Segment; legacy segmentless
-    Controls and pre-Shadow state are never restored.
-11. Qualification criteria are frozen before evaluating a derived Cohort.
-12. Private execution remains a separate authorization and security boundary.
+The strictly later entry result is exactly one of:
 
-## Permanent non-goals for the current slice
+```text
+FULL_ENTRY
+PUT_SIDE_ONLY
+CALL_SIDE_ONLY
+TWO_SIDES_INCOHERENT
+WINGS_ONLY
+NO_ENTRY
+```
 
-- full-market tape, replay platform, feature store, database, generic event bus, workflow engine, or
-  microservice split;
-- online Cohort manager, automatic no-trade counterfactual for every rejection, or per-tick durable
-  Position history;
-- application commissioning, host PID/log inspection, resource acceptance controller, manifest,
-  receipt chain, validator-of-validator, or duplicated business schema;
-- automatic Policy training, qualification, promotion, or private execution.
-- database, fencing service, generic event log, per-tick Position persistence, market replay, or
-  synthesis of facts across a process gap.
+- `FULL_ENTRY` alone may enter normal Short Vol carry and become eligible for primary strategy
+  Outcome evaluation.
+- `PUT_SIDE_ONLY` and `CALL_SIDE_ONLY` contain unintended live short risk. They bypass normal carry,
+  enter bounded partial remediation immediately, and remain ineligible for the primary full-Condor
+  Outcome.
+- `TWO_SIDES_INCOHERENT` preserves two separately observable side acquisitions whose combined
+  four-leg attempt violated the cross-side coherence budget. Both sides enter remediation; the
+  result is never a full Condor or strategy Outcome.
+- `WINGS_ONLY` contains no short risk. It enters residual-wing management and is ineligible for the
+  primary full-Condor Outcome.
+- `NO_ENTRY` creates no Position but remains a known acquisition Outcome of the Decision Case.
+
+An unknown or incoherent acquisition result cannot be converted to any of these known states.
+
+## Position, remediation, and terminal truth
+
+Partial remediation prioritizes removing unintended short risk. It may acquire missing protection
+only when the same fixed Policy explicitly declares that route and all new facts are causally
+eligible; it may not wait indefinitely to manufacture the intended Condor. A dangerous short may be
+bought back independently when its wing lacks a bid.
+
+Remediation can improve or flatten the residual portfolio, but it never changes the frozen
+`ENTRY_TERMINAL` classification, promotes the Case to `FULL_ENTRY`, opens normal carry, or makes the
+Case eligible for the primary full-Condor strategy Outcome.
+
+```text
+SHORT_RISK_FLAT      no short option remains open
+PORTFOLIO_TERMINAL   every residual long wing is sold or officially settled
+```
+
+`SHORT_RISK_FLAT` does not imply `PORTFOLIO_TERMINAL`. Process loss, stale data, a Gap, one failed
+exit attempt, or a missing wing bid does not synthesize either state or a terminal Outcome.
+
+## Eligibility dimensions
+
+The system keeps these independent:
+
+```text
+decision_evaluable
+entry_result_known
+strategy_outcome_eligible
+terminal_economics_eligible
+continuous_path_eligible
+qualification_eligible
+```
+
+A primary `TWO_SIDED_SHORT_VOL` strategy Outcome requires `FULL_ENTRY` and a terminal result under
+the frozen Policy. Partial, wings-only, and no-entry Cases remain valuable acquisition evidence but
+cannot enter the primary strategy-return denominator. A Gap can disqualify continuous-path analysis
+without erasing known terminal economics. Qualification remains a later, offline, pre-registered
+view; the product runtime cannot approve itself.
+
+## UNKNOWN and known-zero truth
+
+`UNKNOWN` means a required fact is missing, stale, discontinuous, malformed, contradictory, outside
+its causal budget, or numerically unresolved. It is never zero, calm, eligible, Candidate, Entry,
+flat risk, or terminality. `NOT_YET_MEASURED` identifies an absent business denominator.
+
+A business zero is valid only when its scope is complete and its denominator is known and positive.
+`ON_DEMAND_COMBO_LIQUIDITY_UNOBSERVED` means only that private/on-demand liquidity was not publicly
+observable. It does not prove the structure impossible.
+
+## Data classes and isolation
+
+Translated public market facts, formula outputs, rejected structures, Radar state, and Workbench
+projections are bounded transient state. Before `DECISION_OPENED`, authoritative durable business
+record count is zero. The bounded public snapshot adapter never opens or writes a Case.
+
+The current local candidate may write a Decision journal only beneath an explicitly supplied,
+non-legacy test or simulation root. It has no authorized stable Case root. It must not read, write,
+translate, migrate, relabel, recover, count, or import the legacy V2 Case root or its 92 Cases. No
+legacy Case is Iron Condor evidence.
+
+## Public Shadow boundary and non-claims
+
+The current permission is deterministic offline Shadow simulation plus at most one task-authorized,
+bounded, read-only public Deribit snapshot. The product contains no credentials, private/account API,
+balance, margin, order, fill, liquidity reservation, RFQ, combo creation, capital, actual exposure,
+settlement action, continuous service, or deployment authority.
+
+A public or component-book price is a counterfactual, not a fill. A Decision Case is a simulated
+research enrollment, not an account position. Current Policies are unqualified and do not establish
+Edge, Alpha, profitability, win probability, or execution readiness.
+
+## Learning truth
+
+The current candidate writes only the primary `TWO_SIDED_SHORT_VOL` arm. It does not pretend that a
+durable `SINGLE_SIDE_VERTICAL_BASELINE` or `NO_TRADE_CONTROL` exists. A later research task may add
+aligned offline comparisons without changing Base truth. Same-Session structures are clustered
+rather than counted as independent events. AI may propose a Challenger; it cannot rewrite Base,
+select its own favorable denominator, qualify itself, or grant execution permission.

@@ -1,95 +1,81 @@
-# Optimatrix
+# Optimatrix BTC 0DTE
 
-Optimatrix is a trader-facing BTC 0–3DTE options opportunity-discovery and Shadow-learning system.
-The Online Runtime has one economic product, Deribit `INVERSE_BTC_V1`, and one repository strategy
-channel, `INVERSE_BTC_SHORT_VOL_V2`. V2 is an ordinal opportunity-ranking hypothesis, not an
-oracle, calibrated probability, or Edge claim. One process binds the canonical Inverse product specification and
-its exact three-Policy chain for the full run; there is no product selector, fallback, or runtime
-product switch. The system has no private account, order, fill, capital, actual-margin, or
-actual-position capability.
-
-## Product flow
+Optimatrix 当前唯一实现的产品是：在同一 Deribit `08:00–08:00 UTC` Session 内，联合评估并
+管理一组上下两侧、defined-risk 的非对称 Iron Condor。
 
 ```text
-Deribit public facts
-→ fixed `INVERSE_BTC_V1` product specification and Policy chain
-→ bounded current market state
-→ Short Vol V2 score: premium evidence × path/liquidity quality
-→ one leader per TTE/expiry/type/Delta bucket
-→ Underwriting-selected frozen protective vertical
-→ conservative full-quantity component-book counterfactual
-→ Underwriting: CANDIDATE | WATCH | ABSTAIN when evaluable
-→ ordinary HIGH Candidate admission, or at most one future-blind LOW/MID no-trade Control
-→ Position: HOLD | CLOSE | UNKNOWN
-→ strictly future Shadow Case Outcome
+Long Put → Short Put → Short Call → Long Call
 ```
 
-## Product roadmap
+单边 Credit Vertical 只是铁鹰的一侧组件，不再是可独立选择的 Short Vol 产品路线。
 
-The roadmap is non-authorizing. Only the upper-left channel is implemented; the other cells create
-no Policy, runtime, module, or placeholder in this repository.
+## 产品漏斗
 
-| Channel | Implementation | Policy | Runtime |
-| --- | --- | --- | --- |
-| `INVERSE_BTC_SHORT_VOL` (`INVERSE_BTC_SHORT_VOL_V2`) | `IMPLEMENTED` | fixed V2 Inverse three-Policy chain | `PUBLIC_SHADOW` |
-| `INVERSE_BTC_LONG_GAMMA` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
-| `INVERSE_ETH_SHORT_VOL` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
-| `INVERSE_ETH_LONG_GAMMA` | `UNIMPLEMENTED / UNKNOWN` | `NONE` | `NONE` |
+系统用一个 `SessionDecisionUnit` 计数，而不是用 option、strike、leg 或候选结构扩大样本：
 
-Before Shadow enrollment, market facts, Radar results, anomalies, quotes, Underwriting, Candidate,
-and Workbench projections are in-memory current state. They are not durable research records. The
-first durable product record is `SHADOW_CASE_OPENED`; a later qualification Cohort is derived
-offline from Shadow Cases.
+```text
+APPLICABLE_SESSION_DECISION
+→ MARKET_CONTEXT_KNOWN
+→ VRP_THETA_QUALIFIED
+→ GAMMA_JUMP_BREAKOUT_RISK_ACCEPTABLE
+→ TWO_SIDED_STRUCTURE_EVALUABLE
+→ ENTRY_ROUTE_EVALUABLE
+→ ENTRY_ATTEMPT_SELECTED
+→ DECISION_CASE_OPENED
+→ ENTRY_RESULT_KNOWN
+→ DECISION_CASE_OUTCOME_KNOWN
+```
 
-## Current stage
+每一阶段暴露 numerator、denominator 和最早 blocker。测试通过、场景数量、页面完成或运行
+时间都不构成产品进展。
 
-The permission boundary remains `PUBLIC_SHADOW`. The sole current service runs the fixed
-causal-coherence V2 chain at `http://127.0.0.1:8675` from the fresh stable root
-`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. Its bounded launch smoke confirmed
-the exact product/Policy identities, all declared GET/HEAD routes, current 128/128 public coverage,
-and an empty reader-valid schema-v5 Case repository.
+## 当前能力
 
-The superseded `8765` surface was already unavailable before the new start; its prior stable root
-was preserved without migration or recovery into the new epoch. The one start and smoke are
-consumed. No restart, process supervisor, private action, or Edge/frequency claim is authorized.
-Exact runtime identity and durable boundaries are in `docs/authority/CURRENT_STAGE.md`.
+- 精确 Deribit 当日 Session 与 phase；
+- inverse BTC 数量、深度、合法 tick、费用、估值和结算；
+- Put/Call Credit Vertical 的联合非对称 Iron Condor 选择；
+- Session VRP、Theta、Gamma/path、jump、event、breakout 与执行质量过滤；
+- 四腿 attempt-boundary coherence；
+- `FULL_ENTRY`、partial、cross-side incoherent、wings-only 与 no-entry acquisition truth；
+- partial short exposure 创建即 `EXIT_REQUIRED`，不得以单边 Vertical 正常持有；
+- short-only risk exit、残余 wing、settlement 和跨进程责任恢复；
+- `FULL_ENTRY` 策略 Outcome 与 acquisition/remediation Outcome 分群；
+- bounded public-only Deribit HTTP snapshot；
+- 离线静态、浏览器不重算的四腿 Workbench。
 
-See:
+## Public Shadow 边界
 
-- `docs/authority/PRODUCT_CONSTITUTION.md`
-- `docs/authority/CURRENT_STAGE.md`
-- `docs/authority/SYSTEM_ARCHITECTURE.md`
-- `docs/authority/DELIVERY_CONTRACT.md`
-- `docs/contracts/SHORT_VOL_RADAR.md`
-- `docs/contracts/SHORT_VOL_UNDERWRITING_POSITION.md`
-- `docs/contracts/SHORT_VOL_SHADOW_CASE.md`
-- `docs/contracts/SHORT_VOL_PERSISTENT_PUBLIC_SHADOW_SERVICE.md`
+`PUBLIC SHADOW - READ ONLY` 只表示公共市场观察与 counterfactual economics。当前仓库没有
+credentials、private API、account、margin、order、fill、RFQ、capital、实际仓位或真实 PnL。
+公开 component books 也不证明四腿可原子成交。
 
-## Repository shape
+Policy 仍是 `PUBLIC_SHADOW_UNQUALIFIED`。本仓库没有证明 Edge、Alpha、胜率或盈利能力；AI
+只能提出 Challenger，不能自行改 Base Policy 或批准资本升级。
 
-- `market_monitor`: Deribit public-source parsing, continuity, trusted time, and bounded market
-  state;
-- `options_domain`: one immutable product specification, instruments, native target-size depth and
-  tick stress, product fee arithmetic, model normalization, and valuation conversion;
-- `short_vol_radar`: V2 score/features, bucket/episode state, protective-structure review, and
-  atomic diagnostics;
-- `short_vol_underwriting`: Underwriting, admission, Position, Outcome, in-memory owner state, and
-  the minimal Shadow Case store;
-- `radar_runtime`: one process, one bounded queue, one reducer, Shadow adapter, funnel diagnostics,
-  and loopback read-only Workbench.
-
-## Engineering rules
-
-Product progress means moving one funnel node or lowering its largest blocker—not producing more
-receipts, hashes, tests, objects, or runtime hours. The application does not commission itself,
-inspect host logs/PIDs, maintain a replay platform, or persist Workbench/operational state.
-
-## Local verification
+## 本地运行
 
 ```bash
 make sync
 make check
+
+.venv/bin/python -m optimatrix snapshot \
+  --event-state NONE \
+  --output build/deribit-current-session-snapshot.json
+
+.venv/bin/python -m optimatrix workbench \
+  --snapshot build/deribit-current-session-snapshot.json \
+  --output-dir build/workbench
 ```
 
-Passing checks proves only the offline code behavior. It does not establish opportunity frequency,
-strategy value, fillability, deployment, qualification, or execution permission.
+打开 `build/workbench/index.html` 可查看静态只读页面。Snapshot 不创建 Decision Case；只有显式
+提供的新产品本地 Case root 才能写模拟 journal。
+
+## 重建与隔离
+
+代码基底来自本地归档 `optimatrix-btc-0dte-rebuild-v0.1.0-complete.zip`，SHA-256：
+`49bb944d2f873e27d175b6ef39d59ce5096ed42d300990eedff8519b8155e380`。旧仓基线为
+`13902c53e972f12721d2ef9d17de866fbda288a7`。
+
+旧单边 `apps/`、`packages/`、`policies/`、V2 contracts 和策略绑定 Workbench 已从当前工作树
+物理删除；治理规则、CI/构建骨架、inverse 数学不变量和产品无关的视觉原则被适配保留。旧
+实现仍可从 Git 基线恢复，但新产品不得 import、迁移、翻译、读取或计入旧 V2 Cases。

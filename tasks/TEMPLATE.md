@@ -14,17 +14,26 @@
 
 **Owning authority/contract:** exact link(s)
 
+`CURRENT_STAGE` must link this file while it is the sole `ACTIVE` non-template task. No placeholder
+may remain when status becomes `ACTIVE`.
+
 ## Product movement
 
-**Current funnel node:** exact node
+**Canonical unit:** `SessionDecisionUnit` or exact other Authority-owned unit
 
-**Baseline:** exact numerator, denominator, and unit
+**Current funnel node:** exact canonical stage
 
-**Primary blocker:** exact measured reason or `NOT_YET_MEASURED`
+**Baseline:** exact numerator, denominator, and unit, or `NOT_YET_MEASURED` with reason
 
-**Expected user-visible delta:** exact change
+**Primary blocker:** exact earliest measured reason or `NOT_YET_MEASURED`
 
-**Durable-data effect:** `NONE` or exact Shadow Case record change
+**Expected user-visible/funnel delta:** exact change
+
+**Known-at/source boundary:** exact causal input boundary
+
+**Durable-data effect:** `NONE` or exact Decision Case event change and direct consumer
+
+**Legacy-data access effect:** `NONE` unless a later Authority explicitly changes isolation
 
 **Complexity added:** exact modules/protocols/dependencies, or `NONE`
 
@@ -34,13 +43,15 @@
 
 **Given:** one observable prerequisite.
 
-**When:** one bounded behavior or authority change occurs.
+**When:** one bounded behavior or Authority change occurs.
 
 **Then:** one observable product result exists.
 
-**Valid zero/UNKNOWN:** exact truthful result and whether it satisfies this closure.
+**Valid zero/UNKNOWN:** exact truthful result, denominator semantics, blocker, and whether it
+satisfies the closure.
 
-**Cheapest falsification:** direct test, bounded observation, or other minimal check.
+**Cheapest falsification:** direct test, deterministic scenario, bounded observation, or other
+minimal check.
 
 ## Change declarations
 
@@ -63,13 +74,17 @@
 ## Validation
 
 - focused tests: exact command;
+- deterministic business scenario: exact command or `NOT_APPLICABLE`;
 - repository gate: `make check` or exact applicable gate;
-- public observation: exact command or `NOT_APPLICABLE`;
-- no manifest, receipt, commissioning, or broad evidence package unless the owning stage is
-  qualification, promotion, or execution.
+- public observation: exact authorized command or `NOT_APPLICABLE`;
+- legacy-root reference/access check: exact command;
+- no manifest, receipt, commissioning, or broad evidence package unless the owning stage is an
+  external release, qualification, promotion, or execution audit.
 
 ## Definition of done
 
-The declared user-visible or funnel delta exists, required checks pass, the diff is bounded, no
-pre-Shadow durable record was introduced, complexity is proportional to the product value, and
-remote state is reported accurately. Tests alone do not satisfy the task.
+The declared user-visible or funnel delta is directly observed; the canonical denominator and
+earliest blocker remain truthful; required checks pass; the diff is bounded; durable facts stay
+inside the Decision Case contract; legacy isolation remains intact; complexity is proportional to
+product value; live authorization and remote state are reported accurately; and this task is
+removed after `CURRENT_STAGE` records the accepted result. Tests alone do not satisfy the task.

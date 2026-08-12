@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="referrer" content="no-referrer">
+  <title>Optimatrix 0DTE Workbench</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to snapshot</a>
+  <header class="app-header">
+    <div class="brand">
+      <span class="eyebrow">Optimatrix / BTC 0DTE</span>
+      <h1 id="product-title">Two-Sided Short Vol Workbench</h1>
+      <p id="strategy-name">Same-session asymmetric Iron Condor</p>
+    </div>
+    <div class="header-actions">
+      <span id="boundary-label" class="boundary-badge">PUBLIC SHADOW - READ ONLY</span>
+      <div class="theme-switch" role="group" aria-label="Color theme">
+        <button type="button" data-theme="dark" aria-pressed="true">Dark</button>
+        <button type="button" data-theme="light" aria-pressed="false">Light</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main-content" class="workspace" tabindex="-1">
+    <section class="boundary-panel" aria-labelledby="boundary-heading">
+      <div>
+        <span class="section-kicker">Evidence boundary</span>
+        <h2 id="boundary-heading">Public observation, not execution</h2>
+      </div>
+      <ul id="boundary-statements"></ul>
+    </section>
+
+    <section class="snapshot-strip" aria-label="Snapshot identity">
+      <div><span>Deribit session</span><strong id="session-id">—</strong></div>
+      <div><span>Observed at</span><strong id="observed-at">—</strong></div>
+      <div><span>Public combo diagnostic</span><strong id="public-combo">—</strong></div>
+    </section>
+
+    <section id="warning-panel" class="warning-panel" aria-labelledby="warning-heading">
+      <div class="section-heading compact">
+        <div>
+          <span class="section-kicker">Source and methodology</span>
+          <h2 id="warning-heading">Warnings</h2>
+        </div>
+        <span id="warning-count" class="count-badge">0</span>
+      </div>
+      <ul id="warning-list" class="chip-list"></ul>
+    </section>
+
+    <div class="primary-grid">
+      <section class="panel decision-panel" aria-labelledby="decision-heading">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">Fixed policy result</span>
+            <h2 id="decision-heading">Decision</h2>
+          </div>
+          <span id="decision-state" class="state-badge">UNKNOWN</span>
+        </div>
+        <dl class="key-values two-column">
+          <div><dt>Session phase</dt><dd id="decision-phase">—</dd></div>
+          <div><dt>Decision identity</dt><dd id="decision-identity" class="mono">—</dd></div>
+        </dl>
+        <h3>Blockers</h3>
+        <ul id="blocker-list" class="chip-list"></ul>
+      </section>
+
+      <section class="panel funnel-panel" aria-labelledby="funnel-heading">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">One observation boundary</span>
+            <h2 id="funnel-heading">Snapshot funnel</h2>
+          </div>
+        </div>
+        <dl id="funnel-values" class="key-values"></dl>
+      </section>
+    </div>
+
+    <section class="panel structure-panel" aria-labelledby="structure-heading">
+      <div class="section-heading">
+        <div>
+          <span class="section-kicker">Canonical strategy object</span>
+          <h2 id="structure-heading">Four-leg defined-risk structure</h2>
+          <p id="structure-message">Waiting for the exported snapshot.</p>
+        </div>
+        <span id="structure-kind" class="state-badge tone-neutral">UNKNOWN</span>
+      </div>
+      <div id="structure-empty" class="empty-state" hidden></div>
+      <div id="leg-grid" class="leg-grid" aria-label="Iron Condor legs"></div>
+      <dl id="structure-metrics" class="metric-grid"></dl>
+    </section>
+
+    <div class="evidence-grid">
+      <section class="panel" aria-labelledby="score-heading">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">Server-owned output</span>
+            <h2 id="score-heading">Score</h2>
+          </div>
+        </div>
+        <dl id="score-values" class="key-values"></dl>
+      </section>
+
+      <section class="panel" aria-labelledby="context-heading">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">Observed risk context</span>
+            <h2 id="context-heading">Market context</h2>
+          </div>
+        </div>
+        <dl id="context-values" class="key-values"></dl>
+      </section>
+    </div>
+
+    <details class="panel methodology-panel">
+      <summary>Snapshot methodology</summary>
+      <dl id="methodology-values" class="key-values"></dl>
+    </details>
+  </main>
+
+  <footer>
+    <strong>PUBLIC SHADOW - READ ONLY</strong>
+    <span>No order · No fill · No account · No margin · No capital · No actual position · No real PnL</span>
+  </footer>
+
+  <script src="workbench-data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

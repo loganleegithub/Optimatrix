@@ -1,447 +1,141 @@
 # Optimatrix System Architecture
 
-**Status:** ACTIVE STRUCTURAL AUTHORITY
+**Status:** ACTIVE ARCHITECTURE AUTHORITY
 
-## Architectural position
+## One causal product path
 
-Optimatrix is one event-driven modular monolith. Market transport, current-state reduction, Radar,
-Underwriting, Shadow admission, Position management, bounded process-independent Shadow Entry
-persistence, funnel
-projection, and the loopback Workbench run in one process. Each process starts with the fixed
-`INVERSE_BTC_V1` profile. It binds the public source universe,
-native/model/valuation units, one exact three-Policy chain, Inverse Case schema, funnel, and
-Workbench projection for the full run. There is no product selector, fallback profile, or runtime
-product switch. No network service split, database, message bus, replay job, generic scheduler, or
-browser strategy engine is part of the current slice.
+One Python modular monolith owns the sole implemented Channel:
 
 ```text
-Deribit public WebSocket for `INVERSE_BTC_V1`
-→ transport-owned immediate `test_request` / `public/test` liveness response
-→ one bounded application queue
-→ one synchronous causal reducer
-→ Radar current state
-→ fixed Underwriting/admission/Position owner
-→ in-memory current view + bounded funnel diagnostics
-→ stable Case repository: aggregate / Observation Segment / transition / Outcome records
-→ coalesced immutable Workbench snapshot
-→ loopback GET/HEAD HTTP
+translated bounded public facts
+→ Inverse BTC product + Deribit MarketSessionId
+→ one SessionDecisionUnit
+→ same-Session market context
+→ joint Put/Call Vertical generation
+→ one selected asymmetric four-leg Condor
+→ canonical funnel + fixed Decision Policy
+→ future-blind DECISION_OPENED
+→ one coherent four-leg entry attempt
+→ entry result / partial remediation / residual-wing duty
+→ SHORT_RISK_FLAT
+→ PORTFOLIO_TERMINAL + Outcome eligibility
 ```
 
-The Online Runtime owns current decisions and one Observation Segment for each active
-Position-bearing Case. The stable Case repository owns admitted Entry and future selected-Control
-aggregates across processes. Qualification Cohorts, aligned comparisons, Challenger datasets, and
-promotion decisions are offline concerns.
+There is no single-side product selector, fallback V2 profile, second reducer, database, message
+bus, dynamic plugin loader, generic N-leg engine, online trainer, host-control subsystem, replay
+platform, or browser-side formula.
 
-## Ownership and dependency direction
+## Module ownership
 
 ```text
-market_monitor
-    Inverse BTC public source parsing, clock, catalogs, books, `btc_usd` index continuity
-        ↓
-options_domain
-    one product specification, instruments, amount rules, native target-depth/tick stress,
-    component-book fees, model normalization, and valuation conversion
-        ↓
-short_vol_radar
-    detector, episode, protective-leg review, official atomic diagnostic, Policy parsing
-        ↓
-short_vol_underwriting
-    Underwriting, Candidate, admission, Position, Outcome, Shadow Case store
-        ↓
-radar_runtime
-    Deribit transport, one reducer, composition, funnel projection, Workbench
+products.py        enabled Inverse BTC product identity and product arithmetic
+session.py         08:00 UTC MarketSessionId and Session phases
+market.py          bounded typed public facts and source validation
+pricing.py         target-depth, adverse tick, fee, Vertical, payoff, valuation, settlement math
+structure.py       bounded Put/Call Vertical generation and joint Condor selection
+radar.py           sole two-sided Decision Policy evaluation and blocker ownership
+product_funnel.py  canonical SessionDecisionUnit stages, denominators, and earliest blocker
+lifecycle.py       Decision Case, coherent entry, remediation, risk-flat and terminal state
+persistence.py     sole append-only Decision journal codec and recovery validator
+engine.py          sole BTC Short Vol composition and business-state owner
+channels.py        fixed 2x2 descriptors; one enabled Channel
+deribit_snapshot.py bounded read-only translator for one current Session
+workbench.py        validated static display projection; browser owns no strategy formula
 ```
 
-Lower packages do not import higher packages. `radar_runtime` may compose every layer but does not
-own strategy formulas.
-
-## One causal application path
-
-Before constructing the graph, startup resolves the canonical `INVERSE_BTC_V1` product
-specification and its exact matching Radar, Underwriting, and Position Policies. Product/Policy
-mismatch fails before any business owner is constructed. There is no product argument, second
-product reducer, owner, queue, Case store, Workbench, or in-process product-comparison funnel.
-
-After acquiring the stable state-root lease and before public intake, startup scans
-`state-root/cases` and validates every Case directory through the one official reader. It restores
-all compatible non-terminal `ADMITTED_SHADOW_TRADE` Entries and future Segment-bearing selected
-Controls bound to `INVERSE_BTC_V1` and the exact frozen Policy chain. A malformed, unsupported, or
-mixed active Position-bearing Case fails the whole startup; the runtime cannot skip it. Terminal
-Cases and legacy segmentless Controls remain research history and are not restored. No CLI
-allowlist chooses business Cases.
-
-The transport answers Deribit's `test_request` immediately with `public/test`, using one
-transport-local string request id and at most one in-flight response. That mandatory connection
-liveness exchange never waits behind Radar, Underwriting, or Position work and never becomes an
-application RPC, causal market fact, Candidate, or durable record. The server notification remains
-visible to the ordered application path after the response is sent; the matching response is
-validated and consumed by the transport.
-
-One application-sequence allocator stamps every accepted application frame and transport-control
-fact with a session epoch, consecutive ingress sequence, and monotonic receive boundary. One
-bounded transport queue preserves application order; runtime does not drain it into a second
-unbounded pending deque. One synchronous reducer exclusively owns mutable market and Radar state,
-processes a local option fact locally, and never waits for network I/O. Cooperative yielding keeps
-reader, sender, and clock-source tasks schedulable while the queue is non-empty.
-
-If ordered receive-to-reducer lag exceeds the fixed currentness deadline, the reducer exposes
-current Radar and leader coverage as `UNKNOWN` and counts no observation. The existing bucket owner
-may retain an inactive bucket's previously accepted pre-activation count across that pause; catch-up
-must recompute the same leader and score band before persistence continues. This adds no second
-queue, timer, tracker, or durable checkpoint, and it does not preserve active decision authority.
-
-The reducer settles one accepted fact completely before calling the downstream owner. The owner
-then settles Underwriting, admission, every open Shadow Position, and Outcome before Workbench or
-funnel publication. No second reducer, response-future owner, or persisted replay path may apply
-business truth.
-
-For a restored Position-bearing Case, its new Observation Segment begins at the first accepted
-settled boundary.
-Until required fresh facts arrive, current observation and Position availability are `UNKNOWN`.
-`HANDOFF_GAP` records observation quality and never manufactures a Position predicate or `CLOSE`.
-
-## Transient state boundary
-
-The following remain bounded in memory:
-
-- platform, clock, catalog, ticker, book, index, RPC, and continuity state;
-- Radar calculations, V2 score/bucket leadership, HIGH and LOW/MID research-review episodes,
-  component-book counterfactuals, atomic diagnostics, Underwriting, causal batch designation,
-  selected-decision refresh, Candidate,
-  admission, and current Position state;
-- internal typed transitions used by the owner and Workbench;
-- service status and funnel diagnostics.
-
-“Bounded” means current ownership, not retained process history. An ended Radar Episode, terminal
-Candidate/admission attempt, and terminal Shadow Case are removed from their active owner maps.
-Workbench may retain only the current live set plus one latest terminal Case projection. Funnel
-diagnostics retain cumulative scalar counts and a fixed blocker-reason vocabulary, while completed
-Episode, Candidate, and Case identities are discarded.
-
-Normal market facts, anomalies, component quotes, atomic diagnostics, Underwriting decisions, Candidates, admission
-attempts, run summaries, and Workbench snapshots are not written to disk.
-
-An immutable in-memory snapshot is allowed for lock-free HTTP reads. Immutability for readers does
-not make a snapshot a durable business record.
-
-## Shadow Case persistence boundary
-
-The first durable record is `SHADOW_CASE_OPENED`, emitted only after a pre-outcome enrollment and
-its strictly later accepted paired entry witness. Enrollment is either an admitted Candidate trade,
-one action-blind HIGH selected decision, or one future-blind LOW/MID score-band Control for a
-causal Radar batch. The stable
-repository is reused across runtime identities:
-
-```text
-state-root/
-  service.lock
-  cases/<case-id>/
-    opened.json
-    first-close.json                       optional, at most one
-    outcome.json                           optional, at most one terminal Case Outcome
-    segments/<segment-sequence>/opened.json
-    segments/<segment-sequence>/closed.json      optional
-```
-
-The store owns atomic file publication, exact record validation, duplicate conflict rejection, and
-a bounded startup scan of this one Case repository. It does not own market reconstruction,
-qualification, Cohort membership, process supervision, host acceptance, a database, manifest, or
-fencing service. `service.lock` prevents simultaneous writers on one host; it is not a distributed
-lease or commissioning proof.
-
-A new admitted Entry or selected Control under the current contract is not visible record-by-record.
-The writer builds and validates `opened.json` plus the origin `segments/0/opened.json` inside one
-staging Case directory on the same
-filesystem, then makes that complete directory visible with one no-replace atomic directory
-publication. A crash before publication leaves no visible Case; after publication both records are
-visible. This protects the enrollment boundary using the existing single-instance lease and
-is not a manifest or fencing protocol.
-
-The one store/reader owns the accepted Inverse schema-v5 Case family. It binds `INVERSE_BTC_V1`
-explicitly, conserves BTC-native entry/close/fee/PnL facts plus separately named USD valuation facts,
-and freezes one canonical V2 score packet at selection plus the same shape at entry refresh. There
-is no online legacy-product, alternate-schema, or migration branch. A new Position-bearing Case's origin
-Segment persists `entry_position_baseline`: the exact entry index and short-leg mark-IV source
-references required by a future Position owner.
-
-Each Position-bearing Case has one or more Observation Segments. Segment-open freezes current
-code/runtime, product/Policy binding, adoption FactBoundary, predecessor segment, and observation
-quality. The origin Segment alone owns the immutable `entry_position_baseline`; later Segments read
-it without copying or rewriting it. Segment-close freezes clean-stop or handled-failure boundary
-and reason. A hard crash may leave segment-open without segment-close; the reader reports that segment
-`INCOMPLETE_UNCLEAN_EXIT`, and the next runtime opens a `HANDOFF_GAP` segment rather than completing
-the missing record. FactBoundaries order facts only inside one segment. The immutable predecessor
-chain orders segments without pretending that different runtime clocks are directly comparable.
-
-Clean stop and handled failure close each active Position-bearing Case's current Segment; they do
-not write `CENSORED_AT_STOP` or `CENSORED_AT_FAILURE` as a terminal Outcome. The aggregate remains
-recoverable until `outcome.json` exists. Legacy segmentless Controls retain their historical
-bounded semantics and are not reinterpreted. A validated Outcome is itself the terminal boundary
-of its producing Segment; the reader projects that Segment as `TERMINATED_BY_OUTCOME` without
-inventing a separate `closed.json` record.
-
-The first Position CLOSE publishes as one immutable `FIRST_CLOSE_INTENT_LATCHED` transition before
-any exit request may be sent. Future intent records also freeze the serial acquisition profile:
-selection rule, retry cadence, response budget, and pair-skew limits. Presence of the transition
-prevents every later runtime from latching another first CLOSE, but never proves economic
-termination. Exit acquisition is serial and in-memory: at most one paired attempt per Position is
-in flight, failed/ineligible/missing pairs defer another attempt, and the first causally eligible
-full-quantity pair wins. If an attempt was pending when a Segment became incomplete, recovery exposes
-`ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS` for history while starting only a new strictly future
-attempt. Legacy combined first-close/schedule records remain valid immutable input.
-
-At expiry, ordinary component-book acquisition stops and the same owner requests the fixed public
-`public/get_delivery_prices` history. One validated response fans out by expiry date to every
-waiting Position, even when the response omits the request owner's date but contains another
-waiter's date. The accepted member retains response identity, request owner/sent/receipt boundaries,
-date, price, and record count. Missing dates or failed/late responses remain `SETTLEMENT_PENDING`
-and retry. The product-owned calculator alone produces signed Inverse settlement, capped public
-delivery fees, BTC-native PnL, and delivery-price valuation for `SETTLED_KNOWN`.
-
-## Internal state versus durable records
-
-Internal owner transitions may retain detailed typed state for correct in-process decisions and
-Workbench projection. They are implementation details, not durable object contracts and not
-inputs to offline research. Recovery uses only validated bounded Case records; it does not persist
-per-tick Position state, replay facts, content manifests, or whole-history relationship graphs.
-
-The durable Case store consumes only Case opening, Segment open/close, immutable first-CLOSE intent,
-and terminal Outcome. Runtime owner, trader Workbench, and AI Researcher directly consume
-segment provenance and quality because later process boundaries cannot be derived from the original
-opened record.
-
-## Funnel diagnostics
-
-The runtime exposes non-durable cumulative funnel counters and blocker reasons. Diagnostics are
-computed from the same settled reducer/owner state, never by rereading files.
-
-Instrument-specific source labels are normalized into bounded blocker categories before entering
-cumulative counters. Exact current instrument/scope detail remains available in the ordinary
-Workbench rows; it cannot create an unbounded aggregate reason-key set.
-The same bounded diagnostic surface owns two additional runtime-local reason counters: loss of a
-nonzero pre-activation Radar confirmation count, and selected-decision `KNOWN_NO_CONTROL`. Their
-fixed enums are emitted by the bucket tracker and Underwriting owner respectively; Funnel only
-aggregates them. Neither counter creates a durable record or reconstructs pre-restart history.
-
-For Radar knownness, the funnel uses the canonical `IndexHistoryReducer` tail state already owned
-by the settled reducer; it does not recalculate the Radar formula. The history reducer is the sole
-validator and in-memory owner of the official `public/get_index_chart_data` response for the fixed
-`btc_usd` index. It accepts only
-bounded, strictly chronological, positive finite average-price points for that one index, applies
-the configured completed-interval cutoff, exposes cadence/age/exact-suffix facts including whether
-the newest response point falls outside that cutoff, and detects completed-overlap revision. It
-never interpolates or fills a gap. The warmup gate is per Policy TTE band:
-
-- `IndexHistoryReducer` owns causal sampling and availability; the Radar baseline calculator owns
-  only multi-horizon variance selection over those samples. The streaming `IndexMinuteReducer`
-  continues to own live index currentness and publication, but no longer owns the economic
-  360-minute baseline;
-
-- an applicable countable evaluation with current index availability `WARMUP` is assigned to the
-  visible startup/recovery bucket and never to the steady denominator;
-- the boundary at which that band first has an `AVAILABLE` tail is post-warmup;
-- after a band has been available, later history `SOURCE_STALE`, `WINDOW_GAP`, or `REVISION`, or
-  live-index `CONTINUITY_GAP`, evaluations remain post-warmup steady-state UNKNOWNs;
-- a later `WARMUP` recovery interval returns to the startup/recovery bucket until availability is
-  restored.
-
-
-The V2 calculator in `short_vol_radar` is the sole owner of target-size bid/ask use, official native
-tick stress, Inverse product-owned Black-model normalization, Black inversion, TTE/Delta
-eligibility, mixed reference RV, score normalization, bucket leadership, and persistence truth.
-The history owner supplies its five-minute RV samples on one source-confirmed UTC-epoch-aligned
-grid; finer official
-chart points cannot rotate that grid as trusted time advances inside the same completed interval.
-Depth walking and adverse tick stress
-happen in the exchange-native BTC premium unit before conversion. Native BTC premium is converted
-with the declared forward for model use. The forward used for model normalization is not the causal
-index used to value BTC cashflows. The same Radar owner derives path quality and bounded optional
-surface/term adjustments. It also projects unsigned OI/gamma concentration, protective vertical
-references, and transparent attention order; those diagnostics cannot imply dealer sign or select
-an Underwriting structure. For each active HIGH or designated LOW/MID research Episode, composition
-waits for a complete positive option scope, excludes
-known inactive or quantity-ineligible legs, and keeps potentially legal metadata/book/source gaps
-`UNKNOWN`. It then uses the sole component-book calculator on every legal target-size protective
-quote and passes those economics to the Underwriting-owned selector. The selector orders action
-class `CANDIDATE > WATCH > ABSTAIN`, then the complete signed predicate-margin vector, narrower
-width, and instrument name. Composition freezes that result and does not switch it during the
-Episode. Official Combo availability remains a separate diagnostic.
-
-Cross-sectional S/T composition uses ticker source timestamps with one Policy-owned `6000 ms`
-maximum skew and ATM proxies within five absolute Delta points of `0.50`. Missing or over-skew
-optional neighbours remove only their optional adjustment. Forward, Delta, and mark-IV changes are
-score-countable and invalidate Call/Put peers on the affected expiry plus the immediately shorter
-expiry whose `T` depends on it; OI/gamma-only changes remain non-countable diagnostics. The existing
-global ticker source-staleness owner is not duplicated.
-
-The Radar Episode is the immutable owner of its activation score packet. Every current
-Episode-owned atomic snapshot carries that frozen packet separately from the score packet
-recomputed at the snapshot's causal boundary. Composition passes both through the typed transient
-Underwriting boundary, including when the first complete Underwriting scope appears after
-activation. The Underwriting owner validates and freezes every eligible HIGH member's activation
-packet when it first sees the Episode; a retired scope clears the transient binding. A later
-non-designated Candidate consumes its own frozen HIGH packet at selection and a truly later
-recomputed packet at entry refresh; it never relabels the current packet as the activation witness.
-
-`options_domain` owns the one product specification and one component-book calculator. Entry walks
-short bids and long asks at the full target quantity, stresses short sells down one native legal
-tick and long buys up one native legal tick, then applies both standard fees in the product's native
-settlement currency. Close walks short asks and long bids, stresses short buys up one native tick
-and long sells down one native tick, then applies both native fees. The calculator also produces one
-explicit valuation projection at the causal `btc_usd` index. Native values remain BTC and their
-valuation fields are explicitly USD-equivalent. Strike
-width and contractual payoff cap are USD-defined; Inverse BTC liability depends on settlement
-price, while actual account margin remains `UNKNOWN`. The same product-aware value object owns the
-canonical scalar fingerprint projection used by Underwriting and Position; no second leg-price
-calculator or parallel quote schema is permitted.
-
-Candidate admission and non-Candidate selected-decision enrollment each schedule exactly two bounded
-`public/get_order_book` requests for the frozen legs. The downstream owner accepts a quote only
-after both strictly later responses share one causal owner, session epoch, and global continuity
-epoch; each covers the full quantity; source timestamps differ by no more than `6000 ms`; and local
-receive boundaries differ by no more than `4000 ms`. A single response cannot open or close a Case.
-Failure of either response retires the sibling and settles that paired attempt. Session,
-continuity, or skew mismatch is a bounded `UNKNOWN` with an exact reason, not an integrity exception.
-When the selected decision is already a Candidate, its ordinary admission pair is the selection's
-future-blind pair; a duplicate control refresh is forbidden. If that refresh remains Candidate it
-opens the ordinary admitted Case, while a refreshed WATCH/ABSTAIN opens the discriminated no-trade
-Case. A selected WATCH/ABSTAIN that refreshes to Candidate opens nothing, reports
-`REFRESHED_CANDIDATE_REQUIRES_CANONICAL_ADMISSION`, and cannot bypass a later Candidate's own
-strictly later admission pair. A selected `UNKNOWN` opens nothing and has no fallback Episode.
-
-Post-CLOSE uses the same two-request pair validator inside a continuing acquisition window. Each
-attempt remains bounded and serial, but a failed or ineligible pair defers another strictly future
-attempt instead of terminalizing the Position. First eligible arrival order, never best observed
-price, selects `EXITED_KNOWN`. At expiry the route changes to the shared official delivery-history
-request and `SETTLED_KNOWN` arithmetic described at the Case boundary.
-
-The canonical stages are:
-
-```text
-APPLICABLE_MARKET_SCOPE
-RADAR_KNOWN
-ANOMALY_ACTIVE
-STRUCTURE_REVIEWABLE
-COMPONENT_BOOK_COUNTERFACTUAL_EVALUABLE
-UNDERWRITING_EVALUABLE
-CANDIDATE
-SHADOW_CASE_OPENED
-SHADOW_CASE_OUTCOME
-```
-
-The last two canonical stages count admitted-Candidate Cases only; selected no-trade Cases use the
-separate research projection below despite sharing the durable Case record family.
-
-Restoring a Position-bearing Case does not recreate Candidate, admission, or `SHADOW_CASE_OPENED` and
-does not increment those funnel counters. A terminal Outcome is counted once for its aggregate,
-regardless of which runtime Segment produced it; only admitted Outcomes enter the canonical funnel.
-Observation quality and named offline-Cohort eligibility remain separate from funnel lifecycle
-completeness.
-
-`APPLICABLE_MARKET_SCOPE` and `RADAR_KNOWN` use post-warmup countable instrument evaluations. The
-separate `radar_knownness.startup_warmup` projection retains startup/recovery counts and reasons, so
-`INDEX_WARMUP` remains visible without becoming the steady-state primary blocker. Every Radar
-UNKNOWN contributes exactly one finite aggregate reason. The primary-blocker function identifies
-the earliest material post-warmup conversion loss and its largest reason. Official Combo outcomes
-are counted in a separate diagnostic projection and never enter the canonical Shadow funnel.
-
-Selected-decision research has a second, explicitly non-canonical projection: HIGH activation or
-LOW/MID research-review batches, pre-outcome selected decisions, Decision Cases, and strictly
-future Outcomes. It may include any Underwriting action, but a no-trade Case never increments the canonical
-Candidate, `SHADOW_CASE_OPENED`, or `SHADOW_CASE_OUTCOME` stages. The projection retains cumulative
-scalars and only current/latest bounded identities.
-
-The Workbench projects every active admitted Entry and future selected Control once by its enrollment
-identity, with origin runtime, current Segment runtime, Segment availability, gap count, observation
-quality, execution state, terminal method, and terminal evidence level. A recovered Case begins
-`UNKNOWN` until fresh facts settle. The browser never infers `HOLD` or `CLOSE` from `HANDOFF_GAP`,
-and the legacy `qualification_eligible` field is only the strict-continuity projection rather than
-online Cohort authority. Version-3 Cohort membership belongs only to the offline evaluator.
-
-The browser may arrange the immutable current Radar rows into an expiry-by-strike discovery map and
-select the already-server-owned subset `HIGH + bucket leader + clue eligible + CONFIRMING|ACTIVE`.
-That is a bounded view filter over typed current facts, not a second detector. It reports the
-visible numerator against the complete current Radar row denominator, preserves fixed strike
-positions, and exposes the selected row's server evidence without recomputing Score, leader,
-confirmation, forward, IV, RV, history, or downstream structure state. Shadow and AI labels in the
-product navigation cannot create an implementation, transition, or authority that their owning
-surface does not already have.
-
-Funnel diagnostics may be displayed and logged externally, but they are not business evidence or
-qualification data.
-
-## Workbench boundary
-
-Workbench publication occurs only after the full reducer-plus-owner transaction. Ordinary
-status-stable updates are coalesced to at most 2 Hz; service/currentness changes publish
-immediately; pending state flushes before reconnect or stop.
-
-HTTP handlers read one immutable complete byte snapshot. They never traverse mutable reducer
-state, read Shadow Case files, compute strategy truth, modify Policy, contact Deribit, or expose a
-write route. The server binds only to loopback and supports the declared GET/HEAD surface. The
-snapshot contains the fixed `INVERSE_BTC_V1` identity, public/index/native/settlement/valuation units,
-a bounded Top-N attention view plus `ALL`, exact V2 score/leader inputs, source-contract facts, a
-separate selected-decision panel with original/refreshed score packets, actions, and margin vectors,
-enrollment/Outcome state, and diagnostic non-claims. Browser code only renders server-owned typed
-truth; it does not infer a unit from an internal field suffix or recalculate score, leader, IV, RV, surface,
-structure economics, or decision-control membership.
-For review-only TTE/Delta rows it renders score context plus the server-owned review constraint,
-never confirmation progress. Runtime-wide reason counts are explicitly labeled cumulative and not
-as causal attribution for the selected row.
-
-## Failure domains
-
-- malformed or incompatible public protocol: fail the owning session or process as declared;
-- unavailable index-chart refresh: retain the last valid in-memory history until its Policy stale
-  deadline, then expose bounded Radar `UNKNOWN`; a completed-point revision is `REVISION/UNKNOWN`
-  until one stable follow-up response; neither condition reconnects the streaming index;
-- local option/book/ticker missingness: `UNKNOWN` at the smallest consumer;
-- reconnect: rebuild current session facts without replacing the same in-process Shadow owner;
-- process restart: after the external operator starts the service, validate and restore every
-  compatible non-terminal admitted Entry, then expose `UNKNOWN` until fresh facts settle;
-- Workbench publication error: explicit process failure in the current simple topology, not stale
-  success;
-- Shadow Case write conflict or I/O failure after enrollment: explicit process failure because an
-  enrolled research Case must not be silently lost;
-- active Case corruption, unsupported frozen Policy, segment-chain conflict, or omitted compatible
-  admitted Entry: fail startup before public intake; never continue with a partial active book;
-- host CPU, memory, process restart, launchd/systemd, logs, and deployment health: external
-  operations, not application business truth.
-
-## Validation ownership
-
-Every external trust boundary has one validator:
-
-- public JSON and source shapes: market/transport owner;
-- Policy JSON and chain compatibility: Policy loader;
-- business decisions: Radar/Underwriting/Position owner;
-- durable aggregate, segment, transition, and Outcome records: Shadow Case store/reader.
-
-No emitted result is re-run through a second business schema, relationship graph, provenance graph,
-or validator-of-validator. The one Case store/reader accepts exactly the Inverse schema-v5 record
-family bound to the fixed Policy chain. Unit tests may independently exercise pure formulas; they
-do not create a second runtime truth path.
-
-## Structural non-goals
-
-The current architecture forbids:
-
-- application commissioning, `launchd`, `lsof`, Unified Log, PID inventory, host resource gates,
-  acceptance supervisors, manifests, or receipt chains;
-- pre-Shadow filesystem writes, Radar evidence writers, service ledgers, Workbench persistence, or
-  online run summaries;
-- online Cohort manager, automatic rejected-counterfactual lifecycle, aligned-pair persistence, or
-  qualification controller;
-- full-feed capture/replay, database, generic event platform, feature store, scheduler, workflow
-  engine, or premature microservices;
-- per-tick Position checkpoints, gap backfill, restart-time `CLOSE` synthesis, Entry allowlists,
-  process-owned continuation claims, manifests, or a distributed fencing service;
-- private/account/order/fill/capital modules before separate authority.
-
-## Complexity stop rule
-
-If one non-product control subsystem causes a second real runtime failure, the default response is
-delete or externalize it. Continued repair requires proving that removing it would create an
-incorrect trader decision, lose an enrolled Shadow Case, or expose actual account/capital risk.
-
-No pre-Shadow component may open a file.
+Lower-level calculators do not depend on strategy composition. `engine.py` composes them but does
+not duplicate product, pricing, Decision, or lifecycle formulas.
+
+## SessionDecisionUnit and funnel owner
+
+The engine constructs exactly one canonical unit from product identity, `MarketSessionId`, decision
+window, and fixed Policy identity. Structure enumeration remains bounded transient work inside that
+unit. The engine/funnel projection alone owns stage numerators, denominators, bounded blocker
+counts, and earliest-material-loss selection.
+
+The snapshot adapter must translate public HTTP responses into the same typed facts and call the
+same owner. It is not a second strategy implementation, continuous Runtime, persistence path, or
+Policy calculator.
+
+## Four-leg structure and attempt boundary
+
+`structure.py` selects one joint structure; no caller may select a Put and Call side independently
+and later call the result a Condor. `lifecycle.py` owns one entry-attempt identity covering all four
+selected legs at the full target quantity.
+
+`FULL_ENTRY` requires all four leg acquisitions to be:
+
+- strictly later than Decision opening;
+- no later than the attempt boundary;
+- attached to the same attempt and selected structure identities;
+- full target quantity;
+- within fixed per-pair and four-leg source/receive coherence budgets.
+
+If these conditions fail, the owner emits a known partial/wings/no-entry result when provable, or
+UNKNOWN when facts cannot establish a result. Independently successful component attempts cannot be
+merged after the fact.
+
+## Partial remediation owner
+
+`lifecycle.py` alone owns remediation. `PUT_SIDE_ONLY`, `CALL_SIDE_ONLY`, and
+`TWO_SIDES_INCOHERENT` never enter normal carry. They immediately create a bounded duty to remove the remaining short risk. Missing-leg completion
+is permitted only when the fixed Policy explicitly authorizes it from strictly future eligible
+facts; it must not become unbounded waiting for an intended Condor.
+
+A dangerous short may be repurchased without requiring its long wing to have a bid. A remaining
+long wing becomes bounded residual-wing duty. `WINGS_ONLY` begins with no short risk; `NO_ENTRY`
+creates no Position.
+
+Remediation facts never rewrite `ENTRY_TERMINAL`, promote a partial Case to `FULL_ENTRY`, or admit it
+to normal carry or the primary strategy-Outcome denominator.
+
+## Transient and durable boundaries
+
+Market catalogs, books, quotes, context, scores, structure candidates, blockers, funnel snapshots,
+unselected attempts, and presentation projections remain bounded in memory. The public snapshot
+adapter performs no durable write.
+
+The first durable new-product fact is `DECISION_OPENED`. The persistence owner freezes one Decision
+Case before entry facts are known and accepts only lifecycle-authorized, append-only, strictly
+future facts. It validates exact keys, identities, sequence, and conflicts. Recovery reconstructs
+only that new-product Case; it does not create a new decision, convert a Gap into an exit, or change
+eligibility.
+
+The current stage authorizes only explicitly supplied non-legacy test/simulation roots. No stable
+Case root or continuous writer is authorized.
+
+## Eligibility projection
+
+The lifecycle owner projects, separately:
+
+- Decision evaluability;
+- entry-result knownness;
+- primary strategy-Outcome eligibility;
+- terminal-economics eligibility;
+- continuous-path eligibility;
+- later qualification eligibility.
+
+`FULL_ENTRY` is required for primary strategy-Outcome eligibility. A known partial, wings-only, or
+no-entry result remains acquisition evidence and cannot be counted as a full-Condor return. A Gap
+may remove continuous-path eligibility without erasing known terminal economics. Offline research
+owns Cohorts, aligned controls, comparison tables, Challengers, and promotion.
+
+## Legacy data isolation
+
+The legacy repository, deployment checkout, V2 Policies, schema-v5 reader, stable root, and 92 Cases
+are external historical assets. No new-product module may import the legacy packages at runtime or
+read, write, translate, migrate, relabel, recover, or count legacy Case bytes. There is no symlink,
+shared root, fallback codec, compatibility translator, or dual-product owner.
+
+## Public Shadow and operations boundary
+
+The system consumes synthetic or bounded translated public market facts only. It owns no private
+API, account, balance, margin, order, fill, RFQ, combo creation, capital, actual settlement action,
+continuous process, deployment, supervisor, or host inspection. Public combo and component routes
+are counterfactual labels, not fills or atomic-execution proof.
+
+## Future Channels
+
+Reserved Channels may reuse product/session/market/lifecycle code only where the business invariant
+is identical. They require separate active tasks, strategy Policies, and permission. Their reserved
+names do not justify factories, generic schemas, unused fields, or runtime selection today.

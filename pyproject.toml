@@ -3,36 +3,22 @@ requires = ["setuptools==82.0.1", "wheel==0.46.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "optimatrix"
-# Required distribution metadata; it is not a product generation or authority identity.
-version = "0.0.0"
-description = "Deribit BTC 0-3DTE defined-risk Short Vol Radar"
+name = "optimatrix-btc-0dte"
+version = "0.1.0"
+description = "Deribit inverse BTC 0DTE two-sided premium-sale Shadow core"
 readme = "README.md"
 requires-python = ">=3.13,<3.15"
-dependencies = ["websockets==16.1.1"]
+dependencies = []
+
+[project.scripts]
+optimatrix-shadow = "optimatrix.cli:main"
 
 [tool.setuptools]
-packages = [
-  "market_monitor",
-  "options_domain",
-  "short_vol_radar",
-  "short_vol_underwriting",
-  "radar_runtime",
-]
-
-[tool.setuptools.package-dir]
-market_monitor = "packages/market_monitor/src/market_monitor"
-options_domain = "packages/options_domain/src/options_domain"
-short_vol_radar = "packages/short_vol_radar/src/short_vol_radar"
-short_vol_underwriting = "packages/short_vol_underwriting/src/short_vol_underwriting"
-radar_runtime = "apps/radar_runtime/src/radar_runtime"
+package-dir = {"" = "src"}
+packages = ["optimatrix"]
 
 [tool.setuptools.package-data]
-radar_runtime = [
-  "workbench_static/*.html",
-  "workbench_static/*.css",
-  "workbench_static/*.js",
-]
+optimatrix = ["data/*.json", "workbench_static/*"]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-q"]
@@ -41,7 +27,7 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["packages", "apps", "tests"]
+files = ["src"]
 
 [tool.ruff]
 line-length = 100
