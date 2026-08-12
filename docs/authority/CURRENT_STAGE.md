@@ -6,9 +6,9 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** `BTC_0DTE_ALL_JOINT_HARD_ELIGIBLE_SELECTION_V1`
 
 **Permission:** deterministic offline Shadow simulation and at most one active-task-authorized,
 bounded, read-only public Deribit current-Session snapshot after offline gates pass
@@ -22,6 +22,13 @@ bounded, read-only public Deribit current-Session snapshot after offline gates p
 **Policy qualification / Edge claim:** `NONE`
 
 ## Current business baseline
+
+The active Radar joint-admission denominator is `1` deterministic adversarial
+`SessionDecisionUnit`. It contains a higher single-side-ranked Condor that fails hard underwriting
+and a lower single-side-ranked combination that passes all hard economics and short-buyback depth.
+The current selector searches only three Verticals per side and underwrites after selection, so
+`0 / 1` units select the hard-eligible structure. The earliest blocker is
+`JOINT_HARD_ELIGIBLE_CANDIDATE_NOT_SEARCHED`.
 
 The Radar MarketContext evidence denominator moved from `0 / 1` to `1 / 1` deterministic
 `SessionDecisionUnit`s correctly distinguishing evidence-qualified context from `UNKNOWN`. Numeric
