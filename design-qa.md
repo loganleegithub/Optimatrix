@@ -67,25 +67,39 @@ final result: passed
 ## Evidence
 
 - Selected design direction: `/Users/logan/.codex/generated_images/019ff1a9-c227-7e21-98bd-ef4ecfd890a4/exec-02b69f21-c5d2-4cc0-b574-2f1b57f09e1c.png`
-- Browser-rendered desktop implementation: `/private/tmp/optimatrix-design-qa/shadow-desktop-dark.png`
-- Responsive list capture: `/private/tmp/optimatrix-design-qa/shadow-narrow-list.png`
-- Responsive detail capture: `/private/tmp/optimatrix-design-qa/shadow-narrow-detail.png`
+- Browser-rendered desktop implementation: `/private/tmp/optimatrix-design-qa/shadow-scheme2-desktop-final.png`
+- Full-view combined comparison: `/private/tmp/optimatrix-design-qa/shadow-scheme2-comparison-final.png`
+- Table-focused comparison: `/private/tmp/optimatrix-design-qa/shadow-scheme2-comparison-table-final.png`
+- Inspector-focused comparison: `/private/tmp/optimatrix-design-qa/shadow-scheme2-comparison-inspector-final.png`
+- Responsive list capture: `/private/tmp/optimatrix-design-qa/shadow-scheme2-narrow-list-final.png`
+- Responsive detail capture: `/private/tmp/optimatrix-design-qa/shadow-scheme2-narrow-detail-final.png`
 - Source visual and desktop implementation: 1487 × 1058 CSS pixels; responsive viewport: 800 × 1058.
-- State: dark theme, current runtime facts projected through schema 7 plus an isolated preview-only enrichment of the four new frozen structure fields. The enrichment reconstructs no strategy truth and is not a product dependency.
-- Runtime facts at acceptance: 33 official Shadow Entries, 33 positions carrying exit responsibility, 0 monitoring, 0 terminal Outcome, two expiries (13/14 AUG). Control records remain outside this page.
+- State: dark theme, Both, first current Shadow position selected, persistent inspector open.
+- Data source: an isolated, read-only recovery projection built through `ShadowCaseStore`, `FixedContractShadowOwner`, and the production schema-7 projector. It exposes 21 admitted Shadow Entries and their persisted first-CLOSE facts without opening a Case Segment or mutating durable storage. Current BTC index is one fresh public display fact. This fixture is visual/business acceptance evidence, not a claim that the stable Runtime is healthy.
+- Acceptance facts: 21 admitted Shadow Entries, 21 Positions carrying exit acquisition responsibility, 0 monitoring, 0 terminal Outcome, one current admitted expiry (13 AUG). The 12 Control Positions in the Case store remain outside this page.
 
-## Trader-first hierarchy
+## Visual fidelity and trader-first hierarchy
 
-The selected “expiry risk book” direction is preserved: active Shadow positions are grouped by expiry in a dense primary table, with a persistent desktop inspector for the selected position. Default row content is intentionally limited to structure, quantity/entry credit, lifecycle responsibility, triggering/current fact, known close economics, next duty, and observation quality. The right panel limits its default view to frozen entry economics, current risk/exit duty, hard-close horizon, and expected terminal route.
+The selected “expiry risk book” direction is now reproduced at its owning layout boundaries: a 64 px product toolbar, 1050 px left risk book, 390 px persistent inspector, 40 px leading expiry band, 61 px data rows, and a nine-column trader scan. The table and inspector start at the same 182 px desktop baseline; the page has no horizontal overflow at 1487 × 1058.
+
+The default page shows only what changes a trader decision: frozen spread identity, side, quantity, current index distance, TTE, first CLOSE trigger, present lifecycle responsibility, public close-economics availability, and next duty. The inspector keeps the reference's five-section sequence: structure economics, current risk, close responsibility, deadline, and terminal expectation.
 
 Full Segment, Gap, Cohort, Entry, Position, and Outcome evidence remains available behind one disclosure. Nine raw exit predicates, Control research, underwriting candidates, and raw payloads do not compete with the trader’s default risk scan.
+
+Required fidelity surfaces:
+
+- Fonts and typography: the existing system sans stack, compact metadata hierarchy, 12–13 px scan labels, and 17 px selected-structure title align with the source density.
+- Spacing and layout rhythm: full-width runtime/product chrome, fixed left/right split, leading expiry band, table header, row rhythm, and bottom status strip match the reference geometry.
+- Colors and state tokens: dark navy surfaces, purple selected outline, amber exit responsibility, green Runtime/positive distance, muted secondary facts, and divider contrast match the selected direction.
+- Image quality and assets: the source is a native data UI with no photography or illustration to reproduce. The current dependency set has no approved matching funnel/filter icon set; controls remain text-first instead of drawing fake icons.
+- Copy and content: the implementation uses current lifecycle vocabulary (`CLOSE 已锁存`, `退出中`, `持仓责任持续`, `尚不可得`) and does not copy the mock's illustrative prices or lifecycle mix.
 
 ## Business-truth acceptance
 
 - Shadow membership is sourced only from `shadow_entries.rows`; underwriting rows and Controls cannot enter the position book.
 - Entry/Position/Outcome association uses exact `shadow_entry_identity`; contract names are display facts, never join keys.
 - `GAPPED` is rendered as observation quality and does not hide an Entry, terminate a Position, or erase the next exit duty.
-- The historical first CLOSE reason remains immutable, including the legacy source-discontinuity reason, while `EXIT_ACQUIRING` continues to show the current obligation to find the first qualified exit fact.
+- The historical first CLOSE reason remains immutable, including legacy source-discontinuity and liquidity-boundary reasons, while `EXIT_ACQUIRING` continues to show the current obligation to find the first qualified exit fact.
 - Unknown exit economics renders as “尚不可得”, never zero. A PnL value appears only from a qualified current close opportunity or a known terminal Outcome.
 - `SETTLEMENT_PENDING`, `EXITED_KNOWN`, `SETTLED_KNOWN`, `TERMINAL_UNKNOWN`, missing/duplicate identity, and display-only fact loss are covered by the executable browser-state harness even though the current natural runtime has not produced those terminal states.
 - Missing responsibility identity fails closed without deleting Entry; a terminal Position with missing/duplicate/non-final Outcome shows `终端结果待恢复` instead of inferring an exit; missing display-only structure facts do not downgrade a valid Position lifecycle.
@@ -93,25 +107,27 @@ Full Segment, Gap, Cohort, Entry, Position, and Outcome evidence remains availab
 
 ## Interactions and responsive acceptance
 
-- Both / Put / Call: 12 Put rows and 21 Call rows; no opposite-type leakage.
-- Expiry filter: 14 AUG returns 9 rows and one matching expiry group.
-- Search: `65500` returns one exact frozen structure; clearing restores all 33 rows.
-- Responsibility filter: all 33 current positions appear under exit responsibility; Monitoring truthfully returns an empty filtered view without changing the 33-position denominator.
+- Both / Put / Call: 21 / 1 / 20 rows; no opposite-type leakage.
+- Filter popover exposes lifecycle and expiry controls and truthfully reports `21 / 21` admitted Shadow positions, all carrying exit responsibility.
+- Search: `63500-P` returns one matching frozen structure; clearing restores all 21 rows.
 - Row selection updates the trader inspector and preserves exact frozen Entry/Position facts.
 - Evidence disclosure expands and retains the Gap/Cohort truth boundary.
-- At 1487 × 1058, neither the page nor the risk table overflows horizontally; the seven trader columns and right inspector remain visible.
+- At 1487 × 1058, neither the page nor the risk table overflows horizontally; all nine trader columns and the 390 px inspector remain visible.
 - At 800 × 1058, the list retains a bounded horizontal table scroller and the selected position opens in a modal drawer below the fixed product chrome. The drawer closes cleanly and restores the list.
-- Table semantics contain two sibling expiry `rowgroup` elements with no nested rowgroup. The skip link is surface-neutral.
-- Application-origin console warnings/errors: none. An unrelated installed translation extension emitted its own version-mismatch errors and was excluded from product findings.
+- The skip link is surface-neutral; the expiry band precedes the column header as in the source hierarchy.
+- Application-origin console warnings/errors: none.
 
-## Comparison findings and fixes
+## Comparison history
 
-1. The first implementation used a 1190 px table minimum, creating avoidable desktop scrolling beside the persistent inspector. It was reduced to a 940 px trader-density grid without removing any decision field.
-2. The first ARIA structure nested expiry rowgroups inside a queue rowgroup. The container role was removed so each expiry owns one valid sibling rowgroup.
-3. Migrated Candidate/Underwriting code names and unused detail/economics styles remained after the redesign. They were deleted or renamed to make Shadow lifecycle ownership explicit.
-4. Responsibility-association faults and display-only field faults initially shared one warning. They are now separate: only the former fails lifecycle association closed; the latter preserves the server-owned Position responsibility.
-5. The global skip label and toolbar region label were Radar-specific. They are now neutral across Radar and Shadow.
+1. Pass 1 — [P1] the desktop grid was attached to the old queue owner, so the inspector fell below the table. The grid now belongs to the shared workspace shell, producing the source's side-by-side 1050/390 split.
+2. Pass 2 — [P2] the expiry band followed the table header and row copy was too verbose. The expiry summary now leads the columns, and row states use compact trader language without dropping the full evidence in the inspector.
+3. Pass 3 — [P2] the selected inspector lacked current index, entry net credit, fee-reserved maximum loss, and independent expiry countdown. The schema-7 projection now exposes those existing server-owned facts; no second policy calculator or durable object was added.
+4. Pass 4 — [P2] the first recovery fixture showed staged Positions as monitoring and omitted persisted first CLOSE responsibility. Final QA uses the official Case recovery objects and first-CLOSE evidence in a non-mutating projection; all 21 admitted rows correctly render `EXIT_ACQUIRING`.
+5. Final comparison — source and implementation were combined at the same 1487 × 1058 state, then rechecked as table- and inspector-focused pairs. No actionable P0, P1, or P2 visual finding remains.
 
-No actionable P0, P1, or P2 design finding remains.
+## Residual P3 polish
+
+- The source's funnel/filter glyphs remain text controls because the repository has no approved matching icon library; no ASCII, hand-drawn SVG, or fake asset was introduced.
+- The source mock illustrates 10 rows over three expiries and mixed lifecycle states. Current durable admitted data contains 21 rows in one expiry and all have exit responsibility. The implementation intentionally preserves that real distribution.
 
 final result: passed

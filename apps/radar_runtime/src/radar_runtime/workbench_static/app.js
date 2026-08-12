@@ -328,6 +328,22 @@ const formatTimestamp = value => {
   }).format(new Date(Number(value)));
 };
 
+const formatExpiryHeading = value => {
+  if (isMissing(value) || !Number.isFinite(Number(value))) return '到期日未知';
+  const expiry = Number(value);
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'UTC', day: '2-digit', month: 'short'
+  }).format(new Date(expiry)).toUpperCase();
+  const today = new Date();
+  const utcToday = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const utcExpiry = Date.UTC(
+    new Date(expiry).getUTCFullYear(), new Date(expiry).getUTCMonth(), new Date(expiry).getUTCDate()
+  );
+  const dayDelta = Math.round((utcExpiry - utcToday) / 86400000);
+  const prefix = dayDelta === 0 ? 'TODAY' : dayDelta === 1 ? 'TOMORROW' : '';
+  return prefix ? `${prefix} · ${parts}` : parts;
+};
+
 const formatStrike = value => {
   if (isMissing(value) || !Number.isFinite(Number(value))) return '—';
   const numeric = Number(value);
@@ -836,6 +852,7 @@ let drawerOpen = false;
 let lastDetailTriggerId = null;
 let evidenceExpanded = false;
 let productMatrixOpen = false;
+let shadowFiltersOpen = false;
 
 const isDrawerViewport = () => typeof window !== 'undefined' &&
   typeof window.matchMedia === 'function' && window.matchMedia(DRAWER_MEDIA_QUERY).matches;
@@ -968,8 +985,15 @@ function renderProductToolbar(documentValue) {
   activeProduct.innerHTML = `<strong>${safeText(activeChannel ? activeChannel.id : ACTIVE_CHANNEL_ID)}</strong>` +
     badgeMarkup(state.label, state.tone);
   count.textContent = '1 / 4';
-  radarToolbar.hidden = queueMode !== 'radar';
+  radarToolbar.hidden = false;
+  radarToolbar.dataset.surface = queueMode;
   activeToggle.setAttribute('aria-pressed', String(activeOnly));
+  activeToggle.hidden = queueMode !== 'radar';
+  const shadowFilterToggle = document.getElementById('shadow-filter-toggle');
+  if (shadowFilterToggle) {
+    shadowFilterToggle.hidden = queueMode !== 'structures';
+    shadowFilterToggle.setAttribute('aria-expanded', String(shadowFiltersOpen));
+  }
   if (document.body) document.body.dataset.surface = queueMode;
   if (typeof document.querySelectorAll === 'function') {
     document.querySelectorAll('[data-option-filter]').forEach(button => {
@@ -1007,7 +1031,7 @@ function renderHeader(documentValue) {
   const latency = latencyState(system);
   status.dataset.state = state.key;
   stateLabel.textContent = state.label;
-  stateDetail.textContent = state.detail;
+  stateDetail.textContent = state.key === 'healthy' ? '决策数据当前可用' : state.detail;
   servicePhase.textContent = `服务 ${service ? displayText(service.phase) : '—'}`;
   dataCurrentness.textContent = `行情 ${service ? displayText(service.data_state) : '—'}`;
   dataDelay.textContent = latency.event;
@@ -1065,73 +1089,156 @@ function renderShadowFilters(documentValue) {
       button.setAttribute('aria-pressed', String(button.dataset.queueMode === queueMode));
     });
   }
+  const popover = document.getElementById('shadow-filter-popover');
+  const toggle = document.getElementById('shadow-filter-toggle');
+  if (popover) popover.hidden = !shadowFiltersOpen;
+  if (toggle) toggle.setAttribute('aria-expanded', String(shadowFiltersOpen));
 }
 
 function renderQueueHead() {
-  const labels = ['结构', '数量', '责任状态', '触发 / 当前事实', '退出经济', '下一责任', '观察'];
-  document.getElementById('queue-head').innerHTML = labels.map(value =>
-    `<span role="columnheader">${escapeHtml(value)}</span>`
+  const labels = [
+    ['结构（简称）', '合约结构（Short → Long）'],
+    ['方向', ''],
+    ['数量', '(BTC)'],
+    ['现价 vs 短行权', '距离 / 占比'],
+    ['TTE', '距离到期'],
+    ['当前触发', 'Entry Delta Bucket'],
+    ['状态', ''],
+    ['关闭成本 / P&L', '当前公共报价（仅参考）'],
+    ['下一步行动', '']
+  ];
+  document.getElementById('queue-head').innerHTML = labels.map(([primary, secondary]) =>
+    `<span role="columnheader"><strong>${escapeHtml(primary)}</strong>` +
+    `${secondary ? `<small>${escapeHtml(secondary)}</small>` : ''}</span>`
   ).join('');
 }
+
+const shadowCurrentIndex = documentValue => documentValue && documentValue.system
+  ? documentValue.system.current_index_price_valuation : null;
+
+const shadowStrikeDistance = (row, documentValue) => {
+  const index = Number(shadowCurrentIndex(documentValue));
+  const strike = Number(row.short_strike_price);
+  if (!Number.isFinite(index) || !Number.isFinite(strike) || index === 0) {
+    return {primary: '暂不可得', secondary: '当前指数不可得', tone: 'muted'};
+  }
+  const distance = row.option_type === 'put' ? index - strike : strike - index;
+  const percent = distance / index * 100;
+  const signed = distance >= 0 ? '+' : '';
+  return {
+    primary: `${signed}${formatCompactNumber(distance, 0)} / ${signed}${formatCompactNumber(percent, 2)}%`,
+    secondary: `现价 ${formatCompactNumber(index, 0)}`,
+    tone: distance < 0 ? 'negative' : distance / index < 0.01 ? 'warning' : 'positive'
+  };
+};
+
+const shadowDistanceToThresholdText = (row, strikeDistance) => {
+  if (strikeDistance.primary === '暂不可得') return '暂不可得';
+  const strike = formatStrike(row.short_strike_price);
+  return `${row.option_type === 'put' ? '≤' : '≥'} ${strike} （${strikeDistance.primary}）`;
+};
+
+const shadowEntryScorePacket = row => row.entry.entry_refresh_score_packet ||
+  row.entry.selection_score_packet;
+
+const shadowEntryDeltaBucket = row => {
+  const packet = shadowEntryScorePacket(row);
+  return packet && packet.bucket_key ? displayText(packet.bucket_key.delta_bucket) : '—';
+};
+
+const shadowTteText = row => formatDurationInterval(
+  row.position && row.position.expiry_countdown_interval_ms
+);
+
+const shadowBookTriggerText = row => shadowTriggerText(row) === '历史 CLOSE 已锁存'
+  ? 'CLOSE 已锁存' : shadowTriggerText(row);
+
+const shadowBookDutyText = row => {
+  const key = shadowLifecyclePresentation(row).key;
+  if (key === 'EXIT_REQUIRED') return '退出中 · 等待报价';
+  if (key === 'SETTLEMENT_PENDING') return '等待官方交割';
+  if (key === 'MONITORING') return '监控 · 观察退出触发';
+  if (key === 'TERMINAL') return '持仓责任已终结';
+  return shadowNextDuty(row);
+};
+
+const shadowStateTone = state => state.tone === 'green' ? 'positive'
+  : state.tone === 'amber' ? 'warning' : state.tone === 'red' ? 'negative' : 'muted';
 
 function shadowBookRowMarkup(row, index, documentValue = currentDocument) {
   const id = shadowBookIdentity(row, index);
   const state = shadowLifecyclePresentation(row);
   const economics = shadowCloseEconomics(row);
   const quality = row.position && row.position.observation_quality || row.entry.observation_quality;
-  const nativeUnit = documentValue.product.native_premium_currency;
   const valuationUnit = documentValue.product.valuation_currency;
+  const strikeDistance = shadowStrikeDistance(row, documentValue);
   const economicPrimary = economics.kind === 'UNKNOWN'
     ? '尚不可得'
     : economics.kind === 'TERMINAL_UNKNOWN'
       ? '终端未知'
       : `${Number(economics.pnl) >= 0 ? '+' : ''}${formatMoney(economics.pnl)} ${valuationUnit}`;
-  const economicSecondary = economics.kind === 'OUTCOME'
-    ? '已形成终端 Outcome'
-    : economics.kind === 'CURRENT_QUOTE'
-      ? `当前合格报价 · 退出借记 ${formatMoney(economics.debit)}`
-      : economics.kind === 'TERMINAL_UNKNOWN'
-        ? '终端事实不可验证 · 不显示 0'
-        : shadowTerminalIssue(row)
-          ? '终端 Outcome 投影待恢复 · 不显示 0'
-          : '不显示 0；等待合格报价或交割';
   const triggerSecondary = row.position && row.position.position_lifecycle_state === 'TERMINAL'
-    ? '首次原因保留；持仓责任已终结'
+    ? '责任已终结'
     : row.position && row.position.primary_exit_rule === 'PLATFORM_OR_SOURCE_DISCONTINUITY'
-      ? '首次原因保留；当前仍承担退出责任'
+      ? '持仓责任持续'
       : row.position && row.position.close_quote_state
         ? `报价 ${displayText(row.position.close_quote_state)}` : '—';
-  return `<button type="button" class="queue-row shadow-book-row" role="row" ` +
+  const lifecycleTone = shadowStateTone(state);
+  const pnlTone = economics.kind === 'UNKNOWN' || economics.kind === 'TERMINAL_UNKNOWN'
+    ? 'muted' : Number(economics.pnl) >= 0 ? 'positive' : 'negative';
+  return `<button type="button" class="queue-row shadow-book-row tone-row-${escapeHtml(lifecycleTone)}" role="row" ` +
     `data-row-id="${escapeHtml(id)}" aria-pressed="${selectedShadowId === id}">` +
     `<span role="cell"><span class="cell-primary">${safeText(shadowStructureLabel(row))}</span>` +
-    `<span class="cell-secondary">SELL ${safeText(row.short_leg && row.short_leg.instrument_name)} · BUY ${safeText(row.long_leg && row.long_leg.instrument_name)}</span></span>` +
-    `<span role="cell"><span class="cell-primary">${safeText(formatDecimal(row.entry.target_quantity_btc))} BTC</span>` +
-    `<span class="cell-secondary">入场净信用 ${safeText(formatNative(row.entry.native_net_entry_credit))} ${safeText(nativeUnit)}</span></span>` +
-    `<span role="cell">${badgeMarkup(state.label, state.tone, 'decision-badge')}` +
-    `<span class="cell-secondary">hard-close ${safeText(formatDurationInterval(row.position && row.position.hard_close_countdown_interval_ms))}</span></span>` +
-    `<span role="cell"><span class="cell-primary">${safeText(shadowTriggerText(row))}</span>` +
-    `<span class="cell-secondary">${safeText(triggerSecondary)}</span></span>` +
-    `<span role="cell"><span class="cell-value ${['UNKNOWN', 'TERMINAL_UNKNOWN'].includes(economics.kind) ? 'cell-muted' : ''}">${safeText(economicPrimary)}</span>` +
-    `<span class="cell-secondary">${safeText(economicSecondary)}</span></span>` +
-    `<span role="cell"><span class="cell-primary shadow-duty">${safeText(shadowNextDuty(row))}</span>` +
-    `<span class="cell-secondary">Public Shadow · 非订单/成交</span></span>` +
-    `<span role="cell">${badgeMarkup(quality === 'GAPPED' ? '有缺口' : quality === 'CONTINUOUS' ? '连续' : '未知', quality === 'GAPPED' ? 'amber' : quality === 'CONTINUOUS' ? 'blue' : 'neutral')}` +
-    `<span class="cell-secondary">${row.issues.length ? safeText(reasonText(row.issues[0])) : ''}</span></span></button>`;
+    `<span class="cell-secondary">${safeText(row.short_leg && row.short_leg.instrument_name)} → ${safeText(row.long_leg && row.long_leg.instrument_name)}</span></span>` +
+    `<span role="cell"><span class="cell-primary">${safeText(optionTypeText(row.option_type))}</span></span>` +
+    `<span role="cell"><span class="cell-primary">${safeText(formatDecimal(row.entry.target_quantity_btc))}</span>` +
+    `<span class="cell-secondary">BTC</span></span>` +
+    `<span role="cell"><span class="cell-value cell-${escapeHtml(strikeDistance.tone)}">${safeText(strikeDistance.primary)}</span>` +
+    `<span class="cell-secondary">${safeText(strikeDistance.secondary)}</span></span>` +
+    `<span role="cell"><span class="cell-primary">${safeText(shadowTteText(row))}</span>` +
+    `<span class="cell-secondary">到期</span></span>` +
+    `<span role="cell"><span class="cell-primary">${safeText(shadowBookTriggerText(row))}</span>` +
+    `<span class="cell-secondary">${safeText(shadowEntryDeltaBucket(row))}</span></span>` +
+    `<span role="cell"><span class="cell-value cell-${escapeHtml(lifecycleTone)}">${safeText(state.label)}</span>` +
+    `<span class="cell-secondary">${safeText(quality === 'GAPPED' ? '观察有缺口' : quality === 'CONTINUOUS' ? '连续观察' : '观察未知')}</span></span>` +
+    `<span role="cell"><span class="cell-value cell-${escapeHtml(pnlTone)}">${safeText(economics.kind === 'CURRENT_QUOTE' ? `${formatMoney(economics.debit)} ${valuationUnit}` : economics.kind === 'OUTCOME' ? 'Outcome' : '等待可执行报价')}</span>` +
+    `<span class="cell-secondary ${pnlTone === 'negative' ? 'cell-negative' : pnlTone === 'positive' ? 'cell-positive' : ''}">${safeText(economicPrimary)}</span></span>` +
+    `<span role="cell"><span class="cell-primary shadow-duty">${safeText(shadowBookDutyText(row))}</span>` +
+    `<span class="cell-secondary">${safeText(triggerSecondary)}</span></span></button>`;
 }
 
-const shadowExpiryGroupMarkup = (group, groupIndex) => {
+const shadowExpiryHeadingMarkup = group => {
   const exitCount = group.rows.filter(row =>
     shadowLifecyclePresentation(row).key === 'EXIT_REQUIRED').length;
   const monitoringCount = group.rows.filter(row =>
     shadowLifecyclePresentation(row).key === 'MONITORING').length;
-  return `<section class="shadow-expiry-group" role="rowgroup" aria-label="${safeText(formatDate(group.expiry))} 到期">` +
-    `<div class="shadow-expiry-heading" role="row"><span role="cell">` +
-      `<strong>${safeText(formatDate(group.expiry))}</strong>` +
-      `<small>${group.rows.length} 个持仓 · ${exitCount} 个退出责任 · ${monitoringCount} 个观察中</small>` +
-    `</span></div>` +
+  const index = shadowCurrentIndex(currentDocument);
+  const shortStrikes = group.rows.map(row => Number(row.short_strike_price)).filter(Number.isFinite);
+  const lower = shortStrikes.length ? Math.min(...shortStrikes) : null;
+  const upper = shortStrikes.length ? Math.max(...shortStrikes) : null;
+  const nearest = Number.isFinite(Number(index)) && shortStrikes.length
+    ? Math.min(...shortStrikes.map(value => Math.abs(value - Number(index)))) : null;
+  const nearestText = nearest === null
+    ? '短腿风险距离暂不可得'
+    : `最近短腿 ${formatCompactNumber(nearest, 0)} USD`;
+  const concentration = lower === null ? '短腿集中区间暂不可得'
+    : `短腿集中 ${formatStrike(lower)}${upper !== lower ? `–${formatStrike(upper)}` : ''}`;
+  const countdown = group.rows[0] && group.rows[0].position
+    ? formatDurationInterval(group.rows[0].position.hard_close_countdown_interval_ms) : '—';
+  return `<div class="shadow-expiry-heading" role="row"><span role="cell">` +
+      `<strong>${safeText(formatExpiryHeading(group.expiry))}</strong>` +
+      `<small>${group.rows.length} 结构</small>` +
+      `<small>${safeText(nearestText)} · ${safeText(countdown)}</small>` +
+      `<small>监控 ${monitoringCount} · 退出中 ${exitCount}</small>` +
+      `<small>${safeText(concentration)}</small>` +
+    `</span></div>`;
+};
+
+const shadowExpiryGroupMarkup = (group, groupIndex, includeHeading = true) =>
+  `<section class="shadow-expiry-group" role="rowgroup" aria-label="${safeText(formatDate(group.expiry))} 到期">` +
+    (includeHeading ? shadowExpiryHeadingMarkup(group) : '') +
     group.rows.map((row, index) => shadowBookRowMarkup(row, groupIndex * 1000 + index)).join('') +
   `</section>`;
-};
 
 const signalLaneLayout = (rows, bounds) => {
   const positioned = rows.map((row, index) => ({
@@ -1291,15 +1398,23 @@ function renderQueue(documentValue) {
         shadowLifecyclePresentation(row).key === 'TERMINAL').length;
       structureStatus.textContent = `显示 ${rows.length} / ${total.length} 个正式 Shadow 持仓 · ` +
         `${exitRequired} 个退出责任 · ${monitoring} 个观察中 · ${terminal} 个已终结`;
+      const footerCount = document.getElementById('shadow-footer-count');
+      if (footerCount) footerCount.textContent = `显示 1–${rows.length} / ${total.length}`;
     }
     if (!rows.length) {
+      const leadingExpiry = document.getElementById('shadow-leading-expiry');
+      if (leadingExpiry) leadingExpiry.innerHTML = '';
       body.innerHTML = emptyQueueMarkup(documentValue);
     } else {
       const ids = rows.map(shadowBookIdentity);
       const selectionChanged = !selectedShadowId || !ids.includes(selectedShadowId);
       if (selectionChanged) selectedShadowId = ids[0];
       if (selectedShadowId && !isDrawerViewport()) drawerOpen = true;
-      body.innerHTML = groupShadowBookRowsByExpiry(rows).map(shadowExpiryGroupMarkup).join('');
+      const groups = groupShadowBookRowsByExpiry(rows);
+      const leadingExpiry = document.getElementById('shadow-leading-expiry');
+      if (leadingExpiry) leadingExpiry.innerHTML = shadowExpiryHeadingMarkup(groups[0]);
+      body.innerHTML = groups.map((group, index) =>
+        shadowExpiryGroupMarkup(group, index, index !== 0)).join('');
     }
   } else {
     kicker.textContent = '当前 Radar';
@@ -1329,11 +1444,25 @@ function shadowDetailMarkup(row, documentValue) {
   const outcome = row.outcome || {state: 'PENDING'};
   const economics = shadowCloseEconomics(row);
   const terminalIssue = shadowTerminalIssue(row);
-  const primaryReason = position.primary_exit_rule;
-  const closeReason = primaryReason === 'PLATFORM_OR_SOURCE_DISCONTINUITY'
-    ? `${reasonText(primaryReason)}（历史首次 CLOSE 已锁存）`
-    : reasonText(primaryReason);
   const quality = position.observation_quality || row.entry.observation_quality;
+  const currentIndex = shadowCurrentIndex(documentValue);
+  const strikeDistance = shadowStrikeDistance(row, documentValue);
+  const thresholdText = shadowDistanceToThresholdText(row, strikeDistance);
+  const scorePacket = shadowEntryScorePacket(row);
+  const scoreResult = scorePacketResult(scorePacket);
+  const premiumStrength = scoreComponentText(scorePacket, 'premium_evidence');
+  const riskQuality = scoreComponentText(scorePacket, 'risk_quality');
+  const netCredit = row.entry.net_entry_credit_valuation;
+  const maxReward = netCredit;
+  const maxRisk = row.entry.entry_fee_reserved_max_loss_valuation;
+  const riskReward = !isMissing(netCredit) && !isMissing(maxRisk) && Number(netCredit) > 0
+    ? `${formatCompactNumber(Number(maxRisk) / Number(netCredit), 1)}×`
+    : '—';
+  const closeDebitText = economics.kind === 'CURRENT_QUOTE'
+    ? `${formatMoney(economics.debit)} ${valuationUnit}` : '等待可执行报价';
+  const pnlText = ['CURRENT_QUOTE', 'OUTCOME'].includes(economics.kind)
+    ? `${Number(economics.pnl) >= 0 ? '+' : ''}${formatMoney(economics.pnl)} ${valuationUnit}`
+    : economics.kind === 'TERMINAL_UNKNOWN' ? '终端未知' : '尚不可得';
   const terminalText = terminalIssue
     ? '终端 Outcome 投影待恢复；不推断退出方式或经济结果'
     : ['PENDING', 'PENDING_OUTCOME'].includes(outcome.state)
@@ -1341,15 +1470,6 @@ function shadowDetailMarkup(row, documentValue) {
         ? '等待官方 delivery price；不可得时才形成 TERMINAL_UNKNOWN'
         : '等待首组合格退出报价；到期未退出则进入官方交割'
     : `${displayText(outcome.state)} · ${displayText(outcome.terminal_method)}`;
-  const closeEconomicsMarkup = economics.kind === 'TERMINAL_UNKNOWN'
-    ? '<div class="shadow-economics-unknown"><strong>终端经济不可得</strong>' +
-      '<span>持仓责任已终结；不显示 0，也不伪造结果。</span></div>'
-    : economics.kind === 'UNKNOWN'
-      ? `<div class="shadow-economics-unknown"><strong>${terminalIssue ? '终端 Outcome 待恢复' : '退出经济尚不可得'}</strong>` +
-        `<span>${terminalIssue ? 'Position 终端态保留；不推断终端经济。' : '不显示 0；继续承担退出或交割责任。'}</span></div>`
-    : `<div class="shadow-pnl-known"><span>${economics.kind === 'OUTCOME' ? '终端公共报价 PnL' : '当前公共报价模拟 PnL'}</span>` +
-      `<strong>${Number(economics.pnl) >= 0 ? '+' : ''}${safeText(formatMoney(economics.pnl))} ${safeText(valuationUnit)}</strong>` +
-      `<small>${economics.kind === 'CURRENT_QUOTE' ? `退出借记 ${safeText(formatMoney(economics.debit))} ${safeText(valuationUnit)}` : '服务器已形成 Outcome'}</small></div>`;
   const responsibilityIssue = shadowResponsibilityIssue(row);
   const issueMarkup = responsibilityIssue
     ? `<div class="callout blocker"><strong>责任关联待恢复</strong>${safeText(row.issues.map(reasonText).join('；'))}。Entry 不删除，浏览器拒绝补推 Position 或 Outcome。</div>`
@@ -1360,33 +1480,54 @@ function shadowDetailMarkup(row, documentValue) {
       : '';
   return `<div class="detail-title-line"><h3>${safeText(shadowStructureLabel(row))}</h3>` +
     `${badgeMarkup(state.label, state.tone, 'decision-badge')}</div>` +
-    `<p class="detail-subtitle">${safeText(formatDate(row.expiry_timestamp_ms))} · ` +
-      `SELL ${safeText(row.short_leg && row.short_leg.instrument_name)} · ` +
-      `BUY ${safeText(row.long_leg && row.long_leg.instrument_name)}</p>` +
+    `<p class="detail-subtitle">${safeText(row.short_leg && row.short_leg.instrument_name)} → ` +
+      `${safeText(row.long_leg && row.long_leg.instrument_name)}</p>` +
+    `<p class="detail-meta">数量 ${safeText(formatDecimal(row.entry.target_quantity_btc))} ${safeText(nativeUnit)} · ` +
+      `方向 ${safeText(optionTypeText(row.option_type))} · Entry Score ${safeText(scoreIntervalText(scorePacket))}</p>` +
     `${issueMarkup}` +
-    `<section class="shadow-trader-section"><div class="detail-section-title"><h4>结构经济</h4>` +
-      `<span class="detail-section-note">冻结 Entry · 浏览器不重算</span></div>` +
-      `<div class="shadow-trader-facts">` +
-        factMarkup('数量', `${formatDecimal(row.entry.target_quantity_btc)} BTC`) +
-        factMarkup(`入场净信用 ${nativeUnit}`, formatNative(row.entry.native_net_entry_credit)) +
-        factMarkup(`入场费前估值 ${valuationUnit}`, formatMoney(row.entry.simulated_entry_credit_valuation)) +
-        factMarkup('入场边界指数', formatMoney(row.entry.entry_valuation_index_price)) +
+    `<section class="shadow-trader-section numbered-section"><h4>1. 结构经济</h4>` +
+      `<div class="shadow-key-values">` +
+        `<div><span>净入场信用（估值）</span><strong>${safeText(isMissing(netCredit) ? '—' : `${formatMoney(netCredit)} ${valuationUnit}`)}</strong></div>` +
+        `<div><span>最大收益（净信用）</span><strong>${safeText(isMissing(maxReward) ? '—' : `${formatMoney(maxReward)} ${valuationUnit}`)}</strong></div>` +
+        `<div><span>最大亏损（含入场费预留）</span><strong>${safeText(isMissing(maxRisk) ? '—' : `${formatMoney(maxRisk)} ${valuationUnit}`)}</strong></div>` +
+        `<div><span>风险 / 信用</span><strong>${safeText(riskReward)}</strong></div>` +
       `</div></section>` +
-    `<section class="shadow-trader-section"><div class="detail-section-title"><h4>当前风险与退出责任</h4>` +
-      `<span class="detail-section-note">Position 当前投影</span></div>` +
-      `<div class="shadow-duty-card"><div><span>首次 CLOSE 原因</span><strong>${safeText(closeReason)}</strong></div>` +
-        `<div><span>当前执行状态</span><strong>${safeText(state.label)}</strong></div>` +
-        `<div><span>下一责任</span><strong>${safeText(shadowNextDuty(row))}</strong></div>` +
-        `<div><span>hard-close</span><strong>${safeText(formatDurationInterval(position.hard_close_countdown_interval_ms))}</strong></div></div>` +
-      `${closeEconomicsMarkup}</section>` +
-    `<section class="shadow-trader-section"><div class="detail-section-title"><h4>终端预期</h4>` +
-      `<span class="detail-section-note">退出与交割二选一终结</span></div>` +
+    `<section class="shadow-trader-section numbered-section"><h4>2. 风险现状</h4>` +
+      `<div class="shadow-key-values">` +
+        `<div><span>当前指数</span><strong>${safeText(isMissing(currentIndex) ? '暂不可得' : `${formatMoney(currentIndex)} ${valuationUnit}`)}</strong></div>` +
+        `<div><span>相对短行权</span><strong class="cell-${escapeHtml(strikeDistance.tone)}">${safeText(strikeDistance.primary)}</strong></div>` +
+        `<div><span>当前触发价</span><strong>${safeText(thresholdText)}</strong></div>` +
+        `<div><span>当前触发</span><strong>${safeText(shadowTriggerText(row))}</strong></div>` +
+        `<div><span>Entry Delta Bucket</span><strong>${safeText(shadowEntryDeltaBucket(row))}</strong></div>` +
+        `<div><span>状态</span><strong class="cell-${escapeHtml(shadowStateTone(state))}">${safeText(state.label)}</strong></div>` +
+      `</div>` +
+      `<div class="signal-metrics shadow-entry-metrics">` +
+        `<div class="signal-metric"><div class="signal-metric-head"><span>Entry Premium Strength (A/S/T)</span><strong>${safeText(premiumStrength)}</strong></div>` +
+          `<progress class="signal-meter" max="100" value="${scoreMetricWidth(scoreResult, 'premium_evidence')}" aria-label="Entry Premium Strength"></progress></div>` +
+        `<div class="signal-metric risk"><div class="signal-metric-head"><span>Entry Risk Quality (D/E)</span><strong>${safeText(riskQuality)}</strong></div>` +
+          `<progress class="signal-meter" max="100" value="${scoreMetricWidth(scoreResult, 'risk_quality')}" aria-label="Entry Risk Quality"></progress></div>` +
+      `</div></section>` +
+    `<section class="shadow-trader-section numbered-section"><h4>3. 关闭职责</h4>` +
+      `<div class="shadow-key-values">` +
+        `<div><span>最佳可证明路径</span><strong>${safeText(position.position_lifecycle_state === 'SETTLEMENT_PENDING' ? '官方交割' : '首组合格双腿公共报价')}</strong></div>` +
+        `<div><span>关闭成本（估值）</span><strong>${safeText(closeDebitText)}</strong></div>` +
+        `<div><span>Shadow P&L（仅参考）</span><strong>${safeText(pnlText)}</strong></div>` +
+        `<div><span>下一步行动</span><strong>${safeText(shadowNextDuty(row))}</strong></div>` +
+      `</div></section>` +
+    `<section class="shadow-trader-section numbered-section"><h4>4. 截止与时限</h4>` +
+      `<div class="shadow-key-values">` +
+        `<div><span>hard-close 边界</span><strong>${safeText(formatTimestamp(position.hard_close_boundary_ms))}</strong></div>` +
+        `<div><span>距离 hard-close</span><strong>${safeText(formatDurationInterval(position.hard_close_countdown_interval_ms))}</strong></div>` +
+        `<div><span>到期边界</span><strong>${safeText(formatTimestamp(row.expiry_timestamp_ms))}</strong></div>` +
+      `</div></section>` +
+    `<section class="shadow-trader-section numbered-section"><h4>5. 终端预期</h4>` +
       `<p class="shadow-terminal-text">${safeText(terminalText)}</p></section>` +
-    `<p class="signal-nonclaim">PUBLIC SHADOW · READ ONLY · 公共盘口反事实，不是订单、成交、账户持仓或实际 PnL。</p>` +
     `<details class="signal-evidence shadow-research-evidence" data-evidence-details${evidenceExpanded ? ' open' : ''}>` +
       `<summary>完整责任链与研究证据</summary><div class="signal-evidence-body">` +
         `<div class="fact-grid">` +
           factMarkup('Shadow Entry', shortIdentity(row.shadow_entry_identity)) +
+          factMarkup(`入场净信用 ${nativeUnit}`, formatNative(row.entry.native_net_entry_credit)) +
+          factMarkup(`入场费前估值 ${valuationUnit}`, formatMoney(row.entry.simulated_entry_credit_valuation)) +
           factMarkup('观察质量', quality) +
           factMarkup('Gap count', row.entry.gap_count) +
           factMarkup('Segment', row.entry.current_segment_sequence) +
@@ -1399,7 +1540,8 @@ function shadowDetailMarkup(row, documentValue) {
           `Cohort 资格在离线研究面按问题分别派生；本页不使用一个全局布尔否决持仓。</div>` +
         `<details class="evidence-details"><summary>服务器原始 Entry / Position / Outcome</summary>` +
           `<pre class="evidence-raw">${escapeHtml(JSON.stringify({entry: row.entry, position: row.position, outcome: row.outcome}, null, 2))}</pre></details>` +
-      `</div></details>`;
+      `</div></details>` +
+    `<p class="signal-nonclaim">PUBLIC SHADOW · READ ONLY · 公共盘口反事实，不是订单、成交、账户持仓或实际 PnL。</p>`;
 }
 
 const scoreMetricWidth = (result, member) => {
@@ -1496,7 +1638,7 @@ function renderDetail(documentValue) {
     title.textContent = '当前没有可显示的详情';
     content.innerHTML = `<div class="detail-placeholder">${emptyQueueMarkup(documentValue)}</div>`;
   } else if (queueMode === 'structures') {
-    if (kicker) kicker.textContent = '当前持仓责任';
+    if (kicker) kicker.textContent = '已选择';
     title.textContent = 'Shadow 风险与退出责任';
     content.innerHTML = shadowDetailMarkup(row, documentValue);
   } else {
@@ -1615,6 +1757,7 @@ function activateQueueMode(mode) {
   const focusIdentity = captureFocusIdentity();
   queueMode = mode;
   drawerOpen = mode === 'structures' && !isDrawerViewport();
+  shadowFiltersOpen = false;
   evidenceExpanded = false;
   renderWorkspace(currentDocument);
   restoreFocusIdentity(focusIdentity);
@@ -1741,7 +1884,8 @@ if (typeof document.addEventListener === 'function') {
     }
     const option = target.closest('[data-option-filter]');
     if (option) {
-      activateOptionFilter(option.dataset.optionFilter);
+      if (queueMode === 'structures') activateShadowOptionFilter(option.dataset.optionFilter);
+      else activateOptionFilter(option.dataset.optionFilter);
       return;
     }
     const shadowOption = target.closest('[data-shadow-option-filter]');
@@ -1751,6 +1895,11 @@ if (typeof document.addEventListener === 'function') {
     }
     if (target.closest('#active-only-toggle')) {
       toggleActiveOnly();
+      return;
+    }
+    if (target.closest('#shadow-filter-toggle')) {
+      shadowFiltersOpen = !shadowFiltersOpen;
+      renderWorkspace(currentDocument);
       return;
     }
     if (target.closest('#product-matrix-toggle')) {
@@ -1790,6 +1939,10 @@ if (typeof document.addEventListener === 'function') {
     if (target.closest('#detail-close') || target.closest('#detail-scrim')) {
       closeDetail();
       return;
+    }
+    if (shadowFiltersOpen && !target.closest('#shadow-filter-popover')) {
+      shadowFiltersOpen = false;
+      renderWorkspace(currentDocument);
     }
     if (productMatrixOpen && !target.closest('#channel-rail')) setProductMatrixOpen(false);
   });

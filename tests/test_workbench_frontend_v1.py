@@ -66,10 +66,11 @@ def test_opportunity_blotter_preserves_public_only_read_only_boundaries() -> Non
     assert "PUBLIC SHADOW · READ ONLY · 非订单/成交" in HTML
     assert "只读发现信号 · 非交易指令 · 尚未形成 Shadow Entry" in JS
     assert "不是订单、成交、账户持仓或实际 PnL" in JS
-    assert "不显示 0\uff1b继续承担退出或交割责任" in JS
+    assert "尚不可得" in JS
+    assert "到期未退出则进入官方交割" in JS
     assert "actual_account_margin_availability !== 'UNKNOWN'" in JS
     assert "actual_account_margin_reason !== 'ACCOUNT_MARGIN_UNKNOWN'" in JS
-    assert "const nativeUnit = documentValue.product.native_premium_currency" in JS
+    assert "native_premium_currency" in JS
     assert "const valuationUnit = documentValue.product.valuation_currency" in JS
 
     assert "WebSocket" not in combined
@@ -532,6 +533,7 @@ const makePosition = (identity, lifecycle, overrides = {{}}) => ({{
   exit_acquisition_eligible: lifecycle === 'TERMINAL',
   primary_exit_rule: lifecycle === 'MONITORING' ? null : 'MAXIMUM_NET_LOSS_BOUNDARY_REACHED',
   hard_close_countdown_interval_ms: {{lower_ms: 3600000, upper_ms: 3600000}},
+  expiry_countdown_interval_ms: {{lower_ms: 5400000, upper_ms: 5400000}},
   close_quote_state: 'UNKNOWN', valid_shadow_close_opportunity: false, ...overrides
 }});
 const makeOutcome = (identity, state = 'PENDING', overrides = {{}}) => ({{
@@ -603,10 +605,9 @@ assert.match(gappedDetail, /Observation Gap 只描述路径质量/);
 assert.match(gappedDetail, /不终止退出责任/);
 assert.equal(gappedDetail.includes('+7.5 USD_EQUIVALENT'), true);
 const pendingDetail = api.shadowDetailMarkup(byId.exit, shadowDocument);
-assert.match(pendingDetail, /不显示 0/);
-assert.match(pendingDetail, /继续承担退出或交割责任/);
-assert.equal(pendingDetail.includes('平台/行情源不连续'), true);
-assert.equal(pendingDetail.includes('历史首次 CLOSE 已锁存'), true);
+assert.match(pendingDetail, /尚不可得/);
+assert.match(pendingDetail, /到期未退出则进入官方交割/);
+assert.match(pendingDetail, /历史 CLOSE 已锁存/);
 const settledDetail = api.shadowDetailMarkup(byId.settled, shadowDocument);
 assert.match(settledDetail, /SETTLED_KNOWN · CONTRACT_SETTLEMENT/);
 assert.match(settledDetail, /-2 USD_EQUIVALENT/);
@@ -658,7 +659,9 @@ assert.equal(displayOnlyIssue.issues.includes('INVALID_ENTRY_COMPONENT_ROLES'), 
 assert.equal(api.shadowLifecyclePresentation(displayOnlyIssue).label, '退出中');
 assert.equal(api.shadowNextDuty(displayOnlyIssue), '继续寻找首组合格退出报价');
 const rowMarkup = api.shadowBookRowMarkup(byId.exit, 0, shadowDocument);
-assert.equal(rowMarkup.includes('Public Shadow · 非订单/成交'), true);
+assert.match(rowMarkup, /CLOSE 已锁存/);
+assert.match(rowMarkup, /等待可执行报价/);
+assert.match(rowMarkup, /退出中 · 等待报价/);
 assert.doesNotMatch(rowMarkup, /style=/);
 const terminalRowMarkup = api.shadowBookRowMarkup(byId.exited, 1, shadowDocument);
 assert.match(terminalRowMarkup, /持仓责任已终结/);

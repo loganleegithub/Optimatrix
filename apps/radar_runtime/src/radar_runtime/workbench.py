@@ -1836,6 +1836,10 @@ def _shadow_rows(
                     else None
                 ),
                 "simulated_entry_credit_valuation": entry_payload.get("gross_entry_credit_usdc"),
+                "net_entry_credit_valuation": entry_payload.get("net_entry_credit_usdc"),
+                "entry_fee_reserved_max_loss_valuation": entry_payload.get(
+                    "entry_fee_reserved_payoff_loss_usdc"
+                ),
                 "native_premium_currency": entry_payload.get("native_premium_currency"),
                 "native_gross_entry_credit": entry_payload.get("native_gross_entry_credit"),
                 "native_entry_fee_reserve": entry_payload.get("native_entry_fee_reserve"),
@@ -1948,6 +1952,14 @@ def _position_rows(
             if hard_close_boundary_ms is not None and trusted is not None
             else None
         )
+        expiry_countdown = (
+            {
+                "lower_ms": expiry_ms - trusted.upper_ms,
+                "upper_ms": expiry_ms - trusted.lower_ms,
+            }
+            if expiry_ms is not None and trusted is not None
+            else None
+        )
         gross_close_cashflow = _decimal_or_none(
             opportunity_payload.get("gross_close_cashflow_usdc")
         )
@@ -2022,6 +2034,7 @@ def _position_rows(
                 ),
                 "hard_close_boundary_ms": hard_close_boundary_ms,
                 "hard_close_countdown_interval_ms": countdown,
+                "expiry_countdown_interval_ms": expiry_countdown,
                 "ordered_latched_exit_rules": action_payload.get(
                     "ordered_latched_close_reason_vector", []
                 ),
@@ -2281,6 +2294,7 @@ def _empty_business_projection(product: OptionProductSpec) -> dict[str, object]:
             "platform_usable": False,
             "platform_reason": "NOT_STARTED",
             "latest_market_event_timestamp_ms": None,
+            "current_index_price_valuation": None,
             "latest_market_event_age_ms": None,
             "last_wire_message_age_ms": None,
             "last_queue_processing_lag_ms": None,
@@ -2409,8 +2423,12 @@ def _latency_projection(
     trusted: TimeInterval | None,
 ) -> dict[str, object]:
     latest_source_ms = _latest_market_event_timestamp(reducer)
+    current_index = reducer.current_index_price_usdc_per_btc
     return {
         "latest_market_event_timestamp_ms": latest_source_ms,
+        "current_index_price_valuation": (
+            str(current_index) if current_index is not None else None
+        ),
         "latest_market_event_age_ms": (
             None
             if trusted is None or latest_source_ms is None
