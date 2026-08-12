@@ -6,15 +6,15 @@
 
 **Current task kind:** `VALIDATION_ONLY`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_LIFECYCLE_V3_AND_SHADOW_RISK_BOOK_CUTOVER_AUTHORIZED`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_TERMINAL_DUTY_COPY_REPAIR_AUTHORIZED`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_8765_CODE_6FF78068A7990584AAE630BD31DBABCD6B90DA9A_PENDING_ONE_CUTOVER`
+**Persistent service:** `RUNNING_8765_CODE_CA8750584E72156D316943C651FE872F77609823_PENDING_ONE_COPY_REPAIR_CUTOVER`
 
-**Live commands:** `ONE_CLEAN_STOP_ONE_START_AND_BOUNDED_API_BROWSER_GATE_AUTHORIZED`
+**Live commands:** `ONE_CLEAN_STOP_ONE_START_AND_BROWSER_REGRESSION_GATE_AUTHORIZED`
 
 **Sole authorized closure:**
 [`SHADOW_POSITION_LIFECYCLE_REALISM`](../../tasks/SHADOW_POSITION_LIFECYCLE_REALISM.md)
@@ -43,26 +43,41 @@ The consumed same-frame Workbench baseline was schema 7, `RUNNING / CURRENT / re
 rows, 34 formal Shadow Entry rows, 47 Position projections, and 47 Outcome projections. Projection
 counts are current UI state, not the durable Case inventory or a qualification denominator.
 
-## Authorized clean cutover
+## First cutover result and exact browser blocker
+
+The first authorized cutover is consumed. The sole replacement runtime is serving code
+`ca8750584e72156d316943c651fe872f77609823` at `127.0.0.1:8765` with runtime identity
+`sha256:1e1f324e770f176ae11004202506dda82127d2ef970c74e1d7c1eb58b8da41bc`.
+All six declared GET/HEAD routes returned 200; health, readiness, schema, import provenance, static
+asset hashes, and `KNOWN_COMPLETE 130 / 130` current coverage matched the merged checkout. The
+official reader accepted all 91 Cases and 15 naturally produced version-3
+`EXITED_KNOWN/MARKET_EXIT` Outcomes. Every one of the 646 pre-cutover files remained byte-exact.
+
+The live responsive browser gate then falsified completion at one display-only boundary. A
+terminal row correctly rendered `已退出` and `持仓责任已终结`, but its first-CLOSE secondary copy
+still said `当前仍承担退出责任`. The server Position and Outcome projections were internally
+consistent; the defect is owned only by the Shadow row copy in `app.js`. It does not authorize a
+backend, Policy, Case, lifecycle, schema, or persistence change.
+
+## Authorized terminal-duty copy repair
 
 This closure authorizes exactly:
 
-1. mark PR `#51` ready, merge the tested branch into `main`, push, and delete the local and remote
-   topic branch;
-2. clean-stop the sole 8765 runtime, verify the listener is absent, synchronize the existing clean
+1. change only the terminal row's secondary responsibility copy and its executable browser-state
+   regression assertion on one bounded repair branch and Draft PR;
+2. run the focused Workbench tests and full repository gate, merge to `main`, push, and delete the
+   local and remote repair branch;
+3. clean-stop the sole 8765 runtime, verify the listener is absent, synchronize the existing clean
    deployment checkout to merged `main`, and start exactly one replacement with the unchanged
    stable root and port;
-3. verify the replacement's import provenance, code/runtime identity, health, readiness, schema-7
-   API, all declared GET/HEAD routes, official Case reader, recovered lifecycle responsibility,
-   and single process ownership;
-4. perform one bounded desktop and responsive browser gate over the Radar and Shadow surfaces,
-   including filters, row/detail interaction, public-read-only boundary, console errors, and
-   repeated current-document observation.
+4. repeat the route, identity, reader, byte-preservation, desktop, responsive, interaction, console,
+   and current-document browser gates, explicitly proving that pending rows retain continuing duty
+   while terminal rows do not.
 
-The compatible rollback point is `bac492f58981f572b37d733cf5b1e6848a3baa7a`: it contains the
-same version-3 Case reader and lifecycle backend while retaining the preceding Workbench. It can
-read every legacy and version-3 follow-up produced by the replacement. A failed gate may use that
-one compatible rollback; it may not restart code `6ff7806` after a version-3 follow-up exists.
+The current `ca87505` runtime and the earlier `bac492f58981f572b37d733cf5b1e6848a3baa7a` remain
+version-3-compatible rollback points. They can read every legacy and version-3 follow-up produced
+by the replacement. A failed gate may use one of those compatible readers; it may not restart code
+`6ff7806` after version-3 follow-ups exist.
 
 The cutover changes no product, Policy identity, predicate threshold, Case root, durable record
 kind, market source, order/fill/account boundary, or private permission. The current Position

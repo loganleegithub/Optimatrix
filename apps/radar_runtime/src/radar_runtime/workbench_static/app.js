@@ -1095,10 +1095,12 @@ function shadowBookRowMarkup(row, index, documentValue = currentDocument) {
         : shadowTerminalIssue(row)
           ? '终端 Outcome 投影待恢复 · 不显示 0'
           : '不显示 0；等待合格报价或交割';
-  const triggerSecondary = row.position && row.position.primary_exit_rule === 'PLATFORM_OR_SOURCE_DISCONTINUITY'
-    ? '首次原因保留；当前仍承担退出责任'
-    : row.position && row.position.close_quote_state
-      ? `报价 ${displayText(row.position.close_quote_state)}` : '—';
+  const triggerSecondary = row.position && row.position.position_lifecycle_state === 'TERMINAL'
+    ? '首次原因保留；持仓责任已终结'
+    : row.position && row.position.primary_exit_rule === 'PLATFORM_OR_SOURCE_DISCONTINUITY'
+      ? '首次原因保留；当前仍承担退出责任'
+      : row.position && row.position.close_quote_state
+        ? `报价 ${displayText(row.position.close_quote_state)}` : '—';
   return `<button type="button" class="queue-row shadow-book-row" role="row" ` +
     `data-row-id="${escapeHtml(id)}" aria-pressed="${selectedShadowId === id}">` +
     `<span role="cell"><span class="cell-primary">${safeText(shadowStructureLabel(row))}</span>` +

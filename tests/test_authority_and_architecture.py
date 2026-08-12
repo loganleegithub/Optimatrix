@@ -182,16 +182,14 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_position_lifecycle_cutover() -> None:
+def test_current_stage_authorizes_terminal_duty_copy_repair() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `VALIDATION_ONLY`" in current
-    assert (
-        "INVERSE_BTC_SHORT_VOL_V2_LIFECYCLE_V3_AND_SHADOW_RISK_BOOK_CUTOVER_AUTHORIZED" in current
-    )
+    assert "INVERSE_BTC_SHORT_VOL_V2_TERMINAL_DUTY_COPY_REPAIR_AUTHORIZED" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "ONE_CLEAN_STOP_ONE_START_AND_BOUNDED_API_BROWSER_GATE_AUTHORIZED" in current
+    assert "ONE_CLEAN_STOP_ONE_START_AND_BROWSER_REGRESSION_GATE_AUTHORIZED" in current
     assert "SHADOW_POSITION_LIFECYCLE_REALISM" in current
     for phrase in (
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
@@ -204,13 +202,18 @@ def test_current_stage_authorizes_position_lifecycle_cutover() -> None:
         "36 Outcome files",
         "646 total files",
         "Existing bytes may not be migrated, replaced, relabeled, or rewritten",
-        "mark PR `#51` ready",
-        "delete the local and remote topic branch",
+        "first authorized cutover is consumed",
+        "15 naturally produced version-3",
+        "Every one of the 646 pre-cutover files remained byte-exact",
+        "terminal row correctly rendered `已退出` and `持仓责任已终结`",
+        "still said `当前仍承担退出责任`",
+        "change only the terminal row's secondary responsibility copy",
+        "delete the local and remote repair branch",
         "exactly one replacement",
-        "compatible rollback point is `bac492f58981f572b37d733cf5b1e6848a3baa7a`",
+        "`bac492f58981f572b37d733cf5b1e6848a3baa7a` remain",
         "The current Position Policy identity and all nine frozen predicate thresholds remain unchanged",
         "Qualification remains offline",
-        "bounded desktop and responsive browser gate",
+        "desktop, responsive, interaction, console",
         "Permission remains `PUBLIC_SHADOW`",
     ):
         assert phrase in normalized

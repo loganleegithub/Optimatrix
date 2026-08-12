@@ -660,6 +660,9 @@ assert.equal(api.shadowNextDuty(displayOnlyIssue), '继续寻找首组合格退�
 const rowMarkup = api.shadowBookRowMarkup(byId.exit, 0, shadowDocument);
 assert.equal(rowMarkup.includes('Public Shadow · 非订单/成交'), true);
 assert.doesNotMatch(rowMarkup, /style=/);
+const terminalRowMarkup = api.shadowBookRowMarkup(byId.exited, 1, shadowDocument);
+assert.match(terminalRowMarkup, /持仓责任已终结/);
+assert.doesNotMatch(terminalRowMarkup, /当前仍承担退出责任/);
 assert.equal(api.postCloseAttemptText('ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS'),
   '旧尝试状态未知 · 当前 Segment 持续承担退出责任');
 assert.equal(api.reasonText('CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE'), '净权利金未覆盖未来成本准备');
