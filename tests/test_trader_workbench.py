@@ -350,13 +350,18 @@ def test_latency_projection_separates_source_event_age_from_queue_processing_lag
     reducer = cast(
         RadarReducer,
         SimpleNamespace(
-            accepted_index_receipt=SimpleNamespace(source_timestamp_ms=1_000),
+            accepted_index_receipt=SimpleNamespace(
+                source_timestamp_ms=1_000,
+            ),
+            current_index_price_usdc_per_btc=Decimal("64000"),
             tickers={},
             accepted_book_receipts={},
             last_wire_received_monotonic_ms=9_900,
             diagnostics=SimpleNamespace(last_queue_processing_lag_ms=12),
             policy=SimpleNamespace(
-                runtime_limits=SimpleNamespace(notification_queue_lag_deadline_ms=5_000)
+                runtime_limits=SimpleNamespace(
+                    notification_queue_lag_deadline_ms=5_000,
+                )
             ),
             queue_lag_currentness_active=False,
         ),
@@ -376,6 +381,7 @@ def test_latency_projection_separates_source_event_age_from_queue_processing_lag
 
     assert latency == {
         "latest_market_event_timestamp_ms": 1_000,
+        "current_index_price_valuation": "64000",
         "latest_market_event_age_ms": 7_000,
         "last_wire_message_age_ms": 100,
         "last_queue_processing_lag_ms": 12,
@@ -434,6 +440,8 @@ def test_shadow_projection_derives_vertical_credit_only_from_persisted_component
                         },
                     ],
                     "gross_entry_credit_usdc": "19.7",
+                    "net_entry_credit_usdc": "17.2",
+                    "entry_fee_reserved_payoff_loss_usdc": "132.8",
                     "expiry_ms": 1_786_150_800_000,
                     "option_type": "put",
                     "short_strike_usdc_per_btc": "64500",
@@ -466,6 +474,8 @@ def test_shadow_projection_derives_vertical_credit_only_from_persisted_component
     assert row["option_type"] == "put"
     assert row["short_strike_price"] == "64500"
     assert row["long_strike_price"] == "63000"
+    assert row["net_entry_credit_valuation"] == "17.2"
+    assert row["entry_fee_reserved_max_loss_valuation"] == "132.8"
     assert row["simulation_label"] == SIMULATION_LABEL
     assert {
         key: row[key]
@@ -1370,7 +1380,7 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "runtimeStatusState" in JS
     assert ".queue-table" in CSS
     assert "overflow: auto" in CSS
-    assert "冻结 Entry · 浏览器不重算" in JS
+    assert "Entry Premium Strength" in JS
     assert "当前 Position 责任仍按服务器投影显示" in JS
 
 
@@ -1453,9 +1463,8 @@ assert.equal(api.channelSnapshotState({{...snapshot, product:{{...snapshot.produ
 
 def test_browser_keeps_formatted_exact_facts_in_collapsed_details() -> None:
     for exact_field in (
-        "native_net_entry_credit",
-        "simulated_entry_credit_valuation",
-        "entry_valuation_index_price",
+        "net_entry_credit_valuation",
+        "entry_fee_reserved_max_loss_valuation",
         "public_quote_net_pnl_valuation",
         "current_close_debit_valuation",
         "primary_exit_rule",
@@ -1622,6 +1631,7 @@ const elementIds = [
   'queue-status', 'queue-head', 'queue-body', 'detail-title', 'detail-content',
   'detail-panel', 'detail-scrim', 'detail-kicker', 'evidence-toggle',
   'active-product', 'product-matrix-count', 'radar-toolbar', 'active-only-toggle',
+  'shadow-filter-toggle', 'shadow-filter-popover', 'shadow-footer-count',
   'product-matrix-toggle', 'channel-rail', 'radar-map-view', 'structure-queue-view',
   'radar-map', 'queue-title', 'queue-kicker', 'structure-status',
   'footer-radar-count', 'footer-shadow-count', 'footer-evidence',

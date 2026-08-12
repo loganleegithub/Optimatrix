@@ -14,7 +14,6 @@
     <div class="topbar-main">
       <div class="brand-lockup">
         <h1>Optimatrix</h1>
-        <span class="environment-badge">只读快照</span>
       </div>
 
       <nav class="product-nav" aria-label="系统视图">
@@ -61,14 +60,16 @@
         aria-expanded="false" aria-controls="channel-rail">产品矩阵 <span id="product-matrix-count">1 / 4</span></button>
       <span class="surface-boundary">Radar 仅发现强信号；Shadow 与 AI 归因在独立视图</span>
     </div>
-    <div id="radar-toolbar" class="radar-toolbar">
+    <div id="radar-toolbar" class="radar-toolbar surface-toolbar">
       <div class="option-filter" role="group" aria-label="期权类型">
-        <button type="button" data-option-filter="both" aria-pressed="true">Both</button>
-        <button type="button" data-option-filter="put" aria-pressed="false">Put</button>
-        <button type="button" data-option-filter="call" aria-pressed="false">Call</button>
+        <button type="button" data-option-filter="both" data-shadow-option-filter="both" aria-pressed="true">Both</button>
+        <button type="button" data-option-filter="put" data-shadow-option-filter="put" aria-pressed="false">Put</button>
+        <button type="button" data-option-filter="call" data-shadow-option-filter="call" aria-pressed="false">Call</button>
       </div>
       <button id="active-only-toggle" class="active-only-toggle" type="button"
         aria-pressed="false"><span class="toggle-track" aria-hidden="true"><span></span></span>只看 ACTIVE</button>
+      <button id="shadow-filter-toggle" class="shadow-filter-toggle" type="button" aria-expanded="false"
+        aria-controls="shadow-filter-popover">筛选</button>
     </div>
   </section>
 
@@ -104,28 +105,29 @@
       </section>
 
       <section id="structure-queue-view" class="structure-queue-view shadow-book-view" hidden>
-        <div class="queue-controls shadow-book-controls" aria-label="Shadow 持仓筛选">
-          <div id="queue-filters" class="filter-row"></div>
-          <div class="shadow-secondary-filters">
-            <div id="shadow-option-filters" class="option-filter" role="group" aria-label="Shadow 期权类型">
-              <button type="button" data-shadow-option-filter="both" aria-pressed="true">Both</button>
-              <button type="button" data-shadow-option-filter="put" aria-pressed="false">Put</button>
-              <button type="button" data-shadow-option-filter="call" aria-pressed="false">Call</button>
-            </div>
-            <label class="shadow-expiry-select">
-              <span>到期日</span>
-              <select id="shadow-expiry-filter" aria-label="筛选到期日"><option value="ALL">全部</option></select>
-            </label>
-            <label class="shadow-search">
-              <span class="visually-hidden">搜索冻结合约或执行价</span>
-              <input id="shadow-search" type="search" autocomplete="off" placeholder="搜索合约 / Strike" aria-label="搜索冻结合约或执行价">
-            </label>
-          </div>
+        <div class="shadow-book-titlebar">
+          <h2>Shadow 过期风险簿</h2>
+          <label class="shadow-search">
+            <span class="visually-hidden">搜索冻结结构、合约或执行价</span>
+            <input id="shadow-search" type="search" autocomplete="off" placeholder="搜索结构 / 行权 / 简称" aria-label="搜索冻结结构、合约或执行价">
+          </label>
         </div>
-        <div id="structure-status" class="queue-status" aria-live="polite"></div>
+        <div id="shadow-filter-popover" class="shadow-filter-popover" aria-label="Shadow 持仓筛选" hidden>
+          <div id="queue-filters" class="filter-row"></div>
+          <label class="shadow-expiry-select">
+            <span>到期日</span>
+            <select id="shadow-expiry-filter" aria-label="筛选到期日"><option value="ALL">全部</option></select>
+          </label>
+          <span id="structure-status" class="shadow-filter-status" aria-live="polite"></span>
+        </div>
+        <div id="shadow-leading-expiry" class="shadow-leading-expiry"></div>
         <div class="queue-table shadow-book-table" role="table" aria-label="Shadow 到期风险簿">
           <div id="queue-head" class="queue-table-head" role="row"></div>
           <div id="queue-body" class="queue-table-body"></div>
+        </div>
+        <div class="shadow-book-footer" aria-label="Shadow 风险簿刷新状态">
+          <span id="shadow-footer-count">显示 —</span>
+          <span>自动刷新 · 2 秒</span>
         </div>
       </section>
     </section>
@@ -135,10 +137,10 @@
     <aside id="detail-panel" class="detail-panel" aria-labelledby="detail-title" aria-hidden="true" inert tabindex="-1">
       <header class="detail-header">
         <div>
-          <p id="detail-kicker" class="section-kicker">当前信号证据</p>
+          <p id="detail-kicker" class="section-kicker">已选择</p>
           <h2 id="detail-title">选择强信号查看证据</h2>
         </div>
-        <button id="detail-close" class="detail-close" type="button">关闭</button>
+        <button id="detail-close" class="detail-close" type="button" aria-label="关闭详情">关闭</button>
       </header>
       <div id="detail-content" class="detail-content">
         <div class="detail-placeholder">从地图中选择一个强信号。</div>
