@@ -434,6 +434,10 @@ def test_shadow_projection_derives_vertical_credit_only_from_persisted_component
                         },
                     ],
                     "gross_entry_credit_usdc": "19.7",
+                    "expiry_ms": 1_786_150_800_000,
+                    "option_type": "put",
+                    "short_strike_usdc_per_btc": "64500",
+                    "long_strike_usdc_per_btc": "63000",
                     "origin_runtime_identity": "sha256:" + "b" * 64,
                     "current_segment_identity": "sha256:" + "3" * 64,
                     "current_segment_sequence": 0,
@@ -458,6 +462,10 @@ def test_shadow_projection_derives_vertical_credit_only_from_persisted_component
         "SHORT_STRESSED_SELL_VWAP_MINUS_LONG_STRESSED_BUY_VWAP"
     )
     assert row["matched_refresh_source_identity"] == "sha256:" + "4" * 64
+    assert row["expiry_timestamp_ms"] == 1_786_150_800_000
+    assert row["option_type"] == "put"
+    assert row["short_strike_price"] == "64500"
+    assert row["long_strike_price"] == "63000"
     assert row["simulation_label"] == SIMULATION_LABEL
     assert {
         key: row[key]
@@ -493,6 +501,10 @@ def test_recovered_entry_stays_one_shadow_row_and_position_starts_unknown() -> N
         "payload": {
             "candidate_identity": "sha256:" + "1" * 64,
             "canonical_leg_identities": [],
+            "expiry_ms": 1_786_150_800_000,
+            "option_type": "call",
+            "short_strike_usdc_per_btc": "100000",
+            "long_strike_usdc_per_btc": "105000",
             "origin_runtime_identity": "sha256:" + "a" * 64,
             "current_segment_identity": None,
             "current_segment_sequence": None,
@@ -520,6 +532,10 @@ def test_recovered_entry_stays_one_shadow_row_and_position_starts_unknown() -> N
 
     assert len(shadow_rows) == len(projection.shadow_rows) == 1
     assert shadow_rows[0]["shadow_entry_identity"] == entry_identity
+    assert shadow_rows[0]["expiry_timestamp_ms"] == 1_786_150_800_000
+    assert shadow_rows[0]["option_type"] == "call"
+    assert shadow_rows[0]["short_strike_price"] == "100000"
+    assert shadow_rows[0]["long_strike_price"] == "105000"
     assert shadow_rows[0]["origin_runtime_identity"] == "sha256:" + "a" * 64
     assert shadow_rows[0]["current_segment_identity"] is None
     assert shadow_rows[0]["current_segment_sequence"] is None
@@ -1354,16 +1370,15 @@ def test_browser_assets_are_display_only_and_have_no_execution_surface() -> None
     assert "runtimeStatusState" in JS
     assert ".queue-table" in CSS
     assert "overflow: auto" in CSS
-    assert "服务器未提供 V2 score packet" in JS
-    assert "浏览器不补算" in JS
+    assert "冻结 Entry · 浏览器不重算" in JS
+    assert "当前 Position 责任仍按服务器投影显示" in JS
 
 
-def test_browser_formats_business_states_and_orders_rows_without_recomputing() -> None:
+def test_browser_formats_radar_and_shadow_states_without_recomputing() -> None:
     test_js = JS.replace(
         "syncThemeControl();\nupdateResponsiveDetailState();\nrefresh();\nsetInterval(refresh, 2000);",
-        "globalThis.__workbenchTest = { structureState, radarState, orderedStructureRows, "
-        "isStrongSignalRow, strongSignalRows, predicateMarginForFailure, formatMargin, formatDurationInterval, "
-        "reasonText, channelSnapshotState };",
+        "globalThis.__workbenchTest = { radarState, isStrongSignalRow, strongSignalRows, "
+        "shadowLifecyclePresentation, formatDurationInterval, reasonText, channelSnapshotState };",
     )
     assert test_js != JS
     harness = f"""
@@ -1394,26 +1409,16 @@ assert.equal(api.isStrongSignalRow(strongRow), true);
 assert.equal(api.radarState(radar[0]).key, 'HIGH');
 assert.equal(api.radarState(radar[0]).label, 'HIGH · 已确认线索');
 
-const underwriting = api.orderedStructureRows([
-  {{short_leg_instrument_name:'n', availability:'NOT_EVALUATED'}},
-  {{short_leg_instrument_name:'u', availability:'UNKNOWN'}},
-  {{short_leg_instrument_name:'a', availability:'EVALUABLE', action:'ABSTAIN'}},
-  {{short_leg_instrument_name:'w', availability:'EVALUABLE', action:'WATCH'}},
-  {{short_leg_instrument_name:'e', availability:'EVALUABLE', action:'CANDIDATE'}},
-  {{short_leg_instrument_name:'s', candidate_lifecycle:'ADMITTED'}}
-]);
-assert.deepEqual(
-  underwriting.map(row => row.short_leg_instrument_name),
-  ['s', 'e', 'w', 'a', 'u', 'n']
-);
-
-const margin = api.predicateMarginForFailure({{
-  predicate_margin_vector: [{{
-    predicate:'CREDIT_ABOVE_FUTURE_COST_RESERVE', signed_margin:'-2.5',
-    unit:'USD_EQUIVALENT', passes:false
-  }}]
-}}, 'CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE');
-assert.equal(api.formatMargin(margin), '-2.5 USD 等值');
+assert.equal(api.shadowLifecyclePresentation({{
+  issues: [], position: {{position_lifecycle_state:'EXIT_ACQUIRING'}}, outcome:null
+}}).label, '退出中');
+assert.equal(api.shadowLifecyclePresentation({{
+  issues: [], position: {{position_lifecycle_state:'SETTLEMENT_PENDING'}}, outcome:null
+}}).label, '等待交割');
+assert.equal(api.shadowLifecyclePresentation({{
+  issues: [], position: {{position_lifecycle_state:'TERMINAL'}},
+  outcome: {{state:'SETTLED_KNOWN', terminal_method:'CONTRACT_SETTLEMENT'}}
+}}).label, '已结算');
 
 const snapshot = {{
   channel_id:'INVERSE_BTC_SHORT_VOL_V2',
@@ -1449,11 +1454,15 @@ assert.equal(api.channelSnapshotState({{...snapshot, product:{{...snapshot.produ
 def test_browser_keeps_formatted_exact_facts_in_collapsed_details() -> None:
     for exact_field in (
         "native_net_entry_credit",
-        "net_entry_credit_valuation",
-        "future_cost_reserve_valuation",
-        "underwriting_reserved_loss_valuation",
-        "entry_boundary_valued_payoff_loss_ex_fees_valuation",
-        "predicate_margin_vector",
+        "simulated_entry_credit_valuation",
+        "entry_valuation_index_price",
+        "public_quote_net_pnl_valuation",
+        "current_close_debit_valuation",
+        "primary_exit_rule",
+        "observation_quality",
+        "terminal_economics_eligible",
+        "continuous_path_eligible",
+        "exit_acquisition_eligible",
         "primary_blocker",
         "upgrade_condition",
         "invalidation_condition",
@@ -1611,7 +1620,7 @@ const assert = require('node:assert/strict');
 const elementIds = [
   'connection', 'as-of', 'runtime', 'channel-list', 'queue-context', 'queue-filters',
   'queue-status', 'queue-head', 'queue-body', 'detail-title', 'detail-content',
-  'detail-panel', 'detail-scrim', 'shadow-jump', 'evidence-toggle',
+  'detail-panel', 'detail-scrim', 'detail-kicker', 'evidence-toggle',
   'active-product', 'product-matrix-count', 'radar-toolbar', 'active-only-toggle',
   'product-matrix-toggle', 'channel-rail', 'radar-map-view', 'structure-queue-view',
   'radar-map', 'queue-title', 'queue-kicker', 'structure-status',

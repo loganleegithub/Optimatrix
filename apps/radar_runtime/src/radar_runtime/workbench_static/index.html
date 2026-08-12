@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body data-surface="radar">
-  <a class="skip-link" href="#queue-workspace">跳至强信号地图</a>
+  <a class="skip-link" href="#queue-workspace">跳至主工作区</a>
 
   <header class="topbar">
     <div class="topbar-main">
@@ -19,7 +19,7 @@
 
       <nav class="product-nav" aria-label="系统视图">
         <button type="button" data-queue-mode="radar" aria-pressed="true">Radar 强信号</button>
-        <button type="button" data-queue-mode="structures" aria-pressed="false">Shadow 跟踪</button>
+        <button type="button" data-queue-mode="structures" aria-pressed="false">Shadow 持仓</button>
         <button type="button" aria-disabled="true" disabled>AI 进化</button>
       </nav>
 
@@ -51,7 +51,7 @@
     <p id="connection" class="connection-warning" role="alert" hidden></p>
   </header>
 
-  <section class="product-toolbar" aria-label="产品与 Radar 筛选">
+  <section class="product-toolbar" aria-label="产品与工作台筛选">
     <div class="product-toolbar-left">
       <div id="active-product" class="active-product" aria-live="polite">
         <strong>INVERSE_BTC_SHORT_VOL_V2</strong>
@@ -103,14 +103,29 @@
         <div id="radar-map" class="radar-map" role="list"></div>
       </section>
 
-      <section id="structure-queue-view" class="structure-queue-view" hidden>
-        <div class="queue-controls" aria-label="结构筛选">
+      <section id="structure-queue-view" class="structure-queue-view shadow-book-view" hidden>
+        <div class="queue-controls shadow-book-controls" aria-label="Shadow 持仓筛选">
           <div id="queue-filters" class="filter-row"></div>
+          <div class="shadow-secondary-filters">
+            <div id="shadow-option-filters" class="option-filter" role="group" aria-label="Shadow 期权类型">
+              <button type="button" data-shadow-option-filter="both" aria-pressed="true">Both</button>
+              <button type="button" data-shadow-option-filter="put" aria-pressed="false">Put</button>
+              <button type="button" data-shadow-option-filter="call" aria-pressed="false">Call</button>
+            </div>
+            <label class="shadow-expiry-select">
+              <span>到期日</span>
+              <select id="shadow-expiry-filter" aria-label="筛选到期日"><option value="ALL">全部</option></select>
+            </label>
+            <label class="shadow-search">
+              <span class="visually-hidden">搜索冻结合约或执行价</span>
+              <input id="shadow-search" type="search" autocomplete="off" placeholder="搜索合约 / Strike" aria-label="搜索冻结合约或执行价">
+            </label>
+          </div>
         </div>
         <div id="structure-status" class="queue-status" aria-live="polite"></div>
-        <div class="queue-table" role="table" aria-label="已结算结构队列">
+        <div class="queue-table shadow-book-table" role="table" aria-label="Shadow 到期风险簿">
           <div id="queue-head" class="queue-table-head" role="row"></div>
-          <div id="queue-body" class="queue-table-body" role="rowgroup"></div>
+          <div id="queue-body" class="queue-table-body"></div>
         </div>
       </section>
     </section>
@@ -120,7 +135,7 @@
     <aside id="detail-panel" class="detail-panel" aria-labelledby="detail-title" aria-hidden="true" inert tabindex="-1">
       <header class="detail-header">
         <div>
-          <p class="section-kicker">当前信号证据</p>
+          <p id="detail-kicker" class="section-kicker">当前信号证据</p>
           <h2 id="detail-title">选择强信号查看证据</h2>
         </div>
         <button id="detail-close" class="detail-close" type="button">关闭</button>
@@ -129,7 +144,6 @@
         <div class="detail-placeholder">从地图中选择一个强信号。</div>
       </div>
       <div id="detail-actions" class="detail-actions">
-        <button id="shadow-jump" class="primary-button" type="button" data-detail-action="shadow">查看 Shadow 条件</button>
         <button id="evidence-toggle" class="secondary-button" type="button" data-detail-action="evidence">展开证据</button>
       </div>
     </aside>
@@ -144,7 +158,7 @@
       <span>Radar 强信号</span><strong id="footer-radar-count">—</strong>
     </button>
     <button type="button" class="system-context-item" data-queue-mode="structures">
-      <span>Shadow 跟踪</span><strong id="footer-shadow-count">—</strong>
+      <span>Shadow 持仓</span><strong id="footer-shadow-count">—</strong>
     </button>
     <div class="system-context-item system-context-disabled">
       <span>AI Evolution 进化</span><strong>尚未接入 · 独立研究面</strong>

@@ -2115,6 +2115,6 @@ def test_workbench_browser_uses_product_owned_units() -> None:
     assert "模拟权利金 (USDC)" not in JS
     assert "Close debit (USDC)" not in JS
     assert "Shadow PnL (USDC)" not in JS
-    assert "净信用\uff08${nativeUnit}\uff09" in JS
-    assert "净信用\uff08${valuationUnit}\uff09" in JS
+    assert "入场净信用 ${nativeUnit}" in JS
+    assert "入场费前估值 ${valuationUnit}" in JS
     assert "_usdc" not in JS.lower()

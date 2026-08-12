@@ -1706,6 +1706,10 @@ def _shadow_rows(
                 "execution_model": None,
                 "entry_component_pair_identity": None,
                 "entry_component_legs": None,
+                "expiry_timestamp_ms": None,
+                "option_type": None,
+                "short_strike_price": None,
+                "long_strike_price": None,
                 "simulated_entry_price_valuation_per_btc": None,
                 "simulated_entry_price_availability": "UNKNOWN",
                 "simulated_entry_price_basis": None,
@@ -1757,6 +1761,10 @@ def _shadow_rows(
                 "execution_model": None,
                 "entry_component_pair_identity": None,
                 "entry_component_legs": None,
+                "expiry_timestamp_ms": None,
+                "option_type": None,
+                "short_strike_price": None,
+                "long_strike_price": None,
                 "simulated_entry_price_valuation_per_btc": None,
                 "simulated_entry_price_availability": "UNKNOWN",
                 "simulated_entry_price_basis": None,
@@ -1812,6 +1820,10 @@ def _shadow_rows(
                 "entry_component_legs": _workbench_component_legs(
                     entry_payload.get("entry_component_legs")
                 ),
+                "expiry_timestamp_ms": entry_payload.get("expiry_ms"),
+                "option_type": entry_payload.get("option_type"),
+                "short_strike_price": entry_payload.get("short_strike_usdc_per_btc"),
+                "long_strike_price": entry_payload.get("long_strike_usdc_per_btc"),
                 "simulated_entry_price_valuation_per_btc": entry_price,
                 "simulated_entry_price_availability": (
                     "AVAILABLE_FROM_SHADOW_ENTRY_STRESSED_COMPONENT_LEGS"

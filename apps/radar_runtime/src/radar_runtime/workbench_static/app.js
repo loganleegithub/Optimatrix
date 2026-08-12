@@ -16,13 +16,12 @@ const CHANNELS = [
   {id: 'INVERSE_ETH_LONG_GAMMA', label: 'ETH Long Gamma', product: 'inverse-eth', strategy: 'LONG_GAMMA'}
 ];
 
-const STRUCTURE_FILTERS = [
+const SHADOW_BOOK_FILTERS = [
   ['ALL', '全部'],
-  ['SHADOW_TRACKING', 'Shadow 跟踪'],
-  ['CANDIDATE', 'Shadow 候选'],
-  ['WATCH', '继续观察'],
-  ['ABSTAIN', '暂不参与'],
-  ['UNKNOWN', '暂不可判断']
+  ['EXIT_REQUIRED', '退出责任'],
+  ['MONITORING', '观察中'],
+  ['TERMINAL', '已终结'],
+  ['UNKNOWN', '待恢复']
 ];
 
 const reasonLabels = {
@@ -117,14 +116,26 @@ const reasonLabels = {
   REFRESHED_OPPORTUNITY_CHANGED: '严格后续刷新已不再是同一机会',
   REQUEST_RETIRED_BEFORE_REFRESH: '刷新请求在返回前退役',
   RUNTIME_TERMINATED_BEFORE_REFRESH: 'Runtime 在刷新返回前终止',
-  OTHER_KNOWN_NO_CONTROL: '其他有界的 KNOWN_NO_CONTROL 原因'
-};
-
-const predicateVectorKeys = {
-  CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE: 'CREDIT_ABOVE_FUTURE_COST_RESERVE',
-  UNDERWRITING_RESERVED_LOSS_LIMIT: 'UNDERWRITING_RESERVED_LOSS_WITHIN_LIMIT',
-  MINIMUM_NET_ENTRY_CREDIT: 'MINIMUM_NET_ENTRY_CREDIT',
-  MINIMUM_NET_CREDIT_TO_PAYOFF_CAP: 'MINIMUM_NET_CREDIT_TO_PAYOFF_CAP'
+  OTHER_KNOWN_NO_CONTROL: '其他有界的 KNOWN_NO_CONTROL 原因',
+  SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED: '到期/交割边界',
+  LATEST_EXIT_BOUNDARY_REACHED: '最晚退出边界',
+  PLATFORM_OR_SOURCE_DISCONTINUITY: '平台/行情源不连续',
+  MAXIMUM_NET_LOSS_BOUNDARY_REACHED: '最大预计净亏损边界',
+  SHORT_LEG_RISK_BOUNDARY_REACHED: '卖腿风险边界',
+  PATH_OR_JUMP_RISK_BOUNDARY_REACHED: '路径/跳跃风险边界',
+  VOLATILITY_STATE_BOUNDARY_REACHED: '波动率状态边界',
+  LIQUIDITY_EXIT_BOUNDARY_REACHED: '流动性退出边界',
+  ECONOMIC_EXIT_BOUNDARY_REACHED: '止盈经济边界',
+  DUPLICATE_SHADOW_ENTRY_IDENTITY: 'Shadow Entry identity 重复',
+  MISSING_POSITION_PROJECTION: '缺少 Position 当前投影',
+  DUPLICATE_POSITION_IDENTITY: 'Position 投影重复',
+  MISSING_TERMINAL_OUTCOME_PROJECTION: '终端 Position 缺少 Outcome 投影',
+  DUPLICATE_OUTCOME_IDENTITY: 'Outcome 投影重复',
+  TERMINAL_OUTCOME_NOT_FINAL: '终端 Position 的 Outcome 尚未终结',
+  INVALID_ENTRY_COMPONENT_ROLES: '冻结双腿角色不完整',
+  INVALID_ENTRY_LEG_ACTIONS: '冻结双腿方向不一致',
+  MISSING_FROZEN_STRUCTURE_FIELDS: '冻结结构字段不完整',
+  POSITION_ENROLLMENT_KIND_MISMATCH: 'Position 不是正式 Shadow Trade'
 };
 
 const postCloseAttemptLabels = {
@@ -250,20 +261,6 @@ const legacyDiagnosticText = packet => {
   return packet.legacy_v1_threshold_pass ? '通过' : '未通过';
 };
 
-const scorePacketCardMarkup = (label, packet) => {
-  const result = scorePacketResult(packet);
-  if (!result) {
-    return `<div class="data-gap-panel"><strong>${escapeHtml(label)}：</strong>` +
-      `服务器未提供 V2 score packet；浏览器不补算。</div>`;
-  }
-  const boundary = packet.fact_boundary && packet.fact_boundary.causal_seq;
-  return `<div class="economics-card">` +
-    `<span class="economics-label">${escapeHtml(label)}</span>` +
-    `<span class="economics-value">${safeText(scoreIntervalText(packet))} · ${safeText(result.band)}</span>` +
-    `<span class="economics-meta">coverage ${safeText(scoreCoverageText(packet))} · causal #${safeText(boundary)}</span>` +
-    `<span class="economics-meta">leader ${safeText(packet.leader_instrument_name)}</span></div>`;
-};
-
 const scoreFactorMarkup = packet => {
   const result = scorePacketResult(packet);
   const factors = result && Array.isArray(result.factors) ? result.factors : [];
@@ -348,24 +345,12 @@ const shortIdentity = value => {
 };
 
 const optionTypeText = value => value === 'put' ? 'Put' : (value === 'call' ? 'Call' : displayText(value));
-const structureTypeText = row => row.queue_row_kind === 'SHADOW_ENTRY'
-  ? '冻结双腿' : `${optionTypeText(row.option_type)} Spread`;
-const structureLabel = row => row.queue_row_kind === 'SHADOW_ENTRY'
-  ? '冻结入场结构'
-  : `${formatDate(row.expiry_timestamp_ms)} · ${formatStrike(row.short_strike_price)} / ${formatStrike(row.long_strike_price)} ${structureTypeText(row)}`;
-
 const badgeMarkup = (label, tone = 'neutral', extraClass = 'state-badge') =>
   `<span class="${escapeHtml(extraClass)} tone-${escapeHtml(tone)}">${safeText(label)}</span>`;
 
 const factMarkup = (label, value) =>
   `<div class="fact"><span class="fact-label">${escapeHtml(label)}</span>` +
   `<span class="fact-value">${safeText(value)}</span></div>`;
-
-const economicsCard = (label, value, meta, variant = '') =>
-  `<div class="economics-card${variant ? ` ${escapeHtml(variant)}` : ''}">` +
-  `<span class="economics-label">${escapeHtml(label)}</span>` +
-  `<span class="economics-value">${safeText(value)}</span>` +
-  `<span class="economics-meta">${safeText(meta)}</span></div>`;
 
 const channelSnapshotState = documentValue => {
   if (!documentValue) {
@@ -467,56 +452,217 @@ const roadmapState = channel => {
   return {label: '尚未接入', tone: 'neutral', note: '无产品与策略快照'};
 };
 
-const shadowTrackingPresentation = row => {
-  const shadow = row && row.shadow_entry_projection;
-  if (!shadow) return null;
-  const gapped = shadow.observation_quality === 'GAPPED';
-  const qualificationExcluded = shadow.qualification_eligible === false;
-  if (!gapped && !qualificationExcluded) return null;
-  return {
-    label: gapped ? '跨进程跟踪' : 'Shadow 跟踪',
-    note: gapped && qualificationExcluded
-      ? '观察有间隙 · 不计入连续观察资格'
-      : (gapped ? '观察有间隙' : '不计入连续观察资格')
-  };
+const shadowResponsibilityIssue = row => (Array.isArray(row.issues) ? row.issues : []).find(value => [
+  'MISSING_SHADOW_ENTRY_IDENTITY',
+  'DUPLICATE_SHADOW_ENTRY_IDENTITY',
+  'MISSING_POSITION_PROJECTION',
+  'DUPLICATE_POSITION_IDENTITY',
+  'POSITION_ENROLLMENT_KIND_MISMATCH'
+].includes(value));
+
+const shadowTerminalIssue = row => {
+  if (!row.position || row.position.position_lifecycle_state !== 'TERMINAL') return null;
+  return (Array.isArray(row.issues) ? row.issues : []).find(value => [
+    'MISSING_TERMINAL_OUTCOME_PROJECTION',
+    'DUPLICATE_OUTCOME_IDENTITY',
+    'TERMINAL_OUTCOME_NOT_FINAL'
+  ].includes(value)) || null;
 };
 
-const structureState = row => {
-  if (Array.isArray(row.shadow_projection_issues) && row.shadow_projection_issues.length) {
-    return {key: 'UNKNOWN', label: 'Shadow 投影异常', tone: 'red', priority: 1};
+const shadowLifecyclePresentation = row => {
+  if (shadowResponsibilityIssue(row)) {
+    return {key: 'UNKNOWN', label: '关联待恢复', tone: 'red', priority: 2};
   }
-  if (row.candidate_lifecycle === 'ADMITTED') {
-    const tracking = shadowTrackingPresentation(row);
-    if (tracking) {
-      return {
-        key: 'SHADOW_TRACKING', label: tracking.label, tone: 'purple', priority: 0,
-        note: tracking.note
-      };
+  if (shadowTerminalIssue(row)) {
+    return {key: 'UNKNOWN', label: '终端结果待恢复', tone: 'red', priority: 2};
+  }
+  const lifecycle = row.position && row.position.position_lifecycle_state;
+  const outcomeState = row.outcome && row.outcome.state;
+  if (lifecycle === 'SETTLEMENT_PENDING') {
+    return {key: 'EXIT_REQUIRED', label: '等待交割', tone: 'amber', priority: 0};
+  }
+  if (lifecycle === 'EXIT_ACQUIRING') {
+    return {key: 'EXIT_REQUIRED', label: '退出中', tone: 'amber', priority: 1};
+  }
+  if (lifecycle === 'MONITORING') {
+    return {key: 'MONITORING', label: '观察中', tone: 'green', priority: 3};
+  }
+  if (lifecycle === 'TERMINAL') {
+    if (['TERMINAL_UNKNOWN', 'MATURE_UNKNOWN'].includes(outcomeState)) {
+      return {key: 'TERMINAL', label: '终端经济未知', tone: 'red', priority: 4};
     }
-    return {key: 'SHADOW_TRACKING', label: 'Shadow 跟踪', tone: 'purple', priority: 0};
+    const label = outcomeState === 'MATURE_KNOWN'
+      ? '已到期'
+      : row.outcome && row.outcome.terminal_method === 'CONTRACT_SETTLEMENT'
+        ? '已结算' : '已退出';
+    return {key: 'TERMINAL', label, tone: 'green', priority: 4};
   }
-  if (row.candidate_lifecycle === 'INVALIDATED') {
-    return {key: 'INVALIDATED', label: '候选已失效', tone: 'red', priority: 7};
+  return {key: 'UNKNOWN', label: '状态待恢复', tone: 'red', priority: 2};
+};
+
+const shadowBookIdentity = (row, index = 0) =>
+  isIdentity(row.shadow_entry_identity) &&
+    !(Array.isArray(row.issues) && row.issues.includes('DUPLICATE_SHADOW_ENTRY_IDENTITY'))
+    ? row.shadow_entry_identity : row.shadow_book_row_key || `shadow-book-${index}`;
+
+const shadowBookRows = documentValue => {
+  const sourceEntries = documentValue && documentValue.shadow_entries &&
+    Array.isArray(documentValue.shadow_entries.rows)
+    ? documentValue.shadow_entries.rows.filter(value =>
+      isIdentity(value.shadow_entry_identity) || value.admission_refresh_terminal_outcome === 'ENTRY_EMITTED')
+    : [];
+  const positions = documentValue && documentValue.positions && Array.isArray(documentValue.positions.rows)
+    ? documentValue.positions.rows : [];
+  const outcomes = documentValue && documentValue.outcomes && Array.isArray(documentValue.outcomes.rows)
+    ? documentValue.outcomes.rows : [];
+  const entryCounts = new Map();
+  sourceEntries.forEach(value => {
+    if (isIdentity(value.shadow_entry_identity)) {
+      entryCounts.set(value.shadow_entry_identity, (entryCounts.get(value.shadow_entry_identity) || 0) + 1);
+    }
+  });
+  return sourceEntries.map((entry, index) => {
+    const entryIdentity = entry.shadow_entry_identity;
+    const positionMatches = isIdentity(entryIdentity)
+      ? positions.filter(value => value.shadow_entry_identity === entryIdentity) : [];
+    const outcomeMatches = isIdentity(entryIdentity)
+      ? outcomes.filter(value => value.shadow_entry_identity === entryIdentity) : [];
+    const legs = Array.isArray(entry.entry_component_legs) ? entry.entry_component_legs : [];
+    const shortLegs = legs.filter(value => value.canonical_leg_role === 'SHORT');
+    const longLegs = legs.filter(value => value.canonical_leg_role === 'LONG');
+    const shortLeg = shortLegs.length === 1 ? shortLegs[0] : null;
+    const longLeg = longLegs.length === 1 ? longLegs[0] : null;
+    const issues = [];
+    if (!isIdentity(entryIdentity)) issues.push('MISSING_SHADOW_ENTRY_IDENTITY');
+    else if (entryCounts.get(entryIdentity) !== 1) issues.push('DUPLICATE_SHADOW_ENTRY_IDENTITY');
+    if (!shortLeg || !longLeg || legs.length !== 2) issues.push('INVALID_ENTRY_COMPONENT_ROLES');
+    else if (shortLeg.action !== 'SELL' || longLeg.action !== 'BUY') {
+      issues.push('INVALID_ENTRY_LEG_ACTIONS');
+    }
+    if (!Number.isFinite(Number(entry.expiry_timestamp_ms)) ||
+        !['put', 'call'].includes(entry.option_type) ||
+        !Number.isFinite(Number(entry.short_strike_price)) ||
+        !Number.isFinite(Number(entry.long_strike_price))) {
+      issues.push('MISSING_FROZEN_STRUCTURE_FIELDS');
+    }
+    if (positionMatches.length === 0) issues.push('MISSING_POSITION_PROJECTION');
+    else if (positionMatches.length > 1) issues.push('DUPLICATE_POSITION_IDENTITY');
+    const position = positionMatches.length === 1 ? positionMatches[0] : null;
+    if (outcomeMatches.length > 1) issues.push('DUPLICATE_OUTCOME_IDENTITY');
+    if (position && position.position_lifecycle_state === 'TERMINAL') {
+      if (outcomeMatches.length === 0) issues.push('MISSING_TERMINAL_OUTCOME_PROJECTION');
+      else if (outcomeMatches.length === 1 &&
+          ['PENDING', 'PENDING_OUTCOME'].includes(outcomeMatches[0].state)) {
+        issues.push('TERMINAL_OUTCOME_NOT_FINAL');
+      }
+    }
+    if (position && position.enrollment_kind && position.enrollment_kind !== 'ADMITTED_SHADOW_TRADE') {
+      issues.push('POSITION_ENROLLMENT_KIND_MISMATCH');
+    }
+    return {
+      queue_row_kind: 'SHADOW_POSITION',
+      shadow_book_row_key: `shadow-book-${index}`,
+      shadow_entry_identity: entryIdentity,
+      expiry_timestamp_ms: entry.expiry_timestamp_ms,
+      option_type: entry.option_type,
+      short_strike_price: entry.short_strike_price,
+      long_strike_price: entry.long_strike_price,
+      short_leg: shortLeg,
+      long_leg: longLeg,
+      entry,
+      position,
+      outcome: outcomeMatches.length === 1 ? outcomeMatches[0] : null,
+      issues
+    };
+  }).sort((left, right) =>
+    Number(left.expiry_timestamp_ms || Number.MAX_SAFE_INTEGER) -
+      Number(right.expiry_timestamp_ms || Number.MAX_SAFE_INTEGER) ||
+    shadowLifecyclePresentation(left).priority - shadowLifecyclePresentation(right).priority ||
+    Number(left.short_strike_price || 0) - Number(right.short_strike_price || 0) ||
+    String(left.shadow_entry_identity || '').localeCompare(String(right.shadow_entry_identity || ''))
+  );
+};
+
+const shadowStructureLabel = row =>
+  `${formatStrike(row.short_strike_price)} / ${formatStrike(row.long_strike_price)} ` +
+  `${optionTypeText(row.option_type)} Credit Spread`;
+
+const filteredShadowBookRows = documentValue => shadowBookRows(documentValue).filter(row => {
+  const presentation = shadowLifecyclePresentation(row);
+  const actionMatches = shadowLifecycleFilter === 'ALL' || presentation.key === shadowLifecycleFilter;
+  const optionMatches = shadowOptionFilter === 'both' || row.option_type === shadowOptionFilter;
+  const expiryMatches = shadowExpiryFilter === 'ALL' ||
+    String(row.expiry_timestamp_ms) === shadowExpiryFilter;
+  const searchHaystack = [
+    row.shadow_entry_identity, row.short_strike_price, row.long_strike_price,
+    row.short_leg && row.short_leg.instrument_name, row.long_leg && row.long_leg.instrument_name
+  ].filter(value => !isMissing(value)).join(' ').toLowerCase();
+  return actionMatches && optionMatches && expiryMatches &&
+    (!shadowSearchQuery || searchHaystack.includes(shadowSearchQuery.toLowerCase()));
+});
+
+const groupShadowBookRowsByExpiry = rows => {
+  const groups = new Map();
+  rows.forEach(row => {
+    const key = Number.isFinite(Number(row.expiry_timestamp_ms))
+      ? String(row.expiry_timestamp_ms) : 'UNKNOWN';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+  return [...groups.entries()].sort(([left], [right]) =>
+    (left === 'UNKNOWN' ? Number.MAX_SAFE_INTEGER : Number(left)) -
+    (right === 'UNKNOWN' ? Number.MAX_SAFE_INTEGER : Number(right))
+  ).map(([expiry, groupRows]) => ({
+    expiry: expiry === 'UNKNOWN' ? null : Number(expiry),
+    rows: groupRows
+  }));
+};
+
+const shadowNextDuty = row => {
+  if (shadowResponsibilityIssue(row)) return '恢复规范关联；Entry 继续保留';
+  if (shadowTerminalIssue(row)) return '恢复唯一终端 Outcome 投影';
+  const lifecycle = row.position.position_lifecycle_state;
+  if (lifecycle === 'SETTLEMENT_PENDING') return '等待官方 delivery price';
+  if (lifecycle === 'EXIT_ACQUIRING') {
+    return row.position.valid_shadow_close_opportunity === true
+      ? '登记首组合格报价并形成 Outcome'
+      : '继续寻找首组合格退出报价';
   }
-  if (row.candidate_lifecycle === 'VALID' && row.candidate_still_valid === true) {
-    return {key: 'CANDIDATE', label: 'Shadow 候选', tone: 'green', priority: 1};
+  if (lifecycle === 'MONITORING') return '继续监控九条退出谓词';
+  if (lifecycle === 'TERMINAL') return '持仓责任已终结';
+  return '恢复 Position 当前投影';
+};
+
+const shadowTriggerText = row => {
+  const responsibilityIssue = shadowResponsibilityIssue(row);
+  if (responsibilityIssue) return reasonText(responsibilityIssue);
+  const position = row.position;
+  if (position.position_lifecycle_state === 'MONITORING') return '尚未触发 CLOSE';
+  if (position.primary_exit_rule === 'PLATFORM_OR_SOURCE_DISCONTINUITY') {
+    return '历史 CLOSE 已锁存';
   }
-  if (row.availability === 'UNKNOWN') {
-    return {key: 'UNKNOWN', label: '暂不可判断', tone: 'amber', priority: 5};
+  return reasonText(position.primary_exit_rule);
+};
+
+const shadowCloseEconomics = row => {
+  const outcome = row.outcome;
+  if (outcome && ['TERMINAL_UNKNOWN', 'MATURE_UNKNOWN'].includes(outcome.state)) {
+    return {kind: 'TERMINAL_UNKNOWN', pnl: null, debit: null};
   }
-  if (row.availability === 'NOT_EVALUATED') {
-    return {key: 'NOT_EVALUATED', label: '尚未评估', tone: 'neutral', priority: 6};
+  if (outcome && !['PENDING', 'PENDING_OUTCOME'].includes(outcome.state) &&
+      !isMissing(outcome.public_quote_net_pnl_valuation)) {
+    return {kind: 'OUTCOME', pnl: outcome.public_quote_net_pnl_valuation, debit: null};
   }
-  if (row.action === 'CANDIDATE') {
-    return {key: 'CANDIDATE_UNCONFIRMED', label: '承保通过 · 待确认', tone: 'blue', priority: 2};
+  const position = row.position;
+  if (position && position.valid_shadow_close_opportunity === true &&
+      !isMissing(position.projected_shadow_pnl_valuation)) {
+    return {
+      kind: 'CURRENT_QUOTE',
+      pnl: position.projected_shadow_pnl_valuation,
+      debit: position.current_close_debit_valuation
+    };
   }
-  if (row.action === 'WATCH') {
-    return {key: 'WATCH', label: '继续观察', tone: 'amber', priority: 3};
-  }
-  if (row.action === 'ABSTAIN') {
-    return {key: 'ABSTAIN', label: '暂不参与', tone: 'neutral', priority: 4};
-  }
-  return {key: 'UNKNOWN', label: '暂不可判断', tone: 'amber', priority: 5};
+  return {kind: 'UNKNOWN', pnl: null, debit: null};
 };
 
 const scorePacketResult = packet => packet && typeof packet === 'object' &&
@@ -667,265 +813,7 @@ const reasonCountsText = values => {
   return entries.map(([reason, count]) => `${reasonText(reason)} ${count}`).join('；');
 };
 
-const structureIdentity = (row, index = 0) => {
-  if (row.queue_row_kind === 'SHADOW_ENTRY') {
-    if (row.shadow_candidate_identity_unique === true) return row.candidate_identity;
-    if (row.shadow_entry_identity_unique === true) return row.shadow_entry_identity;
-    return row.shadow_projection_row_key || `shadow-projection-${index}`;
-  }
-  return [row.candidate_identity, row.underwriting_availability_evaluation_identity,
-    row.underwriting_action_identity, row.radar_scope_or_short_leg_identity]
-    .find(isIdentity) || `structure-${index}`;
-};
 const radarIdentity = (row, index = 0) => row.active_episode_identity || row.instrument_name || `radar-${index}`;
-
-const shadowRowsForCandidate = (row, documentValue) => {
-  if (!isIdentity(row.candidate_identity)) return [];
-  const shadowRows = documentValue.shadow_entries && Array.isArray(documentValue.shadow_entries.rows)
-    ? documentValue.shadow_entries.rows : [];
-  return shadowRows.filter(value => value.candidate_identity === row.candidate_identity);
-};
-
-const shadowRowForCandidate = (row, documentValue) => {
-  const matches = shadowRowsForCandidate(row, documentValue);
-  return matches.length === 1 ? matches[0] : null;
-};
-
-const canonicalShadowEntry = (row, documentValue) => {
-  if (row.queue_row_kind === 'SHADOW_ENTRY') {
-    const shadow = row.shadow_entry_projection;
-    if (!shadow || !isIdentity(row.shadow_entry_identity) ||
-        shadow.shadow_entry_identity !== row.shadow_entry_identity) return null;
-    if (isIdentity(row.candidate_identity) &&
-        shadow.candidate_identity !== row.candidate_identity) return null;
-    return shadow;
-  }
-  const matches = shadowRowsForCandidate(row, documentValue)
-    .filter(value => isIdentity(value.shadow_entry_identity));
-  return matches.length === 1 ? matches[0] : null;
-};
-
-const structureEntryFacts = (row, documentValue) => {
-  const shadow = row.candidate_lifecycle === 'ADMITTED'
-    ? canonicalShadowEntry(row, documentValue) : null;
-  if (shadow) {
-    return {
-      source: 'SHADOW_ENTRY',
-      status: shadow.admission_refresh_terminal_outcome || 'SHADOW_ENTRY',
-      valuationIndex: shadow.entry_valuation_index_price,
-      targetQuantity: shadow.target_quantity_btc,
-      nativeNetCredit: shadow.native_net_entry_credit,
-      nativeGrossCredit: shadow.native_gross_entry_credit,
-      nativeFeeReserve: shadow.native_entry_fee_reserve,
-      valuationGrossCredit: shadow.simulated_entry_credit_valuation
-    };
-  }
-  if (row.queue_row_kind === 'SHADOW_ENTRY') {
-    return {
-      source: 'SHADOW_ENTRY_INVALID', status: 'PROJECTION_INVALID', valuationIndex: null,
-      targetQuantity: null, nativeNetCredit: null, nativeGrossCredit: null,
-      nativeFeeReserve: null, valuationGrossCredit: null
-    };
-  }
-  return {
-    source: 'UNDERWRITING',
-    status: row.availability,
-    valuationIndex: row.entry_valuation_index_price,
-    targetQuantity: row.target_quantity_btc,
-    nativeNetCredit: row.native_net_entry_credit,
-    valuationNetCredit: row.net_entry_credit_valuation
-  };
-};
-
-const shadowStructureRow = (shadow, candidateCounts = null, entryCounts = null, index = 0) => {
-  const legs = Array.isArray(shadow.entry_component_legs) ? shadow.entry_component_legs : [];
-  const shortLegs = legs.filter(value => value.canonical_leg_role === 'SHORT');
-  const longLegs = legs.filter(value => value.canonical_leg_role === 'LONG');
-  const shortLeg = shortLegs.length === 1 ? shortLegs[0] : null;
-  const longLeg = longLegs.length === 1 ? longLegs[0] : null;
-  const candidateIdentityUnique = isIdentity(shadow.candidate_identity) &&
-    (!candidateCounts || candidateCounts.get(shadow.candidate_identity) === 1);
-  const entryIdentityUnique = isIdentity(shadow.shadow_entry_identity) &&
-    (!entryCounts || entryCounts.get(shadow.shadow_entry_identity) === 1);
-  const issues = [];
-  if (!isIdentity(shadow.shadow_entry_identity)) issues.push('MISSING_SHADOW_ENTRY_IDENTITY');
-  else if (!entryIdentityUnique) issues.push('DUPLICATE_SHADOW_ENTRY_IDENTITY');
-  if (!isIdentity(shadow.candidate_identity)) issues.push('MISSING_CANDIDATE_IDENTITY');
-  else if (!candidateIdentityUnique) issues.push('DUPLICATE_CANDIDATE_IDENTITY');
-  if (!shortLeg || !longLeg || legs.length !== 2) issues.push('INVALID_ENTRY_COMPONENT_ROLES');
-  else if (shortLeg.action !== 'SELL' || longLeg.action !== 'BUY') {
-    issues.push('INVALID_ENTRY_LEG_ACTIONS');
-  }
-  return {
-    queue_row_kind: 'SHADOW_ENTRY',
-    shadow_entry_projection: shadow,
-    shadow_projection_row_key: `shadow-projection-${index}`,
-    shadow_projection_issues: issues,
-    shadow_candidate_identity_unique: candidateIdentityUnique,
-    shadow_entry_identity_unique: entryIdentityUnique,
-    shadow_entry_identity: shadow.shadow_entry_identity,
-    candidate_identity: shadow.candidate_identity,
-    candidate_lifecycle: 'ADMITTED',
-    candidate_still_valid: false,
-    availability: 'SHADOW_ENTRY',
-    action: null,
-    short_leg_action: shortLeg && shortLeg.action,
-    long_leg_action: longLeg && longLeg.action,
-    short_leg_instrument_name: shortLeg && shortLeg.instrument_name,
-    long_leg_instrument_name: longLeg && longLeg.instrument_name,
-    target_quantity_btc: shadow.target_quantity_btc,
-    entry_valuation_index_price: shadow.entry_valuation_index_price,
-    native_gross_entry_credit: shadow.native_gross_entry_credit,
-    native_entry_fee_reserve: shadow.native_entry_fee_reserve,
-    native_net_entry_credit: shadow.native_net_entry_credit,
-    gross_entry_credit_valuation: shadow.simulated_entry_credit_valuation,
-    failed_predicates: [],
-    predicate_margin_vector: [],
-    unknown_reasons: []
-  };
-};
-
-const structureQueueRows = documentValue => {
-  const projectedShadowRows = documentValue.shadow_entries && Array.isArray(documentValue.shadow_entries.rows)
-    ? documentValue.shadow_entries.rows : [];
-  const sourceShadowRows = projectedShadowRows.filter(value =>
-    isIdentity(value.shadow_entry_identity) || value.admission_refresh_terminal_outcome === 'ENTRY_EMITTED');
-  const candidateCounts = new Map();
-  const entryCounts = new Map();
-  sourceShadowRows.forEach(value => {
-    if (isIdentity(value.candidate_identity)) {
-      candidateCounts.set(value.candidate_identity, (candidateCounts.get(value.candidate_identity) || 0) + 1);
-    }
-    if (isIdentity(value.shadow_entry_identity)) {
-      entryCounts.set(value.shadow_entry_identity, (entryCounts.get(value.shadow_entry_identity) || 0) + 1);
-    }
-  });
-  const shadowRows = sourceShadowRows.map((value, index) =>
-    shadowStructureRow(value, candidateCounts, entryCounts, index));
-  const shadowCandidates = new Set(shadowRows.map(value => value.candidate_identity).filter(isIdentity));
-  const underwritingRows = documentValue.underwriting && Array.isArray(documentValue.underwriting.rows)
-    ? documentValue.underwriting.rows.filter(value => !shadowCandidates.has(value.candidate_identity)) : [];
-  return orderedStructureRows([...shadowRows, ...underwritingRows]);
-};
-
-const orderedStructureRows = rows => [...rows].sort((left, right) =>
-  structureState(left).priority - structureState(right).priority ||
-  Number(left.expiry_timestamp_ms || 0) - Number(right.expiry_timestamp_ms || 0) ||
-  String(left.short_leg_instrument_name || '').localeCompare(String(right.short_leg_instrument_name || ''))
-);
-
-const predicateMarginForFailure = (row, failedPredicate) => {
-  const vector = Array.isArray(row.predicate_margin_vector) ? row.predicate_margin_vector : [];
-  const vectorKey = predicateVectorKeys[failedPredicate] || failedPredicate;
-  return vector.find(value => value.predicate === vectorKey) || null;
-};
-
-const formatMargin = margin => {
-  if (!margin || isMissing(margin.signed_margin)) return '—';
-  const value = formatCompactNumber(margin.signed_margin, margin.unit === 'FRACTION' ? 4 : 2);
-  if (margin.unit === 'USD_EQUIVALENT') return `${value} USD 等值`;
-  if (margin.unit === 'FRACTION') return `${value} 比例`;
-  if (margin.unit === 'LEVEL_COUNT') return `${value} 层`;
-  return `${value} ${displayText(margin.unit)}`;
-};
-
-const firstFailureSummary = row => {
-  const projectionIssues = Array.isArray(row.shadow_projection_issues)
-    ? row.shadow_projection_issues : [];
-  if (projectionIssues.length) {
-    return {label: 'Shadow 投影关联异常', margin: reasonText(projectionIssues[0])};
-  }
-  const failures = Array.isArray(row.failed_predicates) ? row.failed_predicates : [];
-  if (failures.length) {
-    const first = failures[0];
-    return {label: reasonText(first), margin: formatMargin(predicateMarginForFailure(row, first))};
-  }
-  const state = structureState(row);
-  if (state.key === 'SHADOW_TRACKING') {
-    return {label: '已进入 Shadow 模拟跟踪', margin: '非当前 Candidate'};
-  }
-  if (state.key === 'INVALIDATED') {
-    return {label: '候选已失效', margin: reasonText(row.candidate_invalidation_reason)};
-  }
-  if (state.key === 'UNKNOWN') {
-    const reasons = Array.isArray(row.unknown_reasons) ? row.unknown_reasons : [];
-    return {label: '结构经济暂不可判断', margin: reasonText(reasons[0])};
-  }
-  if (state.key === 'NOT_EVALUATED') {
-    return {label: '尚未进入经济评估', margin: '不可判断门槛'};
-  }
-  if (state.key === 'CANDIDATE_UNCONFIRMED') {
-    return {label: '承保通过', margin: '生命周期未确认'};
-  }
-  if (state.key === 'CANDIDATE') {
-    return {label: '经济谓词通过', margin: '等待 admission'};
-  }
-  return {label: `服务器未列失败谓词`, margin: `当前 ${state.label}`};
-};
-
-const structureJudgement = row => {
-  const projectionIssues = Array.isArray(row.shadow_projection_issues)
-    ? row.shadow_projection_issues : [];
-  if (projectionIssues.length) {
-    return {
-      blocker: projectionIssues.map(reasonText).join('；'),
-      upgrade: '等待服务端恢复唯一 Candidate、Shadow Entry 与冻结双腿身份；浏览器拒绝补推关联。'
-    };
-  }
-  const failures = Array.isArray(row.failed_predicates) ? row.failed_predicates : [];
-  if (failures.length) {
-    return {
-      blocker: failures.map(reasonText).join('；'),
-      upgrade: `未通过 ${failures.length} 项条件；下方逐项显示 owner 已结算的 signed margin。`
-    };
-  }
-  const state = structureState(row);
-  if (state.key === 'SHADOW_TRACKING') {
-    return {
-      blocker: '无当前承保阻塞：该 Candidate 已进入 Shadow 模拟跟踪。',
-      upgrade: '等待严格未来的 Position 与 Outcome 公共行情事实。'
-    };
-  }
-  if (state.key === 'INVALIDATED') {
-    return {
-      blocker: `候选已失效：${reasonText(row.candidate_invalidation_reason)}`,
-      upgrade: '该候选不再等待 admission；需要新的独立机会重新通过承保。'
-    };
-  }
-  if (state.key === 'UNKNOWN') {
-    const reasons = Array.isArray(row.unknown_reasons) ? row.unknown_reasons : [];
-    return {
-      blocker: `结构经济暂不可判断：${reasons.map(reasonText).join('；') || '服务器未提供原因'}`,
-      upgrade: '等待缺失的组件盘口或估值事实恢复后重新评估。'
-    };
-  }
-  if (state.key === 'NOT_EVALUATED') {
-    return {
-      blocker: '尚未进入入场经济评估。',
-      upgrade: '等待官方组合诊断与完整承保评估。'
-    };
-  }
-  if (state.key === 'CANDIDATE_UNCONFIRMED') {
-    return {
-      blocker: '承保 action 已通过，但 Candidate 生命周期尚未确认。',
-      upgrade: '等待 owner 发出 VALID 生命周期，再等待严格未来的 admission 刷新。'
-    };
-  }
-  if (state.key === 'CANDIDATE') {
-    return {
-      blocker: '当前承保经济谓词已通过。',
-      upgrade: '等待严格未来的 admission 刷新。'
-    };
-  }
-  return {
-    blocker: `服务器未列失败谓词；当前 action 为${state.label}。`,
-    upgrade: '等待 owner 后续评估，不由浏览器推断已通过全部门槛。'
-  };
-};
-
-const structureDecisionMarkup = (row, state = structureState(row)) =>
-  badgeMarkup(state.label, state.tone, 'decision-badge') +
-  (state.note ? `<span class="cell-secondary">${safeText(state.note)}</span>` : '');
 
 let lastSuccessfulFetchAtMs = null;
 let lastPublicationRuntimeIdentity = null;
@@ -936,10 +824,13 @@ const retiredRuntimeIdentities = new Set();
 let currentDocument = null;
 let selectedChannelId = ACTIVE_CHANNEL_ID;
 let queueMode = 'radar';
-let structureFilter = 'ALL';
+let shadowLifecycleFilter = 'ALL';
 let optionFilter = 'both';
+let shadowOptionFilter = 'both';
+let shadowExpiryFilter = 'ALL';
+let shadowSearchQuery = '';
 let activeOnly = false;
-let selectedStructureId = null;
+let selectedShadowId = null;
 let selectedRadarId = null;
 let drawerOpen = false;
 let lastDetailTriggerId = null;
@@ -959,7 +850,9 @@ const captureFocusIdentity = () => {
   const active = document.activeElement;
   if (!active || active === document.body) return null;
   if (active.id) return {kind: 'id', value: active.id};
-  for (const key of ['channelId', 'queueMode', 'queueFilter', 'optionFilter', 'rowId']) {
+  for (const key of [
+    'channelId', 'queueMode', 'queueFilter', 'optionFilter', 'shadowOptionFilter', 'rowId'
+  ]) {
     if (active.dataset && active.dataset[key]) return {kind: key, value: active.dataset[key]};
   }
   if (typeof active.matches === 'function' && active.matches('[data-evidence-details] summary')) {
@@ -987,7 +880,7 @@ function updateResponsiveDetailState() {
   const scrim = document.getElementById('detail-scrim');
   if (!panel || !scrim) return;
   const drawer = isDrawerViewport();
-  const open = drawerOpen;
+  const open = !drawer && queueMode === 'structures' ? true : drawerOpen;
   if (document.body && document.body.classList) {
     document.body.classList.toggle('detail-open', open);
   }
@@ -1082,6 +975,11 @@ function renderProductToolbar(documentValue) {
     document.querySelectorAll('[data-option-filter]').forEach(button => {
       button.setAttribute('aria-pressed', String(button.dataset.optionFilter === optionFilter));
     });
+    document.querySelectorAll('[data-shadow-option-filter]').forEach(button => {
+      button.setAttribute(
+        'aria-pressed', String(button.dataset.shadowOptionFilter === shadowOptionFilter)
+      );
+    });
     document.querySelectorAll('[data-queue-mode]').forEach(button => {
       button.setAttribute('aria-pressed', String(button.dataset.queueMode === queueMode));
     });
@@ -1126,28 +1024,43 @@ const selectedChannelCanUseCurrentSnapshot = documentValue =>
 
 function visibleRows(documentValue) {
   if (!selectedChannelCanUseCurrentSnapshot(documentValue)) return [];
-  if (queueMode === 'structures') {
-    const rows = structureQueueRows(documentValue);
-    return structureFilter === 'ALL' ? rows : rows.filter(row => structureState(row).key === structureFilter);
-  }
+  if (queueMode === 'structures') return filteredShadowBookRows(documentValue);
   return filteredStrongSignalRows(documentValue);
 }
 
 function totalRows(documentValue) {
   if (!selectedChannelCanUseCurrentSnapshot(documentValue)) return [];
   return queueMode === 'structures'
-    ? structureQueueRows(documentValue)
+    ? shadowBookRows(documentValue)
     : documentValue.radar.rows;
 }
 
-function renderFilters() {
-  const filters = STRUCTURE_FILTERS;
-  const selected = structureFilter;
+function renderShadowFilters(documentValue) {
+  const filters = SHADOW_BOOK_FILTERS;
   document.getElementById('queue-filters').innerHTML = filters.map(([value, label]) =>
     `<button type="button" data-queue-filter="${escapeHtml(value)}" ` +
-    `aria-pressed="${selected === value}">${escapeHtml(label)}</button>`
+    `aria-pressed="${shadowLifecycleFilter === value}">${escapeHtml(label)}</button>`
   ).join('');
+  const expirySelect = document.getElementById('shadow-expiry-filter');
+  const expiryValues = [...new Set(shadowBookRows(documentValue)
+    .map(row => row.expiry_timestamp_ms)
+    .filter(value => Number.isFinite(Number(value))))].sort((left, right) => Number(left) - Number(right));
+  if (expirySelect) {
+    expirySelect.innerHTML = '<option value="ALL">全部</option>' + expiryValues.map(value =>
+      `<option value="${escapeHtml(value)}">${safeText(formatDate(value))}</option>`
+    ).join('');
+    expirySelect.value = expiryValues.some(value => String(value) === shadowExpiryFilter)
+      ? shadowExpiryFilter : 'ALL';
+    if (expirySelect.value === 'ALL') shadowExpiryFilter = 'ALL';
+  }
+  const search = document.getElementById('shadow-search');
+  if (search && search.value !== shadowSearchQuery) search.value = shadowSearchQuery;
   if (typeof document.querySelectorAll === 'function') {
+    document.querySelectorAll('[data-shadow-option-filter]').forEach(button => {
+      button.setAttribute(
+        'aria-pressed', String(button.dataset.shadowOptionFilter === shadowOptionFilter)
+      );
+    });
     document.querySelectorAll('[data-queue-mode]').forEach(button => {
       button.setAttribute('aria-pressed', String(button.dataset.queueMode === queueMode));
     });
@@ -1155,36 +1068,68 @@ function renderFilters() {
 }
 
 function renderQueueHead() {
-  const labels = ['优先级', '策略通道', '结构', '决策', '入场经济', '首项门槛差'];
+  const labels = ['结构', '数量', '责任状态', '触发 / 当前事实', '退出经济', '下一责任', '观察'];
   document.getElementById('queue-head').innerHTML = labels.map(value =>
     `<span role="columnheader">${escapeHtml(value)}</span>`
   ).join('');
 }
 
-function structureRowMarkup(row, index) {
-  const id = structureIdentity(row, index);
-  const state = structureState(row);
-  const failure = firstFailureSummary(row);
-  const entryFacts = structureEntryFacts(row, currentDocument);
-  const nativeUnit = currentDocument.product.native_premium_currency;
-  const valuationUnit = currentDocument.product.valuation_currency;
-  const valuationCredit = entryFacts.source === 'SHADOW_ENTRY'
-    ? entryFacts.valuationGrossCredit : entryFacts.valuationNetCredit;
-  const valuationBasis = entryFacts.source === 'SHADOW_ENTRY' && !isMissing(valuationCredit)
-    ? ' · 费前' : '';
-  return `<button type="button" class="queue-row structure-row" role="row" ` +
-    `data-row-id="${escapeHtml(id)}" aria-pressed="${selectedStructureId === id}">` +
-    `<span class="queue-priority" role="cell">${index + 1}</span>` +
-    `<span role="cell"><span class="cell-primary">BTC Short Vol</span>` +
-    `<span class="cell-secondary">${escapeHtml(ACTIVE_CHANNEL_ID)}</span></span>` +
-    `<span role="cell"><span class="cell-primary">${safeText(structureLabel(row))}</span>` +
-    `<span class="cell-secondary">${safeText(row.short_leg_instrument_name)} → ${safeText(row.long_leg_instrument_name)}</span></span>` +
-    `<span role="cell">${structureDecisionMarkup(row, state)}</span>` +
-    `<span role="cell"><span class="cell-value">${safeText(formatNative(entryFacts.nativeNetCredit))} ${safeText(nativeUnit)}</span>` +
-    `<span class="cell-secondary">${safeText(formatMoney(valuationCredit))} ${safeText(valuationUnit)}${valuationBasis}</span></span>` +
-    `<span role="cell"><span class="cell-value ${failure.margin.startsWith('-') ? 'cell-warning' : ''}">${safeText(failure.margin)}</span>` +
-    `<span class="cell-secondary">${safeText(failure.label)}</span></span></button>`;
+function shadowBookRowMarkup(row, index, documentValue = currentDocument) {
+  const id = shadowBookIdentity(row, index);
+  const state = shadowLifecyclePresentation(row);
+  const economics = shadowCloseEconomics(row);
+  const quality = row.position && row.position.observation_quality || row.entry.observation_quality;
+  const nativeUnit = documentValue.product.native_premium_currency;
+  const valuationUnit = documentValue.product.valuation_currency;
+  const economicPrimary = economics.kind === 'UNKNOWN'
+    ? '尚不可得'
+    : economics.kind === 'TERMINAL_UNKNOWN'
+      ? '终端未知'
+      : `${Number(economics.pnl) >= 0 ? '+' : ''}${formatMoney(economics.pnl)} ${valuationUnit}`;
+  const economicSecondary = economics.kind === 'OUTCOME'
+    ? '已形成终端 Outcome'
+    : economics.kind === 'CURRENT_QUOTE'
+      ? `当前合格报价 · 退出借记 ${formatMoney(economics.debit)}`
+      : economics.kind === 'TERMINAL_UNKNOWN'
+        ? '终端事实不可验证 · 不显示 0'
+        : shadowTerminalIssue(row)
+          ? '终端 Outcome 投影待恢复 · 不显示 0'
+          : '不显示 0；等待合格报价或交割';
+  const triggerSecondary = row.position && row.position.primary_exit_rule === 'PLATFORM_OR_SOURCE_DISCONTINUITY'
+    ? '首次原因保留；当前仍承担退出责任'
+    : row.position && row.position.close_quote_state
+      ? `报价 ${displayText(row.position.close_quote_state)}` : '—';
+  return `<button type="button" class="queue-row shadow-book-row" role="row" ` +
+    `data-row-id="${escapeHtml(id)}" aria-pressed="${selectedShadowId === id}">` +
+    `<span role="cell"><span class="cell-primary">${safeText(shadowStructureLabel(row))}</span>` +
+    `<span class="cell-secondary">SELL ${safeText(row.short_leg && row.short_leg.instrument_name)} · BUY ${safeText(row.long_leg && row.long_leg.instrument_name)}</span></span>` +
+    `<span role="cell"><span class="cell-primary">${safeText(formatDecimal(row.entry.target_quantity_btc))} BTC</span>` +
+    `<span class="cell-secondary">入场净信用 ${safeText(formatNative(row.entry.native_net_entry_credit))} ${safeText(nativeUnit)}</span></span>` +
+    `<span role="cell">${badgeMarkup(state.label, state.tone, 'decision-badge')}` +
+    `<span class="cell-secondary">hard-close ${safeText(formatDurationInterval(row.position && row.position.hard_close_countdown_interval_ms))}</span></span>` +
+    `<span role="cell"><span class="cell-primary">${safeText(shadowTriggerText(row))}</span>` +
+    `<span class="cell-secondary">${safeText(triggerSecondary)}</span></span>` +
+    `<span role="cell"><span class="cell-value ${['UNKNOWN', 'TERMINAL_UNKNOWN'].includes(economics.kind) ? 'cell-muted' : ''}">${safeText(economicPrimary)}</span>` +
+    `<span class="cell-secondary">${safeText(economicSecondary)}</span></span>` +
+    `<span role="cell"><span class="cell-primary shadow-duty">${safeText(shadowNextDuty(row))}</span>` +
+    `<span class="cell-secondary">Public Shadow · 非订单/成交</span></span>` +
+    `<span role="cell">${badgeMarkup(quality === 'GAPPED' ? '有缺口' : quality === 'CONTINUOUS' ? '连续' : '未知', quality === 'GAPPED' ? 'amber' : quality === 'CONTINUOUS' ? 'blue' : 'neutral')}` +
+    `<span class="cell-secondary">${row.issues.length ? safeText(reasonText(row.issues[0])) : ''}</span></span></button>`;
 }
+
+const shadowExpiryGroupMarkup = (group, groupIndex) => {
+  const exitCount = group.rows.filter(row =>
+    shadowLifecyclePresentation(row).key === 'EXIT_REQUIRED').length;
+  const monitoringCount = group.rows.filter(row =>
+    shadowLifecyclePresentation(row).key === 'MONITORING').length;
+  return `<section class="shadow-expiry-group" role="rowgroup" aria-label="${safeText(formatDate(group.expiry))} 到期">` +
+    `<div class="shadow-expiry-heading" role="row"><span role="cell">` +
+      `<strong>${safeText(formatDate(group.expiry))}</strong>` +
+      `<small>${group.rows.length} 个持仓 · ${exitCount} 个退出责任 · ${monitoringCount} 个观察中</small>` +
+    `</span></div>` +
+    group.rows.map((row, index) => shadowBookRowMarkup(row, groupIndex * 1000 + index)).join('') +
+  `</section>`;
+};
 
 const signalLaneLayout = (rows, bounds) => {
   const positioned = rows.map((row, index) => ({
@@ -1328,20 +1273,31 @@ function renderQueue(documentValue) {
   mapView.hidden = queueMode !== 'radar';
   structureView.hidden = queueMode !== 'structures';
   if (queueMode === 'structures') {
-    renderFilters();
+    renderShadowFilters(documentValue);
     renderQueueHead();
     kicker.textContent = '当前 Shadow';
-    title.textContent = '已结算结构队列';
-    context.textContent = 'Radar、Shadow 与 AI 研究分面呈现；浏览器不按合约名拼接 Episode。';
+    title.textContent = '到期风险持仓簿';
+    context.textContent = '只看正式 Shadow Entry 的当前风险、退出责任与终端结果；Control 留在离线研究面。';
     if (roadmapOnly) structureStatus.textContent = '尚未接入 · 无独立队列快照';
     else if (snapshotState.code !== 'CONNECTED') structureStatus.textContent = `${snapshotState.label} · 不报告业务零值`;
-    else structureStatus.textContent = `显示 ${rows.length} / ${total.length} · 按服务器已结算结构状态排序`;
+    else {
+      const exitRequired = total.filter(row =>
+        shadowLifecyclePresentation(row).key === 'EXIT_REQUIRED').length;
+      const monitoring = total.filter(row =>
+        shadowLifecyclePresentation(row).key === 'MONITORING').length;
+      const terminal = total.filter(row =>
+        shadowLifecyclePresentation(row).key === 'TERMINAL').length;
+      structureStatus.textContent = `显示 ${rows.length} / ${total.length} 个正式 Shadow 持仓 · ` +
+        `${exitRequired} 个退出责任 · ${monitoring} 个观察中 · ${terminal} 个已终结`;
+    }
     if (!rows.length) {
       body.innerHTML = emptyQueueMarkup(documentValue);
     } else {
-      const ids = rows.map(structureIdentity);
-      if (!selectedStructureId || !ids.includes(selectedStructureId)) selectedStructureId = ids[0];
-      body.innerHTML = rows.map(structureRowMarkup).join('');
+      const ids = rows.map(shadowBookIdentity);
+      const selectionChanged = !selectedShadowId || !ids.includes(selectedShadowId);
+      if (selectionChanged) selectedShadowId = ids[0];
+      if (selectedShadowId && !isDrawerViewport()) drawerOpen = true;
+      body.innerHTML = groupShadowBookRowsByExpiry(rows).map(shadowExpiryGroupMarkup).join('');
     }
   } else {
     kicker.textContent = '当前 Radar';
@@ -1359,215 +1315,89 @@ function renderQueue(documentValue) {
   if (table) table.scrollTop = previousScrollTop;
 }
 
-const rawEvidenceMarkup = row => `<details class="evidence-details" data-evidence-details${evidenceExpanded ? ' open' : ''}>` +
-  `<summary>展开服务器原始证据</summary><pre class="evidence-raw">${escapeHtml(JSON.stringify(row, null, 2))}</pre></details>`;
-
-const scorePacketComparisonMarkup = row => {
-  const shadow = row && row.shadow_entry_projection;
-  const selection = shadow && shadow.selection_score_packet;
-  const refresh = shadow && shadow.entry_refresh_score_packet;
-  if (!selection && !refresh) {
-    return '<div class="data-gap-panel">当前结构尚未形成同时冻结 selection 与 entry-refresh packet 的 schema-v5 Case。</div>';
-  }
-  return `<div class="economics-grid">` +
-    scorePacketCardMarkup('Selection score', selection) +
-    scorePacketCardMarkup('Entry-refresh score', refresh) +
-    `</div><div class="data-gap-panel"><strong>Drift 读取规则：</strong>` +
-    `并列展示两个服务器冻结 packet 的 score、band、coverage、boundary 与 leader；浏览器不相减、不重算、不归因。</div>`;
-};
-
-const predicateListMarkup = row => {
-  const vector = Array.isArray(row.predicate_margin_vector) ? row.predicate_margin_vector : [];
-  if (!vector.length) return '<div class="data-gap-panel">当前结构没有可显示的精确谓词 margin。</div>';
-  return `<div class="predicate-list">${vector.map(value =>
-    `<div class="predicate-row${value.passes ? ' predicate-pass' : ''}">` +
-    `<span>${safeText(reasonText(value.predicate))}</span>` +
-    `<span class="predicate-margin">${safeText(formatMargin(value))}</span></div>`
-  ).join('')}</div>`;
-};
-
 const postCloseAttemptText = value => isMissing(value)
   ? '—'
   : (postCloseAttemptLabels[value] || displayText(value));
 
-const shadowTrackingEvidenceMarkup = shadow => {
-  if (!shadow || typeof shadow !== 'object') return '';
-  const gapped = shadow.observation_quality === 'GAPPED';
-  const qualificationExcluded = shadow.qualification_eligible === false;
-  const parts = [];
-  if (gapped) {
-    parts.push(`<div class="callout info"><strong>跨进程跟踪</strong>` +
-      `观察有间隙；这是服务器声明的观察质量，不是异常或当前交易阻塞。</div>`);
-  }
-  if (qualificationExcluded) {
-    parts.push(`<div class="callout info"><strong>研究资格</strong>` +
-      `不计入连续观察资格；已登记的真实 Shadow Entry 入场经济仍保留。</div>`);
-  }
-  if (gapped) {
-    parts.push(`<div class="fact-grid">` +
-      factMarkup('Origin runtime', shortIdentity(shadow.origin_runtime_identity)) +
-      factMarkup('观察 Segment', isMissing(shadow.current_segment_sequence)
-        ? '—' : `#${displayText(shadow.current_segment_sequence)}`) +
-      factMarkup('平仓尝试', postCloseAttemptText(shadow.post_close_attempt_state)) +
-      `</div>`);
-  }
-  const entryBoundary = shadow.entry_fact_boundary && typeof shadow.entry_fact_boundary === 'object'
-    ? shadow.entry_fact_boundary : null;
-  const sourceRefs = Array.isArray(shadow.entry_component_quote_source_refs)
-    ? shadow.entry_component_quote_source_refs : [];
-  const sourceTimes = sourceRefs
-    .map(value => value && value.source_timestamp_ms)
-    .filter(value => Number.isFinite(Number(value)));
-  if (entryBoundary || sourceTimes.length) {
-    parts.push(`<div class="fact-grid">` +
-      factMarkup('入场 causal seq', entryBoundary ? displayText(entryBoundary.causal_seq) : '—') +
-      factMarkup('双腿源时间', sourceTimes.length ? sourceTimes.map(displayText).join(' / ') : '—') +
-      `</div>`);
-  }
-  return parts.join('');
-};
-
-function canonicalShadowMarkup(row, documentValue) {
-  const projectionIssues = Array.isArray(row.shadow_projection_issues)
-    ? row.shadow_projection_issues : [];
-  if (projectionIssues.length) {
-    return `<div class="callout blocker"><strong>Shadow 投影关联异常</strong>` +
-      `${safeText(projectionIssues.map(reasonText).join('；'))}；拒绝推断 Candidate、Position 或 Outcome 关联。</div>`;
-  }
-  if (!isIdentity(row.candidate_identity)) {
-    return `<div class="callout info"><strong>Shadow 状态</strong>` +
-      `当前结构没有 canonical Candidate identity，未建立与 Shadow 跟踪的规范关联。</div>`;
-  }
-  if (row.candidate_lifecycle === 'INVALIDATED') {
-    return `<div class="callout blocker"><strong>Shadow 状态</strong>` +
-      `候选已失效：${safeText(reasonText(row.candidate_invalidation_reason))}；不再等待 admission。</div>`;
-  }
-  const shadowProjection = shadowRowForCandidate(row, documentValue);
-  const shadow = canonicalShadowEntry(row, documentValue);
-  if (!shadow) {
-    const terminal = shadowProjection && shadowProjection.admission_refresh_terminal_outcome;
-    if (!isMissing(terminal)) {
-      const unknownReasons = Array.isArray(shadowProjection.admission_refresh_unknown_reasons)
-        ? shadowProjection.admission_refresh_unknown_reasons.map(reasonText).join('；') : '';
-      return `<div class="callout blocker"><strong>Shadow admission 已终结</strong>` +
-        `${safeText(terminal)}${unknownReasons ? ` · ${safeText(unknownReasons)}` : ''}；未建立 Shadow Entry，不再称为等待刷新。</div>`;
-    }
-    if (row.candidate_lifecycle === 'ADMITTED') {
-      return `<div class="callout blocker"><strong>Shadow 关联缺口</strong>` +
-        `Candidate lifecycle 为 ADMITTED，但当前投影没有匹配的 Shadow Entry identity；拒绝推断已建立跟踪。</div>`;
-    }
-    if (row.candidate_lifecycle !== 'VALID' || row.candidate_still_valid !== true) {
-      return `<div class="callout info"><strong>Shadow 状态</strong>` +
-        `承保 action 已通过，但 Candidate 生命周期尚未确认为 VALID；不计为等待 admission 的 Shadow 候选。</div>`;
-    }
-    return `<div class="callout info"><strong>Shadow 状态</strong>` +
-      `Shadow 候选正在等待严格未来的成对双腿公共盘口刷新；不是订单或成交。</div>`;
-  }
-  const positionRows = documentValue.positions && Array.isArray(documentValue.positions.rows)
-    ? documentValue.positions.rows : [];
-  const position = positionRows.find(value => value.shadow_entry_identity === shadow.shadow_entry_identity);
-  const outcomeRows = documentValue.outcomes && Array.isArray(documentValue.outcomes.rows)
-    ? documentValue.outcomes.rows : [];
-  const outcome = outcomeRows.find(value => value.shadow_entry_identity === shadow.shadow_entry_identity);
-  const parts = [
-    `<div class="callout info"><strong>Shadow 模拟跟踪已建立</strong>` +
-      `公共盘口反事实已登记；不是订单、成交或实际持仓。</div>`
-  ];
-  const trackingEvidence = shadowTrackingEvidenceMarkup(shadow);
-  if (trackingEvidence) parts.push(trackingEvidence);
-  if (position) {
-    parts.push(`<div class="callout info"><strong>当前模拟建议</strong>` +
-      `${safeText(position.position_action)} · ${safeText(position.primary_exit_rule)} · hard-close ${safeText(formatDurationInterval(position.hard_close_countdown_interval_ms))}</div>`);
-    if (position.valid_shadow_close_opportunity === true && !isMissing(position.projected_shadow_pnl_valuation)) {
-      parts.push(`<div class="callout upgrade"><strong>公共盘口模拟盈亏</strong>` +
-        `${safeText(formatMoney(position.projected_shadow_pnl_valuation))} ${safeText(documentValue.product.valuation_currency)}；不是实际账户 PnL。</div>`);
-    }
-  }
-  if (!outcome || ['PENDING', 'PENDING_OUTCOME'].includes(outcome.state)) {
-    parts.push(`<div class="callout blocker"><strong>Outcome</strong>` +
-      `等待严格未来的合格双腿平仓事实；当前 PnL 不是 0，而是尚不可得。</div>`);
-  } else {
-    parts.push(`<div class="callout info"><strong>Outcome</strong>${safeText(outcome.state)}；` +
-      `只有经济字段已知时才显示公共盘口 Shadow 结果。</div>`);
-  }
-  return parts.join('');
-}
-
-function structureDetailMarkup(row, documentValue) {
-  const state = structureState(row);
+function shadowDetailMarkup(row, documentValue) {
+  const state = shadowLifecyclePresentation(row);
   const nativeUnit = documentValue.product.native_premium_currency;
   const valuationUnit = documentValue.product.valuation_currency;
-  const judgement = structureJudgement(row);
-  const entryFacts = structureEntryFacts(row, documentValue);
-  const isShadowEntry = entryFacts.source !== 'UNDERWRITING';
-  const shadowLegProjectionInvalid = isShadowEntry && Array.isArray(row.shadow_projection_issues) &&
-    row.shadow_projection_issues.some(value =>
-      ['INVALID_ENTRY_COMPONENT_ROLES', 'INVALID_ENTRY_LEG_ACTIONS'].includes(value));
-  const economicsMarkup = isShadowEntry
-    ? economicsCard(`净信用（${nativeUnit}）`, formatNative(entryFacts.nativeNetCredit), '扣除双腿费用准备', 'positive') +
-      economicsCard(`费前信用（${nativeUnit}）`, formatNative(entryFacts.nativeGrossCredit), '双腿压力价差', 'positive') +
-      economicsCard(`费用准备（${nativeUnit}）`, formatNative(entryFacts.nativeFeeReserve), '两腿标准公共手续费', 'caution') +
-      economicsCard(`费前信用（${valuationUnit}）`, formatMoney(entryFacts.valuationGrossCredit), '入场边界 USD 等值')
-    : economicsCard(`净信用（${nativeUnit}）`, formatNative(entryFacts.nativeNetCredit), '原生币本位现金流', 'positive') +
-      economicsCard(`净信用（${valuationUnit}）`, formatMoney(entryFacts.valuationNetCredit), '评估边界 USD 等值', 'positive') +
-      economicsCard(`未来成本准备（${valuationUnit}）`, formatMoney(row.future_cost_reserve_valuation), '不是实际账户保证金', 'caution') +
-      economicsCard(`承保准备损失（${valuationUnit}）`, formatMoney(row.underwriting_reserved_loss_valuation), 'Policy 风险准备');
-  const riskBoundary = isShadowEntry
-    ? '当前 Shadow Entry 投影未提供到期 BTC 负债、精确最大损失或账户保证金；不由浏览器推断。'
-    : `入场边界损失代理 ${formatMoney(row.entry_boundary_valued_payoff_loss_ex_fees_valuation)} ${valuationUnit}；` +
-      '不是到期 BTC 负债、精确最大损失或账户保证金。';
-  const legTableMarkup = isShadowEntry
-    ? shadowLegProjectionInvalid
-      ? '<div class="data-gap-panel">冻结双腿的角色或方向投影不完整；拒绝由浏览器补写 SELL/BUY。</div>'
-      : `<table class="leg-table"><thead><tr><th scope="col">方向</th><th scope="col">冻结合约</th></tr></thead><tbody>` +
-        `<tr><td class="leg-sell">${safeText(row.short_leg_action)}</td><td>${safeText(row.short_leg_instrument_name)}</td></tr>` +
-        `<tr><td class="leg-buy">${safeText(row.long_leg_action)}</td><td>${safeText(row.long_leg_instrument_name)}</td></tr>` +
-        `</tbody></table>`
-    : `<table class="leg-table"><thead><tr><th scope="col">方向</th><th scope="col">合约</th><th scope="col">执行价</th></tr></thead><tbody>` +
-      `<tr><td class="leg-sell">SELL</td><td>${safeText(row.short_leg_instrument_name)}</td><td>${safeText(formatDecimal(row.short_strike_price))}</td></tr>` +
-      `<tr><td class="leg-buy">BUY</td><td>${safeText(row.long_leg_instrument_name)}</td><td>${safeText(formatDecimal(row.long_strike_price))}</td></tr>` +
-      `</tbody></table>`;
-  const predicateMarkup = isShadowEntry
-    ? '<div class="data-gap-panel">当前 Shadow Entry 投影未提供入场时的精确谓词 margin；不从当前 Underwriting 窗口补值。</div>'
-    : predicateListMarkup(row);
-  const structureSectionTitle = isShadowEntry
-    ? '结构（冻结入场双腿）'
-    : `结构（卖出 ${structureTypeText(row)}）`;
-  return `<div class="detail-title-line"><h3>INVERSE BTC × SHORT VOL</h3>` +
+  const position = row.position || {};
+  const outcome = row.outcome || {state: 'PENDING'};
+  const economics = shadowCloseEconomics(row);
+  const terminalIssue = shadowTerminalIssue(row);
+  const primaryReason = position.primary_exit_rule;
+  const closeReason = primaryReason === 'PLATFORM_OR_SOURCE_DISCONTINUITY'
+    ? `${reasonText(primaryReason)}（历史首次 CLOSE 已锁存）`
+    : reasonText(primaryReason);
+  const quality = position.observation_quality || row.entry.observation_quality;
+  const terminalText = terminalIssue
+    ? '终端 Outcome 投影待恢复；不推断退出方式或经济结果'
+    : ['PENDING', 'PENDING_OUTCOME'].includes(outcome.state)
+      ? position.position_lifecycle_state === 'SETTLEMENT_PENDING'
+        ? '等待官方 delivery price；不可得时才形成 TERMINAL_UNKNOWN'
+        : '等待首组合格退出报价；到期未退出则进入官方交割'
+    : `${displayText(outcome.state)} · ${displayText(outcome.terminal_method)}`;
+  const closeEconomicsMarkup = economics.kind === 'TERMINAL_UNKNOWN'
+    ? '<div class="shadow-economics-unknown"><strong>终端经济不可得</strong>' +
+      '<span>持仓责任已终结；不显示 0，也不伪造结果。</span></div>'
+    : economics.kind === 'UNKNOWN'
+      ? `<div class="shadow-economics-unknown"><strong>${terminalIssue ? '终端 Outcome 待恢复' : '退出经济尚不可得'}</strong>` +
+        `<span>${terminalIssue ? 'Position 终端态保留；不推断终端经济。' : '不显示 0；继续承担退出或交割责任。'}</span></div>`
+    : `<div class="shadow-pnl-known"><span>${economics.kind === 'OUTCOME' ? '终端公共报价 PnL' : '当前公共报价模拟 PnL'}</span>` +
+      `<strong>${Number(economics.pnl) >= 0 ? '+' : ''}${safeText(formatMoney(economics.pnl))} ${safeText(valuationUnit)}</strong>` +
+      `<small>${economics.kind === 'CURRENT_QUOTE' ? `退出借记 ${safeText(formatMoney(economics.debit))} ${safeText(valuationUnit)}` : '服务器已形成 Outcome'}</small></div>`;
+  const responsibilityIssue = shadowResponsibilityIssue(row);
+  const issueMarkup = responsibilityIssue
+    ? `<div class="callout blocker"><strong>责任关联待恢复</strong>${safeText(row.issues.map(reasonText).join('；'))}。Entry 不删除，浏览器拒绝补推 Position 或 Outcome。</div>`
+    : terminalIssue
+      ? `<div class="callout blocker"><strong>终端结果待恢复</strong>${safeText(row.issues.map(reasonText).join('；'))}。Position 终端态保留，浏览器拒绝推断退出方式或经济结果。</div>`
+    : row.issues.length
+      ? `<div class="callout info"><strong>部分展示事实待恢复</strong>${safeText(row.issues.map(reasonText).join('；'))}。当前 Position 责任仍按服务器投影显示；浏览器不补推结构或 Outcome。</div>`
+      : '';
+  return `<div class="detail-title-line"><h3>${safeText(shadowStructureLabel(row))}</h3>` +
     `${badgeMarkup(state.label, state.tone, 'decision-badge')}</div>` +
-    `<p class="detail-subtitle">${safeText(structureLabel(row))}</p>` +
-    `<div class="fact-grid">` +
-      (isShadowEntry
-        ? factMarkup('Shadow Entry', shortIdentity(row.shadow_entry_identity))
-        : factMarkup('到期日', formatDate(row.expiry_timestamp_ms))) +
-      factMarkup(isShadowEntry ? '入场边界指数' : '评估边界指数', formatMoney(entryFacts.valuationIndex)) +
-      factMarkup('目标规模', `${formatDecimal(entryFacts.targetQuantity)} BTC`) +
-      factMarkup(isShadowEntry ? '跟踪状态' : '评估状态', entryFacts.status) +
-      factMarkup('原生现金流', nativeUnit) +
-      factMarkup('估值单位', valuationUnit) +
-    `</div>` +
-    `<section class="detail-section" data-detail-section="structure"><div class="detail-section-title">` +
-      `<h4>${safeText(structureSectionTitle)}</h4><span class="detail-section-note">公共盘口反事实</span></div>` +
-      `${legTableMarkup}</section>` +
-    `<section class="detail-section"><div class="detail-section-title"><h4>入场经济</h4>` +
-      `<span class="detail-section-note">${isShadowEntry ? 'Shadow Entry 已结算' : '服务器已结算'} · 浏览器不重算</span></div>` +
-      `<div class="economics-grid">${economicsMarkup}</div></section>` +
-    `<section class="detail-section"><div class="detail-section-title"><h4>交易判断</h4></div>` +
-      `<div class="callout-list">` +
-        `<div class="callout blocker"><strong>主要阻塞</strong>${safeText(judgement.blocker)}</div>` +
-        `<div class="callout upgrade"><strong>升级条件</strong>${safeText(judgement.upgrade)}</div>` +
-        `<div class="callout info"><strong>风险边界</strong>${safeText(riskBoundary)}</div>` +
+    `<p class="detail-subtitle">${safeText(formatDate(row.expiry_timestamp_ms))} · ` +
+      `SELL ${safeText(row.short_leg && row.short_leg.instrument_name)} · ` +
+      `BUY ${safeText(row.long_leg && row.long_leg.instrument_name)}</p>` +
+    `${issueMarkup}` +
+    `<section class="shadow-trader-section"><div class="detail-section-title"><h4>结构经济</h4>` +
+      `<span class="detail-section-note">冻结 Entry · 浏览器不重算</span></div>` +
+      `<div class="shadow-trader-facts">` +
+        factMarkup('数量', `${formatDecimal(row.entry.target_quantity_btc)} BTC`) +
+        factMarkup(`入场净信用 ${nativeUnit}`, formatNative(row.entry.native_net_entry_credit)) +
+        factMarkup(`入场费前估值 ${valuationUnit}`, formatMoney(row.entry.simulated_entry_credit_valuation)) +
+        factMarkup('入场边界指数', formatMoney(row.entry.entry_valuation_index_price)) +
       `</div></section>` +
-    `<section class="detail-section"><div class="detail-section-title"><h4>精确谓词 margin</h4>` +
-      `<span class="detail-section-note">正值通过，负值未过门槛</span></div>${predicateMarkup}</section>` +
-    `<section class="detail-section"><div class="detail-section-title"><h4>Selection → Entry drift</h4>` +
-      `<span class="detail-section-note">同一 schema-v5 packet · 只读并列</span></div>` +
-      `${scorePacketComparisonMarkup(row)}</section>` +
-    `<section class="detail-section" data-detail-section="shadow"><div class="detail-section-title"><h4>Shadow 条件</h4></div>` +
-      `<div class="callout-list">${canonicalShadowMarkup(row, documentValue)}</div></section>` +
-    `<section class="detail-section"><div class="data-gap-panel"><strong>未绘制盈亏曲线：</strong>` +
-      `当前 API 没有服务器结算的 payoff 序列。为避免浏览器重算 Inverse payoff，本页不伪造图表或保护腿 Greeks。</div></section>` +
-    rawEvidenceMarkup(row.shadow_entry_projection || row);
+    `<section class="shadow-trader-section"><div class="detail-section-title"><h4>当前风险与退出责任</h4>` +
+      `<span class="detail-section-note">Position 当前投影</span></div>` +
+      `<div class="shadow-duty-card"><div><span>首次 CLOSE 原因</span><strong>${safeText(closeReason)}</strong></div>` +
+        `<div><span>当前执行状态</span><strong>${safeText(state.label)}</strong></div>` +
+        `<div><span>下一责任</span><strong>${safeText(shadowNextDuty(row))}</strong></div>` +
+        `<div><span>hard-close</span><strong>${safeText(formatDurationInterval(position.hard_close_countdown_interval_ms))}</strong></div></div>` +
+      `${closeEconomicsMarkup}</section>` +
+    `<section class="shadow-trader-section"><div class="detail-section-title"><h4>终端预期</h4>` +
+      `<span class="detail-section-note">退出与交割二选一终结</span></div>` +
+      `<p class="shadow-terminal-text">${safeText(terminalText)}</p></section>` +
+    `<p class="signal-nonclaim">PUBLIC SHADOW · READ ONLY · 公共盘口反事实，不是订单、成交、账户持仓或实际 PnL。</p>` +
+    `<details class="signal-evidence shadow-research-evidence" data-evidence-details${evidenceExpanded ? ' open' : ''}>` +
+      `<summary>完整责任链与研究证据</summary><div class="signal-evidence-body">` +
+        `<div class="fact-grid">` +
+          factMarkup('Shadow Entry', shortIdentity(row.shadow_entry_identity)) +
+          factMarkup('观察质量', quality) +
+          factMarkup('Gap count', row.entry.gap_count) +
+          factMarkup('Segment', row.entry.current_segment_sequence) +
+          factMarkup('旧尝试', postCloseAttemptText(row.entry.post_close_attempt_state)) +
+          factMarkup('终端经济 Cohort', position.terminal_economics_eligible) +
+          factMarkup('连续路径 Cohort', position.continuous_path_eligible) +
+          factMarkup('退出观察 Cohort', position.exit_acquisition_eligible) +
+        `</div>` +
+        `<div class="data-gap-panel">Observation Gap 只描述路径质量，不删除 Entry，也不终止退出责任。` +
+          `Cohort 资格在离线研究面按问题分别派生；本页不使用一个全局布尔否决持仓。</div>` +
+        `<details class="evidence-details"><summary>服务器原始 Entry / Position / Outcome</summary>` +
+          `<pre class="evidence-raw">${escapeHtml(JSON.stringify({entry: row.entry, position: row.position, outcome: row.outcome}, null, 2))}</pre></details>` +
+      `</div></details>`;
 }
 
 const scoreMetricWidth = (result, member) => {
@@ -1644,7 +1474,7 @@ function selectedRow(documentValue) {
   const rows = visibleRows(documentValue);
   if (!rows.length) return null;
   if (queueMode === 'structures') {
-    return rows.find((row, index) => structureIdentity(row, index) === selectedStructureId) || rows[0];
+    return rows.find((row, index) => shadowBookIdentity(row, index) === selectedShadowId) || rows[0];
   }
   return rows.find((row, index) => radarIdentity(row, index) === selectedRadarId) || rows[0];
 }
@@ -1657,20 +1487,21 @@ function renderDetail(documentValue) {
   if (openEvidence) evidenceExpanded = openEvidence.open;
   const previousScrollTop = content ? content.scrollTop : 0;
   const row = selectedRow(documentValue);
-  const shadowJump = document.getElementById('shadow-jump');
+  const kicker = document.getElementById('detail-kicker');
   const evidenceToggle = document.getElementById('evidence-toggle');
   if (!row) {
     drawerOpen = false;
     title.textContent = '当前没有可显示的详情';
     content.innerHTML = `<div class="detail-placeholder">${emptyQueueMarkup(documentValue)}</div>`;
   } else if (queueMode === 'structures') {
-    title.textContent = '已结算结构详情';
-    content.innerHTML = structureDetailMarkup(row, documentValue);
+    if (kicker) kicker.textContent = '当前持仓责任';
+    title.textContent = 'Shadow 风险与退出责任';
+    content.innerHTML = shadowDetailMarkup(row, documentValue);
   } else {
+    if (kicker) kicker.textContent = '当前信号证据';
     title.textContent = '强信号证据';
     content.innerHTML = radarDetailMarkup(row, documentValue);
   }
-  if (shadowJump) shadowJump.hidden = !row || queueMode !== 'structures';
   if (evidenceToggle) {
     evidenceToggle.hidden = !row;
     evidenceToggle.textContent = evidenceExpanded ? '收起证据' : '展开证据';
@@ -1691,7 +1522,10 @@ function renderFooter(documentValue) {
     return;
   }
   radarCount.textContent = `${strongSignalRows(documentValue).length} 个当前强信号`;
-  shadowCount.textContent = `${documentValue.shadow_entries.rows.length} 条 Entry`;
+  const shadowRows = shadowBookRows(documentValue);
+  const exitRequired = shadowRows.filter(row =>
+    shadowLifecyclePresentation(row).key === 'EXIT_REQUIRED').length;
+  shadowCount.textContent = `${shadowRows.length} 个持仓 · ${exitRequired} 个退出责任`;
   evidence.disabled = queueMode !== 'radar' || !selectedRow(documentValue);
 }
 
@@ -1749,7 +1583,7 @@ function render(documentValue) {
 
 function renderUnavailable() {
   currentDocument = null;
-  selectedStructureId = null;
+  selectedShadowId = null;
   selectedRadarId = null;
   drawerOpen = false;
   evidenceExpanded = false;
@@ -1765,7 +1599,7 @@ function activateChannel(channelId) {
   if (!CHANNELS.some(value => value.id === channelId)) return;
   const focusIdentity = captureFocusIdentity();
   selectedChannelId = channelId;
-  selectedStructureId = null;
+  selectedShadowId = null;
   selectedRadarId = null;
   drawerOpen = false;
   evidenceExpanded = false;
@@ -1778,16 +1612,16 @@ function activateQueueMode(mode) {
   if (!['structures', 'radar'].includes(mode)) return;
   const focusIdentity = captureFocusIdentity();
   queueMode = mode;
-  drawerOpen = false;
+  drawerOpen = mode === 'structures' && !isDrawerViewport();
   evidenceExpanded = false;
   renderWorkspace(currentDocument);
   restoreFocusIdentity(focusIdentity);
 }
 
 function activateFilter(filter) {
-  if (queueMode !== 'structures' || !STRUCTURE_FILTERS.some(([value]) => value === filter)) return;
+  if (queueMode !== 'structures' || !SHADOW_BOOK_FILTERS.some(([value]) => value === filter)) return;
   const focusIdentity = captureFocusIdentity();
-  structureFilter = filter;
+  shadowLifecycleFilter = filter;
   drawerOpen = false;
   evidenceExpanded = false;
   renderWorkspace(currentDocument);
@@ -1805,6 +1639,40 @@ function activateOptionFilter(filter) {
   restoreFocusIdentity(focusIdentity);
 }
 
+function activateShadowOptionFilter(filter) {
+  if (!['both', 'put', 'call'].includes(filter)) return;
+  const focusIdentity = captureFocusIdentity();
+  shadowOptionFilter = filter;
+  selectedShadowId = null;
+  drawerOpen = false;
+  evidenceExpanded = false;
+  renderWorkspace(currentDocument);
+  restoreFocusIdentity(focusIdentity);
+}
+
+function activateShadowExpiryFilter(filter) {
+  shadowExpiryFilter = filter || 'ALL';
+  selectedShadowId = null;
+  drawerOpen = false;
+  evidenceExpanded = false;
+  renderWorkspace(currentDocument);
+}
+
+function activateShadowSearch(query) {
+  shadowSearchQuery = String(query || '').trim();
+  selectedShadowId = null;
+  drawerOpen = false;
+  evidenceExpanded = false;
+  renderWorkspace(currentDocument);
+  const input = document.getElementById('shadow-search');
+  if (input && typeof input.focus === 'function') {
+    input.focus();
+    if (typeof input.setSelectionRange === 'function') {
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  }
+}
+
 function toggleActiveOnly() {
   const focusIdentity = captureFocusIdentity();
   activeOnly = !activeOnly;
@@ -1818,7 +1686,7 @@ function toggleActiveOnly() {
 function activateRow(rowId) {
   if (!currentDocument) return;
   const focusIdentity = captureFocusIdentity();
-  if (queueMode === 'structures') selectedStructureId = rowId;
+  if (queueMode === 'structures') selectedShadowId = rowId;
   else selectedRadarId = rowId;
   evidenceExpanded = false;
   renderQueue(currentDocument);
@@ -1874,6 +1742,11 @@ if (typeof document.addEventListener === 'function') {
       activateOptionFilter(option.dataset.optionFilter);
       return;
     }
+    const shadowOption = target.closest('[data-shadow-option-filter]');
+    if (shadowOption) {
+      activateShadowOptionFilter(shadowOption.dataset.shadowOptionFilter);
+      return;
+    }
     if (target.closest('#active-only-toggle')) {
       toggleActiveOnly();
       return;
@@ -1902,11 +1775,6 @@ if (typeof document.addEventListener === 'function') {
       return;
     }
     const detailAction = target.closest('[data-detail-action]');
-    if (detailAction && detailAction.dataset.detailAction === 'shadow') {
-      const section = document.querySelector('[data-detail-section="shadow"]');
-      if (section && typeof section.scrollIntoView === 'function') section.scrollIntoView({block: 'start'});
-      return;
-    }
     if (detailAction && detailAction.dataset.detailAction === 'evidence') {
       const evidence = document.querySelector('[data-evidence-details]');
       if (evidence) {
@@ -1922,6 +1790,18 @@ if (typeof document.addEventListener === 'function') {
       return;
     }
     if (productMatrixOpen && !target.closest('#channel-rail')) setProductMatrixOpen(false);
+  });
+
+  document.addEventListener('change', event => {
+    if (event.target && event.target.id === 'shadow-expiry-filter') {
+      activateShadowExpiryFilter(event.target.value);
+    }
+  });
+
+  document.addEventListener('input', event => {
+    if (event.target && event.target.id === 'shadow-search') {
+      activateShadowSearch(event.target.value);
+    }
   });
 
   document.addEventListener('keydown', event => {

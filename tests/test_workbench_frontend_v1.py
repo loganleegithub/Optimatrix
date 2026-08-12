@@ -50,9 +50,9 @@ def test_opportunity_blotter_exposes_the_roadmap_without_fabricating_future_trut
     assert "身份不匹配" in JS
     assert "拒绝展示" in JS
     assert "Radar 线索与已结算结构分成两类队列" not in combined
-    assert "浏览器不按合约名拼接 Episode" in JS
-    assert "服务器未提供 V2 score packet" in JS
-    assert "浏览器不补算" in JS
+    assert "shadow_entry_identity" in JS
+    assert "short_leg && row.short_leg.instrument_name" in JS
+    assert "Control 留在离线研究面" in JS
     assert "A · 可执行 IV / RV 丰厚度" in JS
     assert "S · 可执行 bid-IV \u2212 同类型局部 mark-IV" in JS
     assert "T · 本到期 ATM mark-IV \u2212 下一到期 ATM mark-IV" in JS
@@ -65,8 +65,8 @@ def test_opportunity_blotter_preserves_public_only_read_only_boundaries() -> Non
 
     assert "PUBLIC SHADOW · READ ONLY · 非订单/成交" in HTML
     assert "只读发现信号 · 非交易指令 · 尚未形成 Shadow Entry" in JS
-    assert "不是到期 BTC 负债、精确最大损失或账户保证金" in JS
-    assert "不是实际账户 PnL" in JS
+    assert "不是订单、成交、账户持仓或实际 PnL" in JS
+    assert "不显示 0\uff1b继续承担退出或交割责任" in JS
     assert "actual_account_margin_availability !== 'UNKNOWN'" in JS
     assert "actual_account_margin_reason !== 'ACCOUNT_MARGIN_UNKNOWN'" in JS
     assert "const nativeUnit = documentValue.product.native_premium_currency" in JS
@@ -300,19 +300,16 @@ assert.equal(document.activeElement, trigger);
     assert completed.returncode == 0, completed.stderr
 
 
-def test_opportunity_blotter_maps_server_states_without_recomputing_strategy_truth() -> None:
+def test_shadow_book_maps_server_states_without_recomputing_strategy_truth() -> None:
     test_js = JS.replace(
         "syncThemeControl();\nupdateResponsiveDetailState();\nrefresh();\nsetInterval(refresh, 2000);",
-        "globalThis.__workbenchTest = { channelSnapshotState, latencyState, roadmapState, structureState, "
+        "globalThis.__workbenchTest = { channelSnapshotState, latencyState, roadmapState, "
         "radarState, radarReviewConstraint, radarConfirmationText, reasonCountsText, radarDetailMarkup, "
-        "orderedStructureRows, isStrongSignalRow, strongSignalRows, groupStrongSignalsByExpiry, "
+        "isStrongSignalRow, strongSignalRows, groupStrongSignalsByExpiry, "
         "signalStrikeBounds, signalXPercent, signalLaneLayout, signalMarkerMarkup, "
-        "signalLaneChartMarkup, "
-        "predicateMarginForFailure, "
-        "formatMargin, firstFailureSummary, structureJudgement, canonicalShadowMarkup, "
-        "canonicalShadowEntry, structureEntryFacts, structureIdentity, structureDetailMarkup, "
-        "shadowStructureRow, structureQueueRows, shadowTrackingPresentation, "
-        "structureDecisionMarkup, shadowTrackingEvidenceMarkup, postCloseAttemptText, "
+        "signalLaneChartMarkup, shadowBookRows, groupShadowBookRowsByExpiry, shadowBookIdentity, "
+        "shadowLifecyclePresentation, shadowResponsibilityIssue, shadowTerminalIssue, shadowNextDuty, shadowTriggerText, "
+        "shadowCloseEconomics, shadowBookRowMarkup, shadowDetailMarkup, postCloseAttemptText, "
         "validateDocument, reasonText, escapeHtml, runtimeStatusState };",
     )
     assert test_js != JS
@@ -406,15 +403,6 @@ for (const missingProjection of ['shadow_entries', 'positions', 'outcomes']) {{
   assert.throws(() => api.validateDocument(incomplete), /invalid workbench projection/);
 }}
 
-assert.deepEqual(api.structureState({{candidate_lifecycle: 'ADMITTED'}}),
-  {{key: 'SHADOW_TRACKING', label: 'Shadow 跟踪', tone: 'purple', priority: 0}});
-assert.equal(api.structureState({{
-  candidate_lifecycle: 'VALID', candidate_still_valid: true
-}}).key, 'CANDIDATE');
-assert.equal(api.structureState({{availability: 'UNKNOWN'}}).key, 'UNKNOWN');
-assert.equal(api.structureState({{availability: 'EVALUABLE', action: 'WATCH'}}).key, 'WATCH');
-assert.equal(api.structureState({{availability: 'EVALUABLE', action: 'CANDIDATE'}}).key,
-  'CANDIDATE_UNCONFIRMED');
 assert.equal(api.radarState({{
   instrument_name: 'LEADER', is_bucket_leader: true,
   clue_eligible_tte: true, clue_eligible_delta: true,
@@ -520,229 +508,160 @@ assert.match(meteredDetail, /<progress class="signal-meter" max="100" value="72"
 assert.match(meteredDetail, /<progress class="signal-meter" max="100" value="64"/);
 assert.doesNotMatch(meteredDetail, /style=/);
 
-const ordered = api.orderedStructureRows([
-  {{short_leg_instrument_name: 'A', availability: 'EVALUABLE', action: 'ABSTAIN'}},
-  {{short_leg_instrument_name: 'W', availability: 'EVALUABLE', action: 'WATCH'}},
-  {{short_leg_instrument_name: 'S', candidate_lifecycle: 'ADMITTED'}}
-]);
-assert.deepEqual(ordered.map(row => row.short_leg_instrument_name), ['S', 'W', 'A']);
-
-const row = {{
-  predicate_margin_vector: [{{
-    predicate: 'CREDIT_ABOVE_FUTURE_COST_RESERVE',
-    signed_margin: '-11.75',
-    unit: 'USD_EQUIVALENT',
-    passes: false
-  }}]
-}};
-const margin = api.predicateMarginForFailure(row, 'CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE');
-assert.equal(margin.signed_margin, '-11.75');
-assert.equal(api.formatMargin(margin), '-11.75 USD 等值');
-assert.equal(api.formatMargin({{signed_margin: '-0.0718', unit: 'FRACTION'}}), '-0.0718 比例');
-assert.deepEqual(api.firstFailureSummary({{
-  availability: 'UNKNOWN', failed_predicates: [], unknown_reasons: ['OPTION_BOOK_UNKNOWN']
-}}), {{label: '结构经济暂不可判断', margin: '期权簿不可确认'}});
-assert.match(api.structureJudgement({{
-  availability: 'NOT_EVALUATED', failed_predicates: []
-}}).blocker, /尚未进入/);
-assert.match(api.canonicalShadowMarkup({{
-  candidate_identity: 'candidate', candidate_lifecycle: 'INVALIDATED',
-  candidate_invalidation_reason: 'OPTION_BOOK_UNKNOWN'
-}}, {{shadow_entries: {{rows: []}}}}), /不再等待 admission/);
-assert.match(api.canonicalShadowMarkup({{
-  candidate_identity: 'candidate', candidate_lifecycle: 'VALID', candidate_still_valid: true
-}}, {{shadow_entries: {{rows: [{{
-  candidate_identity: 'candidate', shadow_entry_identity: null,
-  admission_refresh_terminal_outcome: 'UNKNOWN_CONSUMED',
-  admission_refresh_unknown_reasons: ['OPTION_BOOK_UNKNOWN']
-}}]}}}}), /已终结/);
-const admitted = {{
-  candidate_identity: 'candidate', candidate_lifecycle: 'ADMITTED',
-  availability: 'NOT_EVALUATED', native_net_entry_credit: null,
-  net_entry_credit_valuation: null, entry_valuation_index_price: null
-}};
-const matchingShadow = {{
-  candidate_identity: 'candidate', shadow_entry_identity: 'entry',
-  admission_refresh_terminal_outcome: 'ENTRY_EMITTED',
+const makeEntry = (identity, expiry, optionType = 'put') => ({{
+  candidate_identity: `candidate-${{identity}}`, shadow_entry_identity: identity,
+  admission_refresh_terminal_outcome: 'ENTRY_EMITTED', expiry_timestamp_ms: expiry,
+  option_type: optionType, short_strike_price: optionType === 'put' ? '64500' : '70000',
+  long_strike_price: optionType === 'put' ? '63000' : '71500',
   native_gross_entry_credit: '0.00029', native_entry_fee_reserve: '0.00004',
   native_net_entry_credit: '0.00025', simulated_entry_credit_valuation: '18.8206781',
   entry_valuation_index_price: '64898.89', target_quantity_btc: '0.1',
+  origin_runtime_identity: 'sha256:origin', current_segment_sequence: 0,
+  observation_quality: 'CONTINUOUS', gap_count: 0, qualification_eligible: true,
+  tracking_state: 'ACTIVE', post_close_attempt_state: 'NOT_SCHEDULED',
   entry_component_legs: [
-    {{canonical_leg_role: 'SHORT', action: 'SELL', instrument_name: 'BTC-11AUG26-64500-P'}},
-    {{canonical_leg_role: 'LONG', action: 'BUY', instrument_name: 'BTC-11AUG26-63000-P'}}
+    {{canonical_leg_role: 'SHORT', action: 'SELL', instrument_name: `BTC-13AUG26-${{optionType === 'put' ? '64500-P' : '70000-C'}}`}},
+    {{canonical_leg_role: 'LONG', action: 'BUY', instrument_name: `BTC-13AUG26-${{optionType === 'put' ? '63000-P' : '71500-C'}}`}}
   ]
-}};
-const shadowDocument = {{shadow_entries: {{rows: [matchingShadow]}}}};
-assert.equal(api.canonicalShadowEntry(admitted, shadowDocument), matchingShadow);
-assert.deepEqual(api.structureEntryFacts(admitted, shadowDocument), {{
-  source: 'SHADOW_ENTRY', status: 'ENTRY_EMITTED',
-  valuationIndex: '64898.89', targetQuantity: '0.1', nativeNetCredit: '0.00025',
-  nativeGrossCredit: '0.00029', nativeFeeReserve: '0.00004',
-  valuationGrossCredit: '18.8206781'
 }});
-assert.equal(api.structureIdentity({{
-  candidate_identity: 'candidate', underwriting_availability_evaluation_identity: 'changing-evaluation'
-}}), 'candidate');
-assert.equal(api.canonicalShadowEntry(admitted, {{shadow_entries: {{rows: [{{
-  ...matchingShadow, candidate_identity: 'different-candidate'
-}}]}}}}), null);
-const currentUnderwriting = {{
-  availability: 'NOT_EVALUATED', candidate_identity: null, candidate_lifecycle: null,
-  underwriting_availability_evaluation_identity: 'current-evaluation',
-  short_leg_instrument_name: 'BTC-11AUG26-64500-P',
-  long_leg_instrument_name: 'BTC-11AUG26-62000-P', failed_predicates: [],
-  predicate_margin_vector: [], unknown_reasons: []
-}};
-const queueDocument = {{
-  ...shadowDocument,
-  underwriting: {{rows: [currentUnderwriting]}},
-  product: {{native_premium_currency: 'BTC', valuation_currency: 'USD_EQUIVALENT'}},
-  positions: {{rows: []}}, outcomes: {{rows: []}}
-}};
-const queueRows = api.structureQueueRows(queueDocument);
-assert.equal(queueRows.length, 2);
-assert.equal(queueRows[0].queue_row_kind, 'SHADOW_ENTRY');
-assert.equal(api.structureIdentity(queueRows[0]), 'candidate');
-assert.equal(queueRows[0].short_leg_instrument_name, 'BTC-11AUG26-64500-P');
-assert.equal(queueRows[0].long_leg_instrument_name, 'BTC-11AUG26-63000-P');
-assert.equal(api.structureState(currentUnderwriting).key, 'NOT_EVALUATED');
-assert.equal(api.shadowTrackingEvidenceMarkup(matchingShadow), '');
-assert.doesNotMatch(api.structureDecisionMarkup(queueRows[0]), /观察有间隙/);
-const gappedShadow = {{
-  ...matchingShadow,
-  origin_runtime_identity: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-  current_segment_identity: null,
-  current_segment_sequence: null,
-  observation_quality: 'GAPPED', gap_count: 2,
-  qualification_eligible: false, tracking_state: 'RECOVERING',
-  post_close_attempt_state: 'ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS',
-  entry_fact_boundary: {{causal_seq: 4}},
-  entry_component_quote_source_refs: [
-    {{canonical_leg_role: 'SHORT', source_timestamp_ms: 1000}},
-    {{canonical_leg_role: 'LONG', source_timestamp_ms: 1001}}
-  ]
-}};
-const gappedDocument = {{
-  ...queueDocument,
-  shadow_entries: {{rows: [gappedShadow]}},
-  positions: {{rows: [{{
-    shadow_entry_identity: 'entry', position_action: 'UNKNOWN',
-    observation_quality: 'GAPPED', qualification_eligible: false,
-    primary_exit_rule: null, hard_close_countdown_interval_ms: null,
-    valid_shadow_close_opportunity: false
-  }}]}}
-}};
-const [gappedRow] = api.structureQueueRows(gappedDocument);
-assert.deepEqual(api.shadowTrackingPresentation(gappedRow), {{
-  label: '跨进程跟踪', note: '观察有间隙 · 不计入连续观察资格'
+const makePosition = (identity, lifecycle, overrides = {{}}) => ({{
+  shadow_entry_identity: identity, enrollment_kind: 'ADMITTED_SHADOW_TRADE',
+  position_lifecycle_state: lifecycle, position_action: lifecycle === 'MONITORING' ? 'HOLD' : 'CLOSE',
+  observation_quality: 'CONTINUOUS', qualification_eligible: true,
+  terminal_economics_eligible: lifecycle === 'TERMINAL', continuous_path_eligible: true,
+  exit_acquisition_eligible: lifecycle === 'TERMINAL',
+  primary_exit_rule: lifecycle === 'MONITORING' ? null : 'MAXIMUM_NET_LOSS_BOUNDARY_REACHED',
+  hard_close_countdown_interval_ms: {{lower_ms: 3600000, upper_ms: 3600000}},
+  close_quote_state: 'UNKNOWN', valid_shadow_close_opportunity: false, ...overrides
 }});
-assert.deepEqual(api.shadowTrackingPresentation({{
-  candidate_lifecycle: 'ADMITTED',
-  shadow_entry_projection: {{...matchingShadow, observation_quality: 'CONTINUOUS',
-    qualification_eligible: false}}
-}}), {{label: 'Shadow 跟踪', note: '不计入连续观察资格'}});
-assert.equal(api.structureState(gappedRow).key, 'SHADOW_TRACKING');
-assert.equal(api.structureState(gappedRow).tone, 'purple');
-const gappedDecision = api.structureDecisionMarkup(gappedRow);
-assert.match(gappedDecision, /跨进程跟踪/);
-assert.match(gappedDecision, /观察有间隙/);
-assert.match(gappedDecision, /不计入连续观察资格/);
-assert.doesNotMatch(gappedDecision, /tone-red|tone-amber|异常|阻塞/);
-assert.equal(api.postCloseAttemptText('NOT_SCHEDULED'), '尚未安排');
-assert.equal(api.postCloseAttemptText('SCHEDULED'), '已安排');
-assert.equal(api.postCloseAttemptText('TERMINAL'), '已终结');
+const makeOutcome = (identity, state = 'PENDING', overrides = {{}}) => ({{
+  shadow_entry_identity: identity, state, terminal_method: null,
+  public_quote_net_pnl_valuation: null, ...overrides
+}});
+const expiryOne = 1786579200000;
+const expiryTwo = expiryOne + 86400000;
+const entries = [
+  makeEntry('monitor', expiryTwo, 'call'), makeEntry('exit', expiryOne),
+  makeEntry('settlement', expiryOne), makeEntry('exited', expiryTwo),
+  makeEntry('settled', expiryTwo), makeEntry('terminal-unknown', expiryTwo),
+  {{...makeEntry('gapped', expiryOne), observation_quality: 'GAPPED', gap_count: 2,
+    qualification_eligible: false, current_segment_sequence: null,
+    post_close_attempt_state: 'ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS'}}
+];
+const positions = [
+  makePosition('monitor', 'MONITORING'),
+  makePosition('exit', 'EXIT_ACQUIRING', {{
+    primary_exit_rule: 'PLATFORM_OR_SOURCE_DISCONTINUITY', observation_quality: 'GAPPED',
+    qualification_eligible: false, continuous_path_eligible: false
+  }}),
+  makePosition('settlement', 'SETTLEMENT_PENDING', {{primary_exit_rule: 'SETTLEMENT_OR_EXPIRY_BOUNDARY_REACHED'}}),
+  makePosition('exited', 'TERMINAL'), makePosition('settled', 'TERMINAL'),
+  makePosition('terminal-unknown', 'TERMINAL'),
+  makePosition('gapped', 'EXIT_ACQUIRING', {{
+    observation_quality: 'GAPPED', qualification_eligible: false, continuous_path_eligible: false,
+    valid_shadow_close_opportunity: true, current_close_debit_valuation: '9.25',
+    projected_shadow_pnl_valuation: '7.50'
+  }})
+];
+const outcomes = [
+  makeOutcome('monitor'), makeOutcome('exit'), makeOutcome('settlement'),
+  makeOutcome('exited', 'EXITED_KNOWN', {{terminal_method: 'MARKET_EXIT', public_quote_net_pnl_valuation: '8.25'}}),
+  makeOutcome('settled', 'SETTLED_KNOWN', {{terminal_method: 'CONTRACT_SETTLEMENT', public_quote_net_pnl_valuation: '-2.00'}}),
+  makeOutcome('terminal-unknown', 'TERMINAL_UNKNOWN', {{terminal_method: 'TERMINAL_UNKNOWN'}}),
+  makeOutcome('gapped')
+];
+const shadowDocument = {{
+  shadow_entries: {{rows: entries}}, positions: {{rows: positions}}, outcomes: {{rows: outcomes}},
+  underwriting: {{rows: [{{candidate_identity: 'must-not-render'}}]}},
+  product: {{native_premium_currency: 'BTC', valuation_currency: 'USD_EQUIVALENT'}}
+}};
+const bookRows = api.shadowBookRows(shadowDocument);
+assert.equal(bookRows.length, 7);
+assert.equal(bookRows.some(value => value.shadow_entry_identity === 'must-not-render'), false);
+assert.deepEqual(api.groupShadowBookRowsByExpiry(bookRows).map(value => value.rows.length), [3, 4]);
+const byId = Object.fromEntries(bookRows.map(value => [value.shadow_entry_identity, value]));
+assert.equal(api.shadowLifecyclePresentation(byId.monitor).label, '观察中');
+assert.equal(api.shadowNextDuty(byId.monitor), '继续监控九条退出谓词');
+assert.equal(api.shadowLifecyclePresentation(byId.exit).label, '退出中');
+assert.equal(api.shadowTriggerText(byId.exit), '历史 CLOSE 已锁存');
+assert.equal(api.shadowNextDuty(byId.exit), '继续寻找首组合格退出报价');
+assert.equal(api.shadowLifecyclePresentation(byId.settlement).label, '等待交割');
+assert.equal(api.shadowNextDuty(byId.settlement), '等待官方 delivery price');
+assert.equal(api.shadowLifecyclePresentation(byId.exited).label, '已退出');
+assert.equal(api.shadowLifecyclePresentation(byId.settled).label, '已结算');
+assert.equal(api.shadowLifecyclePresentation(byId['terminal-unknown']).label, '终端经济未知');
+assert.deepEqual(api.shadowCloseEconomics(byId['terminal-unknown']),
+  {{kind: 'TERMINAL_UNKNOWN', pnl: null, debit: null}});
+const terminalUnknownDetail = api.shadowDetailMarkup(byId['terminal-unknown'], shadowDocument);
+assert.match(terminalUnknownDetail, /持仓责任已终结/);
+assert.doesNotMatch(terminalUnknownDetail, /继续承担退出或交割责任/);
+assert.deepEqual(api.shadowCloseEconomics(byId.gapped), {{kind: 'CURRENT_QUOTE', pnl: '7.50', debit: '9.25'}});
+assert.equal(api.shadowLifecyclePresentation(byId.gapped).label, '退出中');
+const gappedDetail = api.shadowDetailMarkup(byId.gapped, shadowDocument);
+assert.match(gappedDetail, /旧尝试状态未知 · 当前 Segment 持续承担退出责任/);
+assert.match(gappedDetail, /Observation Gap 只描述路径质量/);
+assert.match(gappedDetail, /不终止退出责任/);
+assert.equal(gappedDetail.includes('+7.5 USD_EQUIVALENT'), true);
+const pendingDetail = api.shadowDetailMarkup(byId.exit, shadowDocument);
+assert.match(pendingDetail, /不显示 0/);
+assert.match(pendingDetail, /继续承担退出或交割责任/);
+assert.equal(pendingDetail.includes('平台/行情源不连续'), true);
+assert.equal(pendingDetail.includes('历史首次 CLOSE 已锁存'), true);
+const settledDetail = api.shadowDetailMarkup(byId.settled, shadowDocument);
+assert.match(settledDetail, /SETTLED_KNOWN · CONTRACT_SETTLEMENT/);
+assert.match(settledDetail, /-2 USD_EQUIVALENT/);
+const missingPositionDocument = {{
+  ...shadowDocument, shadow_entries: {{rows: [makeEntry('missing-position', expiryOne)]}},
+  positions: {{rows: []}}, outcomes: {{rows: [makeOutcome('missing-position')]}}
+}};
+const [missingPosition] = api.shadowBookRows(missingPositionDocument);
+assert.equal(api.shadowResponsibilityIssue(missingPosition), 'MISSING_POSITION_PROJECTION');
+assert.equal(api.shadowLifecyclePresentation(missingPosition).label, '关联待恢复');
+assert.match(api.shadowDetailMarkup(missingPosition, missingPositionDocument), /Entry 不删除/);
+const missingTerminalDocument = {{
+  ...shadowDocument, shadow_entries: {{rows: [makeEntry('missing-terminal', expiryOne)]}},
+  positions: {{rows: [makePosition('missing-terminal', 'TERMINAL')]}}, outcomes: {{rows: []}}
+}};
+const [missingTerminal] = api.shadowBookRows(missingTerminalDocument);
+assert.equal(api.shadowTerminalIssue(missingTerminal), 'MISSING_TERMINAL_OUTCOME_PROJECTION');
+assert.equal(api.shadowLifecyclePresentation(missingTerminal).label, '终端结果待恢复');
+assert.equal(api.shadowNextDuty(missingTerminal), '恢复唯一终端 Outcome 投影');
+assert.match(api.shadowDetailMarkup(missingTerminal, missingTerminalDocument), /不推断退出方式或经济结果/);
+const duplicateTerminalDocument = {{
+  ...shadowDocument, shadow_entries: {{rows: [makeEntry('duplicate-terminal', expiryOne)]}},
+  positions: {{rows: [makePosition('duplicate-terminal', 'TERMINAL')]}},
+  outcomes: {{rows: [
+    makeOutcome('duplicate-terminal', 'EXITED_KNOWN', {{terminal_method: 'MARKET_EXIT'}}),
+    makeOutcome('duplicate-terminal', 'SETTLED_KNOWN', {{terminal_method: 'CONTRACT_SETTLEMENT'}})
+  ]}}
+}};
+const [duplicateTerminal] = api.shadowBookRows(duplicateTerminalDocument);
+assert.equal(api.shadowTerminalIssue(duplicateTerminal), 'DUPLICATE_OUTCOME_IDENTITY');
+assert.equal(api.shadowLifecyclePresentation(duplicateTerminal).label, '终端结果待恢复');
+const duplicateEntry = makeEntry('duplicate-entry', expiryOne);
+const duplicateDocument = {{
+  ...shadowDocument, shadow_entries: {{rows: [duplicateEntry, duplicateEntry]}},
+  positions: {{rows: [makePosition('duplicate-entry', 'EXIT_ACQUIRING')]}},
+  outcomes: {{rows: [makeOutcome('duplicate-entry')]}}
+}};
+const duplicateRows = api.shadowBookRows(duplicateDocument);
+assert.equal(duplicateRows.length, 2);
+assert.notEqual(api.shadowBookIdentity(duplicateRows[0]), api.shadowBookIdentity(duplicateRows[1]));
+assert.equal(api.shadowLifecyclePresentation(duplicateRows[0]).label, '关联待恢复');
+const displayOnlyIssueDocument = {{
+  ...shadowDocument, shadow_entries: {{rows: [{{...makeEntry('display-issue', expiryOne), entry_component_legs: []}}]}},
+  positions: {{rows: [makePosition('display-issue', 'EXIT_ACQUIRING')]}},
+  outcomes: {{rows: [makeOutcome('display-issue')]}}
+}};
+const [displayOnlyIssue] = api.shadowBookRows(displayOnlyIssueDocument);
+assert.equal(displayOnlyIssue.issues.includes('INVALID_ENTRY_COMPONENT_ROLES'), true);
+assert.equal(api.shadowLifecyclePresentation(displayOnlyIssue).label, '退出中');
+assert.equal(api.shadowNextDuty(displayOnlyIssue), '继续寻找首组合格退出报价');
+const rowMarkup = api.shadowBookRowMarkup(byId.exit, 0, shadowDocument);
+assert.equal(rowMarkup.includes('Public Shadow · 非订单/成交'), true);
+assert.doesNotMatch(rowMarkup, /style=/);
 assert.equal(api.postCloseAttemptText('ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS'),
   '旧尝试状态未知 · 当前 Segment 持续承担退出责任');
-const trackingEvidence = api.shadowTrackingEvidenceMarkup(gappedShadow);
-assert.match(trackingEvidence, /跨进程跟踪/);
-assert.match(trackingEvidence, /观察有间隙/);
-assert.match(trackingEvidence, /不计入连续观察资格/);
-assert.match(trackingEvidence, /sha256:aaaa/);
-assert.doesNotMatch(trackingEvidence, /#2/);
-assert.match(trackingEvidence, /入场 causal seq/);
-assert.match(trackingEvidence, />4</);
-assert.match(trackingEvidence, /双腿源时间/);
-assert.match(trackingEvidence, new RegExp('1000 / 1001'));
-assert.match(trackingEvidence, /旧尝试状态未知 · 当前 Segment 持续承担退出责任/);
-assert.doesNotMatch(trackingEvidence, /callout blocker/);
-const gappedShadowMarkup = api.canonicalShadowMarkup(gappedRow, gappedDocument);
-assert.match(gappedShadowMarkup, /跨进程跟踪/);
-assert.match(gappedShadowMarkup, /UNKNOWN/);
-const gappedDetail = api.structureDetailMarkup(gappedRow, gappedDocument);
-assert.match(gappedDetail, /观察有间隙/);
-assert.match(gappedDetail, /不计入连续观察资格/);
-assert.match(gappedDetail, /0\\.00025/);
-assert.match(gappedDetail, /18\\.82/);
-const duplicateDecorated = api.structureQueueRows({{
-  ...queueDocument, underwriting: {{rows: [admitted]}}
-}});
-assert.equal(duplicateDecorated.length, 1);
-const secondShadow = {{...matchingShadow, candidate_identity: 'candidate-2', shadow_entry_identity: 'entry-2'}};
-assert.equal(api.structureQueueRows({{
-  ...queueDocument, underwriting: {{rows: []}}, shadow_entries: {{rows: [matchingShadow, secondShadow]}}
-}}).length, 2);
-const repeatedCandidateShadow = {{
-  ...matchingShadow, shadow_entry_identity: 'entry-duplicate-candidate',
-  native_net_entry_credit: '0.00031'
-}};
-const repeatedCandidateDocument = {{
-  ...queueDocument, underwriting: {{rows: []}},
-  shadow_entries: {{rows: [matchingShadow, repeatedCandidateShadow]}}
-}};
-const repeatedCandidateRows = api.structureQueueRows(repeatedCandidateDocument);
-assert.equal(repeatedCandidateRows.length, 2);
-assert.deepEqual(repeatedCandidateRows.map(value => api.structureIdentity(value)).sort(),
-  ['entry', 'entry-duplicate-candidate']);
-for (const value of repeatedCandidateRows) {{
-  assert.equal(api.structureState(value).key, 'UNKNOWN');
-  assert.equal(api.canonicalShadowEntry(value, repeatedCandidateDocument), value.shadow_entry_projection);
-}}
-assert.equal(api.structureEntryFacts(
-  repeatedCandidateRows.find(value => value.shadow_entry_identity === 'entry-duplicate-candidate'),
-  repeatedCandidateDocument
-).nativeNetCredit, '0.00031');
-const missingCandidateShadow = {{...matchingShadow, candidate_identity: null, shadow_entry_identity: 'entry-no-candidate'}};
-const missingCandidateDocument = {{
-  ...queueDocument, underwriting: {{rows: []}}, shadow_entries: {{rows: [missingCandidateShadow]}}
-}};
-const [missingCandidateRow] = api.structureQueueRows(missingCandidateDocument);
-assert.equal(api.structureState(missingCandidateRow).key, 'UNKNOWN');
-assert.equal(api.structureIdentity(missingCandidateRow), 'entry-no-candidate');
-assert.match(api.structureDetailMarkup(missingCandidateRow, missingCandidateDocument), /Shadow 投影关联异常/);
-const invalidIdentityShadow = {{
-  ...matchingShadow, candidate_identity: {{value: 'candidate'}}, shadow_entry_identity: 17
-}};
-const invalidIdentityDocument = {{
-  ...queueDocument, underwriting: {{rows: []}}, shadow_entries: {{rows: [invalidIdentityShadow]}}
-}};
-const [invalidIdentityRow] = api.structureQueueRows(invalidIdentityDocument);
-assert.equal(api.structureState(invalidIdentityRow).key, 'UNKNOWN');
-assert.equal(api.structureIdentity(invalidIdentityRow), 'shadow-projection-0');
-assert.equal(api.canonicalShadowEntry(invalidIdentityRow, invalidIdentityDocument), null);
-const invalidLegsShadow = {{
-  ...matchingShadow, shadow_entry_identity: 'entry-invalid-legs', candidate_identity: 'candidate-invalid-legs',
-  entry_component_legs: [
-    {{canonical_leg_role: 'SHORT', action: 'BUY', instrument_name: 'BTC-11AUG26-64500-P'}},
-    {{canonical_leg_role: 'LONG', action: 'SELL', instrument_name: 'BTC-11AUG26-63000-P'}}
-  ]
-}};
-const invalidLegsDocument = {{
-  ...queueDocument, underwriting: {{rows: []}}, shadow_entries: {{rows: [invalidLegsShadow]}}
-}};
-const [invalidLegsRow] = api.structureQueueRows(invalidLegsDocument);
-const invalidLegsDetail = api.structureDetailMarkup(invalidLegsRow, invalidLegsDocument);
-assert.equal(api.structureState(invalidLegsRow).key, 'UNKNOWN');
-assert.match(invalidLegsDetail, new RegExp('拒绝由浏览器补写 SELL/BUY'));
-const shadowDetail = api.structureDetailMarkup(queueRows[0], queueDocument);
-assert.match(shadowDetail, /ENTRY_EMITTED/);
-assert.match(shadowDetail, /64898\\.89/);
-assert.match(shadowDetail, /0\\.00025/);
-assert.match(shadowDetail, /18\\.82/);
-assert.match(shadowDetail, /费前信用/);
-assert.match(shadowDetail, /BTC-11AUG26-64500-P/);
-assert.match(shadowDetail, /BTC-11AUG26-63000-P/);
-assert.doesNotMatch(shadowDetail, /NOT_EVALUATED/);
-assert.doesNotMatch(shadowDetail, /跨进程跟踪|观察有间隙|不计入连续观察资格/);
 assert.equal(api.reasonText('CREDIT_NOT_ABOVE_FUTURE_COST_RESERVE'), '净权利金未覆盖未来成本准备');
 assert.equal(api.escapeHtml('<script>&'), '&lt;script&gt;&amp;');
 """
@@ -760,8 +679,8 @@ def test_opportunity_blotter_adds_keyboard_table_and_dialog_accessibility() -> N
     assert 'class="skip-link"' in HTML
     assert 'id="queue-workspace"' in HTML
     assert 'role="table"' in HTML
-    assert 'role="rowgroup"' in HTML
-    assert 'scope="col"' in JS
+    assert 'role="rowgroup"' in JS
+    assert 'role="columnheader"' in JS
     assert "aria-pressed=" in HTML
     assert 'aria-labelledby="detail-title"' in HTML
     assert 'aria-label="关闭详情"' in HTML
