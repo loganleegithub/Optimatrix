@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
@@ -26,6 +27,120 @@ from short_vol_underwriting.domain import (
 )
 from short_vol_underwriting.identity import canonical_identity, require_identity
 from short_vol_underwriting.model import FactBoundary, PredicateTruth
+
+EXIT_ACQUISITION_PROFILE_VERSION = 1
+EXIT_ACQUISITION_SELECTION_RULE = "FIRST_ELIGIBLE_OBSERVED_PAIRED_SAMPLE"
+DEFAULT_EXIT_ACQUISITION_RETRY_INTERVAL_MS = 30_000
+
+
+@dataclass(frozen=True)
+class ExitAcquisitionProfile:
+    """The finite observation protocol frozen before the first exit request."""
+
+    profile_identity: str
+    version: int
+    selection_rule: str
+    retry_interval_ms: int
+    response_budget_ms: int
+    maximum_source_skew_ms: int
+    maximum_receive_skew_ms: int
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        response_budget_ms: int,
+        maximum_source_skew_ms: int,
+        maximum_receive_skew_ms: int,
+        retry_interval_ms: int = DEFAULT_EXIT_ACQUISITION_RETRY_INTERVAL_MS,
+    ) -> ExitAcquisitionProfile:
+        values = (
+            EXIT_ACQUISITION_PROFILE_VERSION,
+            EXIT_ACQUISITION_SELECTION_RULE,
+            retry_interval_ms,
+            response_budget_ms,
+            maximum_source_skew_ms,
+            maximum_receive_skew_ms,
+        )
+        identity = canonical_identity("ExitAcquisitionProfileIdentity", *values)
+        return cls(identity, *values)
+
+    @classmethod
+    def from_object(cls, value: Mapping[str, object]) -> ExitAcquisitionProfile:
+        expected_keys = {
+            "profile_identity",
+            "version",
+            "selection_rule",
+            "retry_interval_ms",
+            "response_budget_ms",
+            "maximum_source_skew_ms",
+            "maximum_receive_skew_ms",
+        }
+        if set(value) != expected_keys:
+            raise ValueError("exit acquisition profile shape is invalid")
+        members: list[int] = []
+        for field_name in (
+            "version",
+            "retry_interval_ms",
+            "response_budget_ms",
+            "maximum_source_skew_ms",
+            "maximum_receive_skew_ms",
+        ):
+            member = value.get(field_name)
+            if isinstance(member, bool) or not isinstance(member, int) or member <= 0:
+                raise ValueError(f"{field_name} must be a positive integer")
+            members.append(member)
+        version, retry, response, source_skew, receive_skew = members
+        selection_rule = value.get("selection_rule")
+        if version != EXIT_ACQUISITION_PROFILE_VERSION:
+            raise ValueError("exit acquisition profile version is unsupported")
+        if selection_rule != EXIT_ACQUISITION_SELECTION_RULE:
+            raise ValueError("exit acquisition selection rule is unsupported")
+        profile = cls.create(
+            retry_interval_ms=retry,
+            response_budget_ms=response,
+            maximum_source_skew_ms=source_skew,
+            maximum_receive_skew_ms=receive_skew,
+        )
+        if value.get("profile_identity") != profile.profile_identity:
+            raise ValueError("exit acquisition profile identity mismatch")
+        return profile
+
+    def as_object(self) -> dict[str, object]:
+        return {
+            "profile_identity": self.profile_identity,
+            "version": self.version,
+            "selection_rule": self.selection_rule,
+            "retry_interval_ms": self.retry_interval_ms,
+            "response_budget_ms": self.response_budget_ms,
+            "maximum_source_skew_ms": self.maximum_source_skew_ms,
+            "maximum_receive_skew_ms": self.maximum_receive_skew_ms,
+        }
+
+
+def exit_acquisition_sample_identity(
+    *,
+    shadow_entry_identity: str,
+    first_close_action_identity: str,
+    profile_identity: str | None,
+    component_pair_identity: str,
+    boundary: FactBoundary,
+) -> str:
+    """Identify the first eligible sample without claiming continuous market priority."""
+
+    require_identity(shadow_entry_identity, "shadow_entry_identity")
+    require_identity(first_close_action_identity, "first_close_action_identity")
+    if profile_identity is not None:
+        require_identity(profile_identity, "profile_identity")
+    require_identity(component_pair_identity, "component_pair_identity")
+    return canonical_identity(
+        "ExitAcquisitionObservedSampleIdentity",
+        shadow_entry_identity,
+        first_close_action_identity,
+        profile_identity,
+        component_pair_identity,
+        boundary.as_object(),
+    )
 
 
 class CloseQuoteState(StrEnum):

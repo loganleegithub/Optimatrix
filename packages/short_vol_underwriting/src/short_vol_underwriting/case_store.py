@@ -26,6 +26,10 @@ from short_vol_radar.score import (
     validate_radar_score_packet,
 )
 
+from short_vol_underwriting.close import (
+    ExitAcquisitionProfile,
+    exit_acquisition_sample_identity,
+)
 from short_vol_underwriting.constants import POSITION_CLOSE_REASONS
 from short_vol_underwriting.control import (
     radar_score_control_batch_identity,
@@ -35,11 +39,13 @@ from short_vol_underwriting.control import (
 )
 from short_vol_underwriting.domain import (
     UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
+    ContractSettlementEconomics,
     EntryEconomics,
     EntryTerms,
     PositionDecision,
     SourceFact,
     UnderwritingThresholdMargins,
+    compute_contract_settlement_economics,
 )
 from short_vol_underwriting.evidence import RuntimeBindings, ShadowStateStore
 from short_vol_underwriting.identity import (
@@ -55,6 +61,11 @@ from short_vol_underwriting.model import (
     PositionDecisionRecoverySeed,
 )
 from short_vol_underwriting.policy import PolicyChain
+from short_vol_underwriting.settlement import (
+    DeliveryPriceWitness,
+    contract_settlement_rule_identity,
+    deribit_option_delivery_fee_rate,
+)
 
 SHADOW_CASE_SCHEMA_VERSION = 5
 OPENED_KIND = "SHADOW_CASE_OPENED"
@@ -116,6 +127,7 @@ class ShadowCaseReadStatus(StrEnum):
 
 class ShadowCaseSegmentStatus(StrEnum):
     OPEN = "OPEN"
+    TERMINATED_BY_OUTCOME = "TERMINATED_BY_OUTCOME"
     CENSORED_AT_STOP = "CENSORED_AT_STOP"
     CENSORED_AT_FAILURE = "CENSORED_AT_FAILURE"
     INCOMPLETE_UNCLEAN_EXIT = "INCOMPLETE_UNCLEAN_EXIT"
@@ -162,6 +174,7 @@ class RecoverableShadowEntry:
     first_close_state: str
     attempt_state: str
     entry_payload: Mapping[str, object]
+    exit_acquisition_profile: ExitAcquisitionProfile | None = None
     enrollment_kind: str = "ADMITTED_SHADOW_TRADE"
 
     @property
@@ -301,6 +314,7 @@ class ShadowCaseStore:
                 opened=opened,
                 segments=segments,
                 value=outcome,
+                first_close=first_close,
             )
             if outcome.get("terminal_state") in {
                 "MATURE_KNOWN",
@@ -313,6 +327,7 @@ class ShadowCaseStore:
                     "position_action_identity"
                 ):
                     raise ShadowCaseStoreError("known Outcome first CLOSE identity mismatch")
+            segments = _project_terminal_segment(segments, outcome)
         status = (
             ShadowCaseReadStatus.COMPLETE
             if outcome is not None
@@ -373,6 +388,7 @@ class ShadowCaseStore:
                     opened=opened,
                     segments=segments,
                     value=outcome,
+                    first_close=first_close,
                 )
             else:
                 _validate_followup(
@@ -393,11 +409,13 @@ class ShadowCaseStore:
                     "position_action_identity"
                 ):
                     raise ShadowCaseStoreError("known Outcome first CLOSE identity mismatch")
+            if segments:
+                segments = _project_terminal_segment(segments, outcome)
         status = (
             ShadowCaseReadStatus.COMPLETE
             if outcome is not None
             else ShadowCaseReadStatus.OPEN
-            if runtime_active or segments
+            if segments
             else ShadowCaseReadStatus.INCOMPLETE_UNCLEAN_EXIT
         )
         return ShadowCaseRead(status, opened, first_close, outcome, segments)
@@ -881,6 +899,16 @@ class ShadowCaseStore:
         if case.outcome is not None or not case.segments:
             raise ShadowCaseStoreError("first CLOSE requires one active Observation Segment")
         segment = case.segments[-1]
+        profile = _mapping(
+            payload.get("exit_acquisition_profile"),
+            "exit_acquisition_profile",
+        )
+        try:
+            parsed_profile = ExitAcquisitionProfile.from_object(profile)
+        except ValueError as exc:
+            raise ShadowCaseStoreError("first CLOSE acquisition profile is invalid") from exc
+        if parsed_profile != _position_exit_acquisition_profile(self.policies):
+            raise ShadowCaseStoreError("first CLOSE acquisition profile does not match Policy")
         record = _normalized_mapping(
             {
                 "record_kind": FIRST_CLOSE_KIND,
@@ -891,6 +919,8 @@ class ShadowCaseStore:
                 "segment_sequence": segment.sequence,
                 "segment_identity": segment.opened.get("segment_identity"),
                 "transition": "FIRST_CLOSE_INTENT_LATCHED",
+                "first_close_contract_version": 2,
+                "exit_acquisition_profile": profile,
                 "first_close_fact_boundary": value.get("fact_boundary"),
                 "position_action_identity": action_identity,
                 "primary_close_reason": payload.get("primary_close_reason"),
@@ -1017,7 +1047,12 @@ class ShadowCaseStore:
             "official_delivery_price_source_ref": payload.get("official_delivery_price_source_ref"),
             "delivery_price_usdc_per_btc": payload.get("delivery_price_usdc_per_btc"),
             "delivery_fee_rate_fraction": payload.get("delivery_fee_rate_fraction"),
+            "contract_settlement_rule_identity": payload.get("contract_settlement_rule_identity"),
+            "exit_acquisition_profile": payload.get("exit_acquisition_profile"),
+            "exit_acquisition_sample_identity": payload.get("exit_acquisition_sample_identity"),
             "close_component_pair_identity": payload.get("close_component_pair_identity"),
+            "close_component_pair_timing": payload.get("close_component_pair_timing"),
+            "close_component_pair_limits": payload.get("close_component_pair_limits"),
             "close_component_quote_source_refs": payload.get("close_component_quote_source_refs"),
             "close_component_legs": _component_legs_for_schema(
                 payload.get("close_component_legs"),
@@ -1027,13 +1062,22 @@ class ShadowCaseStore:
             "non_claims": payload.get("non_claims"),
         }
         outcome_contract_version = payload.get("outcome_contract_version")
-        if outcome_contract_version != 2:
+        if outcome_contract_version not in {2, 3}:
             for field in (
                 "outcome_contract_version",
                 "terminal_method",
                 "official_delivery_price_source_ref",
                 "delivery_price_usdc_per_btc",
                 "delivery_fee_rate_fraction",
+            ):
+                outcome_record.pop(field, None)
+        if outcome_contract_version != 3:
+            for field in (
+                "contract_settlement_rule_identity",
+                "exit_acquisition_profile",
+                "exit_acquisition_sample_identity",
+                "close_component_pair_timing",
+                "close_component_pair_limits",
             ):
                 outcome_record.pop(field, None)
         outcome_record["native_outcome_economics"] = {
@@ -1071,8 +1115,11 @@ class ShadowCaseStore:
                 "segment_identity": segment.opened.get("segment_identity"),
                 "observation_quality": segment.opened.get("observation_quality"),
                 "gap_count": segment.opened.get("gap_count"),
-                "qualification_eligible": segment.opened.get("qualification_eligible"),
             }
+            if outcome_contract_version != 3:
+                segment_projection["qualification_eligible"] = segment.opened.get(
+                    "qualification_eligible"
+                )
             if outcome_contract_version == 2:
                 segment_projection.update(
                     {
@@ -1095,6 +1142,7 @@ class ShadowCaseStore:
                 opened=opened,
                 segments=producing_case.segments,
                 value=record,
+                first_close=producing_case.first_close,
             )
         else:
             _validate_followup(
@@ -1200,12 +1248,7 @@ class ShadowCaseStore:
                     raise ShadowCaseStoreError("Observation Segment predecessor state mismatch")
             if stored_closed is not None:
                 status = ShadowCaseSegmentStatus(str(stored_closed.get("terminal_state")))
-            elif (
-                runtime_active
-                and index == len(raw_segments) - 1
-                and stored_segment_opened.get("code_identity") == self.bindings.code_identity
-                and stored_segment_opened.get("runtime_identity") == self.bindings.runtime_identity
-            ):
+            elif runtime_active and index == len(raw_segments) - 1:
                 status = ShadowCaseSegmentStatus.OPEN
             else:
                 status = ShadowCaseSegmentStatus.INCOMPLETE_UNCLEAN_EXIT
@@ -1311,6 +1354,8 @@ class ShadowCaseStore:
             "segment_sequence",
             "segment_identity",
             "transition",
+            "first_close_contract_version",
+            "exit_acquisition_profile",
             "scheduled_post_close_attempt_identity",
             "request_id_or_marker",
             "execution_model",
@@ -1362,7 +1407,25 @@ class ShadowCaseStore:
             }
             if any(field in value for field in absent):
                 raise ShadowCaseStoreError("first CLOSE intent carries execution-attempt fields")
+            version = value.get("first_close_contract_version")
+            profile_value = value.get("exit_acquisition_profile")
+            if version is None and profile_value is None:
+                return
+            if version != 2:
+                raise ShadowCaseStoreError("first CLOSE contract version is unsupported")
+            try:
+                parsed_profile = ExitAcquisitionProfile.from_object(
+                    _mapping(profile_value, "exit_acquisition_profile")
+                )
+            except ValueError as exc:
+                raise ShadowCaseStoreError("first CLOSE acquisition profile is invalid") from exc
+            if parsed_profile != _position_exit_acquisition_profile(self.policies):
+                raise ShadowCaseStoreError("first CLOSE acquisition profile does not match Policy")
             return
+        if any(
+            field in value for field in ("first_close_contract_version", "exit_acquisition_profile")
+        ):
+            raise ShadowCaseStoreError("legacy first CLOSE attempt carries acquisition profile")
         schedule_boundary = FactBoundary.from_object(
             _boundary(value.get("schedule_fact_boundary"), "schedule_fact_boundary")
         )
@@ -1404,6 +1467,7 @@ class ShadowCaseStore:
         opened: Mapping[str, object],
         segments: tuple[ShadowCaseSegmentRead, ...],
         value: Mapping[str, object],
+        first_close: Mapping[str, object] | None,
     ) -> None:
         extension_fields = {
             "product_spec_identity",
@@ -1436,15 +1500,38 @@ class ShadowCaseStore:
         }:
             raise ShadowCaseStoreError("stable admitted Outcome must be mature")
         _validate_outcome_economics(opened, legacy)
-        for field in ("observation_quality", "gap_count", "qualification_eligible"):
+        for field in ("observation_quality", "gap_count"):
             if value.get(field) != segment.opened.get(field):
                 raise ShadowCaseStoreError(f"Outcome Segment projection mismatch: {field}")
-        if (
-            value.get("observation_quality") == "GAPPED"
-            and value.get("qualification_eligible") is not False
-        ):
-            raise ShadowCaseStoreError("gapped Outcome cannot be qualification eligible")
-        if value.get("outcome_contract_version") == 2:
+        outcome_contract_version = value.get("outcome_contract_version")
+        cohort_projection_fields = {
+            "qualification_eligible",
+            "terminal_economics_eligible",
+            "continuous_path_eligible",
+            "exit_acquisition_eligible",
+        }
+        if outcome_contract_version == 3:
+            if any(field in value for field in cohort_projection_fields):
+                raise ShadowCaseStoreError("version-3 Outcome persists online Cohort membership")
+            if first_close is None:
+                raise ShadowCaseStoreError("version-3 Outcome lacks its first CLOSE")
+            profile_value = value.get("exit_acquisition_profile")
+            _optional_exit_acquisition_profile(profile_value)
+            if profile_value != first_close.get("exit_acquisition_profile"):
+                raise ShadowCaseStoreError(
+                    "Outcome acquisition profile does not match its first CLOSE"
+                )
+        else:
+            if value.get("qualification_eligible") != segment.opened.get("qualification_eligible"):
+                raise ShadowCaseStoreError(
+                    "Outcome Segment projection mismatch: qualification_eligible"
+                )
+            if (
+                value.get("observation_quality") == "GAPPED"
+                and value.get("qualification_eligible") is not False
+            ):
+                raise ShadowCaseStoreError("gapped Outcome cannot be qualification eligible")
+        if outcome_contract_version == 2:
             expected_terminal = value.get("terminal_state") in {
                 "EXITED_KNOWN",
                 "SETTLED_KNOWN",
@@ -2155,6 +2242,25 @@ def _record_segment(
     return segment
 
 
+def _project_terminal_segment(
+    segments: tuple[ShadowCaseSegmentRead, ...],
+    outcome: Mapping[str, object],
+) -> tuple[ShadowCaseSegmentRead, ...]:
+    """Project a valid Outcome as the terminal boundary of its producing Segment."""
+
+    producing = _record_segment(segments, outcome)
+    if producing.closed is not None:
+        raise ShadowCaseStoreError("Outcome cannot terminate an already closed Segment")
+    projected = list(segments)
+    projected[producing.sequence] = ShadowCaseSegmentRead(
+        sequence=producing.sequence,
+        status=ShadowCaseSegmentStatus.TERMINATED_BY_OUTCOME,
+        opened=producing.opened,
+        closed=None,
+    )
+    return tuple(projected)
+
+
 def _validate_segment_bound_followup(
     opened: Mapping[str, object],
     segment_opened: Mapping[str, object],
@@ -2293,6 +2399,11 @@ def _recoverable_projection(
         if effective_first_close is not None
         else None
     )
+    exit_acquisition_profile = (
+        _recoverable_exit_acquisition_profile(effective_first_close)
+        if effective_first_close is not None
+        else None
+    )
     first_close_state = "LATCHED" if effective_first_close is not None else "NOT_LATCHED"
     attempt_state = (
         "ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS"
@@ -2373,6 +2484,7 @@ def _recoverable_projection(
         first_close_decision=first_close_decision,
         first_close_state=first_close_state,
         attempt_state=attempt_state,
+        exit_acquisition_profile=exit_acquisition_profile,
         entry_payload=_freeze_mapping(entry_payload),
         enrollment_kind=enrollment_kind,
     )
@@ -2581,6 +2693,19 @@ def _recoverable_first_close(value: Mapping[str, object]) -> PositionDecision:
             ),
         ),
     )
+
+
+def _recoverable_exit_acquisition_profile(
+    value: Mapping[str, object],
+) -> ExitAcquisitionProfile | None:
+    if value.get("first_close_contract_version") is None:
+        return None
+    try:
+        return ExitAcquisitionProfile.from_object(
+            _mapping(value.get("exit_acquisition_profile"), "exit_acquisition_profile")
+        )
+    except ValueError as exc:
+        raise ShadowCaseStoreError("recovered exit acquisition profile is invalid") from exc
 
 
 def _recoverable_entry_payload(
@@ -2899,7 +3024,9 @@ def _validate_opened(
         source_boundaries=component_source_boundaries,
         pair_identity=entry_component_pair_identity,
         owner_boundary=opened_boundary,
-        policies=policies,
+        maximum_source_skew_ms=(policies.underwriting.maximum_component_pair_source_skew_ms),
+        maximum_receive_skew_ms=(policies.underwriting.maximum_component_pair_receive_skew_ms),
+        field="entry_component_pair",
     )
     entry_component = _validate_component_legs(
         structure.get("entry_component_legs"),
@@ -3324,7 +3451,7 @@ def _validate_followup(
         )
     if expected_kind == OUTCOME_KIND:
         expected_keys.add("native_outcome_economics")
-        if value.get("outcome_contract_version") == 2:
+        if value.get("outcome_contract_version") in {2, 3}:
             expected_keys.update(
                 {
                     "outcome_contract_version",
@@ -3332,6 +3459,16 @@ def _validate_followup(
                     "official_delivery_price_source_ref",
                     "delivery_price_usdc_per_btc",
                     "delivery_fee_rate_fraction",
+                }
+            )
+        if value.get("outcome_contract_version") == 3:
+            expected_keys.update(
+                {
+                    "contract_settlement_rule_identity",
+                    "exit_acquisition_profile",
+                    "exit_acquisition_sample_identity",
+                    "close_component_pair_timing",
+                    "close_component_pair_limits",
                 }
             )
     _exact_keys(value, expected_keys, "Case follow-up")
@@ -3400,28 +3537,102 @@ def _validate_followup(
         _string_sequence(value.get("non_claims"), "non_claims")
         terminal_state = value.get("terminal_state")
         if terminal_state in {"MATURE_KNOWN", "EXITED_KNOWN"}:
-            _identity(
+            pair_identity = _identity(
                 value.get("close_component_pair_identity"),
                 "close_component_pair_identity",
             )
-            _validate_component_source_refs(
+            structure = _mapping(opened.get("structure"), "structure")
+            leg_identities = _string_sequence(
+                structure.get("canonical_leg_identities"),
+                "canonical_leg_identities",
+            )
+            if len(leg_identities) != 2:
+                raise ShadowCaseStoreError("Outcome component legs are incomplete")
+            short_name = _text(
+                structure.get("short_leg_instrument_name"),
+                "short_leg_instrument_name",
+            )
+            long_name = _text(
+                structure.get("long_leg_instrument_name"),
+                "long_leg_instrument_name",
+            )
+            v3_pair = value.get("outcome_contract_version") == 3
+            component_sources = _validate_component_source_refs(
                 value.get("close_component_quote_source_refs"),
                 owner_boundary=later,
                 field="close_component_quote_source_refs",
+                require_pair_timing_inputs=v3_pair,
+                expected_leg_identities=(leg_identities[0], leg_identities[1]),
+                expected_instrument_names=(short_name, long_name),
             )
-            structure = _mapping(opened.get("structure"), "structure")
+            if v3_pair:
+                _validate_component_pair_timing(
+                    value.get("close_component_pair_timing"),
+                    value.get("close_component_pair_limits"),
+                    source_boundaries=component_sources,
+                    pair_identity=pair_identity,
+                    owner_boundary=later,
+                    maximum_source_skew_ms=(
+                        policies.position.maximum_component_pair_source_skew_ms
+                    ),
+                    maximum_receive_skew_ms=(
+                        policies.position.maximum_component_pair_receive_skew_ms
+                    ),
+                    field="close_component_pair",
+                )
+                profile = _optional_exit_acquisition_profile(value.get("exit_acquisition_profile"))
+                response_budget_ms = (
+                    profile.response_budget_ms
+                    if profile is not None
+                    else policies.position.component_book_snapshot_response_budget_ms
+                )
+                for source in component_sources:
+                    sent = source.sent_boundary
+                    if sent is None or (
+                        source.boundary.received_monotonic_ms - sent.received_monotonic_ms
+                        > response_budget_ms
+                    ):
+                        raise ShadowCaseStoreError(
+                            "market exit component response exceeded its frozen budget"
+                        )
+                first_close_identity = _identity(
+                    value.get("first_latched_close_action_identity"),
+                    "first_latched_close_action_identity",
+                )
+                expected_sample_identity = exit_acquisition_sample_identity(
+                    shadow_entry_identity=_identity(
+                        opened.get("enrollment_identity"),
+                        "enrollment_identity",
+                    ),
+                    first_close_action_identity=first_close_identity,
+                    profile_identity=(profile.profile_identity if profile is not None else None),
+                    component_pair_identity=pair_identity,
+                    boundary=later,
+                )
+                if value.get("exit_acquisition_sample_identity") != expected_sample_identity:
+                    raise ShadowCaseStoreError("market exit sample identity mismatch")
+                observation_identity = canonical_identity(
+                    "ShadowObservationIdentity",
+                    _identity(
+                        opened.get("shadow_case_contract_identity"),
+                        "shadow_case_contract_identity",
+                    ),
+                    _identity(opened.get("enrollment_identity"), "enrollment_identity"),
+                )
+                expected_exit_identity = canonical_identity(
+                    "ShadowCounterfactualExitIdentity",
+                    observation_identity,
+                    first_close_identity,
+                    expected_sample_identity,
+                )
+                if value.get("selected_exit_identity") != expected_exit_identity:
+                    raise ShadowCaseStoreError("market exit selection identity mismatch")
             product = _product_from_opened(opened)
             close_component = _validate_component_legs(
                 value.get("close_component_legs"),
                 quantity=_decimal(structure.get("full_quantity_btc"), "full_quantity_btc"),
-                short_name=_text(
-                    structure.get("short_leg_instrument_name"),
-                    "short_leg_instrument_name",
-                ),
-                long_name=_text(
-                    structure.get("long_leg_instrument_name"),
-                    "long_leg_instrument_name",
-                ),
+                short_name=short_name,
+                long_name=long_name,
                 expected_actions=("BUY", "SELL"),
                 field="close_component_legs",
                 schema_version=schema_version,
@@ -3481,7 +3692,14 @@ def _validate_followup(
             or value.get("close_component_legs") != []
         ):
             raise ShadowCaseStoreError("unknown/censored Outcome carries component close facts")
-        if value.get("outcome_contract_version") == 2:
+        outcome_contract_version = value.get("outcome_contract_version")
+        if outcome_contract_version in {2, 3}:
+            if outcome_contract_version == 3:
+                profile = _optional_exit_acquisition_profile(value.get("exit_acquisition_profile"))
+                if profile is not None and profile != _position_exit_acquisition_profile(policies):
+                    raise ShadowCaseStoreError(
+                        "Outcome acquisition profile does not match Position Policy"
+                    )
             terminal_method = value.get("terminal_method")
             expected_method = {
                 "EXITED_KNOWN": "MARKET_EXIT",
@@ -3496,45 +3714,292 @@ def _validate_followup(
             delivery_price = value.get("delivery_price_usdc_per_btc")
             delivery_fee_rate = value.get("delivery_fee_rate_fraction")
             if terminal_state == "SETTLED_KNOWN":
-                source = _mapping(delivery_ref, "official_delivery_price_source_ref")
-                _exact_keys(
-                    source,
-                    {
-                        "source_identity",
-                        "receipt_fact_boundary",
-                        "request_id",
-                        "index_name",
-                        "delivery_date",
-                        "records_total",
-                    },
-                    "official_delivery_price_source_ref",
-                )
-                _identity(source.get("source_identity"), "delivery source identity")
-                if FactBoundary.from_object(source.get("receipt_fact_boundary")) != later:
-                    raise ShadowCaseStoreError("delivery source boundary mismatch")
-                if source.get("index_name") != "btc_usd":
-                    raise ShadowCaseStoreError("delivery source index mismatch")
-                structure = _mapping(opened.get("structure"), "structure")
-                expected_date = (
-                    datetime.fromtimestamp(
-                        _nonnegative_int(structure.get("expiry_ms"), "expiry_ms") / 1000,
-                        tz=UTC,
+                if outcome_contract_version == 3:
+                    _validate_v3_contract_settlement(
+                        opened=opened,
+                        outcome=value,
+                        later=later,
+                        policies=policies,
                     )
-                    .date()
-                    .isoformat()
-                )
-                if source.get("delivery_date") != expected_date:
-                    raise ShadowCaseStoreError("delivery source date mismatch")
-                if _decimal(delivery_price, "delivery_price_usdc_per_btc") <= 0:
-                    raise ShadowCaseStoreError("delivery price must be positive")
-                if _decimal(delivery_fee_rate, "delivery_fee_rate_fraction") < 0:
-                    raise ShadowCaseStoreError("delivery fee rate must be non-negative")
+                else:
+                    delivery_source = _mapping(delivery_ref, "official_delivery_price_source_ref")
+                    _exact_keys(
+                        delivery_source,
+                        {
+                            "source_identity",
+                            "receipt_fact_boundary",
+                            "request_id",
+                            "index_name",
+                            "delivery_date",
+                            "records_total",
+                        },
+                        "official_delivery_price_source_ref",
+                    )
+                    _identity(delivery_source.get("source_identity"), "delivery source identity")
+                    if (
+                        FactBoundary.from_object(delivery_source.get("receipt_fact_boundary"))
+                        != later
+                    ):
+                        raise ShadowCaseStoreError("delivery source boundary mismatch")
+                    if delivery_source.get("index_name") != "btc_usd":
+                        raise ShadowCaseStoreError("delivery source index mismatch")
+                    structure = _mapping(opened.get("structure"), "structure")
+                    expected_date = (
+                        datetime.fromtimestamp(
+                            _nonnegative_int(structure.get("expiry_ms"), "expiry_ms") / 1000,
+                            tz=UTC,
+                        )
+                        .date()
+                        .isoformat()
+                    )
+                    if delivery_source.get("delivery_date") != expected_date:
+                        raise ShadowCaseStoreError("delivery source date mismatch")
+                    if _decimal(delivery_price, "delivery_price_usdc_per_btc") <= 0:
+                        raise ShadowCaseStoreError("delivery price must be positive")
+                    if _decimal(delivery_fee_rate, "delivery_fee_rate_fraction") < 0:
+                        raise ShadowCaseStoreError("delivery fee rate must be non-negative")
                 if value.get("selected_exit_identity") is not None:
                     raise ShadowCaseStoreError("contract settlement cannot select a market exit")
             elif any(
                 member is not None for member in (delivery_ref, delivery_price, delivery_fee_rate)
             ):
                 raise ShadowCaseStoreError("non-settlement Outcome carries delivery facts")
+            if outcome_contract_version == 3:
+                if (
+                    terminal_state != "SETTLED_KNOWN"
+                    and value.get("contract_settlement_rule_identity") is not None
+                ):
+                    raise ShadowCaseStoreError(
+                        "non-settlement Outcome carries a settlement rule identity"
+                    )
+                if terminal_state != "EXITED_KNOWN" and any(
+                    value.get(field) is not None
+                    for field in (
+                        "exit_acquisition_sample_identity",
+                        "close_component_pair_timing",
+                        "close_component_pair_limits",
+                    )
+                ):
+                    raise ShadowCaseStoreError(
+                        "non-market Outcome carries market-exit sample evidence"
+                    )
+
+
+def _optional_exit_acquisition_profile(value: object) -> ExitAcquisitionProfile | None:
+    if value is None:
+        return None
+    try:
+        return ExitAcquisitionProfile.from_object(_mapping(value, "exit_acquisition_profile"))
+    except ValueError as exc:
+        raise ShadowCaseStoreError("exit acquisition profile is invalid") from exc
+
+
+def _position_exit_acquisition_profile(policies: PolicyChain) -> ExitAcquisitionProfile:
+    return ExitAcquisitionProfile.create(
+        response_budget_ms=(policies.position.component_book_snapshot_response_budget_ms),
+        maximum_source_skew_ms=(policies.position.maximum_component_pair_source_skew_ms),
+        maximum_receive_skew_ms=(policies.position.maximum_component_pair_receive_skew_ms),
+    )
+
+
+def _validate_v3_contract_settlement(
+    *,
+    opened: Mapping[str, object],
+    outcome: Mapping[str, object],
+    later: FactBoundary,
+    policies: PolicyChain,
+) -> None:
+    source = _mapping(
+        outcome.get("official_delivery_price_source_ref"),
+        "official_delivery_price_source_ref",
+    )
+    _exact_keys(
+        source,
+        {
+            "source_identity",
+            "response_source_identity",
+            "receipt_fact_boundary",
+            "request_id",
+            "index_name",
+            "delivery_date",
+            "records_total",
+            "owner_origin_boundary",
+            "sent_boundary",
+        },
+        "official_delivery_price_source_ref",
+    )
+    delivery_price = _decimal(
+        outcome.get("delivery_price_usdc_per_btc"),
+        "delivery_price_usdc_per_btc",
+    )
+    receipt_boundary = FactBoundary.from_object(
+        _boundary(source.get("receipt_fact_boundary"), "receipt_fact_boundary")
+    )
+    if receipt_boundary != later:
+        raise ShadowCaseStoreError("delivery source boundary mismatch")
+    try:
+        witness = DeliveryPriceWitness(
+            source_identity=_identity(source.get("source_identity"), "delivery source identity"),
+            response_source_identity=_identity(
+                source.get("response_source_identity"),
+                "delivery response source identity",
+            ),
+            boundary=receipt_boundary,
+            index_name=_text(source.get("index_name"), "delivery index_name"),
+            delivery_date=_text(source.get("delivery_date"), "delivery_date"),
+            delivery_price_usdc_per_btc=delivery_price,
+            request_id=_positive_integer(source.get("request_id"), "delivery request_id"),
+            owner_origin_boundary=FactBoundary.from_object(
+                _boundary(source.get("owner_origin_boundary"), "owner_origin_boundary")
+            ),
+            sent_boundary=FactBoundary.from_object(
+                _boundary(source.get("sent_boundary"), "sent_boundary")
+            ),
+            records_total=_non_negative_integer(
+                source.get("records_total"),
+                "delivery records_total",
+            ),
+        )
+    except ValueError as exc:
+        raise ShadowCaseStoreError("official delivery witness is invalid") from exc
+    if (
+        witness.boundary.received_monotonic_ms - witness.sent_boundary.received_monotonic_ms
+        > policies.position.component_book_snapshot_response_budget_ms
+    ):
+        raise ShadowCaseStoreError("official delivery response exceeded its frozen budget")
+    structure = _mapping(opened.get("structure"), "structure")
+    expiry_ms = _nonnegative_int(structure.get("expiry_ms"), "expiry_ms")
+    expected_date = datetime.fromtimestamp(expiry_ms / 1000, tz=UTC).date().isoformat()
+    if witness.delivery_date != expected_date:
+        raise ShadowCaseStoreError("delivery source date mismatch")
+    product = _product_from_opened(opened)
+    expected_fee_rate = deribit_option_delivery_fee_rate(expiry_ms)
+    stored_fee_rate = _decimal(
+        outcome.get("delivery_fee_rate_fraction"),
+        "delivery_fee_rate_fraction",
+    )
+    if stored_fee_rate != expected_fee_rate:
+        raise ShadowCaseStoreError("delivery fee rate does not match the expiry class")
+    expected_rule_identity = contract_settlement_rule_identity(
+        product_spec_identity=product.identity,
+        expiry_ms=expiry_ms,
+    )
+    if outcome.get("contract_settlement_rule_identity") != expected_rule_identity:
+        raise ShadowCaseStoreError("contract settlement rule identity mismatch")
+    native_entry = _mapping(opened.get("native_entry_economics"), "native_entry_economics")
+    economics = compute_contract_settlement_economics(
+        product=product,
+        option_type=_text(structure.get("option_type"), "option_type"),
+        short_strike_usdc_per_btc=_decimal(
+            _versioned_get(
+                structure,
+                schema_version=_record_schema_version(opened),
+                legacy_key="short_strike_usdc_per_btc",
+                mapping=_V5_STRUCTURE_FIELDS,
+            ),
+            "short strike",
+        ),
+        long_strike_usdc_per_btc=_decimal(
+            _versioned_get(
+                structure,
+                schema_version=_record_schema_version(opened),
+                legacy_key="long_strike_usdc_per_btc",
+                mapping=_V5_STRUCTURE_FIELDS,
+            ),
+            "long strike",
+        ),
+        full_quantity_btc=_decimal(structure.get("full_quantity_btc"), "full_quantity_btc"),
+        delivery_price_usdc_per_btc=delivery_price,
+        delivery_fee_rate_fraction=stored_fee_rate,
+        native_gross_entry_credit=_decimal(
+            native_entry.get("native_gross_entry_credit"),
+            "native_gross_entry_credit",
+        ),
+        native_entry_fee_reserve=_decimal(
+            native_entry.get("native_entry_fee_reserve"),
+            "native_entry_fee_reserve",
+        ),
+    )
+    _validate_recomputed_contract_settlement(opened, outcome, economics)
+
+
+def _validate_recomputed_contract_settlement(
+    opened: Mapping[str, object],
+    outcome: Mapping[str, object],
+    economics: ContractSettlementEconomics,
+) -> None:
+    schema_version = _record_schema_version(opened)
+    entry = _mapping(opened.get("entry_economics"), "entry_economics")
+    gross_entry = _decimal(
+        _versioned_get(
+            entry,
+            schema_version=schema_version,
+            legacy_key="gross_entry_credit_usdc",
+            mapping=_V5_ENTRY_ECONOMICS_FIELDS,
+        ),
+        "gross entry credit",
+    )
+    entry_fee = _decimal(
+        _versioned_get(
+            entry,
+            schema_version=schema_version,
+            legacy_key="entry_fee_reserve_usdc",
+            mapping=_V5_ENTRY_ECONOMICS_FIELDS,
+        ),
+        "entry fee reserve",
+    )
+    expected_values = {
+        "gross_close_cashflow_usdc": economics.delivery_valued_gross_settlement_cashflow_usdc,
+        "close_fee_reserve_usdc": economics.delivery_valued_delivery_fee_reserve_usdc,
+        "net_close_cashflow_usdc": economics.delivery_valued_net_settlement_cashflow_usdc,
+        "gross_pnl_usdc": (gross_entry + economics.delivery_valued_gross_settlement_cashflow_usdc),
+        "total_public_fee_reserve_usdc": (
+            entry_fee + economics.delivery_valued_delivery_fee_reserve_usdc
+        ),
+        "net_pnl_after_public_standard_fee_reserve_usdc": (
+            gross_entry
+            + economics.delivery_valued_gross_settlement_cashflow_usdc
+            - entry_fee
+            - economics.delivery_valued_delivery_fee_reserve_usdc
+        ),
+    }
+    expected_values["net_loss_usdc"] = max(
+        Decimal(0),
+        -expected_values["net_pnl_after_public_standard_fee_reserve_usdc"],
+    )
+    for legacy_key, expected in expected_values.items():
+        stored = _decimal(
+            _versioned_get(
+                outcome,
+                schema_version=schema_version,
+                legacy_key=legacy_key,
+                mapping=_V5_OUTCOME_ECONOMICS_FIELDS,
+            ),
+            legacy_key,
+        )
+        if stored != expected:
+            raise ShadowCaseStoreError(
+                "contract settlement aggregate does not match product payoff"
+            )
+    native = _mapping(outcome.get("native_outcome_economics"), "native_outcome_economics")
+    native_expected = {
+        "native_gross_close_cashflow": economics.native_gross_settlement_cashflow,
+        "native_close_fee_reserve": economics.native_delivery_fee_reserve,
+        "native_net_close_cashflow": economics.native_net_settlement_cashflow,
+        "native_gross_pnl": economics.native_gross_pnl,
+        "native_total_fee_reserve": economics.native_total_fee_reserve,
+        "native_net_pnl": economics.native_net_pnl,
+        "close_valuation_index_price": economics.delivery_price_usdc_per_btc,
+        "boundary_valued_net_pnl_usd": expected_values[
+            "net_pnl_after_public_standard_fee_reserve_usdc"
+        ],
+        "exit_valued_native_net_pnl_usd": economics.delivery_valued_net_pnl_usdc,
+    }
+    for field, expected in native_expected.items():
+        if _decimal(native.get(field), field) != expected:
+            raise ShadowCaseStoreError(
+                "contract settlement native economics do not match product payoff"
+            )
 
 
 def _validate_outcome_economics(
@@ -4244,9 +4709,13 @@ def _validate_component_pair_timing(
     source_boundaries: tuple[_ComponentSourceEvidence, _ComponentSourceEvidence],
     pair_identity: str,
     owner_boundary: FactBoundary,
-    policies: PolicyChain,
+    maximum_source_skew_ms: int,
+    maximum_receive_skew_ms: int,
+    field: str,
 ) -> None:
-    timing = _mapping(timing_value, "entry_component_pair_timing")
+    timing_field = f"{field}_timing"
+    limits_field = f"{field}_limits"
+    timing = _mapping(timing_value, timing_field)
     _exact_keys(
         timing,
         {
@@ -4255,27 +4724,27 @@ def _validate_component_pair_timing(
             "source_timestamp_skew_ms",
             "receive_skew_ms",
         },
-        "entry_component_pair_timing",
+        timing_field,
     )
     session_epochs = _non_negative_integer_pair(
         timing.get("session_epochs"),
-        "entry_component_pair_timing.session_epochs",
+        f"{timing_field}.session_epochs",
     )
     continuity_epochs = _non_negative_integer_pair(
         timing.get("global_continuity_epochs"),
-        "entry_component_pair_timing.global_continuity_epochs",
+        f"{timing_field}.global_continuity_epochs",
     )
     if session_epochs[0] != session_epochs[1]:
-        raise ShadowCaseStoreError("entry component pair session epochs do not match")
+        raise ShadowCaseStoreError(f"{field} session epochs do not match")
     if continuity_epochs[0] != continuity_epochs[1]:
-        raise ShadowCaseStoreError("entry component pair continuity epochs do not match")
+        raise ShadowCaseStoreError(f"{field} continuity epochs do not match")
     if session_epochs != tuple(value.boundary.session_epoch for value in source_boundaries):
-        raise ShadowCaseStoreError("entry component pair session evidence is inconsistent")
+        raise ShadowCaseStoreError(f"{field} session evidence is inconsistent")
     if (
         max(source_boundaries, key=lambda value: value.boundary.causal_seq).boundary
         != owner_boundary
     ):
-        raise ShadowCaseStoreError("entry component pair does not own the Case-open boundary")
+        raise ShadowCaseStoreError(f"{field} does not own its terminal boundary")
     expected_pair_identity = canonical_identity(
         "ComponentBookPairWitnessIdentity",
         source_boundaries[0].source_identity,
@@ -4283,53 +4752,53 @@ def _validate_component_pair_timing(
         owner_boundary.as_object(),
     )
     if pair_identity != expected_pair_identity:
-        raise ShadowCaseStoreError("entry component pair identity mismatch")
+        raise ShadowCaseStoreError(f"{field} identity mismatch")
     source_skew = _non_negative_integer(
         timing.get("source_timestamp_skew_ms"),
-        "entry_component_pair_timing.source_timestamp_skew_ms",
+        f"{timing_field}.source_timestamp_skew_ms",
     )
     receive_skew = _non_negative_integer(
         timing.get("receive_skew_ms"),
-        "entry_component_pair_timing.receive_skew_ms",
+        f"{timing_field}.receive_skew_ms",
     )
     expected_receive_skew = abs(
         source_boundaries[0].boundary.received_monotonic_ms
         - source_boundaries[1].boundary.received_monotonic_ms
     )
     if receive_skew != expected_receive_skew:
-        raise ShadowCaseStoreError("entry component pair receive skew is inconsistent")
+        raise ShadowCaseStoreError(f"{field} receive skew is inconsistent")
     source_timestamps = tuple(value.source_timestamp_ms for value in source_boundaries)
     continuity_sources = tuple(value.global_continuity_epoch for value in source_boundaries)
     if any(value is None for value in (*source_timestamps, *continuity_sources)):
-        raise ShadowCaseStoreError("entry component pair timing sources are incomplete")
+        raise ShadowCaseStoreError(f"{field} timing sources are incomplete")
     assert source_timestamps[0] is not None and source_timestamps[1] is not None
     assert continuity_sources[0] is not None and continuity_sources[1] is not None
     if source_skew != abs(source_timestamps[0] - source_timestamps[1]):
-        raise ShadowCaseStoreError("entry component pair source skew is inconsistent")
+        raise ShadowCaseStoreError(f"{field} source skew is inconsistent")
     if continuity_epochs != continuity_sources:
-        raise ShadowCaseStoreError("entry component pair continuity evidence is inconsistent")
+        raise ShadowCaseStoreError(f"{field} continuity evidence is inconsistent")
 
-    limits = _mapping(limits_value, "entry_component_pair_limits")
+    limits = _mapping(limits_value, limits_field)
     _exact_keys(
         limits,
         {"maximum_source_skew_ms", "maximum_receive_skew_ms"},
-        "entry_component_pair_limits",
+        limits_field,
     )
-    maximum_source_skew = _positive_integer(
+    stored_maximum_source_skew = _positive_integer(
         limits.get("maximum_source_skew_ms"),
-        "entry_component_pair_limits.maximum_source_skew_ms",
+        f"{limits_field}.maximum_source_skew_ms",
     )
-    maximum_receive_skew = _positive_integer(
+    stored_maximum_receive_skew = _positive_integer(
         limits.get("maximum_receive_skew_ms"),
-        "entry_component_pair_limits.maximum_receive_skew_ms",
+        f"{limits_field}.maximum_receive_skew_ms",
     )
     if (
-        maximum_source_skew != policies.underwriting.maximum_component_pair_source_skew_ms
-        or maximum_receive_skew != policies.underwriting.maximum_component_pair_receive_skew_ms
+        stored_maximum_source_skew != maximum_source_skew_ms
+        or stored_maximum_receive_skew != maximum_receive_skew_ms
     ):
-        raise ShadowCaseStoreError("entry component pair limits do not match Underwriting Policy")
-    if source_skew > maximum_source_skew or receive_skew > maximum_receive_skew:
-        raise ShadowCaseStoreError("entry component pair timing exceeds its Policy limits")
+        raise ShadowCaseStoreError(f"{field} limits do not match its frozen Policy")
+    if source_skew > stored_maximum_source_skew or receive_skew > stored_maximum_receive_skew:
+        raise ShadowCaseStoreError(f"{field} timing exceeds its Policy limits")
 
 
 def _non_negative_integer_pair(value: object, field: str) -> tuple[int, int]:

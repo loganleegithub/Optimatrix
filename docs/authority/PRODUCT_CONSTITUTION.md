@@ -271,13 +271,18 @@ After Case opening, one fixed Position Policy continuously returns `HOLD | CLOSE
 strictly later public facts inside the current Observation Segment. `CLOSE` is an immutable exit
 instruction, not a closing fact. Its first Policy reason is durably latched before acquisition, but
 quote failure or process loss cannot consume the Position's continuing exit responsibility. The
-owner keeps at most one paired attempt in flight, retries on a predeclared cadence, and accepts the
-first causally eligible full-quantity pair without retrospective price selection.
+owner freezes one finite acquisition profile with that future first CLOSE, keeps at most one paired
+attempt in flight, retries on the profile's cadence, and accepts the first causally eligible
+full-quantity pair without retrospective price selection. A version-3 market Outcome retains the
+complete accepted pair provenance and its selected-sample identity so the official reader can
+reconstruct that choice independently.
 
 At expiry, ordinary close acquisition gives way to official contract settlement. One validated
 Deribit `btc_usd` delivery-price history response may settle every waiting expiry date. The one
 Inverse calculator forms signed short/long payoff, public capped delivery fee, BTC-native PnL, and
-separate delivery-price valuation. The terminal union is `EXITED_KNOWN | SETTLED_KNOWN |
+separate delivery-price valuation. The terminal record binds both the response envelope and the
+accepted expiry member; a response need not contain the request owner's date in order to settle a
+different waiting date. The terminal union is `EXITED_KNOWN | SETTLED_KNOWN |
 TERMINAL_UNKNOWN`; temporary source failure remains `SETTLEMENT_PENDING`, and the current runtime
 has no automatic unknown-finality timeout.
 
@@ -285,7 +290,8 @@ Clean stop, handled failure, and unclean process loss remain distinct Observatio
 and do not terminate a Position-bearing Case. After recovery and fresh facts, it may still form
 known terminal economics. A gap stores `observation_quality=GAPPED` and preserves the legacy
 strict-continuity projection as false, but it does not globally disqualify the Case. Named offline
-Cohorts separately decide terminal-economics, continuous-path, and exit-acquisition eligibility.
+Cohorts separately decide terminal-economics, continuous-path, terminal-sample-integrity, and
+first-CLOSE-to-terminal exit-acquisition eligibility.
 
 ## AI Researcher and qualification
 

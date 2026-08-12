@@ -181,7 +181,9 @@ records use `FIRST_CLOSE_INTENT_LATCHED` and contain:
 - same Case/product/Policy identities plus the emitting Segment/code/runtime;
 - the exact first Position action identity and boundary;
 - primary and ordered latched close reasons;
-- the predicate truth vector consumed at that boundary.
+- the predicate truth vector consumed at that boundary;
+- for future contract-v2 first-CLOSE intents, one frozen acquisition profile containing the
+  first-eligible-observed-pair rule, retry cadence, response budget, and source/receive skew limits.
 
 The writer publishes this record before releasing an exit request. Later Position evaluations and
 runtimes cannot rewrite it or create another first-close record. Exit acquisition remains in
@@ -197,7 +199,7 @@ future acquisition.
 
 ## `SHADOW_CASE_OUTCOME`
 
-Outcome contract version 2 has one immutable terminal state and method:
+Outcome contract versions 2 and 3 share one immutable terminal state and method:
 
 ```text
 EXITED_KNOWN     / MARKET_EXIT
@@ -206,9 +208,12 @@ TERMINAL_UNKNOWN / TERMINAL_UNKNOWN
 ```
 
 `EXITED_KNOWN` requires the first eligible strictly post-CLOSE paired component-book exit for the
-same frozen legs. It stores the pair/source identities, raw/stressed full-quantity levels for both
-legs, gross close cashflow, both close fee reserves, net close cashflow, gross PnL, total public fee
-reserve, net PnL after reserve, and net loss.
+same frozen legs. It stores raw/stressed full-quantity levels for both legs, gross close cashflow,
+both close fee reserves, net close cashflow, gross PnL, total public fee reserve, net PnL after
+reserve, and net loss. Version 3 additionally stores the frozen acquisition profile, selected
+sample identity, complete per-leg source/request/owner/sent/receipt/session/continuity facts, pair
+timing, and frozen pair limits. The reader reconstructs the pair, sample, and selected-exit
+identities instead of trusting an aggregate price claim.
 
 The Outcome stores BTC-native close cashflow, fees, gross/net PnL, the causal close valuation index,
 the net PnL formed from entry- and close-boundary USD valuations, and the distinct view that values
@@ -217,9 +222,12 @@ after the Outcome. They are counterfactual valuations, not fills, settlement act
 account-margin facts.
 
 `SETTLED_KNOWN` requires one validated official Deribit `btc_usd` delivery-price member for the
-frozen expiry date. It stores its request/source identity, receipt boundary, date, exact delivery
-price, fee class/rate, signed short/long Inverse contractual payoff, native settlement cashflow and
-fee, native PnL, and separately delivery-valued USD economics. Component-close fields are null.
+frozen expiry date. Version 3 stores both response and member identity, request owner-origin/sent/
+receipt boundaries, record count, date, exact delivery price, and the product/expiry settlement-rule
+identity. The reader recomputes the expiry fee class/rate, signed short/long Inverse contractual
+payoff, capped delivery fee, native PnL, and both USD valuation views. Component-close fields are
+null. A response member may settle its matching date even when the response omits the request
+owner's own expiry date.
 
 `TERMINAL_UNKNOWN` is not produced by quote failure, process loss, expiry, or a temporarily missing
 delivery response. It is legal only after a separately predeclared settlement-finality condition is
@@ -227,18 +235,20 @@ known false; the current runtime has no automatic finality timeout and therefore
 `SETTLEMENT_PENDING` while official settlement is unavailable.
 
 Every terminal Outcome records its producing Segment plus
-`observation_quality=CONTINUOUS | GAPPED`, cumulative gap count, and
-the legacy `qualification_eligible` projection. Version 2 also records three explicit derived facts:
-`terminal_economics_eligible`, `continuous_path_eligible`, and
-`exit_acquisition_eligible`. A gapped `EXITED_KNOWN | SETTLED_KNOWN` remains eligible for the
-terminal-economics Cohort while it is excluded from continuous-path analysis; settlement is not an
-exit-acquisition sample. Lifecycle completeness, economic knownness, observation quality, and each
-offline Cohort question remain distinct.
+`observation_quality=CONTINUOUS | GAPPED` and cumulative gap count. Version 2 retains the legacy
+`qualification_eligible`, `terminal_economics_eligible`, `continuous_path_eligible`, and
+`exit_acquisition_eligible` projections for byte compatibility. Version 3 persists none of those
+Cohort Booleans. The offline evaluator derives terminal economics, whole-path continuity,
+terminal-sample integrity, and the first-CLOSE-to-terminal acquisition window separately. A gap
+before first CLOSE may therefore coexist with a complete acquisition window, while a gap after
+first CLOSE excludes that window without erasing known terminal economics.
 
-A valid version-2 terminal Outcome is also the terminal boundary of its producing Segment. Because
+A valid version-2 or version-3 terminal Outcome is also the terminal boundary of its producing
+Segment. Because
 `SHADOW_CASE_SEGMENT_CLOSED` is optional, an inactive reader must use the Outcome's validated
-Segment binding and `observation_quality` instead of relabeling that completed Case
-`INCOMPLETE_UNCLEAN_EXIT` merely because the final Segment has no separate close record.
+Segment binding and project that Segment as `TERMINATED_BY_OUTCOME` instead of relabeling that
+completed Case `INCOMPLETE_UNCLEAN_EXIT` merely because the final Segment has no separate close
+record. This is a read projection, not a synthetic `closed.json` write.
 
 A handled clean stop or failure ends only the current Segment of an admitted Entry or future
 Segment-bearing Control. A stable owner that emits a process-censored aggregate Outcome is
@@ -296,12 +306,13 @@ Inverse product reader then validates each requested Case independently:
 - origin-only `entry_position_baseline` knownness and exact index/mark-IV source binding, without an
   `opened.json` shape or product schema identity change;
 - zero/one immutable first-close intent across the aggregate, with compatibility validation for
-  legacy combined schedule records;
-- terminal Outcome producing-Segment binding, method, observation quality, gap count, and named
-  Cohort facts;
+  legacy combined schedule records and Policy-bound validation for future acquisition profiles;
+- terminal Outcome producing-Segment binding, method, observation quality, and gap count, with
+  legacy named Cohort facts accepted only on version 2;
 - state-specific null/economic requirements;
-- recomputable paired component-book exit or official Inverse contract-settlement arithmetic in the
-  schema's declared native and valuation units;
+- version-3 pair/sample/source reconstruction or official delivery response/member reconstruction,
+  plus recomputable Inverse contract-settlement arithmetic in the schema's declared native and
+  valuation units;
 - no conflicting duplicate files.
 
 It returns active/terminal Entry status, current Segment status, `CONTINUOUS | GAPPED`, and Control
@@ -327,16 +338,19 @@ An ordinary HIGH Candidate is never duplicated as a Control.
 The read-only `report-v2-cases` projection keeps the three enrollment kinds in separate strata and
 does not weight them into a market-population or causal-alpha estimate. It reports an opened Case
 without an Outcome as `PENDING_OPEN` only when the official reader returns `OPEN`; callers reading
-a currently owned root must opt in with `--runtime-active`. The report stores nothing and cannot
-alter Case truth.
+a currently owned root must opt in with `--runtime-active`. That assertion applies only to the
+latest unclosed Segment; it never makes a legacy segmentless Control active. The report stores
+nothing and cannot alter Case truth.
 
 Qualification Cohorts are later offline views over completed Cases under a pre-registered
 evaluator. The terminal-economics Cohort accepts a gapped known exit or settlement; the
-continuous-path Cohort excludes gaps or masks their intervals; and exit-acquisition analysis
-requires a known market exit and a complete acquisition window. Radar/Underwriting comparison
-keeps admitted and selected-Control lifecycles on the same observation horizon. The Online Runtime
-never writes Cohort or aligned-pair objects. The persisted named flags are direct facts for these
-current reports, not one global qualification verdict.
+continuous-path Cohort requires a natural terminal boundary and excludes gaps or masks their
+intervals; terminal-sample-integrity requires version-3 reader-reconstructable market or settlement
+evidence; and exit-acquisition analysis requires a version-3 known market exit, a declared profile,
+no Segment handoff after first CLOSE, and `PLATFORM_OR_SOURCE_DISCONTINUITY=FALSE` at that CLOSE.
+Radar/Underwriting comparison keeps admitted and selected-Control lifecycles on the same observation
+horizon. The Online Runtime never writes Cohort or aligned-pair objects. Version-2 named flags remain
+legacy bytes and are not authoritative for the version-3 evaluator.
 
 ## Required verification
 
@@ -348,8 +362,9 @@ original/refreshed selection boundary ordering, zero Candidate/`SHADOW_ENTRY` fo
 atomic file publication, duplicate handling, pair/source identity and boundary binding, both-leg
 arithmetic, repeated process recovery, Segment close/incomplete/gap truth, recovery-first UNKNOWN,
 intent-first durability, serial retry after failed or process-unknown attempts, first-eligible exit,
-official settlement fanout and arithmetic, future Control recovery, and named gapped Outcome Cohort
-classification. Tests also prove one shared selection/entry score-packet schema, deterministic
+complete version-3 terminal-pair reconstruction and tamper rejection, partial/empty/late official
+settlement fanout and contractual arithmetic, future Control recovery, and named gapped/windowed
+Outcome Cohort classification. Tests also prove one shared selection/entry score-packet schema, deterministic
 LOW/MID inclusion probability, HIGH precedence, and no pre-Case score persistence.
 No database, manifest, receipt, generic graph, per-tick checkpoint, or replay is required. Live
 commands remain governed only by `CURRENT_STAGE`.

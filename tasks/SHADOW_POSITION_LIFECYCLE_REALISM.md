@@ -1,4 +1,4 @@
-# Task — Shadow Position lifecycle realism
+# Task — Shadow Position lifecycle evidence closure
 
 **Status:** ACTIVE
 
@@ -6,12 +6,11 @@
 
 **Runtime implementation:** REQUIRED
 
-**Live commands:** REQUIRED — one isolated full-chain runtime simulation, one stable-runtime
-cutover, and bounded monitoring until the first naturally produced admitted Outcome
+**Live commands:** REQUIRED — one isolated full-business-chain simulation; stable cutover forbidden
 
 **Base commit:** `d0b5a4b6597077500c6fe4be69a73d5e2e765ea9`
 
-**Target branch/PR:** `codex/shadow-position-lifecycle-realism` / Draft PR to be created
+**Target branch/PR:** `codex/shadow-position-lifecycle-realism` / Draft PR `#51`
 
 **Owning authority/contract:**
 [`PRODUCT_CONSTITUTION`](../docs/authority/PRODUCT_CONSTITUTION.md),
@@ -24,121 +23,103 @@ cutover, and bounded monitoring until the first naturally produced admitted Outc
 
 **Current funnel node:** `SHADOW_CASE_OPENED -> SHADOW_CASE_OUTCOME`
 
-**Baseline:** 0 admitted Outcome files from 40 active admitted Entry aggregates; all 40 latest
-Segments are `OPEN/GAPPED`. The same repository contains 12 Radar-score Controls and 10 selected
-Underwriting Controls that are not recovered.
+**Baseline:** 87 durable schema-v5 Cases, 65 immutable first-CLOSE records, 20 naturally produced
+contract-v2 admitted `EXITED_KNOWN` Outcomes, zero natural `SETTLED_KNOWN`, and 43 current
+non-terminal Positions at the repair boundary.
 
-**Primary blocker:** 40/40 active admitted Entries have no terminal Outcome. The Position lifecycle
-couples immutable first-CLOSE history, one public quote-acquisition attempt, and terminal Outcome;
-one failed/lost attempt consumes future exit responsibility, while expiry has no official delivery-
-price settlement path.
+**Primary blocker:** 20/20 version-2 market exits have known aggregate economics but lack complete
+durable pair timing/source evidence for independent reconstruction; 0 settlement Outcomes have
+passed natural business acceptance, while the settlement reader does not yet recompute contractual
+payoff/fee truth. Whole-lifecycle online Booleans also prevent the offline evaluator from answering
+the narrower exit-acquisition question.
 
-**Expected user-visible delta:** A first CLOSE remains immutable while the Workbench truthfully shows
-ongoing exit acquisition across failed pairs and process recovery. At expiry an open Case moves to
-official settlement acquisition and produces `SETTLED_KNOWN` when delivery economics are known.
-Future selected Controls use the same process-independent Position terminal path. Gap quality no
-longer acts as a global qualification verdict.
+**Expected user-visible delta:** A future terminal Case states exactly which observed two-leg sample
+or official delivery member ended responsibility, and the one official reader can reject a
+causally or economically coherent-looking forgery. The offline report separately states terminal
+economics, whole-path continuity, terminal sample integrity, and first-CLOSE-to-terminal window
+quality without an online global eligibility verdict. The read-only Workbench presents only formal
+Shadow Entries as a trader-facing expiry risk book, preserving current exit/settlement duty and
+keeping full lifecycle/Cohort evidence behind disclosure.
 
-**Durable-data effect:** No new record kind and no pre-Shadow write. Existing opened/Segment/first-
-CLOSE bytes remain immutable. Later public quote attempts remain in memory. Existing Segment facts
-continue to preserve gap truth. `SHADOW_CASE_OUTCOME` gains one discriminated market-exit versus
-contract-settlement terminal union and the official delivery-price source/economics directly
-consumed by the trader, AI researcher, and offline terminal-economics Cohort; those future facts
-cannot be derived from opened or first-CLOSE records. Future opened Control Cases gain ordinary
-Observation Segments because process boundaries cannot be derived offline.
+**Durable-data effect:** No new record kind and no rewrite. Future intent-only first-CLOSE records
+may bind one finite acquisition profile. Future `SHADOW_CASE_OUTCOME` records use contract version
+3 and add only the accepted terminal pair timing/source evidence or official delivery
+response/member evidence directly consumed by the AI researcher and offline evaluator. Existing
+v1/v2 bytes remain readable and keep their legacy evidence level.
 
-**Complexity added:** One typed official `public/get_delivery_prices` source route and validator;
-one serial bounded exit-acquisition loop per open Case; one product-owned settlement calculator;
-one terminal Outcome union; recovery of future position-bearing Controls. No dependency.
+**Complexity added:** One typed exit-acquisition profile, one response-level delivery witness, and
+one version-3 branch in the existing Case writer/reader.
 
-**Complexity deleted:** Lifetime single-attempt consumption, `MATURE_UNKNOWN` caused solely by no
-eligible close quote at expiry, Control process-stop terminalization, and use of one online global
-qualification Boolean as all-Cohort eligibility.
+**Complexity deleted:** Online Outcome Cohort Booleans, the report's version-2 terminal Segment
+special case, request-owner delivery-date gating, and use of a network deadline as a sampling
+cadence.
 
 ## Business closure
 
-**Given:** One admitted or selected-Control Case has frozen entry economics and remains without an
-Outcome after first CLOSE, failed quote acquisition, process loss, or arrival at expiry.
+**Given:** One Position-bearing Case has a frozen Entry and optionally an immutable first CLOSE,
+including legacy Cases recovered across truthful gaps.
 
-**When:** Fresh public component-book pairs or the official delivery-price fact arrive in the same
-or a later truthful Observation Segment.
+**When:** It observes failed, incomplete, mismatched, or eligible paired close responses; crosses a
+process boundary; or reaches expiry and receives complete, partial, empty, late, or malformed
+official delivery history.
 
-**Then:** The Case retains its first exit intent, repeatedly acquires at most one pair at a time,
-selects the first causally eligible full-quantity pair as `EXITED_KNOWN`, or uses official expiry
-economics as `SETTLED_KNOWN`; temporary missingness and Gap never consume that responsibility.
+**Then:** First CLOSE remains immutable; one serial acquisition profile chooses only the first
+eligible observed pair; valid response members settle every matching expiry independently of the
+request owner; temporary absence remains pending; and every known terminal Outcome is independently
+recomputable from its durable bounded evidence.
 
-**Valid zero/UNKNOWN:** A temporarily unavailable close pair or delivery-price response remains
-`EXIT_REQUIRED`, `EXIT_ACQUIRING`, or `SETTLEMENT_PENDING`. `TERMINAL_UNKNOWN` is allowed only after
-the predeclared settlement-finality condition is known false; it does not satisfy the known-
-economics closure.
+**Valid zero/UNKNOWN:** No eligible pair remains `EXIT_ACQUIRING`; a missing official member remains
+`SETTLEMENT_PENDING`; legacy-minimal evidence remains valid terminal economics but is excluded from
+strict terminal-sample and acquisition-window Cohorts. These states do not satisfy strict evidence
+closure.
 
-**Cheapest falsification:** Deterministic owner/runtime A→B→C fixtures over one isolated Case root,
-including every predicate class, pair failures/races, restart, Control recovery, settlement and
-offline Cohort projections, followed by one modified-runtime isolated smoke and one authorized
-stable-runtime cutover.
+**Cheapest falsification:** Direct reader-tamper tests and deterministic A→B→C owner/runtime
+fixtures over an isolated Case root, followed by one isolated simulation over a consistent copy of
+the stable repository.
 
 ## Change declarations
 
-**Market/Decision input contract change:** Add one validated Deribit public delivery-price fact for
-the fixed `btc_usd` expiry date. No private or account input.
+**Market/Decision input contract change:** One delivery response witness owns zero or more validated
+date/price members; accepted component-close facts retain their existing complete pair witness.
 
-**Decision Policy change:** Current frozen Position threshold identities remain unchanged for the
-active legacy book. Expiry and quote availability become lifecycle/execution state rather than a
-claim that the Position ended. New threshold semantics remain a later Policy cutover after the
-legacy book drains.
+**Decision Policy change:** NONE. Current nine Position predicates and thresholds remain frozen.
 
-**Outcome/evaluation contract change:** Replace close-only `MATURE_KNOWN | MATURE_UNKNOWN` with a
-versioned terminal union that distinguishes market exit, official contract settlement, and true
-terminal unknown; offline Cohorts derive named eligibility from persisted facts.
+**Outcome/evaluation contract change:** Add Outcome contract version 3, full terminal source
+reconstruction, offline acquisition-window derivation, and legacy evidence-level classification.
 
-**Stage/authorization change:** Permission remains `PUBLIC_SHADOW`. This task authorizes its exact
-isolated simulation, one stable-runtime cutover, and bounded read-only monitoring until the first
-naturally produced admitted Outcome. It grants no order, fill, capital, Policy qualification, or
-private execution authority.
+**Stage/authorization change:** Authorize one isolated simulation; stable runtime cutover remains
+forbidden until a later explicit authority update.
 
 ## Scope
 
-**In:** Position/Outcome domain and owner, Inverse product settlement arithmetic, typed public
-delivery-price transport, Case writer/reader compatibility, future Control recovery, Workbench and
-offline Case projection, owning Authority/contracts, and direct/integration/runtime tests.
+**In:** `short_vol_underwriting` close/settlement/Outcome/Case reader, delivery composition,
+offline Case report, the read-only Workbench Shadow expiry-risk projection, owning
+contracts/authority, and direct/integration/simulation/browser tests.
 
-**Out:** Entry-window redesign, Policy threshold tuning, official Combo execution, per-attempt or
-per-tick persistence, replay, database, supervisor, migration/rewrite of existing Case bytes,
-orders/fills/accounts/capital, and automatic Policy qualification.
+**Out:** opened-record schema migration; Entry-window redesign; successor Position thresholds;
+official Combo execution;
+per-attempt/per-tick persistence; replay; database; supervisor; orders/fills/accounts/capital; and
+automatic Policy qualification.
 
-**Owning module:** `short_vol_underwriting` Position/Outcome owner, composed by `radar_runtime`.
+**Owning module:** `short_vol_underwriting`, composed by `radar_runtime`.
 
 ## Validation
 
-- focused tests: direct Position/Outcome, Case store, runtime composition, Workbench, offline report,
-  and deterministic full-business-chain scenarios;
+- focused tests: Position/Outcome, Case store, delivery composition, offline report, and deterministic
+  full-chain business scenarios, plus exact-identity Workbench lifecycle projection;
 - repository gate: `make check`;
-- public observation: one isolated modified-runtime simulation, then stable runtime GET/HEAD/API,
-  exact active-Case recovery, single-writer, and natural-Outcome observation;
-- no manifest, receipt, commissioning controller, replay, or broad evidence package.
+- public observation: one isolated modified-runtime simulation over a consistent stable-root copy;
+- browser QA: isolated current-fact preview at matching desktop and responsive viewports, recorded in
+  `design-qa.md` without changing the stable runtime;
+- no stable runtime restart/cutover, manifest, receipt, commissioning controller, replay, or broad
+  evidence package.
 
 ## Definition of done
 
-The modified runtime preserves all existing active Case bytes, repeatedly carries exit duty across
-failed pairs and restart, settles expiry from the official public fact, restores future Controls,
-projects named Cohort eligibility without online qualification authority, passes the full business
-scenario matrix and repository gate, runs as the sole stable runtime, and produces and validates at
-least one naturally occurring admitted Outcome. Tests alone do not satisfy the task.
-
-## Closure evidence
-
-- The modified runtime read an isolated copy of all 64 stable Cases, recovered 40/40 admitted
-  Positions with their immutable first CLOSE, retried strictly future public pairs across repeated
-  process boundaries, and produced 20 `EXITED_KNOWN` Outcomes without ending the 20 Cases whose
-  full quantity remained unavailable.
-- The deterministic business matrix exercised Entry persistence, every current Position predicate,
-  failed/skewed pairs, retry-to-exit, recovery-to-exit, recovery-to-settlement, delivery-price
-  fanout, future Control recovery, terminal economics, and all named Cohort projections.
-- Runtime validation exposed and repaired offline exclusion of valid terminal Outcome Segments and
-  the obsolete Workbench "no retry" label. `make check` then passed with 769 tests.
-- Runtime code `6ff78068a7990584aae630bd31dbabcd6b90da9a` is the sole service on loopback port
-  8765. All declared GET/HEAD routes, static-asset identity, API schema, browser rendering,
-  `RUNNING/CURRENT/ready`, single-writer ownership, and PUBLIC_SHADOW boundaries passed.
-- The stable repository naturally produced 20 admitted `EXITED_KNOWN/MARKET_EXIT` Outcomes from
-  public Deribit facts. All 20 passed durable first-CLOSE binding, dual-source, fee/PnL arithmetic,
-  `GAPPED`, and terminal-economics Cohort validation; 20 Positions continue `EXIT_ACQUIRING`.
+The official reader accepts every existing Case unchanged, rejects coherent terminal-evidence
+tampering, version-3 market exits and settlements recompute exactly, partial delivery fanout cannot
+starve another expiry, Cohorts are offline and window-specific, every declared business scenario
+passes on the modified runtime, `make check` passes without overwriting concurrent Web work, and the
+isolated simulation preserves the original Case bytes. The trader Workbench must exclude Controls,
+retain exit/settlement responsibility across Gap, and never render unknown economics as zero or a
+terminal claim. Tests alone do not satisfy the task.

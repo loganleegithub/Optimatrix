@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
@@ -49,7 +50,7 @@ from short_vol_underwriting import (
     CloseQuoteFacts,
     CloseQuoteState,
     ComponentLegRole,
-    DeliveryPriceWitness,
+    DeliveryPriceResponseWitness,
     EntryEconomics,
     FactBoundary,
     FixedContractShadowOwner,
@@ -82,6 +83,8 @@ from short_vol_underwriting import (
     compute_close_economics,
     compute_contract_settlement_economics,
     compute_entry_economics,
+    contract_settlement_rule_identity,
+    deribit_option_delivery_fee_rate,
     evaluate_close_opportunity,
     load_policy_chain,
     ordered_candidate_invalidation,
@@ -1969,6 +1972,55 @@ def test_contract_settlement_caps_non_daily_delivery_fee_per_itm_leg() -> None:
     assert economics.native_delivery_fee_reserve == Decimal("0.00003")
 
 
+def test_delivery_fee_class_and_rule_identity_are_bound_to_expiry_date() -> None:
+    daily_expiry = int(datetime(2026, 8, 13, 8, tzinfo=UTC).timestamp() * 1_000)
+    friday_expiry = int(datetime(2026, 8, 14, 8, tzinfo=UTC).timestamp() * 1_000)
+
+    assert deribit_option_delivery_fee_rate(daily_expiry) == 0
+    assert deribit_option_delivery_fee_rate(friday_expiry) == Decimal("0.00015")
+    assert contract_settlement_rule_identity(
+        product_spec_identity=INVERSE_BTC.identity,
+        expiry_ms=daily_expiry,
+    ) != contract_settlement_rule_identity(
+        product_spec_identity=INVERSE_BTC.identity,
+        expiry_ms=friday_expiry,
+    )
+
+
+def test_delivery_response_envelope_requires_one_strict_causal_session() -> None:
+    origin = _boundary(1, 100)
+    sent = _boundary(2, 110)
+    receipt = _boundary(3, 120)
+    response = DeliveryPriceResponseWitness.create(
+        boundary=receipt,
+        request_id=7,
+        owner_origin_boundary=origin,
+        sent_boundary=sent,
+        records_total=0,
+        members=(),
+    )
+    assert response.members == ()
+
+    with pytest.raises(ValueError, match="strictly causal"):
+        DeliveryPriceResponseWitness.create(
+            boundary=sent,
+            request_id=7,
+            owner_origin_boundary=origin,
+            sent_boundary=sent,
+            records_total=0,
+            members=(),
+        )
+    with pytest.raises(ValueError, match="session boundary"):
+        DeliveryPriceResponseWitness.create(
+            boundary=replace(receipt, session_epoch=2),
+            request_id=7,
+            owner_origin_boundary=origin,
+            sent_boundary=sent,
+            records_total=0,
+            members=(),
+        )
+
+
 def test_admission_schedules_one_rpc_and_consumes_every_terminal_race() -> None:
     combo_identity = "sha256:" + "7" * 64
     instrument_name = "BTC-TEST-COMBO"
@@ -2329,33 +2381,17 @@ def test_recovered_first_close_continues_into_official_settlement_after_gap(
     delivery_boundary = _boundary(4, 140)
     delivery_date = "1970-01-01"
     delivery_price = Decimal("100000")
-    source_identity = canonical_identity(
-        "OfficialDeliveryPriceSourceIdentity",
-        delivery_boundary.runtime_identity,
-        71,
-        "public/get_delivery_prices",
-        dict(DELIVERY_PRICE_REQUEST_PARAMS),
-        "btc_usd",
-        delivery_date,
-        delivery_price,
-        1,
-        terminal_boundary.as_object(),
-        sent_boundary.as_object(),
-        delivery_boundary.as_object(),
+    response = DeliveryPriceResponseWitness.create(
+        boundary=delivery_boundary,
+        request_id=71,
+        owner_origin_boundary=terminal_boundary,
+        sent_boundary=sent_boundary,
+        records_total=1,
+        members=((delivery_date, delivery_price),),
     )
     settled = owner.accept_delivery_price(
         anchor_identity=entry_identity,
-        witness=DeliveryPriceWitness(
-            source_identity=source_identity,
-            boundary=delivery_boundary,
-            index_name="btc_usd",
-            delivery_date=delivery_date,
-            delivery_price_usdc_per_btc=delivery_price,
-            request_id=71,
-            owner_origin_boundary=terminal_boundary,
-            sent_boundary=sent_boundary,
-            records_total=1,
-        ),
+        witness=response.members[0],
     )
 
     outcome = next(item for item in settled.emitted if item.object_kind == "SHADOW_OUTCOME")
@@ -2577,33 +2613,14 @@ def test_one_delivery_history_request_settles_every_waiting_expired_position(
     delivery_boundary = _boundary(4, 140)
     delivery_price = Decimal("100000")
     delivery_date = "1970-01-01"
-    source_identity = canonical_identity(
-        "OfficialDeliveryPriceSourceIdentity",
-        delivery_boundary.runtime_identity,
-        71,
-        "public/get_delivery_prices",
-        dict(DELIVERY_PRICE_REQUEST_PARAMS),
-        "btc_usd",
-        delivery_date,
-        delivery_price,
-        1,
-        terminal_boundary.as_object(),
-        sent_boundary.as_object(),
-        delivery_boundary.as_object(),
-    )
     settled = owner.accept_delivery_prices(
-        (
-            DeliveryPriceWitness(
-                source_identity=source_identity,
-                boundary=delivery_boundary,
-                index_name="btc_usd",
-                delivery_date=delivery_date,
-                delivery_price_usdc_per_btc=delivery_price,
-                request_id=71,
-                owner_origin_boundary=terminal_boundary,
-                sent_boundary=sent_boundary,
-                records_total=1,
-            ),
+        DeliveryPriceResponseWitness.create(
+            boundary=delivery_boundary,
+            request_id=71,
+            owner_origin_boundary=terminal_boundary,
+            sent_boundary=sent_boundary,
+            records_total=1,
+            members=((delivery_date, delivery_price),),
         )
     )
 
@@ -2615,6 +2632,197 @@ def test_one_delivery_history_request_settles_every_waiting_expired_position(
         cast(Mapping[str, object], written[item.object_identity]["payload"])["terminal_state"]
         for item in outcomes
     } == {"SETTLED_KNOWN"}
+
+
+def test_delivery_member_settles_other_expiry_when_request_owner_date_is_missing(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    first = _typed_recovery_entry(bindings, first_close=True)
+    second_identity = canonical_identity("ShadowEntryIdentity", "settlement-other-date")
+    second_terms = replace(first.entry_terms, expiry_ms=86_400_000)
+    second = replace(
+        first,
+        case_id=canonical_identity("ShadowCaseIdentity", "settlement-other-date"),
+        shadow_entry_identity=second_identity,
+        entry_terms=second_terms,
+        current_segment_identity=canonical_identity(
+            "ShadowCaseSegmentIdentity", "settlement-other-date"
+        ),
+        entry_payload={
+            **first.entry_payload,
+            "shadow_entry_identity": second_identity,
+            "origin_case_id": canonical_identity("ShadowCaseIdentity", "settlement-other-date"),
+            "current_segment_identity": canonical_identity(
+                "ShadowCaseSegmentIdentity", "settlement-other-date"
+            ),
+            "expiry_ms": second_terms.expiry_ms,
+        },
+    )
+    owner.activate_recovered_entries((first, second))
+    for entry in (first, second):
+        owner.settle_position(
+            anchor_identity=entry.shadow_entry_identity,
+            facts=_quiet_position_facts(boundary=_boundary(1, 110)),
+            allocate_request_id=lambda: pytest.fail("adoption baseline scheduled acquisition"),
+        )
+
+    terminal_boundary = _boundary(2, 120)
+    natural = replace(
+        _quiet_position_facts(boundary=terminal_boundary),
+        short_leg_state="delivered",
+        long_leg_state="delivered",
+        short_leg_active=False,
+        long_leg_active=False,
+        lifecycle_short_source=SourceFact(
+            canonical_identity("LifecycleSourceIdentity", "other-date-short"),
+            terminal_boundary,
+        ),
+        lifecycle_long_source=SourceFact(
+            canonical_identity("LifecycleSourceIdentity", "other-date-long"),
+            terminal_boundary,
+        ),
+    )
+    first_transition = owner.settle_position(
+        anchor_identity=first.shadow_entry_identity,
+        facts=natural,
+        allocate_request_id=lambda: 71,
+    )
+    second_transition = owner.settle_position(
+        anchor_identity=second.shadow_entry_identity,
+        facts=natural,
+        allocate_request_id=lambda: pytest.fail("second waiter scheduled duplicate request"),
+    )
+    assert second_transition.request_intents == ()
+    (intent,) = first_transition.request_intents
+    sent_boundary = _boundary(3, 130)
+    owner.note_request_sent(request_id=intent.request_id, boundary=sent_boundary)
+    response_boundary = _boundary(4, 140)
+    partial = owner.accept_delivery_prices(
+        DeliveryPriceResponseWitness.create(
+            boundary=response_boundary,
+            request_id=intent.request_id,
+            owner_origin_boundary=terminal_boundary,
+            sent_boundary=sent_boundary,
+            records_total=1,
+            members=(("1970-01-02", Decimal("101000")),),
+        )
+    )
+
+    (other_date_outcome,) = tuple(
+        item for item in partial.emitted if item.object_kind == "SHADOW_OUTCOME"
+    )
+    other_payload = cast(
+        Mapping[str, object],
+        _written_objects(tmp_path, bindings=bindings)[other_date_outcome.object_identity][
+            "payload"
+        ],
+    )
+    assert other_payload["shadow_entry_identity"] == second_identity
+    assert owner.active_trade_identities == frozenset({first.shadow_entry_identity})
+
+    retry_boundary = _boundary(5, 30_141)
+    retry_natural = replace(
+        natural,
+        boundary=retry_boundary,
+        lifecycle_short_source=SourceFact(
+            canonical_identity("LifecycleSourceIdentity", "owner-date-short"),
+            retry_boundary,
+        ),
+        lifecycle_long_source=SourceFact(
+            canonical_identity("LifecycleSourceIdentity", "owner-date-long"),
+            retry_boundary,
+        ),
+    )
+    retry = owner.settle_position(
+        anchor_identity=first.shadow_entry_identity,
+        facts=retry_natural,
+        allocate_request_id=lambda: 72,
+    )
+    (retry_intent,) = retry.request_intents
+    retry_sent = _boundary(6, 30_142)
+    owner.note_request_sent(request_id=retry_intent.request_id, boundary=retry_sent)
+    completed = owner.accept_delivery_prices(
+        DeliveryPriceResponseWitness.create(
+            boundary=_boundary(7, 30_143),
+            request_id=retry_intent.request_id,
+            owner_origin_boundary=retry_boundary,
+            sent_boundary=retry_sent,
+            records_total=1,
+            members=(("1970-01-01", Decimal("100000")),),
+        )
+    )
+    assert (
+        len(tuple(item for item in completed.emitted if item.object_kind == "SHADOW_OUTCOME")) == 1
+    )
+    assert owner.active_trade_identities == frozenset()
+
+
+def test_late_delivery_response_releases_attempt_and_retries_settlement_duty(
+    tmp_path: Path,
+) -> None:
+    owner, bindings = _owner(tmp_path)
+    entry = _typed_recovery_entry(bindings, first_close=True)
+    owner.activate_recovered_entries((entry,))
+    owner.settle_position(
+        anchor_identity=entry.shadow_entry_identity,
+        facts=_quiet_position_facts(boundary=_boundary(1, 110)),
+        allocate_request_id=lambda: pytest.fail("adoption baseline scheduled acquisition"),
+    )
+    origin = _boundary(2, 120)
+    natural = replace(
+        _quiet_position_facts(boundary=origin),
+        short_leg_state="delivered",
+        long_leg_state="delivered",
+        short_leg_active=False,
+        long_leg_active=False,
+        lifecycle_short_source=SourceFact(
+            canonical_identity("LifecycleSourceIdentity", "late-delivery-short"), origin
+        ),
+        lifecycle_long_source=SourceFact(
+            canonical_identity("LifecycleSourceIdentity", "late-delivery-long"), origin
+        ),
+    )
+    scheduled = owner.settle_position(
+        anchor_identity=entry.shadow_entry_identity,
+        facts=natural,
+        allocate_request_id=lambda: 71,
+    )
+    (intent,) = scheduled.request_intents
+    sent = _boundary(3, 130)
+    owner.note_request_sent(request_id=intent.request_id, boundary=sent)
+    late_boundary = _boundary(4, 30_131)
+    late = owner.accept_delivery_prices(
+        DeliveryPriceResponseWitness.create(
+            boundary=late_boundary,
+            request_id=intent.request_id,
+            owner_origin_boundary=origin,
+            sent_boundary=sent,
+            records_total=1,
+            members=(("1970-01-01", Decimal("100000")),),
+        )
+    )
+    assert not any(item.object_kind == "SHADOW_OUTCOME" for item in late.emitted)
+    assert owner.active_trade_identities == frozenset({entry.shadow_entry_identity})
+
+    retry_boundary = _boundary(5, 60_131)
+    retry_facts = replace(
+        natural,
+        boundary=retry_boundary,
+        lifecycle_short_source=SourceFact(
+            canonical_identity("LifecycleSourceIdentity", "late-retry-short"), retry_boundary
+        ),
+        lifecycle_long_source=SourceFact(
+            canonical_identity("LifecycleSourceIdentity", "late-retry-long"), retry_boundary
+        ),
+    )
+    retry = owner.settle_position(
+        anchor_identity=entry.shadow_entry_identity,
+        facts=retry_facts,
+        allocate_request_id=lambda: 72,
+    )
+    (retry_intent,) = retry.request_intents
+    assert retry_intent.request_id == 72
 
 
 def test_downstream_writer_publishes_once_and_rejects_conflicting_identity(tmp_path: Path) -> None:

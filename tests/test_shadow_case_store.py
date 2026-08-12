@@ -23,9 +23,11 @@ from short_vol_radar.score import (
 )
 from short_vol_underwriting import (
     UNDERWRITING_COMPONENT_SELECTION_RULE_IDENTITY,
+    ExitAcquisitionProfile,
     FixedContractShadowOwner,
     RuntimeBindings,
     ShadowCaseReadStatus,
+    ShadowCaseSegmentStatus,
     ShadowCaseStore,
     ShadowCaseStoreError,
     ShadowStateError,
@@ -55,6 +57,14 @@ COMPONENT_NON_CLAIMS = [
     "NO_LIQUIDITY_RESERVATION",
     "ATOMIC_EXECUTABILITY_UNPROVEN",
 ]
+
+
+def _exit_acquisition_profile() -> dict[str, object]:
+    return ExitAcquisitionProfile.create(
+        response_budget_ms=30_000,
+        maximum_source_skew_ms=6_000,
+        maximum_receive_skew_ms=4_000,
+    ).as_object()
 
 
 def _boundary(causal_seq: int) -> FactBoundary:
@@ -518,6 +528,7 @@ def _record_first_close_and_schedule(
             "primary_close_reason": "ECONOMIC_EXIT_BOUNDARY_REACHED",
             "secondary_close_reasons": [],
             "first_latched_close_action_identity": close_identity,
+            "exit_acquisition_profile": _exit_acquisition_profile(),
             "action_fact_boundary": _boundary(causal_seq).as_object(),
         },
     )
@@ -765,6 +776,22 @@ def test_shadow_entry_opens_exactly_one_minimal_case(tmp_path: Path) -> None:
     ]
     read = case_store.read_case(case_id, runtime_active=True)
     assert read.status is ShadowCaseReadStatus.OPEN
+    inactive_read = case_store.read_case(case_id)
+    assert inactive_read.segments[-1].status is ShadowCaseSegmentStatus.INCOMPLETE_UNCLEAN_EXIT
+    offline_bindings = RuntimeBindings(
+        code_identity=_bindings.code_identity,
+        runtime_identity="sha256:" + "d" * 64,
+        radar_policy_identity=_bindings.radar_policy_identity,
+        underwriting_policy_identity=_bindings.underwriting_policy_identity,
+        position_policy_identity=_bindings.position_policy_identity,
+    )
+    offline_reader = ShadowCaseStore(
+        tmp_path / "cases",
+        bindings=offline_bindings,
+        policies=case_store.policies,
+    )
+    asserted_active = offline_reader.read_case(case_id, runtime_active=True)
+    assert asserted_active.segments[-1].status is ShadowCaseSegmentStatus.OPEN
     assert read.opened["shadow_entry_identity"] == entry_identity
     underwriting = read.opened["underwriting"]
     assert isinstance(underwriting, Mapping)
@@ -1285,6 +1312,7 @@ def test_first_close_intent_is_durable_before_transient_exit_attempts_and_remain
             "primary_close_reason": "ECONOMIC_EXIT_BOUNDARY_REACHED",
             "secondary_close_reasons": [],
             "first_latched_close_action_identity": close_identity,
+            "exit_acquisition_profile": _exit_acquisition_profile(),
             "action_fact_boundary": _boundary(5).as_object(),
         },
     )
@@ -1361,6 +1389,8 @@ def test_first_close_intent_is_durable_before_transient_exit_attempts_and_remain
     assert recoverable.first_close_state == "LATCHED"
     assert recoverable.attempt_state == "NOT_SCHEDULED"
     assert recoverable.first_close_decision is not None
+    assert recoverable.exit_acquisition_profile is not None
+    assert recoverable.exit_acquisition_profile.as_object() == _exit_acquisition_profile()
     assert case_residue.exists()
     assert segment_residue.exists()
     assert linked_case_residue.exists()
@@ -1372,6 +1402,7 @@ def test_first_close_intent_is_durable_before_transient_exit_attempts_and_remain
     )
     assert adopted.first_close_state == "LATCHED"
     assert adopted.attempt_state == "NOT_SCHEDULED"
+    assert adopted.exit_acquisition_profile == recoverable.exit_acquisition_profile
     recovery_owner = FixedContractShadowOwner(
         policies=case_store.policies,
         bindings=restarted_bindings,

@@ -93,8 +93,8 @@ commissioning, or host-identity proof.
    at `UNKNOWN` until required fresh facts arrive;
 7. publish each new Position-bearing Case only as one complete initial Case directory containing
    `opened.json + segments/0/opened.json`; publish later Segment records, the combined
-   legacy first-close record or new intent-only first-close record, and terminal Outcomes
-   individually;
+   legacy first-close record or new intent-only first-close/profile record, and versioned terminal
+   Outcomes individually;
 8. on SIGINT/SIGTERM or handled failure, close active Segments without terminating aggregate
    Outcomes.
 
@@ -153,8 +153,9 @@ Every active admitted Entry and future selected Control appears once by its orig
 identity, whether opened in this runtime or restored. The snapshot distinguishes origin runtime
 from current Segment runtime and exposes Segment state, `CONTINUOUS | GAPPED`, gap count,
 current-data availability, immutable first-CLOSE intent, current acquisition/settlement state,
-terminal method, and named Cohort facts. The legacy `qualification_eligible` field is only the
-strict-continuity projection. A restored row is `UNKNOWN` until fresh facts settle; the browser
+terminal method, and terminal evidence level. The legacy `qualification_eligible` field is only the
+strict-continuity projection; version-3 Cohort membership is derived only by the offline report.
+A restored row is `UNKNOWN` until fresh facts settle; the browser
 cannot turn `HANDOFF_GAP` into `HOLD` or `CLOSE`. Runtime health/readiness remains a separate service
 signal.
 
@@ -169,7 +170,8 @@ files or qualify a Policy.
 
 Restoring a Case increments no Candidate, admission, or `SHADOW_CASE_OPENED` counter. An admitted
 terminal `SHADOW_CASE_OUTCOME` is counted once when it first becomes durable. A gapped known exit or
-settlement remains terminal-economics eligible while continuous-path eligibility is false.
+settlement remains available to the offline terminal-economics evaluator while whole-path and
+acquisition-window eligibility remain separate questions.
 
 For each evaluable Underwriting row, Workbench projects the owner-generated selected protective leg,
 complete signed six-predicate margin vector, and all failed predicates. Admission and close rows
@@ -243,7 +245,8 @@ Outcome remains a separate product result.
 Recovery tests run at least runtime A → B → C over one repository and prove stable aggregate
 identity, all-active scanning, terminal/legacy-Control exclusion, future-Control recovery,
 recovery-first UNKNOWN, Segment-chain ordering, gap quality without synthetic CLOSE, immutable
-first-CLOSE intent before acquisition, continued serial retry after uncertain loss, first eligible
-exit, shared official settlement, one known gapped terminal-economics Outcome, no duplicate funnel
-admission, and immutable records. The schema-v5 runtime has no V1 migration or compatibility command. Every
+first-CLOSE intent/profile before acquisition, continued serial retry after uncertain loss, first
+eligible exit with reconstructable pair evidence, partial/empty/late shared official settlement,
+one known gapped terminal-economics Outcome, no duplicate funnel admission, and immutable records.
+The schema-v5 runtime has no V1 migration or compatibility command. Every
 live invocation and stable-root choice remains governed by `CURRENT_STAGE`.

@@ -32,6 +32,7 @@ from short_vol_underwriting.admission import (
 )
 from short_vol_underwriting.case_store import RecoverableShadowEntry
 from short_vol_underwriting.close import (
+    DEFAULT_EXIT_ACQUISITION_RETRY_INTERVAL_MS,
     CloseAtomicAvailability,
     CloseBookAvailability,
     CloseOpportunity,
@@ -40,12 +41,14 @@ from short_vol_underwriting.close import (
     CloseQuoteFacts,
     CloseQuoteState,
     ComponentPostCloseAttempt,
+    ExitAcquisitionProfile,
     NormalizedCloseQuote,
     PostCloseAttempt,
     PostCloseAttemptOwner,
     PostCloseAttemptStatus,
     classify_close_quote,
     evaluate_close_opportunity,
+    exit_acquisition_sample_identity,
     normalize_close_quote,
 )
 from short_vol_underwriting.constants import (
@@ -100,8 +103,11 @@ from short_vol_underwriting.model import (
 from short_vol_underwriting.observation import Observation
 from short_vol_underwriting.policy import PolicyChain
 from short_vol_underwriting.settlement import (
+    SETTLEMENT_PRICE_RETRY_INTERVAL_MS,
+    DeliveryPriceResponseWitness,
     DeliveryPriceWitness,
     SettlementPriceAttempt,
+    contract_settlement_rule_identity,
     delivery_date_for_expiry,
     deribit_option_delivery_fee_rate,
 )
@@ -380,6 +386,8 @@ class _TradeRecord:
     gap_count: int = 0
     qualification_eligible: bool = True
     recovered_attempt_state: str = "NOT_SCHEDULED"
+    exit_acquisition_profile: ExitAcquisitionProfile | None = None
+    selected_exit_sample_identity: str | None = None
     last_position_fingerprint: str | None = None
     last_quote_key: tuple[str, str] | None = None
     last_quote_identity: str | None = None
@@ -657,6 +665,7 @@ class FixedContractShadowOwner:
             gap_count=seed.gap_count,
             qualification_eligible=seed.qualification_eligible,
             recovered_attempt_state=seed.attempt_state,
+            exit_acquisition_profile=seed.exit_acquisition_profile,
             first_close_decision=close,
         )
         self.state_store.restore_current_record(
@@ -1492,52 +1501,55 @@ class FixedContractShadowOwner:
         if anchor_identity not in self._trades:
             self._begin_transition()
             return self._finish_transition()
-        return self.accept_delivery_prices((witness,))
+        return self.accept_delivery_prices(
+            DeliveryPriceResponseWitness(
+                source_identity=witness.response_source_identity,
+                boundary=witness.boundary,
+                index_name=witness.index_name,
+                request_id=witness.request_id,
+                owner_origin_boundary=witness.owner_origin_boundary,
+                sent_boundary=witness.sent_boundary,
+                records_total=witness.records_total,
+                members=(witness,),
+            )
+        )
 
     def accept_delivery_prices(
         self,
-        witnesses: Sequence[DeliveryPriceWitness],
+        response: DeliveryPriceResponseWitness,
     ) -> OwnerTransition:
         """Fan one official history response out to every waiting expired Position."""
 
         self._begin_transition()
-        members = tuple(witnesses)
-        leader = next(
+        request_owner = next(
             (
                 trade
                 for trade in self._trades.values()
                 if trade.settlement_price_attempt is not None
+                and trade.settlement_price_attempt.owns_response(response)
             ),
             None,
         )
-        attempt = leader.settlement_price_attempt if leader is not None else None
-        leader_witness = (
-            next(
-                (
-                    witness
-                    for witness in members
-                    if attempt is not None
-                    and witness.delivery_date == attempt.expected_delivery_date
-                ),
-                None,
-            )
-            if members
-            else None
-        )
-        if (
-            leader is None
-            or attempt is None
-            or leader_witness is None
-            or not attempt.accepts(
-                leader_witness,
-                response_budget_ms=(
-                    self.policies.position.component_book_snapshot_response_budget_ms
-                ),
-            )
-        ):
+        if request_owner is None:
             return self._finish_transition()
-        by_date = {witness.delivery_date: witness for witness in members}
-        response_boundary = leader_witness.boundary
+        request_attempt = request_owner.settlement_price_attempt
+        assert request_attempt is not None
+        if not request_attempt.accepts_response(
+            response,
+            response_budget_ms=(self.policies.position.component_book_snapshot_response_budget_ms),
+        ):
+            for waiting in self._trades.values():
+                if waiting.settlement_price_attempt is not None or waiting.settlement_waiting:
+                    waiting.settlement_price_attempt = None
+                    waiting.settlement_waiting = False
+                    self._defer_acquisition_retry(
+                        waiting,
+                        response.boundary,
+                        retry_interval_ms=SETTLEMENT_PRICE_RETRY_INTERVAL_MS,
+                    )
+            return self._finish_transition()
+        by_date = {witness.delivery_date: witness for witness in response.members}
+        response_boundary = response.boundary
         for trade in tuple(self._trades.values()):
             if trade.observation.state is not OutcomeState.PENDING or (
                 trade.settlement_price_attempt is None and not trade.settlement_waiting
@@ -1547,7 +1559,11 @@ class FixedContractShadowOwner:
             trade.settlement_price_attempt = None
             trade.settlement_waiting = False
             if witness is None:
-                self._defer_acquisition_retry(trade, response_boundary)
+                self._defer_acquisition_retry(
+                    trade,
+                    response_boundary,
+                    retry_interval_ms=SETTLEMENT_PRICE_RETRY_INTERVAL_MS,
+                )
                 continue
             terms = trade.entry_terms
             native_gross_entry_credit = terms.native_gross_entry_credit
@@ -1683,7 +1699,11 @@ class FixedContractShadowOwner:
                     if waiting.settlement_price_attempt is not None or waiting.settlement_waiting:
                         waiting.settlement_price_attempt = None
                         waiting.settlement_waiting = False
-                        self._defer_acquisition_retry(waiting, boundary)
+                        self._defer_acquisition_retry(
+                            waiting,
+                            boundary,
+                            retry_interval_ms=SETTLEMENT_PRICE_RETRY_INTERVAL_MS,
+                        )
                 return self._finish_transition()
             attempt = trade.post_close_attempt
             if attempt is None:
@@ -1881,6 +1901,17 @@ class FixedContractShadowOwner:
                 decision.serialized_action == "CLOSE" and trade.first_close_decision is None
             )
             if first_close_now:
+                trade.exit_acquisition_profile = ExitAcquisitionProfile.create(
+                    response_budget_ms=(
+                        self.policies.position.component_book_snapshot_response_budget_ms
+                    ),
+                    maximum_source_skew_ms=(
+                        self.policies.position.maximum_component_pair_source_skew_ms
+                    ),
+                    maximum_receive_skew_ms=(
+                        self.policies.position.maximum_component_pair_receive_skew_ms
+                    ),
+                )
                 trade.first_close_decision = decision
                 trade.observation.latch_close(
                     decision.position_action_identity,
@@ -4620,6 +4651,11 @@ class FixedContractShadowOwner:
                     decision.first_latched_close_action_identity
                 ),
                 "scheduled_post_close_attempt_identity": attempt_identity,
+                "exit_acquisition_profile": (
+                    trade.exit_acquisition_profile.as_object()
+                    if trade.exit_acquisition_profile is not None
+                    else None
+                ),
                 "action_fact_boundary": facts.boundary.as_object(),
             },
         )
@@ -4770,11 +4806,10 @@ class FixedContractShadowOwner:
         self,
         trade: _TradeRecord,
         boundary: FactBoundary,
+        *,
+        retry_interval_ms: int,
     ) -> None:
-        trade.next_acquisition_monotonic_ms = (
-            boundary.received_monotonic_ms
-            + self.policies.position.component_book_snapshot_response_budget_ms
-        )
+        trade.next_acquisition_monotonic_ms = boundary.received_monotonic_ms + retry_interval_ms
 
     def _release_post_close_attempt_for_retry(
         self,
@@ -4785,7 +4820,16 @@ class FixedContractShadowOwner:
             return
         terminal_boundary = attempt.terminal_boundary or attempt.origin_boundary
         trade.post_close_attempt = None
-        self._defer_acquisition_retry(trade, terminal_boundary)
+        profile = trade.exit_acquisition_profile
+        self._defer_acquisition_retry(
+            trade,
+            terminal_boundary,
+            retry_interval_ms=(
+                profile.retry_interval_ms
+                if profile is not None
+                else DEFAULT_EXIT_ACQUISITION_RETRY_INTERVAL_MS
+            ),
+        )
 
     @staticmethod
     def _acquisition_retry_due(
@@ -5139,12 +5183,27 @@ class FixedContractShadowOwner:
             ),
         )
         self._counts["shadow_close_opportunity_count"] += 1
+        pair_witness = facts.component_pair_witness
+        if pair_witness is None:
+            raise RuntimeError("eligible component close lacks its paired source witness")
+        sample_identity = exit_acquisition_sample_identity(
+            shadow_entry_identity=trade.anchor_identity,
+            first_close_action_identity=trade.first_close_decision.position_action_identity,
+            profile_identity=(
+                trade.exit_acquisition_profile.profile_identity
+                if trade.exit_acquisition_profile is not None
+                else None
+            ),
+            component_pair_identity=pair_witness.pair_identity,
+            boundary=facts.boundary,
+        )
         exit_identity = trade.observation.accept_eligible_exit(
-            close_opportunity_evaluation_identity=opportunity_identity,
+            close_opportunity_evaluation_identity=sample_identity,
             boundary=CaseFactBoundary(trade.segment_sequence, facts.boundary),
         )
         if exit_identity is None:
             return
+        trade.selected_exit_sample_identity = sample_identity
         self._emit(
             "SHADOW_COUNTERFACTUAL_EXIT",
             exit_identity,
@@ -5303,8 +5362,14 @@ class FixedContractShadowOwner:
         else:
             effective_net_pnl = None
             effective_net_loss = None
+        component_pair = (
+            component_close_facts.component_pair_witness
+            if component_close_facts is not None
+            else None
+        )
+        acquisition_profile = trade.exit_acquisition_profile
         payload: dict[str, object] = {
-            "outcome_contract_version": 2,
+            "outcome_contract_version": 3,
             "terminal_method": terminal_method,
             "shadow_outcome_identity": trade.observation.terminal_outcome_identity,
             "shadow_observation_identity": trade.observation.observation_identity,
@@ -5369,6 +5434,33 @@ class FixedContractShadowOwner:
             "delivery_fee_rate_fraction": (
                 deribit_option_delivery_fee_rate(entry_terms.expiry_ms)
                 if settlement is not None
+                else None
+            ),
+            "contract_settlement_rule_identity": (
+                contract_settlement_rule_identity(
+                    product_spec_identity=entry_terms.product_spec_identity,
+                    expiry_ms=entry_terms.expiry_ms,
+                )
+                if settlement is not None and entry_terms.product_spec_identity is not None
+                else None
+            ),
+            "exit_acquisition_profile": (
+                acquisition_profile.as_object() if acquisition_profile is not None else None
+            ),
+            "exit_acquisition_sample_identity": trade.selected_exit_sample_identity,
+            "close_component_pair_timing": (
+                component_pair.timing_as_object() if component_pair is not None else None
+            ),
+            "close_component_pair_limits": (
+                {
+                    "maximum_source_skew_ms": (
+                        self.policies.position.maximum_component_pair_source_skew_ms
+                    ),
+                    "maximum_receive_skew_ms": (
+                        self.policies.position.maximum_component_pair_receive_skew_ms
+                    ),
+                }
+                if component_pair is not None
                 else None
             ),
             "censor_mask": (
@@ -5448,14 +5540,23 @@ class FixedContractShadowOwner:
             ),
             "close_component_quote_source_refs": (
                 [
-                    {"canonical_leg_role": role, **source.as_ref()}
-                    for role, source in (
-                        ("SHORT", component_close_facts.component_short_quote_source),
-                        ("LONG", component_close_facts.component_long_quote_source),
+                    {
+                        "canonical_leg_role": role,
+                        "source_identity": witness.source_identity,
+                        "receipt_fact_boundary": witness.boundary.as_object(),
+                        "source_timestamp_ms": witness.source_timestamp_ms,
+                        "global_continuity_epoch": witness.global_continuity_epoch,
+                        "request_id": witness.request_id,
+                        "owner_origin_boundary": witness.owner_origin_boundary.as_object(),
+                        "sent_boundary": witness.sent_boundary.as_object(),
+                        "change_id": witness.change_id,
+                    }
+                    for role, witness in (
+                        ("SHORT", component_pair.short),
+                        ("LONG", component_pair.long),
                     )
-                    if source is not None
                 ]
-                if component_close_facts is not None
+                if component_pair is not None
                 else []
             ),
             "close_component_legs": (

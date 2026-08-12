@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Mapping
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from options_domain import INVERSE_BTC
@@ -22,6 +24,10 @@ from short_vol_underwriting import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _identity(digit: str) -> str:
+    return "sha256:" + digit * 64
 
 
 def _leg(action: str, raw_vwap_native: str, index_price: str) -> dict[str, object]:
@@ -110,16 +116,18 @@ def _case(
             "observation_quality": "GAPPED" if gapped else "CONTINUOUS",
         }
     segments = (
-        (
-            ShadowCaseSegmentRead(
-                sequence=0,
-                status=ShadowCaseSegmentStatus.CENSORED_AT_STOP,
-                opened={"observation_quality": "GAPPED"},
-                closed={"terminal_state": "CENSORED_AT_STOP"},
+        ShadowCaseSegmentRead(
+            sequence=0,
+            status=(
+                ShadowCaseSegmentStatus.TERMINATED_BY_OUTCOME
+                if outcome is not None
+                else ShadowCaseSegmentStatus.INCOMPLETE_UNCLEAN_EXIT
+                if unclean
+                else ShadowCaseSegmentStatus.OPEN
             ),
-        )
-        if gapped
-        else ()
+            opened={"observation_quality": "GAPPED" if gapped else "CONTINUOUS"},
+            closed=None,
+        ),
     )
     return ShadowCaseRead(
         status=(
@@ -134,6 +142,76 @@ def _case(
         outcome=outcome,
         segments=segments,
     )
+
+
+def _v3_exit_case(
+    digit: str,
+    *,
+    gap_before_first_close: bool = False,
+    gap_after_first_close: bool = False,
+    discontinuity_truth: str = "FALSE",
+) -> ShadowCaseRead:
+    base = _case(
+        digit,
+        expiry_ms=6_000,
+        selection_band="HIGH",
+        entry_band="HIGH",
+        outcome_state="EXITED_KNOWN",
+        gapped=gap_before_first_close or gap_after_first_close,
+    )
+    assert base.outcome is not None
+    profile = {
+        "profile_identity": _identity("a"),
+        "version": 1,
+        "selection_rule": "FIRST_ELIGIBLE_OBSERVED_PAIRED_SAMPLE",
+        "retry_interval_ms": 30_000,
+        "response_budget_ms": 30_000,
+        "maximum_source_skew_ms": 6_000,
+        "maximum_receive_skew_ms": 4_000,
+    }
+    first_close_segment = 0 if gap_after_first_close else 1 if gap_before_first_close else 0
+    outcome_segment = 1 if gap_before_first_close or gap_after_first_close else 0
+    truth_vector = ["FALSE"] * 9
+    truth_vector[2] = discontinuity_truth
+    first_close = {
+        "segment_sequence": first_close_segment,
+        "predicate_truth_vector": truth_vector,
+        "exit_acquisition_profile": profile,
+    }
+    outcome = {
+        **base.outcome,
+        "outcome_contract_version": 3,
+        "segment_sequence": outcome_segment,
+        "selected_exit_identity": _identity("b"),
+        "exit_acquisition_sample_identity": _identity("c"),
+        "exit_acquisition_profile": profile,
+        "close_component_pair_identity": _identity("d"),
+        "close_component_pair_timing": {"later_receipt": {}},
+        "close_component_pair_limits": {
+            "maximum_source_skew_ms": 6_000,
+            "maximum_receive_skew_ms": 4_000,
+        },
+        "close_component_quote_source_refs": [{}, {}],
+    }
+    segments = (
+        (
+            ShadowCaseSegmentRead(
+                sequence=0,
+                status=ShadowCaseSegmentStatus.CENSORED_AT_STOP,
+                opened={"observation_quality": "CONTINUOUS"},
+                closed={"terminal_state": "CENSORED_AT_STOP"},
+            ),
+            ShadowCaseSegmentRead(
+                sequence=1,
+                status=ShadowCaseSegmentStatus.TERMINATED_BY_OUTCOME,
+                opened={"observation_quality": "GAPPED"},
+                closed=None,
+            ),
+        )
+        if gap_before_first_close or gap_after_first_close
+        else base.segments
+    )
+    return replace(base, first_close=first_close, outcome=outcome, segments=segments)
 
 
 def test_named_cohorts_keep_gapped_known_settlement_without_claiming_continuous_path() -> None:
@@ -213,6 +291,7 @@ def test_case_only_report_separates_continuous_and_gapped_denominators() -> None
         "secondary_view": "GAPPED",
         "pending_view": "PENDING_OPEN",
         "incomplete_view": "INCOMPLETE_UNCLEAN_EXIT",
+        "observation_unavailable_view": "NOT_AVAILABLE",
         "snapshot_mode": "SUPPLIED_CASE_READ_STATES",
         "non_claims": [
             "NOT_UNCONDITIONAL_MARKET_OPPORTUNITY_RATE",
@@ -226,15 +305,15 @@ def test_case_only_report_separates_continuous_and_gapped_denominators() -> None
     continuous = views["continuous_primary"]
     assert isinstance(continuous, Mapping)
     assert continuous["denominators"] == {
-        "opened": 1,
+        "opened": 2,
         "mature_known": 1,
         "mature_unknown": 0,
         "censored": 0,
         "right_censored_without_outcome": 0,
-        "pending_open": 0,
+        "pending_open": 1,
         "incomplete_unclean_exit": 0,
     }
-    assert continuous["expiry_cluster_count"] == 1
+    assert continuous["expiry_cluster_count"] == 2
     stressed = continuous["stressed_normalized_outcome"]
     raw = continuous["raw_vwap_fee_recomputed_sensitivity"]
     assert isinstance(stressed, Mapping)
@@ -265,10 +344,10 @@ def test_case_only_report_separates_continuous_and_gapped_denominators() -> None
     by_band = continuous["by_selection_score_band"]
     assert isinstance(by_band, Mapping)
     assert by_band["MID"]["denominators"]["opened"] == 1
-    assert by_band["LOW"]["denominators"]["opened"] == 0
+    assert by_band["LOW"]["denominators"]["opened"] == 1
     by_enrollment = continuous["by_enrollment_kind"]
     assert isinstance(by_enrollment, Mapping)
-    assert by_enrollment["ADMITTED_SHADOW_TRADE"]["denominators"]["opened"] == 1
+    assert by_enrollment["ADMITTED_SHADOW_TRADE"]["denominators"]["opened"] == 2
     assert by_enrollment["RADAR_SCORE_BAND_NO_TRADE_CONTROL"]["denominators"]["opened"] == 0
 
 
@@ -523,7 +602,7 @@ def test_open_admitted_case_with_unclean_segment_is_not_mislabeled_pending() -> 
         ),
     )
 
-    report = build_v2_case_report((case,), product=product, policies=policies)
+    report = cast(dict[str, Any], build_v2_case_report((case,), product=product, policies=policies))
 
     views = report["views"]
     assert isinstance(views, Mapping)
@@ -553,14 +632,14 @@ def test_terminal_outcome_closes_the_final_segment_for_offline_cohorts() -> None
         segments=(
             ShadowCaseSegmentRead(
                 sequence=0,
-                status=ShadowCaseSegmentStatus.INCOMPLETE_UNCLEAN_EXIT,
+                status=ShadowCaseSegmentStatus.TERMINATED_BY_OUTCOME,
                 opened={"observation_quality": "GAPPED"},
                 closed=None,
             ),
         ),
     )
 
-    report = build_v2_case_report((case,), product=product, policies=policies)
+    report = cast(dict[str, Any], build_v2_case_report((case,), product=product, policies=policies))
 
     views = report["views"]
     cohorts = report["cohorts"]
@@ -569,3 +648,103 @@ def test_terminal_outcome_closes_the_final_segment_for_offline_cohorts() -> None
     assert views["gapped_secondary"]["denominators"]["opened"] == 1
     assert views["incomplete_unclean_exit"]["denominators"]["opened"] == 0
     assert cohorts["terminal_economics"]["denominators"]["opened"] == 1
+
+
+def test_pending_lifecycle_is_separate_from_observation_quality() -> None:
+    product, policies = load_persistent_product_policies(ROOT, INVERSE_BTC)
+    case = _case(
+        "b",
+        expiry_ms=7_000,
+        selection_band="MID",
+        entry_band="MID",
+        outcome_state=None,
+    )
+
+    report = cast(dict[str, Any], build_v2_case_report((case,), product=product, policies=policies))
+
+    assert report["report_schema_version"] == 3
+    assert report["views"]["continuous_primary"]["denominators"]["opened"] == 1
+    assert report["views"]["pending_open"]["denominators"]["opened"] == 1
+    row = report["views"]["pending_open"]["case_rows"][0]
+    assert row["observation_quality"] == "CONTINUOUS"
+    assert row["terminal_state"] == "PENDING_OPEN"
+    assert row["continuous_path_eligible"] is False
+
+
+def test_legacy_segmentless_control_has_no_invented_observation_quality() -> None:
+    product, policies = load_persistent_product_policies(ROOT, INVERSE_BTC)
+    case = _case(
+        "c",
+        expiry_ms=8_000,
+        selection_band="LOW",
+        entry_band="LOW",
+        outcome_state=None,
+        enrollment_kind="RADAR_SCORE_BAND_NO_TRADE_CONTROL",
+        sampling_inclusion=(1, 4),
+    )
+    case = replace(
+        case,
+        status=ShadowCaseReadStatus.INCOMPLETE_UNCLEAN_EXIT,
+        segments=(),
+    )
+
+    report = cast(dict[str, Any], build_v2_case_report((case,), product=product, policies=policies))
+
+    incomplete = report["views"]["incomplete_unclean_exit"]
+    assert incomplete["denominators"]["opened"] == 1
+    assert incomplete["case_rows"][0]["observation_quality"] == "NOT_AVAILABLE"
+    assert report["views"]["pending_open"]["denominators"]["opened"] == 0
+    assert report["cohorts"]["continuous_path"]["denominators"]["opened"] == 0
+
+
+def test_exit_acquisition_cohort_is_window_specific_not_whole_path_global() -> None:
+    product, policies = load_persistent_product_policies(ROOT, INVERSE_BTC)
+    pre_close_gap = _v3_exit_case("d", gap_before_first_close=True)
+    post_close_gap = _v3_exit_case("e", gap_after_first_close=True)
+    discontinuous_close = _v3_exit_case("f", discontinuity_truth="TRUE")
+
+    report = cast(
+        dict[str, Any],
+        build_v2_case_report(
+            (pre_close_gap, post_close_gap, discontinuous_close),
+            product=product,
+            policies=policies,
+        ),
+    )
+
+    cohorts = report["cohorts"]
+    assert cohorts["terminal_economics"]["denominators"]["opened"] == 3
+    assert cohorts["terminal_sample_integrity"]["denominators"]["opened"] == 3
+    assert cohorts["continuous_path"]["denominators"]["opened"] == 1
+    assert cohorts["exit_acquisition"]["denominators"]["opened"] == 1
+    rows = cohorts["terminal_economics"]["case_rows"]
+    statuses = {row["case_id"]: row["exit_acquisition_window_status"] for row in rows}
+    assert statuses[pre_close_gap.opened["case_id"]] == "COMPLETE"
+    assert statuses[post_close_gap.opened["case_id"]] == "GAPPED_AFTER_FIRST_CLOSE"
+    assert statuses[discontinuous_close.opened["case_id"]] == "SOURCE_DISCONTINUITY_AT_FIRST_CLOSE"
+
+
+def test_legacy_known_exit_stays_economic_but_not_strict_terminal_sample() -> None:
+    product, policies = load_persistent_product_policies(ROOT, INVERSE_BTC)
+    legacy = _case(
+        "1",
+        expiry_ms=9_000,
+        selection_band="HIGH",
+        entry_band="HIGH",
+        outcome_state="EXITED_KNOWN",
+    )
+    assert legacy.outcome is not None
+    legacy = replace(
+        legacy,
+        outcome={**legacy.outcome, "outcome_contract_version": 2},
+    )
+
+    report = cast(
+        dict[str, Any], build_v2_case_report((legacy,), product=product, policies=policies)
+    )
+
+    assert report["cohorts"]["terminal_economics"]["denominators"]["opened"] == 1
+    assert report["cohorts"]["terminal_sample_integrity"]["denominators"]["opened"] == 0
+    assert report["cohorts"]["exit_acquisition"]["denominators"]["opened"] == 0
+    row = report["views"]["continuous_primary"]["case_rows"][0]
+    assert row["exit_acquisition_window_status"] == "LEGACY_TERMINAL_SAMPLE"

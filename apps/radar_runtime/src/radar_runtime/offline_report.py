@@ -8,6 +8,7 @@ from pathlib import Path
 
 from options_domain import INVERSE_BTC, OptionProductSpec
 from short_vol_underwriting import (
+    POSITION_CLOSE_REASONS,
     PolicyChain,
     RuntimeBindings,
     ShadowCaseRead,
@@ -22,7 +23,7 @@ from short_vol_underwriting.identity import require_identity
 from radar_runtime.identity import git_repository_root
 from radar_runtime.service import load_persistent_product_policies
 
-V2_CASE_REPORT_SCHEMA_VERSION = 2
+V2_CASE_REPORT_SCHEMA_VERSION = 3
 V2_CHANNEL_ID = "INVERSE_BTC_SHORT_VOL_V2"
 
 
@@ -53,7 +54,9 @@ class _CaseOutcomeRow:
     terminal_method: str | None
     terminal_economics_eligible: bool
     continuous_path_eligible: bool
+    terminal_sample_integrity_eligible: bool
     exit_acquisition_eligible: bool
+    exit_acquisition_window_status: str
 
     def as_object(self) -> dict[str, object]:
         return {
@@ -78,7 +81,9 @@ class _CaseOutcomeRow:
             "terminal_method": self.terminal_method,
             "terminal_economics_eligible": self.terminal_economics_eligible,
             "continuous_path_eligible": self.continuous_path_eligible,
+            "terminal_sample_integrity_eligible": (self.terminal_sample_integrity_eligible),
             "exit_acquisition_eligible": self.exit_acquisition_eligible,
+            "exit_acquisition_window_status": self.exit_acquisition_window_status,
         }
 
 
@@ -138,12 +143,27 @@ def build_v2_case_report(
     """Derive conditional V2 score-band and Outcome evidence without replay or storage."""
 
     rows = tuple(_case_outcome_row(case, product=product, policies=policies) for case in cases)
-    continuous = tuple(row for row in rows if row.observation_quality == "CONTINUOUS")
-    gapped = tuple(row for row in rows if row.observation_quality == "GAPPED")
-    incomplete = tuple(row for row in rows if row.observation_quality == "INCOMPLETE_UNCLEAN_EXIT")
-    pending = tuple(row for row in rows if row.observation_quality == "PENDING_OPEN")
-    if len(continuous) + len(gapped) + len(incomplete) + len(pending) != len(rows):
-        raise V2CaseReportError("Case observation quality is outside the V2 report contract")
+    incomplete = tuple(row for row in rows if row.terminal_state == "INCOMPLETE_UNCLEAN_EXIT")
+    continuous = tuple(
+        row
+        for row in rows
+        if row.observation_quality == "CONTINUOUS"
+        and row.terminal_state != "INCOMPLETE_UNCLEAN_EXIT"
+    )
+    gapped = tuple(
+        row
+        for row in rows
+        if row.observation_quality == "GAPPED" and row.terminal_state != "INCOMPLETE_UNCLEAN_EXIT"
+    )
+    unavailable = tuple(
+        row
+        for row in rows
+        if row.observation_quality == "NOT_AVAILABLE"
+        and row.terminal_state != "INCOMPLETE_UNCLEAN_EXIT"
+    )
+    pending = tuple(row for row in rows if row.terminal_state == "PENDING_OPEN")
+    if len(continuous) + len(gapped) + len(incomplete) + len(unavailable) != len(rows):
+        raise V2CaseReportError("Case lifecycle/observation projection is incomplete")
     return {
         "report_schema_version": V2_CASE_REPORT_SCHEMA_VERSION,
         "channel_id": V2_CHANNEL_ID,
@@ -160,6 +180,7 @@ def build_v2_case_report(
             "secondary_view": "GAPPED",
             "pending_view": "PENDING_OPEN",
             "incomplete_view": "INCOMPLETE_UNCLEAN_EXIT",
+            "observation_unavailable_view": "NOT_AVAILABLE",
             "snapshot_mode": snapshot_mode,
             "non_claims": [
                 "NOT_UNCONDITIONAL_MARKET_OPPORTUNITY_RATE",
@@ -173,6 +194,7 @@ def build_v2_case_report(
             "gapped_secondary": _view_object(gapped),
             "pending_open": _view_object(pending),
             "incomplete_unclean_exit": _view_object(incomplete),
+            "observation_unavailable": _view_object(unavailable),
         },
         "cohorts": {
             "terminal_economics": _view_object(
@@ -180,6 +202,9 @@ def build_v2_case_report(
             ),
             "continuous_path": _view_object(
                 tuple(row for row in rows if row.continuous_path_eligible)
+            ),
+            "terminal_sample_integrity": _view_object(
+                tuple(row for row in rows if row.terminal_sample_integrity_eligible)
             ),
             "exit_acquisition": _view_object(
                 tuple(row for row in rows if row.exit_acquisition_eligible)
@@ -270,15 +295,7 @@ def _case_outcome_row(
     )
     observation_quality = _observation_quality(case, enrollment_kind=enrollment_kind)
     outcome = case.outcome
-    terminal_state = (
-        "INCOMPLETE_UNCLEAN_EXIT"
-        if observation_quality == "INCOMPLETE_UNCLEAN_EXIT"
-        else "PENDING_OPEN"
-        if observation_quality == "PENDING_OPEN"
-        else _text(outcome.get("terminal_state"), "terminal_state")
-        if outcome is not None
-        else "RIGHT_CENSORED"
-    )
+    terminal_state = _terminal_state(case)
     stressed: Decimal | None = None
     raw: Decimal | None = None
     known_terminal_states = {"MATURE_KNOWN", "EXITED_KNOWN", "SETTLED_KNOWN"}
@@ -322,6 +339,18 @@ def _case_outcome_row(
         "PENDING_OPEN",
     }:
         raise V2CaseReportError("Case Outcome terminal state is outside the V2 report contract")
+    terminal_sample_integrity_eligible = _terminal_sample_integrity(case)
+    exit_acquisition_window_status = _exit_acquisition_window_status(
+        case,
+        terminal_sample_integrity_eligible=terminal_sample_integrity_eligible,
+    )
+    natural_terminal_states = {
+        "MATURE_KNOWN",
+        "MATURE_UNKNOWN",
+        "EXITED_KNOWN",
+        "SETTLED_KNOWN",
+        "TERMINAL_UNKNOWN",
+    }
     return _CaseOutcomeRow(
         case_id=case_id,
         enrollment_kind=enrollment_kind,
@@ -349,11 +378,12 @@ def _case_outcome_row(
             else None
         ),
         terminal_economics_eligible=terminal_state in known_terminal_states,
-        continuous_path_eligible=observation_quality == "CONTINUOUS",
-        exit_acquisition_eligible=(
-            terminal_state in {"MATURE_KNOWN", "EXITED_KNOWN"}
-            and observation_quality == "CONTINUOUS"
+        continuous_path_eligible=(
+            terminal_state in natural_terminal_states and observation_quality == "CONTINUOUS"
         ),
+        terminal_sample_integrity_eligible=terminal_sample_integrity_eligible,
+        exit_acquisition_eligible=(exit_acquisition_window_status == "COMPLETE"),
+        exit_acquisition_window_status=exit_acquisition_window_status,
     )
 
 
@@ -586,43 +616,140 @@ def _nearest_rank(values: Sequence[Decimal], probability: Decimal) -> Decimal:
     return values[max(1, rank) - 1]
 
 
+def _terminal_state(case: ShadowCaseRead) -> str:
+    if case.outcome is not None:
+        return _text(case.outcome.get("terminal_state"), "terminal_state")
+    case_status = getattr(case.status, "value", case.status)
+    latest_segment_status = (
+        getattr(case.segments[-1].status, "value", case.segments[-1].status)
+        if case.segments
+        else None
+    )
+    if (
+        case_status == "INCOMPLETE_UNCLEAN_EXIT"
+        or latest_segment_status == "INCOMPLETE_UNCLEAN_EXIT"
+    ):
+        return "INCOMPLETE_UNCLEAN_EXIT"
+    if case_status == "OPEN":
+        return "PENDING_OPEN"
+    return "RIGHT_CENSORED"
+
+
 def _observation_quality(
     case: ShadowCaseRead,
     *,
     enrollment_kind: str,
 ) -> str:
-    case_status = getattr(case.status, "value", case.status)
-    if (
-        case_status == "COMPLETE"
-        and case.outcome is not None
-        and case.outcome.get("outcome_contract_version") == 2
-        and case.outcome.get("terminal_state")
-        in {"EXITED_KNOWN", "SETTLED_KNOWN", "TERMINAL_UNKNOWN"}
-    ):
-        terminal_quality = case.outcome.get("observation_quality")
-        if terminal_quality not in {"CONTINUOUS", "GAPPED"}:
-            raise V2CaseReportError("terminal Outcome carries an invalid observation quality")
-        return str(terminal_quality)
-    segment_statuses = {
-        getattr(segment.status, "value", segment.status) for segment in case.segments
-    }
-    if case_status == "INCOMPLETE_UNCLEAN_EXIT" or "INCOMPLETE_UNCLEAN_EXIT" in (segment_statuses):
-        return "INCOMPLETE_UNCLEAN_EXIT"
-    if case_status == "OPEN":
-        return "PENDING_OPEN"
+    del enrollment_kind
     observed = {segment.opened.get("observation_quality") for segment in case.segments}
     if case.outcome is not None and case.outcome.get("observation_quality") is not None:
         observed.add(case.outcome.get("observation_quality"))
     observed.discard(None)
+    if any(value not in {"CONTINUOUS", "GAPPED"} for value in observed):
+        raise V2CaseReportError("Case carries an invalid observation quality")
     if "GAPPED" in observed:
         return "GAPPED"
-    if observed and observed != {"CONTINUOUS"}:
-        raise V2CaseReportError("Case carries an invalid observation quality")
-    if case.outcome is not None and observed == {"CONTINUOUS"}:
+    if observed == {"CONTINUOUS"}:
         return "CONTINUOUS"
-    if enrollment_kind == "ADMITTED_SHADOW_TRADE" and case.segments and observed == {"CONTINUOUS"}:
-        return "CONTINUOUS"
-    return "INCOMPLETE_UNCLEAN_EXIT"
+    return "NOT_AVAILABLE"
+
+
+def _terminal_sample_integrity(case: ShadowCaseRead) -> bool:
+    outcome = case.outcome
+    if outcome is None or outcome.get("outcome_contract_version") != 3:
+        return False
+    terminal_state = outcome.get("terminal_state")
+    if terminal_state == "EXITED_KNOWN":
+        refs = outcome.get("close_component_quote_source_refs")
+        legs = outcome.get("close_component_legs")
+        return (
+            _is_identity(outcome.get("selected_exit_identity"))
+            and _is_identity(outcome.get("exit_acquisition_sample_identity"))
+            and _is_identity(outcome.get("close_component_pair_identity"))
+            and isinstance(outcome.get("close_component_pair_timing"), Mapping)
+            and isinstance(outcome.get("close_component_pair_limits"), Mapping)
+            and isinstance(refs, Sequence)
+            and not isinstance(refs, (str, bytes))
+            and len(refs) == 2
+            and isinstance(legs, Sequence)
+            and not isinstance(legs, (str, bytes))
+            and len(legs) == 2
+        )
+    if terminal_state == "SETTLED_KNOWN":
+        source = outcome.get("official_delivery_price_source_ref")
+        return (
+            isinstance(source, Mapping)
+            and {
+                "source_identity",
+                "response_source_identity",
+                "receipt_fact_boundary",
+                "request_id",
+                "index_name",
+                "delivery_date",
+                "records_total",
+                "owner_origin_boundary",
+                "sent_boundary",
+            }.issubset(source)
+            and _is_identity(source.get("source_identity"))
+            and _is_identity(source.get("response_source_identity"))
+            and _is_identity(outcome.get("contract_settlement_rule_identity"))
+            and outcome.get("delivery_price_usdc_per_btc") is not None
+            and outcome.get("delivery_fee_rate_fraction") is not None
+        )
+    return False
+
+
+def _exit_acquisition_window_status(
+    case: ShadowCaseRead,
+    *,
+    terminal_sample_integrity_eligible: bool,
+) -> str:
+    outcome = case.outcome
+    if outcome is None or outcome.get("terminal_state") != "EXITED_KNOWN":
+        return "NOT_MARKET_EXIT"
+    if outcome.get("outcome_contract_version") != 3:
+        return "LEGACY_TERMINAL_SAMPLE"
+    if not terminal_sample_integrity_eligible:
+        return "TERMINAL_SAMPLE_INCOMPLETE"
+    first_close = case.first_close
+    if first_close is None:
+        return "FIRST_CLOSE_MISSING"
+    profile = first_close.get("exit_acquisition_profile")
+    if not isinstance(profile, Mapping) or not _is_identity(profile.get("profile_identity")):
+        return "PROFILE_UNDECLARED"
+    if outcome.get("exit_acquisition_profile") != profile:
+        return "PROFILE_MISMATCH"
+    first_close_segment = first_close.get("segment_sequence")
+    outcome_segment = outcome.get("segment_sequence")
+    if (
+        isinstance(first_close_segment, bool)
+        or not isinstance(first_close_segment, int)
+        or isinstance(outcome_segment, bool)
+        or not isinstance(outcome_segment, int)
+    ):
+        return "SEGMENT_BINDING_MISSING"
+    if first_close_segment != outcome_segment:
+        return "GAPPED_AFTER_FIRST_CLOSE"
+    truth_vector = first_close.get("predicate_truth_vector")
+    if not isinstance(truth_vector, Sequence) or isinstance(truth_vector, (str, bytes)):
+        return "FIRST_CLOSE_PREDICATE_VECTOR_MISSING"
+    discontinuity_index = POSITION_CLOSE_REASONS.index("PLATFORM_OR_SOURCE_DISCONTINUITY")
+    if len(truth_vector) != len(POSITION_CLOSE_REASONS):
+        return "FIRST_CLOSE_PREDICATE_VECTOR_MISSING"
+    discontinuity = truth_vector[discontinuity_index]
+    if discontinuity == "TRUE":
+        return "SOURCE_DISCONTINUITY_AT_FIRST_CLOSE"
+    if discontinuity != "FALSE":
+        return "SOURCE_CONTINUITY_UNKNOWN_AT_FIRST_CLOSE"
+    return "COMPLETE"
+
+
+def _is_identity(value: object) -> bool:
+    try:
+        require_identity(value, "identity")
+    except ValueError:
+        return False
+    return True
 
 
 def _sampling_projection(

@@ -182,42 +182,38 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_position_lifecycle_realism_closure() -> None:
+def test_current_stage_authorizes_position_lifecycle_evidence_closure() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
     assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "INVERSE_BTC_SHORT_VOL_V2_POSITION_LIFECYCLE_REALISM" in current
+    assert "INVERSE_BTC_SHORT_VOL_V2_POSITION_LIFECYCLE_EVIDENCE_CLOSURE_IN_PROGRESS" in current
     assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
-    assert "TASK_SCOPED_SIMULATION_CUTOVER_AND_FIRST_NATURAL_OUTCOME_MONITOR" in current
+    assert (
+        "TASK_SCOPED_ISOLATED_BUSINESS_SIMULATION_AUTHORIZED_STABLE_CUTOVER_NOT_YET_AUTHORIZED"
+        in current
+    )
     assert "SHADOW_POSITION_LIFECYCLE_REALISM" in current
     for phrase in (
-        "The sole Online Runtime product is `INVERSE_BTC_V1`",
-        "There is no product selector, fallback product, compatibility profile",
-        "The repository contains only the three fixed V2 Inverse Policy artifacts",
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
         "127.0.0.1:8765",
-        "/Users/logan/Optimatrix-runtime",
-        "validated 62 schema-v5 Cases",
-        "40 compatible non-terminal admitted Entries",
-        "zero admitted Outcome files",
-        "12 Radar-score Controls and 10 selected Underwriting Controls",
-        "immutable first-CLOSE history",
-        "official delivery-price settlement path",
-        "isolated full-business-chain simulation",
-        "bounded loopback/API/browser and single-writer validation",
-        "read-only monitoring until at least one admitted",
-        "does not silently reinterpret the nine Policy predicates",
+        "87 schema-v5 Cases",
+        "65 immutable first-CLOSE records",
+        "36 Outcomes",
+        "Twenty Outcomes use contract version 2",
+        "no naturally produced `SETTLED_KNOWN` exists yet",
+        "43 non-terminal Positions",
+        "Future terminal Outcomes use a versioned evidence contract",
+        "Existing Case bytes remain immutable and readable",
+        "The current Position Policy identity and all nine frozen predicate thresholds remain unchanged",
+        "Qualification remains offline",
+        "New Outcomes do not persist Cohort membership Booleans",
+        "one isolated full-business-chain simulation",
+        "Stable cutover is withheld",
+        "concurrent Workbench construction",
         "Permission remains `PUBLIC_SHADOW`",
     ):
         assert phrase in normalized
-    for identity in (
-        "sha256:a7880d3a0b3da12f74438b292ed49d7c034e683d2e1654037229c62474127131",
-        "sha256:fd604c22b6f4a111955f432fe09647e93c38e914e81c4045905ca79b935bdc9d",
-        "sha256:933dce3e4d9736b465aaca95a352ef8c3196592bfef04cf1f958442afe0f5e7d",
-        "sha256:8a00bacc13f5f3f2407ea3ff5060464e12d93c3f336f9d1f9d750a0621fa0ffe",
-    ):
-        assert identity in current
     assert {path.name for path in (ROOT / "tasks").glob("*.md")} == {
         "SHADOW_POSITION_LIFECYCLE_REALISM.md",
         "TEMPLATE.md",

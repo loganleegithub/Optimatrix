@@ -176,22 +176,27 @@ chain orders segments without pretending that different runtime clocks are direc
 Clean stop and handled failure close each active Position-bearing Case's current Segment; they do
 not write `CENSORED_AT_STOP` or `CENSORED_AT_FAILURE` as a terminal Outcome. The aggregate remains
 recoverable until `outcome.json` exists. Legacy segmentless Controls retain their historical
-bounded semantics and are not reinterpreted.
+bounded semantics and are not reinterpreted. A validated Outcome is itself the terminal boundary
+of its producing Segment; the reader projects that Segment as `TERMINATED_BY_OUTCOME` without
+inventing a separate `closed.json` record.
 
 The first Position CLOSE publishes as one immutable `FIRST_CLOSE_INTENT_LATCHED` transition before
-any exit request may be sent. Presence of the transition prevents every later runtime from latching
-another first CLOSE, but never proves economic termination. Exit acquisition is serial and
-in-memory: at most one paired attempt per Position is in flight, failed/ineligible/missing pairs
-defer another attempt, and the first causally eligible full-quantity pair wins. If an attempt was
-pending when a Segment became incomplete, recovery exposes
+any exit request may be sent. Future intent records also freeze the serial acquisition profile:
+selection rule, retry cadence, response budget, and pair-skew limits. Presence of the transition
+prevents every later runtime from latching another first CLOSE, but never proves economic
+termination. Exit acquisition is serial and in-memory: at most one paired attempt per Position is
+in flight, failed/ineligible/missing pairs defer another attempt, and the first causally eligible
+full-quantity pair wins. If an attempt was pending when a Segment became incomplete, recovery exposes
 `ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS` for history while starting only a new strictly future
 attempt. Legacy combined first-close/schedule records remain valid immutable input.
 
 At expiry, ordinary component-book acquisition stops and the same owner requests the fixed public
 `public/get_delivery_prices` history. One validated response fans out by expiry date to every
-waiting Position. Missing dates or failed/late responses remain `SETTLEMENT_PENDING` and retry. The
-product-owned calculator alone produces signed Inverse settlement, capped public delivery fees,
-BTC-native PnL, and delivery-price valuation for `SETTLED_KNOWN`.
+waiting Position, even when the response omits the request owner's date but contains another
+waiter's date. The accepted member retains response identity, request owner/sent/receipt boundaries,
+date, price, and record count. Missing dates or failed/late responses remain `SETTLEMENT_PENDING`
+and retry. The product-owned calculator alone produces signed Inverse settlement, capped public
+delivery fees, BTC-native PnL, and delivery-price valuation for `SETTLED_KNOWN`.
 
 ## Internal state versus durable records
 
@@ -348,10 +353,10 @@ scalars and only current/latest bounded identities.
 
 The Workbench projects every active admitted Entry and future selected Control once by its enrollment
 identity, with origin runtime, current Segment runtime, Segment availability, gap count, observation
-quality, execution state, terminal method, and named Cohort facts. A recovered Case begins `UNKNOWN`
-until fresh facts settle. The browser never infers `HOLD` or `CLOSE` from `HANDOFF_GAP`, and the
-legacy `qualification_eligible` field is only the strict-continuity projection rather than online
-Cohort authority.
+quality, execution state, terminal method, and terminal evidence level. A recovered Case begins
+`UNKNOWN` until fresh facts settle. The browser never infers `HOLD` or `CLOSE` from `HANDOFF_GAP`,
+and the legacy `qualification_eligible` field is only the strict-continuity projection rather than
+online Cohort authority. Version-3 Cohort membership belongs only to the offline evaluator.
 
 The browser may arrange the immutable current Radar rows into an expiry-by-strike discovery map and
 select the already-server-owned subset `HIGH + bucket leader + clue eligible + CONFIRMING|ACTIVE`.

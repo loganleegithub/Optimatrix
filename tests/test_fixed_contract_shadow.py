@@ -81,6 +81,7 @@ from short_vol_underwriting import (
     CloseOptionAvailability,
     FixedContractShadowOwner,
     RuntimeBindings,
+    ShadowCaseSegmentStatus,
     ShadowCaseStore,
     ShadowCaseStoreError,
     ShadowStateStore,
@@ -3167,6 +3168,69 @@ def test_component_shadow_entry_closes_from_a_new_paired_snapshot_and_writes_kno
     assert owner.retained_state_counts["active_trades"] == 0
     assert adapter.retained_state_counts["active_anchors"] == 0
     assert owner.state_store.retained_state_counts["latest_terminal_cases"] == 1
+    durable_case_id = next(path.name for path in cases.iterdir() if path.is_dir())
+    durable = case_store.read_case("sha256:" + durable_case_id)
+    assert durable.outcome is not None
+    assert durable.first_close is not None
+    assert durable.outcome["outcome_contract_version"] == 3
+    assert durable.outcome["exit_acquisition_sample_identity"]
+    assert (
+        durable.outcome["exit_acquisition_profile"]
+        == durable.first_close["exit_acquisition_profile"]
+    )
+    assert durable.outcome["close_component_pair_timing"]
+    assert durable.outcome["close_component_pair_limits"] == {
+        "maximum_source_skew_ms": 6_000,
+        "maximum_receive_skew_ms": 4_000,
+    }
+    close_source_refs = cast(
+        list[Mapping[str, object]],
+        durable.outcome["close_component_quote_source_refs"],
+    )
+    assert all(
+        {
+            "source_timestamp_ms",
+            "global_continuity_epoch",
+            "request_id",
+            "owner_origin_boundary",
+            "sent_boundary",
+        }.issubset(ref)
+        for ref in close_source_refs
+    )
+    assert "qualification_eligible" not in durable.outcome
+    assert durable.segments[-1].status is ShadowCaseSegmentStatus.TERMINATED_BY_OUTCOME
+    outcome_path = cases / durable_case_id / "outcome.json"
+    original_outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
+    tamper_paths = (
+        ("close_component_quote_source_refs", 0, "source_timestamp_ms"),
+        ("close_component_quote_source_refs", 0, "global_continuity_epoch"),
+        ("close_component_quote_source_refs", 0, "request_id"),
+        ("close_component_quote_source_refs", 0, "sent_boundary", "causal_seq"),
+        ("close_component_pair_identity",),
+        ("exit_acquisition_sample_identity",),
+        ("selected_exit_identity",),
+        ("close_component_pair_limits", "maximum_source_skew_ms"),
+    )
+    for path in tamper_paths:
+        tampered = json.loads(json.dumps(original_outcome))
+        owner_value: Any = tampered
+        for member in path[:-1]:
+            owner_value = owner_value[member]
+        final = path[-1]
+        current = owner_value[final]
+        owner_value[final] = (
+            current + 1
+            if isinstance(current, int)
+            else canonical_identity(
+                "TamperedTerminalEvidenceIdentity",
+                path,
+            )
+        )
+        outcome_path.write_text(json.dumps(tampered), encoding="utf-8")
+        with pytest.raises(ShadowCaseStoreError):
+            case_store.read_case("sha256:" + durable_case_id)
+    outcome_path.write_text(json.dumps(original_outcome), encoding="utf-8")
+    case_store.read_case("sha256:" + durable_case_id)
 
 
 def test_selected_abstain_case_reuses_strictly_future_position_outcome_without_canonical_counts(
@@ -3575,7 +3639,10 @@ def test_partial_component_failure_keeps_duty_and_then_uses_official_settlement(
         adapter,
         reducer=reducer,
         request_id=settlement_intent.request_id,
-        result={"data": [], "records_total": 0},
+        result={
+            "data": [{"date": "2000-01-01", "delivery_price": 0}],
+            "records_total": 1,
+        },
         sent_boundary=sent,
         boundary=FactBoundary(1, 13, 30_203, 13),
     )
@@ -3598,12 +3665,38 @@ def test_partial_component_failure_keeps_duty_and_then_uses_official_settlement(
         adapter,
         reducer=reducer,
         request_id=settlement_retry.request_id,
+        result={"data": [], "records_total": 0},
+        sent_boundary=retry_sent,
+        boundary=FactBoundary(1, 16, 60_206, 16),
+    )
+    assert not _object_payloads(owner, "SHADOW_OUTCOME")
+
+    (settlement_final,) = _settled_transaction(
+        adapter,
+        reducer=reducer,
+        commit=_commit(
+            causal_seq=17,
+            monotonic_ms=90_207,
+            cause=CausalCause.TIME_BOUNDARY,
+        ),
+    )
+    assert settlement_final.purpose is RpcPurpose.SETTLEMENT_PRICE
+    assert settlement_final.request_id not in {
+        settlement_intent.request_id,
+        settlement_retry.request_id,
+    }
+    final_sent = FactBoundary(1, 18, 90_208, 18)
+    adapter.on_request_sent(request_id=settlement_final.request_id, boundary=final_sent)
+    _rpc_response(
+        adapter,
+        reducer=reducer,
+        request_id=settlement_final.request_id,
         result={
             "data": [{"date": "2000-01-01", "delivery_price": 105_000}],
             "records_total": 1,
         },
-        sent_boundary=retry_sent,
-        boundary=FactBoundary(1, 16, 60_206, 16),
+        sent_boundary=final_sent,
+        boundary=FactBoundary(1, 19, 90_209, 19),
     )
 
     (outcome,) = _object_payloads(owner, "SHADOW_OUTCOME")
@@ -3623,8 +3716,59 @@ def test_partial_component_failure_keeps_duty_and_then_uses_official_settlement(
     durable = case_store.read_case("sha256:" + durable_case_id)
     assert durable.outcome is not None
     assert durable.outcome["terminal_state"] == "SETTLED_KNOWN"
-    assert durable.outcome["terminal_economics_eligible"] is True
-    assert durable.outcome["continuous_path_eligible"] is True
+    assert "terminal_economics_eligible" not in durable.outcome
+    assert "continuous_path_eligible" not in durable.outcome
+    assert "qualification_eligible" not in durable.outcome
+    assert durable.segments[-1].status is ShadowCaseSegmentStatus.TERMINATED_BY_OUTCOME
+    assert durable.outcome["outcome_contract_version"] == 3
+    delivery_ref = cast(Mapping[str, object], durable.outcome["official_delivery_price_source_ref"])
+    assert {
+        "source_identity",
+        "response_source_identity",
+        "receipt_fact_boundary",
+        "request_id",
+        "index_name",
+        "delivery_date",
+        "records_total",
+        "owner_origin_boundary",
+        "sent_boundary",
+    } == set(delivery_ref)
+    assert durable.outcome["contract_settlement_rule_identity"]
+
+    outcome_path = cases / durable_case_id / "outcome.json"
+    original_outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
+    tamper_specs = (
+        (
+            ("official_delivery_price_source_ref", "source_identity"),
+            canonical_identity("TamperedDeliveryMemberIdentity", "member"),
+        ),
+        (
+            ("official_delivery_price_source_ref", "response_source_identity"),
+            canonical_identity("TamperedDeliveryResponseIdentity", "response"),
+        ),
+        (("official_delivery_price_source_ref", "request_id"), 999),
+        (("official_delivery_price_source_ref", "records_total"), 2),
+        (("official_delivery_price_source_ref", "sent_boundary", "causal_seq"), 14),
+        (("delivery_price_usdc_per_btc",), "105001"),
+        (("delivery_fee_rate_fraction",), "0.00015"),
+        (
+            ("contract_settlement_rule_identity",),
+            canonical_identity("TamperedSettlementRuleIdentity", "rule"),
+        ),
+        (("gross_close_cashflow_usd",), "0"),
+        (("native_outcome_economics", "native_gross_close_cashflow"), "0"),
+    )
+    for path, replacement_value in tamper_specs:
+        tampered = json.loads(json.dumps(original_outcome))
+        owner_value: Any = tampered
+        for member in path[:-1]:
+            owner_value = owner_value[member]
+        owner_value[path[-1]] = replacement_value
+        outcome_path.write_text(json.dumps(tampered), encoding="utf-8")
+        with pytest.raises(ShadowCaseStoreError):
+            case_store.read_case("sha256:" + durable_case_id)
+    outcome_path.write_text(json.dumps(original_outcome), encoding="utf-8")
+    case_store.read_case("sha256:" + durable_case_id)
 
 
 def test_component_quote_fingerprint_is_stable_scalar_identity_input(

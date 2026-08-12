@@ -321,8 +321,11 @@ baseline only after the truthful first evaluation.
 If first CLOSE was already durable, it remains latched. A paired attempt that was pending when the
 process stopped or crashed remains historically
 `ATTEMPT_STATE_UNKNOWN_AFTER_PROCESS_LOSS`; the new Segment neither rewrites nor completes it. That
-unknown attempt does not block a new strictly future exit-acquisition attempt. If first CLOSE occurs
-later from fresh facts, the intent-only durable rule applies before acquisition begins.
+unknown attempt does not block a new strictly future exit-acquisition attempt. A future first-CLOSE
+intent freezes the acquisition selection rule, retry cadence, response budget, and pair-skew limits;
+recovery restores that profile unchanged. Legacy first-CLOSE records without a profile remain
+recoverable but cannot enter the strict acquisition-window Cohort. If first CLOSE occurs later from
+fresh facts, the intent-only durable rule applies before acquisition begins.
 
 `observation_quality=GAPPED` and the legacy strict-continuity projection
 `qualification_eligible=false` preserve the missing interval. They do not change whether the
@@ -347,10 +350,12 @@ response cannot close the Case.
 
 After first CLOSE, the owner runs a serial bounded acquisition loop: at most one two-leg attempt is
 in flight for a Position, a failed/ineligible/missing pair schedules the next attempt after the
-predeclared response interval, and the first causally eligible full-quantity pair wins. It never
-looks back for a better price and does not persist attempt history. Liquidity failure therefore
-means `EXIT_ACQUIRING | LIQUIDITY_BLOCKED`, not a completed close. Process recovery starts a new
-strictly future loop without backfilling the gap.
+frozen retry cadence, and the first causally eligible full-quantity pair wins. The response deadline
+and retry cadence are separately named even when the current values happen to match. It never looks
+back for a better price and does not persist attempt history. The winning sample identity binds the
+first-CLOSE identity, profile identity, complete pair identity, and accepted boundary. Liquidity
+failure therefore means `EXIT_ACQUIRING | LIQUIDITY_BLOCKED`, not a completed close. Process recovery
+starts a new strictly future loop without backfilling the gap.
 
 For an eligible paired component-book close, the same product-aware order applies:
 
@@ -375,8 +380,11 @@ Actual account margin, settlement action, and fill PnL remain outside the public
 At or after the frozen expiry, ordinary close acquisition stops and the Position becomes
 `SETTLEMENT_PENDING`. The runtime requests the official `btc_usd` delivery-price history with the
 one fixed public request shape and fans one accepted response out to every waiting expiry date.
-Missing, malformed, late, or date-incomplete responses remain pending and retry; they do not create
-zero payoff or `TERMINAL_UNKNOWN`.
+Response ownership is independent of the request owner's expiry: every valid date/price member may
+settle its matching waiter even when the owner's date is absent. The response and accepted member
+bind request, owner-origin, sent, receipt, count, date, and price evidence. Missing, malformed, late,
+or date-incomplete responses remain pending and retry; they do not create zero payoff or
+`TERMINAL_UNKNOWN`.
 
 For each leg, the product-owned Inverse calculator forms USD intrinsic, divides it by the official
 delivery price into BTC contractual payoff, applies the signed short/long directions, and reserves
@@ -424,8 +432,9 @@ predicate margins, frozen-leg identity, pair session/continuity/skew boundaries,
 races, strictly post-entry Position order, first CLOSE latching, paired close classification, exact
 Inverse behavior, no pre-Shadow durable writes, repeated A→B→C process recovery, segment-gap
 UNKNOWN, durable intent before acquisition, retry after failed/uncertain attempts, first-eligible
-exit selection, shared official delivery-price acquisition, Inverse contract settlement, future
-Control recovery, and named offline Cohort classification. Full graph manifests, parallel schemas,
+exit selection, complete terminal-pair reconstruction, shared/partial/empty/late official
+delivery-price acquisition, Inverse contract-settlement reader recomputation, future Control
+recovery, and named offline Cohort classification. Full graph manifests, parallel schemas,
 per-tick checkpoints, replay, and
 automatic rejected-counterfactual persistence are not required. Public observation is governed
 only by `CURRENT_STAGE`.

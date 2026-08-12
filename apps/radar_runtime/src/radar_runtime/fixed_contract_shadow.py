@@ -26,14 +26,13 @@ from short_vol_radar.radar import TickerState
 from short_vol_radar.review import LeggedReferenceState, ReviewContext, build_review_contexts
 from short_vol_radar.score import ScoreBand
 from short_vol_underwriting import (
-    DELIVERY_PRICE_REQUEST_PARAMS,
     CloseAtomicAvailability,
     CloseBookAvailability,
     CloseOptionAvailability,
     CloseQuoteFacts,
     ComponentBookPairWitness,
     ComponentLegRole,
-    DeliveryPriceWitness,
+    DeliveryPriceResponseWitness,
     FixedContractShadowOwner,
     PositionFacts,
     PostCloseAttemptStatus,
@@ -733,15 +732,7 @@ class FixedContractShadowRuntimeAdapter:
         accepted_boundary: DownstreamFactBoundary,
     ) -> tuple[ShadowRpcIntent, ...]:
         parsed = _parse_delivery_prices(result)
-        match = (
-            next(
-                (member for member in parsed[0] if member[0] == context.instrument_name),
-                None,
-            )
-            if parsed is not None
-            else None
-        )
-        if parsed is None or match is None:
+        if parsed is None:
             transition = self.owner.note_request_failure(
                 request_id=request_id,
                 boundary=accepted_boundary,
@@ -751,34 +742,15 @@ class FixedContractShadowRuntimeAdapter:
             self._requests.pop(request_id, None)
             return intents
         records_total = parsed[1]
-        witnesses = tuple(
-            DeliveryPriceWitness(
-                source_identity=canonical_identity(
-                    "OfficialDeliveryPriceSourceIdentity",
-                    accepted_boundary.runtime_identity,
-                    request_id,
-                    "public/get_delivery_prices",
-                    dict(DELIVERY_PRICE_REQUEST_PARAMS),
-                    "btc_usd",
-                    delivery_date,
-                    delivery_price,
-                    records_total,
-                    context.origin_boundary.as_object(),
-                    sent_boundary.as_object(),
-                    accepted_boundary.as_object(),
-                ),
-                boundary=accepted_boundary,
-                index_name="btc_usd",
-                delivery_date=delivery_date,
-                delivery_price_usdc_per_btc=delivery_price,
-                request_id=request_id,
-                owner_origin_boundary=context.origin_boundary,
-                sent_boundary=sent_boundary,
-                records_total=records_total,
-            )
-            for delivery_date, delivery_price in parsed[0]
+        witness = DeliveryPriceResponseWitness.create(
+            boundary=accepted_boundary,
+            request_id=request_id,
+            owner_origin_boundary=context.origin_boundary,
+            sent_boundary=sent_boundary,
+            records_total=records_total,
+            members=parsed[0],
         )
-        transition = self.owner.accept_delivery_prices(witnesses)
+        transition = self.owner.accept_delivery_prices(witness)
         intents = self._consume_transition(transition, ())
         self._requests.pop(request_id, None)
         return intents

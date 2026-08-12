@@ -27,6 +27,8 @@ from short_vol_underwriting.model import (
     TerminalSource,
 )
 
+DELIVERY_FEE_PAYOFF_CAP_FRACTION = Decimal("0.125")
+
 
 @dataclass(frozen=True)
 class SourceFact:
@@ -349,7 +351,7 @@ def compute_contract_settlement_economics(
         (
             min(
                 delivery_fee_rate_fraction * full_quantity_btc,
-                Decimal("0.125") * payoff,
+                DELIVERY_FEE_PAYOFF_CAP_FRACTION * payoff,
             )
             for payoff in (short_native, long_native)
             if payoff > 0
