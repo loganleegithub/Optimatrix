@@ -6,9 +6,9 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `NONE`
 
-**Sole authorized closure:** `BTC_0DTE_RADAR_MARKET_CONTEXT_EVIDENCE_GATE_V1`
+**Sole authorized closure:** `NONE`
 
 **Permission:** deterministic offline Shadow simulation and at most one active-task-authorized,
 bounded, read-only public Deribit current-Session snapshot after offline gates pass
@@ -23,10 +23,10 @@ bounded, read-only public Deribit current-Session snapshot after offline gates p
 
 ## Current business baseline
 
-The active Radar evidence closure starts from `1 / 1` applicable deterministic
-`SessionDecisionUnit`s with numeric context but missing method/coverage/source-known-at evidence being
-incorrectly counted as `MARKET_CONTEXT_KNOWN = PASSED`. The earliest blocker is
-`MARKET_CONTEXT_EVIDENCE_NOT_BOUND`.
+The Radar MarketContext evidence denominator moved from `0 / 1` to `1 / 1` deterministic
+`SessionDecisionUnit`s correctly distinguishing evidence-qualified context from `UNKNOWN`. Numeric
+context without complete method, history coverage, public-book coverage, causal timing, and event
+source evidence now stops before structure construction at `MARKET_CONTEXT_KNOWN = UNKNOWN`.
 
 The Position-risk causal-boundary denominator moved from `0 / 1` to `1 / 1` deterministic
 `FULL_ENTRY` Positions. A risk observation now freezes a recoverable two-sided exit duty without
@@ -47,6 +47,18 @@ denominator. The current product includes one four-leg decision object, one cano
 coherent four-leg attempt truth, fail-closed partial remediation, and eligibility-separated Outcomes.
 
 ## Accepted closure result
+
+The measured `MARKET_CONTEXT_EVIDENCE_NOT_BOUND` false pass moved from `1 / 1` to `0 / 1`. The same
+canonical unit remains in the denominator, but incomplete evidence now produces `UNKNOWN 0 / 1`,
+all later stages remain `NOT_REACHED`, structure counts are unknown rather than zero, and no score,
+structure, or Decision Case is created. A complete deterministic context still reaches the original
+risk evaluation without changing Policy thresholds.
+
+Market-context qualification is derived at the decision boundary from supported method identities,
+matched historical coverage and cadence, complete requested public books, source/receive age and
+causality, and event source/known-at facts. Workbench shows the exact evidence state and names the
+current variance measures as unqualified proxies. This transient pre-Case evidence adds no database,
+runtime, durable record, private method, or capital permission.
 
 The measured `EXIT_INTENT_AND_EXECUTABLE_SAMPLE_SHARE_BOUNDARY` blocker moved from `1 / 1` to `0 / 1`.
 Reusing the trigger books produces an exact `NOT_STRICTLY_FUTURE` blocker and leaves both shorts open.

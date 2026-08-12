@@ -30,6 +30,23 @@ LONG_PUT < SHORT_PUT < SHORT_CALL < LONG_CALL
 
 All four legs share product, expiry, target quantity, and selected-structure identity.
 
+## MarketContext evidence gate
+
+Numeric context is not sufficient evidence. Before any structure is constructed or scored, the
+same transient `MarketContext` must bind:
+
+- the physical-side and implied-side method identities;
+- the exact historical risk-horizon coverage start and end;
+- the public-market source and local receipt boundaries;
+- the event-state source and the time at which that state became known; and
+- any exact missing, stale, contradictory, or coverage blocker.
+
+Complete evidence produces `MARKET_CONTEXT_KNOWN = PASSED`. Incomplete evidence produces one
+`Decision.UNKNOWN`, consumes the one `SessionDecisionUnit` denominator at
+`MARKET_CONTEXT_KNOWN = UNKNOWN`, and leaves every later funnel stage `NOT_REACHED`. It is neither a
+known negative nor an abstention. No structure, score, or Decision Case may be created from it, and
+this pre-Case evidence remains transient.
+
 ## Applicable Session and phase
 
 Only options whose expiry equals the current Deribit Session end at `08:00 UTC` are applicable.
@@ -42,15 +59,18 @@ content-identified Policy.
 The score is ordinal and unqualified:
 
 ```text
-premium evidence   executable Session VRP + Theta-capture proxy
-gamma safety       path × jump × event × breakout × concentration interaction
+premium context    ATM mark / trailing-RV ratio + Theta-capture proxy
+path-risk heuristic  path × jump × event × breakout × concentration interaction
 range quality      nearer short-body distance in forecast sigma
 execution quality  joint spreads + depth + four-leg fees + route coherence
-final score        bounded monotone combination of all four terms
+rank score         bounded monotone combination of all four terms
 ```
 
-The Policy owns exact weights and thresholds. A numeric score is not probability, expected return,
-Edge, or profitability. Hard blockers remain explicit and cannot be offset by high premium.
+The current physical side is a trailing matched-horizon realized-variance proxy and the implied side
+is a nearest-ATM mark-variance proxy. They are not yet a qualified physical forecast or model-free
+executable VRP. The Policy owns exact weights and thresholds. A numeric score is not probability,
+expected return, Edge, or profitability. Hard blockers remain explicit and cannot be offset by high
+premium.
 
 Required missing, stale, discontinuous, contradictory, or incoherent facts produce `UNKNOWN` and an
 exact bounded blocker. `ON_DEMAND_COMBO_LIQUIDITY_UNOBSERVED` reports only unobserved private/RFQ

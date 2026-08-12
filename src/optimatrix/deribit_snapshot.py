@@ -17,9 +17,13 @@ from urllib.request import Request, urlopen
 from optimatrix.market import (
     BreakoutState,
     EventState,
+    EventStateSource,
+    ImpliedVarianceMethod,
     MarketContext,
+    MarketContextEvidence,
     OptionQuote,
     OptionType,
+    PhysicalVarianceMethod,
     PriceLevel,
     TickSchedule,
     TickStep,
@@ -27,12 +31,11 @@ from optimatrix.market import (
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.product_funnel import ProductFunnelSnapshot, project_product_funnel
 from optimatrix.products import BTC
-from optimatrix.radar import RadarDecision, evaluate_two_sided_short_vol
+from optimatrix.radar import RadarDecision, evaluate_radar_unit
 from optimatrix.session import current_deribit_session
 from optimatrix.structure import (
     IronCondorCandidate,
     StructureSelection,
-    select_iron_condor,
 )
 
 DEFAULT_DERIBIT_API = "https://www.deribit.com/api/v2"
@@ -48,22 +51,16 @@ class PublicRpcClient(Protocol):
 
 @dataclass(frozen=True)
 class SnapshotMethodology:
-    physical_variance_method: str
-    implied_variance_method: str
     delta_method: str
     concentration_method: str
-    event_state_source: str
     index_history_cadence_ms: int
     book_fetch_mode: str
     combo_diagnostic_method: str
 
     def as_object(self) -> dict[str, object]:
         return {
-            "physical_variance_method": self.physical_variance_method,
-            "implied_variance_method": self.implied_variance_method,
             "delta_method": self.delta_method,
             "concentration_method": self.concentration_method,
-            "event_state_source": self.event_state_source,
             "index_history_cadence_ms": self.index_history_cadence_ms,
             "book_fetch_mode": self.book_fetch_mode,
             "combo_diagnostic_method": self.combo_diagnostic_method,
@@ -80,7 +77,7 @@ class PublicSnapshotEvaluation:
     quotes: tuple[OptionQuote, ...]
     context: MarketContext
     decision: RadarDecision
-    selection: StructureSelection
+    selection: StructureSelection | None
     methodology: SnapshotMethodology
     public_combo_id: str | None
     warnings: tuple[str, ...]
@@ -95,7 +92,24 @@ class PublicSnapshotEvaluation:
             "instrument_count": self.instrument_count,
             "requested_book_count": self.requested_book_count,
             "fetched_book_count": self.fetched_book_count,
-            "methodology": self.methodology.as_object(),
+            "methodology": {
+                "physical_variance_method": (
+                    self.context.evidence.physical_variance_method.value
+                    if self.context.evidence.physical_variance_method is not None
+                    else None
+                ),
+                "implied_variance_method": (
+                    self.context.evidence.implied_variance_method.value
+                    if self.context.evidence.implied_variance_method is not None
+                    else None
+                ),
+                "event_state_source": (
+                    self.context.evidence.event_state_source.value
+                    if self.context.evidence.event_state_source is not None
+                    else None
+                ),
+                **self.methodology.as_object(),
+            },
             "public_combo_id": self.public_combo_id,
             "warnings": list(self.warnings),
             "funnel": self.product_funnel.as_object(),
@@ -103,12 +117,19 @@ class PublicSnapshotEvaluation:
                 "current_session_instruments": self.instrument_count,
                 "books_requested": self.requested_book_count,
                 "usable_quotes": len(self.quotes),
-                "put_verticals": self.selection.considered_put_verticals,
-                "call_verticals": self.selection.considered_call_verticals,
-                "condors": self.selection.considered_condors,
+                "put_verticals": (
+                    self.selection.considered_put_verticals if self.selection is not None else None
+                ),
+                "call_verticals": (
+                    self.selection.considered_call_verticals if self.selection is not None else None
+                ),
+                "condors": self.selection.considered_condors
+                if self.selection is not None
+                else None,
                 "decision": self.decision.decision.value,
             },
             "context": {
+                "knowledge": self.context.knowledge.value,
                 "index_price": str(self.context.index_price),
                 "forward_price": str(self.context.forward_price),
                 "physical_variance_forecast": str(self.context.physical_variance_forecast),
@@ -124,6 +145,30 @@ class PublicSnapshotEvaluation:
                     else None
                 ),
                 "concentration_strength": str(self.context.concentration_strength),
+                "physical_variance_method": (
+                    self.context.evidence.physical_variance_method.value
+                    if self.context.evidence.physical_variance_method is not None
+                    else None
+                ),
+                "implied_variance_method": (
+                    self.context.evidence.implied_variance_method.value
+                    if self.context.evidence.implied_variance_method is not None
+                    else None
+                ),
+                "event_state_source": (
+                    self.context.evidence.event_state_source.value
+                    if self.context.evidence.event_state_source is not None
+                    else None
+                ),
+                "required_history_start_ms": self.context.evidence.required_history_start_ms,
+                "history_coverage_start_ms": self.context.evidence.history_coverage_start_ms,
+                "history_coverage_end_ms": self.context.evidence.history_coverage_end_ms,
+                "history_cadence_ms": self.context.evidence.history_cadence_ms,
+                "market_source_min_ms": self.context.evidence.market_source_min_ms,
+                "market_source_max_ms": self.context.evidence.market_source_max_ms,
+                "market_received_min_ms": self.context.evidence.market_received_min_ms,
+                "market_received_max_ms": self.context.evidence.market_received_max_ms,
+                "event_state_known_at_ms": self.context.evidence.event_state_known_at_ms,
             },
             "decision": {
                 "decision_identity": self.decision.decision_identity,
@@ -295,8 +340,50 @@ def evaluate_live_btc_snapshot(
         physical_variance=physical_variance,
         directional_persistence=persistence,
     )
+    methodology = SnapshotMethodology(
+        delta_method="DERIBIT_ORDER_BOOK_GREEKS",
+        concentration_method=("SHORTLISTED_PUBLIC_OPEN_INTEREST_TIMES_ABSOLUTE_GAMMA"),
+        index_history_cadence_ms=history_cadence_ms,
+        book_fetch_mode="BOUNDED_CONCURRENT_PUBLIC_GET_ORDER_BOOK",
+        combo_diagnostic_method="PUBLIC_GET_COMBOS_EXACT_LEG_SET_ONLY",
+    )
+    request_boundary_ms = int(normalized_now.timestamp() * 1000)
+    known_at_ms = max(request_boundary_ms, int(time.time() * 1000))
+    known_at = datetime.fromtimestamp(known_at_ms / 1000, tz=UTC)
+    requested_books = tuple(sorted(str(item["instrument_name"]) for item in selected_metadata))
+    usable_books = tuple(sorted(quote.instrument_name for quote in quotes))
+    evidence_blockers: list[str] = []
+    if any(quote.source_timestamp_ms > quote.received_timestamp_ms for quote in quotes):
+        evidence_blockers.append("MARKET_SOURCE_AFTER_RECEIPT")
+    if (
+        current_deribit_session(known_at, phase_policy=policy.session).session_id
+        != session.session_id
+    ):
+        evidence_blockers.append("SNAPSHOT_CROSSED_SESSION_BOUNDARY")
+    evidence = MarketContextEvidence(
+        physical_variance_method=(
+            PhysicalVarianceMethod.TRAILING_MATCHED_HORIZON_INDEX_REALIZED_VARIANCE_PROXY
+        ),
+        implied_variance_method=(
+            ImpliedVarianceMethod.NEAREST_ATM_CALL_PUT_MARK_IV_SQUARED_TIMES_RISK_HORIZON
+        ),
+        event_state_source=EventStateSource.EXPLICIT_HUMAN_OR_EXTERNAL_CALENDAR_INPUT,
+        required_history_start_ms=history[-1][0] - horizon_minutes * 60_000,
+        history_coverage_start_ms=history[0][0],
+        history_coverage_end_ms=history[-1][0],
+        history_cadence_ms=history_cadence_ms,
+        market_source_min_ms=min(quote.source_timestamp_ms for quote in quotes),
+        market_source_max_ms=max(quote.source_timestamp_ms for quote in quotes),
+        market_received_min_ms=min(quote.received_timestamp_ms for quote in quotes),
+        market_received_max_ms=max(quote.received_timestamp_ms for quote in quotes),
+        event_state_known_at_ms=request_boundary_ms,
+        maximum_market_age_ms=policy.shadow.maximum_position_quote_age_ms,
+        requested_books=requested_books,
+        usable_books=usable_books,
+        declared_blockers=tuple(evidence_blockers),
+    )
     context = MarketContext(
-        now=normalized_now,
+        now=known_at,
         index_price=index_price,
         forward_price=forward,
         physical_variance_forecast=physical_variance,
@@ -308,31 +395,30 @@ def evaluate_live_btc_snapshot(
         breakout_state=breakout,
         concentrated_strike=concentrated_strike,
         concentration_strength=concentration_strength,
+        evidence=evidence,
     )
-    selection = select_iron_condor(
-        quotes=tuple(quotes),
-        context=context,
-        policy=policy,
-    )
-    decision = evaluate_two_sided_short_vol(
+    decision, selection = evaluate_radar_unit(
         session=session,
         context=context,
-        selection=selection,
+        quotes=tuple(quotes),
         policy=policy,
     )
-    try:
-        combo_result = client.call(
-            "public/get_combos",
-            {"currency": BTC.public_currency},
-        )
-        public_combo_id = _matching_public_combo_id(
-            combo_result,
-            structure=selection.selected,
-        )
-    except DeribitSourceError:
+    if selection is None:
         public_combo_id = None
-        warnings.append("PUBLIC_COMBO_DIAGNOSTIC_UNAVAILABLE")
-    if selection.selected is not None:
+    else:
+        try:
+            combo_result = client.call(
+                "public/get_combos",
+                {"currency": BTC.public_currency},
+            )
+            public_combo_id = _matching_public_combo_id(
+                combo_result,
+                structure=selection.selected,
+            )
+        except DeribitSourceError:
+            public_combo_id = None
+            warnings.append("PUBLIC_COMBO_DIAGNOSTIC_UNAVAILABLE")
+    if selection is not None and selection.selected is not None:
         selected_quotes = (
             selection.selected.long_put,
             selection.selected.short_put,
@@ -350,7 +436,7 @@ def evaluate_live_btc_snapshot(
         if receive_span > policy.shadow.entry_acquisition_window_ms:
             warnings.append("SELECTED_FOUR_LEG_RECEIVE_SPAN_EXCEEDS_ENTRY_WINDOW")
     return PublicSnapshotEvaluation(
-        observed_at=normalized_now,
+        observed_at=known_at,
         session_id=session.session_id,
         instrument_count=len(instruments),
         requested_book_count=len(selected_metadata),
@@ -359,16 +445,7 @@ def evaluate_live_btc_snapshot(
         context=context,
         decision=decision,
         selection=selection,
-        methodology=SnapshotMethodology(
-            physical_variance_method=("TRAILING_MATCHED_HORIZON_INDEX_REALIZED_VARIANCE_PROXY"),
-            implied_variance_method=("NEAREST_ATM_CALL_PUT_MARK_IV_SQUARED_TIMES_RISK_HORIZON"),
-            delta_method="DERIBIT_ORDER_BOOK_GREEKS",
-            concentration_method=("SHORTLISTED_PUBLIC_OPEN_INTEREST_TIMES_ABSOLUTE_GAMMA"),
-            event_state_source="EXPLICIT_HUMAN_OR_EXTERNAL_CALENDAR_INPUT",
-            index_history_cadence_ms=history_cadence_ms,
-            book_fetch_mode="BOUNDED_CONCURRENT_PUBLIC_GET_ORDER_BOOK",
-            combo_diagnostic_method="PUBLIC_GET_COMBOS_EXACT_LEG_SET_ONLY",
-        ),
+        methodology=methodology,
         public_combo_id=public_combo_id,
         warnings=tuple(sorted(set((*warnings, "OI_GAMMA_CONCENTRATION_IS_SHORTLIST_ONLY")))),
         product_funnel=project_product_funnel(

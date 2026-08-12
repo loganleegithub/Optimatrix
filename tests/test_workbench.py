@@ -75,6 +75,7 @@ def _snapshot() -> dict[str, object]:
             ],
         },
         "context": {
+            "knowledge": "KNOWN",
             "index_price": "100000",
             "forward_price": "100050",
             "physical_variance_forecast": "0.0018",
@@ -86,6 +87,18 @@ def _snapshot() -> dict[str, object]:
             "breakout_state": "CALM",
             "concentrated_strike": None,
             "concentration_strength": "0.10",
+            "physical_variance_method": "TRAILING_MATCHED_HORIZON_REALIZED_VARIANCE_PROXY",
+            "implied_variance_method": "ATM_MARK_VARIANCE_PROXY",
+            "event_state_source": "DETERMINISTIC_SCENARIO_INPUT",
+            "required_history_start_ms": 1_786_535_700_000,
+            "history_coverage_start_ms": 1_786_535_700_000,
+            "history_coverage_end_ms": 1_786_543_200_000,
+            "history_cadence_ms": 300_000,
+            "market_source_min_ms": 1_786_543_200_000,
+            "market_source_max_ms": 1_786_543_200_000,
+            "market_received_min_ms": 1_786_543_200_050,
+            "market_received_max_ms": 1_786_543_200_050,
+            "event_state_known_at_ms": 1_786_543_200_000,
         },
         "decision": {
             "decision_identity": "sha256:decision",
@@ -174,6 +187,7 @@ def test_document_projects_one_four_leg_strategy_without_recalculating_values() 
     context = cast(Sequence[Mapping[str, object]], document["context"])
     assert {row["key"]: row["value"] for row in score}["final_score"] == "0.78"
     assert {row["key"]: row["value"] for row in context}["jump_share"] == "0.04"
+    assert {row["key"]: row["value"] for row in context}["knowledge"] == "KNOWN"
     funnel = cast(Sequence[Mapping[str, object]], document["funnel"])
     assert {row["key"]: row["value"] for row in funnel}[
         "TWO_SIDED_STRUCTURE_EVALUABLE"
@@ -232,6 +246,34 @@ def test_no_structure_and_blockers_remain_truthful() -> None:
         "GAMMA_SAFETY_BELOW_MINIMUM",
         "EVENT_STATE_BLOCKED",
     ]
+
+
+def test_unknown_market_context_is_visible_without_a_score_or_structure() -> None:
+    snapshot = _snapshot()
+    context = dict(cast(Mapping[str, object], snapshot["context"]))
+    context["knowledge"] = "UNKNOWN"
+    snapshot["context"] = context
+    decision = dict(cast(Mapping[str, object], snapshot["decision"]))
+    decision["state"] = "UNKNOWN"
+    decision["blockers"] = [
+        "MARKET_CONTEXT_EVIDENCE_NOT_BOUND",
+        "EVENT_STATE_SOURCE_UNKNOWN",
+    ]
+    decision["score"] = None
+    decision["structure"] = None
+    snapshot["decision"] = decision
+
+    document = build_workbench_document(snapshot)
+
+    decision_view = cast(Mapping[str, object], document["decision"])
+    assert decision_view["state"] == "UNKNOWN"
+    assert decision_view["tone"] == "warning"
+    assert document["score"] == []
+    structure = cast(Mapping[str, object], document["structure"])
+    assert structure["available"] is False
+    assert structure["kind"] == "NOT_EVALUATED"
+    context_rows = cast(Sequence[Mapping[str, object]], document["context"])
+    assert {row["key"]: row["value"] for row in context_rows}["knowledge"] == "UNKNOWN"
 
 
 def test_structure_requires_four_distinct_correctly_typed_legs() -> None:

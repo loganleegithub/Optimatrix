@@ -23,19 +23,20 @@ _FUNNEL_STAGE_LABELS = {
     "DECISION_CASE_OUTCOME_KNOWN": "Decision Case Outcome known",
 }
 _SCORE_LABELS = {
-    "vrp_ratio": "Executable session VRP ratio",
+    "vrp_ratio": "ATM mark / trailing-RV ratio",
     "theta_capture_proxy": "Theta capture proxy",
-    "premium_edge": "Premium edge",
-    "gamma_safety": "Gamma safety",
+    "premium_edge": "Premium/time heuristic",
+    "gamma_safety": "Path-risk heuristic",
     "range_quality": "Range quality",
     "execution_quality": "Execution quality",
-    "final_score": "Final score",
+    "final_score": "Experimental rank score",
 }
 _CONTEXT_LABELS = {
+    "knowledge": "Market-context evidence",
     "index_price": "BTC index price",
     "forward_price": "Forward price",
-    "physical_variance_forecast": "Forecast physical variance",
-    "same_session_implied_variance": "Same-session implied variance",
+    "physical_variance_forecast": "Trailing matched-horizon RV proxy",
+    "same_session_implied_variance": "Same-session ATM mark-variance proxy",
     "rv_acceleration": "Realized-volatility acceleration",
     "jump_share": "Jump share",
     "directional_persistence": "Directional persistence",
@@ -43,6 +44,18 @@ _CONTEXT_LABELS = {
     "breakout_state": "Breakout state",
     "concentrated_strike": "Concentrated strike",
     "concentration_strength": "Concentration strength",
+    "physical_variance_method": "Physical-side method",
+    "implied_variance_method": "Implied-side method",
+    "event_state_source": "Event-state source",
+    "required_history_start_ms": "Required history start (ms)",
+    "history_coverage_start_ms": "History coverage start (ms)",
+    "history_coverage_end_ms": "History coverage end (ms)",
+    "history_cadence_ms": "History cadence (ms)",
+    "market_source_min_ms": "Oldest required market source (ms)",
+    "market_source_max_ms": "Latest required market source (ms)",
+    "market_received_min_ms": "Oldest required market receipt (ms)",
+    "market_received_max_ms": "Latest required market receipt (ms)",
+    "event_state_known_at_ms": "Event state known at (ms)",
 }
 _STRUCTURE_METRIC_LABELS = {
     "combined_net_credit_usd": "Four-leg net credit at observation boundary",
@@ -130,7 +143,11 @@ def build_workbench_document(snapshot: Mapping[str, object]) -> dict[str, object
             "tone": _decision_tone(state),
             "blockers": [{"code": blocker, "tone": "danger"} for blocker in blockers],
         },
-        "structure": _structure_projection(decision.get("structure"), quote_index),
+        "structure": _structure_projection(
+            decision.get("structure"),
+            quote_index,
+            decision_state=state,
+        ),
         "score": _optional_display_rows(decision.get("score"), _SCORE_LABELS),
         "context": _display_rows(context, _CONTEXT_LABELS),
         "methodology": _optional_display_rows(root.get("methodology"), {}),
@@ -176,8 +193,21 @@ def write_workbench(
 def _structure_projection(
     value: object,
     quote_index: Mapping[str, Mapping[str, object]],
+    *,
+    decision_state: str,
 ) -> dict[str, object]:
     if value is None:
+        if decision_state.upper() == "UNKNOWN":
+            return {
+                "available": False,
+                "kind": "NOT_EVALUATED",
+                "message": (
+                    "Four-leg structure was not evaluated because required "
+                    "MarketContext evidence is UNKNOWN."
+                ),
+                "legs": [],
+                "metrics": [],
+            }
         return {
             "available": False,
             "kind": "NO_FOUR_LEG_STRUCTURE",
@@ -319,7 +349,8 @@ def _display_rows(
 def _decision_tone(state: str) -> str:
     return {
         "CANDIDATE": "positive",
-        "WATCH": "warning",
+        "REVIEW": "warning",
+        "UNKNOWN": "warning",
         "ABSTAIN": "neutral",
     }.get(state.upper(), "unknown")
 

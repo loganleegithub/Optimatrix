@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from optimatrix.engine import ShadowEngine
-from optimatrix.market import BreakoutState, EventState
+from optimatrix.market import BreakoutState, EventState, MarketContextEvidence
 from optimatrix.radar import Decision
 from optimatrix.scenarios import base_chain, current_expiry, market_context
 
@@ -54,6 +54,60 @@ def test_live_event_is_not_a_mechanical_sell_signal(policy, tmp_path) -> None:
     assert "EVENT_OR_SHOCK_IN_PROGRESS" in decision.blockers
 
 
+def test_unbound_market_context_is_unknown_without_structure_score_or_case(
+    policy,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from dataclasses import replace
+
+    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
+    case_root = tmp_path / "cases"
+    engine = ShadowEngine(policy=policy, case_root=case_root)
+    known_context = market_context(now)
+    future_ms = int(now.timestamp() * 1000) + 1
+    invalid_evidence = replace(
+        known_context.evidence,
+        market_source_max_ms=future_ms,
+        market_received_max_ms=future_ms,
+    )
+    monkeypatch.setattr(
+        "optimatrix.radar.select_iron_condor",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("selector must not run")),
+    )
+    decision = engine.evaluate(
+        quotes=base_chain(expiry=current_expiry(now)),
+        context=replace(known_context, evidence=invalid_evidence),
+    )
+
+    assert decision.decision is Decision.UNKNOWN
+    assert decision.structure is None
+    assert decision.score is None
+    assert decision.blockers[0] == "MARKET_CONTEXT_EVIDENCE_NOT_BOUND"
+    assert "MARKET_SOURCE_BOUNDARY_IN_FUTURE" in decision.blockers
+    with pytest.raises(ValueError, match="only a CANDIDATE"):
+        engine.open_decision_case(decision=decision, opened_at=now)
+    assert not tuple(case_root.rglob("*.jsonl"))
+
+
+def test_missing_event_source_is_unknown_not_calm(policy, tmp_path) -> None:
+    from dataclasses import replace
+
+    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
+    known = market_context(now, event=EventState.NONE)
+    context = replace(
+        known,
+        evidence=replace(known.evidence, event_state_source=None),
+    )
+    decision = ShadowEngine(policy=policy, case_root=tmp_path).evaluate(
+        quotes=base_chain(expiry=current_expiry(now)),
+        context=context,
+    )
+
+    assert decision.decision is Decision.UNKNOWN
+    assert "EVENT_STATE_SOURCE_UNKNOWN" in decision.blockers
+
+
 def test_incoherent_vertical_books_cannot_form_a_two_sided_candidate(
     policy,
     tmp_path,
@@ -92,6 +146,7 @@ def test_market_context_requires_timezone_aware_time() -> None:
             breakout_state=BreakoutState.NEUTRAL,
             concentrated_strike=None,
             concentration_strength=Decimal("0"),
+            evidence=MarketContextEvidence.unknown(),
         )
 
 

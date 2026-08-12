@@ -20,9 +20,13 @@ from optimatrix.lifecycle import (
 from optimatrix.market import (
     BreakoutState,
     EventState,
+    EventStateSource,
+    ImpliedVarianceMethod,
     MarketContext,
+    MarketContextEvidence,
     OptionQuote,
     OptionType,
+    PhysicalVarianceMethod,
     PriceLevel,
     TickSchedule,
     TickStep,
@@ -49,6 +53,7 @@ def run_all_scenarios(
     target_root.mkdir(parents=True, exist_ok=True)
     return (
         calm_high_vrp_take_profit(policy, target_root / "calm"),
+        unknown_market_context_stops_before_structure(policy, target_root / "unknown-context"),
         gamma_explosion_is_rejected(policy, target_root / "gamma"),
         event_phase_changes_decision(policy, target_root / "event"),
         short_risk_exit_keeps_residual_wings(policy, target_root / "short-only"),
@@ -66,6 +71,36 @@ def run_all_scenarios(
         friday_expiry_reserves_delivery_fees(policy, target_root / "friday-settlement"),
         failed_exit_survives_process_recovery(policy, target_root / "exit-recovery"),
         live_shock_forces_short_risk_exit(policy, target_root / "live-shock-exit"),
+    )
+
+
+def unknown_market_context_stops_before_structure(
+    policy: BtcShortVolPolicy,
+    root: Path,
+) -> ScenarioResult:
+    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
+    decision = ShadowEngine(policy=policy, case_root=root).evaluate(
+        quotes=base_chain(expiry=current_expiry(now), observed_at=now),
+        context=market_context(
+            now,
+            evidence=MarketContextEvidence.unknown(),
+        ),
+    )
+    passed = (
+        decision.decision is Decision.UNKNOWN
+        and decision.structure is None
+        and decision.score is None
+        and decision.blockers[0] == "MARKET_CONTEXT_EVIDENCE_NOT_BOUND"
+    )
+    return ScenarioResult(
+        "unknown_market_context_stops_before_structure",
+        passed,
+        {
+            "decision": decision.decision.value,
+            "structure_created": decision.structure is not None,
+            "score_created": decision.score is not None,
+            "primary_blocker": decision.blockers[0],
+        },
     )
 
 
@@ -764,7 +799,28 @@ def market_context(
     directional_persistence: Decimal = Decimal("0.10"),
     event: EventState = EventState.NONE,
     breakout: BreakoutState = BreakoutState.MEAN_REVERTING,
+    evidence: MarketContextEvidence | None = None,
 ) -> MarketContext:
+    now_ms = int(now.timestamp() * 1000)
+    bound_evidence = evidence or MarketContextEvidence(
+        physical_variance_method=(
+            PhysicalVarianceMethod.DETERMINISTIC_MATCHED_HORIZON_REALIZED_VARIANCE_PROXY
+        ),
+        implied_variance_method=ImpliedVarianceMethod.DETERMINISTIC_ATM_MARK_VARIANCE_PROXY,
+        event_state_source=EventStateSource.DETERMINISTIC_SCENARIO_INPUT,
+        required_history_start_ms=now_ms - 120 * 60_000,
+        history_coverage_start_ms=now_ms - 120 * 60_000,
+        history_coverage_end_ms=now_ms,
+        history_cadence_ms=5 * 60_000,
+        market_source_min_ms=now_ms,
+        market_source_max_ms=now_ms,
+        market_received_min_ms=now_ms,
+        market_received_max_ms=now_ms,
+        event_state_known_at_ms=now_ms,
+        maximum_market_age_ms=5_000,
+        requested_books=("DETERMINISTIC_CHAIN",),
+        usable_books=("DETERMINISTIC_CHAIN",),
+    )
     return MarketContext(
         now=now,
         index_price=index,
@@ -778,6 +834,7 @@ def market_context(
         breakout_state=breakout,
         concentrated_strike=Decimal("100000"),
         concentration_strength=Decimal("0.70"),
+        evidence=bound_evidence,
     )
 
 

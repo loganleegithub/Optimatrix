@@ -30,11 +30,10 @@ from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.radar import (
     Decision,
     RadarDecision,
-    evaluate_two_sided_short_vol,
+    evaluate_radar_unit,
     require_radar_decision_identity,
 )
 from optimatrix.session import current_deribit_session, expiry_is_current_session
-from optimatrix.structure import select_iron_condor
 
 
 class ShadowEngine:
@@ -53,17 +52,13 @@ class ShadowEngine:
         current_expiry_quotes = tuple(
             quote for quote in quotes if expiry_is_current_session(quote.expiry, session)
         )
-        selection = select_iron_condor(
-            quotes=current_expiry_quotes,
-            context=context,
-            policy=self.policy,
-        )
-        return evaluate_two_sided_short_vol(
+        decision, _selection = evaluate_radar_unit(
             session=session,
             context=context,
-            selection=selection,
+            quotes=current_expiry_quotes,
             policy=self.policy,
         )
+        return decision
 
     def open_decision_case(
         self,

@@ -5,13 +5,20 @@ from decimal import Decimal
 from enum import StrEnum
 
 from optimatrix.identity import canonical_identity
-from optimatrix.market import BreakoutState, EventState, MarketContext
+from optimatrix.market import (
+    BreakoutState,
+    EventState,
+    MarketContext,
+    MarketContextKnowledge,
+    OptionQuote,
+)
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.session import DeribitSession, SessionPhase
-from optimatrix.structure import IronCondorCandidate, StructureSelection
+from optimatrix.structure import IronCondorCandidate, StructureSelection, select_iron_condor
 
 
 class Decision(StrEnum):
+    UNKNOWN = "UNKNOWN"
     CANDIDATE = "CANDIDATE"
     REVIEW = "REVIEW"
     ABSTAIN = "ABSTAIN"
@@ -39,6 +46,56 @@ class RadarDecision:
     score: ScoreBreakdown | None
     blockers: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        if self.decision is Decision.UNKNOWN and (
+            not self.blockers or self.structure is not None or self.score is not None
+        ):
+            raise ValueError(
+                "UNKNOWN decision requires blockers and cannot have structure or score"
+            )
+        if self.decision is Decision.CANDIDATE and (
+            self.blockers or self.structure is None or self.score is None
+        ):
+            raise ValueError("CANDIDATE requires one structure, one score, and no blockers")
+
+
+def evaluate_radar_unit(
+    *,
+    session: DeribitSession,
+    context: MarketContext,
+    quotes: tuple[OptionQuote, ...],
+    policy: BtcShortVolPolicy,
+) -> tuple[RadarDecision, StructureSelection | None]:
+    """Gate MarketContext truth before any structure enumeration or score computation."""
+
+    if context.knowledge is MarketContextKnowledge.UNKNOWN:
+        empty = StructureSelection(
+            selected=None,
+            considered_put_verticals=0,
+            considered_call_verticals=0,
+            considered_condors=0,
+            blockers=context.evidence_blockers,
+        )
+        return (
+            evaluate_two_sided_short_vol(
+                session=session,
+                context=context,
+                selection=empty,
+                policy=policy,
+            ),
+            None,
+        )
+    selection = select_iron_condor(quotes=quotes, context=context, policy=policy)
+    return (
+        evaluate_two_sided_short_vol(
+            session=session,
+            context=context,
+            selection=selection,
+            policy=policy,
+        ),
+        selection,
+    )
+
 
 def evaluate_two_sided_short_vol(
     *,
@@ -47,6 +104,15 @@ def evaluate_two_sided_short_vol(
     selection: StructureSelection,
     policy: BtcShortVolPolicy,
 ) -> RadarDecision:
+    if context.knowledge is MarketContextKnowledge.UNKNOWN:
+        return _decision(
+            session=session,
+            policy=policy,
+            result=Decision.UNKNOWN,
+            structure=None,
+            score=None,
+            blockers=("MARKET_CONTEXT_EVIDENCE_NOT_BOUND", *context.evidence_blockers),
+        )
     blockers: list[str] = []
     if session.phase is SessionPhase.ROLL_REPRICE:
         blockers.append("ROLL_REPRICE_REVIEW_ONLY")

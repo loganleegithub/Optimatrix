@@ -3,12 +3,21 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import cast
+
+import pytest
 
 from optimatrix.deribit_snapshot import evaluate_live_btc_snapshot
-from optimatrix.market import EventState
+from optimatrix.market import EventState, EventStateSource
 from optimatrix.radar import Decision
 from optimatrix.session import current_deribit_session
 from optimatrix.workbench import build_workbench_document
+
+
+@pytest.fixture(autouse=True)
+def _freeze_public_snapshot_receive_clock(monkeypatch) -> None:
+    boundary = datetime(2026, 8, 12, 18, 0, tzinfo=UTC).timestamp()
+    monkeypatch.setattr("optimatrix.deribit_snapshot.time.time", lambda: boundary)
 
 
 class FakeDeribitClient:
@@ -26,6 +35,8 @@ class FakeDeribitClient:
         self.books = {
             "BTC-X-93000-P": self._book("BTC-X-93000-P", "-0.05", "0.0008", "0.0009"),
             "BTC-X-95000-P": self._book("BTC-X-95000-P", "-0.15", "0.0028", "0.0029"),
+            "BTC-X-99000-P": self._book("BTC-X-99000-P", "-0.45", "0.0080", "0.0081"),
+            "BTC-X-101000-C": self._book("BTC-X-101000-C", "0.45", "0.0080", "0.0081"),
             "BTC-X-105000-C": self._book("BTC-X-105000-C", "0.15", "0.0028", "0.0029"),
             "BTC-X-107000-C": self._book("BTC-X-107000-C", "0.05", "0.0008", "0.0009"),
         }
@@ -37,6 +48,8 @@ class FakeDeribitClient:
             return [
                 self._instrument("BTC-X-93000-P", 93000, "put"),
                 self._instrument("BTC-X-95000-P", 95000, "put"),
+                self._instrument("BTC-X-99000-P", 99000, "put"),
+                self._instrument("BTC-X-101000-C", 101000, "call"),
                 self._instrument("BTC-X-105000-C", 105000, "call"),
                 self._instrument("BTC-X-107000-C", 107000, "call"),
                 {
@@ -119,12 +132,16 @@ def test_public_snapshot_adapter_evaluates_current_session_without_writing_cases
         maximum_books=8,
         depth=20,
     )
-    assert evaluation.instrument_count == 4
-    assert evaluation.fetched_book_count == 4
+    assert evaluation.instrument_count == 6
+    assert evaluation.fetched_book_count == 6
     assert evaluation.decision.decision is Decision.CANDIDATE
     assert evaluation.decision.structure is not None
-    assert evaluation.methodology.event_state_source.startswith("EXPLICIT_")
+    assert (
+        evaluation.context.evidence.event_state_source
+        is EventStateSource.EXPLICIT_HUMAN_OR_EXTERNAL_CALENDAR_INPUT
+    )
     assert evaluation.public_combo_id is None
+    assert evaluation.selection is not None
     assert evaluation.selection.considered_condors > 0
     workbench = build_workbench_document(evaluation.as_object())
     assert workbench["structure"]["kind"] == "ASYMMETRIC_IRON_CONDOR"
@@ -133,6 +150,36 @@ def test_public_snapshot_adapter_evaluates_current_session_without_writing_cases
         for row in workbench["funnel"]
     )
     assert not (tmp_path / "build/live-snapshot-no-cases").exists()
+
+
+def test_incomplete_book_universe_is_unknown_and_skips_structure(policy) -> None:
+    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
+    client = FakeDeribitClient(now)
+    client.books["BTC-X-99000-P"] = {
+        "state": "closed",
+        "instrument_name": "BTC-X-99000-P",
+    }
+
+    evaluation = evaluate_live_btc_snapshot(
+        client=client,
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=8,
+        depth=20,
+    )
+
+    assert evaluation.decision.decision is Decision.UNKNOWN
+    assert "SELECTION_UNIVERSE_INCOMPLETE" in evaluation.decision.blockers
+    assert evaluation.selection is None
+    assert evaluation.decision.structure is None
+    assert evaluation.decision.score is None
+    snapshot = evaluation.as_object()
+    counts = cast(Mapping[str, object], snapshot["market_counts"])
+    assert counts["condors"] is None
+    workbench = build_workbench_document(snapshot)
+    structure = cast(Mapping[str, object], workbench["structure"])
+    assert structure["kind"] == "NOT_EVALUATED"
 
 
 def test_public_snapshot_detects_exact_existing_combo(policy) -> None:

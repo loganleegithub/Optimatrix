@@ -23,6 +23,7 @@ class FunnelStageName(StrEnum):
 class FunnelStageStatus(StrEnum):
     PASSED = "PASSED"
     BLOCKED = "BLOCKED"
+    UNKNOWN = "UNKNOWN"
     NOT_REACHED = "NOT_REACHED"
 
 
@@ -106,13 +107,20 @@ def project_product_funnel(
         policy_identity,
     )
     decision_blockers = set(decision.blockers)
+    market_context_unknown = decision.decision is Decision.UNKNOWN
+    if decision_case_opened is True and decision.decision is not Decision.CANDIDATE:
+        raise ValueError("only a CANDIDATE can open a Decision Case")
     if entry_result_known is True and decision_case_opened is not True:
         raise ValueError("known entry result requires an opened Decision Case")
     if decision_case_outcome_known is True and entry_result_known is not True:
         raise ValueError("known Decision Outcome requires a known entry result")
     checks: tuple[tuple[FunnelStageName, bool | None, tuple[str, ...]], ...] = (
         (FunnelStageName.APPLICABLE_SESSION_DECISION, True, ()),
-        (FunnelStageName.MARKET_CONTEXT_KNOWN, True, ()),
+        (
+            FunnelStageName.MARKET_CONTEXT_KNOWN,
+            not market_context_unknown,
+            decision.blockers if market_context_unknown else (),
+        ),
         (
             FunnelStageName.VRP_THETA_QUALIFIED,
             not bool(decision_blockers & _VRP_THETA_BLOCKERS),
@@ -190,7 +198,11 @@ def project_product_funnel(
             effective_blockers = blockers or (f"{name.value}_BLOCKED",)
             stage = FunnelStage(
                 name,
-                FunnelStageStatus.BLOCKED,
+                (
+                    FunnelStageStatus.UNKNOWN
+                    if name is FunnelStageName.MARKET_CONTEXT_KNOWN and market_context_unknown
+                    else FunnelStageStatus.BLOCKED
+                ),
                 denominator,
                 0,
                 effective_blockers,
