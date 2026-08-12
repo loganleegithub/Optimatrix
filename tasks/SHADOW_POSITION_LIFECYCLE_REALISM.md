@@ -2,11 +2,11 @@
 
 **Status:** ACTIVE
 
-**Task kind:** IMPLEMENTATION
+**Task kind:** VALIDATION_ONLY
 
 **Runtime implementation:** REQUIRED
 
-**Live commands:** REQUIRED — one isolated full-business-chain simulation; stable cutover forbidden
+**Live commands:** REQUIRED — one clean stable cutover and bounded API/browser gate
 
 **Base commit:** `d0b5a4b6597077500c6fe4be69a73d5e2e765ea9`
 
@@ -87,8 +87,9 @@ date/price members; accepted component-close facts retain their existing complet
 **Outcome/evaluation contract change:** Add Outcome contract version 3, full terminal source
 reconstruction, offline acquisition-window derivation, and legacy evidence-level classification.
 
-**Stage/authorization change:** Authorize one isolated simulation; stable runtime cutover remains
-forbidden until a later explicit authority update.
+**Stage/authorization change:** The isolated simulation is accepted. Authorize one clean stable
+runtime cutover and bounded API/browser gate under `CURRENT_STAGE`; no second product or Policy
+change is authorized.
 
 ## Scope
 
@@ -108,11 +109,11 @@ automatic Policy qualification.
 - focused tests: Position/Outcome, Case store, delivery composition, offline report, and deterministic
   full-chain business scenarios, plus exact-identity Workbench lifecycle projection;
 - repository gate: `make check`;
-- public observation: one isolated modified-runtime simulation over a consistent stable-root copy;
-- browser QA: isolated current-fact preview at matching desktop and responsive viewports, recorded in
-  `design-qa.md` without changing the stable runtime;
-- no stable runtime restart/cutover, manifest, receipt, commissioning controller, replay, or broad
-  evidence package.
+- public observation: the accepted isolated simulation plus one clean stable-root stop/start;
+- browser QA: desktop and responsive current-fact validation of Radar and Shadow, with repeated
+  schema-7 document observation and console inspection;
+- no manifest, receipt, commissioning controller, replay, second Case root, or broad evidence
+  package.
 
 ## Definition of done
 
@@ -120,6 +121,7 @@ The official reader accepts every existing Case unchanged, rejects coherent term
 tampering, version-3 market exits and settlements recompute exactly, partial delivery fanout cannot
 starve another expiry, Cohorts are offline and window-specific, every declared business scenario
 passes on the modified runtime, `make check` passes without overwriting concurrent Web work, and the
-isolated simulation preserves the original Case bytes. The trader Workbench must exclude Controls,
-retain exit/settlement responsibility across Gap, and never render unknown economics as zero or a
-terminal claim. Tests alone do not satisfy the task.
+isolated simulation and stable cutover preserve all pre-existing Case bytes. The trader Workbench
+must exclude Controls, retain exit/settlement responsibility across Gap, never render unknown
+economics as zero or a terminal claim, and pass the live desktop/responsive browser gate. Tests
+alone do not satisfy the task.

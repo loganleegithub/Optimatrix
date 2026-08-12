@@ -182,35 +182,35 @@ def test_public_only_validation_does_not_recreate_commissioning() -> None:
     assert "No terminal manifest" in persistent
 
 
-def test_current_stage_authorizes_position_lifecycle_evidence_closure() -> None:
+def test_current_stage_authorizes_position_lifecycle_cutover() -> None:
     current = (ROOT / "docs/authority/CURRENT_STAGE.md").read_text(encoding="utf-8")
     normalized = " ".join(current.split())
     assert "**Current permission boundary:** `PUBLIC_SHADOW`" in current
-    assert "**Current task kind:** `IMPLEMENTATION`" in current
-    assert "INVERSE_BTC_SHORT_VOL_V2_POSITION_LIFECYCLE_EVIDENCE_CLOSURE_IN_PROGRESS" in current
-    assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
+    assert "**Current task kind:** `VALIDATION_ONLY`" in current
     assert (
-        "TASK_SCOPED_ISOLATED_BUSINESS_SIMULATION_AUTHORIZED_STABLE_CUTOVER_NOT_YET_AUTHORIZED"
-        in current
+        "INVERSE_BTC_SHORT_VOL_V2_LIFECYCLE_V3_AND_SHADOW_RISK_BOOK_CUTOVER_AUTHORIZED" in current
     )
+    assert "**Accepted online product:** `INVERSE_BTC_V1_ONLY`" in current
+    assert "ONE_CLEAN_STOP_ONE_START_AND_BOUNDED_API_BROWSER_GATE_AUTHORIZED" in current
     assert "SHADOW_POSITION_LIFECYCLE_REALISM" in current
     for phrase in (
         "/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9",
         "127.0.0.1:8765",
-        "87 schema-v5 Cases",
-        "65 immutable first-CLOSE records",
-        "36 Outcomes",
-        "Twenty Outcomes use contract version 2",
-        "no naturally produced `SETTLED_KNOWN` exists yet",
-        "43 non-terminal Positions",
-        "Future terminal Outcomes use a versioned evidence contract",
-        "Existing Case bytes remain immutable and readable",
+        "ca8fbe8be577eb22b9e5b15c25dd8bf9b1225ad4",
+        "777 tests",
+        "14 reader-validated version-3 `EXITED_KNOWN/MARKET_EXIT` Outcomes",
+        "91 schema-v5 Case directories",
+        "68 immutable first-CLOSE records",
+        "36 Outcome files",
+        "646 total files",
+        "Existing bytes may not be migrated, replaced, relabeled, or rewritten",
+        "mark PR `#51` ready",
+        "delete the local and remote topic branch",
+        "exactly one replacement",
+        "compatible rollback point is `bac492f58981f572b37d733cf5b1e6848a3baa7a`",
         "The current Position Policy identity and all nine frozen predicate thresholds remain unchanged",
         "Qualification remains offline",
-        "New Outcomes do not persist Cohort membership Booleans",
-        "one isolated full-business-chain simulation",
-        "Stable cutover is withheld",
-        "concurrent Workbench construction",
+        "bounded desktop and responsive browser gate",
         "Permission remains `PUBLIC_SHADOW`",
     ):
         assert phrase in normalized

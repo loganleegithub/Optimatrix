@@ -4,84 +4,74 @@
 
 **Current permission boundary:** `PUBLIC_SHADOW`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `VALIDATION_ONLY`
 
-**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_POSITION_LIFECYCLE_EVIDENCE_CLOSURE_IN_PROGRESS`
+**Current implementation status:** `INVERSE_BTC_SHORT_VOL_V2_LIFECYCLE_V3_AND_SHADOW_RISK_BOOK_CUTOVER_AUTHORIZED`
 
 **Accepted online product:** `INVERSE_BTC_V1_ONLY`
 
 **Accepted implementation boundary:** `INVERSE_BTC_SHORT_VOL_V2_PUBLIC_SHADOW`
 
-**Persistent service:** `RUNNING_8765_CODE_6FF78068A7990584AAE630BD31DBABCD6B90DA9A`
+**Persistent service:** `RUNNING_8765_CODE_6FF78068A7990584AAE630BD31DBABCD6B90DA9A_PENDING_ONE_CUTOVER`
 
-**Live commands:** `TASK_SCOPED_ISOLATED_BUSINESS_SIMULATION_AUTHORIZED_STABLE_CUTOVER_NOT_YET_AUTHORIZED`
+**Live commands:** `ONE_CLEAN_STOP_ONE_START_AND_BOUNDED_API_BROWSER_GATE_AUTHORIZED`
 
-**Active closure:**
+**Sole authorized closure:**
 [`SHADOW_POSITION_LIFECYCLE_REALISM`](../../tasks/SHADOW_POSITION_LIFECYCLE_REALISM.md)
 
-## Current business baseline
+## Accepted implementation and pre-stop baseline
+
+The accepted integrated implementation is
+`ca8fbe8be577eb22b9e5b15c25dd8bf9b1225ad4` on Draft PR `#51`. It combines the version-3
+Position terminal-evidence reader/writer, continuing exit and settlement responsibility, offline
+window-specific Cohorts, and the read-only Shadow expiry-risk Workbench. The exact integrated tree
+passed focused lifecycle/Workbench tests and `make check` with 777 tests. Its isolated runtime
+simulation over a consistent stable-root copy preserved every original file and naturally produced
+14 reader-validated version-3 `EXITED_KNOWN/MARKET_EXIT` Outcomes.
 
 The stable repository is
-`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. At the repair boundary its direct
-record inventory held 87 schema-v5 Cases, 65 immutable first-CLOSE records, and 36 Outcomes. Twenty
-Outcomes use contract version 2 and are naturally produced admitted `EXITED_KNOWN/MARKET_EXIT`
-results; no naturally produced `SETTLED_KNOWN` exists yet. Legacy history remains immutable.
+`/Users/logan/OptiMatrix_DATA/Deribit/optimatrix-shadow-v2-v9`. The consumed pre-stop inventory
+contains 91 schema-v5 Case directories, 68 immutable first-CLOSE records, 36 Outcome files, and
+646 total files. Existing bytes may not be migrated, replaced, relabeled, or rewritten. Normal
+clean-stop Segment closure and replacement-runtime recovery may only append the contract-authorized
+Segment and Outcome files.
 
-Runtime code `6ff78068a7990584aae630bd31dbabcd6b90da9a` is the current loopback service at
-`127.0.0.1:8765`. Its current projection held 43 non-terminal Positions at the repair boundary:
-35 `EXIT_ACQUIRING` and 8 `MONITORING`. Normal public intake may increase those counts while this
-task is implemented; counts are a baseline, not a cap or completion criterion.
+The sole service at `127.0.0.1:8765` still runs code
+`6ff78068a7990584aae630bd31dbabcd6b90da9a` with runtime identity
+`sha256:6e09aac4eb81101bf8deaf7ed054c89dc5b51c008715b2279cca61851972cf08`.
+The consumed same-frame Workbench baseline was schema 7, `RUNNING / CURRENT / ready`, 130 Radar
+rows, 34 formal Shadow Entry rows, 47 Position projections, and 47 Outcome projections. Projection
+counts are current UI state, not the durable Case inventory or a qualification denominator.
 
-The prior lifecycle repair correctly separated immutable first CLOSE from continuing quote
-acquisition and naturally produced known market-exit economics. The remaining primary blocker is
-terminal evidence closure: the durable market-exit pair lacks the complete timing/source fields
-needed for independent reader reconstruction; contract settlement validates aggregate arithmetic
-without recomputing product payoff and fee semantics; a delivery-history response is incorrectly
-conditioned on its request owner's date; and online whole-lifecycle Booleans still act as Cohort
-membership.
+## Authorized clean cutover
 
-## Active implementation authority
+This closure authorizes exactly:
 
-This task may change only the existing Position/Outcome owner, official delivery-price source
-route, schema-v5 Case follow-up version union, official reader, offline Case report, owning
-contracts, and deterministic business tests. Existing Case bytes remain immutable and readable.
-No new record kind, pre-Shadow persistence, per-attempt tape, database, replay path, supervisor,
-order, fill, account, margin, capital, or private execution is authorized.
+1. mark PR `#51` ready, merge the tested branch into `main`, push, and delete the local and remote
+   topic branch;
+2. clean-stop the sole 8765 runtime, verify the listener is absent, synchronize the existing clean
+   deployment checkout to merged `main`, and start exactly one replacement with the unchanged
+   stable root and port;
+3. verify the replacement's import provenance, code/runtime identity, health, readiness, schema-7
+   API, all declared GET/HEAD routes, official Case reader, recovered lifecycle responsibility,
+   and single process ownership;
+4. perform one bounded desktop and responsive browser gate over the Radar and Shadow surfaces,
+   including filters, row/detail interaction, public-read-only boundary, console errors, and
+   repeated current-document observation.
 
-Future terminal Outcomes use a versioned evidence contract. A market exit must retain enough of
-the accepted two-leg response pair for the one Case reader to recompute source identities, causal
-ownership, session/continuity equality, skew limits, selected sample identity, quantities, fees,
-and economics. Official contract settlement must retain a reconstructable response/member witness
-and be recomputed by the existing Inverse product calculator. Older Outcomes remain terminal
-economic history but cannot be promoted into stricter evidence Cohorts by rewriting them.
+The compatible rollback point is `bac492f58981f572b37d733cf5b1e6848a3baa7a`: it contains the
+same version-3 Case reader and lifecycle backend while retaining the preceding Workbench. It can
+read every legacy and version-3 follow-up produced by the replacement. A failed gate may use that
+one compatible rollback; it may not restart code `6ff7806` after a version-3 follow-up exists.
 
-The current Position Policy identity and all nine frozen predicate thresholds remain unchanged.
-This repair may bind an explicit exit-acquisition observation profile at a future first CLOSE and
-separate its retry cadence from an RPC response deadline, but it cannot reinterpret an existing
-first-CLOSE reason. Source-discontinuity, directional-path, liquidity, and normalized threshold
-changes require a successor Position Policy after the active legacy book is no longer bound to the
-current identity.
+The cutover changes no product, Policy identity, predicate threshold, Case root, durable record
+kind, market source, order/fill/account boundary, or private permission. The current Position
+Policy identity and all nine frozen predicate thresholds remain unchanged. Qualification remains
+offline and no online global Cohort verdict is authorized.
 
-Qualification remains offline. New Outcomes do not persist Cohort membership Booleans. The
-official report derives terminal economics, continuous path, market-exit evidence, and the bounded
-first-CLOSE-to-terminal acquisition window as separate questions. The legacy
-`qualification_eligible` Segment field remains only a strict whole-path continuity projection.
-
-## Validation and live boundary
-
-The authorized validation is deterministic direct and integration tests, `make check`, and one
-isolated full-business-chain simulation over a consistent copy of the stable Case repository. The
-simulation must cover eligible and ineligible paired books, timing/session/continuity failures,
-failed and partial delivery histories, call/put settlement regimes, daily and standard delivery
-fees, process recovery, Control recovery, reader tamper rejection, Segment truth, and named
-offline Cohorts.
-
-This stage does not authorize stopping, replacing, or writing through the stable runtime. Stable
-cutover is withheld while the implementation and concurrent Workbench construction remain
-unintegrated. A later authority update must name the tested code identity, preserve all existing
-Case bytes, establish compatible-reader rollback, and explicitly authorize the one stable cutover.
+## Permission and non-claims
 
 Permission remains `PUBLIC_SHADOW`: production public facts and counterfactual economics only. A
 public book or delivery price is not an order, fill, settlement action, actual position, account
-PnL, or capital exposure. Green tests, a responsive Workbench, `PENDING`, or `GAPPED` do not qualify
-a Policy or prove terminal economics.
+PnL, or capital exposure. `PENDING`, `GAPPED`, a responsive Workbench, green tests, or a recovered
+Case do not qualify a Policy or prove terminal economics.
