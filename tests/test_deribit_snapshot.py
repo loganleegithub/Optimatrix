@@ -224,25 +224,17 @@ def test_http_client_allowlist_matches_b3_runtime_permission() -> None:
 def test_http_client_refuses_methods_outside_b3_allowlist_before_request_construction(
     method, monkeypatch
 ) -> None:
-    request_constructed = False
-    network_called = False
+    connection_constructed = False
 
-    def unexpected_request(*args, **kwargs):
-        nonlocal request_constructed
-        request_constructed = True
-        raise AssertionError("request must not be constructed for a forbidden method")
+    def unexpected_connection(*args, **kwargs):
+        nonlocal connection_constructed
+        connection_constructed = True
+        raise AssertionError("connection must not be constructed for a forbidden method")
 
-    def unexpected_urlopen(*args, **kwargs):
-        nonlocal network_called
-        network_called = True
-        raise AssertionError("network must not be called for a forbidden method")
-
-    monkeypatch.setattr("optimatrix.deribit_snapshot.Request", unexpected_request)
-    monkeypatch.setattr("optimatrix.deribit_snapshot.urlopen", unexpected_urlopen)
+    monkeypatch.setattr("optimatrix.deribit_snapshot.HTTPSConnection", unexpected_connection)
     with pytest.raises(ValueError, match="B3 allowlist"):
         DeribitHttpClient(base_url="https://invalid.example").call(method, {})
-    assert request_constructed is False
-    assert network_called is False
+    assert connection_constructed is False
 
 
 def test_http_client_preserves_validated_production_json_rpc_envelope(monkeypatch) -> None:
@@ -262,22 +254,30 @@ def test_http_client_preserves_validated_production_json_rpc_envelope(monkeypatc
     requests = []
 
     class FakeHttpResponse:
-        def __enter__(self):
-            return self
+        status = 200
 
-        def __exit__(self, *args) -> None:
+        def getheader(self, _name):
             return None
 
         def read(self) -> bytes:
             return json.dumps(payload).encode("utf-8")
 
-    def fake_urlopen(request, *, timeout):
-        requests.append((request, timeout))
-        return FakeHttpResponse()
+    class FakeHttpsConnection:
+        def __init__(self, host, *, port, timeout):
+            requests.append((host, port, timeout))
+
+        def request(self, method, path, *, body, headers):
+            requests.append((method, path, body, headers))
+
+        def getresponse(self):
+            return FakeHttpResponse()
+
+        def close(self) -> None:
+            requests.append("closed")
 
     clock = iter((sent_ms / 1000, receive_ms / 1000))
     monkeypatch.setattr("optimatrix.deribit_snapshot.time.time", lambda: next(clock))
-    monkeypatch.setattr("optimatrix.deribit_snapshot.urlopen", fake_urlopen)
+    monkeypatch.setattr("optimatrix.deribit_snapshot.HTTPSConnection", FakeHttpsConnection)
     response = DeribitHttpClient(timeout_seconds=10).call(
         "public/get_index_price",
         {"index_name": "btc_usd"},
@@ -288,15 +288,19 @@ def test_http_client_preserves_validated_production_json_rpc_envelope(monkeypatc
     assert response.local_sent_at_ms == sent_ms
     assert response.local_received_at_ms == receive_ms
     assert response.server_processing_us == 10_000
-    request, timeout = requests[0]
-    assert request.get_method() == "POST"
-    assert timeout == 10
-    assert json.loads(request.data) == {
+    assert requests[0] == ("www.deribit.com", None, 10)
+    method, path, body, headers = requests[1]
+    assert method == "POST"
+    assert path == "/api/v2/public/get_index_price"
+    assert json.loads(body) == {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "public/get_index_price",
         "params": {"index_name": "btc_usd"},
     }
+    assert headers["Connection"] == "keep-alive"
+    assert headers["Accept-Encoding"] == "gzip"
+    assert requests[2] == "closed"
 
 
 def test_http_client_rejects_nonproduction_envelope(monkeypatch) -> None:
@@ -312,19 +316,73 @@ def test_http_client_rejects_nonproduction_envelope(monkeypatch) -> None:
     }
 
     class FakeHttpResponse:
-        def __enter__(self):
-            return self
+        status = 200
 
-        def __exit__(self, *args) -> None:
+        def getheader(self, _name):
             return None
 
         def read(self) -> bytes:
             return json.dumps(payload).encode("utf-8")
 
-    monkeypatch.setattr(
-        "optimatrix.deribit_snapshot.urlopen", lambda *args, **kwargs: FakeHttpResponse()
-    )
+    class FakeHttpsConnection:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def request(self, *args, **kwargs):
+            pass
+
+        def getresponse(self):
+            return FakeHttpResponse()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("optimatrix.deribit_snapshot.HTTPSConnection", FakeHttpsConnection)
     with pytest.raises(DeribitSourceError, match="not from production"):
+        DeribitHttpClient().call("public/get_time", {})
+
+
+@pytest.mark.parametrize(
+    ("status", "encoding", "response_body", "error"),
+    (
+        (503, None, b"{}", "not successful"),
+        (200, "br", b"{}", "unsupported encoding"),
+        (200, "gzip", b"not-gzip", "BadGzipFile"),
+        (200, None, b"not-json", "JSONDecodeError"),
+    ),
+)
+def test_http_client_rejects_invalid_http_transport_facts(
+    status,
+    encoding,
+    response_body,
+    error,
+    monkeypatch,
+) -> None:
+    class FakeHttpResponse:
+        def __init__(self) -> None:
+            self.status = status
+
+        def getheader(self, name):
+            return encoding if name == "Content-Encoding" else None
+
+        def read(self) -> bytes:
+            return response_body
+
+    class FakeHttpsConnection:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def request(self, *args, **kwargs):
+            pass
+
+        def getresponse(self):
+            return FakeHttpResponse()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("optimatrix.deribit_snapshot.HTTPSConnection", FakeHttpsConnection)
+    with pytest.raises(DeribitSourceError, match=error):
         DeribitHttpClient().call("public/get_time", {})
 
 

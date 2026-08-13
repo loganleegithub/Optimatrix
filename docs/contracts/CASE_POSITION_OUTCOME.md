@@ -10,8 +10,11 @@ Entry truth come from
 
 ## TradeCase and record boundary
 
-Every pre-registered DecisionWindow has one BTC-contract-owned DecisionRecord in the
-`ObservationLedger`. Candidate selection is not the start of the learning population.
+The 96 pre-registered DecisionWindows remain the Session denominator. Each Window whose causal cut
+is attempted by an enrolled runtime owns exactly one BTC-contract-owned DecisionRecord in the
+`ObservationLedger`: valid evidence yields its Decision, while an exhausted or invalid cut yields
+`UNKNOWN` at the input deadline. A Window missed before enrollment remains absent as measured
+coverage and is never backfilled. Candidate selection is not the start of the learning population.
 
 A Candidate opens at most one TradeCase in `CaseJournal`. It freezes truth layer, product, Window,
 optional Episode, Policy, causal Decision boundary, selected four-leg structure, target amount,

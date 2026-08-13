@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import math
 import threading
@@ -9,10 +10,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from http.client import HTTPException
+from http.client import HTTPException, HTTPSConnection
 from itertools import pairwise
 from typing import Protocol
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 
 from optimatrix.decision import (
     DecisionWindow,
@@ -294,9 +295,22 @@ class DeribitHttpClient:
     ) -> None:
         if not base_url.startswith("https://"):
             raise ValueError("Deribit base_url must use HTTPS")
+        parsed_base_url = urlsplit(base_url)
+        if (
+            parsed_base_url.scheme != "https"
+            or parsed_base_url.hostname is None
+            or parsed_base_url.username is not None
+            or parsed_base_url.password is not None
+            or parsed_base_url.query
+            or parsed_base_url.fragment
+        ):
+            raise ValueError("Deribit base_url must be a plain HTTPS origin and path")
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be finite and positive")
         self.base_url = base_url.rstrip("/")
+        self._host = parsed_base_url.hostname
+        self._port = parsed_base_url.port
+        self._path = parsed_base_url.path.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.audit_callback = audit_callback
         self._next_request_id = 1
@@ -320,25 +334,55 @@ class DeribitHttpClient:
             ensure_ascii=True,
             separators=(",", ":"),
         )
-        request = Request(
-            f"{self.base_url}/{method}",
-            data=body.encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": "optimatrix-btc-0dte/0.1",
-            },
-            method="POST",
+        connection = HTTPSConnection(
+            self._host,
+            port=self._port,
+            timeout=self.timeout_seconds,
         )
         local_sent_at_ms = int(time.time() * 1000)
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                response_body = response.read()
+            connection.request(
+                "POST",
+                f"{self._path}/{method}",
+                body=body.encode("utf-8"),
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip",
+                    "Connection": "keep-alive",
+                    "Content-Type": "application/json",
+                    "User-Agent": "optimatrix-btc-0dte/0.1",
+                },
+            )
+            response = connection.getresponse()
+            response_body = response.read()
+            if response.status != 200:
+                raise DeribitSourceError(
+                    f"Deribit HTTP response is not successful: {response.status}"
+                )
+            content_encoding = response.getheader("Content-Encoding")
+            if content_encoding == "gzip":
+                response_body = gzip.decompress(response_body)
+            elif content_encoding not in (None, "", "identity"):
+                raise DeribitSourceError(
+                    f"Deribit HTTP response uses unsupported encoding: {content_encoding}"
+                )
             local_received_at_ms = int(time.time() * 1000)
             payload = json.loads(response_body.decode("utf-8"))
-        except (OSError, HTTPException, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except DeribitSourceError:
+            raise
+        except (
+            OSError,
+            EOFError,
+            HTTPException,
+            UnicodeDecodeError,
+            gzip.BadGzipFile,
+            json.JSONDecodeError,
+        ) as exc:
             raise DeribitSourceError(
                 f"Deribit request failed: {method}: {type(exc).__name__}: {exc}"
             ) from exc
+        finally:
+            connection.close()
         return _validated_public_rpc_response(
             payload,
             method=method,
