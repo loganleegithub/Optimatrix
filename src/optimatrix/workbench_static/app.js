@@ -2,7 +2,7 @@
   'use strict';
 
   const documentValue = window.OPTIMATRIX_WORKBENCH;
-  if (!documentValue || documentValue.schema_version !== 2) {
+  if (!documentValue || documentValue.schema_version !== 3) {
     document.body.textContent = 'Unsupported or missing Workbench export.';
     return;
   }
@@ -64,7 +64,7 @@
     setText(`${prefix}-population-label`, population.label);
     setText(
       `${prefix}-population-count`,
-      `${population.recorded} / ${population.denominator}`
+      `${population.recorded} / ${population.attempted} recorded / attempted`
     );
     renderRows(`${prefix}-population-values`, population.rows);
     renderBreakdowns(`${prefix}-population-breakdowns`, population.breakdowns);
@@ -234,6 +234,10 @@
   renderList('warning-list', documentValue.warnings, 'No snapshot warnings were reported.');
   renderList('blocker-list', projection.blockers, 'No projection blocker was reported.');
   renderRows('runtime-values', runtime.facts);
+  setText(
+    'session-calendar-reference',
+    `${documentValue.population.calendar_reference} scheduled windows`
+  );
   renderPopulation('decision', documentValue.population.decisions);
   renderPopulation('outcome', documentValue.population.outcomes);
   renderRows('window-values', documentValue.window);

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from optimatrix.lifecycle import TradeCase
 
-WORKBENCH_SCHEMA_VERSION = 2
+WORKBENCH_SCHEMA_VERSION = 3
 _ASSET_ROOT = Path(__file__).with_name("workbench_static")
 _STATIC_ASSETS = ("index.html", "styles.css", "app.js")
 
@@ -57,13 +57,10 @@ _RUNTIME_LABELS = {
     "restart_count": "Observed restarts",
     "last_recovery_at": "Last recovery",
     "current_window_id": "Current Decision Window",
+    "attempted_window_count": "Attempted Decision Windows",
     "last_error": "Last error",
 }
 _POPULATION_LABELS = {
-    "denominator": "Session denominator",
-    "recorded": "Recorded",
-    "missing": "Missing",
-    "complete": "Complete",
     "future_path_known": "Future path known",
     "future_path_unknown": "Future path unknown",
     "continuous": "Continuous future path",
@@ -241,6 +238,12 @@ def build_workbench_document(
     warnings = _text_sequence(root.get("warnings"), "snapshot.warnings")
     quote_index = _quote_index(root.get("quotes"))
 
+    runtime = _runtime_projection(
+        runtime_state,
+        fallback_session_id=session_id,
+        fallback_updated_at=observed_at,
+    )
+
     return {
         "schema_version": WORKBENCH_SCHEMA_VERSION,
         "product": {
@@ -259,12 +262,11 @@ def build_workbench_document(
             "requested_book_count": _display_value(root.get("requested_book_count")),
             "fetched_book_count": _display_value(root.get("fetched_book_count")),
         },
-        "runtime": _runtime_projection(
-            runtime_state,
-            fallback_session_id=session_id,
-            fallback_updated_at=observed_at,
+        "runtime": runtime,
+        "population": _ledger_population_projection(
+            ledger_population,
+            attempted_window_count=runtime["attempted_window_count"],
         ),
-        "population": _ledger_population_projection(ledger_population),
         "warnings": [{"code": warning, "tone": "warning"} for warning in warnings],
         "window": _display_rows(window, _WINDOW_LABELS),
         "projection": {
@@ -582,6 +584,7 @@ def _runtime_projection(
             "tone": "neutral",
             "session_id": fallback_session_id,
             "updated_at": fallback_updated_at,
+            "attempted_window_count": "UNKNOWN",
             "last_error": "NONE",
             "facts": [],
         }
@@ -597,6 +600,10 @@ def _runtime_projection(
         "tone": _runtime_tone(status),
         "session_id": session_id,
         "updated_at": _display_value(runtime.get("updated_at")),
+        "attempted_window_count": _display_count(
+            runtime.get("attempted_window_count"),
+            "runtime_state.attempted_window_count",
+        ),
         "last_error": _display_value(display_runtime.get("last_error")),
         "facts": _display_rows(display_runtime, _RUNTIME_LABELS),
     }
@@ -604,24 +611,39 @@ def _runtime_projection(
 
 def _ledger_population_projection(
     value: Mapping[str, object] | None,
+    *,
+    attempted_window_count: object,
 ) -> dict[str, object]:
     if value is None:
         return {
             "available": False,
-            "decisions": _population_section(None, label="DecisionRecords"),
-            "outcomes": _population_section(None, label="WindowOutcomes"),
+            "calendar_reference": "UNKNOWN",
+            "decisions": _population_section(
+                None,
+                label="DecisionRecords",
+                attempted_window_count=attempted_window_count,
+            ),
+            "outcomes": _population_section(
+                None,
+                label="WindowOutcomes",
+                attempted_window_count=attempted_window_count,
+            ),
         }
     population = _mapping(value, "ledger_population")
+    decisions = _population_section(
+        population.get("decisions"),
+        label="DecisionRecords",
+        attempted_window_count=attempted_window_count,
+        field="ledger_population.decisions",
+    )
     return {
         "available": True,
-        "decisions": _population_section(
-            population.get("decisions"),
-            label="DecisionRecords",
-            field="ledger_population.decisions",
-        ),
+        "calendar_reference": decisions["denominator"],
+        "decisions": decisions,
         "outcomes": _population_section(
             population.get("outcomes"),
             label="WindowOutcomes",
+            attempted_window_count=attempted_window_count,
             field="ledger_population.outcomes",
         ),
     }
@@ -631,13 +653,17 @@ def _population_section(
     value: object,
     *,
     label: str,
+    attempted_window_count: object,
     field: str = "ledger population",
 ) -> dict[str, object]:
     if value is None:
         return {
             "label": label,
             "recorded": "UNKNOWN",
+            "attempted": attempted_window_count,
             "denominator": "UNKNOWN",
+            "scheduled_missing": "UNKNOWN",
+            "scheduled_complete": "UNKNOWN",
             "rows": [],
             "breakdowns": [],
         }
@@ -657,8 +683,18 @@ def _population_section(
     return {
         "label": label,
         "recorded": _display_value(summary.get("recorded")),
+        "attempted": attempted_window_count,
         "denominator": _display_value(summary.get("denominator")),
-        "rows": _display_rows(summary, _POPULATION_LABELS),
+        "scheduled_missing": _display_value(summary.get("missing")),
+        "scheduled_complete": _display_value(summary.get("complete")),
+        "rows": _display_rows(
+            {
+                key: nested
+                for key, nested in summary.items()
+                if key not in {"denominator", "recorded", "missing", "complete"}
+            },
+            _POPULATION_LABELS,
+        ),
         "breakdowns": breakdowns,
     }
 
@@ -829,6 +865,14 @@ def _display_value(value: object) -> str:
             raise ValueError("snapshot contains a non-finite number")
         return str(value)
     raise TypeError(f"snapshot display value has unsupported type: {type(value).__name__}")
+
+
+def _display_count(value: object, field: str) -> str:
+    if value is None:
+        return "UNKNOWN"
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return str(value)
 
 
 def _mapping(value: object, field: str) -> Mapping[str, object]:

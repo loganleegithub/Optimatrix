@@ -220,7 +220,9 @@ def test_runtime_records_one_complete_unknown_session_and_workbench(policy, tmp_
 
         document = _document(tmp_path / "stable/workbench/workbench-data.js")
         assert document["runtime"]["status"] == "COMPLETE_PENDING_TRADER_ACCEPTANCE"
+        assert document["runtime"]["attempted_window_count"] == "96"
         assert document["population"]["decisions"]["recorded"] == "96"
+        assert document["population"]["decisions"]["attempted"] == "96"
         assert document["population"]["outcomes"]["recorded"] == "96"
         assert document["cases"] == []
     finally:

@@ -266,6 +266,7 @@ def test_document_projects_one_four_leg_strategy_without_recalculating_values() 
         "tone": "neutral",
         "session_id": "2026-08-13T08:00:00Z",
         "updated_at": "2026-08-12T18:00:00+00:00",
+        "attempted_window_count": "UNKNOWN",
         "last_error": "NONE",
         "facts": [],
     }
@@ -290,7 +291,10 @@ def test_static_export_is_network_free_and_browser_receives_only_presentation_da
     assert '<script src="workbench-data.js"></script>' in html
     assert '<meta http-equiv="refresh" content="10">' in html
     assert "Runtime and recovery" in html
-    assert "Session population" in html
+    assert "Encountered market coverage" in html
+    assert "Session calendar reference" in html
+    assert "not a trader-acceptance failure" in html
+    assert "recorded / attempted" in html
     assert "All Shadow Cases" in html
     assert ".runtime-values { grid-template-columns: 1fr; }" in stylesheet
     assert ".runtime-values > div { grid-template-columns:" in stylesheet
@@ -487,6 +491,7 @@ def test_runtime_population_and_every_recovered_case_are_rendered_as_supplied(
         "restart_count": 1,
         "last_recovery_at": "2026-08-13T11:45:00Z",
         "current_window_id": "sha256:current-window",
+        "attempted_window_count": 20,
         "last_error": None,
     }
     ledger_population = {
@@ -532,8 +537,17 @@ def test_runtime_population_and_every_recovered_case_are_rendered_as_supplied(
     population = cast(Mapping[str, object], document["population"])
     decisions = cast(Mapping[str, object], population["decisions"])
     outcomes = cast(Mapping[str, object], population["outcomes"])
+    assert population["calendar_reference"] == "96"
     assert (decisions["recorded"], decisions["denominator"]) == ("19", "96")
     assert (outcomes["recorded"], outcomes["denominator"]) == ("3", "96")
+    assert (decisions["recorded"], decisions["attempted"]) == ("19", "20")
+    assert (outcomes["recorded"], outcomes["attempted"]) == ("3", "20")
+    assert decisions["scheduled_missing"] == "77"
+    assert decisions["scheduled_complete"] == "NO"
+    decision_rows = cast(Sequence[Mapping[str, str]], decisions["rows"])
+    assert not {"denominator", "recorded", "missing", "complete"} & {
+        row["key"] for row in decision_rows
+    }
     decision_breakdowns = cast(Sequence[Mapping[str, object]], decisions["breakdowns"])
     result_counts = cast(Sequence[Mapping[str, str]], decision_breakdowns[0]["rows"])
     assert {row["key"]: row["value"] for row in result_counts} == {

@@ -741,6 +741,7 @@ class BtcPublicShadowRuntime:
             "recovered_case_count": self.progress.recovered_case_count,
             "restart_count": self.progress.restart_count,
             "current_window_id": current_window.identity if current_window is not None else None,
+            "attempted_window_count": len(self.progress.attempted_decision_window_ids),
             "last_error": self.progress.last_error,
         }
         write_workbench(

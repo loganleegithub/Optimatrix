@@ -84,7 +84,7 @@
       <section class="panel window-panel" aria-labelledby="window-heading">
         <div class="section-heading">
           <div>
-            <span class="section-kicker">Pre-registered denominator</span>
+            <span class="section-kicker">Current runtime window</span>
             <h2 id="window-heading">Decision Window record</h2>
           </div>
         </div>
@@ -95,16 +95,25 @@
     <section class="panel population-panel" aria-labelledby="population-heading">
       <div class="section-heading">
         <div>
-          <span class="section-kicker">Stable ObservationLedger</span>
-          <h2 id="population-heading">Session population</h2>
-          <p>Recorded counts are rendered as supplied by the Ledger summaries.</p>
+          <span class="section-kicker">Runtime enrollment coverage</span>
+          <h2 id="population-heading">Encountered market coverage</h2>
+          <p>
+            Coverage begins when this runtime enrolls. Earlier unattempted windows are not
+            system omissions and are not a trader-acceptance failure.
+          </p>
+        </div>
+        <div class="calendar-reference">
+          <span>Session calendar reference</span>
+          <strong id="session-calendar-reference">UNKNOWN scheduled windows</strong>
         </div>
       </div>
       <div class="population-grid">
         <article class="population-card">
           <div class="population-heading">
             <h3 id="decision-population-label">DecisionRecords</h3>
-            <span id="decision-population-count" class="count-badge">UNKNOWN / UNKNOWN</span>
+            <span id="decision-population-count" class="count-badge">
+              UNKNOWN / UNKNOWN recorded / attempted
+            </span>
           </div>
           <dl id="decision-population-values" class="key-values"></dl>
           <div id="decision-population-breakdowns" class="population-breakdowns"></div>
@@ -112,7 +121,9 @@
         <article class="population-card">
           <div class="population-heading">
             <h3 id="outcome-population-label">WindowOutcomes</h3>
-            <span id="outcome-population-count" class="count-badge">UNKNOWN / UNKNOWN</span>
+            <span id="outcome-population-count" class="count-badge">
+              UNKNOWN / UNKNOWN recorded / attempted
+            </span>
           </div>
           <dl id="outcome-population-values" class="key-values"></dl>
           <div id="outcome-population-breakdowns" class="population-breakdowns"></div>
