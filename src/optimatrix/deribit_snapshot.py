@@ -915,7 +915,7 @@ def evaluate_live_btc_snapshot(
         implied_variance_method=(
             ImpliedVarianceMethod.NEAREST_ATM_CALL_PUT_MARK_IV_SQUARED_TIMES_RISK_HORIZON
         ),
-        event_state_source=EventStateSource.EXPLICIT_HUMAN_OR_EXTERNAL_CALENDAR_INPUT,
+        event_state_source=EventStateSource.B3_RUNTIME_FIXED_NONE_NO_LIVE_EVENT_SOURCE,
         required_history_start_ms=history[-1][0] - horizon_minutes * 60_000,
         history_coverage_start_ms=history[0][0],
         history_coverage_end_ms=history[-1][0],

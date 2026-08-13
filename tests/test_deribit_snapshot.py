@@ -131,7 +131,7 @@ def test_public_snapshot_projects_bounded_whole_product_without_writes(
     assert evaluation.selection is not None and evaluation.selection.selected is not None
     assert (
         evaluation.context.evidence.event_state_source
-        is EventStateSource.EXPLICIT_HUMAN_OR_EXTERNAL_CALENDAR_INPUT
+        is EventStateSource.B3_RUNTIME_FIXED_NONE_NO_LIVE_EVENT_SOURCE
     )
     snapshot = evaluation.as_object()
     assert snapshot["observed_at"] == evaluation.observed_at.isoformat()

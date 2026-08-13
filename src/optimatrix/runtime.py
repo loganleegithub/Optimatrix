@@ -1379,17 +1379,31 @@ class BtcPublicShadowRuntime:
                 case.last_observed_at or case.decision_boundary,
                 attempts.get(case_id, case.decision_boundary),
             )
-            if gap_boundary <= boundary + cadence * 2 or case.gap_observed:
+            gap_detected = gap_boundary > boundary + cadence * 2 and not case.gap_observed
+            updated = replace(case, gap_observed=True) if gap_detected else case
+            if (
+                updated.entry_final
+                and updated.position_id is not None
+                and updated.position_state is not PositionState.TERMINAL
+                and updated.exit_intent is None
+                and now >= case_session.end
+            ):
+                updated = freeze_latest_exit_on_time_boundary(
+                    updated,
+                    known_at=now,
+                    policy=self.policy,
+                )
+            if updated == case:
                 continue
-            gapped = replace(case, gap_observed=True)
-            self.journal.append(gapped)
-            self.cases[case_id] = gapped
-            self._audit(
-                "LIFECYCLE_CADENCE_GAP",
-                now,
-                f"case={case_id}",
-                session=case_session,
-            )
+            self.journal.append(updated)
+            self.cases[case_id] = updated
+            if gap_detected:
+                self._audit(
+                    "LIFECYCLE_CADENCE_GAP",
+                    now,
+                    f"case={case_id}",
+                    session=case_session,
+                )
 
     def _reconcile_inflight_gaps(self, now: datetime) -> None:
         recorded = {record.window.identity for record in self.ledger.read()}
@@ -1675,6 +1689,8 @@ class BtcPublicShadowRuntime:
                 f"fact={fact.identity}",
                 session=session,
             )
+            if self.progress.status == "SETTLEMENT_UNVERIFIED":
+                self._set_status("RUNNING", fact.known_at)
             return
         self._set_status(
             "SETTLEMENT_UNVERIFIED",

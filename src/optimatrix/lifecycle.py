@@ -910,8 +910,8 @@ def freeze_latest_exit_on_time_boundary(
     boundary = _utc(known_at, "known_at")
     expiry = _structure_expiry(case)
     latest_exit_at = expiry - timedelta(minutes=policy.lifecycle.latest_exit_minutes_to_expiry)
-    if boundary < latest_exit_at or boundary >= expiry:
-        raise ValueError("LATEST_EXIT time boundary is not currently active")
+    if boundary < latest_exit_at:
+        raise ValueError("LATEST_EXIT time boundary has not been reached")
     evidence_id = canonical_identity(
         "DeribitTimeBoundaryV1",
         case.identity,

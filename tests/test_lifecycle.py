@@ -291,6 +291,27 @@ def test_latest_exit_can_freeze_from_deribit_time_when_no_market_cut_exists(
     assert updated.exit_intent.source == "DERIBIT_TIME_BOUNDARY_WITHOUT_MARKET_CUT"
 
 
+def test_latest_exit_responsibility_can_be_recovered_after_expiry(
+    policy,
+    tmp_path,
+) -> None:
+    _engine, case = _entered_case(policy, tmp_path)
+    expiry = current_expiry(case.entry_observed_at)
+
+    updated = freeze_latest_exit_on_time_boundary(
+        replace(case, gap_observed=True),
+        known_at=expiry + timedelta(minutes=5),
+        policy=policy,
+    )
+
+    assert updated.exit_intent is not None
+    assert updated.exit_intent.reason == "LATEST_EXIT"
+    assert updated.exit_intent.observed_at == expiry - timedelta(
+        minutes=policy.lifecycle.latest_exit_minutes_to_expiry
+    )
+    assert updated.exit_intent.known_at == expiry + timedelta(minutes=5)
+
+
 def test_first_trigger_is_immutable_and_exit_requires_strictly_later_cut(
     policy,
     tmp_path,

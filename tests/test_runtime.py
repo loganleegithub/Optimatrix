@@ -1097,6 +1097,8 @@ def test_official_settlement_retries_on_a_later_cadence_until_position_is_termin
         assert unresolved.outcome is None
         assert runtime.settlement_fact is None
         assert source.settlement_calls == 3
+        assert runtime.progress.status == "SETTLEMENT_UNVERIFIED"
+        assert runtime.progress.last_error is not None
 
         runtime.tick(first_boundary + timedelta(seconds=30))
         assert source.settlement_calls == 3
@@ -1109,6 +1111,8 @@ def test_official_settlement_retries_on_a_later_cadence_until_position_is_termin
         assert runtime.settlement_fact is not None
         assert terminal.outcome is not None
         assert terminal.outcome.terminal_method is TerminalMethod.CONTRACT_SETTLEMENT
+        assert runtime.progress.status == "RUNNING"
+        assert runtime.progress.last_error is None
     finally:
         runtime.close()
 
@@ -1264,6 +1268,42 @@ def test_complete_market_failure_at_latest_exit_still_freezes_time_responsibilit
         assert updated.exit_intent is not None
         assert updated.exit_intent.reason == "LATEST_EXIT"
         assert updated.exit_intent.source == "DERIBIT_TIME_BOUNDARY_WITHOUT_MARKET_CUT"
+    finally:
+        runtime.close()
+
+
+def test_wake_after_expiry_freezes_latest_exit_before_official_settlement(
+    policy,
+    tmp_path,
+) -> None:
+    session = _session(policy)
+    source = FakeRuntimeSource(policy, session)
+    runtime = BtcPublicShadowRuntime(
+        root=tmp_path / "stable",
+        policy=policy,
+        source=source,
+        event_state=EventState.NONE,
+        now=session.start - timedelta(minutes=10),
+        target_session=session,
+        sleep=source.sleeps.append,
+    )
+    try:
+        opened = _open_case(runtime, source, window_index=4)
+        entered, _entry_at = _enter_case(runtime, opened)
+        assert entered.exit_intent is None
+
+        runtime.tick(session.end + timedelta(minutes=5))
+
+        terminal = runtime.cases[entered.identity]
+        assert terminal.gap_observed
+        assert terminal.exit_intent is not None
+        assert terminal.exit_intent.reason == "LATEST_EXIT"
+        assert terminal.exit_intent.observed_at == session.end - timedelta(
+            minutes=policy.lifecycle.latest_exit_minutes_to_expiry
+        )
+        assert terminal.exit_intent.known_at == session.end + timedelta(minutes=5)
+        assert terminal.outcome is not None
+        assert terminal.outcome.terminal_method is TerminalMethod.CONTRACT_SETTLEMENT
     finally:
         runtime.close()
 
