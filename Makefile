@@ -29,7 +29,12 @@ test:
 	$(PYTHON) -m pytest
 
 clean-build:
-	rm -rf build/simulation-cases build/business-acceptance.json build/workbench
+	rm -rf build
+
+clean: clean-build
+	rm -rf .mypy_cache .pytest_cache .ruff_cache
+	rm -rf src/optimatrix/__pycache__ tests/__pycache__
+	rm -f .DS_Store docs/.DS_Store src/.DS_Store src/optimatrix/.DS_Store
 
 simulate: clean-build
 	$(PYTHON) -m optimatrix simulate \
