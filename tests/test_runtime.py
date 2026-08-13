@@ -1233,6 +1233,41 @@ def test_market_failure_workbench_shows_current_window_and_gap(policy, tmp_path)
         runtime.close()
 
 
+def test_complete_market_failure_at_latest_exit_still_freezes_time_responsibility(
+    policy,
+    tmp_path,
+) -> None:
+    session = _session(policy)
+    source = FakeRuntimeSource(policy, session)
+    runtime = BtcPublicShadowRuntime(
+        root=tmp_path / "stable",
+        policy=policy,
+        source=source,
+        event_state=EventState.NONE,
+        now=session.start - timedelta(minutes=10),
+        target_session=session,
+        sleep=source.sleeps.append,
+    )
+    try:
+        opened = _open_case(runtime, source, window_index=4)
+        entered, _entry_at = _enter_case(runtime, opened)
+        source.fail_snapshot = True
+        latest_exit_at = session.end - timedelta(
+            minutes=policy.lifecycle.latest_exit_minutes_to_expiry
+        )
+
+        runtime.tick(latest_exit_at)
+
+        updated = runtime.cases[entered.identity]
+        assert updated.gap_observed
+        assert updated.position_state is PositionState.EXIT_INTENT_FROZEN
+        assert updated.exit_intent is not None
+        assert updated.exit_intent.reason == "LATEST_EXIT"
+        assert updated.exit_intent.source == "DERIBIT_TIME_BOUNDARY_WITHOUT_MARKET_CUT"
+    finally:
+        runtime.close()
+
+
 def test_fixed_runtime_preflight_retries_without_consulting_host_wall(
     policy,
     tmp_path,

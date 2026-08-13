@@ -74,7 +74,9 @@ the observation `UNKNOWN`, preserves the Position and existing exit intent, and 
 market-risk conclusion. It is not itself proof that the market moved or that a close occurred. A
 deterministic `LATEST_EXIT` boundary depends only on the frozen expiry and validated Deribit UTC;
 when that boundary is known, missing or invalid market prices must still freeze the whole-product
-ExitIntent while keeping the exit estimate `UNKNOWN`.
+ExitIntent while keeping the exit estimate `UNKNOWN`. If the complete public market call fails,
+the frozen time boundary owns a content-addressed time-evidence identity instead of pretending that
+a MarketObservation existed.
 
 The first known trigger freezes one `ExitIntent` with category, reason, observed-at and known-at
 boundaries, source, Policy identity, and full-product scope. If several triggers share one

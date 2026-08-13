@@ -19,6 +19,7 @@ from optimatrix.lifecycle import (
     WindowOutcome,
     evaluate_shadow_entry,
     evaluate_shadow_exit,
+    freeze_latest_exit_on_time_boundary,
     monitor_shadow_position,
     open_trade_case,
     settle_shadow_position,
@@ -265,6 +266,29 @@ def test_latest_exit_freezes_responsibility_when_one_frozen_leg_is_missing(
     assert updated.position_state is PositionState.EXIT_INTENT_FROZEN
     assert updated.exit_intent is not None
     assert updated.exit_intent.reason == "LATEST_EXIT"
+
+
+def test_latest_exit_can_freeze_from_deribit_time_when_no_market_cut_exists(
+    policy,
+    tmp_path,
+) -> None:
+    _engine, case = _entered_case(policy, tmp_path)
+    expiry = current_expiry(case.entry_observed_at)
+    latest_exit_at = expiry - timedelta(minutes=policy.lifecycle.latest_exit_minutes_to_expiry)
+    gapped = replace(case, gap_observed=True)
+
+    updated = freeze_latest_exit_on_time_boundary(
+        gapped,
+        known_at=latest_exit_at,
+        policy=policy,
+    )
+
+    assert updated.position_state is PositionState.EXIT_INTENT_FROZEN
+    assert updated.exit_intent is not None
+    assert updated.exit_intent.reason == "LATEST_EXIT"
+    assert updated.exit_intent.observed_at == latest_exit_at
+    assert updated.exit_intent.known_at == latest_exit_at
+    assert updated.exit_intent.source == "DERIBIT_TIME_BOUNDARY_WITHOUT_MARKET_CUT"
 
 
 def test_first_trigger_is_immutable_and_exit_requires_strictly_later_cut(

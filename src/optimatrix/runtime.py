@@ -38,6 +38,7 @@ from optimatrix.lifecycle import (
     PositionState,
     TradeCase,
     WindowOutcome,
+    freeze_latest_exit_on_time_boundary,
     open_trade_case,
     window_outcome_eligibility,
 )
@@ -1481,6 +1482,23 @@ class BtcPublicShadowRuntime:
                 raise ValueError("market cut expiry does not match the frozen TradeCase Session")
             if observation is None and not case.gap_observed:
                 case = replace(case, gap_observed=True)
+            if (
+                observation is None
+                and case.entry_final
+                and case.position_id is not None
+                and case.position_state is not PositionState.TERMINAL
+                and case.exit_intent is None
+                and now
+                >= case_session.end
+                - timedelta(minutes=self.policy.lifecycle.latest_exit_minutes_to_expiry)
+                and now < case_session.end
+            ):
+                case = freeze_latest_exit_on_time_boundary(
+                    case,
+                    known_at=now,
+                    policy=self.policy,
+                )
+            if observation is None and case != self.cases[prior.identity]:
                 self.journal.append(case)
                 self.cases[case.identity] = case
             last_observed_at = case.last_observed_at or case.entry_observed_at

@@ -896,6 +896,43 @@ def monitor_shadow_position(
     )
 
 
+def freeze_latest_exit_on_time_boundary(
+    case: TradeCase,
+    *,
+    known_at: datetime,
+    policy: BtcShortVolPolicy,
+) -> TradeCase:
+    """Freeze deterministic exit responsibility when no market cut is available."""
+
+    _require_open_position(case, policy)
+    if case.exit_intent is not None:
+        return case
+    boundary = _utc(known_at, "known_at")
+    expiry = _structure_expiry(case)
+    latest_exit_at = expiry - timedelta(minutes=policy.lifecycle.latest_exit_minutes_to_expiry)
+    if boundary < latest_exit_at or boundary >= expiry:
+        raise ValueError("LATEST_EXIT time boundary is not currently active")
+    evidence_id = canonical_identity(
+        "DeribitTimeBoundaryV1",
+        case.identity,
+        policy.identity,
+        latest_exit_at,
+    )
+    return replace(
+        case,
+        exit_intent=ExitIntent(
+            category=_trigger_category("LATEST_EXIT"),
+            reason="LATEST_EXIT",
+            observation_id=evidence_id,
+            observed_at=latest_exit_at,
+            known_at=boundary,
+            source="DERIBIT_TIME_BOUNDARY_WITHOUT_MARKET_CUT",
+            policy_id=policy.identity,
+        ),
+        position_state=PositionState.EXIT_INTENT_FROZEN,
+    )
+
+
 def _latest_exit_intent(
     case: TradeCase,
     observation: MarketObservation,

@@ -215,6 +215,7 @@ def _validate_transition(previous: TradeCase, current: TradeCase) -> None:
             (not previous.entry_final and current.entry_final)
             or (previous.outcome is None and current.outcome is not None)
             or (not previous.gap_observed and current.gap_observed)
+            or (previous.exit_intent is None and current.exit_intent is not None)
         )
     ):
         raise ValueError("CaseJournal duplicate observation needs a final Entry transition")
