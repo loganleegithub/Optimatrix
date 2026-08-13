@@ -4,6 +4,7 @@ import json
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from threading import Barrier
 
 import pytest
 
@@ -160,6 +161,78 @@ def test_incomplete_book_universe_is_unknown_and_skips_structure(policy) -> None
     assert evaluation.selection is None
     snapshot = evaluation.as_object()
     assert snapshot["projection"]["state"] == "UNKNOWN"
+
+
+def test_snapshot_captures_independent_inputs_and_all_books_concurrently(policy) -> None:
+    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+
+    class ConcurrentCutClient(FakeDeribitClient):
+        def __init__(self, boundary: datetime) -> None:
+            super().__init__(boundary)
+            self.input_barrier = Barrier(3)
+            self.book_barrier = Barrier(10)
+            self.extra = (
+                ("BTC-X-96000-P", 96000, "put", "-0.20"),
+                ("BTC-X-97000-P", 97000, "put", "-0.30"),
+                ("BTC-X-103000-C", 103000, "call", "0.20"),
+                ("BTC-X-109000-C", 109000, "call", "0.03"),
+            )
+            for name, _strike, _option_type, delta in self.extra:
+                self.books[name] = self._book(name, delta, "0.0010", "0.0011")
+
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            if method in {
+                "public/get_index_price",
+                "public/get_instruments",
+                "public/get_index_chart_data",
+            }:
+                self.input_barrier.wait(timeout=2)
+            if method == "public/get_instruments":
+                return [
+                    *super().call(method, params),
+                    *(
+                        self._instrument(name, strike, option_type)
+                        for name, strike, option_type, _delta in self.extra
+                    ),
+                ]
+            if method == "public/get_order_book":
+                self.book_barrier.wait(timeout=2)
+            return super().call(method, params)
+
+    evaluation = evaluate_live_btc_snapshot(
+        client=ConcurrentCutClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=10,
+        depth=20,
+    )
+
+    assert evaluation.requested_book_count == evaluation.fetched_book_count == 10
+    assert not evaluation.observation.data_health_blockers
+
+
+def test_snapshot_retries_as_a_whole_when_any_requested_book_call_fails(policy) -> None:
+    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+
+    class FailedBookClient(FakeDeribitClient):
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            if (
+                method == "public/get_order_book"
+                and params.get("instrument_name") == "BTC-X-99000-P"
+            ):
+                raise DeribitSourceError("bounded book request failed")
+            return super().call(method, params)
+
+    with pytest.raises(DeribitSourceError, match="1 of 6 requested option books failed"):
+        evaluate_live_btc_snapshot(
+            client=FailedBookClient(now),
+            policy=policy,
+            now=now,
+            event_state=EventState.NONE,
+            maximum_books=8,
+            depth=20,
+        )
 
 
 def test_material_index_history_gap_rejects_snapshot(policy) -> None:

@@ -598,19 +598,27 @@ def evaluate_live_btc_snapshot(
             policy=policy,
             request_boundary=normalized_now,
         )
-    index_response = client.call(
-        "public/get_index_price",
-        {"index_name": BTC.price_index},
-    )
-    index_result = _mapping(
-        _rpc_result(index_response),
-        "index price result",
-    )
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="deribit-cut-input") as executor:
+        index_future = executor.submit(
+            client.call,
+            "public/get_index_price",
+            {"index_name": BTC.price_index},
+        )
+        instruments_future = executor.submit(
+            client.call,
+            "public/get_instruments",
+            {"currency": BTC.public_currency, "kind": "option", "expired": False},
+        )
+        history_future = executor.submit(
+            fetch_btc_index_history,
+            client,
+            known_at=normalized_now,
+        )
+        index_response = index_future.result()
+        instrument_response = instruments_future.result()
+        history = history_future.result()
+    index_result = _mapping(_rpc_result(index_response), "index price result")
     index_price = _positive_decimal(index_result.get("index_price"), "index_price")
-    instrument_response = client.call(
-        "public/get_instruments",
-        {"currency": BTC.public_currency, "kind": "option", "expired": False},
-    )
     instruments = _instrument_metadata(
         _rpc_result(instrument_response),
         session_end_ms=int(session.end.timestamp() * 1000),
@@ -634,10 +642,6 @@ def evaluate_live_btc_snapshot(
     )
     if len(quotes) < 4:
         raise DeribitSourceError("fewer than four current-session option books were usable")
-    history = fetch_btc_index_history(
-        client,
-        known_at=normalized_now,
-    )
     horizon_minutes = max(
         5,
         session.minutes_to_expiry - policy.lifecycle.latest_exit_minutes_to_expiry,
@@ -781,7 +785,7 @@ def _fetch_books(
         )
         return item, _rpc_result(response), received_at_ms
 
-    workers = min(8, max(1, len(metadata)))
+    workers = min(32, max(1, len(metadata)))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="deribit-book") as executor:
         futures = {executor.submit(fetch_one, item): item for item in metadata}
         for future in as_completed(futures):
@@ -805,6 +809,13 @@ def _fetch_books(
                 quotes.append(quote)
             if forward is not None:
                 forwards.append(forward)
+    failed_requests = tuple(
+        warning for warning in warnings if warning.startswith("BOOK_REQUEST_OR_PARSE_FAILED:")
+    )
+    if failed_requests:
+        raise DeribitSourceError(
+            f"{len(failed_requests)} of {len(metadata)} requested option books failed"
+        )
     quotes.sort(key=lambda quote: (quote.strike, quote.option_type.value, quote.instrument_name))
     return quotes, forwards, tuple(warnings)
 
