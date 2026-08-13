@@ -1,86 +1,66 @@
 # BTC 0DTE Two-Sided Short Vol Contract
 
-**Status:** ACTIVE IMPLEMENTATION CONTRACT
+**Status:** ACTIVE DECISION AND ENTRY CONTRACT
 
 **Owning capability:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-## Decision object
+This contract owns Session applicability, the decision unit, required MarketContext, joint
+structure selection, the product funnel, and Entry acquisition truth. Product-wide evidence and
+non-claim semantics remain in `../authority/PRODUCT_CONSTITUTION.md`; exchange mechanics and API
+sources are indexed in `../research/PRIMARY_SOURCES.md`.
 
-One decision belongs to exactly one canonical unit:
+## Session and decision unit
+
+An option is `0DTE` only when its expiry equals the end of the current Deribit settlement Session at
+`08:00 UTC`. A rolling `TTE < 24h` label is insufficient.
+
+```text
+ROLL_REPRICE   review only
+CORE_CARRY     entry may be evaluated
+LATE_THETA     entry requires the Policy's additional qualification
+EXIT_ONLY      no new short-premium entry
+DELIVERY_TWAP  no new short-premium entry
+```
+
+Phase boundaries are Policy values, not a qualified sweet-zone claim.
+
+The sole funnel unit is:
 
 ```text
 SessionDecisionUnit =
-  INVERSE_BTC product identity
-  + current Deribit 08:00 settlement MarketSessionId
-  + decision window identity
-  + fixed Decision Policy identity
+  product_spec_identity
+  + MarketSessionId
+  + decision_window_identity
+  + Decision Policy identity
 ```
 
-The system may examine a bounded option chain and many candidate structures inside the unit, but it
-selects at most one asymmetric four-leg Iron Condor. It first prices legal Put and Call Credit
-Vertical components at full target quantity and evaluates every legal joint combination inside that
-already bounded chain. Every joint candidate must pass hard economics, directional/range limits,
-and both-short buyback-depth readiness before ranking. It never adds independent single-leg or
-Vertical scores, never prunes by an unproved single-side top-N rule, and candidates do not multiply
-the funnel denominator.
+One unit may inspect many options, Verticals, quotes, and joint candidates. The fixed Policy may
+select at most one primary four-leg structure; internal objects never multiply the denominator.
 
-The selected canonical leg order is:
+## MarketContext gate
 
-```text
-LONG_PUT < SHORT_PUT < SHORT_CALL < LONG_CALL
-```
+Before scoring or structure creation, one context must bind the exact Decision boundary and include:
 
-All four legs share product, expiry, target quantity, and selected-structure identity.
+- implied- and physical-variance method identities and matched horizon;
+- historical coverage boundaries;
+- public source and local receive boundaries; and
+- event state, when it became known, and exact missing or contradictory reasons.
 
-## MarketContext evidence gate
+Complete causal evidence passes `MARKET_CONTEXT_KNOWN`. Incomplete evidence produces one
+`Decision.UNKNOWN`, consumes that unit at this stage as `UNKNOWN`, and leaves later stages
+`NOT_REACHED`. It creates no score, structure, or Decision Case and remains transient.
 
-Numeric context is not sufficient evidence. Before any structure is constructed or scored, the
-same transient `MarketContext` must bind:
+## Decision and joint structure
 
-- the physical-side and implied-side method identities;
-- the exact historical risk-horizon coverage start and end;
-- the public-market source and local receipt boundaries;
-- the event-state source and the time at which that state became known; and
-- any exact missing, stale, contradictory, or coverage blocker.
+The engine evaluates one product object containing one Put Credit Vertical and one Call Credit
+Vertical. The score is an ordinal, unqualified filtering hypothesis combining premium/Theta
+context, path and event risk, body distance, and execution quality. Policy owns its exact weights,
+thresholds, freshness limits, and coherence budgets. Hard blockers cannot be offset by a higher
+score. The current implied input is a nearest-ATM mark-variance proxy and the physical input is a
+trailing matched-horizon realized-variance proxy; neither is yet a qualified physical forecast or
+model-free executable VRP measure.
 
-Complete evidence produces `MARKET_CONTEXT_KNOWN = PASSED`. Incomplete evidence produces one
-`Decision.UNKNOWN`, consumes the one `SessionDecisionUnit` denominator at
-`MARKET_CONTEXT_KNOWN = UNKNOWN`, and leaves every later funnel stage `NOT_REACHED`. It is neither a
-known negative nor an abstention. No structure, score, or Decision Case may be created from it, and
-this pre-Case evidence remains transient.
-
-## Applicable Session and phase
-
-Only options whose expiry equals the current Deribit Session end at `08:00 UTC` are applicable.
-`ROLL_REPRICE` is review-only. `CORE_CARRY` and Policy-qualified `LATE_THETA` may select an attempt.
-`EXIT_ONLY` and `DELIVERY_TWAP` prohibit new short-premium entry. Boundary changes require a new
-content-identified Policy.
-
-## Joint score and hard blockers
-
-The score is ordinal and unqualified:
-
-```text
-premium context    ATM mark / trailing-RV ratio + Theta-capture proxy
-path-risk heuristic  path × jump × event × breakout × concentration interaction
-range quality      nearer short-body distance in forecast sigma
-execution quality  joint spreads + depth + four-leg fees + route coherence
-rank score         bounded monotone combination of all four terms
-```
-
-The current physical side is a trailing matched-horizon realized-variance proxy and the implied side
-is a nearest-ATM mark-variance proxy. They are not yet a qualified physical forecast or model-free
-executable VRP. The Policy owns exact weights and thresholds. A numeric score is not probability,
-expected return, Edge, or profitability. Hard blockers remain explicit and cannot be offset by high
-premium.
-
-Required missing, stale, discontinuous, contradictory, or incoherent facts produce `UNKNOWN` and an
-exact bounded blocker. `ON_DEMAND_COMBO_LIQUIDITY_UNOBSERVED` reports only unobserved private/RFQ
-liquidity; it is not a no-structure conclusion.
-
-## Structure economics
-
-Entry counterfactual pricing consumes full target quantity and applies legal adverse tick stress:
+Entry counterfactual pricing consumes full target quantity at adverse legal ticks:
 
 ```text
 sell Short Put at stressed bid
@@ -90,37 +70,31 @@ buy Long Call at stressed ask
 reserve all four standard public fees
 ```
 
-Underwriting evaluates one joint structure: native and boundary-valued net credit, four-leg fee
-burden, maximum side payoff and maximum loss, nearer body distance, portfolio net Delta, and fixed
-Gamma/jump/event/breakout/execution limits. Native BTC premium and USD-equivalent boundary valuation
-remain distinct quantities.
+`structure.py` jointly generates and filters legal four-leg candidates. Underwriting uses native
+and boundary-valued credit, fee burden, side payoff and loss, nearer body distance, portfolio Delta,
+the Policy's Gamma/jump/event/breakout limits, and full-quantity public buyback depth for both short
+bodies. A heuristic rank cannot rescue a failed hard condition. If no joint candidate passes, the
+unit stops at `ENTRY_ROUTE_EVALUABLE` with
+`NO_JOINT_CANDIDATE_PASSES_HARD_UNDERWRITING`, exact rejection reasons, and no selected attempt.
 
-At the same Decision boundary, each short body must also have enough public ask depth to repurchase
-the full target quantity under the same adverse-tick stress. This is a bounded exit-readiness
-counterfactual, not reserved liquidity, a future guarantee, an order, or a fill. A candidate that
-fails any hard condition is excluded before rank; a better heuristic rank cannot rescue it. If all
-joint candidates fail, the unit remains structurally evaluable but stops at `ENTRY_ROUTE_EVALUABLE`
-with `NO_JOINT_CANDIDATE_PASSES_HARD_UNDERWRITING` and exact reasons.
+Public component books are bounded counterfactual inputs. Public combo absence has the product-wide
+`ON_DEMAND_COMBO_LIQUIDITY_UNOBSERVED` meaning; it is not an impossibility or atomic-execution claim.
 
-## Four-leg attempt coherence
+## One coherent Entry attempt
 
-One selected attempt freezes:
+Selection freezes the Case, unit, Policy, structure, all four legs, full target quantity, route,
+attempt identity, decision and attempt boundaries, timing/coherence budgets, consumed levels, and
+fee reserves.
 
-- Decision Case, `SessionDecisionUnit`, Policy, and structure identities;
-- all four canonical leg identities and full target quantity;
-- one attempt identity and decision/attempt boundaries;
-- permitted route (`PUBLIC_COMBO`, bounded two-Vertical route, or explicit wings-only fallback);
-- per-pair and all-four source/receive timing limits;
-- consumed raw/stressed levels and public fee reserves.
+Every acquisition fact must be strictly later than Decision opening, no later than the attempt
+boundary, attached to the same selected structure and attempt, and measured at full target
+quantity. `FULL_ENTRY` requires all four legs within the Policy's pair and all-four coherence
+budgets. Separate attempts, later retries, different structures, or mismatched quantities cannot be
+combined after the fact.
 
-Every acquisition fact must be strictly later than Decision opening and no later than the attempt
-boundary. `FULL_ENTRY` requires four full-quantity results within the same attempt and coherence
-budgets. Results from separate attempts, later retries, different structures, or mismatched
-quantities cannot be combined into `FULL_ENTRY`.
+## Entry result
 
-## Entry-result classification
-
-The attempt produces exactly one known state when facts suffice:
+When facts suffice, the attempt produces exactly one result:
 
 ```text
 FULL_ENTRY
@@ -131,37 +105,19 @@ WINGS_ONLY
 NO_ENTRY
 ```
 
-Otherwise its entry result remains `UNKNOWN` with exact reasons.
+- `FULL_ENTRY`: all four selected legs were acquired coherently; normal two-sided carry may open.
+- `PUT_SIDE_ONLY` or `CALL_SIDE_ONLY`: one Credit Vertical was acquired; live short risk enters
+  remediation immediately and never normal carry.
+- `TWO_SIDES_INCOHERENT`: both side acquisitions were observable but violated cross-side coherence;
+  both sides enter remediation and the result is not a full Condor.
+- `WINGS_ONLY`: no short risk exists; residual long-wing duty remains.
+- `NO_ENTRY`: no Position exists; the Case retains a known acquisition result.
 
-- `FULL_ENTRY`: all four selected legs acquired coherently; normal carry may open.
-- `PUT_SIDE_ONLY`: Put Credit Vertical acquired without the Call side; immediate remediation, never
-  normal carry.
-- `CALL_SIDE_ONLY`: Call Credit Vertical acquired without the Put side; immediate remediation,
-  never normal carry.
-- `TWO_SIDES_INCOHERENT`: both side components were observable as acquired but violated the
-  four-leg cross-side coherence budget; both sides enter remediation and remain strategy-ineligible.
-- `WINGS_ONLY`: only long protection remains; no short risk, residual-wing management only.
-- `NO_ENTRY`: no Position; known Decision acquisition Outcome.
+If facts cannot establish one state, Entry remains `UNKNOWN`. Later remediation never rewrites this
+result or promotes it to `FULL_ENTRY`. Position handling belongs to
+`SHADOW_LIFECYCLE.md`.
 
-The entry-result name describes public Shadow counterfactual acquisition, not an actual fill.
-
-## Partial remediation
-
-Partial short exposure is a failure state with one bounded objective: remove unintended short risk.
-The Position owner must not wait indefinitely for the missing side to turn the failure into an
-intended Condor. It may:
-
-1. buy back the dangerous short using a strictly future eligible public counterfactual; or
-2. acquire missing protection/side only when the frozen Policy explicitly authorizes that bounded
-   route and its causal/timing limits remain satisfied.
-
-A missing long-wing bid never blocks buying back the short. Residual long wings continue under the
-Shadow lifecycle contract. Remediation never rewrites the frozen entry result, promotes the Case to
-`FULL_ENTRY`, enters normal carry, or grants primary strategy-Outcome eligibility.
-
-## Funnel projection
-
-The owning engine projects, for one `SessionDecisionUnit`:
+## Canonical funnel
 
 ```text
 APPLICABLE_SESSION_DECISION
@@ -176,12 +132,8 @@ ENTRY_RESULT_KNOWN
 DECISION_CASE_OUTCOME_KNOWN
 ```
 
-Each stage has an exact numerator, denominator, known-negative blockers, unknown blockers, and
-upgrade condition. The primary blocker is the earliest material loss.
-
-## Non-claims
-
-This contract authorizes public Shadow counterfactuals only. It grants no private API, account,
-margin, order, fill, RFQ, combo creation, liquidity reservation, capital, actual execution,
-settlement action, continuous runtime, Policy qualification, Edge, Alpha, win-rate, or profitability
-claim.
+Each stage denominator is the preceding stage numerator. A known negative records one bounded
+blocker; required-fact `UNKNOWN` is separate. The primary blocker is the earliest material loss.
+`DECISION_CASE_OPENED` counts only a future-blind formal `CANDIDATE` enrollment, not Review or
+Abstain. Test count, runtime duration, object count, and UI rows are supporting evidence, not funnel
+movement.

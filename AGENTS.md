@@ -1,91 +1,93 @@
-# Optimatrix engineering contract
+# Optimatrix Agent contract
 
-## Purpose and read route
+## Job
 
-Route one explicit business closure into the smallest coherent change. Before changing behavior,
-read, in order:
+Complete one authorized business closure with the smallest coherent final system. Documents in this
+repository are instructions for Agents: read only the current task and its exact owner, do not
+reconcile every document before acting.
 
-1. `docs/authority/PRODUCT_CONSTITUTION.md`;
-2. `docs/authority/NORTH_STAR.md`;
-3. `docs/authority/CURRENT_STAGE.md`;
-4. `docs/authority/DELIVERY_CONTRACT.md`;
-5. the one active task under `tasks/`;
-6. `docs/authority/SYSTEM_ARCHITECTURE.md` when modules, persistence, runtime state, or dependencies
-   change;
-7. `docs/authority/EXECUTION_CONTRACT.md` and the owning contract under `docs/contracts/`.
+Authority defines product intent and permission. Source defines current implementation; tests and
+direct observations provide evidence about it. If these layers conflict, record the conflict as the
+task blocker instead of changing whichever layer is easier. Reports, screenshots, memory, package
+text, and prior CI are leads only.
 
-Authority states current product truth. It is not an incident archive, deployment controller,
-compatibility catalogue, proof package, or substitute for business acceptance.
+## Route before any write
 
-## Product hard rules
+1. Read `docs/authority/CURRENT_STAGE.md`.
+2. If it links an active task, read that one task.
+3. Read only the owner needed by that task:
+   - product identity, thesis, evidence semantics, or permanent boundary:
+     `docs/authority/PRODUCT_CONSTITUTION.md`;
+   - modules, dependencies, transient state, or persistence location:
+     `docs/authority/SYSTEM_ARCHITECTURE.md`;
+   - Session, MarketContext, Policy decision, structure, funnel, or Entry result:
+     `docs/contracts/BTC_0DTE_TWO_SIDED_SHORT_VOL.md`;
+   - Decision Case, Position, remediation, terminality, Outcome, or recovery:
+     `docs/contracts/SHADOW_LIFECYCLE.md`.
 
-1. The sole implemented product is same-Deribit-session, two-sided, four-leg, defined-risk BTC
-   premium sale: one Put Credit Vertical plus one Call Credit Vertical. A single Vertical is a
-   component and future comparison arm, never the canonical Short Vol product.
-2. `0DTE` means expiry at the end of the current Deribit `08:00–08:00 UTC` settlement Session. A
-   rolling `TTE < 24h` label is insufficient.
-3. Executable Session VRP is the reason to sell and Theta is the monetization mechanism. High
-   premium cannot override Gamma, jump, scheduled-event, directional-breakout, concentration, or
-   execution risk.
-4. One `SessionDecisionUnit` is the only funnel counting unit. Options, legs, Verticals, structures,
-   quotes, retries, and UI rows do not create additional product opportunities.
-5. One selected entry attempt is one coherent four-leg attempt. `FULL_ENTRY` requires the complete
-   selected Condor at full quantity from one attempt identity and bounded causal/timing limits.
-   Independently successful Verticals cannot be combined after the fact.
-6. `PUT_SIDE_ONLY`, `CALL_SIDE_ONLY`, and `TWO_SIDES_INCOHERENT` are acquisition failures with live
-   short risk. They enter bounded remediation immediately and can never enter normal carry.
-   `WINGS_ONLY` and `NO_ENTRY` create no short-premium Position.
-7. `SHORT_RISK_FLAT` and `PORTFOLIO_TERMINAL` are distinct. Flatten the dangerous short even when a
-   protective wing lacks a bid; any residual long wing retains a bounded lifecycle duty.
-8. Public combo absence means `ON_DEMAND_COMBO_LIQUIDITY_UNOBSERVED`; it does not prove that the
-   structure or component routes are impossible. A public quote is never an order, fill, liquidity
-   reservation, or atomic-execution claim.
-9. BTC Short Vol is the only implemented Channel. The other three 2x2 cells are reserved
-   descriptors with no Policy, owner, Case codec, runtime, or generic extension framework.
+When the Stage says `NONE`, read-only discovery and existing offline checks are allowed. The only
+repository-file writes allowed are creation of one task from `tasks/TEMPLATE.md` and the matching
+Stage link. Every other write waits for that activation.
 
-## Funnel and task gates
+## One task and one permission boundary
 
-1. Every task must move one canonical funnel stage, reduce its earliest material blocker, improve
-   the trader-visible explanation, or delete a proven non-product obstacle without losing truth.
-2. Before editing, the active task names the `SessionDecisionUnit` denominator, exact baseline,
-   primary blocker, expected user-visible or funnel delta, durable-data effect, and complexity
-   added/deleted.
-3. `CURRENT_STAGE` and `tasks/` agree exactly: `NONE` means only `TEMPLATE.md` exists; otherwise
-   exactly one non-template task is `ACTIVE` and linked from `CURRENT_STAGE`.
-4. Tests, scenario count, object count, document count, manifest, archive digest, runtime duration,
-   and green CI are supporting evidence. None is product progress or Policy qualification.
-5. A valid `0` requires a known positive denominator. Missing, zero, stale, contradictory, or
-   incomplete required facts remain `UNKNOWN` or `NOT_YET_MEASURED`; they cannot create a Candidate,
-   Decision Case, normal carry, known Outcome, or calm-market claim.
+`CURRENT_STAGE` and `tasks/` must agree exactly: `NONE` means only the template exists; otherwise
+exactly one non-template task is `ACTIVE` and linked from the Stage.
 
-## Data and evidence gates
+- `AUTHORITY_ONLY` may change Agent instructions, Authority, contracts, task templates, and their
+  direct tests. It may not change runtime behavior or run live commands.
+- `IMPLEMENTATION` may change one bounded behavior and its direct documentation and tests.
+- `VALIDATION_ONLY` may observe an already-implemented behavior but may not hide an implementation,
+  Policy, or schema change.
 
-1. Before `DECISION_OPENED`, authoritative durable business record count is zero. A bounded public
-   snapshot performs no durable write and cannot open a Decision Case.
-2. A formal `CANDIDATE` may open one Decision Case before future acquisition is known. The Case
-   freezes the selected product, Policy, SessionDecisionUnit, structure, decision boundary, and
-   exact non-claims. Entry and later lifecycle facts must be strictly future facts.
-3. Decision eligibility, strategy-Outcome eligibility, terminal-economics eligibility,
-   continuous-path eligibility, and qualification eligibility are separate fields. Partial,
-   wings-only, no-entry, gapped, and unknown results are never relabelled as full-Condor evidence.
-4. The legacy repository, runtime checkout, V2 Case root, V2 Policies, and 92 historical Cases are
-   external historical assets. This product may not read, write, translate, migrate, relabel,
-   recover, count, or import them.
-5. New Decision journals require an explicitly supplied non-legacy root. No stable production root,
-   continuous service, private API, account, margin, order, fill, RFQ, capital, or execution
-   permission exists in the current stage.
-6. Current facts and every business formula have one owner. Do not add a second schema,
-   validator-of-validator, replay graph, browser-side calculator, database, message bus, plugin
-   discovery, generic N-leg engine, online trainer, host commissioning, or process self-audit.
+The Stage is the permission ceiling; the task may only narrow it. A live call, durable root,
+continuous process, private method, account action, or deployment requires matching, exact text in
+both. Technical capability is not permission.
 
-## Engineering gates
+An active task states the observable Given/When/Then, owner, unit, baseline/denominator, earliest
+blocker, expected delta, known-at/source boundary, durable and legacy effects, bounded files,
+complexity added/deleted, and the cheapest falsification. Use `NOT_YET_MEASURED` rather than inventing
+a baseline.
 
-- Reuse audited product, tick, depth, fee, settlement, identity, and lifecycle calculators when they
-  fit the new product contract; do not preserve obsolete V2 strategy semantics for convenience.
-- Prefer one direct module and focused dataclass over an abstract interface with one caller.
-- Remove obsolete code in the same change; keep no parallel legacy strategy path or hidden
-  translator.
-- Run the task's focused checks and repository gate, inspect the final diff and references, and
-  report unavailable external checks exactly.
-- Do not claim completion until the active task's business delta is directly observed. Green tests
-  alone never satisfy the task.
+## Product guardrails
+
+- The sole implemented product is one same-Deribit-Session, two-sided, four-leg, defined-risk BTC
+  premium sale. A Vertical is a component, not a fallback product.
+- The denominator is one `SessionDecisionUnit`; options, legs, candidates, quotes, retries, and UI
+  rows do not multiply opportunities.
+- Required missing, stale, contradictory, or causally ineligible facts remain `UNKNOWN`; they do
+  not become zero, calm, Candidate, Entry, flat risk, or terminality.
+- `FULL_ENTRY` requires one coherent four-leg attempt. Partial short exposure enters remediation,
+  never normal carry.
+- A Gap, restart, unavailable market, or failed quote does not erase a Position.
+  `SHORT_RISK_FLAT` and `PORTFOLIO_TERMINAL` are different facts.
+- Public Shadow facts are counterfactual observations, not orders, fills, account exposure,
+  realized PnL, reserved liquidity, Edge, or Policy qualification. Legacy V2 state remains outside
+  this product.
+
+Exact definitions belong to the linked product or lifecycle owner. Do not expand these guardrails
+into a second specification.
+
+## Implementation rule
+
+Search the current owner, code, tests, manifest, lockfile, and direct references before changing
+them. Reuse a fitting implementation first; otherwise make the smallest direct local change. Every
+new abstraction, option, dependency, durable fact, retry, and file must serve the active acceptance
+criterion and an existing direct consumer. Build nothing for a hypothetical product, caller,
+scale, migration, deployment, or failure mode.
+
+Remove obsolete code, tests, documents, configuration, and references in the same change. Do not
+leave a compatibility path or archive unless the current task has a consumer for it. Preserve
+unrelated user work.
+
+## Verification and closure
+
+Use the cheapest check that can falsify the declared delta, then run the materially affected
+repository gate. Inspect the final diff and references. Green tests, object counts, document counts,
+and prior runtime evidence do not by themselves prove product progress, live reachability, Edge, or
+completion.
+
+A task closes only after its declared product, trader-visible, blocker, or complexity delta is
+directly observed. Replace `CURRENT_STAGE` with the post-task current snapshot, remove the completed
+task, and report any unavailable external check as `UNVERIFIED`. Git retains history; Authority does
+not.

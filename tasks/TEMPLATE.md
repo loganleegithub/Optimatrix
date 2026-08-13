@@ -1,90 +1,63 @@
-# Task — Business closure
+# Task — One business closure
 
 **Status:** DRAFT | ACTIVE
 
 **Task kind:** AUTHORITY_ONLY | IMPLEMENTATION | VALIDATION_ONLY
 
-**Runtime implementation:** REQUIRED | FORBIDDEN | NOT_APPLICABLE
+**Runtime implementation:** REQUIRED | FORBIDDEN
 
-**Live commands:** REQUIRED | FORBIDDEN | NOT_APPLICABLE
+**Live commands:** FORBIDDEN | exact command, bounds, attempts, output, and retry rule
 
-**Base commit:** exact SHA
+**Owning authority/contract:** exact link
 
-**Target branch/PR:** exact branch and PR
+No placeholder may remain when the task becomes `ACTIVE`. `CURRENT_STAGE` must link this file as the
+only active non-template task.
 
-**Owning authority/contract:** exact link(s)
+## Closure
 
-`CURRENT_STAGE` must link this file while it is the sole `ACTIVE` non-template task. No placeholder
-may remain when status becomes `ACTIVE`.
+**Given:** observable prerequisite
 
-## Product movement
+**When:** one bounded change or observation
 
-**Canonical unit:** `SessionDecisionUnit` or exact other Authority-owned unit
+**Then:** observable result
 
-**Current funnel node:** exact canonical stage
+**Canonical unit and funnel node:** exact owner-defined values or `NOT_APPLICABLE`
 
-**Baseline:** exact numerator, denominator, and unit, or `NOT_YET_MEASURED` with reason
+**Baseline and denominator:** exact values or `NOT_YET_MEASURED` with reason
 
-**Primary blocker:** exact earliest measured reason or `NOT_YET_MEASURED`
+**Primary blocker:** earliest measured reason
 
-**Expected user-visible/funnel delta:** exact change
+**Expected product, trader-visible, blocker, or complexity delta:** exact change
 
-**Known-at/source boundary:** exact causal input boundary
+**Known-at/source boundary:** causal input boundary
 
-**Durable-data effect:** `NONE` or exact Decision Case event change and direct consumer
+**Valid zero/UNKNOWN:** truthful result and whether it satisfies closure
 
-**Legacy-data access effect:** `NONE` unless a later Authority explicitly changes isolation
+## Effects and scope
 
-**Complexity added:** exact modules/protocols/dependencies, or `NONE`
+**Market/Decision/Policy/Outcome change:** `NONE` or exact authorized change
 
-**Complexity deleted:** exact obsolete surface, or `NONE`
+**Durable-data effect and direct consumer:** `NONE` or exact Case-owned fact
 
-## Business closure
+**Legacy-data access effect:** `NONE` unless product Authority changes isolation
 
-**Given:** one observable prerequisite.
+**Stage/authorization effect:** `NONE` or exact change
 
-**When:** one bounded behavior or Authority change occurs.
+**Files and behavior in scope:** exact bounded list
 
-**Then:** one observable product result exists.
+**Out of scope:** exact boundary
 
-**Valid zero/UNKNOWN:** exact truthful result, denominator semantics, blocker, and whether it
-satisfies the closure.
+**Complexity added:** `NONE` or exact addition and consumer
 
-**Cheapest falsification:** direct test, deterministic scenario, bounded observation, or other
-minimal check.
+**Complexity deleted:** `NONE` or exact obsolete surface
 
-## Change declarations
+## Verification and closure
 
-**Market/Decision input contract change:** NONE | exact approved delta
+**Cheapest falsification:** exact focused check or bounded observation
 
-**Decision Policy change:** NONE | exact approved delta
+**Repository gate:** `make check` or exact applicable gate
 
-**Outcome/evaluation contract change:** NONE | exact approved delta
+**External evidence:** exact authorized check or `UNVERIFIED`
 
-**Stage/authorization change:** NONE | exact approved delta
-
-## Scope
-
-**In:** exact files and behaviors
-
-**Out:** exact forbidden changes
-
-**Owning module:** exact owner
-
-## Validation
-
-- focused tests: exact command;
-- deterministic business scenario: exact command or `NOT_APPLICABLE`;
-- repository gate: `make check` or exact applicable gate;
-- public observation: exact authorized command or `NOT_APPLICABLE`;
-- legacy-root reference/access check: exact command;
-- no manifest, receipt, commissioning, or broad evidence package unless the owning stage is an
-  external release, qualification, promotion, or execution audit.
-
-## Definition of done
-
-The declared user-visible or funnel delta is directly observed; the canonical denominator and
-earliest blocker remain truthful; required checks pass; the diff is bounded; durable facts stay
-inside the Decision Case contract; legacy isolation remains intact; complexity is proportional to
-product value; live authorization and remote state are reported accurately; and this task is
-removed after `CURRENT_STAGE` records the accepted result. Tests alone do not satisfy the task.
+Close only after directly observing the declared delta. Replace `CURRENT_STAGE` with the post-task
+snapshot and remove this file; do not append a completion history.
